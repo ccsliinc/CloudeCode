@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #569cd6;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 10px;
+            margin-bottom: 20px;
+            background: #252526;
+            border-radius: 4px;
+            border-left: 3px solid #0e639c;
+        }
+
+        .status.connected {
+            border-left-color: #4caf50;
+        }
+
+        .status.error {
+            border-left-color: #f44336;
+        }
+
+        .terminal-container {
+            background: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 15px;
+            height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+
+        .terminal-line {
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-bottom: 2px;
+        }
+
+        .command-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            background: #2d2d30;
+            border: 1px solid #3c3c3c;
+            color: #d4d4d4;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .tunnels {
+            margin-top: 20px;
+            padding: 15px;
+            background: #252526;
+            border-radius: 4px;
+        }
+
+        .tunnels h3 {
+            margin-bottom: 10px;
+            color: #569cd6;
+            font-size: 16px;
+        }
+
+        .tunnel-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #2d2d30;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .tunnel-url {
+            color: #4ec9b0;
+            text-decoration: none;
+            font-family: monospace;
+        }
+
+        .tunnel-url:hover {
+            text-decoration: underline;
+        }
+
+        .copy-btn {
+            padding: 5px 10px;
+            font-size: 12px;
+            background: #0e639c;
+        }
+
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            .terminal-container {
+                height: 400px;
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Claude Code Controller</h1>
+
+        <div class="status" id="status">
+            <strong>Status:</strong> <span id="statusText">Disconnected</span>
+        </div>
+
+        <div class="controls">
+            <button id="createSessionBtn" onclick="createSession()">Create Session</button>
+            <button id="destroySessionBtn" onclick="destroySession()" disabled>Destroy Session</button>
+            <button id="connectWsBtn" onclick="connectWebSocket()" disabled>Connect Terminal</button>
+            <button id="getTunnelsBtn" onclick="getTunnels()">Refresh Tunnels</button>
+        </div>
+
+        <div class="terminal-container" id="terminal">
+            <div class="terminal-line" style="color: #608b4e;">// Terminal output will appear here...</div>
+        </div>
+
+        <div class="command-input">
+            <input
+                type="text"
+                id="commandInput"
+                placeholder="Type a command and press Enter..."
+                disabled
+                onkeypress="handleCommandKeyPress(event)"
+            >
+            <button onclick="sendCommand()" id="sendCommandBtn" disabled>Send</button>
+        </div>
+
+        <div class="tunnels" id="tunnelsContainer" style="display: none;">
+            <h3>Active Tunnels</h3>
+            <div id="tunnelsList"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1';
+        const WS_URL = 'ws://localhost:8000/ws/terminal';
+
+        let ws = null;
+        let sessionActive = false;
+
+        // Create session
+        async function createSession() {
+            try {
+                updateStatus('Creating session...', 'status');
+
+                const response = await fetch(`${API_BASE}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ auto_start_claude: true })
+                });
+
+                if (!response.ok) throw new Error('Failed to create session');
+
+                const session = await response.json();
+                console.log('Session created:', session);
+
+                sessionActive = true;
+                updateStatus('Session created! Click "Connect Terminal" to view output.', 'status connected');
+
+                document.getElementById('createSessionBtn').disabled = true;
+                document.getElementById('destroySessionBtn').disabled = false;
+                document.getElementById('connectWsBtn').disabled = false;
+
+                addTerminalLine(`[SYSTEM] Session created: ${session.id}`, '#4caf50');
+
+            } catch (error) {
+                console.error('Error creating session:', error);
+                updateStatus('Error: ' + error.message, 'status error');
+            }
+        }
+
+        // Destroy session
+        async function destroySession() {
+            try {
+                updateStatus('Destroying session...', 'status');
+
+                const response = await fetch(`${API_BASE}/sessions`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to destroy session');
+
+                sessionActive = false;
+
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+
+                updateStatus('Session destroyed', 'status');
+
+                document.getElementById('createSessionBtn').disabled = false;
+                document.getElementById('destroySessionBtn').disabled = true;
+                document.getElementById('connectWsBtn').disabled = true;
+                document.getElementById('commandInput').disabled = true;
+                document.getElementById('sendCommandBtn').disabled = true;
+
+                addTerminalLine('[SYSTEM] Session destroyed', '#f44336');
+
+            } catch (error) {
+                console.error('Error destroying session:', error);
+                updateStatus('Error: ' + error.message, 'status error');
+            }
+        }
+
+        // Connect WebSocket
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('Already connected');
+                return;
+            }
+
+            updateStatus('Connecting to terminal...', 'status');
+
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateStatus('Terminal connected', 'status connected');
+                document.getElementById('commandInput').disabled = false;
+                document.getElementById('sendCommandBtn').disabled = false;
+                addTerminalLine('[SYSTEM] Terminal connected', '#4caf50');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleWebSocketMessage(message);
+                } catch (error) {
+                    console.error('Error parsing message:', error);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('WebSocket error', 'status error');
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+                updateStatus('Terminal disconnected', 'status error');
+                document.getElementById('commandInput').disabled = true;
+                document.getElementById('sendCommandBtn').disabled = true;
+                ws = null;
+            };
+        }
+
+        // Handle WebSocket messages
+        function handleWebSocketMessage(message) {
+            switch (message.type) {
+                case 'log':
+                    addTerminalLine(message.content);
+                    break;
+
+                case 'tunnel_created':
+                    addTerminalLine(`[TUNNEL] Created: ${message.tunnel.public_url}`, '#4ec9b0');
+                    getTunnels();
+                    break;
+
+                case 'session_status':
+                    console.log('Session status:', message);
+                    break;
+
+                case 'error':
+                    addTerminalLine(`[ERROR] ${message.message}`, '#f44336');
+                    break;
+            }
+        }
+
+        // Send command
+        function sendCommand() {
+            const input = document.getElementById('commandInput');
+            const command = input.value.trim();
+
+            if (!command || !ws || ws.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            const message = {
+                type: 'command',
+                command: command
+            };
+
+            ws.send(JSON.stringify(message));
+            addTerminalLine(`> ${command}`, '#569cd6');
+            input.value = '';
+        }
+
+        // Handle Enter key in command input
+        function handleCommandKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendCommand();
+            }
+        }
+
+        // Get tunnels
+        async function getTunnels() {
+            try {
+                const response = await fetch(`${API_BASE}/tunnels`);
+
+                if (!response.ok) throw new Error('Failed to fetch tunnels');
+
+                const tunnels = await response.json();
+                displayTunnels(tunnels);
+
+            } catch (error) {
+                console.error('Error fetching tunnels:', error);
+            }
+        }
+
+        // Display tunnels
+        function displayTunnels(tunnels) {
+            const container = document.getElementById('tunnelsContainer');
+            const list = document.getElementById('tunnelsList');
+
+            if (tunnels.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+            list.innerHTML = '';
+
+            tunnels.forEach(tunnel => {
+                const item = document.createElement('div');
+                item.className = 'tunnel-item';
+                item.innerHTML = `
+                    <div>
+                        <strong>Port ${tunnel.port}:</strong>
+                        <a href="${tunnel.public_url}" target="_blank" class="tunnel-url">${tunnel.public_url}</a>
+                    </div>
+                    <button class="copy-btn" onclick="copyToClipboard('${tunnel.public_url}')">Copy</button>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        // Copy to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                console.log('Copied to clipboard:', text);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        }
+
+        // Add line to terminal
+        function addTerminalLine(text, color = '#d4d4d4') {
+            const terminal = document.getElementById('terminal');
+            const line = document.createElement('div');
+            line.className = 'terminal-line';
+            line.style.color = color;
+            line.textContent = text;
+            terminal.appendChild(line);
+
+            // Auto-scroll to bottom
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        // Update status
+        function updateStatus(text, className) {
+            const status = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+            status.className = className;
+            statusText.textContent = text;
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            console.log('Claude Code Controller loaded');
+            addTerminalLine('// Ready to start. Click "Create Session" to begin.', '#608b4e');
+        });
+    </script>
+</body>
+</html>

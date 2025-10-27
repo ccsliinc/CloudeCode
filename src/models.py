@@ -1,0 +1,180 @@
+"""Data models for Claude Code Controller."""
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from enum import Enum
+
+
+class SessionStatus(str, Enum):
+    """Session status enumeration."""
+    CREATING = "creating"
+    RUNNING = "running"
+    STOPPED = "stopped"
+    ERROR = "error"
+
+
+class TunnelStatus(str, Enum):
+    """Tunnel status enumeration."""
+    CREATING = "creating"
+    ACTIVE = "active"
+    STOPPED = "stopped"
+    ERROR = "error"
+
+
+class Tunnel(BaseModel):
+    """Tunnel model for port forwarding."""
+    id: str = Field(..., description="Unique tunnel identifier")
+    session_id: str = Field(..., description="Associated session ID")
+    port: int = Field(..., description="Local port being tunneled")
+    public_url: str = Field(..., description="Public URL for accessing the tunnel")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: TunnelStatus = TunnelStatus.CREATING
+    process_pid: Optional[int] = Field(None, description="Cloudflared process PID")
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class Session(BaseModel):
+    """Session model for Claude Code instance."""
+    id: str = Field(..., description="Unique session identifier")
+    tmux_session: str = Field(..., description="Tmux session name")
+    working_dir: str = Field(..., description="Working directory path")
+    status: SessionStatus = SessionStatus.CREATING
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    tunnels: List[Tunnel] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class LogEntry(BaseModel):
+    """Log entry model for terminal output."""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    session_id: str
+    content: str
+    log_type: str = "stdout"  # "stdout", "stderr", "system"
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class SessionStats(BaseModel):
+    """Session statistics."""
+    total_commands: int = 0
+    uptime_seconds: int = 0
+    log_lines: int = 0
+    active_tunnels: int = 0
+
+
+class SessionInfo(BaseModel):
+    """Complete session information including logs and tunnels."""
+    session: Session
+    recent_logs: List[LogEntry] = Field(default_factory=list)
+    active_tunnels: List[Tunnel] = Field(default_factory=list)
+    stats: SessionStats = Field(default_factory=SessionStats)
+
+
+# API Request Models
+
+class CreateSessionRequest(BaseModel):
+    """Request model for creating a new session."""
+    working_dir: Optional[str] = Field(
+        None,
+        description="Override working directory (defaults to configured path)"
+    )
+    auto_start_claude: bool = Field(
+        True,
+        description="Auto-launch claude-code CLI"
+    )
+
+
+class CommandRequest(BaseModel):
+    """Request model for sending a command."""
+    command: str = Field(..., description="Command to execute in the session")
+
+
+class CreateTunnelRequest(BaseModel):
+    """Request model for manually creating a tunnel."""
+    port: int = Field(..., description="Local port to tunnel", ge=1, le=65535)
+
+
+# API Response Models
+
+class ErrorResponse(BaseModel):
+    """Standard error response."""
+    error: str = Field(..., description="Error code")
+    message: str = Field(..., description="Human-readable error message")
+    code: int = Field(..., description="HTTP status code")
+
+
+class SuccessResponse(BaseModel):
+    """Standard success response."""
+    success: bool = True
+    message: str = ""
+
+
+# WebSocket Message Models
+
+class WSMessageType(str, Enum):
+    """WebSocket message types."""
+    LOG = "log"
+    TUNNEL_CREATED = "tunnel_created"
+    TUNNEL_STOPPED = "tunnel_stopped"
+    SESSION_STATUS = "session_status"
+    COMMAND = "command"
+    ERROR = "error"
+    PING = "ping"
+    PONG = "pong"
+
+
+class WSLogMessage(BaseModel):
+    """WebSocket log message."""
+    type: WSMessageType = WSMessageType.LOG
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    content: str
+    log_type: str = "stdout"
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class WSTunnelMessage(BaseModel):
+    """WebSocket tunnel event message."""
+    type: WSMessageType
+    tunnel: Tunnel
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class WSSessionStatusMessage(BaseModel):
+    """WebSocket session status message."""
+    type: WSMessageType = WSMessageType.SESSION_STATUS
+    status: SessionStatus
+    uptime: int = 0
+
+
+class WSCommandMessage(BaseModel):
+    """WebSocket command message (client -> server)."""
+    type: WSMessageType = WSMessageType.COMMAND
+    command: str
+
+
+class WSErrorMessage(BaseModel):
+    """WebSocket error message."""
+    type: WSMessageType = WSMessageType.ERROR
+    error: str
+    message: str

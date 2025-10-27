@@ -1,0 +1,244 @@
+"""REST API routes for Claude Code Controller."""
+
+from fastapi import APIRouter, HTTPException, Request
+from typing import List
+import structlog
+
+from src.models import (
+    Session,
+    SessionInfo,
+    CreateSessionRequest,
+    CommandRequest,
+    CreateTunnelRequest,
+    Tunnel,
+    LogEntry,
+    SuccessResponse,
+    ErrorResponse
+)
+
+logger = structlog.get_logger()
+
+router = APIRouter()
+
+
+@router.post("/sessions", response_model=Session, status_code=201)
+async def create_session(request: Request, body: CreateSessionRequest):
+    """
+    Create a new Claude Code session.
+
+    Args:
+        body: Session creation parameters
+
+    Returns:
+        Created session object
+
+    Raises:
+        HTTPException: If session creation fails
+    """
+    session_manager = request.app.state.session_manager
+
+    try:
+        # Generate session ID
+        import uuid
+        session_id = f"ses_{uuid.uuid4().hex[:8]}"
+
+        logger.info(
+            "api_create_session_request",
+            session_id=session_id,
+            working_dir=body.working_dir
+        )
+
+        session = await session_manager.create_session(
+            session_id=session_id,
+            working_dir=body.working_dir,
+            auto_start_claude=body.auto_start_claude
+        )
+
+        return session
+
+    except ValueError as e:
+        logger.error("session_creation_failed_validation", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("session_creation_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+
+
+@router.get("/sessions", response_model=SessionInfo)
+async def get_session(request: Request):
+    """
+    Get information about the current session.
+
+    Returns:
+        Session information
+
+    Raises:
+        HTTPException: If no session exists
+    """
+    session_manager = request.app.state.session_manager
+
+    session_info = await session_manager.get_session_info()
+
+    if not session_info:
+        raise HTTPException(status_code=404, detail="No active session")
+
+    return session_info
+
+
+@router.delete("/sessions", response_model=SuccessResponse)
+async def destroy_session(request: Request):
+    """
+    Destroy the current session.
+
+    Returns:
+        Success response
+
+    Raises:
+        HTTPException: If session destruction fails
+    """
+    session_manager = request.app.state.session_manager
+    tunnel_manager = request.app.state.tunnel_manager
+
+    try:
+        logger.info("api_destroy_session_request")
+
+        # Clean up tunnels first
+        await tunnel_manager.destroy_all_tunnels()
+
+        # Destroy session
+        await session_manager.destroy_session()
+
+        return SuccessResponse(message="Session destroyed successfully")
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("session_destruction_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to destroy session: {str(e)}")
+
+
+@router.post("/sessions/command", response_model=SuccessResponse)
+async def send_command(request: Request, body: CommandRequest):
+    """
+    Send a command to the active session.
+
+    Args:
+        body: Command to send
+
+    Returns:
+        Success response
+
+    Raises:
+        HTTPException: If command sending fails
+    """
+    session_manager = request.app.state.session_manager
+
+    try:
+        logger.info("api_send_command", command=body.command[:50])
+
+        await session_manager.send_command(body.command)
+
+        return SuccessResponse(message="Command sent successfully")
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("send_command_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to send command: {str(e)}")
+
+
+@router.get("/sessions/logs", response_model=List[LogEntry])
+async def get_logs(request: Request, limit: int = 100):
+    """
+    Get recent log entries.
+
+    Args:
+        limit: Maximum number of entries to return (default 100)
+
+    Returns:
+        List of log entries
+
+    Raises:
+        HTTPException: If no session exists
+    """
+    session_manager = request.app.state.session_manager
+
+    if not session_manager.has_active_session():
+        raise HTTPException(status_code=404, detail="No active session")
+
+    logs = session_manager.get_recent_logs(limit=limit)
+    return logs
+
+
+@router.get("/tunnels", response_model=List[Tunnel])
+async def get_tunnels(request: Request):
+    """
+    Get all active tunnels.
+
+    Returns:
+        List of active tunnels
+    """
+    tunnel_manager = request.app.state.tunnel_manager
+
+    tunnels = tunnel_manager.get_active_tunnels()
+    return tunnels
+
+
+@router.post("/tunnels", response_model=Tunnel, status_code=201)
+async def create_tunnel(request: Request, body: CreateTunnelRequest):
+    """
+    Manually create a tunnel for a specific port.
+
+    Args:
+        body: Tunnel creation parameters
+
+    Returns:
+        Created tunnel object
+
+    Raises:
+        HTTPException: If tunnel creation fails
+    """
+    tunnel_manager = request.app.state.tunnel_manager
+
+    try:
+        logger.info("api_create_tunnel_request", port=body.port)
+
+        tunnel = await tunnel_manager.create_tunnel(port=body.port)
+
+        return tunnel
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("tunnel_creation_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to create tunnel: {str(e)}")
+
+
+@router.delete("/tunnels/{tunnel_id}", response_model=SuccessResponse)
+async def destroy_tunnel(request: Request, tunnel_id: str):
+    """
+    Destroy a specific tunnel.
+
+    Args:
+        tunnel_id: ID of the tunnel to destroy
+
+    Returns:
+        Success response
+
+    Raises:
+        HTTPException: If tunnel destruction fails
+    """
+    tunnel_manager = request.app.state.tunnel_manager
+
+    try:
+        logger.info("api_destroy_tunnel_request", tunnel_id=tunnel_id)
+
+        await tunnel_manager.destroy_tunnel(tunnel_id)
+
+        return SuccessResponse(message="Tunnel destroyed successfully")
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("tunnel_destruction_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to destroy tunnel: {str(e)}")
