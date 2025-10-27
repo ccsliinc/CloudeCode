@@ -48,14 +48,14 @@ else
     NEEDS_SETUP=true
 fi
 
-# Check claude-code
+# Check claude
 echo ""
-echo "Checking claude-code..."
-if command -v claude-code &> /dev/null; then
-    echo -e "${GREEN}✓${NC} claude-code is installed"
+echo "Checking claude..."
+if command -v claude &> /dev/null; then
+    echo -e "${GREEN}✓${NC} claude is installed"
 else
-    echo -e "${YELLOW}!${NC} claude-code is not installed (optional)"
-    echo "  Install from: https://claude.com/claude-code"
+    echo -e "${YELLOW}!${NC} claude is not installed (optional)"
+    echo "  Install from: https://claude.com/download"
 fi
 
 # Check Python

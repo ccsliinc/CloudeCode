@@ -16,7 +16,7 @@ Remote control and monitoring system for Claude Code development sessions. Contr
 - Python 3.11+
 - tmux installed (`brew install tmux` on macOS)
 - cloudflared CLI installed (`brew install cloudflared` on macOS)
-- claude-code CLI installed and configured
+- Claude CLI installed and configured
 
 ## Installation
 
@@ -154,7 +154,7 @@ Connect to `ws://localhost:8000/ws/terminal` for real-time terminal streaming.
 
 ## How It Works
 
-1. **Session Creation**: Creates a tmux session and automatically launches `claude-code`
+1. **Session Creation**: Creates a tmux session and automatically launches Claude with `--dangerously-skip-permissions`
 2. **Log Monitoring**: Polls terminal output every 500ms and streams to WebSocket clients
 3. **Pattern Detection**: Regex patterns detect when dev servers start
 4. **Auto-Tunneling**: When `localhost:PORT` is detected, automatically creates Cloudflare tunnel
@@ -260,8 +260,8 @@ The system will automatically:
 - Try: `http://192.168.1.x:8000/health`
 - Check firewall settings
 
-### Claude Code not starting
-- Ensure claude-code is in PATH: `which claude-code`
+### Claude not starting
+- Ensure claude is in PATH: `which claude`
 - Check tmux session: `tmux attach -t claude-code-session`
 - Look at session logs via API
 
