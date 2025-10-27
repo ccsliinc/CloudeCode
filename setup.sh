@@ -53,6 +53,10 @@ echo ""
 echo "Checking claude..."
 if command -v claude &> /dev/null; then
     echo -e "${GREEN}✓${NC} claude is installed"
+elif [ -f ~/.claude/local/claude ]; then
+    echo -e "${GREEN}✓${NC} claude is installed at ~/.claude/local/claude"
+elif [ -f /Users/Adam/.claude/local/claude ]; then
+    echo -e "${GREEN}✓${NC} claude is installed at ~/.claude/local/claude"
 else
     echo -e "${YELLOW}!${NC} claude is not installed (optional)"
     echo "  Install from: https://claude.com/download"
