@@ -137,7 +137,7 @@ class SessionManager:
             # Start Claude Code if requested
             if auto_start_claude:
                 await asyncio.sleep(0.5)  # Give tmux a moment to stabilize
-                self.tmux.send_keys(tmux_session_name, "claude-code")
+                self.tmux.send_keys(tmux_session_name, "claude-code --dangerously-skip-permissions")
                 logger.info("claude_code_started", session_id=session_id)
 
             self._save_session_metadata()
