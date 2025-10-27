@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     tunnel_provider: str = "cloudflare"
     auto_create_tunnels: bool = True
     tunnel_timeout: int = 30  # seconds to wait for tunnel URL
+    use_named_tunnels: bool = True  # Use Cloudflare named tunnels
+
+    # Cloudflare Configuration
+    cloudflare_api_token: Optional[str] = None
+    cloudflare_zone_id: Optional[str] = None
+    cloudflare_domain: str = "claude.adoom.nyc"
+    cloudflare_tunnel_name: str = "claude-controller"
+    cloudflare_tunnel_id: Optional[str] = None  # Will be set after tunnel creation
 
     # Security Configuration
     api_key: Optional[str] = None

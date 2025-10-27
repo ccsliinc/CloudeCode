@@ -37,11 +37,21 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-4. (Optional) Configure settings in `.env`:
+4. Run the setup script to verify all dependencies:
 ```bash
-# Default settings work for most use cases
-# Customize working directory, ports, etc. as needed
+./setup.sh
 ```
+
+5. Configure Cloudflare (for named tunnels):
+```bash
+# Edit .env and add:
+CLOUDFLARE_API_TOKEN=your_api_token_here
+CLOUDFLARE_ZONE_ID=your_zone_id
+CLOUDFLARE_DOMAIN=claude.adoom.nyc
+CLOUDFLARE_TUNNEL_NAME=claude-controller
+```
+
+See [Cloudflare Setup](#cloudflare-setup) section below for details.
 
 ## Usage
 
@@ -171,6 +181,66 @@ TUNNEL_TIMEOUT=30
 # Logging
 LOG_BUFFER_SIZE=1000
 ```
+
+## Cloudflare Setup
+
+The system supports two tunnel modes:
+
+### 1. Quick Tunnels (Default - Free)
+Uses Cloudflare's `trycloudflare.com` service. No account required but:
+- ❌ URLs change on restart
+- ❌ No custom domain
+- ❌ Subject to rate limits
+- ❌ Service can be unstable
+
+### 2. Named Tunnels (Recommended - Free with Account)
+Uses your Cloudflare account with persistent custom domains:
+- ✅ Stable URLs like `3000.claude.adoom.nyc`
+- ✅ Automatic CNAME creation
+- ✅ CNAMEs reused across restarts
+- ✅ Single tunnel, multiple ports
+
+**Setup Named Tunnels:**
+
+1. **Authenticate cloudflared**:
+```bash
+cloudflared login
+```
+This opens a browser for OAuth authentication.
+
+2. **Get Cloudflare API credentials**:
+   - Go to: https://dash.cloudflare.com/profile/api-tokens
+   - Click "Create Token"
+   - Use template: "Edit zone DNS"
+   - Add permissions: `Zone.DNS:Edit` and `Account.Cloudflare Tunnel:Edit`
+   - Copy the token
+
+3. **Get Zone ID**:
+   - Go to your domain's overview in Cloudflare dashboard
+   - Scroll down to "API" section
+   - Copy the "Zone ID"
+
+4. **Configure `.env`**:
+```bash
+USE_NAMED_TUNNELS=true
+CLOUDFLARE_API_TOKEN=your_token_here
+CLOUDFLARE_ZONE_ID=your_zone_id
+CLOUDFLARE_DOMAIN=claude.adoom.nyc
+CLOUDFLARE_TUNNEL_NAME=claude-controller
+```
+
+5. **Start the server**:
+The system will automatically:
+- Create the named tunnel `claude-controller`
+- Start the tunnel process
+- Create CNAMEs like `3000.claude.adoom.nyc` when ports are detected
+- Reuse CNAMEs on subsequent starts
+
+**How it works:**
+- Single persistent tunnel: `claude-controller`
+- Dynamic ingress rules added for each detected port
+- CNAMEs created via Cloudflare API: `{port}.claude.adoom.nyc`
+- Tunnel config auto-reloaded when ports added/removed
 
 ## Troubleshooting
 

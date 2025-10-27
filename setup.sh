@@ -1,0 +1,177 @@
+#!/bin/bash
+
+# Setup script for Claude Code Remote Controller
+# Checks and configures all required authentication
+
+set -e
+
+echo "🚀 Claude Code Remote Controller - Setup"
+echo "========================================"
+echo ""
+
+# Color codes
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Track if any setup is needed
+NEEDS_SETUP=false
+
+# Check tmux
+echo "Checking tmux..."
+if command -v tmux &> /dev/null; then
+    echo -e "${GREEN}✓${NC} tmux is installed"
+else
+    echo -e "${RED}✗${NC} tmux is not installed"
+    echo "  Install with: brew install tmux"
+    NEEDS_SETUP=true
+fi
+
+# Check cloudflared
+echo ""
+echo "Checking cloudflared..."
+if command -v cloudflared &> /dev/null; then
+    echo -e "${GREEN}✓${NC} cloudflared is installed"
+
+    # Check authentication
+    if [ -f ~/.cloudflared/cert.pem ]; then
+        echo -e "${GREEN}✓${NC} cloudflared is authenticated"
+    else
+        echo -e "${YELLOW}!${NC} cloudflared is not authenticated"
+        echo "  Run: cloudflared login"
+        NEEDS_SETUP=true
+    fi
+else
+    echo -e "${RED}✗${NC} cloudflared is not installed"
+    echo "  Install with: brew install cloudflared"
+    NEEDS_SETUP=true
+fi
+
+# Check claude-code
+echo ""
+echo "Checking claude-code..."
+if command -v claude-code &> /dev/null; then
+    echo -e "${GREEN}✓${NC} claude-code is installed"
+else
+    echo -e "${YELLOW}!${NC} claude-code is not installed (optional)"
+    echo "  Install from: https://claude.com/claude-code"
+fi
+
+# Check Python
+echo ""
+echo "Checking Python..."
+if command -v python3 &> /dev/null; then
+    PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
+    echo -e "${GREEN}✓${NC} Python $PYTHON_VERSION is installed"
+else
+    echo -e "${RED}✗${NC} Python 3 is not installed"
+    NEEDS_SETUP=true
+fi
+
+# Check virtual environment
+echo ""
+echo "Checking Python virtual environment..."
+if [ -d "venv" ]; then
+    echo -e "${GREEN}✓${NC} Virtual environment exists"
+else
+    echo -e "${YELLOW}!${NC} Virtual environment not found"
+    echo "  Creating virtual environment..."
+    python3 -m venv venv
+    echo -e "${GREEN}✓${NC} Virtual environment created"
+fi
+
+# Check dependencies
+echo ""
+echo "Checking Python dependencies..."
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+    if python3 -c "import fastapi" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} Python dependencies installed"
+    else
+        echo -e "${YELLOW}!${NC} Installing Python dependencies..."
+        pip install -r requirements.txt
+        echo -e "${GREEN}✓${NC} Dependencies installed"
+    fi
+    deactivate
+fi
+
+# Check directories
+echo ""
+echo "Checking directories..."
+if [ -d "/tmp/claude-code-logs" ]; then
+    echo -e "${GREEN}✓${NC} Log directory exists"
+else
+    echo -e "${YELLOW}!${NC} Creating log directory..."
+    mkdir -p /tmp/claude-code-logs
+    echo -e "${GREEN}✓${NC} Log directory created"
+fi
+
+if [ -d ~/claude-projects ]; then
+    echo -e "${GREEN}✓${NC} Projects directory exists"
+else
+    echo -e "${YELLOW}!${NC} Creating projects directory..."
+    mkdir -p ~/claude-projects
+    echo -e "${GREEN}✓${NC} Projects directory created"
+fi
+
+# Check .env file
+echo ""
+echo "Checking configuration..."
+if [ -f ".env" ]; then
+    echo -e "${GREEN}✓${NC} .env file exists"
+
+    # Check for Cloudflare credentials
+    if grep -q "CLOUDFLARE_API_TOKEN=" .env && grep -q "CLOUDFLARE_ZONE_ID=" .env; then
+        TOKEN=$(grep "CLOUDFLARE_API_TOKEN=" .env | cut -d'=' -f2)
+        ZONE=$(grep "CLOUDFLARE_ZONE_ID=" .env | cut -d'=' -f2)
+
+        if [ -z "$TOKEN" ] || [ -z "$ZONE" ]; then
+            echo -e "${YELLOW}!${NC} Cloudflare credentials not configured in .env"
+            echo "  Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID to .env"
+            NEEDS_SETUP=true
+        else
+            echo -e "${GREEN}✓${NC} Cloudflare credentials configured"
+        fi
+    else
+        echo -e "${YELLOW}!${NC} Cloudflare credentials not found in .env"
+        NEEDS_SETUP=true
+    fi
+else
+    echo -e "${YELLOW}!${NC} .env file not found"
+    echo "  Copying from .env.example..."
+    cp .env.example .env
+    echo -e "${GREEN}✓${NC} .env file created"
+    echo -e "${YELLOW}!${NC} Please edit .env and add your Cloudflare credentials"
+    NEEDS_SETUP=true
+fi
+
+# Summary
+echo ""
+echo "========================================"
+if [ "$NEEDS_SETUP" = true ]; then
+    echo -e "${YELLOW}⚠ Setup incomplete${NC}"
+    echo ""
+    echo "Next steps:"
+    echo "1. Install missing dependencies (see above)"
+    echo "2. Run: cloudflared login"
+    echo "3. Edit .env and add:"
+    echo "   - CLOUDFLARE_API_TOKEN (from Cloudflare dashboard)"
+    echo "   - CLOUDFLARE_ZONE_ID (from Cloudflare dashboard)"
+    echo "4. Run this script again to verify"
+    echo ""
+    echo "To get Cloudflare credentials:"
+    echo "  1. Go to: https://dash.cloudflare.com/profile/api-tokens"
+    echo "  2. Create token with 'Zone.DNS' edit permissions"
+    echo "  3. Get Zone ID from your domain's overview page"
+    exit 1
+else
+    echo -e "${GREEN}✓ Setup complete!${NC}"
+    echo ""
+    echo "You can now start the server:"
+    echo "  ./start.sh"
+    echo ""
+    echo "Or run manually:"
+    echo "  source venv/bin/activate"
+    echo "  python3 -m src.main"
+fi

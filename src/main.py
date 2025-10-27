@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
-from src.core.tunnel_manager import TunnelManager
+from src.core.hybrid_tunnel_manager import HybridTunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 # Global instances (will be initialized in lifespan)
 session_manager: SessionManager = None
 log_monitor: LogMonitor = None
-tunnel_manager: TunnelManager = None
+tunnel_manager: HybridTunnelManager = None
 auto_tunnel: AutoTunnelOrchestrator = None
 
 
@@ -45,7 +45,11 @@ async def lifespan(app: FastAPI):
     # Initialize core components
     session_manager = SessionManager()
     log_monitor = LogMonitor(session_manager)
-    tunnel_manager = TunnelManager(session_manager)
+    tunnel_manager = HybridTunnelManager(session_manager)
+
+    # Initialize tunnel manager
+    await tunnel_manager.initialize()
+
     auto_tunnel = AutoTunnelOrchestrator(log_monitor, tunnel_manager)
 
     # Initialize auto-tunnel orchestrator
@@ -69,6 +73,7 @@ async def lifespan(app: FastAPI):
 
     await log_monitor.stop_monitoring()
     await auto_tunnel.cleanup()
+    await tunnel_manager.shutdown()
 
     logger.info("application_shutdown_complete")
 
