@@ -13,6 +13,19 @@
 
 These versions have prebuilt wheels for Python 3.13 on ARM64 macOS.
 
+### Structlog logging_level error
+**Issue**: `TypeError: make_filtering_bound_logger() got an unexpected keyword argument 'logging_level'`
+
+**Solution**: Use `wrapper_class=structlog.BoundLogger` instead of `make_filtering_bound_logger(logging_level=20)` in structlog.configure()
+
+### Log directory not found
+**Issue**: `[Errno 2] No such file or directory: '/tmp/claude-code-logs/session_metadata.json'`
+
+**Solution**: Create the log directory before starting:
+```bash
+mkdir -p /tmp/claude-code-logs
+```
+
 ## Tmux
 
 ### Session already exists
@@ -37,6 +50,16 @@ tmux -L claude-controller kill-session -t claude-code-session
 2. Test manually: `cloudflared tunnel --url http://localhost:3000`
 3. Check stderr output from tunnel process
 4. Increase `TUNNEL_TIMEOUT` in .env
+
+### Cloudflare service error (Error 1101)
+**Issue**: `ERR Error unmarshaling QuickTunnel response` or `Worker threw exception`
+
+**Cause**: Cloudflare's trycloudflare.com free tunnel service is experiencing temporary issues
+
+**Solutions**:
+1. Wait and retry later (usually resolves within minutes/hours)
+2. Use a Cloudflare account with named tunnels (more reliable)
+3. Use alternative tunnel provider (ngrok) - requires code modification
 
 ## WebSocket
 

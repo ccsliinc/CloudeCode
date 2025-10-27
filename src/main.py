@@ -20,7 +20,7 @@ structlog.configure(
         structlog.processors.add_log_level,
         structlog.processors.JSONRenderer()
     ],
-    wrapper_class=structlog.make_filtering_bound_logger(logging_level=20),  # INFO level
+    wrapper_class=structlog.BoundLogger,
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
 )
