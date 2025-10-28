@@ -325,6 +325,12 @@
         let term = null;
         let fitAddon = null;
 
+        // Auto-reconnect tracking
+        let reconnectAttempts = 0;
+        let reconnectTimeout = null;
+        let maxReconnectAttempts = 5;
+        let isReconnecting = false;
+
         // Single-writer queue for PTY data
         const queue = [];
         let flushing = false;
@@ -464,11 +470,12 @@
                 console.log('Session created:', session);
 
                 sessionActive = true;
-                updateStatus('Session created! Connecting...', 'status connected');
+                updateStatus('Session created! Connecting...', 'status');
 
+                // Note: setButtonState will be called by ws.onopen when connection succeeds
+                // For now, just disable Create button and enable Destroy
                 document.getElementById('createSessionBtn').disabled = true;
                 document.getElementById('destroySessionBtn').disabled = false;
-                document.getElementById('connectWsBtn').disabled = false;
 
                 // Auto-connect WebSocket
                 setTimeout(connectWebSocket, 500);
@@ -520,11 +527,12 @@
                 if (session && session.id) {
                     console.log('Valid session found:', session.id);
                     sessionActive = true;
-                    updateStatus('Existing session found', 'status connected');
+                    updateStatus('Existing session found', 'status');
 
+                    // Note: setButtonState will be called by ws.onopen when connection succeeds
+                    // For now, just disable Create button and enable Destroy
                     document.getElementById('createSessionBtn').disabled = true;
                     document.getElementById('destroySessionBtn').disabled = false;
-                    document.getElementById('connectWsBtn').disabled = false;
                     document.getElementById('sessionInfo').textContent =
                         `Session: ${session.id} | PID: ${session.pty_pid} | Uptime: ${Math.floor((Date.now() - new Date(session.created_at)) / 1000)}s`;
 
@@ -565,16 +573,16 @@
 
                 sessionActive = false;
 
+                // Stop any reconnection attempts
+                stopReconnecting();
+
                 if (ws) {
                     ws.close();
                     ws = null;
                 }
 
-                updateStatus('Session destroyed', 'status');
-
-                document.getElementById('createSessionBtn').disabled = false;
-                document.getElementById('destroySessionBtn').disabled = true;
-                document.getElementById('connectWsBtn').disabled = true;
+                // Update button states to disconnected
+                setButtonState('disconnected');
                 document.getElementById('sessionInfo').textContent = 'No active session';
 
                 if (term) {
@@ -606,6 +614,12 @@
 
         // Connect WebSocket
         async function connectWebSocket() {
+            // If reconnecting, stop the reconnect loop
+            if (isReconnecting) {
+                stopReconnecting();
+                return;
+            }
+
             if (ws && ws.readyState === WebSocket.OPEN) {
                 console.log('Already connected');
                 return;
@@ -633,7 +647,17 @@
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
-                updateStatus('Connected', 'status connected');
+
+                // Reset reconnect state on successful connection
+                reconnectAttempts = 0;
+                isReconnecting = false;
+                if (reconnectTimeout) {
+                    clearTimeout(reconnectTimeout);
+                    reconnectTimeout = null;
+                }
+
+                // Update UI to connected state
+                setButtonState('connected');
 
                 if (term) {
                     term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
@@ -666,11 +690,17 @@
 
             ws.onclose = () => {
                 console.log('WebSocket closed');
-                updateStatus('Disconnected', 'status');
                 ws = null;
 
                 if (term) {
                     term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
+                }
+
+                // Attempt auto-reconnect if session still active and not manually stopped
+                if (sessionActive && !isReconnecting) {
+                    attemptReconnect();
+                } else if (!sessionActive) {
+                    setButtonState('disconnected');
                 }
             };
         }
@@ -733,9 +763,86 @@
             statusEl.className = 'status ' + className;
         }
 
+        // Button state management
+        function setButtonState(state) {
+            const createBtn = document.getElementById('createSessionBtn');
+            const connectBtn = document.getElementById('connectWsBtn');
+            const destroyBtn = document.getElementById('destroySessionBtn');
+
+            if (state === 'connected') {
+                // State: Connected - show disabled Create, enabled Destroy
+                createBtn.disabled = true;
+                createBtn.style.display = 'flex';
+                connectBtn.style.display = 'none';
+                destroyBtn.disabled = false;
+                updateStatus('Connected', 'status connected');
+            } else if (state === 'reconnecting') {
+                // State: Reconnecting - show enabled Connect (as stop button), disabled Destroy
+                createBtn.style.display = 'none';
+                connectBtn.style.display = 'flex';
+                connectBtn.disabled = false;
+                connectBtn.setAttribute('data-tooltip', 'Stop reconnecting');
+                destroyBtn.disabled = true;
+                updateStatus('Reconnecting...', 'status');
+            } else if (state === 'disconnected') {
+                // State: No session - show enabled Create, disabled Destroy
+                createBtn.disabled = false;
+                createBtn.style.display = 'flex';
+                connectBtn.style.display = 'none';
+                destroyBtn.disabled = true;
+                updateStatus('Ready', 'status');
+            }
+        }
+
+        // Stop reconnection attempts
+        function stopReconnecting() {
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            isReconnecting = false;
+            reconnectAttempts = 0;
+            console.log('Reconnection stopped by user');
+        }
+
+        // Auto-reconnect function
+        function attemptReconnect() {
+            if (!sessionActive || reconnectAttempts >= maxReconnectAttempts) {
+                if (reconnectAttempts >= maxReconnectAttempts) {
+                    console.log('Max reconnect attempts reached');
+                    updateStatus('Connection failed', 'status error');
+                    if (term) {
+                        term.writeln('\n\x1b[1;31m[Reconnection failed after ' + maxReconnectAttempts + ' attempts]\x1b[0m');
+                    }
+                }
+                stopReconnecting();
+                return;
+            }
+
+            isReconnecting = true;
+            reconnectAttempts++;
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 16000);
+
+            console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} in ${delay}ms`);
+            setButtonState('reconnecting');
+
+            if (term) {
+                term.writeln(`\n\x1b[1;33m[Reconnecting... Attempt ${reconnectAttempts}/${maxReconnectAttempts}]\x1b[0m`);
+            }
+
+            reconnectTimeout = setTimeout(() => {
+                connectWebSocket();
+            }, delay);
+        }
+
         // Initialize on load
         window.addEventListener('load', async () => {
             initTerminal();
+
+            // Set initial button state
+            setButtonState('disconnected');
 
             // Always try to check for existing session first
             if (term) {
