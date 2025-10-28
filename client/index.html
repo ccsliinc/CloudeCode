@@ -19,9 +19,11 @@
             font-family: 'SF Mono', monospace;
             background: #1e1e1e;
             color: #d4d4d4;
-            height: 100vh;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
+            margin: 0;
+            overflow: hidden;
         }
 
         .header {
@@ -188,6 +190,15 @@
             .controls {
                 gap: 6px;
             }
+
+            .terminal-container {
+                padding: 10px;
+                min-height: 350px;
+            }
+
+            .info {
+                display: none;
+            }
         }
 
         @media (max-width: 480px) {
@@ -203,19 +214,26 @@
             .header {
                 padding: 8px 12px;
             }
+
+            .terminal-container {
+                padding: 8px;
+                min-height: 300px;
+            }
         }
 
         .terminal-container {
             flex: 1;
-            padding: 20px;
+            padding: 15px;
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            min-height: 400px;
         }
 
         #terminal {
             flex: 1;
             background: #1e1e1e;
+            min-height: 0;
         }
 
         .info {
