@@ -1,0 +1,23 @@
+{
+  "totp_secret": "GENERATETHISWITHPYOTPBASE32SECRET",
+  "template_path": "/Users/Adam/Dropbox/.claude-template",
+  "jwt_secret": "GENERATETHISWITHSECRETSTOKEN_URLSAFE",
+  "jwt_expiry_minutes": 30,
+  "projects": [
+    {
+      "name": "THC Beverages Lambdas",
+      "path": "/Users/Adam/Dropbox/Hightails/code/thcbev_lambdas",
+      "description": "AWS Lambda functions for THC Beverages"
+    },
+    {
+      "name": "Nyedis",
+      "path": "/Users/Adam/Dropbox/Nyedis/code/",
+      "description": "Nyedis project codebase"
+    },
+    {
+      "name": "Example Project",
+      "path": "/Users/Adam/projects/example",
+      "description": "Example project entry"
+    }
+  ]
+}

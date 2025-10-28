@@ -95,6 +95,10 @@ class CreateSessionRequest(BaseModel):
         True,
         description="Auto-launch claude-code CLI"
     )
+    copy_templates: bool = Field(
+        False,
+        description="Copy template files to working directory"
+    )
 
 
 class CommandRequest(BaseModel):
@@ -105,6 +109,18 @@ class CommandRequest(BaseModel):
 class CreateTunnelRequest(BaseModel):
     """Request model for manually creating a tunnel."""
     port: int = Field(..., description="Local port to tunnel", ge=1, le=65535)
+
+
+class VerifyTOTPRequest(BaseModel):
+    """Request model for TOTP code verification."""
+    code: str = Field(..., description="6-digit TOTP code", min_length=6, max_length=6)
+
+
+class ProjectResponse(BaseModel):
+    """Response model for a project."""
+    name: str = Field(..., description="Project display name")
+    path: str = Field(..., description="Project directory path")
+    description: Optional[str] = Field(None, description="Project description")
 
 
 # API Response Models
@@ -120,6 +136,13 @@ class SuccessResponse(BaseModel):
     """Standard success response."""
     success: bool = True
     message: str = ""
+
+
+class AuthTokenResponse(BaseModel):
+    """Response with JWT authentication token."""
+    success: bool = True
+    token: str = Field(..., description="JWT authentication token")
+    expires_in: int = Field(..., description="Token expiry time in seconds")
 
 
 # WebSocket Message Models

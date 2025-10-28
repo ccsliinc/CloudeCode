@@ -1,6 +1,6 @@
 """REST API routes for Claude Code Controller."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from typing import List
 import structlog
 
@@ -15,13 +15,14 @@ from src.models import (
     SuccessResponse,
     ErrorResponse
 )
+from src.api.auth import require_auth
 
 logger = structlog.get_logger()
 
 router = APIRouter()
 
 
-@router.post("/sessions", response_model=Session, status_code=201)
+@router.post("/sessions", response_model=Session, status_code=201, dependencies=[Depends(require_auth)])
 async def create_session(request: Request, body: CreateSessionRequest):
     """
     Create a new Claude Code session.
@@ -45,13 +46,15 @@ async def create_session(request: Request, body: CreateSessionRequest):
         logger.info(
             "api_create_session_request",
             session_id=session_id,
-            working_dir=body.working_dir
+            working_dir=body.working_dir,
+            copy_templates=body.copy_templates
         )
 
         session = await session_manager.create_session(
             session_id=session_id,
             working_dir=body.working_dir,
-            auto_start_claude=body.auto_start_claude
+            auto_start_claude=body.auto_start_claude,
+            copy_templates=body.copy_templates
         )
 
         return session
@@ -64,7 +67,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
 
-@router.get("/sessions", response_model=SessionInfo)
+@router.get("/sessions", response_model=SessionInfo, dependencies=[Depends(require_auth)])
 async def get_session(request: Request):
     """
     Get information about the current session.
@@ -85,7 +88,7 @@ async def get_session(request: Request):
     return session_info
 
 
-@router.delete("/sessions", response_model=SuccessResponse)
+@router.delete("/sessions", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def destroy_session(request: Request):
     """
     Destroy the current session.
@@ -117,7 +120,7 @@ async def destroy_session(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to destroy session: {str(e)}")
 
 
-@router.post("/sessions/command", response_model=SuccessResponse)
+@router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def send_command(request: Request, body: CommandRequest):
     """
     Send a command to the active session.
@@ -147,7 +150,7 @@ async def send_command(request: Request, body: CommandRequest):
         raise HTTPException(status_code=500, detail=f"Failed to send command: {str(e)}")
 
 
-@router.get("/sessions/logs", response_model=List[LogEntry])
+@router.get("/sessions/logs", response_model=List[LogEntry], dependencies=[Depends(require_auth)])
 async def get_logs(request: Request, limit: int = 100):
     """
     Get recent log entries.
@@ -170,7 +173,7 @@ async def get_logs(request: Request, limit: int = 100):
     return logs
 
 
-@router.get("/tunnels", response_model=List[Tunnel])
+@router.get("/tunnels", response_model=List[Tunnel], dependencies=[Depends(require_auth)])
 async def get_tunnels(request: Request):
     """
     Get all active tunnels.
@@ -184,7 +187,7 @@ async def get_tunnels(request: Request):
     return tunnels
 
 
-@router.post("/tunnels", response_model=Tunnel, status_code=201)
+@router.post("/tunnels", response_model=Tunnel, status_code=201, dependencies=[Depends(require_auth)])
 async def create_tunnel(request: Request, body: CreateTunnelRequest):
     """
     Manually create a tunnel for a specific port.
@@ -214,7 +217,7 @@ async def create_tunnel(request: Request, body: CreateTunnelRequest):
         raise HTTPException(status_code=500, detail=f"Failed to create tunnel: {str(e)}")
 
 
-@router.delete("/tunnels/{tunnel_id}", response_model=SuccessResponse)
+@router.delete("/tunnels/{tunnel_id}", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def destroy_tunnel(request: Request, tunnel_id: str):
     """
     Destroy a specific tunnel.

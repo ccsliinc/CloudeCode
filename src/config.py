@@ -1,9 +1,27 @@
 """Configuration management using pydantic-settings."""
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
+import json
+
+
+class ProjectConfig(BaseModel):
+    """Configuration for a predefined project."""
+    name: str
+    path: str
+    description: Optional[str] = None
+
+
+class AuthConfig(BaseModel):
+    """Authentication configuration loaded from JSON."""
+    totp_secret: str
+    jwt_secret: str
+    jwt_expiry_minutes: int = 30
+    template_path: Optional[str] = None
+    projects: List[ProjectConfig] = []
 
 
 class Settings(BaseSettings):
@@ -46,9 +64,14 @@ class Settings(BaseSettings):
     api_key: Optional[str] = None
     allowed_origins: List[str] = ["*"]
 
+    # Authentication Configuration
+    auth_config_file: str = "~/.claude-tunnel/config.json"
+
     # Tmux Configuration
     tmux_socket_name: str = "claude-controller"
     tmux_session_name: str = "claude-code-session"
+
+    _auth_config_cache: Optional[AuthConfig] = None
 
     def get_working_dir(self) -> Path:
         """Get the absolute path for the working directory."""
@@ -65,6 +88,59 @@ class Settings(BaseSettings):
     def get_session_metadata_path(self) -> Path:
         """Get the path for session metadata JSON file."""
         return Path(self.log_directory).expanduser() / "session_metadata.json"
+
+    def load_auth_config(self) -> AuthConfig:
+        """
+        Load authentication configuration from JSON file.
+
+        Returns:
+            AuthConfig object with TOTP secret, JWT config, and projects
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If config file is invalid
+        """
+        if self._auth_config_cache is not None:
+            return self._auth_config_cache
+
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+
+            # Convert projects from dict to ProjectConfig objects
+            projects_data = data.get("projects", [])
+            projects = [ProjectConfig(**p) for p in projects_data]
+
+            auth_config = AuthConfig(
+                totp_secret=data["totp_secret"],
+                jwt_secret=data["jwt_secret"],
+                jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
+                template_path=data.get("template_path"),
+                projects=projects
+            )
+
+            # Cache it
+            self._auth_config_cache = auth_config
+            return auth_config
+
+        except KeyError as e:
+            raise ValueError(
+                f"Invalid auth config file: missing required field {e}\n"
+                f"Check {config_path}"
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
 
 
 # Global settings instance

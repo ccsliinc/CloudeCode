@@ -17,6 +17,7 @@ from src.core.hybrid_tunnel_manager import HybridTunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
+from src.api.auth import router as auth_router
 
 # Configure structlog
 structlog.configure(
@@ -157,8 +158,9 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(api_router, prefix="/api/v1")
-app.include_router(ws_router)
+app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
+app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
+app.include_router(ws_router)                       # WebSocket routes
 
 # Mount static files
 client_dir = Path(__file__).parent.parent / "client"

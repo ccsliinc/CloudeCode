@@ -15,6 +15,7 @@ from src.models import (
     WSPTYResizeMessage,
     WSErrorMessage
 )
+from src.api.auth import verify_jwt_token
 
 logger = structlog.get_logger()
 
@@ -80,6 +81,13 @@ async def websocket_terminal(websocket: WebSocket):
     Args:
         websocket: WebSocket connection
     """
+    # Check authentication via query parameter
+    token = websocket.query_params.get("token")
+    if not token or not verify_jwt_token(token):
+        logger.warning("websocket_auth_failed", query_params=websocket.query_params.keys())
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
     await connection_manager.connect(websocket)
 
     # Get app state

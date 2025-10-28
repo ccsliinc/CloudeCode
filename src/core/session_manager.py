@@ -11,6 +11,7 @@ import structlog
 from src.config import settings
 from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEntry
 from src.utils.pty_session import PTYSession, PTYSessionError
+from src.utils.template_manager import copy_templates as copy_template_files
 
 logger = structlog.get_logger()
 
@@ -140,7 +141,8 @@ class SessionManager:
         self,
         session_id: str,
         working_dir: Optional[str] = None,
-        auto_start_claude: bool = True
+        auto_start_claude: bool = True,
+        copy_templates: bool = False
     ) -> Session:
         """
         Create a new Claude Code session.
@@ -149,6 +151,7 @@ class SessionManager:
             session_id: Unique identifier for the session
             working_dir: Working directory for the session (defaults to config)
             auto_start_claude: Whether to automatically start claude-code
+            copy_templates: Whether to copy template files to working directory
 
         Returns:
             Created Session object
@@ -172,8 +175,28 @@ class SessionManager:
         logger.info(
             "creating_session",
             session_id=session_id,
-            working_dir=str(work_path)
+            working_dir=str(work_path),
+            copy_templates=copy_templates
         )
+
+        # Copy template files if requested
+        if copy_templates:
+            try:
+                auth_config = settings.load_auth_config()
+                if auth_config.template_path:
+                    success, error = copy_template_files(
+                        auth_config.template_path,
+                        str(work_path)
+                    )
+                    if success:
+                        logger.info("templates_copied_to_session", path=str(work_path))
+                    else:
+                        logger.warning("template_copy_failed", error=error)
+                else:
+                    logger.warning("no_template_path_configured")
+            except Exception as e:
+                logger.error("template_copy_error", error=str(e))
+                # Don't fail session creation if template copy fails
 
         try:
             # Create PTY session
