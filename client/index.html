@@ -25,67 +25,184 @@
         }
 
         .header {
-            background: #2d2d30;
-            padding: 15px 20px;
-            border-bottom: 1px solid #3e3e42;
+            background: #0a0a0a;
+            padding: 12px 20px;
+            border-bottom: 2px solid #d77757;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
         }
 
         h1 {
-            font-size: 1.5rem;
-            margin-bottom: 10px;
+            font-size: 1.3rem;
+            margin: 0;
             color: #d77757;
+            white-space: nowrap;
         }
 
         .controls {
             display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+            gap: 8px;
             align-items: center;
         }
 
         button {
-            background: #0e639c;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
+            background: rgba(215, 119, 87, 0.15);
+            color: #d77757;
+            border: 1px solid rgba(215, 119, 87, 0.3);
+            padding: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
             cursor: pointer;
-            font-size: 14px;
-            transition: background 0.2s;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
         }
 
         button:hover:not(:disabled) {
-            background: #1177bb;
+            background: rgba(215, 119, 87, 0.25);
+            border-color: #d77757;
+            box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
+            transform: scale(1.05);
         }
 
         button:disabled {
-            background: #3e3e42;
+            background: rgba(62, 62, 66, 0.1);
+            border-color: rgba(62, 62, 66, 0.3);
+            color: #666;
             cursor: not-allowed;
-            opacity: 0.5;
+            opacity: 0.4;
         }
 
         button.danger {
-            background: #c5000b;
+            color: #ff4444;
+            border-color: rgba(255, 68, 68, 0.3);
+            background: rgba(255, 68, 68, 0.1);
         }
 
         button.danger:hover:not(:disabled) {
-            background: #e81123;
+            background: rgba(255, 68, 68, 0.2);
+            border-color: #ff4444;
+            box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
+        }
+
+        /* Tooltip on hover */
+        button::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0a0a0a;
+            color: #d4d4d4;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            border: 1px solid #d77757;
+        }
+
+        button:hover::after {
+            opacity: 1;
         }
 
         .status {
-            padding: 8px 16px;
-            border-radius: 4px;
-            background: #3e3e42;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ffa500;
             display: inline-block;
-            font-size: 14px;
+            box-shadow: 0 0 8px rgba(255, 165, 0, 0.6);
+            transition: all 0.3s ease;
+            position: relative;
         }
 
         .status.connected {
-            background: #0e7219;
+            background: #00ff00;
+            box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
+            animation: pulse 2s infinite;
         }
 
         .status.error {
-            background: #c5000b;
+            background: #ff0000;
+            box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* Tooltip for status indicator */
+        .status::after {
+            content: attr(data-status);
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0a0a0a;
+            color: #d4d4d4;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            border: 1px solid #d77757;
+        }
+
+        .status:hover::after {
+            opacity: 1;
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 10px 15px;
+            }
+
+            h1 {
+                font-size: 1.1rem;
+            }
+
+            button {
+                width: 44px;
+                height: 44px;
+                font-size: 18px;
+            }
+
+            .status {
+                width: 14px;
+                height: 14px;
+            }
+
+            .controls {
+                gap: 6px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1rem;
+            }
+
+            button {
+                width: 40px;
+                height: 40px;
+            }
+
+            .header {
+                padding: 8px 12px;
+            }
         }
 
         .terminal-container {
@@ -150,10 +267,10 @@
     <div class="header">
         <h1>☁️ Cloude Code</h1>
         <div class="controls">
-            <button onclick="createSession()" id="createSessionBtn">Create Session</button>
-            <button onclick="connectWebSocket()" id="connectWsBtn" disabled>Connect Terminal</button>
-            <button onclick="destroySession()" id="destroySessionBtn" class="danger" disabled>Destroy Session</button>
-            <span class="status" id="statusText">Ready</span>
+            <button onclick="createSession()" id="createSessionBtn" data-tooltip="Create Session">⚡</button>
+            <button onclick="connectWebSocket()" id="connectWsBtn" disabled data-tooltip="Connect Terminal">🔌</button>
+            <button onclick="destroySession()" id="destroySessionBtn" class="danger" disabled data-tooltip="Destroy Session">💀</button>
+            <span class="status" id="statusText" data-status="Ready"></span>
         </div>
     </div>
 
@@ -594,8 +711,8 @@
         // Update status
         function updateStatus(text, className) {
             const statusEl = document.getElementById('statusText');
-            statusEl.textContent = text;
-            statusEl.className = className;
+            statusEl.setAttribute('data-status', text);
+            statusEl.className = 'status ' + className;
         }
 
         // Initialize on load
