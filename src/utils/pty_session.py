@@ -90,12 +90,13 @@ class PTYSession:
                 flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
                 fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-                # Configure terminal attributes
+                # Configure terminal attributes - disable line ending conversion
+                # Let xterm.js handle all line ending rendering
                 attrs = termios.tcgetattr(self.master_fd)
-                # ONLCR: Map NL to CR-NL on output
-                attrs[1] |= termios.ONLCR
-                # ICRNL: Map CR to NL on input
-                attrs[0] |= termios.ICRNL
+                # Input flags: don't convert CR to NL
+                attrs[0] &= ~termios.ICRNL
+                # Output flags: don't convert NL to CR-NL (xterm.js handles this)
+                attrs[1] &= ~termios.ONLCR
                 termios.tcsetattr(self.master_fd, termios.TCSANOW, attrs)
 
                 # Set initial terminal size
