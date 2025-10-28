@@ -8,307 +8,39 @@
     <!-- xterm.js CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
 
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'SF Mono', monospace;
-            background: #1e1e1e;
-            color: #d4d4d4;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            margin: 0;
-            overflow: hidden;
-        }
-
-        .header {
-            background: #0a0a0a;
-            padding: 12px 20px;
-            border-bottom: 2px solid #d77757;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 15px;
-        }
-
-        h1 {
-            font-size: 1.3rem;
-            margin: 0;
-            color: #d77757;
-            white-space: nowrap;
-        }
-
-        .version {
-            font-size: 0.7rem;
-            color: #888;
-            font-weight: normal;
-        }
-
-        .controls {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        button {
-            background: rgba(215, 119, 87, 0.15);
-            color: #d77757;
-            border: 1px solid rgba(215, 119, 87, 0.3);
-            padding: 0;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-        }
-
-        button:hover:not(:disabled) {
-            background: rgba(215, 119, 87, 0.25);
-            border-color: #d77757;
-            box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
-            transform: scale(1.05);
-        }
-
-        button:disabled {
-            background: rgba(62, 62, 66, 0.1);
-            border-color: rgba(62, 62, 66, 0.3);
-            color: #666;
-            cursor: not-allowed;
-            opacity: 0.4;
-        }
-
-        button.danger {
-            color: #ff4444;
-            border-color: rgba(255, 68, 68, 0.3);
-            background: rgba(255, 68, 68, 0.1);
-        }
-
-        button.danger:hover:not(:disabled) {
-            background: rgba(255, 68, 68, 0.2);
-            border-color: #ff4444;
-            box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
-        }
-
-        /* Tooltip on hover */
-        button::after {
-            content: attr(data-tooltip);
-            position: absolute;
-            bottom: -30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #0a0a0a;
-            color: #d4d4d4;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            white-space: nowrap;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s;
-            border: 1px solid #d77757;
-        }
-
-        button:hover::after {
-            opacity: 1;
-        }
-
-        .status {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #ffa500;
-            display: inline-block;
-            box-shadow: 0 0 8px rgba(255, 165, 0, 0.6);
-            transition: all 0.3s ease;
-            position: relative;
-        }
-
-        .status.connected {
-            background: #00ff00;
-            box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
-            animation: pulse 2s infinite;
-        }
-
-        .status.error {
-            background: #ff0000;
-            box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-
-        /* Tooltip for status indicator */
-        .status::after {
-            content: attr(data-status);
-            position: absolute;
-            bottom: -30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #0a0a0a;
-            color: #d4d4d4;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            white-space: nowrap;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s;
-            border: 1px solid #d77757;
-        }
-
-        .status:hover::after {
-            opacity: 1;
-        }
-
-        /* Mobile responsive */
-        @media (max-width: 768px) {
-            .header {
-                padding: 10px 15px;
-            }
-
-            h1 {
-                font-size: 1.1rem;
-            }
-
-            button {
-                width: 44px;
-                height: 44px;
-                font-size: 18px;
-            }
-
-            .status {
-                width: 14px;
-                height: 14px;
-            }
-
-            .controls {
-                gap: 6px;
-            }
-
-            .terminal-container {
-                padding: 10px;
-                min-height: 350px;
-            }
-
-            .info {
-                display: none;
-            }
-        }
-
-        @media (max-width: 480px) {
-            h1 {
-                font-size: 1rem;
-            }
-
-            button {
-                width: 40px;
-                height: 40px;
-            }
-
-            .header {
-                padding: 8px 12px;
-            }
-
-            .terminal-container {
-                padding: 8px;
-                min-height: 300px;
-            }
-        }
-
-        .terminal-container {
-            flex: 1;
-            padding: 15px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            min-height: 400px;
-        }
-
-        #terminal {
-            flex: 1;
-            background: #1e1e1e;
-            min-height: 0;
-        }
-
-        .info {
-            background: #2d2d30;
-            padding: 10px 20px;
-            border-top: 1px solid #3e3e42;
-            font-size: 12px;
-            color: #858585;
-        }
-
-        .tunnels {
-            background: #252526;
-            padding: 15px 20px;
-            border-top: 1px solid #3e3e42;
-        }
-
-        .tunnels h3 {
-            margin-bottom: 10px;
-            color: #4ec9b0;
-            font-size: 1.1rem;
-        }
-
-        .tunnel-item {
-            background: #2d2d30;
-            padding: 10px;
-            margin-bottom: 8px;
-            border-radius: 4px;
-            border-left: 3px solid #4ec9b0;
-        }
-
-        /* Prevent line-height/letter-spacing from bleeding into xterm measurement */
-        .xterm, .xterm * {
-            line-height: normal !important;
-            letter-spacing: normal !important;
-            font-kerning: normal !important;
-        }
-
-        .tunnel-item a {
-            color: #569cd6;
-            text-decoration: none;
-        }
-
-        .tunnel-item a:hover {
-            text-decoration: underline;
-        }
-    </style>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
 <body>
     <div class="header">
-        <h1>☁️ Cloude Code <span class="version">v0.1</span></h1>
+        <h1>☁️ Cloude Code <span class="version">v0.2</span></h1>
         <div class="controls">
-            <button onclick="createSession()" id="createSessionBtn" data-tooltip="Create Session">⚡</button>
-            <button onclick="connectWebSocket()" id="connectWsBtn" disabled data-tooltip="Connect Terminal">🔌</button>
-            <button onclick="destroySession()" id="destroySessionBtn" class="danger" disabled data-tooltip="Destroy Session">💀</button>
+            <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">🔓</button>
+            <button onclick="TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">💀</button>
             <span class="status" id="statusText" data-status="Ready"></span>
         </div>
     </div>
 
-    <div class="terminal-container">
-        <div id="terminal"></div>
-    </div>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="screen"></div>
 
-    <div class="tunnels" id="tunnelsContainer" style="display: none;">
-        <h3>Active Tunnels</h3>
-        <div id="tunnelsList"></div>
-    </div>
+    <!-- Launchpad Screen -->
+    <div id="launchpad-screen" class="screen"></div>
 
-    <div class="info">
-        <span id="sessionInfo">No active session</span>
+    <!-- Terminal Screen -->
+    <div id="terminal-screen" class="screen">
+        <div class="terminal-container">
+            <div id="terminal"></div>
+        </div>
+
+        <div class="tunnels" id="tunnelsContainer" style="display: none;">
+            <h3>Active Tunnels</h3>
+            <div id="tunnelsList"></div>
+        </div>
+
+        <div class="info">
+            <span id="sessionInfo">No active session</span>
+        </div>
     </div>
 
     <!-- xterm.js -->
@@ -317,636 +49,166 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
 
+    <!-- Application modules -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/launchpad.js"></script>
+    <script src="/static/js/terminal.js"></script>
+
+    <!-- App Controller -->
     <script>
-        // API configuration
-        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.host;
-
-        const API_BASE = `${protocol}//${host}/api/v1`;
-        const WS_URL = `${wsProtocol}//${host}/ws/terminal`;
-
-        let ws = null;
-        let sessionActive = false;
-        let term = null;
-        let fitAddon = null;
-
-        // Auto-reconnect tracking
-        let reconnectAttempts = 0;
-        let reconnectTimeout = null;
-        let maxReconnectAttempts = 5;
-        let isReconnecting = false;
-
-        // WebSocket keepalive
-        let keepaliveInterval = null;
-
-        // Single-writer queue for PTY data
-        const queue = [];
-        let flushing = false;
-
-        function enqueue(bytes) {
-            queue.push(bytes);
-            if (!flushing) {
-                flushing = true;
-                requestAnimationFrame(flush);
-            }
-        }
-
-        function flush() {
-            // merge queue into a single Uint8Array
-            let total = 0;
-            for (const c of queue) total += c.length;
-            const merged = new Uint8Array(total);
-            let o = 0;
-            while (queue.length) {
-                const c = queue.shift();
-                merged.set(c, o);
-                o += c.length;
-            }
-            // Write once; use callback to signal completion
-            term.write(merged, () => {
-                flushing = false;
-                if (queue.length) requestAnimationFrame(flush);
-            });
-        }
-
-        // Initialize xterm.js terminal
-        function initTerminal() {
-            term = new Terminal({
-                cursorBlink: true,
-                fontSize: 14,
-                fontFamily: '"SF Mono", monospace',
-                fontWeight: 'normal',
-                fontWeightBold: 'bold',
-                allowTransparency: false,
-                theme: {
-                    background: '#1e1e1e',
-                    foreground: '#d4d4d4',
-                    cursor: '#d4d4d4',
-                    black: '#000000',
-                    red: '#cd3131',
-                    green: '#0dbc79',
-                    yellow: '#e5e510',
-                    blue: '#2472c8',
-                    magenta: '#bc3fbc',
-                    cyan: '#11a8cd',
-                    white: '#e5e5e5',
-                    brightBlack: '#666666',
-                    brightRed: '#f14c4c',
-                    brightGreen: '#23d18b',
-                    brightYellow: '#f5f543',
-                    brightBlue: '#3b8eea',
-                    brightMagenta: '#d670d6',
-                    brightCyan: '#29b8db',
-                    brightWhite: '#ffffff'
-                },
-                allowProposedApi: true,
-                convertEol: false,  // PTY handles EOL, avoid double-translation
-                scrollback: 10000,
-                windowsMode: false
-            });
-
-            fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
-
-            // Load WebGL renderer for better performance and Unicode support
-            try {
-                const webglAddon = new WebglAddon.WebglAddon();
-                term.loadAddon(webglAddon);
-            } catch (e) {
-                console.warn('WebGL addon not available, using canvas renderer', e);
+        /**
+         * App Controller - Manages application state and screen transitions
+         */
+        class AppController {
+            constructor() {
+                this.currentScreen = null;
+                this.logoutBtn = null;
+                this.destroyBtn = null;
             }
 
-            // Load Unicode 11 addon for better character support
-            try {
-                const unicode11Addon = new Unicode11Addon.Unicode11Addon();
-                term.loadAddon(unicode11Addon);
-                term.unicode.activeVersion = '11';
-            } catch (e) {
-                console.warn('Unicode11 addon not available', e);
-            }
+            /**
+             * Initialize application
+             */
+            async init() {
+                console.log('App: Initializing');
 
-            term.open(document.getElementById('terminal'));
+                this.logoutBtn = document.getElementById('logoutBtn');
+                this.destroyBtn = document.getElementById('destroySessionBtn');
 
-            // Handle terminal input - send as raw bytes
-            term.onData(data => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    // Convert special symbols for mobile keyboard shortcuts
-                    if (data === '¥') {
-                        data = '\n';  // Yen = Newline
-                    } else if (data === '€') {
-                        data = '\t';  // Euro = Tab
-                    } else if (data === '￡' || data === '£') {
-                        data = '\x1b[Z';  // Pound (both variants) = Shift+Tab
+                // Initialize modules
+                Auth.init();
+                Launchpad.init();
+                TerminalController.init();
+
+                // Setup event listeners
+                this.setupEventListeners();
+
+                // Check if user is authenticated
+                if (Auth.isAuthenticated()) {
+                    console.log('App: User has token, verifying...');
+                    const isValid = await Auth.verifyToken();
+                    if (isValid) {
+                        this.showLaunchpad();
+                    } else {
+                        console.log('App: Token invalid, showing auth');
+                        this.showAuth();
                     }
-                    // Send input as binary frame
-                    ws.send(new TextEncoder().encode(data));
+                } else {
+                    console.log('App: No token, showing auth');
+                    this.showAuth();
                 }
-            });
+            }
 
-            // Handle window resize
-            window.addEventListener('resize', () => {
-                if (fitAddon) {
-                    fitAddon.fit();
-                    sendResize();
-                }
-            });
+            /**
+             * Setup event listeners
+             */
+            setupEventListeners() {
+                // Auth events
+                window.addEventListener('authenticated', () => {
+                    console.log('App: User authenticated');
+                    this.showLaunchpad();
+                });
 
-            // Auto-scroll terminal to bottom on focus (mobile keyboard fix)
-            const terminalElement = document.getElementById('terminal');
-            if (terminalElement) {
-                terminalElement.addEventListener('focus', () => {
-                    // Scroll terminal container to bottom
-                    const container = document.querySelector('.terminal-container');
-                    if (container) {
-                        setTimeout(() => {
-                            container.scrollIntoView({ behavior: 'smooth', block: 'end' });
-                        }, 100);
-                    }
-                }, true); // Use capture to catch focus events from xterm
+                window.addEventListener('auth-required', () => {
+                    console.log('App: Auth required');
+                    this.showAuth();
+                });
 
-                // Also handle click/touch events
-                terminalElement.addEventListener('click', () => {
-                    const container = document.querySelector('.terminal-container');
-                    if (container && window.innerWidth <= 768) {
-                        setTimeout(() => {
-                            container.scrollIntoView({ behavior: 'smooth', block: 'end' });
-                        }, 100);
-                    }
+                window.addEventListener('logged-out', () => {
+                    console.log('App: User logged out');
+                    this.showAuth();
+                });
+
+                // Session events
+                window.addEventListener('session-created', (e) => {
+                    console.log('App: Session created', e.detail);
+                    this.showTerminal(e.detail.session);
+                });
+
+                window.addEventListener('session-destroyed', () => {
+                    console.log('App: Session destroyed');
+                    this.showLaunchpad();
                 });
             }
 
-            term.writeln('\x1b[1;32mCloude Code Terminal\x1b[0m');
-            term.writeln('');
-            term.writeln('\x1b[2;37mKeyboard shortcuts:\x1b[0m');
-            term.writeln('  \x1b[2;37m¥\x1b[0m = Newline (Enter)');
-            term.writeln('  \x1b[2;37m€\x1b[0m = Tab');
-            term.writeln('  \x1b[2;37m￡\x1b[0m = Shift+Tab');
-            term.writeln('');
-            term.writeln('Waiting for session...\n');
-        }
-
-        // Send resize event to server
-        function sendResize() {
-            if (ws && ws.readyState === WebSocket.OPEN && term) {
-                ws.send(JSON.stringify({
-                    type: 'pty_resize',
-                    cols: term.cols,
-                    rows: term.rows
-                }));
+            /**
+             * Show auth screen
+             */
+            showAuth() {
+                console.log('App: Showing auth screen');
+                this.hideAllScreens();
+                document.getElementById('auth-screen').classList.add('active');
+                this.logoutBtn.classList.add('hidden');
+                this.destroyBtn.classList.add('hidden');
+                this.currentScreen = 'auth';
             }
-        }
 
-        // Create session
-        async function createSession() {
-            try {
-                updateStatus('Creating session...', 'status');
+            /**
+             * Show launchpad screen
+             */
+            showLaunchpad() {
+                console.log('App: Showing launchpad screen');
+                this.hideAllScreens();
+                document.getElementById('launchpad-screen').classList.add('active');
+                this.logoutBtn.classList.remove('hidden');
+                this.destroyBtn.classList.add('hidden');
+                this.currentScreen = 'launchpad';
 
-                const response = await fetch(`${API_BASE}/sessions`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ auto_start_claude: true })
+                // Reload projects
+                Launchpad.loadProjects();
+            }
+
+            /**
+             * Show terminal screen
+             */
+            showTerminal(session) {
+                console.log('App: Showing terminal screen');
+                this.hideAllScreens();
+                document.getElementById('terminal-screen').classList.add('active');
+                this.logoutBtn.classList.remove('hidden');
+                this.destroyBtn.classList.remove('hidden');
+                this.currentScreen = 'terminal';
+
+                // Connect terminal to session
+                TerminalController.connectToSession(session);
+            }
+
+            /**
+             * Hide all screens
+             */
+            hideAllScreens() {
+                document.querySelectorAll('.screen').forEach(screen => {
+                    screen.classList.remove('active');
                 });
+            }
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Failed to create session');
-                }
-
-                const session = await response.json();
-                console.log('Session created:', session);
-
-                sessionActive = true;
-                updateStatus('Session created! Connecting...', 'status');
-
-                // Note: setButtonState will be called by ws.onopen when connection succeeds
-                // For now, just disable Create button and enable Destroy
-                document.getElementById('createSessionBtn').disabled = true;
-                document.getElementById('destroySessionBtn').disabled = false;
-
-                // Auto-connect WebSocket
-                setTimeout(connectWebSocket, 500);
-
-            } catch (error) {
-                console.error('Error creating session:', error);
-
-                // If session already exists, connect to it
-                if (error.message.includes('already running')) {
-                    if (term) {
-                        term.writeln('\x1b[1;33m[Session already exists - connecting...]\x1b[0m');
-                    }
-                    updateStatus('Connecting to existing session...', 'status');
-
-                    // Check and connect to existing session
-                    setTimeout(async () => {
-                        const hasSession = await checkExistingSession();
-                        if (hasSession) {
-                            updateStatus('Connected to existing session', 'status connected');
+            /**
+             * Logout
+             */
+            async logout() {
+                if (confirm('Are you sure you want to logout?')) {
+                    // Destroy active session if exists
+                    if (TerminalController.sessionActive) {
+                        try {
+                            await TerminalController.destroySession();
+                        } catch (error) {
+                            console.error('App: Error destroying session during logout:', error);
                         }
-                    }, 500);
-                } else {
-                    updateStatus('Error: ' + error.message, 'status error');
-                    if (term) {
-                        term.writeln(`\x1b[1;31m[Error: ${error.message}]\x1b[0m`);
-                    }
-                }
-            }
-        }
-
-        // Check for existing session
-        async function checkExistingSession() {
-            try {
-                console.log('Checking for existing session...');
-                const response = await fetch(`${API_BASE}/sessions`);
-                console.log('Session check response status:', response.status);
-
-                if (!response.ok) {
-                    console.log('No existing session found (response not ok)');
-                    return false;
-                }
-
-                const data = await response.json();
-                console.log('Session data:', data);
-
-                // API returns {session: {...}, ...} structure
-                const session = data.session || data;
-
-                if (session && session.id) {
-                    console.log('Valid session found:', session.id);
-                    sessionActive = true;
-                    updateStatus('Existing session found', 'status');
-
-                    // Note: setButtonState will be called by ws.onopen when connection succeeds
-                    // For now, just disable Create button and enable Destroy
-                    document.getElementById('createSessionBtn').disabled = true;
-                    document.getElementById('destroySessionBtn').disabled = false;
-                    document.getElementById('sessionInfo').textContent =
-                        `Session: ${session.id} | PID: ${session.pty_pid} | Uptime: ${Math.floor((Date.now() - new Date(session.created_at)) / 1000)}s`;
-
-                    if (term) {
-                        term.writeln('\x1b[1;32m[Existing session found - connecting to WebSocket...]\x1b[0m');
                     }
 
-                    // Auto-connect WebSocket
-                    setTimeout(connectWebSocket, 500);
-
-                    // Load tunnels
-                    loadTunnels();
-
-                    return true;
+                    // Logout
+                    Auth.logout();
                 }
-
-                console.log('Session data invalid or missing');
-                return false;
-            } catch (error) {
-                console.error('Error checking existing session:', error);
-                if (term) {
-                    term.writeln(`\x1b[1;31m[Error checking session: ${error.message}]\x1b[0m`);
-                }
-                return false;
             }
         }
 
-        // Destroy session
-        async function destroySession() {
-            try {
-                updateStatus('Destroying session...', 'status');
-
-                const response = await fetch(`${API_BASE}/sessions`, {
-                    method: 'DELETE'
-                });
-
-                if (!response.ok) throw new Error('Failed to destroy session');
-
-                sessionActive = false;
-
-                // Stop any reconnection attempts
-                stopReconnecting();
-
-                if (ws) {
-                    ws.close();
-                    ws = null;
-                }
-
-                // Update button states to disconnected
-                setButtonState('disconnected');
-                document.getElementById('sessionInfo').textContent = 'No active session';
-
-                if (term) {
-                    term.clear();
-                    term.writeln('\x1b[1;31mSession destroyed\x1b[0m\n');
-                }
-
-            } catch (error) {
-                console.error('Error destroying session:', error);
-                updateStatus('Error: ' + error.message, 'status error');
-            }
-        }
-
-        // Wait for fonts and layout to be ready
-        async function waitForFontsAndLayout(container) {
-            if (document.fonts?.ready) {
-                try { await document.fonts.ready; } catch {}
-            }
-            // Ensure the container has non-zero size
-            const t0 = performance.now();
-            while ((container.offsetWidth|0) === 0 || (container.offsetHeight|0) === 0) {
-                if (performance.now() - t0 > 2000) break;
-                await new Promise(r => setTimeout(r, 16));
-            }
-            // Let layout settle
-            await new Promise(requestAnimationFrame);
-            await new Promise(requestAnimationFrame);
-        }
-
-        // Connect WebSocket
-        async function connectWebSocket() {
-            // If reconnecting, stop the reconnect loop
-            if (isReconnecting) {
-                stopReconnecting();
-                return;
-            }
-
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                console.log('Already connected');
-                return;
-            }
-
-            updateStatus('Connecting to terminal...', 'status');
-
-            // Wait for fonts and layout before connecting
-            const container = document.getElementById('terminal');
-            await waitForFontsAndLayout(container);
-            fitAddon.fit();
-
-            // Send resize notification (will be sent again after connection)
-            console.log('Terminal size:', term.cols, 'x', term.rows);
-
-            // Now connect
-            ws = new WebSocket(WS_URL);
-            ws.binaryType = 'arraybuffer';
-            setupWebSocketHandlers();
-        }
-
-        // Setup WebSocket event handlers (extracted from connectWebSocket)
-        function setupWebSocketHandlers() {
-            if (!ws) return;
-
-            ws.onopen = () => {
-                console.log('WebSocket connected');
-
-                // Reset reconnect state on successful connection
-                reconnectAttempts = 0;
-                isReconnecting = false;
-                if (reconnectTimeout) {
-                    clearTimeout(reconnectTimeout);
-                    reconnectTimeout = null;
-                }
-
-                // Update UI to connected state
-                setButtonState('connected');
-
-                if (term) {
-                    term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
-                }
-
-                // Send initial resize with real dimensions
-                sendResize();
-
-                // Start keepalive ping to prevent timeout
-                if (keepaliveInterval) {
-                    clearInterval(keepaliveInterval);
-                }
-                keepaliveInterval = setInterval(() => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({type: "ping"}));
-                        console.log('Sent keepalive ping');
-                    }
-                }, 30000); // Send ping every 30 seconds
-                console.log('Keepalive started (30s interval)');
-            };
-
-            ws.onmessage = (event) => {
-                // Handle binary frames (PTY data)
-                if (event.data instanceof ArrayBuffer) {
-                    enqueue(new Uint8Array(event.data));
-                    return;
-                }
-
-                // Handle JSON control messages
-                try {
-                    const message = JSON.parse(event.data);
-                    handleWebSocketMessage(message);
-                } catch (error) {
-                    console.error('Failed to parse message:', error);
-                }
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                updateStatus('WebSocket error', 'status error');
-            };
-
-            ws.onclose = () => {
-                console.log('WebSocket closed');
-                ws = null;
-
-                // Stop keepalive
-                if (keepaliveInterval) {
-                    clearInterval(keepaliveInterval);
-                    keepaliveInterval = null;
-                    console.log('Keepalive stopped');
-                }
-
-                if (term) {
-                    term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
-                }
-
-                // Attempt auto-reconnect if session still active and not manually stopped
-                if (sessionActive && !isReconnecting) {
-                    attemptReconnect();
-                } else if (!sessionActive) {
-                    setButtonState('disconnected');
-                }
-            };
-        }
-
-
-        // Handle WebSocket messages
-        function handleWebSocketMessage(message) {
-            const type = message.type;
-
-            // Note: pty_data is now handled as binary frames, not JSON
-            if (type === 'log') {
-                // System log message
-                if (term && message.content) {
-                    term.writeln(`\x1b[1;33m${message.content}\x1b[0m`);
-                }
-            } else if (type === 'tunnel_created') {
-                // Tunnel created
-                if (term) {
-                    term.writeln(`\x1b[1;36m[Tunnel created: ${message.tunnel.public_url}]\x1b[0m`);
-                }
-                loadTunnels();
-            } else if (type === 'error') {
-                // Error message
-                if (term) {
-                    term.writeln(`\x1b[1;31m[Error: ${message.message}]\x1b[0m`);
-                }
-            } else if (type === 'pong') {
-                // Pong response to keepalive ping
-                console.log('Received pong');
-            }
-        }
-
-        // Load tunnels
-        async function loadTunnels() {
-            try {
-                const response = await fetch(`${API_BASE}/tunnels`);
-                if (!response.ok) return;
-
-                const tunnels = await response.json();
-                const container = document.getElementById('tunnelsContainer');
-                const list = document.getElementById('tunnelsList');
-
-                if (tunnels.length > 0) {
-                    container.style.display = 'block';
-                    list.innerHTML = tunnels.map(tunnel => `
-                        <div class="tunnel-item">
-                            <strong>Port ${tunnel.port}:</strong>
-                            <a href="${tunnel.public_url}" target="_blank">${tunnel.public_url}</a>
-                        </div>
-                    `).join('');
-                } else {
-                    container.style.display = 'none';
-                }
-            } catch (error) {
-                console.error('Error loading tunnels:', error);
-            }
-        }
-
-        // Update status
-        function updateStatus(text, className) {
-            const statusEl = document.getElementById('statusText');
-            statusEl.setAttribute('data-status', text);
-            statusEl.className = 'status ' + className;
-        }
-
-        // Button state management
-        function setButtonState(state) {
-            const createBtn = document.getElementById('createSessionBtn');
-            const connectBtn = document.getElementById('connectWsBtn');
-            const destroyBtn = document.getElementById('destroySessionBtn');
-
-            if (state === 'connected') {
-                // State: Connected - show disabled Create, enabled Destroy
-                createBtn.disabled = true;
-                createBtn.style.display = 'flex';
-                connectBtn.style.display = 'none';
-                destroyBtn.disabled = false;
-                updateStatus('Connected', 'status connected');
-            } else if (state === 'reconnecting') {
-                // State: Reconnecting - show enabled Connect (as stop button), disabled Destroy
-                createBtn.style.display = 'none';
-                connectBtn.style.display = 'flex';
-                connectBtn.disabled = false;
-                connectBtn.setAttribute('data-tooltip', 'Stop reconnecting');
-                destroyBtn.disabled = true;
-                updateStatus('Reconnecting...', 'status');
-            } else if (state === 'disconnected') {
-                // State: No session - show enabled Create, disabled Destroy
-                createBtn.disabled = false;
-                createBtn.style.display = 'flex';
-                connectBtn.style.display = 'none';
-                destroyBtn.disabled = true;
-                updateStatus('Ready', 'status');
-            }
-        }
-
-        // Stop reconnection attempts
-        function stopReconnecting() {
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
-            }
-            isReconnecting = false;
-            reconnectAttempts = 0;
-            console.log('Reconnection stopped by user');
-        }
-
-        // Auto-reconnect function
-        function attemptReconnect() {
-            if (!sessionActive || reconnectAttempts >= maxReconnectAttempts) {
-                if (reconnectAttempts >= maxReconnectAttempts) {
-                    console.log('Max reconnect attempts reached');
-                    updateStatus('Connection failed', 'status error');
-                    if (term) {
-                        term.writeln('\n\x1b[1;31m[Reconnection failed after ' + maxReconnectAttempts + ' attempts]\x1b[0m');
-                    }
-                }
-                stopReconnecting();
-                return;
-            }
-
-            isReconnecting = true;
-            reconnectAttempts++;
-
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 16000);
-
-            console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts} in ${delay}ms`);
-            setButtonState('reconnecting');
-
-            if (term) {
-                term.writeln(`\n\x1b[1;33m[Reconnecting... Attempt ${reconnectAttempts}/${maxReconnectAttempts}]\x1b[0m`);
-            }
-
-            reconnectTimeout = setTimeout(() => {
-                connectWebSocket();
-            }, delay);
-        }
+        // Create app instance
+        const App = new AppController();
 
         // Initialize on load
-        window.addEventListener('load', async () => {
-            initTerminal();
-
-            // Set initial button state
-            setButtonState('disconnected');
-
-            // Always try to check for existing session first
-            if (term) {
-                term.writeln('\x1b[1;36m[Checking for existing session...]\x1b[0m');
-            }
-
-            try {
-                console.log('[INIT] Checking for existing session...');
-                const hasExisting = await checkExistingSession();
-                console.log('[INIT] checkExistingSession returned:', hasExisting);
-
-                // If no existing session, auto-create one
-                if (!hasExisting) {
-                    console.log('[INIT] No session found, will create new session in 500ms');
-                    if (term) {
-                        term.writeln('\x1b[1;33m[No existing session found - creating new session...]\x1b[0m');
-                    }
-                    setTimeout(() => {
-                        console.log('[INIT] Calling createSession()...');
-                        createSession();
-                    }, 500);
-                } else {
-                    console.log('[INIT] Existing session found, skipping auto-create');
-                }
-            } catch (error) {
-                console.error('[INIT] Error during initialization:', error);
-                if (term) {
-                    term.writeln('\x1b[1;31m[Error checking session - will retry...]\x1b[0m');
-                }
-                // Retry after a delay
-                setTimeout(() => {
-                    console.log('[INIT] Retrying checkExistingSession...');
-                    checkExistingSession();
-                }, 2000);
-            }
+        window.addEventListener('load', () => {
+            App.init();
         });
     </script>
 </body>
