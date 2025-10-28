@@ -240,7 +240,12 @@
             }
 
             term.open(document.getElementById('terminal'));
-            fitAddon.fit();
+
+            // Use requestAnimationFrame to ensure terminal layout is complete
+            // before any WebSocket connections (fixes race condition)
+            requestAnimationFrame(() => {
+                fitAddon.fit();
+            });
 
             // Handle terminal input
             term.onData(data => {
@@ -428,7 +433,20 @@
 
             updateStatus('Connecting to terminal...', 'status');
 
-            ws = new WebSocket(WS_URL);
+            // Ensure terminal is fully laid out before connecting WebSocket
+            // Use requestAnimationFrame to wait for browser layout calculations
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    // Double RAF ensures layout + paint are complete
+                    ws = new WebSocket(WS_URL);
+                    setupWebSocketHandlers();
+                });
+            });
+        }
+
+        // Setup WebSocket event handlers (extracted from connectWebSocket)
+        function setupWebSocketHandlers() {
+            if (!ws) return;
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -466,6 +484,7 @@
                 }
             };
         }
+
 
         // Handle WebSocket messages
         function handleWebSocketMessage(message) {

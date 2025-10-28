@@ -90,14 +90,9 @@ class PTYSession:
                 flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
                 fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-                # Configure terminal attributes - disable line ending conversion
-                # Let xterm.js handle all line ending rendering
-                attrs = termios.tcgetattr(self.master_fd)
-                # Input flags: don't convert CR to NL
-                attrs[0] &= ~termios.ICRNL
-                # Output flags: don't convert NL to CR-NL (xterm.js handles this)
-                attrs[1] &= ~termios.ONLCR
-                termios.tcsetattr(self.master_fd, termios.TCSANOW, attrs)
+                # Don't set any terminal attributes - use defaults
+                # The PTY and xterm.js will handle line endings naturally
+                pass
 
                 # Set initial terminal size
                 self._set_terminal_size(80, 24)
