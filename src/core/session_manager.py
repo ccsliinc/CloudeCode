@@ -383,7 +383,8 @@ class SessionManager:
         Returns:
             SessionInfo object or None if no session exists
         """
-        if not self.session:
+        # Check if we have a valid active session with PTY
+        if not self.has_active_session():
             return None
 
         # Calculate uptime
