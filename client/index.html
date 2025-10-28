@@ -331,6 +331,9 @@
         let maxReconnectAttempts = 5;
         let isReconnecting = false;
 
+        // WebSocket keepalive
+        let keepaliveInterval = null;
+
         // Single-writer queue for PTY data
         const queue = [];
         let flushing = false;
@@ -427,8 +430,8 @@
                         data = '\n';  // Yen = Newline
                     } else if (data === '€') {
                         data = '\t';  // Euro = Tab
-                    } else if (data === '￡') {
-                        data = '\x1b[Z';  // Pound = Shift+Tab
+                    } else if (data === '￡' || data === '£') {
+                        data = '\x1b[Z';  // Pound (both variants) = Shift+Tab
                     }
                     // Send input as binary frame
                     ws.send(new TextEncoder().encode(data));
@@ -703,6 +706,18 @@
 
                 // Send initial resize with real dimensions
                 sendResize();
+
+                // Start keepalive ping to prevent timeout
+                if (keepaliveInterval) {
+                    clearInterval(keepaliveInterval);
+                }
+                keepaliveInterval = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({type: "ping"}));
+                        console.log('Sent keepalive ping');
+                    }
+                }, 30000); // Send ping every 30 seconds
+                console.log('Keepalive started (30s interval)');
             };
 
             ws.onmessage = (event) => {
@@ -729,6 +744,13 @@
             ws.onclose = () => {
                 console.log('WebSocket closed');
                 ws = null;
+
+                // Stop keepalive
+                if (keepaliveInterval) {
+                    clearInterval(keepaliveInterval);
+                    keepaliveInterval = null;
+                    console.log('Keepalive stopped');
+                }
 
                 if (term) {
                     term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
@@ -765,6 +787,9 @@
                 if (term) {
                     term.writeln(`\x1b[1;31m[Error: ${message.message}]\x1b[0m`);
                 }
+            } else if (type === 'pong') {
+                // Pong response to keepalive ping
+                console.log('Received pong');
             }
         }
 
