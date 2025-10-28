@@ -154,47 +154,63 @@ async def receive_messages(websocket: WebSocket, session_manager):
     """
     try:
         while True:
-            # Wait for message from client
-            data = await websocket.receive_text()
-
+            # Try to receive binary data first (PTY input)
             try:
-                message = json.loads(data)
-                msg_type = message.get("type")
+                message = await websocket.receive()
 
-                if msg_type == WSMessageType.PTY_DATA:
-                    # Handle PTY input from client
-                    input_msg = WSPTYInputMessage(**message)
-                    logger.debug("pty_input_received", data_len=len(input_msg.data))
-
+                # Handle binary PTY input
+                if "bytes" in message:
+                    data = message["bytes"]
+                    logger.debug("pty_input_received", data_len=len(data))
                     try:
-                        await session_manager.send_input(input_msg.data)
+                        # Convert bytes to string for PTY input
+                        text = data.decode('utf-8')
+                        await session_manager.send_input(text)
                     except Exception as e:
-                        # Send error back to client
+                        logger.error("input_failed", error=str(e))
                         error_msg = WSErrorMessage(
                             error="input_failed",
                             message=str(e)
                         )
                         await websocket.send_text(error_msg.model_dump_json())
 
-                elif msg_type == WSMessageType.PTY_RESIZE:
-                    # Handle terminal resize
-                    resize_msg = WSPTYResizeMessage(**message)
-                    logger.info("terminal_resize_request", cols=resize_msg.cols, rows=resize_msg.rows)
-
+                # Handle text messages (control messages)
+                elif "text" in message:
+                    data = message["text"]
                     try:
-                        session_manager.resize_terminal(resize_msg.cols, resize_msg.rows)
+                        msg = json.loads(data)
+                        msg_type = msg.get("type")
+
+                        if msg_type == WSMessageType.PTY_RESIZE:
+                            # Handle terminal resize
+                            resize_msg = WSPTYResizeMessage(**msg)
+                            logger.info("terminal_resize_request", cols=resize_msg.cols, rows=resize_msg.rows)
+                            try:
+                                session_manager.resize_terminal(resize_msg.cols, resize_msg.rows)
+                            except Exception as e:
+                                logger.error("resize_failed", error=str(e))
+
+                        elif msg_type == WSMessageType.PING:
+                            # Respond to ping
+                            pong_msg = {"type": WSMessageType.PONG}
+                            await websocket.send_text(json.dumps(pong_msg))
+
+                    except json.JSONDecodeError:
+                        logger.warning("invalid_json_received", data=data[:100])
                     except Exception as e:
-                        logger.error("resize_failed", error=str(e))
+                        logger.error("message_processing_error", error=str(e))
 
-                elif msg_type == WSMessageType.PING:
-                    # Respond to ping
-                    pong_msg = {"type": WSMessageType.PONG}
-                    await websocket.send_text(json.dumps(pong_msg))
-
-            except json.JSONDecodeError:
-                logger.warning("invalid_json_received", data=data[:100])
+            except RuntimeError as e:
+                # Handle the case where websocket is already disconnected
+                if "Cannot call \"receive\" once a disconnect message has been received" in str(e):
+                    logger.debug("websocket_already_disconnected", error=str(e))
+                    break
+                else:
+                    logger.error("receive_error", error=str(e))
+                    raise
             except Exception as e:
-                logger.error("message_processing_error", error=str(e))
+                logger.error("receive_error", error=str(e))
+                raise
 
     except WebSocketDisconnect:
         raise
@@ -205,21 +221,22 @@ async def receive_messages(websocket: WebSocket, session_manager):
 
 async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue):
     """
-    Send PTY output from queue to the WebSocket client.
+    Send PTY output from queue to the WebSocket client as binary frames.
 
     Args:
         websocket: WebSocket connection
-        queue: Queue containing PTY output (base64 encoded)
+        queue: Queue containing PTY output (base64 encoded strings)
     """
     try:
         while True:
-            # Wait for PTY output
+            # Wait for PTY output (base64 encoded)
             encoded_data = await queue.get()
 
             try:
-                # Send to client
-                msg = WSPTYDataMessage(data=encoded_data)
-                await websocket.send_text(msg.model_dump_json())
+                # Decode base64 to raw bytes
+                raw_bytes = base64.b64decode(encoded_data)
+                # Send as binary frame directly
+                await websocket.send_bytes(raw_bytes)
             except Exception as e:
                 logger.error("send_pty_output_error", error=str(e))
                 raise

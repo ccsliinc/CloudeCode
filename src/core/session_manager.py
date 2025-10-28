@@ -60,9 +60,23 @@ class SessionManager:
                         session_id=self.session.id,
                         pty_pid=self.session.pty_pid
                     )
-                    self.session.status = SessionStatus.STOPPED
+                    # Clean up stale session metadata
+                    logger.info("cleaning_up_stale_session", session_id=self.session.id)
+                    try:
+                        metadata_path.unlink()
+                        logger.info("stale_session_metadata_deleted")
+                    except Exception as e:
+                        logger.error("failed_to_delete_stale_metadata", error=str(e))
+                    self.session = None
             else:
-                self.session.status = SessionStatus.STOPPED
+                # No PTY PID means invalid session, clean it up
+                logger.info("cleaning_up_session_without_pty", session_id=self.session.id)
+                try:
+                    metadata_path.unlink()
+                    logger.info("invalid_session_metadata_deleted")
+                except Exception as e:
+                    logger.error("failed_to_delete_invalid_metadata", error=str(e))
+                self.session = None
 
         except Exception as e:
             logger.error("failed_to_load_session_metadata", error=str(e))
@@ -394,6 +408,10 @@ class SessionManager:
         Check if there's an active session.
 
         Returns:
-            True if session exists and is running
+            True if session exists and is running with a valid PTY
         """
-        return self.session is not None and self.session.status == SessionStatus.RUNNING
+        return (
+            self.session is not None
+            and self.session.status == SessionStatus.RUNNING
+            and self.pty is not None
+        )

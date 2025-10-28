@@ -72,6 +72,29 @@ tmux -L claude-controller kill-session -t claude-code-session
 3. CORS settings in config allow your origin
 4. No firewall blocking WebSocket connections
 
+### Stale session on startup (requires manual destroy/create)
+**Issue**: After running `stop.sh`, next startup shows an old session that doesn't work. User must manually destroy and create new session.
+
+**Root Cause**:
+- `stop.sh` kills PTY processes but leaves session metadata file
+- On startup, app tries to restore session from metadata but PTY is dead
+- Creates "zombie" session that appears active but has no working PTY
+
+**Fix Applied** (v1.0.1):
+- Session manager now auto-deletes stale session metadata on startup
+- Validates PTY process exists before restoring session
+- Enhanced `has_active_session()` to check PTY validity
+- WebSocket disconnect errors handled gracefully
+
+**If issue persists**:
+```bash
+# Manually delete stale metadata
+rm /tmp/claude-code-logs/session_metadata.json
+
+# Restart service
+./stop.sh && ./start.sh
+```
+
 ## Common Patterns
 
 ### Check if server is running
