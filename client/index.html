@@ -43,6 +43,12 @@
             white-space: nowrap;
         }
 
+        .version {
+            font-size: 0.7rem;
+            color: #888;
+            font-weight: normal;
+        }
+
         .controls {
             display: flex;
             gap: 8px;
@@ -283,7 +289,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>☁️🤖 Cloude Code v0.1</h1>
+        <h1>☁️ Cloude Code <span class="version">v0.1</span></h1>
         <div class="controls">
             <button onclick="createSession()" id="createSessionBtn" data-tooltip="Create Session">⚡</button>
             <button onclick="connectWebSocket()" id="connectWsBtn" disabled data-tooltip="Connect Terminal">🔌</button>
@@ -913,22 +919,33 @@
             }
 
             try {
+                console.log('[INIT] Checking for existing session...');
                 const hasExisting = await checkExistingSession();
+                console.log('[INIT] checkExistingSession returned:', hasExisting);
 
                 // If no existing session, auto-create one
                 if (!hasExisting) {
+                    console.log('[INIT] No session found, will create new session in 500ms');
                     if (term) {
                         term.writeln('\x1b[1;33m[No existing session found - creating new session...]\x1b[0m');
                     }
-                    setTimeout(createSession, 500);
+                    setTimeout(() => {
+                        console.log('[INIT] Calling createSession()...');
+                        createSession();
+                    }, 500);
+                } else {
+                    console.log('[INIT] Existing session found, skipping auto-create');
                 }
             } catch (error) {
-                console.error('Error during initialization:', error);
+                console.error('[INIT] Error during initialization:', error);
                 if (term) {
                     term.writeln('\x1b[1;31m[Error checking session - will retry...]\x1b[0m');
                 }
                 // Retry after a delay
-                setTimeout(() => checkExistingSession(), 2000);
+                setTimeout(() => {
+                    console.log('[INIT] Retrying checkExistingSession...');
+                    checkExistingSession();
+                }, 2000);
             }
         });
     </script>
