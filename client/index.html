@@ -166,39 +166,6 @@
             opacity: 1;
         }
 
-        /* Floating newline button for mobile */
-        .newline-btn {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: rgba(215, 119, 87, 0.3);
-            border: 1px solid rgba(215, 119, 87, 0.5);
-            color: #d77757;
-            font-size: 24px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        }
-
-        .newline-btn:hover {
-            background: rgba(215, 119, 87, 0.5);
-            border-color: #d77757;
-            box-shadow: 0 0 16px rgba(215, 119, 87, 0.5);
-            transform: scale(1.1);
-        }
-
-        .newline-btn:active {
-            transform: scale(0.95);
-        }
-
         /* Mobile responsive */
         @media (max-width: 768px) {
             .header {
@@ -251,13 +218,6 @@
             .terminal-container {
                 padding: 8px;
                 min-height: 300px;
-            }
-        }
-
-        /* Desktop: Hide newline button */
-        @media (min-width: 769px) {
-            .newline-btn {
-                display: none;
             }
         }
 
@@ -335,9 +295,6 @@
     <div class="terminal-container">
         <div id="terminal"></div>
     </div>
-
-    <!-- Floating newline button for mobile -->
-    <button class="newline-btn" id="newlineBtn" title="Insert newline">↵</button>
 
     <div class="tunnels" id="tunnelsContainer" style="display: none;">
         <h3>Active Tunnels</h3>
@@ -465,6 +422,10 @@
             // Handle terminal input - send as raw bytes
             term.onData(data => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
+                    // Convert Yen symbol (¥) to newline for mobile users
+                    if (data === '¥') {
+                        data = '\n';
+                    }
                     // Send input as binary frame
                     ws.send(new TextEncoder().encode(data));
                 }
@@ -477,16 +438,6 @@
                     sendResize();
                 }
             });
-
-            // Mobile newline button handler
-            const newlineBtn = document.getElementById('newlineBtn');
-            if (newlineBtn) {
-                newlineBtn.addEventListener('click', () => {
-                    if (term) {
-                        term.write('\n');
-                    }
-                });
-            }
 
             // Auto-scroll terminal to bottom on focus (mobile keyboard fix)
             const terminalElement = document.getElementById('terminal');
