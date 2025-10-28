@@ -146,7 +146,7 @@ class NamedTunnelManager:
                 # Root domain points to the FastAPI app on port 8000
                 {
                     "hostname": self.domain,
-                    "service": "http://localhost:8000"
+                    "service": "http://127.0.0.1:8000"
                 },
                 # Default rule (required, must be last)
                 {"service": "http_status:404"}
@@ -197,8 +197,8 @@ class NamedTunnelManager:
             if check_result.returncode == 0 and check_result.stdout.strip():
                 pid = check_result.stdout.strip().split('\n')[0]
                 logger.info("tunnel_process_started", pid=pid, log_file=str(log_file))
-                # Store a dummy process object with the PID for reference
-                self._tunnel_process = type('obj', (object,), {'pid': int(pid), 'poll': lambda: None})()
+                # Store PID directly instead of dummy object
+                self._tunnel_process = int(pid)
             else:
                 with open(log_file, "r") as f:
                     log_output = f.read()
@@ -249,7 +249,7 @@ class NamedTunnelManager:
                 port=port,
                 public_url=public_url,
                 status=TunnelStatus.ACTIVE,
-                process_pid=self._tunnel_process.pid if self._tunnel_process else None
+                process_pid=self._tunnel_process if self._tunnel_process else None
             )
 
             self.tunnels[port] = tunnel
@@ -286,7 +286,7 @@ class NamedTunnelManager:
             # Add new ingress rule (before the catch-all 404 rule)
             new_rule = {
                 "hostname": f"{port}.{self.domain}",
-                "service": f"http://localhost:{port}"
+                "service": f"http://127.0.0.1:{port}"
             }
 
             # Insert before the last rule (which should be the 404 catch-all)
@@ -300,11 +300,11 @@ class NamedTunnelManager:
 
             # Reload tunnel configuration
             # Send SIGHUP to cloudflared process to reload config
-            if self._tunnel_process and hasattr(self._tunnel_process, 'pid'):
+            if self._tunnel_process:
                 try:
                     import os
                     import signal
-                    os.kill(int(self._tunnel_process.pid), signal.SIGHUP)
+                    os.kill(self._tunnel_process, signal.SIGHUP)
                     logger.info("tunnel_config_reloaded")
                 except Exception as e:
                     logger.warning("tunnel_config_reload_failed", error=str(e))
@@ -371,11 +371,11 @@ class NamedTunnelManager:
             logger.info("ingress_rule_removed", port=port)
 
             # Reload tunnel configuration
-            if self._tunnel_process and hasattr(self._tunnel_process, 'pid'):
+            if self._tunnel_process:
                 try:
                     import os
                     import signal
-                    os.kill(int(self._tunnel_process.pid), signal.SIGHUP)
+                    os.kill(self._tunnel_process, signal.SIGHUP)
                     logger.info("tunnel_config_reloaded")
                 except Exception as e:
                     logger.warning("tunnel_config_reload_failed", error=str(e))
@@ -389,13 +389,22 @@ class NamedTunnelManager:
         logger.info("shutting_down_named_tunnel")
 
         if self._tunnel_process:
-            self._tunnel_process.terminate()
-
             try:
-                self._tunnel_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                logger.warning("tunnel_process_not_terminating_killing")
-                self._tunnel_process.kill()
+                import os
+                import signal
+                os.kill(self._tunnel_process, signal.SIGTERM)
+                await asyncio.sleep(2)
+                # Check if still running
+                try:
+                    os.kill(self._tunnel_process, 0)
+                    # Still running, force kill
+                    logger.warning("tunnel_process_not_terminating_killing")
+                    os.kill(self._tunnel_process, signal.SIGKILL)
+                except ProcessLookupError:
+                    # Process already dead
+                    pass
+            except Exception as e:
+                logger.error("tunnel_shutdown_error", error=str(e))
 
         logger.info("named_tunnel_shutdown_complete")
 

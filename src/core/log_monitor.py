@@ -109,14 +109,14 @@ class LogMonitor:
                 #
                 #         # Broadcast to subscribers
                 #         await self._broadcast_log(new_content)
-
-                        # Detect patterns
-                        self._detect_patterns(new_content)
-
-                    self._last_output = output
-
-                # Poll every 500ms
-                await asyncio.sleep(0.5)
+                #
+                #         # Detect patterns
+                #         self._detect_patterns(new_content)
+                #
+                #     self._last_output = output
+                #
+                # # Poll every 500ms
+                # await asyncio.sleep(0.5)
 
             except Exception as e:
                 logger.error("monitor_loop_error", error=str(e))
