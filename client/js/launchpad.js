@@ -2,6 +2,8 @@
  * Launchpad Module - Project selection UI with terminal aesthetic
  */
 
+console.log('[Launchpad Module] Loading...');
+
 class Launchpad {
     constructor() {
         this.launchpadScreen = null;
@@ -14,6 +16,7 @@ class Launchpad {
     init() {
         this.launchpadScreen = document.getElementById('launchpad-screen');
         this.renderLaunchpadUI();
+        // Note: loadProjects() will be called by App.showLaunchpad()
     }
 
     /**
@@ -60,8 +63,7 @@ class Launchpad {
             this.createNewSession();
         });
 
-        // Load projects
-        this.loadProjects();
+        // Note: loadProjects() will be called by App.showLaunchpad()
     }
 
     /**
@@ -185,3 +187,4 @@ class Launchpad {
 
 // Export singleton instance
 window.Launchpad = new Launchpad();
+console.log('[Launchpad Module] Exported as window.Launchpad:', window.Launchpad);

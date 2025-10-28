@@ -176,8 +176,8 @@ async def get_totp_qr():
         # Create TOTP URI
         totp = pyotp.TOTP(auth_config.totp_secret)
         uri = totp.provisioning_uri(
-            name="ClaudeTunnel",
-            issuer_name="ClaudeTunnel"
+            name="Cloude Code",
+            issuer_name="Cloude Code"
         )
 
         # Generate QR code

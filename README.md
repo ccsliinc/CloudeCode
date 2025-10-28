@@ -22,7 +22,7 @@ Remote control and monitoring system for Claude Code development sessions. Contr
 
 1. Clone the repository:
 ```bash
-cd ClaudeTunnel
+cd "Cloude Code"
 ```
 
 2. Create virtual environment and install dependencies:
@@ -270,7 +270,7 @@ The system will automatically:
 ### Project Structure
 
 ```
-ClaudeTunnel/
+Cloude Code/
 ├── src/
 │   ├── main.py              # FastAPI app
 │   ├── config.py            # Configuration

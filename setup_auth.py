@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Setup script for ClaudeTunnel authentication.
+"""Setup script for Cloude Code authentication.
 
 Generates TOTP secret and JWT secret, creates config file.
 """
@@ -67,7 +67,7 @@ def generate_jwt_secret():
     return secrets.token_urlsafe(32)
 
 
-def generate_qr_code(secret: str, account_name: str = "ClaudeTunnel"):
+def generate_qr_code(secret: str, account_name: str = "Cloude Code"):
     """Generate QR code for TOTP secret."""
     import pyotp
     import qrcode
@@ -75,7 +75,7 @@ def generate_qr_code(secret: str, account_name: str = "ClaudeTunnel"):
     totp = pyotp.TOTP(secret)
     uri = totp.provisioning_uri(
         name=account_name,
-        issuer_name="ClaudeTunnel"
+        issuer_name="Cloude Code"
     )
 
     # Generate QR code
@@ -100,7 +100,7 @@ def main():
     check_and_setup_venv()
 
     print("=" * 70)
-    print("ClaudeTunnel Authentication Setup")
+    print("Cloude Code Authentication Setup")
     print("=" * 70)
     print()
 
@@ -159,7 +159,7 @@ def main():
     print("2. Edit your config file to update project paths:")
     print(f"   {config_path}")
     print("3. Update the template_path to your .claude template directory")
-    print("4. Restart the ClaudeTunnel server:")
+    print("4. Restart the Cloude Code server:")
     print("   ./stop.sh && ./start.sh")
     print()
     print("You're all set! Access the app and log in with your TOTP code.")

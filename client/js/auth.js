@@ -2,6 +2,8 @@
  * Auth Module - Handles authentication, token management, and auth UI
  */
 
+console.log('[Auth Module] Loading...');
+
 class Auth {
     constructor() {
         this.tokenKey = 'claude_tunnel_token';
@@ -26,7 +28,7 @@ class Auth {
     renderAuthUI() {
         this.authScreen.innerHTML = `
             <div class="auth-container">
-                <div class="auth-prompt">☁️ claude tunnel authentication</div>
+                <div class="auth-prompt">☁️🤖 Cloude Code Authentication</div>
                 <div class="auth-description">
                     enter your 6-digit totp code from your authenticator app to access claude code sessions.
                 </div>
@@ -69,9 +71,14 @@ class Auth {
             }
         });
 
-        // Filter non-numeric input
+        // Filter non-numeric input and auto-submit on 6 digits
         this.totpInput.addEventListener('input', (e) => {
             e.target.value = e.target.value.replace(/[^0-9]/g, '');
+
+            // Auto-submit when 6 digits are entered
+            if (e.target.value.length === 6) {
+                this.handleLogin();
+            }
         });
 
         // Check if setup is needed
@@ -224,3 +231,4 @@ class Auth {
 
 // Export singleton instance
 window.Auth = new Auth();
+console.log('[Auth Module] Exported as window.Auth:', window.Auth);

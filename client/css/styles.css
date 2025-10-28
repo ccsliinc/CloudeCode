@@ -91,8 +91,8 @@ button.danger:hover:not(:disabled) {
     box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
 }
 
-/* Tooltip on hover */
-button::after {
+/* Tooltip on hover (only for buttons with data-tooltip) */
+button[data-tooltip]::after {
     content: attr(data-tooltip);
     position: absolute;
     bottom: -30px;
@@ -110,7 +110,7 @@ button::after {
     border: 1px solid #d77757;
 }
 
-button:hover::after {
+button[data-tooltip]:hover::after {
     opacity: 1;
 }
 

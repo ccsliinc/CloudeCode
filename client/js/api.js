@@ -2,6 +2,8 @@
  * API Module - Handles all API calls with JWT token injection
  */
 
+console.log('[API Module] Loading...');
+
 class API {
     constructor() {
         const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
@@ -206,3 +208,4 @@ class API {
 
 // Export singleton instance
 window.API = new API();
+console.log('[API Module] Exported as window.API:', window.API);

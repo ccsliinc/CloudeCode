@@ -1,4 +1,4 @@
-# ClaudeTunnel Work Log
+# Cloude Code Work Log
 
 ## Session: 2025-10-28 - Public Access Fix
 
@@ -480,7 +480,7 @@ User should:
 ## Session: 2025-10-28 - TOTP Authentication & Project Launchpad
 
 ### Overall Goal (Updated)
-Transform ClaudeTunnel into a **secure multi-project Claude Code launcher** with:
+Transform Cloude Code into a **secure multi-project Claude Code launcher** with:
 1. **TOTP 2FA Authentication** - Login required before accessing any sessions
 2. **Project Launchpad** - Choose from preset projects or create new sessions
 3. **Template Management** - Auto-copy .claude config to new sessions
@@ -850,7 +850,7 @@ client/
 - [ ] Can navigate back to launchpad
 - [ ] Token expiry handled gracefully
 
-**Once frontend is complete, ClaudeTunnel will be a secure, multi-project Claude Code launcher accessible at https://claude.adoom.nyc!**
+**Once frontend is complete, Cloude Code will be a secure, multi-project Claude Code launcher accessible at https://claude.adoom.nyc!**
 
 ---
 
@@ -1234,4 +1234,4 @@ Total: 1,618 lines (vs original 954-line monolithic index.html)
 
 **🎉 FRONTEND IMPLEMENTATION COMPLETE!**
 
-ClaudeTunnel is now a fully functional, secure, multi-project Claude Code launcher with TOTP authentication, accessible at https://claude.adoom.nyc!
+Cloude Code is now a fully functional, secure, multi-project Claude Code launcher with TOTP authentication, accessible at https://claude.adoom.nyc!

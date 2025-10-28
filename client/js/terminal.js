@@ -2,6 +2,8 @@
  * Terminal Module - Handles xterm.js terminal and WebSocket PTY connection
  */
 
+console.log('[Terminal Module] Loading...');
+
 class Terminal {
     constructor() {
         this.ws = null;
@@ -494,3 +496,4 @@ class Terminal {
 
 // Export singleton instance
 window.TerminalController = new Terminal();
+console.log('[Terminal Module] Exported as window.TerminalController:', window.TerminalController);

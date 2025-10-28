@@ -16,7 +16,7 @@
         <h1>☁️ Cloude Code <span class="version">v0.2</span></h1>
         <div class="controls">
             <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">🔓</button>
-            <button onclick="TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">💀</button>
+            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">💀</button>
             <span class="status" id="statusText" data-status="Ready"></span>
         </div>
     </div>
@@ -76,18 +76,16 @@
                 this.logoutBtn = document.getElementById('logoutBtn');
                 this.destroyBtn = document.getElementById('destroySessionBtn');
 
-                // Initialize modules
-                Auth.init();
-                Launchpad.init();
-                TerminalController.init();
-
                 // Setup event listeners
                 this.setupEventListeners();
 
+                // Initialize auth module (always needed first)
+                window.Auth.init();
+
                 // Check if user is authenticated
-                if (Auth.isAuthenticated()) {
+                if (window.Auth.isAuthenticated()) {
                     console.log('App: User has token, verifying...');
-                    const isValid = await Auth.verifyToken();
+                    const isValid = await window.Auth.verifyToken();
                     if (isValid) {
                         this.showLaunchpad();
                     } else {
@@ -155,8 +153,13 @@
                 this.destroyBtn.classList.add('hidden');
                 this.currentScreen = 'launchpad';
 
+                // Initialize launchpad if first time
+                if (!window.Launchpad.launchpadScreen) {
+                    window.Launchpad.init();
+                }
+
                 // Reload projects
-                Launchpad.loadProjects();
+                window.Launchpad.loadProjects();
             }
 
             /**
@@ -170,8 +173,13 @@
                 this.destroyBtn.classList.remove('hidden');
                 this.currentScreen = 'terminal';
 
+                // Initialize terminal if first time
+                if (!window.TerminalController.term) {
+                    window.TerminalController.init();
+                }
+
                 // Connect terminal to session
-                TerminalController.connectToSession(session);
+                window.TerminalController.connectToSession(session);
             }
 
             /**
@@ -189,16 +197,16 @@
             async logout() {
                 if (confirm('Are you sure you want to logout?')) {
                     // Destroy active session if exists
-                    if (TerminalController.sessionActive) {
+                    if (window.TerminalController.sessionActive) {
                         try {
-                            await TerminalController.destroySession();
+                            await window.TerminalController.destroySession();
                         } catch (error) {
                             console.error('App: Error destroying session during logout:', error);
                         }
                     }
 
                     // Logout
-                    Auth.logout();
+                    window.Auth.logout();
                 }
             }
         }
