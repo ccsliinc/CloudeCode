@@ -422,9 +422,13 @@
             // Handle terminal input - send as raw bytes
             term.onData(data => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    // Convert Yen symbol (¥) to newline for mobile users
+                    // Convert special symbols for mobile keyboard shortcuts
                     if (data === '¥') {
-                        data = '\n';
+                        data = '\n';  // Yen = Newline
+                    } else if (data === '€') {
+                        data = '\t';  // Euro = Tab
+                    } else if (data === '￡') {
+                        data = '\x1b[Z';  // Pound = Shift+Tab
                     }
                     // Send input as binary frame
                     ws.send(new TextEncoder().encode(data));
@@ -464,6 +468,12 @@
             }
 
             term.writeln('\x1b[1;32mClaude Code Controller Terminal\x1b[0m');
+            term.writeln('');
+            term.writeln('\x1b[1;36mKeyboard shortcuts:\x1b[0m');
+            term.writeln('  \x1b[1;33m¥\x1b[0m = Newline (Enter)');
+            term.writeln('  \x1b[1;33m€\x1b[0m = Tab');
+            term.writeln('  \x1b[1;33m￡\x1b[0m = Shift+Tab');
+            term.writeln('');
             term.writeln('Waiting for session...\n');
         }
 
