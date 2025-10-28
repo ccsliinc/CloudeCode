@@ -57,6 +57,7 @@ class NamedTunnelManager:
                 raise NamedTunnelError("Failed to get or create tunnel")
 
             self.tunnel_id = tunnel_id
+            self.cloudflare_api.tunnel_id = tunnel_id  # Update CloudflareAPI with tunnel ID
             logger.info("tunnel_id_obtained", tunnel_id=tunnel_id)
 
             # Create initial config
@@ -64,6 +65,13 @@ class NamedTunnelManager:
 
             # Start tunnel process
             await self._start_tunnel_process()
+
+            # Create root domain CNAME
+            root_url = await self.cloudflare_api.create_root_cname()
+            if root_url:
+                logger.info("root_domain_configured", url=root_url)
+            else:
+                logger.warning("root_domain_cname_creation_failed")
 
             logger.info("named_tunnel_initialized", tunnel_name=self.tunnel_name)
             return True
@@ -93,7 +101,7 @@ class NamedTunnelManager:
                 check=True
             )
 
-            tunnels = json.loads(result.stdout)
+            tunnels = json.loads(result.stdout) or []
 
             # Find our tunnel by name
             for tunnel in tunnels:
@@ -135,6 +143,11 @@ class NamedTunnelManager:
             "tunnel": self.tunnel_id,
             "credentials-file": str(Path.home() / ".cloudflared" / f"{self.tunnel_id}.json"),
             "ingress": [
+                # Root domain points to the FastAPI app on port 8000
+                {
+                    "hostname": self.domain,
+                    "service": "http://localhost:8000"
+                },
                 # Default rule (required, must be last)
                 {"service": "http_status:404"}
             ]
@@ -147,33 +160,49 @@ class NamedTunnelManager:
         with open(self._config_path, "w") as f:
             yaml.dump(config, f)
 
-        logger.info("tunnel_config_created", config_path=str(self._config_path))
+        logger.info("tunnel_config_created", config_path=str(self._config_path), root_domain=self.domain)
 
     async def _start_tunnel_process(self):
         """Start the cloudflared tunnel process."""
-        if self._tunnel_process and self._tunnel_process.poll() is None:
-            logger.warning("tunnel_process_already_running")
-            return
-
         try:
             logger.info("starting_tunnel_process", tunnel_name=self.tunnel_name)
 
-            self._tunnel_process = subprocess.Popen(
-                ["cloudflared", "tunnel", "--config", str(self._config_path), "run"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            # Create log file for cloudflared output
+            log_file = Path("/tmp/cloudflared-tunnel.log")
+
+            # Use shell command with nohup to ensure process stays alive
+            shell_cmd = f"nohup cloudflared tunnel --config {self._config_path} run > {log_file} 2>&1 &"
+
+            # Execute the shell command
+            result = subprocess.run(
+                shell_cmd,
+                shell=True,
+                capture_output=True,
                 text=True
             )
 
-            logger.info("tunnel_process_started", pid=self._tunnel_process.pid)
+            if result.returncode != 0:
+                raise NamedTunnelError(f"Failed to start cloudflared: {result.stderr}")
 
             # Wait a moment for tunnel to establish
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
-            # Check if process is still running
-            if self._tunnel_process.poll() is not None:
-                stderr = self._tunnel_process.stderr.read()
-                raise NamedTunnelError(f"Tunnel process died: {stderr}")
+            # Verify tunnel is running by checking for cloudflared process
+            check_result = subprocess.run(
+                ["pgrep", "-f", "cloudflared tunnel"],
+                capture_output=True,
+                text=True
+            )
+
+            if check_result.returncode == 0 and check_result.stdout.strip():
+                pid = check_result.stdout.strip().split('\n')[0]
+                logger.info("tunnel_process_started", pid=pid, log_file=str(log_file))
+                # Store a dummy process object with the PID for reference
+                self._tunnel_process = type('obj', (object,), {'pid': int(pid), 'poll': lambda: None})()
+            else:
+                with open(log_file, "r") as f:
+                    log_output = f.read()
+                raise NamedTunnelError(f"Tunnel process not found after start: {log_output}")
 
         except Exception as e:
             logger.error("tunnel_process_start_failed", error=str(e))
@@ -271,9 +300,14 @@ class NamedTunnelManager:
 
             # Reload tunnel configuration
             # Send SIGHUP to cloudflared process to reload config
-            if self._tunnel_process:
-                self._tunnel_process.send_signal(1)  # SIGHUP
-                logger.info("tunnel_config_reloaded")
+            if self._tunnel_process and hasattr(self._tunnel_process, 'pid'):
+                try:
+                    import os
+                    import signal
+                    os.kill(int(self._tunnel_process.pid), signal.SIGHUP)
+                    logger.info("tunnel_config_reloaded")
+                except Exception as e:
+                    logger.warning("tunnel_config_reload_failed", error=str(e))
 
         except Exception as e:
             logger.error("add_ingress_rule_failed", port=port, error=str(e))
@@ -337,9 +371,14 @@ class NamedTunnelManager:
             logger.info("ingress_rule_removed", port=port)
 
             # Reload tunnel configuration
-            if self._tunnel_process:
-                self._tunnel_process.send_signal(1)  # SIGHUP
-                logger.info("tunnel_config_reloaded")
+            if self._tunnel_process and hasattr(self._tunnel_process, 'pid'):
+                try:
+                    import os
+                    import signal
+                    os.kill(int(self._tunnel_process.pid), signal.SIGHUP)
+                    logger.info("tunnel_config_reloaded")
+                except Exception as e:
+                    logger.warning("tunnel_config_reload_failed", error=str(e))
 
         except Exception as e:
             logger.error("remove_ingress_rule_failed", port=port, error=str(e))

@@ -1,7 +1,8 @@
-"""Session manager for Claude Code instances."""
+"""Session manager for Claude Code instances using PTY."""
 
 import asyncio
 import json
+import base64
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -9,21 +10,21 @@ import structlog
 
 from src.config import settings
 from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEntry
-from src.utils.tmux import TmuxUtils, TmuxError
+from src.utils.pty_session import PTYSession, PTYSessionError
 
 logger = structlog.get_logger()
 
 
 class SessionManager:
-    """Manages Claude Code sessions running in tmux."""
+    """Manages Claude Code sessions running in PTY."""
 
     def __init__(self):
         """Initialize the session manager."""
-        self.tmux = TmuxUtils(socket_name=settings.tmux_socket_name)
         self.session: Optional[Session] = None
+        self.pty: Optional[PTYSession] = None
         self.log_buffer: list[LogEntry] = []
         self.command_count: int = 0
-        self._last_output: str = ""
+        self._output_subscribers: list[asyncio.Queue] = []
 
         # Load persisted session if it exists
         self._load_session_metadata()
@@ -41,20 +42,26 @@ class SessionManager:
                 data = json.load(f)
                 self.session = Session(**data)
 
-            # Check if the tmux session still exists
-            if self.tmux.session_exists(self.session.tmux_session):
-                self.session.status = SessionStatus.RUNNING
-                logger.info(
-                    "session_restored_from_metadata",
-                    session_id=self.session.id,
-                    tmux_session=self.session.tmux_session
-                )
+            # Check if the PTY process still exists
+            if self.session.pty_pid:
+                try:
+                    import os
+                    import signal
+                    os.kill(self.session.pty_pid, 0)  # Check if process exists
+                    self.session.status = SessionStatus.RUNNING
+                    logger.info(
+                        "session_restored_from_metadata",
+                        session_id=self.session.id,
+                        pty_pid=self.session.pty_pid
+                    )
+                except (ProcessLookupError, PermissionError):
+                    logger.warning(
+                        "pty_process_not_found",
+                        session_id=self.session.id,
+                        pty_pid=self.session.pty_pid
+                    )
+                    self.session.status = SessionStatus.STOPPED
             else:
-                logger.warning(
-                    "tmux_session_not_found",
-                    session_id=self.session.id,
-                    tmux_session=self.session.tmux_session
-                )
                 self.session.status = SessionStatus.STOPPED
 
         except Exception as e:
@@ -76,6 +83,45 @@ class SessionManager:
         except Exception as e:
             logger.error("failed_to_save_session_metadata", error=str(e))
 
+    async def _handle_pty_output(self, data: bytes):
+        """
+        Handle output from PTY.
+
+        Args:
+            data: Output data from PTY
+        """
+        # Encode as base64 for safe transmission
+        encoded_data = base64.b64encode(data).decode('utf-8')
+
+        # Broadcast to all subscribers
+        for queue in self._output_subscribers.copy():
+            try:
+                await queue.put(encoded_data)
+            except Exception as e:
+                logger.error("failed_to_send_to_subscriber", error=str(e))
+                self._output_subscribers.remove(queue)
+
+    def subscribe_output(self) -> asyncio.Queue:
+        """
+        Subscribe to PTY output stream.
+
+        Returns:
+            Queue that will receive output data
+        """
+        queue = asyncio.Queue()
+        self._output_subscribers.append(queue)
+        return queue
+
+    def unsubscribe_output(self, queue: asyncio.Queue):
+        """
+        Unsubscribe from PTY output stream.
+
+        Args:
+            queue: Queue to unsubscribe
+        """
+        if queue in self._output_subscribers:
+            self._output_subscribers.remove(queue)
+
     async def create_session(
         self,
         session_id: str,
@@ -95,7 +141,7 @@ class SessionManager:
 
         Raises:
             ValueError: If a session already exists
-            TmuxError: If tmux session creation fails
+            PTYSessionError: If PTY session creation fails
         """
         if self.session and self.session.status == SessionStatus.RUNNING:
             raise ValueError("A session is already running. Stop it before creating a new one.")
@@ -115,46 +161,47 @@ class SessionManager:
             working_dir=str(work_path)
         )
 
-        # Create tmux session
-        tmux_session_name = settings.tmux_session_name
-
         try:
-            self.tmux.create_session(
-                session_name=tmux_session_name,
+            # Create PTY session
+            self.pty = PTYSession(
+                session_id=session_id,
                 working_dir=work_path,
-                detached=True
+                on_output=self._handle_pty_output
             )
+
+            # Start shell in PTY
+            if auto_start_claude:
+                # Start Claude Code directly
+                command = "/Users/Adam/.claude/local/claude --dangerously-skip-permissions"
+                await self.pty.start(command=command)
+            else:
+                # Just start a shell
+                await self.pty.start()
 
             self.session = Session(
                 id=session_id,
-                tmux_session=tmux_session_name,
+                pty_pid=self.pty.pid,
                 working_dir=str(work_path),
                 status=SessionStatus.RUNNING,
                 created_at=datetime.utcnow(),
                 last_activity=datetime.utcnow()
             )
 
-            # Start Claude Code if requested
-            if auto_start_claude:
-                await asyncio.sleep(0.5)  # Give tmux a moment to stabilize
-                self.tmux.send_keys(tmux_session_name, "claude --dangerously-skip-permissions")
-                logger.info("claude_code_started", session_id=session_id)
-
             self._save_session_metadata()
 
             logger.info(
                 "session_created",
                 session_id=session_id,
-                tmux_session=tmux_session_name
+                pty_pid=self.pty.pid
             )
 
             return self.session
 
-        except TmuxError as e:
+        except PTYSessionError as e:
             logger.error("session_creation_failed", error=str(e))
             if self.session:
                 self.session.status = SessionStatus.ERROR
-            raise
+            raise ValueError(f"Failed to create session: {e}") from e
 
     async def destroy_session(self) -> bool:
         """
@@ -165,7 +212,6 @@ class SessionManager:
 
         Raises:
             ValueError: If no session exists
-            TmuxError: If tmux session destruction fails
         """
         if not self.session:
             raise ValueError("No session to destroy")
@@ -173,7 +219,10 @@ class SessionManager:
         logger.info("destroying_session", session_id=self.session.id)
 
         try:
-            self.tmux.kill_session(self.session.tmux_session)
+            if self.pty:
+                await self.pty.stop()
+                self.pty = None
+
             self.session.status = SessionStatus.STOPPED
 
             # Clean up metadata
@@ -184,11 +233,12 @@ class SessionManager:
             self.session = None
             self.log_buffer.clear()
             self.command_count = 0
+            self._output_subscribers.clear()
 
             logger.info("session_destroyed")
             return True
 
-        except TmuxError as e:
+        except Exception as e:
             logger.error("session_destruction_failed", error=str(e))
             raise
 
@@ -204,13 +254,15 @@ class SessionManager:
 
         Raises:
             ValueError: If no session exists
-            TmuxError: If sending command fails
         """
         if not self.session:
             raise ValueError("No active session")
 
         if self.session.status != SessionStatus.RUNNING:
             raise ValueError(f"Session is not running (status: {self.session.status})")
+
+        if not self.pty:
+            raise ValueError("PTY not initialized")
 
         logger.info(
             "sending_command",
@@ -219,43 +271,60 @@ class SessionManager:
         )
 
         try:
-            self.tmux.send_keys(self.session.tmux_session, command)
+            await self.pty.send_command(command)
             self.session.last_activity = datetime.utcnow()
             self.command_count += 1
             self._save_session_metadata()
             return True
 
-        except TmuxError as e:
+        except PTYSessionError as e:
             logger.error("send_command_failed", error=str(e))
-            raise
+            raise ValueError(f"Failed to send command: {e}") from e
 
-    async def capture_output(self, lines: int = 1000) -> str:
+    async def send_input(self, data: str) -> bool:
         """
-        Capture output from the session.
+        Send raw input to the PTY.
 
         Args:
-            lines: Number of lines to capture (from scrollback)
+            data: Input data to send
 
         Returns:
-            Captured output as string
+            True if input sent successfully
 
         Raises:
             ValueError: If no session exists
-            TmuxError: If capture fails
         """
-        if not self.session:
+        if not self.session or not self.pty:
             raise ValueError("No active session")
 
-        try:
-            output = self.tmux.capture_pane(
-                session_name=self.session.tmux_session,
-                start_line=-lines
-            )
-            return output
+        if self.session.status != SessionStatus.RUNNING:
+            raise ValueError(f"Session is not running (status: {self.session.status})")
 
-        except TmuxError as e:
-            logger.error("capture_output_failed", error=str(e))
-            raise
+        try:
+            await self.pty.write(data.encode('utf-8'))
+            self.session.last_activity = datetime.utcnow()
+            return True
+
+        except PTYSessionError as e:
+            logger.error("send_input_failed", error=str(e))
+            raise ValueError(f"Failed to send input: {e}") from e
+
+    def resize_terminal(self, cols: int, rows: int):
+        """
+        Resize the PTY terminal.
+
+        Args:
+            cols: Number of columns
+            rows: Number of rows
+        """
+        if not self.pty:
+            return
+
+        try:
+            self.pty.resize(cols, rows)
+            logger.debug("terminal_resized", cols=cols, rows=rows)
+        except Exception as e:
+            logger.error("terminal_resize_failed", error=str(e))
 
     def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
         """

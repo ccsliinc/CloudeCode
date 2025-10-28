@@ -1,9 +1,14 @@
 """Main FastAPI application for Claude Code Controller."""
 
 import structlog
+import asyncio
+import httpx
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from src.config import settings
 from src.core.session_manager import SessionManager
@@ -26,6 +31,58 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
+
+
+async def verify_public_access():
+    """Verify that the public URL is accessible."""
+    public_url = f"https://{settings.cloudflare_domain}/health"
+
+    logger.info("verifying_public_access", url=public_url)
+
+    # Wait a bit for DNS to propagate
+    await asyncio.sleep(5)
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                response = await client.get(public_url)
+
+                if response.status_code == 200:
+                    logger.info(
+                        "public_access_verified",
+                        url=f"https://{settings.cloudflare_domain}",
+                        status_code=response.status_code
+                    )
+                    print("\n" + "="*80)
+                    print(f"✅ PUBLIC ACCESS VERIFIED!")
+                    print(f"🌐 Your API is accessible at: https://{settings.cloudflare_domain}")
+                    print(f"📊 Health endpoint: {public_url}")
+                    print("="*80 + "\n")
+                    return True
+                else:
+                    logger.warning(
+                        "public_access_check_failed",
+                        attempt=attempt + 1,
+                        status_code=response.status_code
+                    )
+        except Exception as e:
+            logger.warning(
+                "public_access_check_error",
+                attempt=attempt + 1,
+                error=str(e)
+            )
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(5)
+
+    logger.error("public_access_verification_failed_after_retries")
+    print("\n" + "="*80)
+    print(f"⚠️  PUBLIC ACCESS VERIFICATION FAILED")
+    print(f"🔗 Expected URL: https://{settings.cloudflare_domain}")
+    print(f"💡 The tunnel may still be initializing. Try accessing it in a few moments.")
+    print("="*80 + "\n")
+    return False
 
 
 # Global instances (will be initialized in lifespan)
@@ -66,6 +123,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("application_ready")
 
+    # Verify public URL accessibility if using named tunnels
+    if tunnel_manager._is_named:
+        await verify_public_access()
+
     yield
 
     # Cleanup on shutdown
@@ -99,15 +160,16 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(ws_router)
 
+# Mount static files
+client_dir = Path(__file__).parent.parent / "client"
+app.mount("/static", StaticFiles(directory=str(client_dir)), name="static")
+
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {
-        "name": "Claude Code Controller",
-        "version": "1.0.0",
-        "status": "operational"
-    }
+    """Serve the web interface."""
+    index_path = client_dir / "index.html"
+    return FileResponse(index_path)
 
 
 @app.get("/health")

@@ -41,7 +41,7 @@ class Tunnel(BaseModel):
 class Session(BaseModel):
     """Session model for Claude Code instance."""
     id: str = Field(..., description="Unique session identifier")
-    tmux_session: str = Field(..., description="Tmux session name")
+    pty_pid: Optional[int] = Field(None, description="PTY process PID")
     working_dir: str = Field(..., description="Working directory path")
     status: SessionStatus = SessionStatus.CREATING
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -134,6 +134,8 @@ class WSMessageType(str, Enum):
     ERROR = "error"
     PING = "ping"
     PONG = "pong"
+    PTY_DATA = "pty_data"
+    PTY_RESIZE = "pty_resize"
 
 
 class WSLogMessage(BaseModel):
@@ -178,3 +180,22 @@ class WSErrorMessage(BaseModel):
     type: WSMessageType = WSMessageType.ERROR
     error: str
     message: str
+
+
+class WSPTYDataMessage(BaseModel):
+    """WebSocket PTY data message (server -> client)."""
+    type: WSMessageType = WSMessageType.PTY_DATA
+    data: str  # Base64 encoded for binary safety
+
+
+class WSPTYInputMessage(BaseModel):
+    """WebSocket PTY input message (client -> server)."""
+    type: WSMessageType = WSMessageType.PTY_DATA
+    data: str  # User input to send to PTY
+
+
+class WSPTYResizeMessage(BaseModel):
+    """WebSocket PTY resize message (client -> server)."""
+    type: WSMessageType = WSMessageType.PTY_RESIZE
+    cols: int
+    rows: int

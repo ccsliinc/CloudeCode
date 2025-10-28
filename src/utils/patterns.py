@@ -22,11 +22,12 @@ class PatternDetector:
 
     # Regex patterns for detection
     PATTERNS = {
-        # Detect localhost server URLs with ports
+        # Detect localhost server URLs with ports (including IPv6 format)
         "localhost_server": re.compile(
             r"(?:https?://)?localhost:(\d+)|"
             r"(?:https?://)?127\.0\.0\.1:(\d+)|"
-            r"(?:https?://)?0\.0\.0\.0:(\d+)"
+            r"(?:https?://)?0\.0\.0\.0:(\d+)|"
+            r"(?:https?://)?(?:\[::\]|\[::1\]):(\d+)"  # IPv6 localhost
         ),
 
         # Detect "server ready" type messages
@@ -38,7 +39,7 @@ class PatternDetector:
 
         # Detect port numbers in "listening on" messages
         "listening_on_port": re.compile(
-            r"(?:listening|running|started).*?(?:port|on|:)\s*(\d+)",
+            r"(?:listening|running|started|serving).*?(?:port|on|:)\s*(\d+)",
             re.IGNORECASE
         ),
 

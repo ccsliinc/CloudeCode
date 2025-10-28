@@ -179,7 +179,7 @@ class TmuxUtils:
         if self.socket_name:
             cmd.extend(["-L", self.socket_name])
 
-        cmd.extend(["capture-pane", "-t", session_name, "-p"])
+        cmd.extend(["capture-pane", "-t", session_name, "-p", "-e"])  # -e preserves ANSI codes
 
         if start_line is not None:
             cmd.extend(["-S", str(start_line)])

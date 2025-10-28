@@ -62,6 +62,10 @@ class CloudflareAPI:
             logger.warning("cloudflare_not_configured_skipping_cname")
             return None
 
+        if not self.tunnel_id:
+            logger.error("tunnel_id_not_set_cannot_create_cname", port=port)
+            return None
+
         subdomain = f"{port}.{self.domain}"
         tunnel_target = f"{self.tunnel_id}.cfargotunnel.com"
 
@@ -141,6 +145,71 @@ class CloudflareAPI:
             return None
         except Exception as e:
             logger.error("dns_lookup_failed", subdomain=subdomain, error=str(e))
+            return None
+
+    async def create_root_cname(self) -> Optional[str]:
+        """
+        Create the root CNAME record for the main domain.
+
+        Returns:
+            Full domain URL or None if failed
+
+        Example:
+            Creates claude.adoom.nyc -> <tunnel_id>.cfargotunnel.com
+        """
+        if not self.is_configured():
+            logger.warning("cloudflare_not_configured_skipping_root_cname")
+            return None
+
+        if not self.tunnel_id:
+            logger.error("tunnel_id_not_set_cannot_create_root_cname")
+            return None
+
+        tunnel_target = f"{self.tunnel_id}.cfargotunnel.com"
+
+        try:
+            # Check if CNAME already exists
+            existing_record = await self._get_dns_record(self.domain)
+
+            if existing_record:
+                logger.info(
+                    "root_cname_already_exists",
+                    domain=self.domain,
+                    record_id=existing_record['id']
+                )
+                return f"https://{self.domain}"
+
+            # Create new CNAME record
+            dns_record = {
+                'name': self.domain,
+                'type': 'CNAME',
+                'content': tunnel_target,
+                'ttl': 1,  # Auto TTL
+                'proxied': True  # Enable Cloudflare proxy
+            }
+
+            logger.info("creating_root_cname", domain=self.domain, target=tunnel_target)
+
+            result = self.cf.zones.dns_records.post(self.zone_id, data=dns_record)
+
+            logger.info(
+                "root_cname_created_successfully",
+                domain=self.domain,
+                record_id=result['id']
+            )
+
+            return f"https://{self.domain}"
+
+        except CloudFlareAPIError as e:
+            logger.error(
+                "cloudflare_api_error_root_cname",
+                domain=self.domain,
+                error=str(e),
+                code=e.code if hasattr(e, 'code') else None
+            )
+            return None
+        except Exception as e:
+            logger.error("root_cname_creation_failed", domain=self.domain, error=str(e))
             return None
 
     async def delete_cname_for_port(self, port: int) -> bool:

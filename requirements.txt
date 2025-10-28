@@ -14,8 +14,11 @@ python-dotenv==1.0.0
 # Logging
 structlog==23.2.0
 
+# Static files
+aiofiles>=23.2.0
+
 # Cloudflare API
-cloudflare>=2.11.0
+cloudflare>=2.11.0,<3.0
 pyyaml>=6.0
 
 # Testing
