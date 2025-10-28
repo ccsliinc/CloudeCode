@@ -1,4 +1,4 @@
-"""Main FastAPI application for Claude Code Controller."""
+"""Main FastAPI application for Cloude Code Controller."""
 
 import structlog
 import asyncio
@@ -142,7 +142,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Claude Code Controller",
+    title="☁️ Cloud Code",
     description="Remote control and monitoring for Claude Code sessions",
     version="1.0.0",
     lifespan=lifespan

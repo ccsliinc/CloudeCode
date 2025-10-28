@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🚀 Claude Code Remote Controller - Setup"
+echo "☁️ Cloude Code Remote Controller - Setup"
 echo "========================================"
 echo ""
 

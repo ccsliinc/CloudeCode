@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Start script for Claude Code Controller
+# Start script for Cloude Code
 
 # Activate virtual environment
 source venv/bin/activate

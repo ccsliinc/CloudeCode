@@ -38,7 +38,7 @@ class Launchpad {
     renderLaunchpadUI() {
         this.launchpadScreen.innerHTML = `
             <div class="launchpad-container">
-                <div class="launchpad-header">☁️ claude code launcher</div>
+                <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new session</div>
 
                 <div class="launchpad-section">
@@ -129,7 +129,56 @@ class Launchpad {
 
         } catch (error) {
             console.error('Launchpad: Failed to create session:', error);
-            this.showError('failed to create session: ' + error.message);
+
+            // If session already exists, offer to connect or destroy
+            if (error.message.includes('already running')) {
+                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and create new)')) {
+                    // Connect to existing session
+                    this.connectToExistingSession();
+                } else {
+                    // Destroy and recreate
+                    this.destroyAndCreateNew();
+                }
+            } else {
+                this.showError('failed to create session: ' + error.message);
+            }
+        }
+    }
+
+    /**
+     * Connect to existing session
+     */
+    async connectToExistingSession() {
+        try {
+            this.updateStatus('connecting to existing session...');
+            const data = await window.API.getSession();
+            const session = data.session || data;
+
+            console.log('Launchpad: Connecting to existing session:', session);
+
+            // Trigger session-created event
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session }
+            }));
+        } catch (error) {
+            console.error('Launchpad: Failed to get existing session:', error);
+            this.showError('failed to connect: ' + error.message);
+        }
+    }
+
+    /**
+     * Destroy existing session and create new one
+     */
+    async destroyAndCreateNew() {
+        try {
+            this.updateStatus('destroying old session...');
+            await window.API.destroySession();
+
+            // Wait a moment, then create new
+            setTimeout(() => this.createNewSession(), 500);
+        } catch (error) {
+            console.error('Launchpad: Failed to destroy session:', error);
+            this.showError('failed to destroy session: ' + error.message);
         }
     }
 
@@ -159,7 +208,35 @@ class Launchpad {
 
         } catch (error) {
             console.error('Launchpad: Failed to open project:', error);
-            this.showError(`failed to open ${project.name}: ${error.message}`);
+
+            // If session already exists, offer to connect or destroy
+            if (error.message.includes('already running')) {
+                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and open this project)')) {
+                    // Connect to existing session
+                    this.connectToExistingSession();
+                } else {
+                    // Destroy and recreate with this project
+                    this.destroyAndOpenProject(project);
+                }
+            } else {
+                this.showError(`failed to open ${project.name}: ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Destroy existing session and open project
+     */
+    async destroyAndOpenProject(project) {
+        try {
+            this.updateStatus('destroying old session...');
+            await window.API.destroySession();
+
+            // Wait a moment, then open project
+            setTimeout(() => this.selectProject(project), 500);
+        } catch (error) {
+            console.error('Launchpad: Failed to destroy session:', error);
+            this.showError('failed to destroy session: ' + error.message);
         }
     }
 

@@ -28,7 +28,7 @@ class Auth {
     renderAuthUI() {
         this.authScreen.innerHTML = `
             <div class="auth-container">
-                <div class="auth-prompt">☁️🤖 Cloude Code Authentication</div>
+                <div class="auth-prompt">☁️ Cloude Code Authentication</div>
                 <div class="auth-description">
                     enter your 6-digit totp code from your authenticator app to access claude code sessions.
                 </div>
@@ -147,7 +147,8 @@ class Auth {
 
         } catch (error) {
             console.error('Auth: Login failed:', error);
-            this.showError(error.message || 'authentication failed - invalid code');
+            const errorMsg = error?.message || String(error) || 'authentication failed - invalid code';
+            this.showError(errorMsg);
             this.totpInput.value = '';
             this.totpInput.focus();
         } finally {

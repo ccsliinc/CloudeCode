@@ -1235,3 +1235,214 @@ Total: 1,618 lines (vs original 954-line monolithic index.html)
 **🎉 FRONTEND IMPLEMENTATION COMPLETE!**
 
 Cloude Code is now a fully functional, secure, multi-project Claude Code launcher with TOTP authentication, accessible at https://claude.adoom.nyc!
+
+---
+
+## ✅ Frontend Bug Fixes & UX Improvements - Session: 2025-10-28
+
+### Testing & Iteration
+After initial frontend deployment, performed live testing and fixed critical bugs preventing authentication and session creation.
+
+### Bugs Fixed
+
+#### 1. Module Loading Issue (CRITICAL)
+**Problem:** `Auth.init is not a function` error on page load
+
+**Root Cause:** Modules exported to `window.Auth`, but code referenced `Auth` without `window.` prefix
+
+**Fix:**
+- Added `window.` prefix to all module references in `client/index.html`
+- Updated: `Auth.init()` → `window.Auth.init()`
+- Updated all calls: `Launchpad.loadProjects()`, `TerminalController.connectToSession()`, etc.
+
+**Impact:** Fixed module initialization completely
+
+#### 2. Premature Module Initialization
+**Problem:** 401 errors on page load, xterm.js not loaded when Terminal.init() called
+
+**Root Cause:** All modules initialized at app startup before auth/before needed
+
+**Fix:**
+- Implemented lazy loading strategy
+- Auth module: Always initializes first (required for all flows)
+- Launchpad module: Initializes only when `showLaunchpad()` called
+- Terminal module: Initializes only when `showTerminal()` called
+- Removed `loadProjects()` from `renderLaunchpadUI()` (called by `showLaunchpad()` instead)
+
+**Impact:**
+- No more 401 errors on page load
+- xterm.js has time to load from CDN before Terminal initializes
+- Clean console on startup
+
+#### 3. Empty Tooltip on Login Button
+**Problem:** Hovering over login button showed empty circle tooltip
+
+**Root Cause:** CSS selector `button::after` applied to ALL buttons, including those without `data-tooltip`
+
+**Fix:**
+- Changed CSS selector: `button::after` → `button[data-tooltip]::after`
+- Changed hover: `button:hover::after` → `button[data-tooltip]:hover::after`
+
+**Impact:** Tooltips only show on circular header buttons, not form buttons
+
+#### 4. TOTP API Field Mismatch (CRITICAL)
+**Problem:** TOTP login failed with 422 error, showing `[object Object]` in error message
+
+**Root Cause:**
+- Frontend sent: `{ totp_code: "123456" }`
+- Backend expected: `{ code: "123456" }`
+
+**Fix:**
+- Updated `client/js/api.js`: Changed `totp_code` to `code` in request body
+- Improved error handling to show actual error message instead of `[object Object]`
+
+**Impact:** TOTP authentication now works correctly
+
+#### 5. Session Conflict Error
+**Problem:** "A session is already running" error when creating new session or opening project
+
+**Root Cause:** Backend detected existing session but frontend showed cryptic error
+
+**Fix:**
+- Added session conflict detection in `launchpad.js`
+- Show user-friendly confirm dialog with two options:
+  - **OK:** Connect to existing session (`connectToExistingSession()`)
+  - **Cancel:** Destroy old and create new (`destroyAndCreateNew()` or `destroyAndOpenProject()`)
+- Implemented helper methods for both flows
+
+**Impact:** Graceful session management with user choice
+
+### UX Improvements
+
+#### 1. Auto-Submit on 6 Digits
+**Feature:** TOTP input automatically submits when 6th digit entered
+
+**Implementation:**
+- Added input event listener in `auth.js`
+- Check `if (value.length === 6)` → auto-call `handleLogin()`
+
+**Impact:** Faster login, no need to click button or press Enter
+
+#### 2. Better Error Messages
+**Before:** `✗ [object Object]`
+**After:** `✗ Invalid TOTP code` or actual error message
+
+**Implementation:**
+- Added fallback chain: `error?.message || String(error) || 'default message'`
+
+**Impact:** Users see actionable error messages
+
+#### 3. Session Conflict Dialog
+**Before:** Alert popup with raw error
+**After:** Friendly confirm dialog with clear options
+
+```
+A session is already running. Do you want to connect to it?
+
+(Click OK to connect, Cancel to destroy and create new)
+```
+
+**Impact:** Users understand what's happening and can choose their action
+
+### Files Modified (This Session)
+
+1. **client/index.html**
+   - Added `window.` prefix to all module calls
+   - Implemented lazy loading (Auth → Launchpad → Terminal)
+   - Fixed module initialization order
+
+2. **client/css/styles.css**
+   - Fixed tooltip selector: `button[data-tooltip]::after`
+
+3. **client/js/api.js**
+   - Fixed TOTP request: `totp_code` → `code`
+   - Added debug logging
+
+4. **client/js/auth.js**
+   - Auto-submit on 6 digits
+   - Better error message handling
+   - Added debug logging
+
+5. **client/js/launchpad.js**
+   - Session conflict detection
+   - `connectToExistingSession()` method
+   - `destroyAndCreateNew()` method
+   - `destroyAndOpenProject()` method
+   - Removed premature `loadProjects()` call
+
+6. **client/js/terminal.js**
+   - Added debug logging
+
+### Git Commits
+
+**Commit 1:** `57dbc40`
+```
+Add frontend authentication UI with modular JavaScript architecture
+- 7 files changed, 2203 insertions(+), 898 deletions(-)
+```
+
+**Commit 2:** `0763fe3`
+```
+Rebrand to Cloude Code and fix frontend initialization bugs
+- 10 files changed, 58 insertions(+), 33 deletions(-)
+```
+
+### Testing Results
+
+✅ **Authentication:**
+- TOTP input works with auto-submit
+- Token stored in localStorage
+- Token auto-injected in API calls
+- Login screen renders cleanly (no errors)
+
+✅ **Project Launchpad:**
+- Projects load after authentication (no premature 401s)
+- Session conflict handled gracefully
+- User can choose to connect or destroy
+
+✅ **Module Loading:**
+- All modules load in correct order
+- No `is not a function` errors
+- Clean console on page load
+
+✅ **UX:**
+- No empty tooltips
+- Clear error messages
+- Fast login (6-digit auto-submit)
+- Friendly session conflict dialog
+
+### Known Issues / Future Work
+
+- Terminal screen not yet tested (pending session creation)
+- Need to test WebSocket connection with auth token
+- Need to test template copying for new sessions
+- Need to test project path validation
+
+### Current Status
+
+**Working:**
+- ✅ TOTP authentication with auto-submit
+- ✅ Project launchpad with 3 configured projects
+- ✅ Session conflict resolution
+- ✅ Module lazy loading
+- ✅ Clean error messages
+
+**Ready for Testing:**
+- ⏳ Terminal screen (PTY + WebSocket)
+- ⏳ Session creation with templates
+- ⏳ Project path validation
+- ⏳ Logout flow
+
+**Next Steps:**
+1. Test session creation (new + existing projects)
+2. Verify terminal WebSocket connects with JWT token
+3. Test template copying
+4. Test Claude Code auto-launch
+5. Test session destroy → launchpad flow
+6. Test logout → clear token → re-auth
+
+---
+
+**🎯 Current State: Authentication & Launchpad FULLY FUNCTIONAL**
+
+All critical bugs fixed. System ready for end-to-end testing of terminal session creation.

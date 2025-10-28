@@ -95,7 +95,7 @@ class API {
         const response = await fetch(`${this.baseURL}/auth/verify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ totp_code: totpCode })
+            body: JSON.stringify({ code: totpCode })
         });
 
         if (!response.ok) {
