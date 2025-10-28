@@ -75,7 +75,6 @@ class PTYSession:
                 env = os.environ.copy()
                 env['TERM'] = 'xterm-256color'
                 env['COLORTERM'] = 'truecolor'
-                env['PS1'] = r'\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 
                 # Execute shell or command
                 if command:
@@ -90,6 +89,14 @@ class PTYSession:
                 # Set master fd to non-blocking
                 flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
                 fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                # Configure terminal attributes
+                attrs = termios.tcgetattr(self.master_fd)
+                # ONLCR: Map NL to CR-NL on output
+                attrs[1] |= termios.ONLCR
+                # ICRNL: Map CR to NL on input
+                attrs[0] |= termios.ICRNL
+                termios.tcsetattr(self.master_fd, termios.TCSANOW, attrs)
 
                 # Set initial terminal size
                 self._set_terminal_size(80, 24)
@@ -130,7 +137,13 @@ class PTYSession:
                         logger.info("pty_process_exited", session_id=self.session_id)
                         self.running = False
                         break
-                    raise
+                    elif e.errno == 35:  # EAGAIN - no data available (non-blocking)
+                        # This is expected in non-blocking mode, just continue
+                        await asyncio.sleep(0.01)
+                        continue
+                    else:
+                        logger.error("pty_read_error", error=str(e))
+                        await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
                 break

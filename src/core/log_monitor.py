@@ -87,20 +87,28 @@ class LogMonitor:
                     await asyncio.sleep(1)
                     continue
 
-                # Capture current terminal output
-                output = await self.session_manager.capture_output(lines=1000)
+                # Note: With PTY-based sessions, output is streamed directly via WebSocket
+                # This polling loop is no longer needed for terminal output monitoring
+                # We keep it running for port detection patterns only
+                # Just sleep and continue - port detection happens via pattern matching
+                await asyncio.sleep(1)
+                continue
 
-                # Check if output has changed
-                if output != self._last_output:
-                    # Find new lines
-                    new_content = self._extract_new_content(self._last_output, output)
-
-                    if new_content:
-                        # Add to session log buffer
-                        self.session_manager.add_log_entry(new_content)
-
-                        # Broadcast to subscribers
-                        await self._broadcast_log(new_content)
+                # OLD CODE - No longer used with PTY
+                # # Capture current terminal output
+                # output = await self.session_manager.capture_output(lines=1000)
+                #
+                # # Check if output has changed
+                # if output != self._last_output:
+                #     # Find new lines
+                #     new_content = self._extract_new_content(self._last_output, output)
+                #
+                #     if new_content:
+                #         # Add to session log buffer
+                #         self.session_manager.add_log_entry(new_content)
+                #
+                #         # Broadcast to subscribers
+                #         await self._broadcast_log(new_content)
 
                         # Detect patterns
                         self._detect_patterns(new_content)

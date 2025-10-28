@@ -474,8 +474,22 @@
             if (type === 'pty_data') {
                 // Decode base64 and write to terminal
                 if (term && message.data) {
-                    const decoded = atob(message.data);
-                    term.write(decoded);
+                    try {
+                        // Decode base64 to binary
+                        const binaryString = atob(message.data);
+                        // Convert binary string to Uint8Array
+                        const bytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            bytes[i] = binaryString.charCodeAt(i);
+                        }
+                        // Decode as UTF-8 and write to terminal
+                        const text = new TextDecoder('utf-8').decode(bytes);
+                        term.write(text);
+                    } catch (e) {
+                        console.error('Error decoding PTY data:', e);
+                        // Fallback to simple decoding
+                        term.write(atob(message.data));
+                    }
                 }
             } else if (type === 'log') {
                 // System log message
