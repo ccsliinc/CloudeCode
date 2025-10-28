@@ -5,20 +5,73 @@ Generates TOTP secret and JWT secret, creates config file.
 """
 import json
 import secrets
+import subprocess
+import sys
 from pathlib import Path
-import pyotp
-import qrcode
+
+
+def check_and_setup_venv():
+    """Ensure venv exists and has required packages."""
+    # Get venv path
+    project_root = Path(__file__).parent
+    venv_path = project_root / "venv"
+    venv_python = venv_path / "bin" / "python3"
+
+    # Check if venv exists
+    if not venv_python.exists():
+        print("❌ venv not found at: venv/")
+        print("Please create it first:")
+        print("  python3 -m venv venv")
+        sys.exit(1)
+
+    # Check if dependencies are installed
+    try:
+        import pyotp
+        import qrcode
+        import jwt
+        print("✅ All dependencies available\n")
+        return
+    except ImportError as e:
+        missing_module = str(e).split("'")[1] if "'" in str(e) else "unknown"
+        print(f"📦 Missing dependency: {missing_module}")
+        print("Installing auth dependencies in venv...\n")
+
+    # Install dependencies
+    try:
+        result = subprocess.run([
+            str(venv_python), "-m", "pip", "install", "-q",
+            "pyotp", "qrcode", "pillow", "pyjwt"
+        ], check=True, capture_output=True, text=True)
+
+        print("✅ Dependencies installed successfully\n")
+
+        # Re-exec with venv python
+        print("🔄 Re-running with venv python...\n")
+        subprocess.run([str(venv_python), __file__] + sys.argv[1:])
+        sys.exit(0)
+
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to install dependencies: {e}")
+        print(f"Error output: {e.stderr}")
+        sys.exit(1)
+
 
 def generate_totp_secret():
     """Generate a random TOTP secret."""
+    import pyotp
     return pyotp.random_base32()
+
 
 def generate_jwt_secret():
     """Generate a random JWT secret."""
     return secrets.token_urlsafe(32)
 
+
 def generate_qr_code(secret: str, account_name: str = "ClaudeTunnel"):
     """Generate QR code for TOTP secret."""
+    import pyotp
+    import qrcode
+
     totp = pyotp.TOTP(secret)
     uri = totp.provisioning_uri(
         name=account_name,
@@ -43,6 +96,9 @@ def generate_qr_code(secret: str, account_name: str = "ClaudeTunnel"):
 
 def main():
     """Main setup function."""
+    # Ensure venv has required dependencies
+    check_and_setup_venv()
+
     print("=" * 70)
     print("ClaudeTunnel Authentication Setup")
     print("=" * 70)
