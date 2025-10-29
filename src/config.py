@@ -161,7 +161,8 @@ class Settings(BaseSettings):
                 jwt_secret=data["jwt_secret"],
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
                 template_path=data.get("template_path"),
-                projects=projects
+                projects=projects,
+                common_slash_commands=data.get("common_slash_commands", [])
             )
 
             # Cache it
