@@ -15,7 +15,8 @@ class DPad {
             DOWN: '\x1b[B',
             RIGHT: '\x1b[C',
             LEFT: '\x1b[D',
-            ENTER: '\r'
+            ENTER: '\r',
+            ESC: '\x1b'
         };
     }
 
@@ -106,6 +107,10 @@ class DPad {
 
         this.overlay.innerHTML = `
             <div class="dpad-container">
+                <button class="dpad-esc dpad-key" data-key="ESC">
+                    <span style="font-size: 14px; font-weight: bold; color: #d77757;">ESC</span>
+                </button>
+
                 <button class="dpad-close" data-action="close">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
                         <path d="M6 6L18 18M18 6L6 18" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
