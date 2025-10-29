@@ -128,6 +128,14 @@ class API {
     }
 
     /**
+     * Config: Get common slash commands
+     * @returns {Promise<object>} - {commands: Array<string>}
+     */
+    async getCommonCommands() {
+        return await this.call('/config/common-commands');
+    }
+
+    /**
      * Projects: Get project list
      * @returns {Promise<Array>}
      */

@@ -66,7 +66,7 @@ class SlashCommandsModal {
 
         // Fetch common commands from API
         try {
-            const response = await window.API.get('/config/common-commands');
+            const response = await window.API.getCommonCommands();
             this.commonCommands = response.commands || [];
             console.log('[SlashCommands] Fetched', this.commonCommands.length, 'common commands');
         } catch (error) {
