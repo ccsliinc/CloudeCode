@@ -1,8 +1,8 @@
 {
   "totp_secret": "GENERATETHISWITHPYOTPBASE32SECRET",
-  "template_path": "/Users/Adam/Dropbox/.claude-template",
   "jwt_secret": "GENERATETHISWITHSECRETSTOKEN_URLSAFE",
   "jwt_expiry_minutes": 30,
+  "template_path": "claude-template",
   "projects": [
     {
       "name": "THC Beverages Lambdas",

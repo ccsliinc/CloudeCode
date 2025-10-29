@@ -222,7 +222,8 @@ class SessionManager:
             # Start shell in PTY
             if auto_start_claude:
                 # Start Claude Code directly
-                command = "/Users/Adam/.claude/local/claude --dangerously-skip-permissions"
+                claude_cli = settings.get_claude_cli_path()
+                command = f"{claude_cli} --dangerously-skip-permissions"
                 await self.pty.start(command=command)
             else:
                 # Just start a shell

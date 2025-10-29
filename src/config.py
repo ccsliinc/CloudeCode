@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     tmux_socket_name: str = "claude-controller"
     tmux_session_name: str = "claude-code-session"
 
+    # Claude CLI Configuration
+    claude_cli_path: Optional[str] = None
+
     _auth_config_cache: Optional[AuthConfig] = None
 
     def get_working_dir(self) -> Path:
@@ -88,6 +91,45 @@ class Settings(BaseSettings):
     def get_session_metadata_path(self) -> Path:
         """Get the path for session metadata JSON file."""
         return Path(self.log_directory).expanduser() / "session_metadata.json"
+
+    def get_claude_cli_path(self) -> str:
+        """
+        Get the path to the Claude CLI binary with auto-detection fallback.
+
+        Detection order:
+        1. claude_cli_path setting (if explicitly set)
+        2. `which claude` command (if found in PATH)
+        3. ~/.claude/local/claude (if exists)
+        4. /Users/Adam/.claude/local/claude (hardcoded fallback for backwards compatibility)
+        5. Just "claude" (trust system PATH)
+
+        Returns:
+            Path to Claude CLI binary
+        """
+        import shutil
+        import subprocess
+
+        # 1. Check if explicitly set
+        if self.claude_cli_path:
+            return self.claude_cli_path
+
+        # 2. Try `which claude`
+        claude_in_path = shutil.which("claude")
+        if claude_in_path:
+            return claude_in_path
+
+        # 3. Check ~/.claude/local/claude
+        home_path = Path.home() / ".claude" / "local" / "claude"
+        if home_path.exists():
+            return str(home_path)
+
+        # 4. Check hardcoded path (backwards compatibility)
+        hardcoded_path = Path("/Users/Adam/.claude/local/claude")
+        if hardcoded_path.exists():
+            return str(hardcoded_path)
+
+        # 5. Fallback to just "claude" and trust PATH
+        return "claude"
 
     def load_auth_config(self) -> AuthConfig:
         """

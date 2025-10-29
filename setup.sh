@@ -51,15 +51,21 @@ fi
 # Check claude
 echo ""
 echo "Checking claude..."
+CLAUDE_PATH=""
 if command -v claude &> /dev/null; then
-    echo -e "${GREEN}✓${NC} claude is installed"
+    CLAUDE_PATH=$(command -v claude)
+    echo -e "${GREEN}✓${NC} claude is installed at: $CLAUDE_PATH"
 elif [ -f ~/.claude/local/claude ]; then
-    echo -e "${GREEN}✓${NC} claude is installed at ~/.claude/local/claude"
-elif [ -f /Users/Adam/.claude/local/claude ]; then
-    echo -e "${GREEN}✓${NC} claude is installed at ~/.claude/local/claude"
+    CLAUDE_PATH="$HOME/.claude/local/claude"
+    echo -e "${GREEN}✓${NC} claude is installed at: $CLAUDE_PATH"
 else
     echo -e "${YELLOW}!${NC} claude is not installed (optional)"
     echo "  Install from: https://claude.com/download"
+fi
+
+if [ -n "$CLAUDE_PATH" ]; then
+    echo "  Detected path: $CLAUDE_PATH"
+    echo "  To override, set CLAUDE_CLI_PATH in your .env file"
 fi
 
 # Check Python
