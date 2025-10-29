@@ -9,10 +9,6 @@ class DPad {
         this.floatingButton = null;
         this.overlay = null;
 
-        // Double-tap detection for DOWN arrow
-        this.lastDownPressTime = 0;
-        this.doubleTapThreshold = 600; // ms (increased for easier double-tap)
-
         // ANSI escape sequences for terminal navigation
         this.keys = {
             UP: '\x1b[A',
@@ -22,7 +18,8 @@ class DPad {
             ENTER: '\r',
             ESC: '\x1b',
             TAB: '\t',
-            SHIFT_TAB: '\x1b[Z'
+            SHIFT_TAB: '\x1b[Z',
+            SCROLL_BOTTOM: null  // Special action - no key code
         };
     }
 
@@ -183,6 +180,18 @@ class DPad {
                         </button>
                         <div class="dpad-spacer"></div>
                     </div>
+
+                    <div class="dpad-row">
+                        <div class="dpad-spacer"></div>
+                        <button class="dpad-key dpad-scroll-bottom" data-key="SCROLL_BOTTOM">
+                            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                                <path d="M10 10L16 16L22 10" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M10 14L16 20L22 14" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 24H24" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="dpad-spacer"></div>
+                    </div>
                 </div>
             </div>
         `;
@@ -227,6 +236,19 @@ class DPad {
      * Send key to terminal
      */
     sendKey(keyName) {
+        if (!window.TerminalController) {
+            console.error('DPad: TerminalController not found');
+            return;
+        }
+
+        // Handle scroll to bottom button (special action - no key code)
+        if (keyName === 'SCROLL_BOTTOM') {
+            console.log('DPad: Scroll to bottom button pressed');
+            window.TerminalController.scrollToBottomAndEnableAutoScroll();
+            return;
+        }
+
+        // Get key code for regular keys
         const keyCode = this.keys[keyName];
 
         if (!keyCode) {
@@ -234,36 +256,9 @@ class DPad {
             return;
         }
 
-        if (!window.TerminalController) {
-            console.error('DPad: TerminalController not found');
-            return;
-        }
-
-        // Handle DOWN arrow double-tap detection
-        if (keyName === 'DOWN') {
-            const now = Date.now();
-            const timeSinceLastPress = now - this.lastDownPressTime;
-
-            console.log(`DPad: DOWN pressed - timeSinceLastPress: ${timeSinceLastPress}ms, threshold: ${this.doubleTapThreshold}ms`);
-
-            if (this.lastDownPressTime > 0 && timeSinceLastPress < this.doubleTapThreshold) {
-                // Double-tap detected - force scroll to bottom
-                console.log('🎯 DPad: DOUBLE-TAP DOWN DETECTED! Jumping to bottom');
-                window.TerminalController.scrollToBottomAndEnableAutoScroll();
-                this.lastDownPressTime = 0; // Reset to prevent triple-tap
-                return; // Don't send the key, just scroll
-            }
-
-            // Single tap - send key and update timestamp
-            console.log('DPad: Single tap DOWN - sending key');
-            this.lastDownPressTime = now;
-            window.TerminalController.sendKeyToTerminal(keyCode);
-            window.TerminalController.scrollToBottomAndEnableAutoScroll();
-        } else {
-            // Other keys - just send normally
-            console.log('DPad: Sending key:', keyName);
-            window.TerminalController.sendKeyToTerminal(keyCode);
-        }
+        // Send key to terminal
+        console.log('DPad: Sending key:', keyName);
+        window.TerminalController.sendKeyToTerminal(keyCode);
     }
 
     /**
