@@ -59,8 +59,11 @@ class Launchpad {
                 <div class="launchpad-section">
                     <div class="launchpad-section-title">► server management</div>
                     <button class="reset-server-btn" id="reset-server-btn">
-                        <span>🔄</span>
-                        <span>reset server (stop and start)</span>
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                            <path d="M12 2.5V5.5H9" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>reset server</span>
                     </button>
                 </div>
             </div>
