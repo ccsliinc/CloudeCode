@@ -49,12 +49,9 @@ class DPad {
         this.floatingButton.id = 'dpad-float-btn';
         this.floatingButton.className = 'dpad-float-button';
         this.floatingButton.innerHTML = `
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                <rect x="4" y="8" width="16" height="8" rx="2" stroke="#d77757" stroke-width="1.5"/>
-                <path d="M8 11h2M14 11h2" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
-                <circle cx="14" cy="11" r="0.8" fill="#d77757"/>
-                <circle cx="16" cy="11" r="0.8" fill="#d77757"/>
-                <line x1="9" y1="10" x2="9" y2="12" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M8 4H12V8H16V12H12V16H8V12H4V8H8V4Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
+                <circle cx="10" cy="10" r="1" fill="#d77757"/>
             </svg>
         `;
 
