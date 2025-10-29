@@ -237,6 +237,11 @@ class DPad {
 
         console.log('DPad: Sending key:', keyName);
         window.TerminalController.sendKeyToTerminal(keyCode);
+
+        // If DOWN arrow, also scroll to bottom and re-enable auto-scroll
+        if (keyName === 'DOWN') {
+            window.TerminalController.scrollToBottomAndEnableAutoScroll();
+        }
     }
 
     /**

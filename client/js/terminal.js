@@ -24,6 +24,10 @@ class Terminal {
         this.queue = [];
         this.flushing = false;
 
+        // Auto-scroll behavior
+        this.autoScrollEnabled = true;
+        this.resizeDebounceTimer = null;
+
         // UI elements
         this.destroySessionBtn = null;
         this.statusEl = null;
@@ -182,13 +186,21 @@ class Terminal {
             }
         });
 
-        // Handle window resize
+        // Handle window resize with debouncing
         window.addEventListener('resize', () => {
-            if (this.fitAddon) {
-                this.fitAddon.fit();
-                this.sendResize();
+            if (this.resizeDebounceTimer) {
+                clearTimeout(this.resizeDebounceTimer);
             }
+            this.resizeDebounceTimer = setTimeout(() => {
+                if (this.fitAddon && this.term) {
+                    this.fitAddon.fit();
+                    this.sendResize();
+                }
+            }, 100);
         });
+
+        // Setup scroll event listener for auto-scroll detection
+        this.setupScrollListener();
 
         // Auto-scroll terminal to bottom on focus (mobile keyboard fix)
         const terminalElement = document.getElementById('terminal');
@@ -248,8 +260,65 @@ class Terminal {
         }
         this.term.write(merged, () => {
             this.flushing = false;
+
+            // Auto-scroll to bottom if enabled
+            if (this.autoScrollEnabled && this.term) {
+                this.term.scrollToBottom();
+            }
+
             if (this.queue.length) requestAnimationFrame(() => this.flush());
         });
+    }
+
+    /**
+     * Setup scroll event listener to detect manual scrolling
+     */
+    setupScrollListener() {
+        // Wait for terminal to be fully initialized
+        setTimeout(() => {
+            const viewport = document.querySelector('.xterm-viewport');
+            if (viewport) {
+                let scrollTimeout = null;
+                viewport.addEventListener('scroll', () => {
+                    // Debounce scroll events
+                    if (scrollTimeout) clearTimeout(scrollTimeout);
+
+                    scrollTimeout = setTimeout(() => {
+                        if (!this.term) return;
+
+                        // Check if user scrolled to bottom
+                        const isAtBottom = this.isScrolledToBottom(viewport);
+
+                        if (isAtBottom) {
+                            // User scrolled back to bottom, re-enable auto-scroll
+                            this.autoScrollEnabled = true;
+                        } else {
+                            // User scrolled up, disable auto-scroll
+                            this.autoScrollEnabled = false;
+                        }
+                    }, 100);
+                });
+            }
+        }, 500);
+    }
+
+    /**
+     * Check if viewport is scrolled to bottom
+     */
+    isScrolledToBottom(viewport) {
+        if (!viewport) return true;
+        const threshold = 10; // pixels from bottom
+        return (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight) <= threshold;
+    }
+
+    /**
+     * Scroll to bottom and re-enable auto-scroll (for D-pad)
+     */
+    scrollToBottomAndEnableAutoScroll() {
+        if (this.term) {
+            this.autoScrollEnabled = true;
+            this.term.scrollToBottom();
+        }
     }
 
     /**
@@ -335,6 +404,10 @@ class Terminal {
         // Wait for fonts and layout
         const container = document.getElementById('terminal');
         await this.waitForFontsAndLayout(container);
+
+        // Fit terminal with multiple attempts to ensure proper sizing
+        this.fitAddon.fit();
+        await new Promise(resolve => setTimeout(resolve, 50));
         this.fitAddon.fit();
 
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
