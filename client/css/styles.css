@@ -960,11 +960,11 @@ button[data-tooltip]:hover::after {
 
 /* Slash Commands Modal */
 .modal {
-    display: none;
+    display: none !important;
 }
 
 .modal.active {
-    display: flex;
+    display: flex !important;
 }
 
 .modal .modal-overlay {

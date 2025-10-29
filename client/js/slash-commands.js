@@ -58,16 +58,19 @@ class SlashCommandsModal {
 
     /**
      * Initialize the slash commands modal
+     * Note: Does NOT create the modal - that happens lazily on first open()
      */
     async init(onCommandSelect) {
+        console.log('[SlashCommands] Initializing (NOT creating modal yet)');
         this.onCommandSelect = onCommandSelect;
 
         // Fetch common commands from API
         try {
             const response = await window.API.get('/config/common-commands');
             this.commonCommands = response.commands || [];
+            console.log('[SlashCommands] Fetched', this.commonCommands.length, 'common commands');
         } catch (error) {
-            console.error('Failed to fetch common commands:', error);
+            console.error('[SlashCommands] Failed to fetch common commands:', error);
             // Fallback to defaults
             this.commonCommands = [
                 '/agents', '/clear', '/compact', '/context',
@@ -75,16 +78,18 @@ class SlashCommandsModal {
             ];
         }
 
-        this.createModal();
-        this.attachEventListeners();
+        // Modal will be created lazily on first open() call
+        console.log('[SlashCommands] Initialization complete (modal will be created on demand)');
     }
 
     /**
      * Create the modal HTML structure
      */
     createModal() {
+        console.log('[SlashCommands] createModal() called');
+
         const modalHTML = `
-            <div id="slash-commands-modal" class="modal">
+            <div id="slash-commands-modal" class="modal" style="display: none;">
                 <div class="modal-overlay"></div>
                 <div class="modal-content slash-commands-modal-content">
                     <div class="modal-header">
@@ -112,12 +117,14 @@ class SlashCommandsModal {
         // Remove existing modal if any
         const existingModal = document.getElementById('slash-commands-modal');
         if (existingModal) {
+            console.log('[SlashCommands] Removing existing modal');
             existingModal.remove();
         }
 
         // Add modal to body
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         this.modal = document.getElementById('slash-commands-modal');
+        console.log('[SlashCommands] Modal added to DOM:', this.modal ? 'success' : 'FAILED');
     }
 
     /**
@@ -213,10 +220,25 @@ class SlashCommandsModal {
     }
 
     /**
-     * Open the modal
+     * Open the modal (creates it on first call)
      */
     open() {
-        if (!this.modal) return;
+        console.log('[SlashCommands] open() called');
+
+        // Lazy initialization - create modal on first open
+        if (!this.modal) {
+            console.log('[SlashCommands] Modal does not exist yet, creating now...');
+            this.createModal();
+            this.attachEventListeners();
+            console.log('[SlashCommands] Modal created and event listeners attached');
+        }
+
+        if (!this.modal) {
+            console.error('[SlashCommands] Failed to create modal!');
+            return;
+        }
+
+        console.log('[SlashCommands] Adding .active class to show modal');
         this.modal.classList.add('active');
         this.isOpen = true;
     }
@@ -225,7 +247,12 @@ class SlashCommandsModal {
      * Close the modal
      */
     close() {
-        if (!this.modal) return;
+        console.log('[SlashCommands] close() called');
+        if (!this.modal) {
+            console.log('[SlashCommands] No modal to close');
+            return;
+        }
+        console.log('[SlashCommands] Removing .active class to hide modal');
         this.modal.classList.remove('active');
         this.isOpen = false;
     }
