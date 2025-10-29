@@ -266,6 +266,18 @@ class Terminal {
     }
 
     /**
+     * Send key to terminal (for D-pad)
+     * @param {string} keyData - ANSI escape sequence or character
+     */
+    sendKeyToTerminal(keyData) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(new TextEncoder().encode(keyData));
+        } else {
+            console.warn('Terminal: WebSocket not open, cannot send key');
+        }
+    }
+
+    /**
      * Connect to session
      * @param {object} session - Session data
      */

@@ -581,6 +581,130 @@ button[data-tooltip]:hover::after {
     }
 }
 
+/* Mobile D-Pad Styles */
+.dpad-float-button {
+    display: none; /* Hidden by default, shown on mobile via JS */
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: rgba(215, 119, 87, 0.15);
+    border: 2px solid rgba(215, 119, 87, 0.3);
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    z-index: 9998;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.dpad-float-button:hover,
+.dpad-float-button:active {
+    background: rgba(215, 119, 87, 0.25);
+    border-color: rgba(215, 119, 87, 0.5);
+    transform: scale(1.05);
+    box-shadow: 0 0 16px rgba(215, 119, 87, 0.4);
+}
+
+.dpad-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    animation: fadeIn 0.2s ease;
+}
+
+.dpad-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding: 40px;
+}
+
+.dpad-close {
+    position: absolute;
+    top: -20px;
+    right: -20px;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: rgba(215, 119, 87, 0.15);
+    border: 2px solid rgba(215, 119, 87, 0.3);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.dpad-close:active {
+    background: rgba(215, 119, 87, 0.35);
+    border-color: rgba(215, 119, 87, 0.6);
+    transform: scale(0.95);
+}
+
+.dpad-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.dpad-row {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.dpad-spacer {
+    width: 75px;
+    height: 75px;
+}
+
+.dpad-key {
+    width: 75px;
+    height: 75px;
+    border-radius: 12px;
+    background: rgba(215, 119, 87, 0.15);
+    border: 2px solid rgba(215, 119, 87, 0.3);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.dpad-key:active,
+.dpad-key.active {
+    background: rgba(215, 119, 87, 0.35);
+    border-color: rgba(215, 119, 87, 0.6);
+    transform: scale(0.92);
+    box-shadow: 0 0 20px rgba(215, 119, 87, 0.5);
+}
+
+.dpad-enter {
+    border-radius: 50%;
+}
+
+/* Mobile only display */
+@media (min-width: 769px) {
+    .dpad-float-button {
+        display: none !important;
+    }
+}
+
 /* Utility classes */
 .hidden {
     display: none !important;

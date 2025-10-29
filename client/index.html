@@ -64,6 +64,7 @@
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <script src="/static/js/terminal.js"></script>
+    <script src="/static/js/dpad.js"></script>
 
     <!-- App Controller -->
     <script>
@@ -163,6 +164,11 @@
                 this.destroyBtn.classList.add('hidden');
                 this.currentScreen = 'launchpad';
 
+                // Hide D-pad on launchpad
+                if (window.DPad) {
+                    window.DPad.hide();
+                }
+
                 // Initialize launchpad if first time
                 if (!window.Launchpad.launchpadScreen) {
                     window.Launchpad.init();
@@ -186,6 +192,16 @@
                 // Initialize terminal if first time
                 if (!window.TerminalController.term) {
                     await window.TerminalController.init();
+                }
+
+                // Initialize D-pad (mobile only)
+                if (window.DPad && !window.DPad.floatingButton) {
+                    window.DPad.init();
+                }
+
+                // Show D-pad on terminal screen
+                if (window.DPad) {
+                    window.DPad.show();
                 }
 
                 // Connect terminal to session
