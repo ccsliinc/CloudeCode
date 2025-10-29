@@ -16,7 +16,9 @@ class DPad {
             RIGHT: '\x1b[C',
             LEFT: '\x1b[D',
             ENTER: '\r',
-            ESC: '\x1b'
+            ESC: '\x1b',
+            TAB: '\t',
+            SHIFT_TAB: '\x1b[Z'
         };
     }
 
@@ -154,6 +156,22 @@ class DPad {
                             </svg>
                         </button>
                         <div class="dpad-spacer"></div>
+                    </div>
+
+                    <div class="dpad-row">
+                        <button class="dpad-key" data-key="SHIFT_TAB">
+                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                                <path d="M20 14L8 14M8 14L12 10M8 14L12 18" stroke="#d77757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M6 8L6 20" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <div class="dpad-spacer"></div>
+                        <button class="dpad-key" data-key="TAB">
+                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                                <path d="M8 14L20 14M20 14L16 10M20 14L16 18" stroke="#d77757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M22 8L22 20" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
                     </div>
                 </div>
             </div>
