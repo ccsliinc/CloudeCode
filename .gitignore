@@ -30,6 +30,9 @@ ENV/
 .env
 .env.local
 
+# Configuration (contains secrets)
+config.json
+
 # IDE
 .vscode/
 .idea/

@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     allowed_origins: List[str] = ["*"]
 
     # Authentication Configuration
-    auth_config_file: str = "~/.claude-tunnel/config.json"
+    auth_config_file: str = "./config.json"
 
     # Tmux Configuration
     tmux_socket_name: str = "claude-controller"
