@@ -9,6 +9,10 @@ class DPad {
         this.floatingButton = null;
         this.overlay = null;
 
+        // Double-tap detection for DOWN arrow
+        this.lastDownPressTime = 0;
+        this.doubleTapThreshold = 400; // ms
+
         // ANSI escape sequences for terminal navigation
         this.keys = {
             UP: '\x1b[A',
@@ -235,12 +239,28 @@ class DPad {
             return;
         }
 
-        console.log('DPad: Sending key:', keyName);
-        window.TerminalController.sendKeyToTerminal(keyCode);
-
-        // If DOWN arrow, also scroll to bottom and re-enable auto-scroll
+        // Handle DOWN arrow double-tap detection
         if (keyName === 'DOWN') {
+            const now = Date.now();
+            const timeSinceLastPress = now - this.lastDownPressTime;
+
+            if (timeSinceLastPress < this.doubleTapThreshold) {
+                // Double-tap detected - force scroll to bottom
+                console.log('DPad: Double-tap DOWN detected, jumping to bottom');
+                window.TerminalController.scrollToBottomAndEnableAutoScroll();
+                this.lastDownPressTime = 0; // Reset to prevent triple-tap
+                return; // Don't send the key, just scroll
+            }
+
+            // Single tap - send key and update timestamp
+            this.lastDownPressTime = now;
+            console.log('DPad: Sending key:', keyName);
+            window.TerminalController.sendKeyToTerminal(keyCode);
             window.TerminalController.scrollToBottomAndEnableAutoScroll();
+        } else {
+            // Other keys - just send normally
+            console.log('DPad: Sending key:', keyName);
+            window.TerminalController.sendKeyToTerminal(keyCode);
         }
     }
 
