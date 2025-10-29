@@ -1058,17 +1058,19 @@ button[data-tooltip]:hover::after {
     background: rgba(215, 119, 87, 0.15);
     border: 2px solid rgba(215, 119, 87, 0.3);
     color: #d4d4d4;
-    padding: 12px 8px;
+    padding: 12px 10px;
     border-radius: 12px;
     cursor: pointer;
     font-family: 'SF Mono', monospace;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     transition: all 0.2s ease;
     text-align: center;
     min-height: 45px;
     display: flex;
     align-items: center;
     justify-content: center;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .command-button:hover,
@@ -1145,14 +1147,26 @@ button[data-tooltip]:hover::after {
         max-height: 90vh;
     }
 
+    .slash-commands-modal-content .modal-body {
+        padding: 16px;
+    }
+
     .common-commands-grid {
         grid-template-columns: repeat(3, 1fr);
         gap: 8px;
     }
 
     .command-button {
-        padding: 10px 6px;
-        font-size: 0.75rem;
+        padding: 10px 8px;
+        font-size: 0.7rem;
         min-height: 42px;
+    }
+
+    .all-commands-section {
+        padding-top: 16px;
+    }
+
+    .command-item {
+        padding: 10px 12px;
     }
 }
