@@ -52,6 +52,7 @@ class SlashCommandsModal {
     constructor() {
         this.commonCommands = [];
         this.modal = null;
+        this.button = null;
         this.isOpen = false;
         this.onCommandSelect = null;
     }
@@ -80,33 +81,109 @@ class SlashCommandsModal {
 
         // Modal will be created lazily on first open() call
         console.log('[SlashCommands] Initialization complete (modal will be created on demand)');
+
+        // Create the floating button
+        this.createButton();
+    }
+
+    /**
+     * Create the floating slash command button
+     */
+    createButton() {
+        if (this.button) {
+            console.log('[SlashCommands] Button already exists');
+            return;
+        }
+
+        this.button = document.createElement('button');
+        this.button.id = 'slash-commands-btn';
+        this.button.className = 'slash-commands-btn';
+        this.button.setAttribute('aria-label', 'Open Slash Commands');
+        this.button.style.display = 'none'; // Hidden by default
+
+        // Set initial icon (slash)
+        this.updateButtonIcon();
+
+        this.button.addEventListener('click', () => {
+            if (this.isOpen) {
+                this.close();
+            } else {
+                this.open();
+            }
+        });
+
+        document.body.appendChild(this.button);
+        console.log('[SlashCommands] Button created and added to DOM');
+    }
+
+    /**
+     * Update button icon based on open/closed state
+     */
+    updateButtonIcon() {
+        if (!this.button) return;
+
+        if (this.isOpen) {
+            // X icon (close)
+            this.button.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M6 6L18 18M18 6L6 18" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            `;
+        } else {
+            // Slash icon (open)
+            this.button.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M14 4L10 20" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                </svg>
+            `;
+        }
+    }
+
+    /**
+     * Show the button
+     */
+    show() {
+        if (this.button) {
+            this.button.style.display = 'flex';
+        }
+    }
+
+    /**
+     * Hide the button
+     */
+    hide() {
+        if (this.button) {
+            this.button.style.display = 'none';
+        }
     }
 
     /**
      * Create the modal HTML structure
+     * Note: Content is nested INSIDE overlay (like D-pad pattern)
      */
     createModal() {
         console.log('[SlashCommands] createModal() called');
 
         const modalHTML = `
             <div id="slash-commands-modal" class="modal" style="display: none;">
-                <div class="modal-overlay"></div>
-                <div class="modal-content slash-commands-modal-content">
-                    <div class="modal-header">
-                        <h2>/ Slash Commands</h2>
-                        <button class="modal-close" aria-label="Close modal">&times;</button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="common-commands-section">
-                            <h3>Quick Access</h3>
-                            <div class="common-commands-grid" id="common-commands-grid">
-                                ${this.renderCommonCommands()}
-                            </div>
+                <div class="modal-overlay">
+                    <div class="modal-content slash-commands-modal-content">
+                        <div class="modal-header">
+                            <h2>/ Slash Commands</h2>
+                            <button class="modal-close" aria-label="Close modal">&times;</button>
                         </div>
-                        <div class="all-commands-section">
-                            <h3>All Commands</h3>
-                            <div class="all-commands-list" id="all-commands-list">
-                                ${this.renderAllCommands()}
+                        <div class="modal-body">
+                            <div class="common-commands-section">
+                                <h3>Quick Access</h3>
+                                <div class="common-commands-grid" id="common-commands-grid">
+                                    ${this.renderCommonCommands()}
+                                </div>
+                            </div>
+                            <div class="all-commands-section">
+                                <h3>All Commands</h3>
+                                <div class="all-commands-list" id="all-commands-list">
+                                    ${this.renderAllCommands()}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -241,6 +318,9 @@ class SlashCommandsModal {
         console.log('[SlashCommands] Adding .active class to show modal');
         this.modal.classList.add('active');
         this.isOpen = true;
+
+        // Update button icon to X
+        this.updateButtonIcon();
     }
 
     /**
@@ -255,6 +335,9 @@ class SlashCommandsModal {
         console.log('[SlashCommands] Removing .active class to hide modal');
         this.modal.classList.remove('active');
         this.isOpen = false;
+
+        // Update button icon back to slash
+        this.updateButtonIcon();
     }
 
     /**

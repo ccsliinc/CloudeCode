@@ -938,7 +938,7 @@ button[data-tooltip]:hover::after {
     left: 20px;
     width: 45px;
     height: 45px;
-    background: rgba(30, 30, 30, 0.95);
+    background: rgba(215, 119, 87, 0.15);
     border: 2px solid rgba(215, 119, 87, 0.3);
     border-radius: 50%;
     display: flex;
@@ -1050,29 +1050,34 @@ button[data-tooltip]:hover::after {
 
 .common-commands-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
 }
 
 .command-button {
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
+    background: rgba(215, 119, 87, 0.15);
+    border: 2px solid rgba(215, 119, 87, 0.3);
     color: #d4d4d4;
-    padding: 10px 12px;
-    border-radius: 4px;
+    padding: 12px 8px;
+    border-radius: 12px;
     cursor: pointer;
     font-family: 'SF Mono', monospace;
     font-size: 0.85rem;
     transition: all 0.2s ease;
     text-align: center;
+    min-height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.command-button:hover {
-    background: #3e3e42;
-    border-color: #d77757;
+.command-button:hover,
+.command-button:active {
+    background: rgba(215, 119, 87, 0.35);
+    border-color: rgba(215, 119, 87, 0.6);
     color: #d77757;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(215, 119, 87, 0.3);
+    transform: scale(0.95);
+    box-shadow: 0 0 20px rgba(215, 119, 87, 0.5);
 }
 
 .all-commands-section {
@@ -1141,12 +1146,13 @@ button[data-tooltip]:hover::after {
     }
 
     .common-commands-grid {
-        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-        gap: 6px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
     }
 
     .command-button {
-        padding: 8px 10px;
-        font-size: 0.8rem;
+        padding: 10px 6px;
+        font-size: 0.75rem;
+        min-height: 42px;
     }
 }

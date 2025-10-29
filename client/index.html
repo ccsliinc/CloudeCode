@@ -171,9 +171,8 @@
                 }
 
                 // Hide slash command button on launchpad
-                const slashBtn = document.getElementById('slash-commands-btn');
-                if (slashBtn) {
-                    slashBtn.style.display = 'none';
+                if (window.SlashCommandsModal) {
+                    window.SlashCommandsModal.hide();
                 }
 
                 // Initialize launchpad if first time
@@ -212,18 +211,16 @@
                 }
 
                 // Initialize slash commands modal
-                if (window.SlashCommandsModal && !window.SlashCommandsModal.modal) {
+                if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
                     await window.SlashCommandsModal.init((command) => {
                         // Insert command into terminal without Enter
                         window.TerminalController.insertText(command);
                     });
-                    this.createSlashCommandButton();
                 }
 
                 // Show slash command button on terminal screen
-                const slashBtn = document.getElementById('slash-commands-btn');
-                if (slashBtn) {
-                    slashBtn.style.display = 'block';
+                if (window.SlashCommandsModal) {
+                    window.SlashCommandsModal.show();
                 }
 
                 // Connect terminal to session
@@ -329,35 +326,6 @@
                     // Focus confirm button
                     setTimeout(() => confirmBtn.focus(), 100);
                 });
-            }
-
-            /**
-             * Create slash command floating button
-             */
-            createSlashCommandButton() {
-                // Check if button already exists
-                if (document.getElementById('slash-commands-btn')) {
-                    return;
-                }
-
-                const button = document.createElement('button');
-                button.id = 'slash-commands-btn';
-                button.className = 'slash-commands-btn';
-                button.innerHTML = `
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M13 4L7 16" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                `;
-                button.setAttribute('aria-label', 'Open Slash Commands');
-                button.style.display = 'none'; // Hidden by default
-
-                button.addEventListener('click', () => {
-                    if (window.SlashCommandsModal) {
-                        window.SlashCommandsModal.open();
-                    }
-                });
-
-                document.body.appendChild(button);
             }
         }
 
