@@ -368,6 +368,8 @@ button[data-tooltip]:hover::after {
 #launchpad-screen {
     flex-direction: column;
     padding: 20px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .launchpad-container {
@@ -433,11 +435,12 @@ button[data-tooltip]:hover::after {
     background: #2d2d30;
     border: 1px solid #3e3e42;
     border-left: 3px solid #d77757;
-    padding: 14px 16px;
+    padding: 14px 40px 14px 16px;
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.3s ease;
     position: relative;
+    overflow: hidden;
 }
 
 .project-item:hover {
@@ -457,6 +460,9 @@ button[data-tooltip]:hover::after {
     color: #858585;
     font-size: 0.85rem;
     margin-bottom: 6px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-all;
 }
 
 .project-description {
