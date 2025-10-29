@@ -587,8 +587,8 @@ button[data-tooltip]:hover::after {
     position: fixed;
     bottom: 20px;
     right: 20px;
-    width: 60px;
-    height: 60px;
+    width: 45px;
+    height: 45px;
     border-radius: 50%;
     background: rgba(215, 119, 87, 0.15);
     border: 2px solid rgba(215, 119, 87, 0.3);
@@ -614,7 +614,7 @@ button[data-tooltip]:hover::after {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
+    background: transparent;
     display: flex;
     justify-content: center;
     align-items: center;
