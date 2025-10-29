@@ -208,8 +208,8 @@ class Settings(BaseSettings):
             if any(p.get("name") == project.name for p in projects_data):
                 raise ValueError(f"Project with name '{project.name}' already exists")
 
-            # Add new project
-            projects_data.append({
+            # Add new project at the top (index 0)
+            projects_data.insert(0, {
                 "name": project.name,
                 "path": project.path,
                 "description": project.description
@@ -278,6 +278,72 @@ class Settings(BaseSettings):
                 f"Invalid JSON in auth config file: {e}\n"
                 f"Check {config_path}"
             )
+
+    def move_project_to_top(self, working_dir: str) -> None:
+        """
+        Move a project to the top of the projects list (most recently used).
+
+        Args:
+            working_dir: Path of the working directory to match against projects
+
+        Note:
+            Fails silently if no matching project found (user might use custom paths)
+        """
+        try:
+            config_path = Path(self.auth_config_file).expanduser()
+
+            if not config_path.exists():
+                return  # Fail silently
+
+            # Read current config
+            with open(config_path) as f:
+                data = json.load(f)
+
+            projects_data = data.get("projects", [])
+            if not projects_data:
+                return  # No projects to reorder
+
+            # Normalize the working_dir path for comparison
+            working_path = Path(working_dir).expanduser().resolve()
+
+            # Find matching project
+            matching_project = None
+            matching_index = None
+
+            for i, project in enumerate(projects_data):
+                project_path = Path(project.get("path", "")).expanduser().resolve()
+                if project_path == working_path:
+                    matching_project = project
+                    matching_index = i
+                    break
+
+            # If no match found, fail silently (user using custom path)
+            if matching_project is None or matching_index is None:
+                return
+
+            # If already at top, no need to reorder
+            if matching_index == 0:
+                return
+
+            # Move to top
+            projects_data.pop(matching_index)
+            projects_data.insert(0, matching_project)
+
+            # Update data
+            data["projects"] = projects_data
+
+            # Write back to file
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+
+        except Exception as e:
+            # Fail silently - don't want to break session creation if reordering fails
+            import structlog
+            logger = structlog.get_logger()
+            logger.warning("failed_to_reorder_projects", error=str(e), working_dir=working_dir)
 
 
 # Global settings instance

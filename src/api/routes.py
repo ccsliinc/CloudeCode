@@ -16,6 +16,7 @@ from src.models import (
     ErrorResponse
 )
 from src.api.auth import require_auth
+from src.config import settings
 
 logger = structlog.get_logger()
 
@@ -56,6 +57,10 @@ async def create_session(request: Request, body: CreateSessionRequest):
             auto_start_claude=body.auto_start_claude,
             copy_templates=body.copy_templates
         )
+
+        # Move this project to the top of the list (most recently used)
+        if session.working_dir:
+            settings.move_project_to_top(session.working_dir)
 
         return session
 
