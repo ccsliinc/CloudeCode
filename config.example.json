@@ -3,12 +3,18 @@
   "jwt_secret": "GENERATETHISWITHSECRETSTOKEN_URLSAFE",
   "jwt_expiry_minutes": 30,
   "template_path": "claude-template",
+  "common_slash_commands": [
+    "/agents",
+    "/clear",
+    "/compact",
+    "/context",
+    "/hooks",
+    "/mcp",
+    "/resume",
+    "/rewind",
+    "/usage"
+  ],
   "projects": [
-    {
-      "name": "🧠 QuantumVibes™",
-      "path": "~/projects/quantum-vibes",
-      "description": "Multimodal transformer embeddings for sentiment-driven quantum coherence optimization"
-    },
     {
       "name": "🔥 AGI-SaaS Disruptor",
       "path": "~/projects/agi-saas",
@@ -20,34 +26,9 @@
       "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression"
     },
     {
-      "name": "💎 CryptoSentience",
-      "path": "~/projects/crypto-sentience",
-      "description": "GPT-4-powered arbitrage engine analyzing memecoin vibes across 47 dimensions"
-    },
-    {
-      "name": "🚀 MetaOps Singularity",
-      "path": "~/projects/metaops",
-      "description": "Sentient DevOps platform that deploys itself before you think about deploying"
-    },
-    {
-      "name": "🌈 DeFi Consciousness",
-      "path": "~/projects/defi-consciousness",
-      "description": "Web3-native AI that achieves financial enlightenment through staking mechanisms"
-    },
-    {
       "name": "⚛️ ReactHook Nirvana",
       "path": "~/projects/react-nirvana",
       "description": "Component library that transcends the virtual DOM and enters the astral plane"
-    },
-    {
-      "name": "🐍 PythonGPT-∞",
-      "path": "~/projects/python-gpt-infinity",
-      "description": "Recursively self-improving snake that writes its own PEP proposals"
-    },
-    {
-      "name": "🔮 PromptDAO",
-      "path": "~/projects/prompt-dao",
-      "description": "Governance-token-gated prompt engineering collective achieving AGI through vibes"
     },
     {
       "name": "☁️ Cloude Code",

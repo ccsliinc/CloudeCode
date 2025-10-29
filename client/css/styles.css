@@ -930,3 +930,219 @@ button[data-tooltip]:hover::after {
     background: #2d2d30;
     border-color: #d77757;
 }
+
+/* Slash Commands Button */
+.slash-commands-btn {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 45px;
+    height: 45px;
+    background: rgba(30, 30, 30, 0.95);
+    border: 2px solid rgba(215, 119, 87, 0.3);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 9998;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.slash-commands-btn:hover,
+.slash-commands-btn:active {
+    background: rgba(215, 119, 87, 0.25);
+    border-color: rgba(215, 119, 87, 0.5);
+    transform: scale(1.05);
+    box-shadow: 0 0 16px rgba(215, 119, 87, 0.4);
+}
+
+/* Slash Commands Modal */
+.modal.active {
+    display: flex;
+}
+
+.modal .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease;
+}
+
+.slash-commands-modal-content {
+    background: #1e1e1e;
+    border: 2px solid #d77757;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+    position: relative;
+}
+
+.slash-commands-modal-content .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid #3e3e42;
+}
+
+.slash-commands-modal-content .modal-header h2 {
+    color: #d77757;
+    font-size: 1.3rem;
+    margin: 0;
+    font-weight: bold;
+}
+
+.modal-close {
+    background: transparent;
+    border: none;
+    color: #d77757;
+    font-size: 2rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+    transform: scale(1.1);
+    color: #e88768;
+}
+
+.slash-commands-modal-content .modal-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.common-commands-section {
+    margin-bottom: 30px;
+}
+
+.common-commands-section h3 {
+    color: #d77757;
+    font-size: 1rem;
+    margin: 0 0 12px 0;
+    font-weight: normal;
+    text-transform: lowercase;
+}
+
+.common-commands-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+}
+
+.command-button {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    color: #d4d4d4;
+    padding: 10px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+    text-align: center;
+}
+
+.command-button:hover {
+    background: #3e3e42;
+    border-color: #d77757;
+    color: #d77757;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(215, 119, 87, 0.3);
+}
+
+.all-commands-section {
+    border-top: 1px solid #3e3e42;
+    padding-top: 20px;
+}
+
+.all-commands-section h3 {
+    color: #d77757;
+    font-size: 1rem;
+    margin: 0 0 16px 0;
+    font-weight: normal;
+    text-transform: lowercase;
+}
+
+.all-commands-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.command-category h4 {
+    color: #d77757;
+    font-size: 0.9rem;
+    margin: 0 0 8px 0;
+    font-weight: normal;
+    opacity: 0.8;
+}
+
+.command-item {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    padding: 12px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.command-item:hover {
+    background: #3e3e42;
+    border-color: #d77757;
+    transform: translateX(4px);
+}
+
+.command-name {
+    color: #d77757;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.95rem;
+    font-weight: bold;
+}
+
+.command-description {
+    color: #858585;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+    .slash-commands-modal-content {
+        width: 95%;
+        max-height: 90vh;
+    }
+
+    .common-commands-grid {
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+        gap: 6px;
+    }
+
+    .command-button {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+    }
+}

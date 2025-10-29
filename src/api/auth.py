@@ -357,3 +357,48 @@ async def check_auth_status():
         HTTPException: If not authenticated
     """
     return SuccessResponse(message="Authenticated")
+
+
+@router.get("/config/common-commands", dependencies=[Depends(require_auth)])
+async def get_common_commands():
+    """
+    Get list of common slash commands from config.
+
+    Returns:
+        List of common slash commands
+
+    Raises:
+        HTTPException: If config loading fails
+    """
+    try:
+        auth_config = settings.load_auth_config()
+
+        # Return common commands if defined, otherwise return default set
+        commands = getattr(auth_config, 'common_slash_commands', [
+            "/agents",
+            "/clear",
+            "/compact",
+            "/context",
+            "/hooks",
+            "/mcp",
+            "/resume",
+            "/rewind",
+            "/usage"
+        ])
+
+        logger.debug("common_commands_retrieved", count=len(commands))
+
+        return {"commands": commands}
+
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except Exception as e:
+        logger.error("common_commands_retrieval_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve common commands: {str(e)}"
+        )

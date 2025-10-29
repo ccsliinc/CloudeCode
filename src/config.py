@@ -22,6 +22,7 @@ class AuthConfig(BaseModel):
     jwt_expiry_minutes: int = 30
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
+    common_slash_commands: List[str] = []
 
 
 class Settings(BaseSettings):

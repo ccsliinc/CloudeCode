@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Setup script for Claude Code Remote Controller
+# Setup script for Cloude Code
 # Checks and configures all required authentication
 
 set -e
 
-echo "☁️ Cloude Code Remote Controller - Setup"
+echo "☁️ Cloude Code - Setup"
 echo "========================================"
 echo ""
 

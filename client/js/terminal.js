@@ -629,6 +629,22 @@ class Terminal {
     }
 
     /**
+     * Insert text into terminal without pressing Enter
+     * Used for slash commands
+     */
+    insertText(text) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            console.warn('Terminal: Cannot insert text - WebSocket not connected');
+            return;
+        }
+
+        // Send text to terminal without newline
+        this.ws.send(new TextEncoder().encode(text));
+
+        console.log('Terminal: Inserted text:', text);
+    }
+
+    /**
      * Update status
      */
     updateStatus(text, className) {
