@@ -55,12 +55,24 @@ class Launchpad {
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
                 </div>
+
+                <div class="launchpad-section">
+                    <div class="launchpad-section-title">► server management</div>
+                    <button class="reset-server-btn" id="reset-server-btn">
+                        <span>🔄</span>
+                        <span>reset server (stop and start)</span>
+                    </button>
+                </div>
             </div>
         `;
 
         // Event listeners
         document.getElementById('new-session-btn').addEventListener('click', () => {
             this.createNewSession();
+        });
+
+        document.getElementById('reset-server-btn').addEventListener('click', () => {
+            this.resetServer();
         });
 
         // Note: loadProjects() will be called by App.showLaunchpad()
@@ -151,6 +163,44 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to delete project:', error);
             this.showError('failed to delete project: ' + error.message);
+        }
+    }
+
+    /**
+     * Reset the server
+     */
+    async resetServer() {
+        try {
+            // Show confirmation modal
+            const confirmed = await this.showConfirmModal(
+                'reset server',
+                'are you sure you want to reset the server?',
+                'this will stop and restart the server. any active sessions will be terminated.'
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            // Show loading state
+            this.updateStatus('resetting server...');
+
+            // Call reset API
+            await window.API.resetServer();
+
+            console.log('Launchpad: Server reset initiated');
+
+            // Show success message
+            this.updateStatus('server reset initiated - reconnecting...');
+
+            // Wait a moment for the server to restart, then reload the page
+            setTimeout(() => {
+                window.location.reload();
+            }, 3000);
+
+        } catch (error) {
+            console.error('Launchpad: Failed to reset server:', error);
+            this.showError('failed to reset server: ' + error.message);
         }
     }
 

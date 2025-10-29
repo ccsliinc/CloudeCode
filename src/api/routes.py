@@ -245,3 +245,47 @@ async def destroy_tunnel(request: Request, tunnel_id: str):
     except Exception as e:
         logger.error("tunnel_destruction_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to destroy tunnel: {str(e)}")
+
+
+@router.post("/server/reset", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
+async def reset_server(request: Request):
+    """
+    Reset the server by running the reset.sh script.
+
+    Returns:
+        Success response
+
+    Raises:
+        HTTPException: If reset fails
+    """
+    import subprocess
+    import os
+
+    try:
+        logger.info("api_reset_server_request")
+
+        # Get the project root directory (where reset.sh is located)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        reset_script = os.path.join(project_root, "reset.sh")
+
+        # Check if reset.sh exists
+        if not os.path.exists(reset_script):
+            raise HTTPException(status_code=500, detail="reset.sh script not found")
+
+        # Execute reset.sh in the background
+        subprocess.Popen(
+            [reset_script],
+            cwd=project_root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+
+        logger.info("api_reset_server_initiated")
+        return SuccessResponse(message="Server reset initiated")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("server_reset_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to reset server: {str(e)}")

@@ -227,6 +227,16 @@ class API {
         const token = this.getToken();
         return `${this.wsBaseURL}/ws/terminal${token ? `?token=${token}` : ''}`;
     }
+
+    /**
+     * Server: Reset server
+     * @returns {Promise<object>}
+     */
+    async resetServer() {
+        return await this.call('/server/reset', {
+            method: 'POST'
+        });
+    }
 }
 
 // Export singleton instance
