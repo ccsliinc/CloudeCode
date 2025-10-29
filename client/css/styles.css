@@ -368,8 +368,6 @@ button[data-tooltip]:hover::after {
 #launchpad-screen {
     flex-direction: column;
     padding: 20px;
-    overflow-y: auto;
-    overflow-x: hidden;
 }
 
 .launchpad-container {
