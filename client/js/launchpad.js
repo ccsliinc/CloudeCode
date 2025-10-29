@@ -111,11 +111,11 @@ class Launchpad {
         console.log('Launchpad: Creating new session');
 
         try {
-            // Show modal to get project name
-            const projectName = await this.showProjectNameModal();
+            // Show modal to get project details
+            const projectDetails = await this.showProjectNameModal();
 
-            if (!projectName) {
-                console.log('Launchpad: Project name cancelled');
+            if (!projectDetails) {
+                console.log('Launchpad: Project creation cancelled');
                 return; // User cancelled
             }
 
@@ -133,9 +133,9 @@ class Launchpad {
             // Save project to config with the actual path from the session
             try {
                 await window.API.createProject({
-                    name: projectName,
+                    name: projectDetails.name,
                     path: session.working_dir,
-                    description: null
+                    description: projectDetails.description || null
                 });
                 console.log('Launchpad: Project saved to config');
             } catch (error) {
@@ -169,8 +169,8 @@ class Launchpad {
     }
 
     /**
-     * Show modal to prompt for project name
-     * @returns {Promise<string|null>} Project name or null if cancelled
+     * Show modal to prompt for project name and description
+     * @returns {Promise<{name: string, description: string}|null>} Project details or null if cancelled
      */
     showProjectNameModal() {
         return new Promise((resolve) => {
@@ -196,6 +196,19 @@ class Launchpad {
                                 give your project a memorable name. you can reconnect to it later from the launcher.
                             </div>
                         </div>
+                        <div class="modal-input-group">
+                            <label class="modal-label">description (optional)</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="modal-project-description"
+                                placeholder="e.g., Building an AI-powered chatbot"
+                                autocomplete="off"
+                            />
+                            <div class="modal-description">
+                                add a short description to help remember what this project is about.
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
@@ -206,19 +219,36 @@ class Launchpad {
 
             document.body.appendChild(overlay);
 
-            const input = overlay.querySelector('#modal-project-name');
+            const nameInput = overlay.querySelector('#modal-project-name');
+            const descInput = overlay.querySelector('#modal-project-description');
             const confirmBtn = overlay.querySelector('#modal-confirm');
             const cancelBtn = overlay.querySelector('#modal-cancel');
 
-            // Focus input
-            setTimeout(() => input.focus(), 100);
+            // Focus name input
+            setTimeout(() => nameInput.focus(), 100);
 
-            // Handle Enter key
-            input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && input.value.trim()) {
-                    const name = input.value.trim();
-                    document.body.removeChild(overlay);
-                    resolve(name);
+            // Handle Enter key on name input (moves to description)
+            nameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (nameInput.value.trim()) {
+                        descInput.focus();
+                    }
+                }
+            });
+
+            // Handle Enter key on description input (submits)
+            descInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const name = nameInput.value.trim();
+                    if (name) {
+                        const description = descInput.value.trim();
+                        document.body.removeChild(overlay);
+                        resolve({ name, description });
+                    } else {
+                        nameInput.focus();
+                    }
                 }
             });
 
@@ -232,12 +262,13 @@ class Launchpad {
 
             // Handle confirm button
             confirmBtn.addEventListener('click', () => {
-                const name = input.value.trim();
+                const name = nameInput.value.trim();
                 if (name) {
+                    const description = descInput.value.trim();
                     document.body.removeChild(overlay);
-                    resolve(name);
+                    resolve({ name, description });
                 } else {
-                    input.focus();
+                    nameInput.focus();
                 }
             });
 
