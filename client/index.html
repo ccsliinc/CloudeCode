@@ -205,7 +205,14 @@
              * Logout
              */
             async logout() {
-                if (confirm('Are you sure you want to logout?')) {
+                // Show confirmation modal
+                const confirmed = await this.showConfirmModal(
+                    'logout',
+                    'are you sure you want to logout?',
+                    'any active session will be destroyed.'
+                );
+
+                if (confirmed) {
                     // Destroy active session if exists
                     if (window.TerminalController.sessionActive) {
                         try {
@@ -218,6 +225,72 @@
                     // Logout
                     window.Auth.logout();
                 }
+            }
+
+            /**
+             * Show confirmation modal
+             * @param {string} title - Modal title
+             * @param {string} message - Main message
+             * @param {string} details - Additional details (optional)
+             * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+             */
+            showConfirmModal(title, message, details = null) {
+                return new Promise((resolve) => {
+                    // Create modal overlay
+                    const overlay = document.createElement('div');
+                    overlay.className = 'modal-overlay';
+
+                    // Create modal content
+                    overlay.innerHTML = `
+                        <div class="modal-content">
+                            <div class="modal-header">» ${title}</div>
+                            <div class="modal-body">
+                                <div class="modal-message">${message}</div>
+                                ${details ? `<div class="modal-description">${details}</div>` : ''}
+                            </div>
+                            <div class="modal-footer">
+                                <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
+                                <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                            </div>
+                        </div>
+                    `;
+
+                    document.body.appendChild(overlay);
+
+                    const confirmBtn = overlay.querySelector('#modal-confirm');
+                    const cancelBtn = overlay.querySelector('#modal-cancel');
+
+                    // Handle Escape key
+                    overlay.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape') {
+                            document.body.removeChild(overlay);
+                            resolve(false);
+                        }
+                    });
+
+                    // Handle confirm button
+                    confirmBtn.addEventListener('click', () => {
+                        document.body.removeChild(overlay);
+                        resolve(true);
+                    });
+
+                    // Handle cancel button
+                    cancelBtn.addEventListener('click', () => {
+                        document.body.removeChild(overlay);
+                        resolve(false);
+                    });
+
+                    // Handle click outside modal
+                    overlay.addEventListener('click', (e) => {
+                        if (e.target === overlay) {
+                            document.body.removeChild(overlay);
+                            resolve(false);
+                        }
+                    });
+
+                    // Focus confirm button
+                    setTimeout(() => confirmBtn.focus(), 100);
+                });
             }
         }
 

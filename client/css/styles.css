@@ -437,6 +437,7 @@ button[data-tooltip]:hover::after {
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.3s ease;
+    position: relative;
 }
 
 .project-item:hover {
@@ -462,6 +463,34 @@ button[data-tooltip]:hover::after {
     color: #d4d4d4;
     font-size: 0.9rem;
     line-height: 1.4;
+}
+
+.project-delete-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    background: transparent;
+    color: #858585;
+    border: 1px solid transparent;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.project-delete-btn:hover {
+    background: rgba(255, 68, 68, 0.2);
+    color: #ff4444;
+    border-color: #ff4444;
+    box-shadow: 0 0 8px rgba(255, 68, 68, 0.4);
+    transform: scale(1.1);
 }
 
 .launchpad-empty {
@@ -643,6 +672,13 @@ button[data-tooltip]:hover::after {
     color: #858585;
     font-size: 0.85rem;
     margin-top: 6px;
+}
+
+.modal-message {
+    color: #d4d4d4;
+    font-size: 1rem;
+    line-height: 1.5;
+    margin-bottom: 10px;
 }
 
 .modal-footer {

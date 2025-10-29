@@ -194,6 +194,54 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
+    def delete_project(self, project_name: str) -> None:
+        """
+        Delete a project from the configuration file.
+
+        Args:
+            project_name: Name of the project to delete
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If config file is invalid or project doesn't exist
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            # Read current config
+            with open(config_path) as f:
+                data = json.load(f)
+
+            # Find and remove project
+            projects_data = data.get("projects", [])
+            original_length = len(projects_data)
+            projects_data = [p for p in projects_data if p.get("name") != project_name]
+
+            if len(projects_data) == original_length:
+                raise ValueError(f"Project '{project_name}' not found")
+
+            # Update data
+            data["projects"] = projects_data
+
+            # Write back to file
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
 
 # Global settings instance
 settings = Settings()

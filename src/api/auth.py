@@ -306,6 +306,45 @@ async def create_project(body: CreateProjectRequest):
         )
 
 
+@router.delete("/projects/{project_name}", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
+async def delete_project(project_name: str):
+    """
+    Delete a project from the configuration.
+
+    Args:
+        project_name: Name of the project to delete
+
+    Returns:
+        Success response
+
+    Raises:
+        HTTPException: If project deletion fails
+    """
+    try:
+        # Delete from config file
+        settings.delete_project(project_name)
+
+        logger.info("project_deleted", name=project_name)
+
+        return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
+
+    except ValueError as e:
+        logger.warning("project_deletion_failed_validation", error=str(e))
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except Exception as e:
+        logger.error("project_deletion_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete project: {str(e)}"
+        )
+
+
 @router.get("/auth/status", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def check_auth_status():
     """

@@ -86,7 +86,8 @@ class Launchpad {
         projectListEl.innerHTML = this.projects.map((project, index) => {
             const description = project.description || 'no description';
             return `
-                <div class="project-item" data-index="${index}">
+                <div class="project-item" data-index="${index}" data-name="${project.name}">
+                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project">×</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
                     <div class="project-description">${description}</div>
@@ -94,13 +95,128 @@ class Launchpad {
             `;
         }).join('');
 
-        // Add click handlers
+        // Add click handlers for project selection
         const projectItems = projectListEl.querySelectorAll('.project-item');
         projectItems.forEach(item => {
-            item.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                // Don't open project if clicking delete button
+                if (e.target.classList.contains('project-delete-btn')) {
+                    return;
+                }
                 const index = parseInt(item.dataset.index);
                 this.selectProject(this.projects[index]);
             });
+        });
+
+        // Add click handlers for delete buttons
+        const deleteButtons = projectListEl.querySelectorAll('.project-delete-btn');
+        deleteButtons.forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent project selection
+                const projectName = btn.dataset.name;
+                await this.deleteProject(projectName);
+            });
+        });
+    }
+
+    /**
+     * Delete a project
+     */
+    async deleteProject(projectName) {
+        try {
+            // Show confirmation modal
+            const confirmed = await this.showConfirmModal(
+                'delete project',
+                `are you sure you want to delete "${projectName}"?`,
+                'this will only remove it from the launcher. the actual files will not be deleted.'
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            // Show loading state
+            this.updateStatus(`deleting ${projectName}...`);
+
+            // Delete project via API
+            await window.API.deleteProject(projectName);
+
+            console.log('Launchpad: Project deleted:', projectName);
+
+            // Reload projects list
+            await this.loadProjects();
+
+            this.updateStatus('project deleted');
+
+        } catch (error) {
+            console.error('Launchpad: Failed to delete project:', error);
+            this.showError('failed to delete project: ' + error.message);
+        }
+    }
+
+    /**
+     * Show confirmation modal
+     * @param {string} title - Modal title
+     * @param {string} message - Main message
+     * @param {string} details - Additional details (optional)
+     * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+     */
+    showConfirmModal(title, message, details = null) {
+        return new Promise((resolve) => {
+            // Create modal overlay
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            // Create modal content
+            overlay.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">» ${title}</div>
+                    <div class="modal-body">
+                        <div class="modal-message">${message}</div>
+                        ${details ? `<div class="modal-description">${details}</div>` : ''}
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const confirmBtn = overlay.querySelector('#modal-confirm');
+            const cancelBtn = overlay.querySelector('#modal-cancel');
+
+            // Handle Escape key
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    document.body.removeChild(overlay);
+                    resolve(false);
+                }
+            });
+
+            // Handle confirm button
+            confirmBtn.addEventListener('click', () => {
+                document.body.removeChild(overlay);
+                resolve(true);
+            });
+
+            // Handle cancel button
+            cancelBtn.addEventListener('click', () => {
+                document.body.removeChild(overlay);
+                resolve(false);
+            });
+
+            // Handle click outside modal
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    document.body.removeChild(overlay);
+                    resolve(false);
+                }
+            });
+
+            // Focus confirm button
+            setTimeout(() => confirmBtn.focus(), 100);
         });
     }
 

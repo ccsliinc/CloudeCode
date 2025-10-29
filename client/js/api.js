@@ -148,6 +148,17 @@ class API {
     }
 
     /**
+     * Projects: Delete project
+     * @param {string} projectName - Name of the project to delete
+     * @returns {Promise<object>}
+     */
+    async deleteProject(projectName) {
+        return await this.call(`/projects/${encodeURIComponent(projectName)}`, {
+            method: 'DELETE'
+        });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean}
      * @returns {Promise<object>} - Session data
