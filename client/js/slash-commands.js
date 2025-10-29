@@ -174,13 +174,12 @@ class SlashCommandsModal {
                         </div>
                         <div class="modal-body">
                             <div class="common-commands-section">
-                                <h3>Quick Access</h3>
                                 <div class="common-commands-grid" id="common-commands-grid">
                                     ${this.renderCommonCommands()}
                                 </div>
                             </div>
                             <div class="all-commands-section">
-                                <h3>All Commands</h3>
+                                <h3>all commands</h3>
                                 <div class="all-commands-list" id="all-commands-list">
                                     ${this.renderAllCommands()}
                                 </div>
@@ -208,9 +207,17 @@ class SlashCommandsModal {
      * Render common commands as buttons
      */
     renderCommonCommands() {
+        console.log('[SlashCommands] renderCommonCommands() called with', this.commonCommands.length, 'commands:', this.commonCommands);
+
+        if (!this.commonCommands || this.commonCommands.length === 0) {
+            console.warn('[SlashCommands] No common commands to render!');
+            return '<div style="color: #858585; padding: 12px; text-align: center;">No common commands configured</div>';
+        }
+
         return this.commonCommands.map(cmd => {
             const cmdInfo = ALL_SLASH_COMMANDS.find(c => c.command === cmd);
             const description = cmdInfo ? cmdInfo.description : '';
+            console.log('[SlashCommands] Rendering button for:', cmd, 'description:', description);
             return `
                 <button class="command-button" data-command="${cmd}" title="${description}">
                     ${cmd}
