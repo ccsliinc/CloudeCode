@@ -111,48 +111,39 @@ class Launchpad {
         console.log('Launchpad: Creating new session');
 
         try {
-            // Prompt for project details
-            const projectName = prompt('Enter a name for this project:');
+            // Show modal to get project name
+            const projectName = await this.showProjectNameModal();
+
             if (!projectName) {
                 console.log('Launchpad: Project name cancelled');
                 return; // User cancelled
             }
 
-            const projectPath = prompt('Enter the full path to the project directory:', '/Users/Adam/Dropbox/');
-            if (!projectPath) {
-                console.log('Launchpad: Project path cancelled');
-                return; // User cancelled
-            }
-
-            const projectDescription = prompt('Enter a description (optional):');
-
             // Show loading state
-            this.updateStatus('saving project and creating session...');
+            this.updateStatus('creating new session...');
 
-            // Save project to config
-            try {
-                await window.API.createProject({
-                    name: projectName,
-                    path: projectPath,
-                    description: projectDescription || null
-                });
-                console.log('Launchpad: Project saved to config');
-            } catch (error) {
-                // If project already exists, that's ok - continue anyway
-                if (!error.message.includes('already exists')) {
-                    throw error;
-                }
-                console.log('Launchpad: Project already exists, continuing...');
-            }
-
-            // Create session with the specified path and template copying
+            // Create session with auto-generated path and template copying
             const session = await window.API.createSession({
-                working_dir: projectPath,
                 auto_start_claude: true,
                 copy_templates: true
             });
 
             console.log('Launchpad: New session created:', session);
+
+            // Save project to config with the actual path from the session
+            try {
+                await window.API.createProject({
+                    name: projectName,
+                    path: session.working_dir,
+                    description: null
+                });
+                console.log('Launchpad: Project saved to config');
+            } catch (error) {
+                // If project already exists, that's ok - continue anyway
+                if (!error.message.includes('already exists')) {
+                    console.error('Launchpad: Failed to save project:', error);
+                }
+            }
 
             // Trigger session-created event
             window.dispatchEvent(new CustomEvent('session-created', {
@@ -175,6 +166,95 @@ class Launchpad {
                 this.showError('failed to create session: ' + error.message);
             }
         }
+    }
+
+    /**
+     * Show modal to prompt for project name
+     * @returns {Promise<string|null>} Project name or null if cancelled
+     */
+    showProjectNameModal() {
+        return new Promise((resolve) => {
+            // Create modal overlay
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            // Create modal content
+            overlay.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">» name this project</div>
+                    <div class="modal-body">
+                        <div class="modal-input-group">
+                            <label class="modal-label">project name</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="modal-project-name"
+                                placeholder="e.g., My Awesome Project"
+                                autocomplete="off"
+                            />
+                            <div class="modal-description">
+                                give your project a memorable name. you can reconnect to it later from the launcher.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">create session</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const input = overlay.querySelector('#modal-project-name');
+            const confirmBtn = overlay.querySelector('#modal-confirm');
+            const cancelBtn = overlay.querySelector('#modal-cancel');
+
+            // Focus input
+            setTimeout(() => input.focus(), 100);
+
+            // Handle Enter key
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && input.value.trim()) {
+                    const name = input.value.trim();
+                    document.body.removeChild(overlay);
+                    resolve(name);
+                }
+            });
+
+            // Handle Escape key
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    document.body.removeChild(overlay);
+                    resolve(null);
+                }
+            });
+
+            // Handle confirm button
+            confirmBtn.addEventListener('click', () => {
+                const name = input.value.trim();
+                if (name) {
+                    document.body.removeChild(overlay);
+                    resolve(name);
+                } else {
+                    input.focus();
+                }
+            });
+
+            // Handle cancel button
+            cancelBtn.addEventListener('click', () => {
+                document.body.removeChild(overlay);
+                resolve(null);
+            });
+
+            // Handle click outside modal
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    document.body.removeChild(overlay);
+                    resolve(null);
+                }
+            });
+        });
     }
 
     /**
