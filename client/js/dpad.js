@@ -60,7 +60,11 @@ class DPad {
 
         this.floatingButton.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.open();
+            if (this.isOpen) {
+                this.close();
+            } else {
+                this.open();
+            }
         });
 
         document.body.appendChild(this.floatingButton);
@@ -75,9 +79,13 @@ class DPad {
         this.isOpen = true;
         this.createOverlay();
 
-        // Hide floating button while overlay is open
+        // Change floating button to X
         if (this.floatingButton) {
-            this.floatingButton.style.display = 'none';
+            this.floatingButton.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M6 6L18 18M18 6L6 18" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            `;
         }
     }
 
@@ -94,9 +102,14 @@ class DPad {
             this.overlay = null;
         }
 
-        // Show floating button again
+        // Change floating button back to D-pad icon
         if (this.floatingButton) {
-            this.floatingButton.style.display = 'flex';
+            this.floatingButton.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M8 4H12V8H16V12H12V16H8V12H4V8H8V4Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="10" cy="10" r="1" fill="#d77757"/>
+                </svg>
+            `;
         }
     }
 
@@ -111,12 +124,6 @@ class DPad {
             <div class="dpad-container">
                 <button class="dpad-esc dpad-key" data-key="ESC">
                     <span style="font-size: 14px; font-weight: bold; color: #d77757;">ESC</span>
-                </button>
-
-                <button class="dpad-close" data-action="close">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                        <path d="M6 6L18 18M18 6L6 18" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
                 </button>
 
                 <button class="dpad-shift-tab dpad-key" data-key="SHIFT_TAB">
@@ -207,13 +214,6 @@ class DPad {
                 const key = btn.dataset.key;
                 this.sendKey(key);
             });
-        });
-
-        // Close button
-        const closeBtn = this.overlay.querySelector('.dpad-close');
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.close();
         });
 
         document.body.appendChild(this.overlay);
