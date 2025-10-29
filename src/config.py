@@ -100,8 +100,7 @@ class Settings(BaseSettings):
         1. claude_cli_path setting (if explicitly set)
         2. `which claude` command (if found in PATH)
         3. ~/.claude/local/claude (if exists)
-        4. /Users/Adam/.claude/local/claude (hardcoded fallback for backwards compatibility)
-        5. Just "claude" (trust system PATH)
+        4. Just "claude" (trust system PATH)
 
         Returns:
             Path to Claude CLI binary
@@ -123,12 +122,7 @@ class Settings(BaseSettings):
         if home_path.exists():
             return str(home_path)
 
-        # 4. Check hardcoded path (backwards compatibility)
-        hardcoded_path = Path("/Users/Adam/.claude/local/claude")
-        if hardcoded_path.exists():
-            return str(hardcoded_path)
-
-        # 5. Fallback to just "claude" and trust PATH
+        # 4. Fallback to just "claude" and trust PATH
         return "claude"
 
     def load_auth_config(self) -> AuthConfig:
