@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import structlog
 
-from src.config import settings
-from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, SuccessResponse
+from src.config import settings, ProjectConfig
+from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, SuccessResponse
 
 logger = structlog.get_logger()
 
@@ -253,6 +253,56 @@ async def get_projects():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve projects: {str(e)}"
+        )
+
+
+@router.post("/projects", response_model=ProjectResponse, status_code=201, dependencies=[Depends(require_auth)])
+async def create_project(body: CreateProjectRequest):
+    """
+    Add a new project to the configuration.
+
+    Args:
+        body: Project creation parameters
+
+    Returns:
+        Created project object
+
+    Raises:
+        HTTPException: If project creation fails
+    """
+    try:
+        # Create ProjectConfig object
+        project = ProjectConfig(
+            name=body.name,
+            path=body.path,
+            description=body.description
+        )
+
+        # Save to config file
+        settings.save_project(project)
+
+        logger.info("project_created", name=project.name, path=project.path)
+
+        return ProjectResponse(
+            name=project.name,
+            path=project.path,
+            description=project.description
+        )
+
+    except ValueError as e:
+        logger.warning("project_creation_failed_validation", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except Exception as e:
+        logger.error("project_creation_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create project: {str(e)}"
         )
 
 

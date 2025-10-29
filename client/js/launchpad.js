@@ -111,11 +111,43 @@ class Launchpad {
         console.log('Launchpad: Creating new session');
 
         try {
-            // Show loading state
-            this.updateStatus('creating new session...');
+            // Prompt for project details
+            const projectName = prompt('Enter a name for this project:');
+            if (!projectName) {
+                console.log('Launchpad: Project name cancelled');
+                return; // User cancelled
+            }
 
-            // Create session with auto-generated path and template copying
+            const projectPath = prompt('Enter the full path to the project directory:', '/Users/Adam/Dropbox/');
+            if (!projectPath) {
+                console.log('Launchpad: Project path cancelled');
+                return; // User cancelled
+            }
+
+            const projectDescription = prompt('Enter a description (optional):');
+
+            // Show loading state
+            this.updateStatus('saving project and creating session...');
+
+            // Save project to config
+            try {
+                await window.API.createProject({
+                    name: projectName,
+                    path: projectPath,
+                    description: projectDescription || null
+                });
+                console.log('Launchpad: Project saved to config');
+            } catch (error) {
+                // If project already exists, that's ok - continue anyway
+                if (!error.message.includes('already exists')) {
+                    throw error;
+                }
+                console.log('Launchpad: Project already exists, continuing...');
+            }
+
+            // Create session with the specified path and template copying
             const session = await window.API.createSession({
+                working_dir: projectPath,
                 auto_start_claude: true,
                 copy_templates: true
             });

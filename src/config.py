@@ -142,6 +142,58 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
+    def save_project(self, project: ProjectConfig) -> None:
+        """
+        Add a new project to the configuration file.
+
+        Args:
+            project: ProjectConfig object to add
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If config file is invalid or project already exists
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            # Read current config
+            with open(config_path) as f:
+                data = json.load(f)
+
+            # Check if project with same name already exists
+            projects_data = data.get("projects", [])
+            if any(p.get("name") == project.name for p in projects_data):
+                raise ValueError(f"Project with name '{project.name}' already exists")
+
+            # Add new project
+            projects_data.append({
+                "name": project.name,
+                "path": project.path,
+                "description": project.description
+            })
+
+            # Update data
+            data["projects"] = projects_data
+
+            # Write back to file
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
 
 # Global settings instance
 settings = Settings()

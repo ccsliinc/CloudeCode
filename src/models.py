@@ -116,6 +116,13 @@ class VerifyTOTPRequest(BaseModel):
     code: str = Field(..., description="6-digit TOTP code", min_length=6, max_length=6)
 
 
+class CreateProjectRequest(BaseModel):
+    """Request model for creating a new project."""
+    name: str = Field(..., description="Project display name")
+    path: str = Field(..., description="Project directory path")
+    description: Optional[str] = Field(None, description="Project description")
+
+
 class ProjectResponse(BaseModel):
     """Response model for a project."""
     name: str = Field(..., description="Project display name")

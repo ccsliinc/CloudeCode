@@ -136,6 +136,18 @@ class API {
     }
 
     /**
+     * Projects: Create new project
+     * @param {object} params - {name: string, path: string, description?: string}
+     * @returns {Promise<object>} - Project data
+     */
+    async createProject(params) {
+        return await this.call('/projects', {
+            method: 'POST',
+            body: params
+        });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean}
      * @returns {Promise<object>} - Session data
