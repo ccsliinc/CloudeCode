@@ -959,6 +959,10 @@ button[data-tooltip]:hover::after {
 }
 
 /* Slash Commands Modal */
+.modal {
+    display: none;
+}
+
 .modal.active {
     display: flex;
 }
