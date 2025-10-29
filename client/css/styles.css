@@ -181,6 +181,19 @@ button[data-tooltip]:hover::after {
     min-height: 0;
 }
 
+/* Hide scrollbars on terminal viewport */
+#terminal .xterm-viewport {
+    overflow-y: scroll !important;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+    width: 0;
+    height: 0;
+}
+
 /* Prevent line-height/letter-spacing from bleeding into xterm measurement */
 .xterm, .xterm * {
     line-height: normal !important;

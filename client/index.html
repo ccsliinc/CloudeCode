@@ -15,8 +15,18 @@
     <div class="header">
         <h1>☁️ Cloude Code <span class="version">v0.2</span></h1>
         <div class="controls">
-            <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">🔓</button>
-            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">💀</button>
+            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 3L12 9H4L8 3Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M4 11H12" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
             <span class="status" id="statusText" data-status="Ready"></span>
         </div>
     </div>
@@ -165,7 +175,7 @@
             /**
              * Show terminal screen
              */
-            showTerminal(session) {
+            async showTerminal(session) {
                 console.log('App: Showing terminal screen');
                 this.hideAllScreens();
                 document.getElementById('terminal-screen').classList.add('active');
@@ -175,7 +185,7 @@
 
                 // Initialize terminal if first time
                 if (!window.TerminalController.term) {
-                    window.TerminalController.init();
+                    await window.TerminalController.init();
                 }
 
                 // Connect terminal to session

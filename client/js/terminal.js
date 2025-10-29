@@ -33,7 +33,7 @@ class Terminal {
     /**
      * Initialize terminal
      */
-    init() {
+    async init() {
         console.log('Terminal: Initializing xterm.js');
 
         this.destroySessionBtn = document.getElementById('destroySessionBtn');
@@ -43,14 +43,63 @@ class Terminal {
         // Add destroy session handler
         this.destroySessionBtn.addEventListener('click', () => this.destroySession());
 
+        // Wait for xterm.js to load from CDN
+        await this.waitForXterm();
+
         this.initTerminal();
+    }
+
+    /**
+     * Wait for xterm.js CDN scripts to load
+     */
+    async waitForXterm() {
+        const maxWait = 10000; // 10 seconds max
+        const checkInterval = 50; // Check every 50ms
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < maxWait) {
+            // Check if all xterm.js modules are loaded (use window.Terminal to avoid shadowing)
+            const terminalLoaded = typeof window.Terminal !== 'undefined' && window.Terminal !== Terminal;
+            const fitLoaded = typeof FitAddon !== 'undefined' && typeof FitAddon.FitAddon !== 'undefined';
+            const webglLoaded = typeof WebglAddon !== 'undefined' && typeof WebglAddon.WebglAddon !== 'undefined';
+            const unicodeLoaded = typeof Unicode11Addon !== 'undefined' && typeof Unicode11Addon.Unicode11Addon !== 'undefined';
+
+            if (terminalLoaded && fitLoaded && webglLoaded && unicodeLoaded) {
+                console.log('Terminal: xterm.js loaded', {
+                    windowTerminal: typeof window.Terminal,
+                    FitAddon: typeof FitAddon?.FitAddon,
+                    WebglAddon: typeof WebglAddon?.WebglAddon,
+                    Unicode11Addon: typeof Unicode11Addon?.Unicode11Addon
+                });
+                return;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+        }
+
+        console.error('Terminal: xterm.js failed to load', {
+            windowTerminal: typeof window.Terminal,
+            FitAddon: typeof FitAddon,
+            WebglAddon: typeof WebglAddon,
+            Unicode11Addon: typeof Unicode11Addon
+        });
+        throw new Error('xterm.js failed to load from CDN');
     }
 
     /**
      * Initialize xterm.js terminal
      */
     initTerminal() {
-        this.term = new Terminal({
+        console.log('Terminal: Creating xterm Terminal instance', {
+            windowTerminal: typeof window.Terminal,
+            localTerminal: typeof Terminal,
+            isXtermTerminal: window.Terminal !== Terminal
+        });
+
+        // Use window.Terminal to get xterm.js Terminal, not our wrapper class
+        const XTerminal = window.Terminal;
+
+        this.term = new XTerminal({
             cursorBlink: true,
             fontSize: 14,
             fontFamily: '"SF Mono", monospace',
@@ -83,6 +132,17 @@ class Terminal {
             scrollback: 10000,
             windowsMode: false
         });
+
+        console.log('Terminal: Terminal instance created', {
+            term: this.term,
+            hasLoadAddon: typeof this.term?.loadAddon,
+            allMethods: this.term ? Object.getOwnPropertyNames(Object.getPrototypeOf(this.term)).filter(m => typeof this.term[m] === 'function').slice(0, 20) : []
+        });
+
+        if (typeof this.term.loadAddon !== 'function') {
+            console.error('Terminal methods available:', Object.getOwnPropertyNames(Object.getPrototypeOf(this.term)));
+            throw new Error(`Terminal instance has no loadAddon method. Available methods: ${Object.getOwnPropertyNames(Object.getPrototypeOf(this.term)).join(', ')}`);
+        }
 
         this.fitAddon = new FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
@@ -258,7 +318,7 @@ class Terminal {
             return;
         }
 
-        this.updateStatus('Connecting to terminal...', 'status');
+        this.updateStatus('Connecting to terminal...');
 
         // Wait for fonts and layout
         const container = document.getElementById('terminal');
@@ -293,7 +353,7 @@ class Terminal {
                 this.reconnectTimeout = null;
             }
 
-            this.updateStatus('Connected', 'status connected');
+            this.updateStatus('Connected', 'connected');
 
             if (this.term) {
                 this.term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
@@ -331,7 +391,7 @@ class Terminal {
 
         this.ws.onerror = (error) => {
             console.error('Terminal: WebSocket error:', error);
-            this.updateStatus('WebSocket error', 'status error');
+            this.updateStatus('WebSocket error', 'error');
         };
 
         this.ws.onclose = () => {
@@ -386,7 +446,7 @@ class Terminal {
         if (!this.sessionActive || this.reconnectAttempts >= this.maxReconnectAttempts) {
             if (this.reconnectAttempts >= this.maxReconnectAttempts) {
                 console.log('Terminal: Max reconnect attempts reached');
-                this.updateStatus('Connection failed', 'status error');
+                this.updateStatus('Connection failed', 'error');
                 if (this.term) {
                     this.term.writeln('\n\x1b[1;31m[Reconnection failed after ' + this.maxReconnectAttempts + ' attempts]\x1b[0m');
                 }
@@ -401,7 +461,7 @@ class Terminal {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 16000);
 
         console.log(`Terminal: Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
-        this.updateStatus('Reconnecting...', 'status');
+        this.updateStatus('Reconnecting...');
 
         if (this.term) {
             this.term.writeln(`\n\x1b[1;33m[Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}]\x1b[0m`);
@@ -454,7 +514,7 @@ class Terminal {
      */
     async destroySession() {
         try {
-            this.updateStatus('Destroying session...', 'status');
+            this.updateStatus('Destroying session...');
 
             await window.API.destroySession();
 
@@ -479,7 +539,7 @@ class Terminal {
 
         } catch (error) {
             console.error('Terminal: Error destroying session:', error);
-            this.updateStatus('Error: ' + error.message, 'status error');
+            this.updateStatus('Error: ' + error.message, 'error');
         }
     }
 

@@ -160,8 +160,21 @@ class SessionManager:
             ValueError: If a session already exists
             PTYSessionError: If PTY session creation fails
         """
-        if self.session and self.session.status == SessionStatus.RUNNING:
+        # Check for valid active session (not just metadata)
+        if self.has_active_session():
             raise ValueError("A session is already running. Stop it before creating a new one.")
+
+        # Clean up zombie session metadata if exists
+        if self.session and not self.has_active_session():
+            logger.info("cleaning_up_zombie_session", session_id=self.session.id)
+            self.session = None
+            metadata_path = settings.get_session_metadata_path()
+            try:
+                if metadata_path.exists():
+                    metadata_path.unlink()
+                    logger.info("zombie_session_metadata_deleted")
+            except Exception as e:
+                logger.error("failed_to_delete_zombie_metadata", error=str(e))
 
         # Determine working directory
         if working_dir:

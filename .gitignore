@@ -55,3 +55,6 @@ session_metadata.json
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Temporary files
+icons.html
