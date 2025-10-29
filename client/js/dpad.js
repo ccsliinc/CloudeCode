@@ -160,16 +160,17 @@ class DPad {
 
                     <div class="dpad-row">
                         <button class="dpad-key" data-key="SHIFT_TAB">
-                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                                <path d="M20 14L8 14M8 14L12 10M8 14L12 18" stroke="#d77757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                <path d="M6 8L6 20" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                            <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+                                <path d="M15 5L13 12L8 10L12 15L5 17L12 19L10 24L15 20L20 24L18 19L25 17L18 15L22 10L17 12L15 5Z" fill="#d77757" stroke="#d77757" stroke-width="1" stroke-linejoin="round"/>
                             </svg>
                         </button>
                         <div class="dpad-spacer"></div>
                         <button class="dpad-key" data-key="TAB">
-                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                                <path d="M8 14L20 14M20 14L16 10M20 14L16 18" stroke="#d77757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                <path d="M22 8L22 20" stroke="#d77757" stroke-width="2.5" stroke-linecap="round"/>
+                            <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+                                <path d="M15 8C12 8 10 10 10 12C10 13 10.5 14 11 14.5C10 15 9 16 9 17.5C9 19.5 11 21 13 21C13 21 13 22 15 22C17 22 17 21 17 21C19 21 21 19.5 21 17.5C21 16 20 15 19 14.5C19.5 14 20 13 20 12C20 10 18 8 15 8Z" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <circle cx="13" cy="11.5" r="0.8" fill="#d77757"/>
+                                <circle cx="17" cy="11.5" r="0.8" fill="#d77757"/>
+                                <path d="M11 17C11 17 11.5 18 13 18.5M19 17C19 17 18.5 18 17 18.5" stroke="#d77757" stroke-width="1.2" stroke-linecap="round"/>
                             </svg>
                         </button>
                     </div>
