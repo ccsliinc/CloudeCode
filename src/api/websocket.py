@@ -121,7 +121,7 @@ async def websocket_terminal(websocket: WebSocket):
             receive_messages(websocket, session_manager)
         )
         send_pty_task = asyncio.create_task(
-            send_pty_output(websocket, pty_output_queue)
+            send_pty_output(websocket, pty_output_queue, log_monitor)
         )
         send_tunnels_task = asyncio.create_task(
             send_queue_messages(websocket, tunnel_queue)
@@ -227,13 +227,14 @@ async def receive_messages(websocket: WebSocket, session_manager):
         raise
 
 
-async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue):
+async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monitor=None):
     """
     Send PTY output from queue to the WebSocket client as binary frames.
 
     Args:
         websocket: WebSocket connection
         queue: Queue containing PTY output (base64 encoded strings)
+        log_monitor: Optional LogMonitor for pattern detection
     """
     try:
         while True:
@@ -243,6 +244,17 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue):
             try:
                 # Decode base64 to raw bytes
                 raw_bytes = base64.b64decode(encoded_data)
+
+                # Pattern detection: decode and analyze output
+                if log_monitor:
+                    try:
+                        text = raw_bytes.decode('utf-8', errors='replace')
+                        # Run pattern detection on the output
+                        log_monitor._detect_patterns(text)
+                    except Exception as e:
+                        # Don't let pattern detection errors break output streaming
+                        logger.debug("pattern_detection_error", error=str(e))
+
                 # Send as binary frame directly
                 await websocket.send_bytes(raw_bytes)
             except Exception as e:
