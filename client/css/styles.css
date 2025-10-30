@@ -530,6 +530,32 @@ button[data-tooltip]:hover::after {
     text-align: center;
 }
 
+.launchpad-footer {
+    margin-top: 40px;
+    padding: 20px 0;
+    text-align: center;
+    border-top: 1px solid rgba(215, 119, 87, 0.2);
+}
+
+.launchpad-footer a {
+    display: inline-block;
+    transition: all 0.3s ease;
+    opacity: 0.7;
+}
+
+.launchpad-footer a:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.launchpad-footer svg {
+    filter: drop-shadow(0 0 8px rgba(215, 119, 87, 0.3));
+}
+
+.launchpad-footer a:hover svg {
+    filter: drop-shadow(0 0 16px rgba(215, 119, 87, 0.6));
+}
+
 /* Terminal screen */
 #terminal-screen {
     flex-direction: column;
