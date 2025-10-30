@@ -355,6 +355,14 @@ class SlashCommandsModal {
             this.onCommandSelect(command);
         }
         this.close();
+
+        // Focus terminal to open keyboard on mobile
+        setTimeout(() => {
+            const terminal = document.querySelector('.xterm-helper-textarea');
+            if (terminal) {
+                terminal.focus();
+            }
+        }, 100);
     }
 }
 
