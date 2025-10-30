@@ -14,7 +14,7 @@ Runs Claude Code in a persistent pseudo-terminal on your Mac and exposes a web-b
 
 Perfect for developers who want to code on the couch, monitor long-running tasks from their phone, or quickly share dev environments without manual tunnel setup.
 
-<img width="388" alt="Claude Code Terminal" src="docs/images/terminal.png">
+<img width="388" alt="Claude Code Terminal" src="docs/images/terminal.jpg">
 
 > **Live Terminal:** Full xterm.js terminal with WebSocket streaming, mobile D-pad controls, and slash command shortcuts.
 
@@ -37,7 +37,7 @@ Perfect for developers who want to code on the couch, monitor long-running tasks
 
 Quick-access modal for all Claude Code slash commands with one-click insertion.
 
-<img width="388" alt="Slash Commands Modal" src="docs/images/slash-commands.png">
+<img width="388" alt="Slash Commands Modal" src="docs/images/slash-commands.jpg">
 
 **How to use:**
 - Click the floating slash (/) button in the bottom-right of the terminal
@@ -70,7 +70,7 @@ Edit `config.json` to customize "common commands" shown at the top:
 
 Virtual D-pad overlay for mobile terminal navigation (auto-appears on touch devices).
 
-<img width="388" alt="D-Pad Controls" src="docs/images/dpad.png">
+<img width="388" alt="D-Pad Controls" src="docs/images/dpad.jpg">
 
 **Button mappings:**
 - **Arrow Keys**: UP, DOWN, LEFT, RIGHT navigation
@@ -109,7 +109,7 @@ Prevents the annoying "fighting with auto-scroll" experience when reading logs.
 
 ### Project Management
 
-<img width="388" alt="Project Launcher" src="docs/images/launchpad.png">
+<img width="388" alt="Project Launcher" src="docs/images/launchpad.jpg">
 
 > **Launchpad Interface:** Project management with quick-launch, descriptions, and emoji icons in a terminal-aesthetic UI.
 
@@ -259,7 +259,7 @@ This will:
 
 Scan the QR code with your authenticator app.
 
-<img width="388" alt="TOTP Authentication" src="docs/images/totp-login.png">
+<img width="388" alt="TOTP Authentication" src="docs/images/totp-login.jpg">
 
 > **Secure Access:** TOTP 2FA login screen - scan QR with Google Authenticator or Authy.
 
