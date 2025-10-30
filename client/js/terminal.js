@@ -227,9 +227,9 @@ class Terminal {
         this.term.writeln('\x1b[1;32mCloude Code Terminal\x1b[0m');
         this.term.writeln('');
         this.term.writeln('\x1b[2;37mKeyboard shortcuts:\x1b[0m');
-        this.term.writeln('  \x1b[2;37m¥\x1b[0m = Newline (Enter)');
-        this.term.writeln('  \x1b[2;37m€\x1b[0m = Tab');
-        this.term.writeln('  \x1b[2;37m￡\x1b[0m = Shift+Tab');
+        this.term.writeln('  ¥  = Newline (Enter)');
+        this.term.writeln('  €  = Tab');
+        this.term.writeln('  £  = Shift+Tab');
         this.term.writeln('');
         this.term.writeln('Waiting for session...\n');
     }

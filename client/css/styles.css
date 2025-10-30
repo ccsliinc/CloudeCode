@@ -1049,8 +1049,9 @@ button[data-tooltip]:hover::after {
 }
 
 .common-commands-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 10px;
 }
 
@@ -1066,6 +1067,7 @@ button[data-tooltip]:hover::after {
     transition: all 0.2s ease;
     text-align: center;
     min-height: 45px;
+    width: 31%;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1152,7 +1154,6 @@ button[data-tooltip]:hover::after {
     }
 
     .common-commands-grid {
-        grid-template-columns: repeat(3, 1fr);
         gap: 8px;
     }
 
@@ -1160,6 +1161,7 @@ button[data-tooltip]:hover::after {
         padding: 10px 8px;
         font-size: 0.7rem;
         min-height: 42px;
+        width: 31%;
     }
 
     .all-commands-section {
