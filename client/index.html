@@ -13,7 +13,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>☁️ Cloude Code <span class="version">v0.2</span></h1>
+        <h1 id="appTitle">☁️ Cloude Code <span class="version">v0.2</span></h1>
         <div class="controls">
             <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -139,6 +139,15 @@
                 window.addEventListener('session-destroyed', () => {
                     console.log('App: Session destroyed');
                     this.showLaunchpad();
+                });
+
+                // Title click - navigate back to launchpad (only from terminal)
+                const appTitle = document.getElementById('appTitle');
+                appTitle.addEventListener('click', () => {
+                    if (this.currentScreen === 'terminal') {
+                        console.log('App: Title clicked, navigating to launchpad');
+                        this.showLaunchpad();
+                    }
                 });
             }
 
