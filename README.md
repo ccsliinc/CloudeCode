@@ -4,11 +4,19 @@ Remote control and monitoring for Claude Code CLI - code from anywhere.
 
 Control Claude Code sessions from any device on your network. Built for mobile-first development workflows with auto-tunneling, persistent sessions, and real-time terminal streaming.
 
+https://github.com/user-attachments/assets/83c9b6cf-36e2-4a24-b835-39e4f4d5f08c
+
+> **Quick Demo:** Watch Cloude Code in action - mobile control, auto-tunneling, and real-time terminal streaming.
+
 ## What It Does
 
 Runs Claude Code in a persistent pseudo-terminal on your Mac and exposes a web-based control interface. Access your coding session from your phone, tablet, or another computer. When Claude spins up a dev server, it automatically creates a public Cloudflare tunnel and broadcasts the URL to all connected clients.
 
 Perfect for developers who want to code on the couch, monitor long-running tasks from their phone, or quickly share dev environments without manual tunnel setup.
+
+<img width="388" alt="Claude Code Terminal" src="https://github.com/user-attachments/assets/d5e8f63f-405f-413f-8c9b-7d02c9f9e7c8">
+
+> **Live Terminal:** Full xterm.js terminal with WebSocket streaming, mobile D-pad controls, and slash command shortcuts.
 
 ## Key Features
 
@@ -28,6 +36,8 @@ Perfect for developers who want to code on the couch, monitor long-running tasks
 ### Slash Commands Modal
 
 Quick-access modal for all Claude Code slash commands with one-click insertion.
+
+<img width="388" alt="Slash Commands Modal" src="https://github.com/user-attachments/assets/e4d5c1bd-9b8e-4a9f-a1f7-42a9ab4f9e62">
 
 **How to use:**
 - Click the floating slash (/) button in the bottom-right of the terminal
@@ -59,6 +69,8 @@ Edit `config.json` to customize "common commands" shown at the top:
 #### D-Pad Controls
 
 Virtual D-pad overlay for mobile terminal navigation (auto-appears on touch devices).
+
+<img width="388" alt="D-Pad Controls" src="https://github.com/user-attachments/assets/e31b8c0c-7fb5-44cb-92e4-c1cb6e4f8e8f">
 
 **Button mappings:**
 - **Arrow Keys**: UP, DOWN, LEFT, RIGHT navigation
@@ -96,6 +108,10 @@ Intelligent scrolling that follows terminal output but doesn't fight you:
 Prevents the annoying "fighting with auto-scroll" experience when reading logs.
 
 ### Project Management
+
+<img width="388" alt="Project Launcher" src="https://github.com/user-attachments/assets/d70e72d6-4c45-494b-aeb5-32eea9eca81e">
+
+> **Launchpad Interface:** Project management with quick-launch, descriptions, and emoji icons in a terminal-aesthetic UI.
 
 #### Template File Copying
 
@@ -242,6 +258,10 @@ This will:
 - Save QR image to `./totp-qr.png`
 
 Scan the QR code with your authenticator app.
+
+<img width="388" alt="TOTP Authentication" src="https://github.com/user-attachments/assets/25db0f44-1e1a-4d83-8f80-cec1f2f4cf07">
+
+> **Secure Access:** TOTP 2FA login screen - scan QR with Google Authenticator or Authy.
 
 ### 4. Verify Setup
 
