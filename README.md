@@ -7,6 +7,8 @@ Control Claude Code sessions from any device on your network. Built for mobile-f
 https://github.com/user-attachments/assets/83c9b6cf-36e2-4a24-b835-39e4f4d5f08c
 
 > **Quick Demo:** Watch Cloude Code in action - mobile control, auto-tunneling, and real-time terminal streaming.
+>
+> _Note: Screenshots below should be saved to `docs/images/` in the repo._
 
 ## What It Does
 
@@ -14,7 +16,7 @@ Runs Claude Code in a persistent pseudo-terminal on your Mac and exposes a web-b
 
 Perfect for developers who want to code on the couch, monitor long-running tasks from their phone, or quickly share dev environments without manual tunnel setup.
 
-<img width="388" alt="Claude Code Terminal" src="https://github.com/user-attachments/assets/d5e8f63f-405f-413f-8c9b-7d02c9f9e7c8">
+<img width="388" alt="Claude Code Terminal" src="docs/images/terminal.png">
 
 > **Live Terminal:** Full xterm.js terminal with WebSocket streaming, mobile D-pad controls, and slash command shortcuts.
 
@@ -37,7 +39,7 @@ Perfect for developers who want to code on the couch, monitor long-running tasks
 
 Quick-access modal for all Claude Code slash commands with one-click insertion.
 
-<img width="388" alt="Slash Commands Modal" src="https://github.com/user-attachments/assets/e4d5c1bd-9b8e-4a9f-a1f7-42a9ab4f9e62">
+<img width="388" alt="Slash Commands Modal" src="docs/images/slash-commands.png">
 
 **How to use:**
 - Click the floating slash (/) button in the bottom-right of the terminal
@@ -70,7 +72,7 @@ Edit `config.json` to customize "common commands" shown at the top:
 
 Virtual D-pad overlay for mobile terminal navigation (auto-appears on touch devices).
 
-<img width="388" alt="D-Pad Controls" src="https://github.com/user-attachments/assets/e31b8c0c-7fb5-44cb-92e4-c1cb6e4f8e8f">
+<img width="388" alt="D-Pad Controls" src="docs/images/dpad.png">
 
 **Button mappings:**
 - **Arrow Keys**: UP, DOWN, LEFT, RIGHT navigation
@@ -109,7 +111,7 @@ Prevents the annoying "fighting with auto-scroll" experience when reading logs.
 
 ### Project Management
 
-<img width="388" alt="Project Launcher" src="https://github.com/user-attachments/assets/d70e72d6-4c45-494b-aeb5-32eea9eca81e">
+<img width="388" alt="Project Launcher" src="docs/images/launchpad.png">
 
 > **Launchpad Interface:** Project management with quick-launch, descriptions, and emoji icons in a terminal-aesthetic UI.
 
@@ -259,7 +261,7 @@ This will:
 
 Scan the QR code with your authenticator app.
 
-<img width="388" alt="TOTP Authentication" src="https://github.com/user-attachments/assets/25db0f44-1e1a-4d83-8f80-cec1f2f4cf07">
+<img width="388" alt="TOTP Authentication" src="docs/images/totp-login.png">
 
 > **Secure Access:** TOTP 2FA login screen - scan QR with Google Authenticator or Authy.
 
