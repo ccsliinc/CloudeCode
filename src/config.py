@@ -16,9 +16,9 @@ class ProjectConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    """Authentication configuration loaded from JSON."""
-    totp_secret: str
-    jwt_secret: str
+    """Authentication configuration loaded from JSON and .env."""
+    totp_secret: Optional[str] = None  # Populated from Settings (.env)
+    jwt_secret: Optional[str] = None   # Populated from Settings (.env)
     jwt_expiry_minutes: int = 30
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # Security Configuration
     api_key: Optional[str] = None
     allowed_origins: List[str] = ["*"]
+
+    # Authentication Secrets (from .env)
+    totp_secret: Optional[str] = None
+    jwt_secret: Optional[str] = None
 
     # Authentication Configuration
     auth_config_file: str = "./config.json"
@@ -128,14 +132,17 @@ class Settings(BaseSettings):
 
     def load_auth_config(self) -> AuthConfig:
         """
-        Load authentication configuration from JSON file.
+        Load authentication configuration from JSON file + .env secrets.
+
+        Secrets (totp_secret, jwt_secret) come from .env via Settings.
+        Non-secrets (projects, template_path, etc) come from JSON file.
 
         Returns:
             AuthConfig object with TOTP secret, JWT config, and projects
 
         Raises:
             FileNotFoundError: If config file doesn't exist
-            ValueError: If config file is invalid
+            ValueError: If config file is invalid or secrets missing
         """
         if self._auth_config_cache is not None:
             return self._auth_config_cache
@@ -156,24 +163,29 @@ class Settings(BaseSettings):
             projects_data = data.get("projects", [])
             projects = [ProjectConfig(**p) for p in projects_data]
 
+            # Build AuthConfig with secrets from .env (via Settings)
+            # and configuration from JSON file
             auth_config = AuthConfig(
-                totp_secret=data["totp_secret"],
-                jwt_secret=data["jwt_secret"],
+                totp_secret=self.totp_secret,  # From .env via Settings
+                jwt_secret=self.jwt_secret,    # From .env via Settings
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
                 template_path=data.get("template_path"),
                 projects=projects,
                 common_slash_commands=data.get("common_slash_commands", [])
             )
 
+            # Validate secrets are set
+            if not auth_config.totp_secret or not auth_config.jwt_secret:
+                raise ValueError(
+                    "Missing authentication secrets in .env file.\n"
+                    "Required: TOTP_SECRET and JWT_SECRET\n"
+                    "Run ./setup_auth.py to generate them."
+                )
+
             # Cache it
             self._auth_config_cache = auth_config
             return auth_config
 
-        except KeyError as e:
-            raise ValueError(
-                f"Invalid auth config file: missing required field {e}\n"
-                f"Check {config_path}"
-            )
         except json.JSONDecodeError as e:
             raise ValueError(
                 f"Invalid JSON in auth config file: {e}\n"

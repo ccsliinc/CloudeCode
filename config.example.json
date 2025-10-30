@@ -1,6 +1,4 @@
 {
-  "totp_secret": "GENERATETHISWITHPYOTPBASE32SECRET",
-  "jwt_secret": "GENERATETHISWITHSECRETSTOKEN_URLSAFE",
   "jwt_expiry_minutes": 30,
   "template_path": "claude-template",
   "common_slash_commands": [

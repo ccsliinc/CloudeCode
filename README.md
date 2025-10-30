@@ -23,6 +23,149 @@ Perfect for developers who want to code on the couch, monitor long-running tasks
 - **Pattern Detection Engine** - Monitors terminal output for `localhost:PORT` and "Server ready" signals
 - **Session Recovery** - Automatically validates and reconnects to existing sessions on startup
 
+## Features in Detail
+
+### Slash Commands Modal
+
+Quick-access modal for all Claude Code slash commands with one-click insertion.
+
+**How to use:**
+- Click the floating slash (/) button in the bottom-right of the terminal
+- Select from common commands (top section) or browse all 49+ commands (bottom section)
+- Commands are inserted into terminal without executing - customize before pressing Enter
+- ESC key or click outside to close
+
+**Command categories:**
+- **Workflow**: /clear, /compact, /rewind, /resume
+- **Configuration**: /config, /model, /permissions, /settings
+- **Account**: /login, /logout, /status
+- **Development**: /sandbox, /review, /cost, /usage, /help
+- **Project Setup**: /init, /add-dir, /agents
+- **Utilities**: /doctor, /mcp, /memory, /vim, /bug, /context, /hooks
+
+**Customization:**
+Edit `config.json` to customize "common commands" shown at the top:
+```json
+{
+  "common_slash_commands": [
+    "/agents", "/clear", "/compact", "/context",
+    "/hooks", "/mcp", "/resume", "/rewind", "/usage"
+  ]
+}
+```
+
+### Mobile Features
+
+#### D-Pad Controls
+
+Virtual D-pad overlay for mobile terminal navigation (auto-appears on touch devices).
+
+**Button mappings:**
+- **Arrow Keys**: UP, DOWN, LEFT, RIGHT navigation
+- **Center Button**: ENTER/Return
+- **ESC**: Escape key
+- **TAB**: Tab key (🐛 icon)
+- **⇧TAB**: Shift+Tab for reverse navigation (✨ icon)
+- **⬇SCROLL**: Force scroll to bottom and re-enable auto-scroll
+
+**Usage:**
+- Tap floating D-pad button to open/close
+- Touch-optimized with visual feedback
+- Desktop-compatible for testing
+
+#### Special Key Bindings
+
+Mobile keyboards often lack terminal control keys. Use these shortcuts:
+
+| Symbol | Function | Why |
+|--------|----------|-----|
+| `¥` (Yen) | Enter/Newline | iOS international keyboard |
+| `€` (Euro) | Tab | Easy access on mobile |
+| `£` (Pound) | Shift+Tab | Reverse tab navigation |
+
+These appear in the terminal startup message as a reminder.
+
+#### Smart Auto-Scroll
+
+Intelligent scrolling that follows terminal output but doesn't fight you:
+- **Auto-scrolls** when at bottom of terminal
+- **Auto-disables** when you scroll up to read history
+- **Re-enables** when you scroll back to bottom
+- **Force enable** with D-pad scroll button
+
+Prevents the annoying "fighting with auto-scroll" experience when reading logs.
+
+### Project Management
+
+#### Template File Copying
+
+New projects automatically copy from a template directory (optional).
+
+**Configuration:**
+```json
+{
+  "template_path": "~/my-templates"
+}
+```
+
+**Behavior:**
+- Only copies for **new projects** (not existing ones)
+- Triggered by `copy_templates: true` flag when creating session
+- Smart exclusions: `.git`, `node_modules`, `venv`, `__pycache__`, `.env`, `.DS_Store`, etc.
+
+#### Project Features
+
+- **Auto-reordering**: Projects automatically sort by most recently used
+- **Descriptions**: Add descriptions when creating projects
+- **Quick Delete**: × button on each project with confirmation
+- **No-delete guarantee**: Deleting from launcher never deletes actual files
+
+### Pattern Detection Engine
+
+Monitors terminal output for intelligent automation triggers:
+
+| Pattern | Detects | Action |
+|---------|---------|--------|
+| **localhost_server** | `localhost:PORT`, `127.0.0.1:PORT`, `0.0.0.0:PORT`, `[::]:PORT` | Create tunnel |
+| **server_ready** | "server running", "development server started" | Create tunnel |
+| **listening_on_port** | "listening on port 3000", "running on :8080" | Create tunnel |
+| **error** | ERROR, Error, FAIL, Failed | Log detection |
+| **warning** | WARNING, WARN | Log detection |
+| **file_created** | "Created file:", "Saved file:" | Log detection |
+| **build_complete** | "build successful", "compilation finished" | Log detection |
+| **test_result** | "tests passed", "specs failed" | Log detection |
+
+### Smart Reliability Features
+
+#### Auto-Reconnect
+- WebSocket automatically reconnects if connection drops
+- Exponential backoff: 1s → 2s → 4s → 8s → 16s
+- Max 5 attempts with status shown in terminal
+
+#### WebSocket Keepalive
+- Ping sent every 30 seconds
+- Prevents timeout on mobile networks
+- Automatic pong response
+
+#### Session Conflict Resolution
+- Detects if session already running when creating new one
+- Prompts: Connect to existing OR destroy and create new
+- Prevents orphaned sessions
+
+### Advanced Configuration
+
+Additional `config.json` options:
+
+```json
+{
+  "jwt_expiry_minutes": 30,           // JWT token lifetime (default: 30)
+  "template_path": "~/my-templates",  // Template directory for new projects
+  "common_slash_commands": [          // Quick-access slash commands
+    "/agents", "/clear", "/usage"
+  ]
+}
+```
+
 ## Use Cases
 
 - **Mobile Development**: Start Claude Code on your Mac, control it from your phone while away from your desk
@@ -81,8 +224,9 @@ This will:
 - Generate a TOTP secret for 2FA
 - Create JWT secret for token auth
 - Display a QR code for Google Authenticator/Authy
-- Save config to `~/.claude-tunnel/config.json`
-- Save QR image to `~/.claude-tunnel/totp-qr.png`
+- Save secrets to `.env` (TOTP_SECRET, JWT_SECRET)
+- Save configuration to `./config.json` (projects, template_path, etc.)
+- Save QR image to `./totp-qr.png`
 
 Scan the QR code with your authenticator app.
 
@@ -111,7 +255,7 @@ Server runs on `http://0.0.0.0:8000`
 
 ### 6. Access Launchpad
 
-Open `http://localhost:8000` in your browser (or `http://YOUR_MAC_IP:8000` from phone).
+Open `http://localhost:8000` in your browser (or `http://YOUR_IP:8000` from phone).
 
 - Enter your TOTP code to authenticate
 - Create a new project or select existing
@@ -132,6 +276,11 @@ PORT=8000                 # API server port
 DEFAULT_WORKING_DIR=~/claude-projects  # Where new projects are created
 SESSION_TIMEOUT=3600                   # Session idle timeout (seconds)
 
+# Authentication (generated by setup_auth.py - don't edit manually)
+TOTP_SECRET=              # TOTP secret for 2FA
+JWT_SECRET=               # JWT signing secret
+AUTH_CONFIG_FILE=./config.json  # Path to config.json
+
 # Tunnels
 AUTO_CREATE_TUNNELS=true               # Auto-create tunnels when ports detected
 USE_NAMED_TUNNELS=false                # Use named tunnels (requires Cloudflare config)
@@ -141,6 +290,7 @@ CLOUDFLARE_API_TOKEN=your_token        # API token with DNS edit + Tunnel edit p
 CLOUDFLARE_ZONE_ID=your_zone_id        # Zone ID for your domain
 CLOUDFLARE_DOMAIN=claude.yourdomain.com  # Your custom domain
 CLOUDFLARE_TUNNEL_NAME=claude-controller # Tunnel name
+CLOUDFLARE_TUNNEL_ID=                  # Optional: Skip tunnel lookup, uses auto-discovery if empty
 ```
 
 ### Cloudflare Tunnel Modes
@@ -263,8 +413,7 @@ CloudeCode/
 │   ├── api/                         # API layer
 │   │   ├── routes.py                # REST endpoints
 │   │   ├── websocket.py             # WebSocket handlers
-│   │   ├── auth.py                  # TOTP/JWT auth
-│   │   └── deps.py                  # Dependency injection
+│   │   └── auth.py                  # TOTP/JWT auth
 │   └── utils/                       # Utilities
 │       ├── pty_session.py           # PTY process wrapper
 │       ├── patterns.py              # Regex pattern matcher
@@ -277,11 +426,18 @@ CloudeCode/
 │       ├── auth.js                  # Auth module
 │       ├── launchpad.js             # Project launcher
 │       ├── terminal.js              # xterm.js integration
-│       └── dpad.js                  # Mobile controls
+│       ├── dpad.js                  # Mobile controls
+│       └── slash-commands.js        # Slash commands modal
 ├── .env.example                     # Environment template
+├── .env                             # Secrets (TOTP, JWT) - gitignored
+├── config.json                      # Configuration (projects, templates, etc.)
+├── config.example.json              # Config template
 ├── requirements.txt                 # Python deps
 ├── setup.sh                         # Dependency checker
 ├── setup_auth.py                    # TOTP setup script
+├── start.sh                         # Start server script
+├── stop.sh                          # Stop server script
+├── reset.sh                         # Restart server script
 └── README.md                        # This file
 ```
 
@@ -394,7 +550,7 @@ ws://localhost:8000/ws/terminal?token=YOUR_JWT_TOKEN
 - **Test manually**: `cloudflared tunnel --url http://localhost:3000`
 
 ### Can't Connect from Phone
-- **Symptom**: `http://MAC_IP:8000` times out
+- **Symptom**: `http://YOUR_IP:8000` times out
 - **Check**:
   - Phone on same WiFi network
   - Mac firewall allows port 8000: System Preferences → Security → Firewall

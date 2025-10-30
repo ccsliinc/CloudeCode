@@ -147,6 +147,26 @@ if [ -f ".env" ]; then
         echo -e "${YELLOW}!${NC} Cloudflare credentials not found in .env"
         NEEDS_SETUP=true
     fi
+
+    # Check for authentication secrets
+    echo ""
+    echo "Checking authentication secrets..."
+    if grep -q "TOTP_SECRET=" .env && grep -q "JWT_SECRET=" .env; then
+        TOTP=$(grep "TOTP_SECRET=" .env | cut -d'=' -f2)
+        JWT=$(grep "JWT_SECRET=" .env | cut -d'=' -f2)
+
+        if [ -z "$TOTP" ] || [ -z "$JWT" ]; then
+            echo -e "${YELLOW}!${NC} Authentication secrets not configured in .env"
+            echo "  Run: ./setup_auth.py"
+            NEEDS_SETUP=true
+        else
+            echo -e "${GREEN}✓${NC} Authentication secrets configured"
+        fi
+    else
+        echo -e "${YELLOW}!${NC} Authentication secrets not found in .env"
+        echo "  Run: ./setup_auth.py"
+        NEEDS_SETUP=true
+    fi
 else
     echo -e "${YELLOW}!${NC} .env file not found"
     echo "  Copying from .env.example..."

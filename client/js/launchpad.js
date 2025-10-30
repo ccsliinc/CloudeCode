@@ -39,13 +39,13 @@ class Launchpad {
         this.launchpadScreen.innerHTML = `
             <div class="launchpad-container">
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
-                <div class="launchpad-prompt">select a project or create a new session</div>
+                <div class="launchpad-prompt">select a project or create a new project</div>
 
                 <div class="launchpad-section">
-                    <div class="launchpad-section-title">► new session</div>
+                    <div class="launchpad-section-title">► new project</div>
                     <button class="new-session-btn" id="new-session-btn">
                         <span>⚡</span>
-                        <span>create new session with auto-generated workspace</span>
+                        <span>create new project</span>
                     </button>
                 </div>
 
@@ -91,7 +91,7 @@ class Launchpad {
             projectListEl.innerHTML = `
                 <div class="launchpad-empty">
                     no projects configured yet<br>
-                    <small style="color: #666;">edit ~/.claude-tunnel/config.json to add projects</small>
+                    <small style="color: #666;">edit config.json to add projects</small>
                 </div>
             `;
             return;
@@ -274,10 +274,10 @@ class Launchpad {
     }
 
     /**
-     * Create new session with auto-generated workspace
+     * Create new project with auto-generated workspace
      */
     async createNewSession() {
-        console.log('Launchpad: Creating new session');
+        console.log('Launchpad: Creating new project');
 
         try {
             // Show modal to get project details
@@ -289,7 +289,7 @@ class Launchpad {
             }
 
             // Show loading state
-            this.updateStatus('creating new session...');
+            this.updateStatus('creating new project...');
 
             // Create session with auto-generated path and template copying
             const session = await window.API.createSession({
@@ -297,7 +297,7 @@ class Launchpad {
                 copy_templates: true
             });
 
-            console.log('Launchpad: New session created:', session);
+            console.log('Launchpad: New project created:', session);
 
             // Save project to config with the actual path from the session
             try {

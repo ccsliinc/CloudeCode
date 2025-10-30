@@ -29,9 +29,10 @@ ENV/
 # Environment Variables
 .env
 .env.local
-
-# Configuration (contains secrets)
 config.json
+
+# Authentication
+totp-qr.png
 
 # IDE
 .vscode/
@@ -58,6 +59,3 @@ session_metadata.json
 .coverage
 htmlcov/
 .pytest_cache/
-
-# Temporary files
-icons.html
