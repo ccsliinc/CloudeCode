@@ -56,7 +56,7 @@ class CloudflareAPI:
             Full subdomain URL or None if failed
 
         Example:
-            For port 3000: creates 3000.claude.adoom.nyc -> <tunnel_id>.cfargotunnel.com
+            For port 3000: creates 3000.claude.mydomain.com -> <tunnel_id>.cfargotunnel.com
         """
         if not self.is_configured():
             logger.warning("cloudflare_not_configured_skipping_cname")
@@ -155,7 +155,7 @@ class CloudflareAPI:
             Full domain URL or None if failed
 
         Example:
-            Creates claude.adoom.nyc -> <tunnel_id>.cfargotunnel.com
+            Creates claude.mydomain.com-> <tunnel_id>.cfargotunnel.com
         """
         if not self.is_configured():
             logger.warning("cloudflare_not_configured_skipping_root_cname")

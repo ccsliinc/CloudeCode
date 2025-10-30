@@ -40,13 +40,13 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Session Configuration
-    default_working_dir: str = "~/claude-projects"
+    default_working_dir: str  # Required in .env
     session_timeout: int = 3600  # seconds (1 hour)
 
     # Logging Configuration
     log_buffer_size: int = 1000  # lines to keep in memory
     log_file_retention: int = 7  # days
-    log_directory: str = "/tmp/claude-code-logs"
+    log_directory: str  # Required in .env
 
     # Tunnel Configuration
     tunnel_provider: str = "cloudflare"
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     # Cloudflare Configuration
     cloudflare_api_token: Optional[str] = None
     cloudflare_zone_id: Optional[str] = None
-    cloudflare_domain: str = "claude.adoom.nyc"
-    cloudflare_tunnel_name: str = "claude-controller"
+    cloudflare_domain: Optional[str] = None
+    cloudflare_tunnel_name: Optional[str] = None
     cloudflare_tunnel_id: Optional[str] = None  # Will be set after tunnel creation
 
     # Security Configuration
@@ -71,10 +71,6 @@ class Settings(BaseSettings):
 
     # Authentication Configuration
     auth_config_file: str = "./config.json"
-
-    # Tmux Configuration
-    tmux_socket_name: str = "claude-controller"
-    tmux_session_name: str = "claude-code-session"
 
     # Claude CLI Configuration
     claude_cli_path: Optional[str] = None

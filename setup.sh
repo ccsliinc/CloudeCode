@@ -18,16 +18,6 @@ NC='\033[0m' # No Color
 # Track if any setup is needed
 NEEDS_SETUP=false
 
-# Check tmux
-echo "Checking tmux..."
-if command -v tmux &> /dev/null; then
-    echo -e "${GREEN}✓${NC} tmux is installed"
-else
-    echo -e "${RED}✗${NC} tmux is not installed"
-    echo "  Install with: brew install tmux"
-    NEEDS_SETUP=true
-fi
-
 # Check cloudflared
 echo ""
 echo "Checking cloudflared..."
@@ -106,22 +96,38 @@ if [ -f "venv/bin/activate" ]; then
     deactivate
 fi
 
-# Check directories
+# Check directories (using values from .env if it exists)
 echo ""
 echo "Checking directories..."
-if [ -d "/tmp/claude-code-logs" ]; then
-    echo -e "${GREEN}✓${NC} Log directory exists"
+
+# Load directory paths from .env if available
+LOG_DIR="/tmp/claude-code-logs"  # default
+PROJECTS_DIR=~/claude-projects    # default
+
+if [ -f ".env" ]; then
+    if grep -q "LOG_DIRECTORY=" .env; then
+        LOG_DIR=$(grep "LOG_DIRECTORY=" .env | cut -d'=' -f2)
+        LOG_DIR=$(eval echo "$LOG_DIR")  # Expand ~ and variables
+    fi
+    if grep -q "DEFAULT_WORKING_DIR=" .env; then
+        PROJECTS_DIR=$(grep "DEFAULT_WORKING_DIR=" .env | cut -d'=' -f2)
+        PROJECTS_DIR=$(eval echo "$PROJECTS_DIR")  # Expand ~ and variables
+    fi
+fi
+
+if [ -d "$LOG_DIR" ]; then
+    echo -e "${GREEN}✓${NC} Log directory exists: $LOG_DIR"
 else
-    echo -e "${YELLOW}!${NC} Creating log directory..."
-    mkdir -p /tmp/claude-code-logs
+    echo -e "${YELLOW}!${NC} Creating log directory: $LOG_DIR"
+    mkdir -p "$LOG_DIR"
     echo -e "${GREEN}✓${NC} Log directory created"
 fi
 
-if [ -d ~/claude-projects ]; then
-    echo -e "${GREEN}✓${NC} Projects directory exists"
+if [ -d "$PROJECTS_DIR" ]; then
+    echo -e "${GREEN}✓${NC} Projects directory exists: $PROJECTS_DIR"
 else
-    echo -e "${YELLOW}!${NC} Creating projects directory..."
-    mkdir -p ~/claude-projects
+    echo -e "${YELLOW}!${NC} Creating projects directory: $PROJECTS_DIR"
+    mkdir -p "$PROJECTS_DIR"
     echo -e "${GREEN}✓${NC} Projects directory created"
 fi
 
