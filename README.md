@@ -4,11 +4,9 @@ Remote control and monitoring for Claude Code CLI - code from anywhere.
 
 Control Claude Code sessions from any device on your network. Built for mobile-first development workflows with auto-tunneling, persistent sessions, and real-time terminal streaming.
 
-https://github.com/user-attachments/assets/83c9b6cf-36e2-4a24-b835-39e4f4d5f08c
+[![Cloude Code Demo](https://img.youtube.com/vi/tGcRtH_RLiE/0.jpg)](https://www.youtube.com/shorts/tGcRtH_RLiE)
 
 > **Quick Demo:** Watch Cloude Code in action - mobile control, auto-tunneling, and real-time terminal streaming.
->
-> _Note: Screenshots below should be saved to `docs/images/` in the repo._
 
 ## What It Does
 
