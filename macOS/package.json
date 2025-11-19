@@ -54,6 +54,10 @@
       {
         "from": "../config.example.json",
         "to": "config.example.json"
+      },
+      {
+        "from": "../nuke.sh",
+        "to": "nuke.sh"
       }
     ],
     "mac": {

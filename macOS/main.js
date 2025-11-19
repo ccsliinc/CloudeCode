@@ -101,7 +101,21 @@ function updateMenu() {
   const canStart = state === 'stopped';
   const canStop = state === 'running' || state === 'starting';
 
-  const menu = Menu.buildFromTemplate([
+  // Build menu items array
+  const menuItems = [];
+
+  // Only show setup script option if config is not complete
+  if (!configStatus.isConfigured) {
+    menuItems.push({
+      label: '⚠️  Run Setup Script',
+      click: () => {
+        serverManager.openSetupScript();
+      }
+    });
+  }
+
+  // Status items (always shown)
+  menuItems.push(
     {
       label: statusText,
       enabled: false
@@ -114,13 +128,9 @@ function updateMenu() {
       label: `Tunnels: ${tunnelCount}`,
       enabled: false
     },
-    {
-      label: configText,
-      enabled: false
-    },
     { type: 'separator' },
     {
-      label: 'Open Terminal',
+      label: 'Open Terminal Logs',
       click: () => {
         const { exec } = require('child_process');
         // Open Terminal and tail the server logs
@@ -135,114 +145,124 @@ function updateMenu() {
       },
       enabled: isRunning
     },
-    {
-      label: 'Run Setup Script',
-      click: () => {
-        serverManager.openSetupScript();
-      },
-      enabled: !configStatus.isConfigured
-    },
     { type: 'separator' },
     {
-      label: 'Restart Server',
-      click: async () => {
-        await serverManager.restart();
-        updateMenu();
-        setTimeout(updateMenu, 2500);
-      },
-      enabled: isRunning
-    },
-    {
-      label: canStart ? 'Start Server' : 'Stop Server',
-      click: async () => {
-        if (canStart) {
-          await serverManager.start();
-        } else {
-          await serverManager.stop();
-        }
-        updateMenu();
-        setTimeout(updateMenu, 500);
-      },
-      enabled: canStart || canStop
-    },
-    { type: 'separator' },
-    {
-      label: 'Launch at Login',
-      type: 'checkbox',
-      checked: launchAgentInstaller.isEnabled(),
-      click: () => {
-        const appPath = app.getPath('exe');
-        launchAgentInstaller.toggle(appPath);
-        setTimeout(updateMenu, 100);
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Nuke it from Orbit!',
-      click: async () => {
-        const { dialog } = require('electron');
-
-        // Show confirmation dialog
-        const result = await dialog.showMessageBox({
-          type: 'warning',
-          title: 'Nuke it from Orbit!',
-          message: 'Complete System Reset',
-          detail:
-            'This will completely remove ALL Cloude Code configuration:\n\n' +
-            '✗ Cloudflare tunnel will be DELETED\n' +
-            '✗ All DNS records will be DELETED\n' +
-            '✗ All local configuration files\n' +
-            '✗ Python virtual environment\n' +
-            '✗ All logs and temporary files\n' +
-            '✗ Cloudflared authentication\n' +
-            '✗ macOS app settings\n\n' +
-            'You will need to run setup.sh again to use Cloude Code.\n\n' +
-            'Are you ABSOLUTELY SURE?',
-          buttons: ['Cancel', 'NUKE IT'],
-          defaultId: 0,
-          cancelId: 0
-        });
-
-        if (result.response === 1) {
-          console.log('Nuking system...');
-
-          // Stop server first
-          await serverManager.stop();
-
-          // Stop stats polling
-          if (statsUpdateInterval) {
-            clearTimeout(statsUpdateInterval);
-          }
-
-          // Run nuke.sh script
-          const { exec } = require('child_process');
-          const projectRoot = serverManager.getProjectRoot();
-          const nukeScript = path.join(projectRoot, 'nuke.sh');
-
-          exec(`"${nukeScript}"`, { cwd: projectRoot }, (error, stdout, stderr) => {
-            if (error) {
-              console.error('Nuke failed:', error);
-              dialog.showErrorBox(
-                'Nuke Failed',
-                `Failed to complete system reset:\n\n${error.message}`
-              );
+      label: 'Server',
+      submenu: [
+        {
+          label: 'Restart Server',
+          click: async () => {
+            await serverManager.restart();
+            updateMenu();
+            setTimeout(updateMenu, 2500);
+          },
+          enabled: isRunning
+        },
+        {
+          label: canStart ? 'Start Server' : 'Stop Server',
+          click: async () => {
+            if (canStart) {
+              await serverManager.start();
             } else {
-              console.log('Nuke output:', stdout);
-              if (stderr) console.error('Nuke stderr:', stderr);
-
-              // Show success and quit
-              dialog.showMessageBox({
-                type: 'info',
-                title: 'System Reset Complete',
-                message: 'Cloude Code has been completely removed.',
-                detail: 'Run ./setup.sh to configure again.\n\nThe app will now quit.',
-                buttons: ['OK']
-              }).then(() => {
-                app.quit();
-              });
+              await serverManager.stop();
             }
-          });
+            updateMenu();
+            setTimeout(updateMenu, 500);
+          },
+          enabled: canStart || canStop
+        },
+        { type: 'separator' },
+        {
+          label: 'Launch at Login',
+          type: 'checkbox',
+          checked: launchAgentInstaller.isEnabled(),
+          click: () => {
+            const appPath = app.getPath('exe');
+            launchAgentInstaller.toggle(appPath);
+            setTimeout(updateMenu, 100);
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Uninstall',
+          submenu: [
+            {
+              label: '☢️  Nuke it from Orbit!',
+              click: async () => {
+                const { dialog } = require('electron');
+
+                // Show confirmation dialog
+                const result = await dialog.showMessageBox({
+                  type: 'warning',
+                  title: 'Nuke it from Orbit!',
+                  message: 'Complete System Reset',
+                  detail:
+                    'This will completely remove ALL Cloude Code configuration:\n\n' +
+                    '✗ Cloudflare tunnel will be DELETED\n' +
+                    '✗ All DNS records will be DELETED\n' +
+                    '✗ All local configuration files\n' +
+                    '✗ Python virtual environment\n' +
+                    '✗ All logs and temporary files\n' +
+                    '✗ Cloudflared authentication\n' +
+                    '✗ macOS app settings\n\n' +
+                    'You will need to run setup.sh again to use Cloude Code.\n\n' +
+                    'Are you ABSOLUTELY SURE?',
+                  buttons: ['Cancel', 'NUKE IT'],
+                  defaultId: 0,
+                  cancelId: 0
+                });
+
+                if (result.response === 1) {
+                  console.log('Nuking system...');
+
+                  // Stop server first
+                  await serverManager.stop();
+
+                  // Stop stats polling
+                  if (statsUpdateInterval) {
+                    clearTimeout(statsUpdateInterval);
+                  }
+
+                  // Run nuke.sh script
+                  const { exec } = require('child_process');
+                  const projectRoot = serverManager.getProjectRoot();
+                  const nukeScript = path.join(projectRoot, 'nuke.sh');
+
+                  exec(`"${nukeScript}"`, { cwd: projectRoot }, (error, stdout, stderr) => {
+                    if (error) {
+                      console.error('Nuke failed:', error);
+                      dialog.showErrorBox(
+                        'Nuke Failed',
+                        `Failed to complete system reset:\n\n${error.message}`
+                      );
+                    } else {
+                      console.log('Nuke output:', stdout);
+                      if (stderr) console.error('Nuke stderr:', stderr);
+
+                      // Show success and quit
+                      dialog.showMessageBox({
+                        type: 'info',
+                        title: 'System Reset Complete',
+                        message: 'Cloude Code has been completely removed.',
+                        detail: 'Run ./setup.sh to configure again.\n\nThe app will now quit.',
+                        buttons: ['OK']
+                      }).then(() => {
+                        app.quit();
+                      });
+                    }
+                  });
+                }
+              }
+            }
+          ]
         }
+      ]
+    },
+    { type: 'separator' },
+    {
+      label: 'About Cloude Code',
+      click: () => {
+        shell.openExternal('https://github.com/Adoom666/CloudeCode');
       }
     },
     { type: 'separator' },
@@ -263,7 +283,9 @@ function updateMenu() {
         app.quit();
       }
     }
-  ]);
+  );
+
+  const menu = Menu.buildFromTemplate(menuItems);
 
   tray.setContextMenu(menu);
 }
