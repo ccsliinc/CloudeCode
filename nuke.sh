@@ -300,13 +300,20 @@ echo ""
 echo "Removing macOS App Support files..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-APP_SUPPORT="$HOME/Library/Application Support/Cloude Code"
-if [ -d "$APP_SUPPORT" ]; then
-    rm -rf "$APP_SUPPORT"
-    log_cleanup "Removed: $APP_SUPPORT"
-else
-    log_skip "Directory: $APP_SUPPORT"
-fi
+# Remove both possible app support directories
+APP_SUPPORT_DIRS=(
+    "$HOME/Library/Application Support/Cloude Code"
+    "$HOME/Library/Application Support/cloude-code-menubar"
+)
+
+for APP_SUPPORT in "${APP_SUPPORT_DIRS[@]}"; do
+    if [ -d "$APP_SUPPORT" ]; then
+        rm -rf "$APP_SUPPORT"
+        log_cleanup "Removed: $APP_SUPPORT"
+    else
+        log_skip "Directory: $APP_SUPPORT"
+    fi
+done
 
 echo ""
 echo "========================================"
