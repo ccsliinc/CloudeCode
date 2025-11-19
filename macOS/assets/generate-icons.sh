@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate placeholder menu bar icons for Cloude Code
+# Generate retro pixel art menu bar icons for Cloude Code
 
 set -e
 
@@ -12,30 +12,37 @@ if ! command -v convert &> /dev/null; then
     exit 1
 fi
 
-echo "🎨 Generating placeholder menu bar icons..."
+echo "🎨 Generating retro pixel art menu bar icons..."
 
-# Create 22x22 standard icon (simple cloud + terminal symbol)
+# Color scheme
+COLOR="#d77757"  # Orange/brown retro color
+
+# Create 22x22 standard icon - pixel art character with arms
 convert -size 22x22 xc:transparent \
-    -fill black \
-    -draw "ellipse 11,8 8,5 0,360" \
-    -draw "ellipse 6,10 4,3 0,360" \
-    -draw "ellipse 16,10 4,3 0,360" \
-    -draw "rectangle 6,14 16,18" \
-    -draw "line 8,16 9,16" \
-    -draw "line 11,16 14,16" \
+    -fill "$COLOR" \
+    -draw "rectangle 7,4 14,6" \
+    -draw "rectangle 8,7 9,9" \
+    -draw "rectangle 12,7 13,9" \
+    -draw "rectangle 4,10 6,12" \
+    -draw "rectangle 7,10 14,12" \
+    -draw "rectangle 15,10 17,12" \
+    -draw "rectangle 8,13 9,15" \
+    -draw "rectangle 12,13 13,15" \
     iconTemplate.png
 
 echo "✅ Created iconTemplate.png (22x22)"
 
-# Create 44x44 retina icon
+# Create 44x44 retina icon - scaled up pixel art
 convert -size 44x44 xc:transparent \
-    -fill black \
-    -draw "ellipse 22,16 16,10 0,360" \
-    -draw "ellipse 12,20 8,6 0,360" \
-    -draw "ellipse 32,20 8,6 0,360" \
-    -draw "rectangle 12,28 32,36" \
-    -draw "line 16,32 18,32" \
-    -draw "line 22,32 28,32" \
+    -fill "$COLOR" \
+    -draw "rectangle 14,8 28,12" \
+    -draw "rectangle 16,14 18,18" \
+    -draw "rectangle 24,14 26,18" \
+    -draw "rectangle 8,20 12,24" \
+    -draw "rectangle 14,20 28,24" \
+    -draw "rectangle 30,20 34,24" \
+    -draw "rectangle 16,26 18,30" \
+    -draw "rectangle 24,26 26,30" \
     iconTemplate@2x.png
 
 echo "✅ Created iconTemplate@2x.png (44x44)"
@@ -45,4 +52,4 @@ echo ""
 echo "📝 Note: You'll need to create icon.icns for the app bundle."
 echo "   Use the instructions in README.md or a tool like Icon Slate."
 echo ""
-echo "✨ Placeholder icons generated successfully!"
+echo "✨ Retro pixel art icons generated successfully!"
