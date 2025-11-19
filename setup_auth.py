@@ -149,6 +149,99 @@ def generate_qr_code(secret: str, account_name: str = "Cloude Code"):
 
     return uri, qr_path
 
+def prompt_with_default(prompt_text, default_value=""):
+    """Prompt user for input with optional default value."""
+    if default_value:
+        user_input = input(f"{prompt_text} [{default_value}]: ").strip()
+        return user_input if user_input else default_value
+    else:
+        return input(f"{prompt_text}: ").strip()
+
+
+def setup_env_file(env_path):
+    """Interactive setup for .env file configuration."""
+    print("=" * 70)
+    print("Cloudflare Configuration")
+    print("=" * 70)
+    print()
+    print("You'll need:")
+    print("  1. A Cloudflare account and domain")
+    print("  2. API token (with Zone.DNS and Tunnel permissions)")
+    print("  3. Your Cloudflare Zone ID")
+    print()
+
+    # Get current values if .env exists
+    current_values = {}
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.split('=', 1)
+                    current_values[key] = value
+
+    # Prompt for values
+    cf_domain = prompt_with_default(
+        "Cloudflare domain (e.g., claude.yourdomain.com)",
+        current_values.get('CLOUDFLARE_DOMAIN', 'cloude.example.com')
+    )
+
+    print()
+    print("To get your Cloudflare credentials:")
+    print("  API Token: https://dash.cloudflare.com/profile/api-tokens")
+    print("  Zone ID: Found on your domain's overview page")
+    print()
+
+    cf_token = prompt_with_default(
+        "Cloudflare API token",
+        current_values.get('CLOUDFLARE_API_TOKEN', '')
+    )
+
+    cf_zone = prompt_with_default(
+        "Cloudflare Zone ID",
+        current_values.get('CLOUDFLARE_ZONE_ID', '')
+    )
+
+    cf_tunnel_name = prompt_with_default(
+        "Tunnel name",
+        current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')
+    )
+
+    # Update .env file with all values
+    env_template_path = env_path.parent / ".env.example"
+    if env_template_path.exists():
+        with open(env_template_path) as f:
+            content = f.read()
+    else:
+        # Minimal template if .env.example doesn't exist
+        content = (
+            "CLOUDFLARE_API_TOKEN=\n"
+            "CLOUDFLARE_ZONE_ID=\n"
+            "CLOUDFLARE_DOMAIN=\n"
+            "CLOUDFLARE_TUNNEL_NAME=\n"
+            "TOTP_SECRET=\n"
+            "JWT_SECRET=\n"
+        )
+
+    # Replace placeholders
+    content = content.replace(f"CLOUDFLARE_DOMAIN={current_values.get('CLOUDFLARE_DOMAIN', 'cloude.mydomain.nyc')}",
+                             f"CLOUDFLARE_DOMAIN={cf_domain}")
+    content = content.replace("CLOUDFLARE_API_TOKEN=", f"CLOUDFLARE_API_TOKEN={cf_token}")
+    content = content.replace("CLOUDFLARE_ZONE_ID=", f"CLOUDFLARE_ZONE_ID={cf_zone}")
+    content = content.replace(f"CLOUDFLARE_TUNNEL_NAME={current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')}",
+                             f"CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}")
+
+    # Write .env
+    with open(env_path, 'w') as f:
+        f.write(content)
+
+    print()
+    print(f"✅ Configuration written to {env_path}")
+    print()
+
+    return cf_domain, cf_token, cf_zone, cf_tunnel_name
+
+
 def main():
     """Main setup function."""
     # Ensure venv has required dependencies
@@ -159,18 +252,22 @@ def main():
     print("=" * 70)
     print()
 
+    # Project root
+    project_root = Path(__file__).parent
+    env_path = project_root / ".env"
+
+    # Interactive .env setup
+    cf_domain, cf_token, cf_zone, cf_tunnel_name = setup_env_file(env_path)
+
     # Generate new secrets
     totp_secret = generate_totp_secret()
     jwt_secret = generate_jwt_secret()
     print("🔑 Generated new authentication secrets\n")
 
-    # Update .env file in project root
-    project_root = Path(__file__).parent
-    env_path = project_root / ".env"
-
-    print(f"Updating .env file at: {env_path}")
+    # Update .env file with secrets
+    print(f"Adding authentication secrets to .env...")
     update_env_file(env_path, totp_secret, jwt_secret)
-    print(f"✅ Secrets written to .env\n")
+    print(f"✅ Secrets added to .env\n")
 
     # Config file in project directory
     config_path = project_root / "config.json"
@@ -218,30 +315,69 @@ def main():
     print("TOTP Setup")
     print("=" * 70)
     print()
-    print("Scan this QR code with your authenticator app:")
-    print()
 
     # Generate and display QR code
     uri, qr_path = generate_qr_code(totp_secret)
 
+    # Open QR code with Preview
     print()
-    print(f"QR code also saved to: {qr_path}")
-    print()
-    print(f"Or manually enter this secret in your app: {totp_secret}")
+    print(f"📱 Opening QR code...")
+    try:
+        subprocess.run(['open', str(qr_path)], check=False)
+        print(f"✅ QR code opened in Preview: {qr_path}")
+    except Exception as e:
+        print(f"⚠️  Could not open QR code automatically: {e}")
+        print(f"   Please open manually: {qr_path}")
+
     print()
     print("=" * 70)
-    print("Next Steps")
+    print(f"📱 SCAN THE QR CODE that just opened in Preview!")
     print("=" * 70)
     print()
-    print("1. Scan the QR code above with Google Authenticator, Authy, or similar")
-    print("2. Edit your config file to update project paths:")
+    print("Use Google Authenticator, Authy, or any TOTP app")
+    print()
+    print(f"Or manually enter this secret: {totp_secret}")
+    print()
+
+    input("Press Enter after scanning the QR code...")
+
+    print()
+    print("=" * 70)
+    print("Setup Complete!")
+    print("=" * 70)
+    print()
+    print(f"✅ Configuration: {env_path}")
+    print(f"✅ App config: {config_path}")
+    print()
+    print("You can find and modify the app config here:")
     print(f"   {config_path}")
-    print("3. Update the template_path to your .claude template directory")
-    print("4. Start the Cloude Code server:")
-    print("   ./start.sh")
     print()
-    print("You're all set! Access the app and log in with your TOTP code.")
+    print("Starting Cloude Code server...")
     print()
+
+    # Start the server
+    try:
+        venv_python = project_root / "venv" / "bin" / "python3"
+        if venv_python.exists():
+            subprocess.Popen([str(venv_python), '-m', 'src.main'],
+                           cwd=str(project_root),
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            print("✅ Server started in background")
+        else:
+            print("⚠️  Could not find venv, please start server manually with: ./start.sh")
+    except Exception as e:
+        print(f"⚠️  Could not start server: {e}")
+        print("   Start manually with: ./start.sh")
+
+    print()
+    print("This window will close in 3 seconds...")
+    import time
+    time.sleep(3)
+
+    # Close terminal window
+    subprocess.run(['osascript', '-e', 'tell application "Terminal" to close first window'],
+                  check=False)
 
 if __name__ == "__main__":
     main()

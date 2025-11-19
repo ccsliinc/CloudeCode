@@ -182,6 +182,15 @@ function updateMenu() {
             setTimeout(updateMenu, 100);
           }
         },
+        {
+          label: 'Edit Config',
+          click: () => {
+            const { exec } = require('child_process');
+            const configPath = path.join(serverManager.getProjectRoot(), 'config.json');
+            // Open Finder and select the config.json file
+            exec(`open -R "${configPath}"`);
+          }
+        },
         { type: 'separator' },
         {
           label: 'Uninstall',
