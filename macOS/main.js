@@ -27,6 +27,9 @@ app.whenReady().then(async () => {
   // Start server automatically
   await serverManager.start();
 
+  // Update menu to show starting state
+  updateMenu();
+
   // Start polling for stats
   startStatsPolling();
 
