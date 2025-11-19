@@ -507,10 +507,20 @@ class ServerManager {
     } else {
       // Check required env vars
       const envContent = fs.readFileSync(envPath, 'utf8');
-      const requiredVars = ['TOTP_SECRET', 'JWT_SECRET'];
+      const requiredVars = [
+        'TOTP_SECRET',
+        'JWT_SECRET',
+        'CLOUDFLARE_API_TOKEN',
+        'CLOUDFLARE_ZONE_ID',
+        'CLOUDFLARE_DOMAIN'
+      ];
 
       requiredVars.forEach(varName => {
-        if (!envContent.includes(`${varName}=`) || envContent.includes(`${varName}=\n`) || envContent.includes(`${varName}=""\n`)) {
+        // Check if var exists and has a non-empty value
+        const regex = new RegExp(`${varName}=(.+)`, 'm');
+        const match = envContent.match(regex);
+
+        if (!match || !match[1] || match[1].trim() === '' || match[1].trim() === '""') {
           status.isConfigured = false;
           status.missingEnvVars.push(varName);
         }

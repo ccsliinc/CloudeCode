@@ -341,7 +341,15 @@ def setup_env_file(env_path):
     print(f"✅ Configuration written to {env_path}")
     print()
 
-    return cf_domain, cf_token, cf_zone, cf_tunnel_name
+    # Validate Claude CLI path
+    if claude_cli_path and claude_cli_path != '/path/to/claude':
+        if not Path(claude_cli_path).exists():
+            print(f"⚠️  Claude CLI not found at: {claude_cli_path}")
+            print("   This may cause issues when creating projects.")
+            print("   You can update CLAUDE_CLI_PATH in .env later.")
+            print()
+
+    return cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir
 
 
 def main():
@@ -354,12 +362,78 @@ def main():
     print("=" * 70)
     print()
 
+    # Show Python version
+    import sys
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    print(f"🐍 Python {python_version}")
+    print()
+
+    # Check cloudflared installation
+    import shutil
+    if not shutil.which('cloudflared'):
+        print("❌ cloudflared is not installed")
+        print()
+        print("Install with: brew install cloudflared")
+        print()
+        print("Visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/")
+        print()
+        input("Press Enter after installing cloudflared...")
+        # Check again
+        if not shutil.which('cloudflared'):
+            print("❌ cloudflared still not found. Please install and try again.")
+            sys.exit(1)
+
+    print("✅ cloudflared is installed")
+
+    # Check cloudflared authentication
+    cert_path = Path.home() / '.cloudflared' / 'cert.pem'
+    if not cert_path.exists():
+        print("⚠️  cloudflared is not authenticated")
+        print()
+        print("Authenticating with Cloudflare...")
+        print("A browser window will open. Please log in and authorize.")
+        print()
+
+        # Run cloudflared login
+        result = subprocess.run(['cloudflared', 'login'], capture_output=False)
+
+        if result.returncode != 0 or not cert_path.exists():
+            print("❌ cloudflared authentication failed")
+            print("Please run 'cloudflared login' manually and try again.")
+            sys.exit(1)
+
+        print("✅ cloudflared authenticated successfully")
+    else:
+        print("✅ cloudflared is authenticated")
+
+    print()
+
     # Project root
     project_root = Path(__file__).parent
     env_path = project_root / ".env"
 
     # Interactive .env setup
-    cf_domain, cf_token, cf_zone, cf_tunnel_name = setup_env_file(env_path)
+    cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
+
+    # Create directories
+    import os
+    print("Creating directories...")
+    log_dir_expanded = os.path.expanduser(os.path.expandvars(log_dir))
+    working_dir_expanded = os.path.expanduser(os.path.expandvars(working_dir))
+
+    try:
+        Path(log_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created log directory: {log_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create log directory: {e}")
+
+    try:
+        Path(working_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created projects directory: {working_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create projects directory: {e}")
+
+    print()
 
     # Generate new secrets
     totp_secret = generate_totp_secret()
