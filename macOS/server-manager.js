@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const axios = require('axios');
 const { app } = require('electron');
+const net = require('net');
 
 class ServerManager {
   constructor() {
@@ -20,22 +21,66 @@ class ServerManager {
 
     this.pythonPath = path.join(this.baseDir, 'venv', 'bin', 'python3');
     this.apiUrl = 'http://localhost:8000';
-    this.isRunning = false;
+    this.port = 8000;
+    this.state = 'stopped'; // 'stopped', 'starting', 'running'
     this.startTime = null;
+  }
+
+  /**
+   * Check if port is in use
+   * @returns {Promise<boolean>}
+   */
+  async isPortInUse() {
+    return new Promise((resolve) => {
+      const server = net.createServer();
+
+      server.once('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
+
+      server.once('listening', () => {
+        server.close();
+        resolve(false);
+      });
+
+      server.listen(this.port, '0.0.0.0');
+    });
   }
 
   /**
    * Start the Python FastAPI server
    */
-  start() {
+  async start() {
     if (this.process) {
       console.log('Server already running');
       return;
     }
 
+    // Check if port is already in use
+    const portInUse = await this.isPortInUse();
+    if (portInUse) {
+      console.log(`Port ${this.port} already in use, checking if it's our server...`);
+      const health = await this.getHealth();
+      if (health) {
+        console.log('Server already running on port, adopting it');
+        this.state = 'running';
+        this.startTime = Date.now(); // Approximate
+        return;
+      } else {
+        console.error(`Port ${this.port} in use by another process!`);
+        return;
+      }
+    }
+
     console.log('Starting Cloude Code server...');
     console.log(`Base directory: ${this.baseDir}`);
     console.log(`Python path: ${this.pythonPath}`);
+
+    this.state = 'starting';
 
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,
@@ -44,23 +89,35 @@ class ServerManager {
     });
 
     this.startTime = Date.now();
-    this.isRunning = true;
 
-    // Log stdout
+    // Log stdout and detect when server is ready
     this.process.stdout.on('data', (data) => {
-      console.log(`[SERVER] ${data.toString().trim()}`);
+      const output = data.toString().trim();
+      console.log(`[SERVER] ${output}`);
+
+      // Check if server is ready
+      if (output.includes('Application startup complete') ||
+          output.includes('application_ready')) {
+        this.state = 'running';
+      }
     });
 
     // Log stderr
     this.process.stderr.on('data', (data) => {
-      console.error(`[SERVER ERROR] ${data.toString().trim()}`);
+      const output = data.toString().trim();
+      console.error(`[SERVER ERROR] ${output}`);
+
+      // Also check stderr for ready signal
+      if (output.includes('Application startup complete')) {
+        this.state = 'running';
+      }
     });
 
     // Handle process exit
     this.process.on('exit', (code, signal) => {
       console.log(`Server process exited with code ${code} and signal ${signal}`);
       this.process = null;
-      this.isRunning = false;
+      this.state = 'stopped';
       this.startTime = null;
     });
 
@@ -68,7 +125,7 @@ class ServerManager {
     this.process.on('error', (err) => {
       console.error('Failed to start server:', err);
       this.process = null;
-      this.isRunning = false;
+      this.state = 'stopped';
       this.startTime = null;
     });
 
@@ -85,6 +142,7 @@ class ServerManager {
     }
 
     console.log('Stopping server...');
+    this.state = 'stopped';
 
     try {
       // Try graceful shutdown via API first
@@ -110,7 +168,6 @@ class ServerManager {
     }
 
     this.process = null;
-    this.isRunning = false;
     this.startTime = null;
   }
 
@@ -153,11 +210,19 @@ class ServerManager {
   }
 
   /**
+   * Get current server state
+   * @returns {string} 'stopped', 'starting', or 'running'
+   */
+  getState() {
+    return this.state;
+  }
+
+  /**
    * Check if process is running
    * @returns {boolean}
    */
   isProcessRunning() {
-    return this.process !== null && this.isRunning;
+    return this.process !== null;
   }
 }
 

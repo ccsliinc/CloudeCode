@@ -14,7 +14,7 @@ app.on('window-all-closed', () => {
   // Don't quit
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   console.log('Cloude Code menu bar app starting...');
 
   // Initialize components
@@ -25,7 +25,7 @@ app.whenReady().then(() => {
   createTray();
 
   // Start server automatically
-  serverManager.start();
+  await serverManager.start();
 
   // Start polling for stats
   startStatsPolling();
@@ -64,12 +64,32 @@ function createTray() {
  * Build and update the tray menu
  */
 function updateMenu() {
-  const isRunning = serverManager.isProcessRunning();
+  const state = serverManager.getState();
   const health = currentStats;
 
   const sessionName = health?.session_name || 'None';
   const tunnelCount = health?.tunnel_count || 0;
-  const statusText = isRunning ? '● Server: Running' : '○ Server: Stopped';
+
+  let statusText, statusIcon;
+  switch (state) {
+    case 'running':
+      statusText = '● Server: Running';
+      statusIcon = '●';
+      break;
+    case 'starting':
+      statusText = '◐ Server: Starting...';
+      statusIcon = '◐';
+      break;
+    case 'stopped':
+    default:
+      statusText = '○ Server: Stopped';
+      statusIcon = '○';
+      break;
+  }
+
+  const isRunning = state === 'running';
+  const canStart = state === 'stopped';
+  const canStop = state === 'running' || state === 'starting';
 
   const menu = Menu.buildFromTemplate([
     {
@@ -104,20 +124,23 @@ function updateMenu() {
       label: 'Restart Server',
       click: async () => {
         await serverManager.restart();
-        setTimeout(updateMenu, 500);
+        updateMenu();
+        setTimeout(updateMenu, 2500);
       },
       enabled: isRunning
     },
     {
-      label: isRunning ? 'Stop Server' : 'Start Server',
+      label: canStart ? 'Start Server' : 'Stop Server',
       click: async () => {
-        if (isRunning) {
-          await serverManager.stop();
+        if (canStart) {
+          await serverManager.start();
         } else {
-          serverManager.start();
+          await serverManager.stop();
         }
+        updateMenu();
         setTimeout(updateMenu, 500);
-      }
+      },
+      enabled: canStart || canStop
     },
     { type: 'separator' },
     {
@@ -138,7 +161,7 @@ function updateMenu() {
 
         // Stop stats polling
         if (statsUpdateInterval) {
-          clearInterval(statsUpdateInterval);
+          clearTimeout(statsUpdateInterval);
         }
 
         // Stop server
@@ -157,8 +180,22 @@ function updateMenu() {
  * Start polling server for stats updates
  */
 function startStatsPolling() {
-  // Poll every 5 seconds
-  statsUpdateInterval = setInterval(async () => {
+  let pollInterval = 5000; // Default 5 seconds
+  let fastPollCount = 0;
+  const maxFastPolls = 12; // Poll fast for ~1 minute during startup
+
+  const poll = async () => {
+    const state = serverManager.getState();
+
+    // Poll faster during startup
+    if (state === 'starting' && fastPollCount < maxFastPolls) {
+      pollInterval = 2000; // 2 seconds
+      fastPollCount++;
+    } else {
+      pollInterval = 5000; // 5 seconds
+      fastPollCount = 0;
+    }
+
     if (serverManager.isProcessRunning()) {
       const health = await serverManager.getHealth();
       if (health) {
@@ -167,21 +204,22 @@ function startStatsPolling() {
       } else {
         // Server process running but API not responding
         currentStats = null;
+        updateMenu();
       }
     } else {
       currentStats = null;
       updateMenu();
     }
-  }, 5000);
 
-  // Do initial check after 3 seconds (give server time to start)
-  setTimeout(async () => {
-    const health = await serverManager.getHealth();
-    if (health) {
-      currentStats = health;
-      updateMenu();
+    // Schedule next poll with dynamic interval
+    if (statsUpdateInterval) {
+      clearTimeout(statsUpdateInterval);
     }
-  }, 3000);
+    statsUpdateInterval = setTimeout(poll, pollInterval);
+  };
+
+  // Do initial check after 2 seconds
+  setTimeout(poll, 2000);
 }
 
 /**
@@ -191,7 +229,7 @@ app.on('before-quit', async () => {
   console.log('App quitting...');
 
   if (statsUpdateInterval) {
-    clearInterval(statsUpdateInterval);
+    clearTimeout(statsUpdateInterval);
   }
 
   if (serverManager) {
