@@ -109,6 +109,15 @@ function updateMenu() {
     },
     { type: 'separator' },
     {
+      label: 'Open Terminal',
+      click: () => {
+        const { exec } = require('child_process');
+        // Open Terminal and tail the server logs
+        exec(`osascript -e 'tell application "Terminal" to do script "tail -f /tmp/cloudecode-server.log"'`);
+      },
+      enabled: isRunning
+    },
+    {
       label: 'Open in Browser',
       click: () => {
         shell.openExternal('http://localhost:8000');

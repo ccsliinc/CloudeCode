@@ -3,10 +3,12 @@ const path = require('path');
 const axios = require('axios');
 const { app } = require('electron');
 const net = require('net');
+const fs = require('fs');
 
 class ServerManager {
   constructor() {
     this.process = null;
+    this.logStream = null;
 
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
@@ -22,6 +24,7 @@ class ServerManager {
     this.pythonPath = path.join(this.baseDir, 'venv', 'bin', 'python3');
     this.apiUrl = 'http://localhost:8000';
     this.port = 8000;
+    this.logFile = '/tmp/cloudecode-server.log';
     this.state = 'stopped'; // 'stopped', 'starting', 'running'
     this.startTime = null;
   }
@@ -79,8 +82,13 @@ class ServerManager {
     console.log('Starting Cloude Code server...');
     console.log(`Base directory: ${this.baseDir}`);
     console.log(`Python path: ${this.pythonPath}`);
+    console.log(`Log file: ${this.logFile}`);
 
     this.state = 'starting';
+
+    // Create log file stream
+    this.logStream = fs.createWriteStream(this.logFile, { flags: 'a' });
+    this.logStream.write(`\n\n=== Server starting at ${new Date().toISOString()} ===\n`);
 
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,
@@ -95,6 +103,11 @@ class ServerManager {
       const output = data.toString().trim();
       console.log(`[SERVER] ${output}`);
 
+      // Write to log file
+      if (this.logStream) {
+        this.logStream.write(`[STDOUT] ${output}\n`);
+      }
+
       // Check if server is ready
       if (output.includes('Application startup complete') ||
           output.includes('application_ready')) {
@@ -107,6 +120,11 @@ class ServerManager {
       const output = data.toString().trim();
       console.error(`[SERVER ERROR] ${output}`);
 
+      // Write to log file
+      if (this.logStream) {
+        this.logStream.write(`[STDERR] ${output}\n`);
+      }
+
       // Also check stderr for ready signal
       if (output.includes('Application startup complete')) {
         this.state = 'running';
@@ -116,6 +134,14 @@ class ServerManager {
     // Handle process exit
     this.process.on('exit', (code, signal) => {
       console.log(`Server process exited with code ${code} and signal ${signal}`);
+
+      // Close log stream
+      if (this.logStream) {
+        this.logStream.write(`\n=== Server stopped at ${new Date().toISOString()} (code: ${code}, signal: ${signal}) ===\n`);
+        this.logStream.end();
+        this.logStream = null;
+      }
+
       this.process = null;
       this.state = 'stopped';
       this.startTime = null;
@@ -124,6 +150,14 @@ class ServerManager {
     // Handle process errors
     this.process.on('error', (err) => {
       console.error('Failed to start server:', err);
+
+      // Close log stream
+      if (this.logStream) {
+        this.logStream.write(`\n=== Server error: ${err.message} ===\n`);
+        this.logStream.end();
+        this.logStream = null;
+      }
+
       this.process = null;
       this.state = 'stopped';
       this.startTime = null;
@@ -165,6 +199,12 @@ class ServerManager {
           this.process.kill('SIGKILL');
         }
       }, 5000);
+    }
+
+    // Close log stream
+    if (this.logStream) {
+      this.logStream.end();
+      this.logStream = null;
     }
 
     this.process = null;
