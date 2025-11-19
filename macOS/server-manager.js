@@ -12,10 +12,10 @@ class ServerManager {
 
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
-      // In production: app is in dist/mac-arm64/Cloude Code.app
-      // Need to go up to project root: ../../../..
+      // In production: app.asar is at dist/mac-arm64/Cloude Code.app/Contents/Resources/app.asar
+      // Need to go up to project root: Resources -> Contents -> App -> mac-arm64 -> dist -> macOS -> cloudecode
       const appPath = app.getAppPath(); // Points to app.asar or Resources folder
-      this.baseDir = path.join(appPath, '..', '..', '..', '..', '..');
+      this.baseDir = path.join(appPath, '..', '..', '..', '..', '..', '..');
     } else {
       // In development: running from macOS/ folder
       this.baseDir = path.join(__dirname, '..');
