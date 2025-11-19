@@ -165,9 +165,13 @@ def setup_env_file(env_path):
     print("=" * 70)
     print()
     print("You'll need:")
-    print("  1. A Cloudflare account and domain")
-    print("  2. API token (with Zone.DNS and Tunnel permissions)")
+    print("  1. A Cloudflare account with a domain added")
+    print("  2. API token (with Zone.DNS Edit and Tunnel Edit permissions)")
     print("  3. Your Cloudflare Zone ID")
+    print()
+    print("IMPORTANT: DNS records will be created AUTOMATICALLY!")
+    print("  You don't need to manually create any DNS records.")
+    print("  Cloude Code will create them via the Cloudflare API.")
     print()
 
     # Get current values if .env exists
@@ -187,15 +191,43 @@ def setup_env_file(env_path):
     )
 
     print()
-    print("To get your Cloudflare credentials:")
-    print("  API Token: https://dash.cloudflare.com/profile/api-tokens")
-    print("  Zone ID: Found on your domain's overview page")
+    print("=" * 70)
+    print("How to Create a Cloudflare API Token:")
+    print("=" * 70)
+    print()
+    print("1. Go to: https://dash.cloudflare.com/profile/api-tokens")
+    print("2. Click 'Create Token'")
+    print("3. Click 'Create Custom Token'")
+    print("4. Set token name: 'Cloude Code'")
+    print("5. Add these permissions:")
+    print("   - Zone > DNS > Edit")
+    print("   - Account > Cloudflare Tunnel > Edit")
+    print("6. Set Zone Resources:")
+    print("   - Include > Specific zone > [select your domain]")
+    print("7. Click 'Continue to summary' then 'Create Token'")
+    print("8. Copy the token (you won't see it again!)")
+    print()
+    print("=" * 70)
     print()
 
     cf_token = prompt_with_default(
         "Cloudflare API token",
         current_values.get('CLOUDFLARE_API_TOKEN', '')
     )
+
+    print()
+    print("=" * 70)
+    print("How to Find Your Zone ID:")
+    print("=" * 70)
+    print()
+    print("1. Go to: https://dash.cloudflare.com")
+    print("2. Click on your domain")
+    print("3. Scroll down on the Overview page")
+    print("4. Look for 'Zone ID' on the right sidebar")
+    print("5. Copy the Zone ID")
+    print()
+    print("=" * 70)
+    print()
 
     cf_zone = prompt_with_default(
         "Cloudflare Zone ID",
