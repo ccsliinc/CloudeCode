@@ -72,7 +72,7 @@ class ServerManager {
    */
   async ensureServerFiles() {
     const requiredDirs = ['src', 'client'];
-    const requiredFiles = ['setup_auth.py', 'requirements.txt', 'config.example.json'];
+    const requiredFiles = ['setup_auth.py', 'requirements.txt', 'config.example.json', 'nuke.sh'];
 
     // Create baseDir if it doesn't exist
     if (!fs.existsSync(this.baseDir)) {
