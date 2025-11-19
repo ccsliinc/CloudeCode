@@ -14,10 +14,10 @@ if ! command -v iconutil &> /dev/null; then
     exit 1
 fi
 
-echo "🎨 Generating app icon bundle from pixel art..."
+echo "🎨 Generating app icon bundle from AppIcon-1024.png..."
 
 # Source image
-SOURCE="iconTemplate@2x.png"
+SOURCE="AppIcon-1024.png"
 
 # Create iconset directory
 ICONSET="icon.iconset"
