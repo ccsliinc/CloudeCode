@@ -91,6 +91,7 @@ function updateMenu() {
   }
 
   const isRunning = state === 'running';
+  const isStartingOrRunning = state === 'starting' || state === 'running';
   const canStart = state === 'stopped';
   const canStop = state === 'running' || state === 'starting';
 
@@ -115,7 +116,7 @@ function updateMenu() {
         // Open Terminal and tail the server logs
         exec(`osascript -e 'tell application "Terminal" to do script "tail -f /tmp/cloudecode-server.log"'`);
       },
-      enabled: isRunning
+      enabled: isStartingOrRunning
     },
     {
       label: 'Open in Browser',
