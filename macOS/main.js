@@ -73,6 +73,12 @@ function updateMenu() {
   const sessionName = health?.session_name || 'None';
   const tunnelCount = health?.tunnel_count || 0;
 
+  // Check configuration status
+  const configStatus = serverManager.checkConfiguration();
+  const configText = configStatus.isConfigured
+    ? '✓ Configuration: OK'
+    : '⚠ Configuration: Setup Required';
+
   let statusText, statusIcon;
   switch (state) {
     case 'running':
@@ -108,6 +114,10 @@ function updateMenu() {
       label: `Tunnels: ${tunnelCount}`,
       enabled: false
     },
+    {
+      label: configText,
+      enabled: false
+    },
     { type: 'separator' },
     {
       label: 'Open Terminal',
@@ -124,6 +134,13 @@ function updateMenu() {
         shell.openExternal('http://localhost:8000');
       },
       enabled: isRunning
+    },
+    {
+      label: 'Run Setup Script',
+      click: () => {
+        serverManager.openSetupScript();
+      },
+      enabled: !configStatus.isConfigured
     },
     { type: 'separator' },
     {

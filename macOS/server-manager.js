@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('path');
 const axios = require('axios');
 const { app } = require('electron');
@@ -8,6 +8,7 @@ const fs = require('fs');
 class ServerManager {
   constructor() {
     this.process = null;
+    this.processPid = null;
     this.logStream = null;
 
     // Determine base directory based on whether app is packaged
@@ -96,7 +97,9 @@ class ServerManager {
       env: { ...process.env }
     });
 
+    this.processPid = this.process.pid;
     this.startTime = Date.now();
+    console.log(`Server process started with PID: ${this.processPid}`);
 
     // Log stdout and detect when server is ready
     this.process.stdout.on('data', (data) => {
@@ -143,6 +146,7 @@ class ServerManager {
       }
 
       this.process = null;
+      this.processPid = null;
       this.state = 'stopped';
       this.startTime = null;
     });
@@ -159,6 +163,7 @@ class ServerManager {
       }
 
       this.process = null;
+      this.processPid = null;
       this.state = 'stopped';
       this.startTime = null;
     });
@@ -167,39 +172,78 @@ class ServerManager {
   }
 
   /**
+   * Kill process by PID
+   */
+  killByPid(pid, signal = 'SIGTERM') {
+    return new Promise((resolve) => {
+      exec(`kill -${signal === 'SIGTERM' ? '15' : '9'} ${pid}`, (error) => {
+        if (error) {
+          console.log(`Failed to kill PID ${pid}:`, error.message);
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Kill any process using port 8000
+   */
+  killByPort() {
+    return new Promise((resolve) => {
+      exec(`lsof -ti:${this.port} | xargs kill -9`, (error) => {
+        if (error) {
+          console.log('No process found on port', this.port);
+        } else {
+          console.log('Killed process on port', this.port);
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
    * Stop the server gracefully
    */
   async stop() {
-    if (!this.process) {
-      console.log('Server not running');
-      return;
-    }
-
     console.log('Stopping server...');
-    this.state = 'stopped';
 
+    // Try graceful shutdown via API first
     try {
-      // Try graceful shutdown via API first
       await axios.post(`${this.apiUrl}/api/v1/shutdown`, {}, {
         timeout: 2000
       });
       console.log('Sent shutdown signal to server');
+      // Wait a bit for graceful shutdown
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
-      console.log('API shutdown failed, killing process:', err.message);
+      console.log('API shutdown failed:', err.message);
     }
 
-    // Kill the process
-    if (this.process) {
+    // Kill by process reference if we have it
+    if (this.process && !this.process.killed) {
+      console.log('Killing server process by reference...');
       this.process.kill('SIGTERM');
 
-      // Force kill after 5 seconds if still running
+      // Force kill after 3 seconds if still running
       setTimeout(() => {
-        if (this.process) {
+        if (this.process && !this.process.killed) {
           console.log('Force killing server process');
           this.process.kill('SIGKILL');
         }
-      }, 5000);
+      }, 3000);
     }
+    // Otherwise kill by PID if we have it
+    else if (this.processPid) {
+      console.log(`Killing server by PID ${this.processPid}...`);
+      await this.killByPid(this.processPid, 'SIGTERM');
+
+      // Wait a bit, then force kill if needed
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await this.killByPid(this.processPid, 'SIGKILL');
+    }
+
+    // Fallback: kill any process on port 8000
+    await this.killByPort();
 
     // Close log stream
     if (this.logStream) {
@@ -207,8 +251,16 @@ class ServerManager {
       this.logStream = null;
     }
 
-    this.process = null;
-    this.startTime = null;
+    // Wait for process to fully exit before clearing state
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // If process still exists, wait for exit event to clean up
+    // Otherwise clean up now
+    if (!this.process) {
+      this.processPid = null;
+      this.state = 'stopped';
+      this.startTime = null;
+    }
   }
 
   /**
@@ -264,6 +316,69 @@ class ServerManager {
    */
   isProcessRunning() {
     return this.process !== null;
+  }
+
+  /**
+   * Check if configuration is complete
+   * @returns {Object} Status object with isConfigured flag and details
+   */
+  checkConfiguration() {
+    const envPath = path.join(this.baseDir, '.env');
+    const configPath = path.join(this.baseDir, 'config.json');
+    const setupScriptPath = path.join(this.baseDir, 'setup_auth.py');
+
+    const status = {
+      isConfigured: true,
+      missingFiles: [],
+      missingEnvVars: [],
+      details: []
+    };
+
+    // Check if .env exists
+    if (!fs.existsSync(envPath)) {
+      status.isConfigured = false;
+      status.missingFiles.push('.env');
+      status.details.push('.env file not found');
+    } else {
+      // Check required env vars
+      const envContent = fs.readFileSync(envPath, 'utf8');
+      const requiredVars = ['TOTP_SECRET', 'JWT_SECRET'];
+
+      requiredVars.forEach(varName => {
+        if (!envContent.includes(`${varName}=`) || envContent.includes(`${varName}=\n`) || envContent.includes(`${varName}=""\n`)) {
+          status.isConfigured = false;
+          status.missingEnvVars.push(varName);
+        }
+      });
+
+      if (status.missingEnvVars.length > 0) {
+        status.details.push(`Missing env vars: ${status.missingEnvVars.join(', ')}`);
+      }
+    }
+
+    // Check if config.json exists
+    if (!fs.existsSync(configPath)) {
+      status.missingFiles.push('config.json');
+      status.details.push('config.json not found (optional)');
+    }
+
+    // Check if setup script exists
+    if (!fs.existsSync(setupScriptPath)) {
+      status.details.push('setup_auth.py not found');
+    }
+
+    return status;
+  }
+
+  /**
+   * Open Terminal and run setup script
+   */
+  openSetupScript() {
+    const setupScript = path.join(this.baseDir, 'setup_auth.py');
+    const pythonPath = this.pythonPath;
+
+    // Open Terminal and run setup
+    exec(`osascript -e 'tell application "Terminal" to do script "cd \\"${this.baseDir}\\" && \\"${pythonPath}\\" setup_auth.py"'`);
   }
 }
 
