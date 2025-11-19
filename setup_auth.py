@@ -324,7 +324,7 @@ def setup_env_file(env_path):
             "\n"
             "# Security (Optional)\n"
             "API_KEY=\n"
-            "ALLOWED_ORIGINS=*\n"
+            "# ALLOWED_ORIGINS defaults to [\"*\"] - only set if you need to restrict origins\n"
             "\n"
             "# Authentication Secrets\n"
             "TOTP_SECRET=\n"
