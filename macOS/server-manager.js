@@ -545,6 +545,14 @@ class ServerManager {
     // Open Terminal and run setup
     exec(`osascript -e 'tell application "Terminal" to do script "cd \\"${this.baseDir}\\" && \\"${pythonPath}\\" setup_auth.py"'`);
   }
+
+  /**
+   * Get the project root directory
+   * @returns {string} Path to project root
+   */
+  getProjectRoot() {
+    return this.baseDir;
+  }
 }
 
 module.exports = ServerManager;

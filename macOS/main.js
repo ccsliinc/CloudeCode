@@ -178,6 +178,75 @@ function updateMenu() {
     },
     { type: 'separator' },
     {
+      label: 'Nuke it from Orbit!',
+      click: async () => {
+        const { dialog } = require('electron');
+
+        // Show confirmation dialog
+        const result = await dialog.showMessageBox({
+          type: 'warning',
+          title: 'Nuke it from Orbit!',
+          message: 'Complete System Reset',
+          detail:
+            'This will completely remove ALL Cloude Code configuration:\n\n' +
+            '✗ Cloudflare tunnel will be DELETED\n' +
+            '✗ All DNS records will be DELETED\n' +
+            '✗ All local configuration files\n' +
+            '✗ Python virtual environment\n' +
+            '✗ All logs and temporary files\n' +
+            '✗ Cloudflared authentication\n' +
+            '✗ macOS app settings\n\n' +
+            'You will need to run setup.sh again to use Cloude Code.\n\n' +
+            'Are you ABSOLUTELY SURE?',
+          buttons: ['Cancel', 'NUKE IT'],
+          defaultId: 0,
+          cancelId: 0
+        });
+
+        if (result.response === 1) {
+          console.log('Nuking system...');
+
+          // Stop server first
+          await serverManager.stop();
+
+          // Stop stats polling
+          if (statsUpdateInterval) {
+            clearTimeout(statsUpdateInterval);
+          }
+
+          // Run nuke.sh script
+          const { exec } = require('child_process');
+          const projectRoot = serverManager.getProjectRoot();
+          const nukeScript = path.join(projectRoot, 'nuke.sh');
+
+          exec(`"${nukeScript}"`, { cwd: projectRoot }, (error, stdout, stderr) => {
+            if (error) {
+              console.error('Nuke failed:', error);
+              dialog.showErrorBox(
+                'Nuke Failed',
+                `Failed to complete system reset:\n\n${error.message}`
+              );
+            } else {
+              console.log('Nuke output:', stdout);
+              if (stderr) console.error('Nuke stderr:', stderr);
+
+              // Show success and quit
+              dialog.showMessageBox({
+                type: 'info',
+                title: 'System Reset Complete',
+                message: 'Cloude Code has been completely removed.',
+                detail: 'Run ./setup.sh to configure again.\n\nThe app will now quit.',
+                buttons: ['OK']
+              }).then(() => {
+                app.quit();
+              });
+            }
+          });
+        }
+      }
+    },
+    { type: 'separator' },
+    {
       label: 'Quit Cloude Code',
       click: async () => {
         console.log('Quitting app...');
