@@ -50,6 +50,10 @@
       {
         "from": "../setup_auth.py",
         "to": "setup_auth.py"
+      },
+      {
+        "from": "../config.example.json",
+        "to": "config.example.json"
       }
     ],
     "mac": {
