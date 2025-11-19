@@ -219,9 +219,10 @@ class ServerManager {
     await this.stop();
 
     // Wait a bit before restarting
-    setTimeout(() => {
-      this.start();
-    }, 2000);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    await this.start();
+    console.log('Server restarted');
   }
 
   /**
