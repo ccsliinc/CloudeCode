@@ -30,16 +30,27 @@
       "output": "dist"
     },
     "files": [
-      "**/*",
-      "../src/**/*",
-      "../client/**/*",
-      "../venv/**/*",
-      "../.env",
-      "../config.json",
-      "../requirements.txt",
-      "../setup.sh",
-      "../start.sh",
-      "../stop.sh"
+      "**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../src",
+        "to": "src",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../client",
+        "to": "client",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../requirements.txt",
+        "to": "requirements.txt"
+      },
+      {
+        "from": "../setup_auth.py",
+        "to": "setup_auth.py"
+      }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

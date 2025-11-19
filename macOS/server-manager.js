@@ -13,21 +13,176 @@ class ServerManager {
 
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
-      // In production: app.asar is at dist/mac-arm64/Cloude Code.app/Contents/Resources/app.asar
-      // Need to go up to project root: Resources -> Contents -> App -> mac-arm64 -> dist -> macOS -> cloudecode (7 levels)
-      const appPath = app.getAppPath(); // Points to app.asar or Resources folder
-      this.baseDir = path.join(appPath, '..', '..', '..', '..', '..', '..', '..');
+      // In production: Store server files in Application Support
+      // This makes the app portable across different machines
+      this.baseDir = path.join(app.getPath('userData'), 'server');
+      this.appResourcesPath = path.join(app.getAppPath(), '..');
     } else {
       // In development: running from macOS/ folder
       this.baseDir = path.join(__dirname, '..');
+      this.appResourcesPath = this.baseDir;
     }
 
-    this.pythonPath = path.join(this.baseDir, 'venv', 'bin', 'python3');
+    // Auto-detect Python installation
+    this.pythonPath = this.findPython();
     this.apiUrl = 'http://localhost:8000';
     this.port = 8000;
     this.logFile = '/tmp/cloudecode-server.log';
     this.state = 'stopped'; // 'stopped', 'starting', 'running'
     this.startTime = null;
+  }
+
+  /**
+   * Find Python 3 installation on the system
+   * @returns {string} Path to python3 executable
+   */
+  findPython() {
+    // In development, prefer local venv
+    if (!app.isPackaged) {
+      const localVenv = path.join(this.baseDir, 'venv', 'bin', 'python3');
+      if (fs.existsSync(localVenv)) {
+        console.log(`Using local venv Python: ${localVenv}`);
+        return localVenv;
+      }
+    }
+
+    // Check common Python installation locations
+    const pythonLocations = [
+      '/opt/homebrew/bin/python3',     // Apple Silicon Homebrew
+      '/usr/local/bin/python3',        // Intel Homebrew
+      '/usr/bin/python3',              // System Python
+      path.join(process.env.HOME || '', '.pyenv', 'shims', 'python3'), // pyenv
+    ];
+
+    for (const location of pythonLocations) {
+      if (fs.existsSync(location)) {
+        console.log(`Found Python at: ${location}`);
+        return location;
+      }
+    }
+
+    // Fallback to PATH
+    console.log('Using python3 from PATH');
+    return 'python3';
+  }
+
+  /**
+   * Ensure server files exist in baseDir
+   * Copies from bundled resources if needed (packaged app)
+   */
+  async ensureServerFiles() {
+    const requiredDirs = ['src', 'client'];
+    const requiredFiles = ['setup_auth.py', 'requirements.txt'];
+
+    // Create baseDir if it doesn't exist
+    if (!fs.existsSync(this.baseDir)) {
+      console.log(`Creating baseDir: ${this.baseDir}`);
+      fs.mkdirSync(this.baseDir, { recursive: true });
+    }
+
+    if (app.isPackaged) {
+      // Copy files from app resources to Application Support
+      const resourcesPath = this.appResourcesPath;
+
+      for (const dir of requiredDirs) {
+        const srcPath = path.join(resourcesPath, dir);
+        const destPath = path.join(this.baseDir, dir);
+
+        if (fs.existsSync(srcPath) && !fs.existsSync(destPath)) {
+          console.log(`Copying ${dir}/ to Application Support...`);
+          this.copyRecursive(srcPath, destPath);
+        }
+      }
+
+      for (const file of requiredFiles) {
+        const srcPath = path.join(resourcesPath, file);
+        const destPath = path.join(this.baseDir, file);
+
+        if (fs.existsSync(srcPath) && !fs.existsSync(destPath)) {
+          console.log(`Copying ${file} to Application Support...`);
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
+    }
+
+    // Check if essential files exist
+    const srcDir = path.join(this.baseDir, 'src');
+    if (!fs.existsSync(srcDir)) {
+      throw new Error(`Server source files not found at: ${srcDir}`);
+    }
+  }
+
+  /**
+   * Copy directory recursively
+   */
+  copyRecursive(src, dest) {
+    if (!fs.existsSync(dest)) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
+
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+
+      if (entry.isDirectory()) {
+        this.copyRecursive(srcPath, destPath);
+      } else {
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
+  }
+
+  /**
+   * Ensure virtual environment exists and has dependencies installed
+   */
+  async ensureVenv() {
+    const venvPath = path.join(this.baseDir, 'venv');
+    const requirementsPath = path.join(this.baseDir, 'requirements.txt');
+
+    // If venv doesn't exist, create it
+    if (!fs.existsSync(venvPath)) {
+      console.log('Creating virtual environment...');
+
+      return new Promise((resolve, reject) => {
+        exec(`"${this.pythonPath}" -m venv "${venvPath}"`, (error) => {
+          if (error) {
+            console.error('Failed to create venv:', error);
+            reject(error);
+            return;
+          }
+
+          // Install requirements
+          if (fs.existsSync(requirementsPath)) {
+            const venvPython = path.join(venvPath, 'bin', 'python3');
+            console.log('Installing requirements...');
+
+            exec(`"${venvPython}" -m pip install -r "${requirementsPath}"`, (error2) => {
+              if (error2) {
+                console.error('Failed to install requirements:', error2);
+                reject(error2);
+                return;
+              }
+
+              console.log('Venv setup complete');
+              // Update pythonPath to use venv
+              this.pythonPath = venvPython;
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+      });
+    } else {
+      // Venv exists, use it
+      const venvPython = path.join(venvPath, 'bin', 'python3');
+      if (fs.existsSync(venvPython)) {
+        this.pythonPath = venvPython;
+        console.log(`Using existing venv: ${venvPython}`);
+      }
+    }
   }
 
   /**
@@ -62,6 +217,16 @@ class ServerManager {
     if (this.process) {
       console.log('Server already running');
       return;
+    }
+
+    // First-run setup: Ensure server files and venv exist
+    try {
+      await this.ensureServerFiles();
+      await this.ensureVenv();
+    } catch (error) {
+      console.error('Setup failed:', error);
+      this.state = 'stopped';
+      throw error;
     }
 
     // Check if port is already in use
