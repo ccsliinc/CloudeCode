@@ -13,7 +13,8 @@ from src.models import (
     Tunnel,
     LogEntry,
     SuccessResponse,
-    ErrorResponse
+    ErrorResponse,
+    HealthResponse
 )
 from src.api.auth import require_auth
 from src.config import settings
@@ -294,3 +295,80 @@ async def reset_server(request: Request):
     except Exception as e:
         logger.error("server_reset_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to reset server: {str(e)}")
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_endpoint(request: Request):
+    """
+    Health check endpoint for menu bar app.
+    Returns server status, uptime, session info, and tunnel count.
+
+    Note: This endpoint does NOT require authentication to allow menu bar app
+    to poll before user logs in via web UI.
+
+    Returns:
+        Health status with stats
+    """
+    import time
+    import os
+
+    session_manager = request.app.state.session_manager
+    tunnel_manager = request.app.state.tunnel_manager
+
+    # Get session info
+    session_name = None
+    if session_manager and session_manager.has_active_session():
+        session_info = await session_manager.get_session_info()
+        if session_info and session_info.session:
+            # Use basename of working directory as session name
+            session_name = os.path.basename(session_info.session.working_dir)
+
+    # Get tunnel count
+    tunnel_count = 0
+    if tunnel_manager:
+        tunnels = tunnel_manager.get_active_tunnels()
+        tunnel_count = len(tunnels)
+
+    # Calculate uptime (we don't track server start time, so use session uptime as proxy)
+    uptime_seconds = 0
+    if session_manager and session_manager.has_active_session():
+        session_info = await session_manager.get_session_info()
+        if session_info and session_info.stats:
+            uptime_seconds = session_info.stats.uptime_seconds
+
+    return HealthResponse(
+        status="running",
+        uptime=uptime_seconds,
+        session_name=session_name,
+        tunnel_count=tunnel_count
+    )
+
+
+@router.post("/shutdown", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
+async def shutdown_server(request: Request):
+    """
+    Gracefully shut down the server.
+    Used by menu bar app to restart the server.
+
+    Returns:
+        Success response
+
+    Note: Server will exit after sending response
+    """
+    import os
+    import signal
+    import asyncio
+
+    logger.info("api_shutdown_request")
+
+    # Schedule shutdown after response is sent
+    async def delayed_shutdown():
+        await asyncio.sleep(0.5)
+        logger.info("initiating_graceful_shutdown")
+        # Send SIGTERM to self for graceful shutdown
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    # Start shutdown task in background
+    asyncio.create_task(delayed_shutdown())
+
+    return SuccessResponse(message="Server shutdown initiated")

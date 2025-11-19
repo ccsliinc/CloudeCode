@@ -152,6 +152,14 @@ class AuthTokenResponse(BaseModel):
     expires_in: int = Field(..., description="Token expiry time in seconds")
 
 
+class HealthResponse(BaseModel):
+    """Health check response for menu bar app."""
+    status: str = Field(..., description="Server status (running/stopped)")
+    uptime: int = Field(..., description="Server uptime in seconds")
+    session_name: Optional[str] = Field(None, description="Current session name/working dir")
+    tunnel_count: int = Field(0, description="Number of active tunnels")
+
+
 # WebSocket Message Models
 
 class WSMessageType(str, Enum):

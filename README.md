@@ -610,6 +610,80 @@ ws://localhost:8000/ws/terminal?token=YOUR_JWT_TOKEN
   - Check API logs in terminal output
 - **Manual test**: Use Cloudflare dashboard to create a test DNS record
 
+## macOS Menu Bar App
+
+A native macOS menu bar application that runs Cloude Code in the background with quick access to stats and controls.
+
+### Features
+
+- **Background server management**: Start/stop/restart the Python server
+- **Live stats**: Server status, current session, active tunnels
+- **Quick access**: Click to open terminal in browser
+- **Auto-launch**: Optional launch at login
+- **System tray integration**: Sits quietly in menu bar
+
+### Installation
+
+```bash
+cd macOS
+
+# Install dependencies
+npm install
+
+# Optional: Generate placeholder icons
+cd assets && ./generate-icons.sh && cd ..
+
+# Run in development mode
+npm start
+```
+
+### Building the App
+
+```bash
+cd macOS
+npm run build
+```
+
+This creates `dist/Cloude Code.dmg` - a macOS installer.
+
+### Menu Bar Controls
+
+The menu bar app provides:
+- **Server status** - Running/stopped indicator with colored dot
+- **Session info** - Current session name (or "None")
+- **Tunnel count** - Number of active Cloudflare tunnels
+- **Open Terminal** - Launches browser to localhost:8000
+- **Restart/Stop/Start Server** - Control server lifecycle
+- **Launch at Login** - Toggle auto-start on macOS boot
+- **Quit** - Stop server and quit app
+
+### How It Works
+
+1. Electron app spawns Python server as subprocess
+2. Polls `/api/v1/health` every 5 seconds for stats
+3. Web UI remains accessible for mobile/remote access
+4. Server logs pipe to Electron console for debugging
+
+### Auto-Launch Setup
+
+The app can install a LaunchAgent to start automatically:
+
+1. Click "Launch at Login" in menu
+2. App installs `~/Library/LaunchAgents/com.cloudecode.menubar.plist`
+3. Server starts on boot and keeps running
+4. Disable anytime by unchecking menu item
+
+### Icon Customization
+
+Replace placeholder icons in `macOS/assets/`:
+- `iconTemplate.png` - 22x22px menu bar icon
+- `iconTemplate@2x.png` - 44x44px retina icon
+- `icon.icns` - App bundle icon
+
+See `macOS/assets/README.md` for design guidelines.
+
+---
+
 ## Development
 
 ### Running Tests
