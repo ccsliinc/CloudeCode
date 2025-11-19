@@ -106,13 +106,6 @@ function updateMenu() {
     },
     { type: 'separator' },
     {
-      label: 'Open Terminal',
-      click: () => {
-        shell.openExternal('http://localhost:8000');
-      },
-      enabled: isRunning
-    },
-    {
       label: 'Open in Browser',
       click: () => {
         shell.openExternal('http://localhost:8000');
