@@ -1,11 +1,23 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const axios = require('axios');
+const { app } = require('electron');
 
 class ServerManager {
   constructor() {
     this.process = null;
-    this.baseDir = path.join(__dirname, '..');
+
+    // Determine base directory based on whether app is packaged
+    if (app.isPackaged) {
+      // In production: app is in dist/mac-arm64/Cloude Code.app
+      // Need to go up to project root: ../../../..
+      const appPath = app.getAppPath(); // Points to app.asar or Resources folder
+      this.baseDir = path.join(appPath, '..', '..', '..', '..', '..');
+    } else {
+      // In development: running from macOS/ folder
+      this.baseDir = path.join(__dirname, '..');
+    }
+
     this.pythonPath = path.join(this.baseDir, 'venv', 'bin', 'python3');
     this.apiUrl = 'http://localhost:8000';
     this.isRunning = false;
