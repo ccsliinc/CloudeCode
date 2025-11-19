@@ -72,7 +72,7 @@ class ServerManager {
    */
   async ensureServerFiles() {
     const requiredDirs = ['src', 'client'];
-    const requiredFiles = ['setup_auth.py', 'requirements.txt', 'config.example.json', 'nuke.sh'];
+    const requiredFiles = ['setup_auth.py', 'requirements.txt', 'config.example.json', 'nuke.sh', '.env.example'];
 
     // Create baseDir if it doesn't exist
     if (!fs.existsSync(this.baseDir)) {
@@ -227,6 +227,15 @@ class ServerManager {
       console.error('Setup failed:', error);
       this.state = 'stopped';
       throw error;
+    }
+
+    // Validate .env file has required fields
+    const validation = this.validateEnvFile();
+    if (!validation.isValid) {
+      const errorMsg = `Configuration validation failed:\n${validation.errors.join('\n')}`;
+      console.error(errorMsg);
+      this.state = 'stopped';
+      throw new Error(errorMsg);
     }
 
     // Check if port is already in use
@@ -481,6 +490,75 @@ class ServerManager {
    */
   isProcessRunning() {
     return this.process !== null;
+  }
+
+  /**
+   * Validate .env file has all required fields for server startup
+   * @returns {Object} Validation result with isValid flag and error details
+   */
+  validateEnvFile() {
+    const envPath = path.join(this.baseDir, '.env');
+
+    const result = {
+      isValid: true,
+      missingRequired: [],
+      emptyRequired: [],
+      errors: []
+    };
+
+    // Check if .env exists
+    if (!fs.existsSync(envPath)) {
+      result.isValid = false;
+      result.errors.push('.env file not found. Run setup first.');
+      return result;
+    }
+
+    // Read .env content
+    const envContent = fs.readFileSync(envPath, 'utf8');
+
+    // CRITICAL: These fields are required by Settings class (no defaults)
+    const criticalFields = ['DEFAULT_WORKING_DIR', 'LOG_DIRECTORY'];
+
+    // IMPORTANT: These fields are required for authentication
+    const authFields = ['TOTP_SECRET', 'JWT_SECRET'];
+
+    // Check critical fields
+    criticalFields.forEach(field => {
+      const regex = new RegExp(`^${field}=(.*)$`, 'm');
+      const match = envContent.match(regex);
+
+      if (!match) {
+        result.missingRequired.push(field);
+        result.isValid = false;
+      } else if (!match[1] || match[1].trim() === '') {
+        result.emptyRequired.push(field);
+        result.isValid = false;
+      }
+    });
+
+    // Check auth fields
+    authFields.forEach(field => {
+      const regex = new RegExp(`^${field}=(.*)$`, 'm');
+      const match = envContent.match(regex);
+
+      if (!match) {
+        result.missingRequired.push(field);
+        result.isValid = false;
+      } else if (!match[1] || match[1].trim() === '') {
+        result.emptyRequired.push(field);
+        result.isValid = false;
+      }
+    });
+
+    // Build error messages
+    if (result.missingRequired.length > 0) {
+      result.errors.push(`Missing required fields: ${result.missingRequired.join(', ')}`);
+    }
+    if (result.emptyRequired.length > 0) {
+      result.errors.push(`Empty required fields: ${result.emptyRequired.join(', ')}`);
+    }
+
+    return result;
   }
 
   /**
