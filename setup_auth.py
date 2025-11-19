@@ -239,6 +239,51 @@ def setup_env_file(env_path):
         current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')
     )
 
+    # Optional settings
+    print()
+    print("=" * 70)
+    print("Optional Settings (press Enter to use defaults)")
+    print("=" * 70)
+    print()
+
+    # Try to auto-detect Claude CLI path
+    import shutil
+    auto_claude_path = shutil.which('claude')
+    if not auto_claude_path:
+        # Check common locations
+        common_paths = [
+            str(Path.home() / '.claude' / 'local' / 'claude'),
+            '/usr/local/bin/claude',
+            '/opt/homebrew/bin/claude'
+        ]
+        for path_str in common_paths:
+            if Path(path_str).exists():
+                auto_claude_path = path_str
+                break
+
+    default_claude_path = current_values.get('CLAUDE_CLI_PATH', auto_claude_path or '/path/to/claude')
+    if auto_claude_path:
+        print(f"📍 Detected Claude CLI at: {auto_claude_path}")
+
+    claude_cli_path = prompt_with_default(
+        "Claude CLI path (leave empty for auto-detect)",
+        default_claude_path if not auto_claude_path else auto_claude_path
+    )
+
+    default_working_dir = current_values.get('DEFAULT_WORKING_DIR', '~/cloude-projects')
+    working_dir = prompt_with_default(
+        "Default working directory for projects",
+        default_working_dir
+    )
+
+    default_log_dir = current_values.get('LOG_DIRECTORY', '/tmp/cloude-code-logs')
+    log_dir = prompt_with_default(
+        "Log directory",
+        default_log_dir
+    )
+
+    print()
+
     # Update .env file with all values
     env_template_path = env_path.parent / ".env.example"
     if env_template_path.exists():
@@ -251,6 +296,9 @@ def setup_env_file(env_path):
             "CLOUDFLARE_ZONE_ID=\n"
             "CLOUDFLARE_DOMAIN=\n"
             "CLOUDFLARE_TUNNEL_NAME=\n"
+            "CLAUDE_CLI_PATH=/path/to/claude\n"
+            "DEFAULT_WORKING_DIR=~/cloude-projects\n"
+            "LOG_DIRECTORY=/tmp/cloude-code-logs\n"
             "TOTP_SECRET=\n"
             "JWT_SECRET=\n"
         )
@@ -262,6 +310,28 @@ def setup_env_file(env_path):
     content = content.replace("CLOUDFLARE_ZONE_ID=", f"CLOUDFLARE_ZONE_ID={cf_zone}")
     content = content.replace(f"CLOUDFLARE_TUNNEL_NAME={current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')}",
                              f"CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}")
+
+    # Replace optional settings
+    # Handle CLAUDE_CLI_PATH
+    if 'CLAUDE_CLI_PATH=' in content:
+        import re
+        content = re.sub(r'CLAUDE_CLI_PATH=.*', f'CLAUDE_CLI_PATH={claude_cli_path}', content)
+    else:
+        content += f"\nCLAUDE_CLI_PATH={claude_cli_path}\n"
+
+    # Handle DEFAULT_WORKING_DIR
+    if 'DEFAULT_WORKING_DIR=' in content:
+        import re
+        content = re.sub(r'DEFAULT_WORKING_DIR=.*', f'DEFAULT_WORKING_DIR={working_dir}', content)
+    else:
+        content += f"DEFAULT_WORKING_DIR={working_dir}\n"
+
+    # Handle LOG_DIRECTORY
+    if 'LOG_DIRECTORY=' in content:
+        import re
+        content = re.sub(r'LOG_DIRECTORY=.*', f'LOG_DIRECTORY={log_dir}', content)
+    else:
+        content += f"LOG_DIRECTORY={log_dir}\n"
 
     # Write .env
     with open(env_path, 'w') as f:
