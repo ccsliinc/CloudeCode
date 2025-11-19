@@ -9,10 +9,6 @@ out/
 # Electron build cache
 .cache/
 
-# Generated icons (optional - remove these lines if you want to commit icons)
-assets/*.png
-assets/*.icns
-
 # Logs
 *.log
 npm-debug.log*
