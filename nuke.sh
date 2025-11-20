@@ -17,27 +17,36 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Confirmation
-echo -e "${RED}⚠️  WARNING ⚠️${NC}"
-echo ""
-echo "This will completely remove ALL Cloude Code configuration and setup:"
-echo ""
-echo "  ✗ Cloudflare tunnel will be DELETED from Cloudflare"
-echo "  ✗ All DNS records will be DELETED from Cloudflare"
-echo "  ✗ All local configuration files (.env, config.json, etc.)"
-echo "  ✗ Python virtual environment"
-echo "  ✗ All logs and temporary files"
-echo "  ✗ Cloudflared authentication and tunnel configs"
-echo "  ✗ macOS app settings and LaunchAgent"
-echo ""
-echo -e "${YELLOW}You will need to run setup.sh again to use Cloude Code.${NC}"
-echo ""
-read -p "Are you ABSOLUTELY SURE you want to continue? (type 'NUKE' to confirm): " CONFIRM
+# Check if --skip-confirm flag is passed (for macOS app usage)
+SKIP_CONFIRM=false
+if [ "$1" = "--skip-confirm" ]; then
+    SKIP_CONFIRM=true
+    echo "Running in non-interactive mode (confirmation already provided)"
+fi
 
-if [ "$CONFIRM" != "NUKE" ]; then
+# Confirmation (only if not skipped)
+if [ "$SKIP_CONFIRM" = "false" ]; then
+    echo -e "${RED}⚠️  WARNING ⚠️${NC}"
     echo ""
-    echo "Aborted. No changes made."
-    exit 0
+    echo "This will completely remove ALL Cloude Code configuration and setup:"
+    echo ""
+    echo "  ✗ Cloudflare tunnel will be DELETED from Cloudflare"
+    echo "  ✗ All DNS records will be DELETED from Cloudflare"
+    echo "  ✗ All local configuration files (.env, config.json, etc.)"
+    echo "  ✗ Python virtual environment"
+    echo "  ✗ All logs and temporary files"
+    echo "  ✗ Cloudflared authentication and tunnel configs"
+    echo "  ✗ macOS app settings and LaunchAgent"
+    echo ""
+    echo -e "${YELLOW}You will need to run setup.sh again to use Cloude Code.${NC}"
+    echo ""
+    read -p "Are you ABSOLUTELY SURE you want to continue? (type 'NUKE' to confirm): " CONFIRM
+
+    if [ "$CONFIRM" != "NUKE" ]; then
+        echo ""
+        echo "Aborted. No changes made."
+        exit 0
+    fi
 fi
 
 echo ""

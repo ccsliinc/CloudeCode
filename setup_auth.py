@@ -187,7 +187,7 @@ def setup_env_file(env_path):
     # Prompt for values
     cf_domain = prompt_with_default(
         "Cloudflare domain (e.g., claude.yourdomain.com)",
-        current_values.get('CLOUDFLARE_DOMAIN', 'cloude.example.com')
+        current_values.get('CLOUDFLARE_DOMAIN', '')
     )
 
     print()
@@ -236,7 +236,7 @@ def setup_env_file(env_path):
 
     cf_tunnel_name = prompt_with_default(
         "Tunnel name",
-        current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')
+        current_values.get('CLOUDFLARE_TUNNEL_NAME', 'claude-tunnel')
     )
 
     # Optional settings
@@ -334,33 +334,31 @@ def setup_env_file(env_path):
             "AUTH_CONFIG_FILE=./config.json\n"
         )
 
-    # Replace placeholders
-    content = content.replace(f"CLOUDFLARE_DOMAIN={current_values.get('CLOUDFLARE_DOMAIN', 'cloude.mydomain.nyc')}",
-                             f"CLOUDFLARE_DOMAIN={cf_domain}")
-    content = content.replace("CLOUDFLARE_API_TOKEN=", f"CLOUDFLARE_API_TOKEN={cf_token}")
-    content = content.replace("CLOUDFLARE_ZONE_ID=", f"CLOUDFLARE_ZONE_ID={cf_zone}")
-    content = content.replace(f"CLOUDFLARE_TUNNEL_NAME={current_values.get('CLOUDFLARE_TUNNEL_NAME', 'cloude-controller')}",
-                             f"CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}")
+    # Replace placeholders using regex for reliability
+    import re
+
+    # Cloudflare Configuration - use regex to replace any existing value
+    content = re.sub(r'^CLOUDFLARE_DOMAIN=.*$', f'CLOUDFLARE_DOMAIN={cf_domain}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_API_TOKEN=.*$', f'CLOUDFLARE_API_TOKEN={cf_token}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_ZONE_ID=.*$', f'CLOUDFLARE_ZONE_ID={cf_zone}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_TUNNEL_NAME=.*$', f'CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}', content, flags=re.MULTILINE)
 
     # Replace optional settings
     # Handle CLAUDE_CLI_PATH
     if 'CLAUDE_CLI_PATH=' in content:
-        import re
-        content = re.sub(r'CLAUDE_CLI_PATH=.*', f'CLAUDE_CLI_PATH={claude_cli_path}', content)
+        content = re.sub(r'^CLAUDE_CLI_PATH=.*$', f'CLAUDE_CLI_PATH={claude_cli_path}', content, flags=re.MULTILINE)
     else:
         content += f"\nCLAUDE_CLI_PATH={claude_cli_path}\n"
 
     # Handle DEFAULT_WORKING_DIR
     if 'DEFAULT_WORKING_DIR=' in content:
-        import re
-        content = re.sub(r'DEFAULT_WORKING_DIR=.*', f'DEFAULT_WORKING_DIR={working_dir}', content)
+        content = re.sub(r'^DEFAULT_WORKING_DIR=.*$', f'DEFAULT_WORKING_DIR={working_dir}', content, flags=re.MULTILINE)
     else:
         content += f"DEFAULT_WORKING_DIR={working_dir}\n"
 
     # Handle LOG_DIRECTORY
     if 'LOG_DIRECTORY=' in content:
-        import re
-        content = re.sub(r'LOG_DIRECTORY=.*', f'LOG_DIRECTORY={log_dir}', content)
+        content = re.sub(r'^LOG_DIRECTORY=.*$', f'LOG_DIRECTORY={log_dir}', content, flags=re.MULTILINE)
     else:
         content += f"LOG_DIRECTORY={log_dir}\n"
 
@@ -576,6 +574,25 @@ def main():
     except Exception as e:
         print(f"⚠️  Could not start server: {e}")
         print("   Start manually with: ./start.sh")
+
+    # Restart Cloude Code app if it's running
+    print()
+    print("Restarting Cloude Code app to apply changes...")
+    try:
+        # Check if the app is running
+        result = subprocess.run(['pgrep', '-x', 'Cloude Code'], capture_output=True)
+        if result.returncode == 0:
+            # App is running, restart it
+            subprocess.run(['killall', 'Cloude Code'], check=False)
+            import time
+            time.sleep(2)  # Wait for graceful shutdown
+            subprocess.run(['open', '-a', 'Cloude Code'], check=False)
+            print("✅ Cloude Code app restarted")
+        else:
+            print("ℹ️  Cloude Code app not running (launch it from Applications)")
+    except Exception as e:
+        print(f"⚠️  Could not restart app: {e}")
+        print("   Please restart Cloude Code manually from Applications")
 
     print()
     print("This window will close in 3 seconds...")

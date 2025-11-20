@@ -25,9 +25,14 @@ class ServerManager {
 
     // Auto-detect Python installation
     this.pythonPath = this.findPython();
-    this.apiUrl = 'http://localhost:8000';
+    this.apiUrl = 'http://127.0.0.1:8000';
     this.port = 8000;
-    this.logFile = '/tmp/cloudecode-server.log';
+    // Use userData/logs for persistent logging
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    this.logFile = path.join(logDir, 'server.log');
     this.state = 'stopped'; // 'stopped', 'starting', 'running'
     this.startTime = null;
   }
@@ -64,6 +69,81 @@ class ServerManager {
     // Fallback to PATH
     console.log('Using python3 from PATH');
     return 'python3';
+  }
+
+  /**
+   * Ensure cloudflared is installed
+   */
+  async ensureCloudflared() {
+    const binDir = path.join(this.baseDir, 'bin');
+    const cloudflaredPath = path.join(binDir, 'cloudflared');
+
+    // Check if already exists
+    if (fs.existsSync(cloudflaredPath)) {
+      console.log('cloudflared found at:', cloudflaredPath);
+      return cloudflaredPath;
+    }
+
+    // Check if in global PATH
+    try {
+      const { stdout } = await new Promise((resolve) => exec('which cloudflared', (err, stdout) => resolve({ stdout })));
+      if (stdout && stdout.trim()) {
+        console.log('cloudflared found in PATH:', stdout.trim());
+        return 'cloudflared';
+      }
+    } catch (e) {
+      // Ignore
+    }
+
+    console.log('cloudflared not found, downloading...');
+
+    if (!fs.existsSync(binDir)) {
+      fs.mkdirSync(binDir, { recursive: true });
+    }
+
+    const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+    const url = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${arch}.tgz`;
+
+    console.log(`Downloading from ${url}...`);
+
+    try {
+      const response = await axios({
+        url,
+        method: 'GET',
+        responseType: 'stream'
+      });
+
+      const tgzPath = path.join(binDir, 'cloudflared.tgz');
+      const writer = fs.createWriteStream(tgzPath);
+
+      await new Promise((resolve, reject) => {
+        response.data.pipe(writer);
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+
+      console.log('Download complete, extracting...');
+
+      await new Promise((resolve, reject) => {
+        exec(`tar -xzf "${tgzPath}" -C "${binDir}"`, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+
+      // Cleanup tgz
+      fs.unlinkSync(tgzPath);
+
+      // Ensure executable
+      fs.chmodSync(cloudflaredPath, '755');
+
+      console.log('cloudflared installed successfully');
+      return cloudflaredPath;
+
+    } catch (err) {
+      console.error('Failed to download cloudflared:', err);
+      throw new Error('Failed to download cloudflared: ' + err.message);
+    }
   }
 
   /**
@@ -219,10 +299,11 @@ class ServerManager {
       return;
     }
 
-    // First-run setup: Ensure server files and venv exist
+    // First-run setup: Ensure server files, venv, and cloudflared exist
     try {
       await this.ensureServerFiles();
       await this.ensureVenv();
+      await this.ensureCloudflared();
     } catch (error) {
       console.error('Setup failed:', error);
       this.state = 'stopped';
@@ -234,6 +315,17 @@ class ServerManager {
     if (!validation.isValid) {
       const errorMsg = `Configuration validation failed:\n${validation.errors.join('\n')}`;
       console.error(errorMsg);
+
+      // Write to startup error log even if server doesn't start
+      const errorLogPath = path.join(app.getPath('userData'), 'logs', 'startup-errors.log');
+      try {
+        const timestamp = new Date().toISOString();
+        fs.appendFileSync(errorLogPath, `\n[${timestamp}] ${errorMsg}\n`);
+        console.log(`Error logged to: ${errorLogPath}`);
+      } catch (logErr) {
+        console.warn('Could not write to error log:', logErr.message);
+      }
+
       this.state = 'stopped';
       throw new Error(errorMsg);
     }
@@ -247,6 +339,22 @@ class ServerManager {
         console.log('Server already running on port, adopting it');
         this.state = 'running';
         this.startTime = Date.now(); // Approximate
+
+        // Try to capture the PID of the existing process
+        try {
+          exec(`lsof -ti:${this.port}`, (err, stdout) => {
+            if (!err && stdout) {
+              const pid = parseInt(stdout.trim());
+              if (!isNaN(pid)) {
+                console.log(`Adopted existing server process PID: ${pid}`);
+                this.processPid = pid;
+              }
+            }
+          });
+        } catch (e) {
+          console.warn('Could not determine PID of running server:', e.message);
+        }
+
         return;
       } else {
         console.error(`Port ${this.port} in use by another process!`);
@@ -265,10 +373,15 @@ class ServerManager {
     this.logStream = fs.createWriteStream(this.logFile, { flags: 'a' });
     this.logStream.write(`\n\n=== Server starting at ${new Date().toISOString()} ===\n`);
 
+    // Add bin directory to PATH so python process can find cloudflared
+    const binDir = path.join(this.baseDir, 'bin');
+    const env = { ...process.env };
+    env.PATH = `${binDir}:${env.PATH}`;
+
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env }
+      env: env
     });
 
     this.processPid = this.process.pid;
@@ -287,7 +400,7 @@ class ServerManager {
 
       // Check if server is ready
       if (output.includes('Application startup complete') ||
-          output.includes('application_ready')) {
+        output.includes('application_ready')) {
         this.state = 'running';
       }
     });
@@ -489,7 +602,30 @@ class ServerManager {
    * @returns {boolean}
    */
   isProcessRunning() {
-    return this.process !== null;
+    // If we spawned the process ourselves, check the process object
+    if (this.process && !this.process.killed) {
+      return true;
+    }
+
+    // If we have a PID (either spawned or adopted), verify it's still alive
+    if (this.processPid) {
+      try {
+        // Sending signal 0 doesn't actually send a signal, just checks if process exists
+        process.kill(this.processPid, 0);
+        return true;
+      } catch (err) {
+        if (err.code === 'ESRCH') {
+          // No such process - it died
+          this.processPid = null;
+          return false;
+        }
+        // Other error (e.g., permission denied) - assume it's not running
+        console.warn('Error checking process PID:', err.message);
+        return false;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -601,6 +737,18 @@ class ServerManager {
         if (!match || !match[1] || match[1].trim() === '' || match[1].trim() === '""') {
           status.isConfigured = false;
           status.missingEnvVars.push(varName);
+        }
+
+        // Check for placeholder values in CLOUDFLARE_DOMAIN
+        if (varName === 'CLOUDFLARE_DOMAIN' && match && match[1]) {
+          const domain = match[1].trim();
+          if (domain.includes('example.com') ||
+            domain.includes('yourdomain.com') ||
+            domain.includes('your-subdomain') ||
+            domain.includes('mydomain.nyc')) {
+            status.isConfigured = false;
+            status.details.push('CLOUDFLARE_DOMAIN contains placeholder value. Run setup to configure.');
+          }
         }
       });
 
