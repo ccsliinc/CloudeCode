@@ -32,13 +32,16 @@ function showAboutDialog() {
   });
 
   // Get the icon path and convert to data URL for reliable display
+  // In packaged app, assets are in app.asar, not Resources
   const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets', 'AppIcon-1024.png')
+    ? path.join(app.getAppPath(), 'assets', 'AppIcon-1024.png')
     : path.join(__dirname, 'assets', 'AppIcon-1024.png');
 
-  // Load icon and convert to data URL
-  const iconImage = nativeImage.createFromPath(iconPath);
-  const iconDataUrl = iconImage.toDataURL();
+  // Read image file and convert to base64 data URL
+  const fs = require('fs');
+  const iconBuffer = fs.readFileSync(iconPath);
+  const iconBase64 = iconBuffer.toString('base64');
+  const iconDataUrl = `data:image/png;base64,${iconBase64}`;
 
   const currentYear = new Date().getFullYear();
   const appVersion = 'v0.1';
