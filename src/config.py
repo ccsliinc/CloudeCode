@@ -72,6 +72,27 @@ class TunnelConfig(BaseModel):
     )
 
 
+class NotificationsConfig(BaseModel):
+    """Push notification configuration (Item 6).
+
+    - ``enabled``: master flag. False = the router is wired but every
+      ``emit()`` is a no-op. No background traffic, no warnings.
+    - ``ntfy_base_url``: the ntfy server. Default is the public
+      sh.ntfy.sh; self-hosted users override.
+    - ``ntfy_topic``: the secret topic name. EMPTY by default —
+      ``setup_auth.py`` generates a 32-hex value on first run. Treat
+      as a credential: anyone with the topic name can read your
+      notifications.
+    - ``public_base_url``: e.g. ``"http://mac.lan:8000"``. When set,
+      notifications include a Click deep link back to the session.
+      When unset, notifications fire without a Click header.
+    """
+    enabled: bool = False
+    ntfy_base_url: str = Field(default="https://ntfy.sh")
+    ntfy_topic: str = Field(default="")
+    public_base_url: str = Field(default="")
+
+
 class AuthRateLimits(BaseModel):
     """Rate-limit knobs for authentication endpoints.
 
@@ -110,6 +131,7 @@ class AuthConfig(BaseModel):
     session: SessionConfig = Field(default_factory=SessionConfig)
     tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
 
 class Settings(BaseSettings):
@@ -287,6 +309,19 @@ class Settings(BaseSettings):
                 )
                 rate_limits_config = AuthRateLimits()
 
+            # Build NotificationsConfig from optional "notifications" block;
+            # same malformed-block tolerance as session/tunnel.
+            notifications_data = data.get("notifications", {}) or {}
+            try:
+                notifications_config = NotificationsConfig(**notifications_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_notifications_config_block",
+                    raw=notifications_data,
+                )
+                notifications_config = NotificationsConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -312,6 +347,7 @@ class Settings(BaseSettings):
                 session=session_config,
                 tunnel=tunnel_config,
                 auth_rate_limits=rate_limits_config,
+                notifications=notifications_config,
             )
 
             # Validate secrets are set

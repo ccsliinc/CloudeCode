@@ -2,9 +2,17 @@
 """Setup script for Cloude Code authentication.
 
 Generates TOTP secret and JWT secret, creates config file.
+
+Subcommands:
+- (no args): full interactive setup.
+- ``--rotate-topic``: regenerate the ntfy push topic, write it to
+  config.json, print the new ntfy URL, and exit. Used after a
+  suspected topic leak or as a periodic hygiene rotation.
 """
+import argparse
 import json
 import secrets
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -381,8 +389,204 @@ def setup_env_file(env_path):
     return cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir
 
 
+def _generate_ntfy_topic() -> str:
+    """Generate a fresh 32-hex-char ntfy topic.
+
+    Treat as a credential — anyone with this string can read your
+    notifications. We use ``secrets.token_hex(16)`` for 128 bits of
+    entropy in a URL-safe form (ntfy topics are ASCII-only paths).
+    """
+    return f"cloude-{secrets.token_hex(16)}"
+
+
+def _default_public_base_url() -> str:
+    """Best-effort guess at this machine's mDNS-resolvable URL."""
+    try:
+        hostname = socket.gethostname()
+        # Strip any existing .local suffix to avoid double-suffixing.
+        if hostname.endswith(".local"):
+            hostname = hostname[: -len(".local")]
+        return f"http://{hostname}.local:8000"
+    except Exception:
+        return "http://localhost:8000"
+
+
+def _validate_url_reachable(url: str, timeout: float = 3.0) -> bool:
+    """HEAD probe a URL. Returns True on any 2xx-4xx (server is alive).
+
+    Connection refused / timeout / DNS failure → False. We warn-and-
+    continue rather than block setup; the user may be configuring on
+    a different network than they'll deploy on.
+    """
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            resp = client.head(url)
+            # Any HTTP response means SOMETHING is listening.
+            return 200 <= resp.status_code < 500
+    except Exception:
+        return False
+
+
+def setup_notifications_block(config_path: Path) -> None:
+    """Interactive ntfy push setup. Updates config.json in place.
+
+    Asks the user if they want notifications. If yes:
+    - Generates a fresh 32-hex topic.
+    - Prompts for public_base_url with a sensible mDNS default.
+    - HEAD-probes the URL; warns if unreachable but does not block.
+    - Writes the notifications block to config.json.
+    """
+    print()
+    print("=" * 70)
+    print("Push Notifications (ntfy.sh)")
+    print("=" * 70)
+    print()
+    print("Cloude Code can push permission prompts, task-complete,")
+    print("and other signals to your phone via ntfy.sh.")
+    print()
+    print("Privacy note: titles/bodies contain NO project name. The")
+    print("only identifying data is the deep-link URL (LAN-only).")
+    print()
+    answer = input("Enable push notifications? [y/N]: ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("Skipping notifications setup.")
+        return
+
+    topic = _generate_ntfy_topic()
+    base_url = "https://ntfy.sh"
+
+    print()
+    print("Subscribe in the ntfy app to this exact URL:")
+    print()
+    print(f"   {base_url}/{topic}")
+    print()
+    print("(iOS: ntfy app → + → Subscribe to topic)")
+    print()
+    input("Press Enter once you're subscribed...")
+
+    print()
+    default_pub = _default_public_base_url()
+    public_base_url = prompt_with_default(
+        "Public/LAN base URL for deep links",
+        default_pub,
+    )
+
+    if public_base_url:
+        print(f"Probing {public_base_url}/health ...")
+        ok = _validate_url_reachable(f"{public_base_url}/health")
+        if ok:
+            print(f"OK — server reachable at {public_base_url}")
+        else:
+            print(f"WARN: {public_base_url} not reachable from here.")
+            print("      Notifications will still work; deep-link clicks")
+            print("      will only resolve from inside your LAN.")
+
+    # Read existing config (created earlier in main()).
+    if not config_path.exists():
+        print(f"WARN: {config_path} not found — skipping notifications write.")
+        return
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"WARN: could not read {config_path}: {e}")
+        return
+
+    data["notifications"] = {
+        "enabled": True,
+        "ntfy_base_url": base_url,
+        "ntfy_topic": topic,
+        "public_base_url": public_base_url,
+    }
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print()
+        print(f"Notifications configured in {config_path}")
+        print()
+    except Exception as e:
+        print(f"WARN: could not write {config_path}: {e}")
+
+
+def rotate_topic_command() -> int:
+    """Regenerate the ntfy topic and write to config.json.
+
+    Reads the existing config to preserve ``ntfy_base_url`` and
+    ``public_base_url``. If the notifications block is missing, we
+    create one with ``enabled=false`` and ``public_base_url=""`` so
+    the user can wire up the rest later.
+
+    Returns process exit code.
+    """
+    project_root = Path(__file__).parent
+    config_path = project_root / "config.json"
+
+    if not config_path.exists():
+        print(f"ERROR: {config_path} not found. Run setup_auth.py first.")
+        return 1
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"ERROR: could not read {config_path}: {e}")
+        return 1
+
+    existing = data.get("notifications") or {}
+    base_url = existing.get("ntfy_base_url") or "https://ntfy.sh"
+    public_base_url = existing.get("public_base_url") or ""
+    enabled = existing.get("enabled", True)
+
+    new_topic = _generate_ntfy_topic()
+    data["notifications"] = {
+        "enabled": enabled,
+        "ntfy_base_url": base_url,
+        "ntfy_topic": new_topic,
+        "public_base_url": public_base_url,
+    }
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"ERROR: could not write {config_path}: {e}")
+        return 1
+
+    print()
+    print("=" * 70)
+    print("ntfy topic rotated")
+    print("=" * 70)
+    print()
+    print("Re-subscribe in the ntfy app to this exact URL:")
+    print()
+    print(f"   {base_url}/{new_topic}")
+    print()
+    print("Old topic is now invalid — restart the Cloude Code server")
+    print("to pick up the new topic.")
+    print()
+    return 0
+
+
 def main():
     """Main setup function."""
+    # Handle --rotate-topic before requiring full venv / cloudflared.
+    parser = argparse.ArgumentParser(
+        description="Cloude Code authentication / notifications setup",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--rotate-topic",
+        action="store_true",
+        help="Regenerate ntfy push topic, write to config.json, exit.",
+    )
+    args = parser.parse_args()
+
+    if args.rotate_topic:
+        sys.exit(rotate_topic_command())
+
     # Ensure venv has required dependencies
     check_and_setup_venv()
 
@@ -392,7 +596,6 @@ def main():
     print()
 
     # Show Python version
-    import sys
     python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     print(f"🐍 Python {python_version}")
     print()
@@ -515,6 +718,10 @@ def main():
             json.dump(config, f, indent=2)
 
         print(f"✅ Configuration file created at: {config_path}\n")
+
+    # Item 6: optional ntfy push notification setup. Runs AFTER the
+    # config file exists (we mutate it in place).
+    setup_notifications_block(config_path)
 
     print("=" * 70)
     print("TOTP Setup")

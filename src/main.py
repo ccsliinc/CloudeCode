@@ -19,6 +19,8 @@ from src.core.log_monitor import LogMonitor
 from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.core.refresh_store import RefreshStore
+from src.core.notifications import NotificationRouter
+from src.core.notifications import ntfy as ntfy_backend
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
@@ -97,6 +99,7 @@ tunnel_manager: TunnelManager = None
 auto_tunnel: AutoTunnelOrchestrator = None
 refresh_store: RefreshStore = None
 _refresh_purge_task: asyncio.Task = None
+notification_router: NotificationRouter = None
 
 
 # Six-hour cadence for the purge loop. Keep a module-level constant so
@@ -124,7 +127,7 @@ async def _refresh_purge_loop(store: RefreshStore):
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global session_manager, log_monitor, tunnel_manager, auto_tunnel
-    global refresh_store, _refresh_purge_task
+    global refresh_store, _refresh_purge_task, notification_router
 
     logger.info("application_starting", version="1.0.0")
 
@@ -134,6 +137,18 @@ async def lifespan(app: FastAPI):
     # No-op for PTY backend (PTYs die with the parent).
     await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
+
+    # Item 6: notification router. Wired AFTER log_monitor (which is the
+    # signal source for IdleWatcher in Item 7) but BEFORE auto_tunnel
+    # (which may want to fire a TUNNEL_CREATED event on bring-up).
+    auth_cfg = settings.load_auth_config()
+    notif_cfg = auth_cfg.notifications
+    await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
+    notification_router = NotificationRouter(
+        notif_cfg, asyncio.get_running_loop()
+    )
+    await notification_router.start()
+
     tunnel_manager = TunnelManager.from_settings(
         settings, session_manager=session_manager
     )
@@ -167,6 +182,7 @@ async def lifespan(app: FastAPI):
     app.state.tunnel_manager = tunnel_manager
     app.state.auto_tunnel = auto_tunnel
     app.state.refresh_store = refresh_store
+    app.state.notification_router = notification_router
 
     logger.info("application_ready")
 
@@ -201,6 +217,13 @@ async def lifespan(app: FastAPI):
     await log_monitor.stop_monitoring()
     await auto_tunnel.cleanup()
     await tunnel_manager.shutdown()
+
+    # Item 6: tear down notification pipeline AFTER everything else has
+    # stopped emitting. Router cancels its worker; ntfy backend closes
+    # the httpx client.
+    if notification_router is not None:
+        await notification_router.stop()
+    await ntfy_backend.shutdown()
 
     logger.info("application_shutdown_complete")
 
