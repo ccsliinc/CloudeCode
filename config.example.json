@@ -11,6 +11,11 @@
     "enable_cloudflare": false,
     "lan_hostname": "auto"
   },
+  "auth_rate_limits": {
+    "totp_verify_per_minute": 5,
+    "totp_verify_per_hour": 20,
+    "trust_proxy_headers": false
+  },
   "common_slash_commands": [
     "/agents",
     "/clear",

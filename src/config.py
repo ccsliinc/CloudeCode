@@ -72,6 +72,24 @@ class TunnelConfig(BaseModel):
     )
 
 
+class AuthRateLimits(BaseModel):
+    """Rate-limit knobs for authentication endpoints.
+
+    - ``totp_verify_per_minute`` / ``totp_verify_per_hour``: dual-window
+      limits applied to the TOTP verify endpoint. Both must be satisfied;
+      the per-minute bucket stops rapid brute-force bursts, the per-hour
+      bucket caps sustained hammering.
+    - ``trust_proxy_headers``: when True, the rate-limit key comes from the
+      first value of ``X-Forwarded-For``; otherwise the direct peer
+      ``request.client.host`` is used. MUST stay False when the app is
+      reachable directly (LAN bind). Flip to True only when terminating
+      TLS behind a trusted reverse proxy (Cloudflare tunnel, nginx, ALB).
+    """
+    totp_verify_per_minute: int = Field(default=5, ge=1)
+    totp_verify_per_hour: int = Field(default=20, ge=1)
+    trust_proxy_headers: bool = False
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
@@ -82,6 +100,7 @@ class AuthConfig(BaseModel):
     common_slash_commands: List[str] = []
     session: SessionConfig = Field(default_factory=SessionConfig)
     tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
+    auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
 
 
 class Settings(BaseSettings):
@@ -246,6 +265,19 @@ class Settings(BaseSettings):
                 )
                 tunnel_config = TunnelConfig()
 
+            # Build AuthRateLimits from optional "auth_rate_limits" block;
+            # same malformed-block tolerance as session/tunnel.
+            rate_limits_data = data.get("auth_rate_limits", {}) or {}
+            try:
+                rate_limits_config = AuthRateLimits(**rate_limits_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_auth_rate_limits_block",
+                    raw=rate_limits_data,
+                )
+                rate_limits_config = AuthRateLimits()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -257,6 +289,7 @@ class Settings(BaseSettings):
                 common_slash_commands=data.get("common_slash_commands", []),
                 session=session_config,
                 tunnel=tunnel_config,
+                auth_rate_limits=rate_limits_config,
             )
 
             # Validate secrets are set

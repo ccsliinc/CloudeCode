@@ -1,15 +1,21 @@
 """Authentication endpoints and utilities for TOTP-based auth."""
 
+import asyncio
+import base64
+import io
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
 import jwt
 import pyotp
 import qrcode
-import io
-import base64
-from datetime import datetime, timedelta
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Request, Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import structlog
+from cachetools import TTLCache
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
 from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, SuccessResponse
@@ -18,6 +24,93 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+
+
+def _rate_limit_key(request: Request) -> str:
+    """
+    Resolve the client identity used for rate-limit bucketing.
+
+    When ``auth_rate_limits.trust_proxy_headers`` is True we honor the first
+    value of ``X-Forwarded-For`` (standard reverse-proxy convention — the
+    left-most entry is the original client). When False we fall back to the
+    direct peer address via ``get_remote_address``, which defends against
+    spoofed XFF headers when the app is reachable directly.
+
+    A misconfigured auth layer (can't load settings) must not bypass the
+    limiter — in that case we fall back to the direct peer address rather
+    than raising, which would otherwise 500 every auth request.
+    """
+    try:
+        trust_proxy = settings.load_auth_config().auth_rate_limits.trust_proxy_headers
+    except Exception:
+        trust_proxy = False
+
+    if trust_proxy:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # Take the leftmost (original client) IP. Strip surrounding
+            # whitespace — some proxies emit ", " separators.
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+    return get_remote_address(request)
+
+
+# Module-level Limiter. Wired into the FastAPI app in src/main.py via
+# `app.state.limiter = limiter` + SlowAPIMiddleware + RateLimitExceeded
+# handler. Default storage is memory:// which is fine for the single-process
+# MVP; swap to Redis if we ever run multiple workers.
+#
+# headers_enabled=True makes slowapi inject X-RateLimit-Limit/Remaining/Reset
+# AND the canonical Retry-After header on 429 responses. Retry-After is the
+# signal clients (and compliant bots) use to back off cleanly — without it
+# the 429 is just a wall with no hint when to try again.
+limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
+
+
+def _totp_rate_limit() -> str:
+    """
+    Build the slowapi limit string from config so operators can tune the
+    window without editing decorators. Evaluated on every request — the
+    config is cached inside ``Settings``, so this is a dict lookup.
+
+    slowapi accepts semicolon-separated limits where ALL must hold. A
+    sensible default pair is "5/minute;20/hour":
+      - the minute bucket kills brute-force bursts,
+      - the hour bucket caps sustained hammering across 12 windows.
+    """
+    try:
+        cfg = settings.load_auth_config().auth_rate_limits
+        return f"{cfg.totp_verify_per_minute}/minute;{cfg.totp_verify_per_hour}/hour"
+    except Exception:
+        # Fail safe to tight defaults if config is temporarily unreadable.
+        return "5/minute;20/hour"
+
+
+# --- TOTP replay / reuse dedup cache -----------------------------------------
+#
+# RFC 6238 TOTP codes are valid for their 30-second step, and we verify with
+# valid_window=1 (±1 step). That means a single captured code is accepted for
+# up to 90 seconds from the attacker's perspective. slowapi blocks brute force
+# of NEW codes, but does nothing against REPLAY of a single captured valid
+# code under the attacker's count budget.
+#
+# We plug that hole with an in-process TTL cache keyed on the submitted code.
+# TTL of 90s covers the full ±1-window pyotp accepts plus a small buffer; once
+# an entry expires, that code is outside pyotp's window anyway and cannot
+# reverify. maxsize=1000 absorbs very high submission rates without unbounded
+# growth (slowapi caps real rate anyway).
+#
+# cachetools.TTLCache is NOT thread-safe for mixed reads/writes, and the
+# verify handler is async. We serialize check-then-insert under an asyncio
+# Lock so two concurrent submissions of the same freshly-valid code can't
+# both succeed (TOCTOU on replay dedup).
+#
+# Threat model note: single-user system, so keying only on the code is safe.
+# In multi-tenant systems this would need to be (user_id, code).
+_TOTP_REPLAY_TTL = 90  # seconds; ±1 window of 30s + 30s buffer
+_totp_seen_cache: TTLCache = TTLCache(maxsize=1000, ttl=_TOTP_REPLAY_TTL)
+_totp_seen_lock = asyncio.Lock()
 
 
 def create_jwt_token(expiry_minutes: Optional[int] = None) -> tuple[str, int]:
@@ -106,18 +199,30 @@ async def require_auth(
 
 
 @router.post("/auth/verify", response_model=AuthTokenResponse)
-async def verify_totp(body: VerifyTOTPRequest):
+@limiter.limit(_totp_rate_limit)
+async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequest):
     """
     Verify TOTP code and return JWT token.
 
+    Defense layers, outermost first:
+      1. slowapi rate limit (5/min;20/hour by default) — caps brute-force
+         attempts per client IP. Returns 429 with Retry-After.
+      2. Replay dedup (TTLCache keyed on code, 90s TTL) — a single captured
+         valid code cannot be replayed within pyotp's ±1-step window.
+         Returns 401 with ``reason: code_reused``.
+      3. ``pyotp.TOTP.verify`` with valid_window=1 — the actual OTP check.
+
     Args:
-        body: Request with TOTP code
+        request: Required by slowapi to extract the rate-limit key.
+        response: Required by slowapi to inject X-RateLimit-* and Retry-After
+            headers when ``headers_enabled=True`` on the Limiter.
+        body: Request with TOTP code.
 
     Returns:
-        JWT token and expiry time
+        JWT token and expiry time.
 
     Raises:
-        HTTPException: If verification fails
+        HTTPException: If verification fails (401) or config missing (500).
     """
     try:
         auth_config = settings.load_auth_config()
@@ -125,13 +230,33 @@ async def verify_totp(body: VerifyTOTPRequest):
         # Create TOTP instance
         totp = pyotp.TOTP(auth_config.totp_secret)
 
-        # Verify code (allows 1 period before and after for clock drift)
-        if not totp.verify(body.code, valid_window=1):
-            logger.warning("totp_verification_failed", code=body.code[:2] + "****")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication code"
-            )
+        # Serialize "have I seen this code? → verify → remember this code"
+        # so concurrent submissions can't both slip through on a replay.
+        async with _totp_seen_lock:
+            if body.code in _totp_seen_cache:
+                # The code was already accepted (or at least submitted through
+                # this branch) within the TTL window. Reject without re-running
+                # the TOTP check. Same 401 shape as invalid code to keep the
+                # enumeration signal minimal, but with a distinct reason for
+                # client-side UX ("that code was already used — wait for the
+                # next 30-second tick").
+                logger.warning("totp_code_reused", code=body.code[:2] + "****")
+                raise HTTPException(
+                    status_code=401,
+                    detail={"success": False, "reason": "code_reused"},
+                )
+
+            # Verify code (allows 1 period before and after for clock drift)
+            if not totp.verify(body.code, valid_window=1):
+                logger.warning("totp_verification_failed", code=body.code[:2] + "****")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid authentication code"
+                )
+
+            # Valid — mark the code as consumed. Even if downstream JWT
+            # creation blows up, we still want to ban replay of this code.
+            _totp_seen_cache[body.code] = time.monotonic()
 
         # Generate JWT token
         token, expiry_seconds = create_jwt_token()

@@ -5,10 +5,13 @@ import asyncio
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings
 from src.core.session_manager import SessionManager
@@ -17,7 +20,7 @@ from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
-from src.api.auth import router as auth_router
+from src.api.auth import router as auth_router, limiter as auth_limiter
 
 # Configure structlog
 structlog.configure(
@@ -169,6 +172,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Wire slowapi rate limiter. The Limiter instance is defined in
+# src/api/auth.py (where the @limiter.limit decorators are applied).
+# Here we just bolt it onto the app:
+#   - app.state.limiter is where SlowAPIMiddleware looks it up.
+#   - _rate_limit_exceeded_handler emits a 429 with a Retry-After header
+#     derived from the exception's reset time. Do NOT override or duplicate
+#     its logging — slowapi already warns on 429 internally.
+app.state.limiter = auth_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
