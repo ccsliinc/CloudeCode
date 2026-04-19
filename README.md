@@ -1,62 +1,293 @@
-# ☁️ Cloude Code
+# Cloude Code
 
-Remote control and monitoring for Claude Code CLI - code from anywhere.
-
-Control Claude Code sessions from any device on your network. Built for mobile-first development workflows with auto-tunneling, persistent sessions, and real-time terminal streaming.
+Remote control platform for Claude Code CLI sessions — access your terminal from anywhere via secure Cloudflare tunnels.
 
 [![Cloude Code Demo](https://img.youtube.com/vi/tGcRtH_RLiE/0.jpg)](https://www.youtube.com/shorts/tGcRtH_RLiE)
 
-> **Quick Demo:** Watch Cloude Code in action - mobile control, auto-tunneling, and real-time terminal streaming.
+> **Quick Demo:** Watch Cloude Code in action — mobile control, auto-tunneling, and real-time terminal streaming.
 
-## What It Does
+---
 
-Runs Claude Code in a persistent pseudo-terminal on your Mac and exposes a web-based control interface. Access your coding session from your phone, tablet, or another computer. When Claude spins up a dev server, it automatically creates a public Cloudflare tunnel and broadcasts the URL to all connected clients.
+## Overview
 
-Perfect for developers who want to code on the couch, monitor long-running tasks from their phone, or quickly share dev environments without manual tunnel setup.
+Cloude Code is a hybrid desktop application that runs the Claude Code CLI in a persistent pseudo-terminal (PTY) on your Mac and exposes a web-based control interface over the internet. A macOS menu bar app (Electron) manages a Python FastAPI server, which spawns PTY sessions and streams terminal I/O to browser clients via WebSocket. When Claude spins up a dev server, Cloude Code automatically creates a Cloudflare tunnel and broadcasts the public URL to all connected clients.
+
+The platform was built for mobile-first developer workflows: start Claude Code on your Mac, continue the session from your phone on the couch, a tablet in another room, or a laptop on the road. Authentication is handled via TOTP (Google Authenticator / Authy) plus short-lived JWTs. Tunneling supports both zero-config "quick" tunnels (random `*.trycloudflare.com` URLs) and named tunnels with persistent custom domains.
+
+Under the hood, Cloude Code combines a Node/Electron control plane (tray icon, server lifecycle, auto-launch) with a Python data plane (PTY management, tunnel orchestration, auth). The web frontend is vanilla JS with xterm.js for terminal emulation — deliberately dependency-light so it loads fast on mobile networks.
 
 <img width="388" alt="Claude Code Terminal" src="docs/images/terminal.jpg">
 
-> **Live Terminal:** Full xterm.js terminal with WebSocket streaming, mobile D-pad controls, and slash command shortcuts.
+---
 
-## Key Features
+## Features
 
-- **PTY-Based Persistent Sessions** - Claude Code runs in an isolated pseudo-terminal that survives server restarts
-- **Real-Time WebSocket Terminal** - Full bidirectional terminal I/O with xterm.js rendering and Unicode support
-- **Intelligent Auto-Tunneling** - Pattern detection automatically creates Cloudflare tunnels when dev servers start
-- **Hybrid Tunnel Strategy** - Choose between quick tunnels (instant, random URLs) or named tunnels (persistent custom domains)
-- **Web Launchpad Interface** - Terminal-aesthetic UI for project management and session control
-- **TOTP Authentication** - Secure access with Google Authenticator/Authy 2FA and JWT tokens
-- **Project Management** - Quick-launch predefined projects with template file copying
-- **Mobile-Optimized** - D-pad controls, special keyboard shortcuts (¥=Enter, €=Tab), and responsive design
-- **Pattern Detection Engine** - Monitors terminal output for `localhost:PORT` and "Server ready" signals
-- **Session Recovery** - Automatically validates and reconnects to existing sessions on startup
+- **Remote terminal control** — Full xterm.js emulation with ANSI/Unicode support, bidirectional streaming over WebSocket
+- **Persistent PTY sessions** — Claude Code runs in an isolated pseudo-terminal that survives server restarts; metadata in `LOG_DIRECTORY/session_metadata.json`
+- **Automatic dev-server tunneling** — Pattern detection watches terminal output for `localhost:PORT` and triggers Cloudflare tunnel creation
+- **Hybrid tunnel strategy** — Quick tunnels (instant, random URLs) or named tunnels (persistent custom domains, auto-created CNAMEs)
+- **TOTP + JWT authentication** — 2FA via any RFC 6238 authenticator app, `±1` window drift tolerance, configurable JWT lifetime
+- **Project launcher** — MRU-sorted project list with optional template file copying for new projects
+- **Slash-command palette** — One-click insertion of all Claude Code slash commands (`/agents`, `/clear`, `/mcp`, etc.)
+- **macOS menu bar integration** — Status indicator, server start/stop, launch-at-login via LaunchAgent
+- **Mobile-optimized UI** — D-pad overlay for arrow/Ctrl keys, special key bindings (`¥`=Enter, `€`=Tab), responsive layout
+- **Smart auto-scroll** — Follows output but disables when you scroll up to read history
+- **WebSocket resilience** — Auto-reconnect with exponential backoff, 30s keepalive, session conflict resolution
 
-## Features in Detail
+---
 
-### Slash Commands Modal
+## Architecture
 
-Quick-access modal for all Claude Code slash commands with one-click insertion.
+### Data flow
 
-<img width="388" alt="Slash Commands Modal" src="docs/images/slash-commands.jpg">
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                        REMOTE / MOBILE CLIENT                        │
+ │   Browser + xterm.js  ·  TOTP login  ·  Launchpad  ·  D-pad          │
+ └───────────────────────────────┬─────────────────────────────────────┘
+                                 │  HTTPS + WSS (Bearer JWT)
+                                 ▼
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                     CLOUDFLARE EDGE (Tunnel)                         │
+ │    Quick Tunnel:  *.trycloudflare.com                                │
+ │    Named Tunnel:  *.yourdomain.com                                   │
+ └───────────────────────────────┬─────────────────────────────────────┘
+                                 │  cloudflared --> localhost:8000
+                                 ▼
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │              MACOS HOST  (Electron menu bar app)                     │
+ │                                                                      │
+ │   ┌─────────────────────┐       ┌──────────────────────────────┐    │
+ │   │  Electron main.js   │ spawn │   Python FastAPI (uvicorn)   │    │
+ │   │  · Tray icon        │◄─────►│   · /api/v1/*  REST          │    │
+ │   │  · server-manager   │ health│   · /ws/terminal  WebSocket  │    │
+ │   │  · launchagent      │ poll  │   · /health                  │    │
+ │   └─────────────────────┘ 5s    └──────────┬───────────────────┘    │
+ │                                             │                        │
+ │                                             ▼                        │
+ │   ┌─────────────────────────────────────────────────────────────┐   │
+ │   │                    SESSION + TUNNEL CORE                     │   │
+ │   │                                                              │   │
+ │   │   SessionManager ──► PTYSession ──► bash + claude CLI        │   │
+ │   │        │                  │                                  │   │
+ │   │        │                  └──► LogMonitor (pattern detect)   │   │
+ │   │        │                              │                      │   │
+ │   │        │                              ▼                      │   │
+ │   │        └───► AutoTunnelOrchestrator ─► HybridTunnelManager   │   │
+ │   │                                              │               │   │
+ │   │                                              ▼               │   │
+ │   │                                     cloudflared subprocess   │   │
+ │   │                                     + Cloudflare API         │   │
+ │   └─────────────────────────────────────────────────────────────┘   │
+ └─────────────────────────────────────────────────────────────────────┘
+```
 
-**How to use:**
-- Click the floating slash (/) button in the bottom-right of the terminal
-- Select from common commands (top section) or browse all 49+ commands (bottom section)
-- Commands are inserted into terminal without executing - customize before pressing Enter
-- ESC key or click outside to close
+### Control plane vs. data plane
 
-**Command categories:**
-- **Workflow**: /clear, /compact, /rewind, /resume
-- **Configuration**: /config, /model, /permissions, /settings
-- **Account**: /login, /logout, /status
-- **Development**: /sandbox, /review, /cost, /usage, /help
-- **Project Setup**: /init, /add-dir, /agents
-- **Utilities**: /doctor, /mcp, /memory, /vim, /bug, /context, /hooks
+- **Control plane (Electron):** The menu bar app owns server lifecycle. It spawns the Python process via Node `child_process`, polls `GET /health` every 5s (2s during startup), and — critically — adopts an existing process on port 8000 if one is already running. This makes reboots and crashes graceful.
+- **Data plane (Python):** FastAPI handles all session, tunnel, auth, and WebSocket traffic. `SessionManager` creates `PTYSession` objects that wrap Python's `pty` module. `LogMonitor` tees the PTY output and scans for port-exposing patterns. When a match fires, `AutoTunnelOrchestrator` asks `HybridTunnelManager` to provision a tunnel, and the resulting URL is broadcast to the WebSocket client as a typed event.
 
-**Customization:**
-Edit `config.json` to customize "common commands" shown at the top:
+### Authentication flow
+
+```
+   Client                         Server
+     │                              │
+     │  GET /api/v1/auth/qr         │   (unauthenticated)
+     │─────────────────────────────►│
+     │  PNG QR (otpauth://...)      │
+     │◄─────────────────────────────│
+     │                              │
+     │  [user scans QR with app]    │
+     │                              │
+     │  POST /api/v1/auth/verify    │
+     │  { code: "123456" }          │
+     │─────────────────────────────►│
+     │                              │ pyotp.verify(±1 window)
+     │  { token, expires_in }       │ jwt.encode(exp=30m)
+     │◄─────────────────────────────│
+     │                              │
+     │  localStorage.set('claude_tunnel_token', token)
+     │                              │
+     │  GET /api/v1/sessions        │
+     │  Authorization: Bearer <jwt> │
+     │─────────────────────────────►│ jwt.decode + exp check
+     │  { session }                 │
+     │◄─────────────────────────────│
+     │                              │
+     │  WSS /ws/terminal?token=...  │
+     │═════════════════════════════►│
+     │  bidirectional PTY stream    │
+     │◄════════════════════════════►│
+```
+
+---
+
+## File Structure
+
+```
+cloudecode/
+├── macOS/                              # Electron menu bar app
+│   ├── main.js                         # Tray icon, app lifecycle
+│   ├── preload.js                      # Secure IPC bridge
+│   ├── server-manager.js               # Python subprocess lifecycle
+│   ├── launchagent-installer.js        # macOS auto-launch (LaunchAgent plist)
+│   ├── package.json                    # Electron + electron-builder config
+│   ├── assets/                         # iconTemplate.png, AppIcon-1024.png
+│   └── dist/                           # Built DMG packages (generated)
+│
+├── src/                                # Python FastAPI backend
+│   ├── main.py                         # FastAPI app, lifespan, mounts
+│   ├── config.py                       # Pydantic settings, env loading
+│   ├── models.py                       # Pydantic data models
+│   ├── core/
+│   │   ├── session_manager.py          # PTY session lifecycle
+│   │   ├── pty_session.py              # PTY spawn + I/O
+│   │   ├── log_monitor.py              # Watches PTY for localhost patterns
+│   │   ├── auto_tunnel.py              # Orchestrates auto-tunnel creation
+│   │   ├── hybrid_tunnel_manager.py    # Quick + named tunnel selector
+│   │   ├── tunnel_manager.py           # Base tunnel lifecycle
+│   │   ├── named_tunnel_manager.py     # Named tunnel implementation
+│   │   └── cloudflare_api.py           # Cloudflare REST API wrapper
+│   ├── api/
+│   │   ├── routes.py                   # REST: sessions/tunnels/projects
+│   │   ├── auth.py                     # TOTP + JWT endpoints
+│   │   ├── websocket.py                # PTY WebSocket streaming
+│   │   └── deps.py                     # DI utilities (auth, managers)
+│   └── utils/                          # PTY helpers, templates, patterns
+│
+├── client/                             # Web frontend (vanilla JS SPA)
+│   ├── index.html                      # Single-page app shell
+│   ├── js/
+│   │   ├── api.js                      # REST + WebSocket client
+│   │   ├── auth.js                     # TOTP login, JWT storage
+│   │   ├── terminal.js                 # xterm.js integration
+│   │   ├── launchpad.js                # Project selector UI
+│   │   ├── slash-commands.js           # Slash command palette
+│   │   └── dpad.js                     # Mobile D-pad controls
+│   └── css/styles.css                  # Dark theme, responsive
+│
+├── config.json                         # Projects + slash commands (user-editable)
+├── config.example.json                 # Template
+├── .env.example                        # Environment variable template
+├── requirements.txt                    # Python dependencies
+├── setup.sh                            # Full installer (venv + pip + cloudflared)
+├── setup_auth.py                       # Interactive TOTP/JWT + CF config wizard
+├── nuke.sh                             # Complete uninstall (files + tunnels + DNS)
+├── reset.sh                            # Light reset (preserves config)
+├── start.sh / stop.sh                  # Manual server control
+│
+├── IOS_APP_PLAN.md                     # Future native iOS app design
+├── THEPROBLEM.md                       # Known issues log
+└── SECURITY_GAPS.md                    # Security posture analysis
+```
+
+---
+
+## Prerequisites
+
+| Requirement     | Version     | Notes                                                           |
+| --------------- | ----------- | --------------------------------------------------------------- |
+| macOS           | 11+         | Electron app and menu bar integration target macOS              |
+| Python          | 3.8+        | 3.11+ recommended                                               |
+| Node.js         | 18+         | Only required to build the Electron app from source             |
+| Claude CLI      | Latest      | `claude` must be on `PATH` (or `CLAUDE_CLI_PATH` configured)    |
+| cloudflared     | Any recent  | Auto-downloaded by `setup.sh` if missing                        |
+| Cloudflare acct | Free tier   | Optional — required for named tunnels only                      |
+
+Quick dependency check:
+
+```bash
+python3 --version
+which claude
+which cloudflared || brew install cloudflared
+```
+
+---
+
+## Installation
+
+### End-user (DMG)
+
+1. Download the latest `Cloude Code.dmg` from the releases page (or build from source — see below).
+2. Open the DMG and drag **Cloude Code** to `/Applications`.
+3. Launch. The first run copies default config files into `~/Library/Application Support/cloude-code-menubar/`.
+4. Click the menu bar icon → **Setup** to run the interactive auth wizard (generates TOTP secret and JWT key, prompts for optional Cloudflare credentials).
+5. Scan the displayed QR code with Google Authenticator, Authy, or any RFC 6238 TOTP app.
+6. Open `http://localhost:8000` in your browser, or use the public tunnel URL shown in the menu.
+
+### Developer (clone + setup)
+
+```bash
+# 1. Clone
+git clone <repo-url> cloudecode
+cd cloudecode
+
+# 2. Run the installer — creates venv, installs deps, downloads cloudflared
+./setup.sh
+
+# 3. Run interactive auth setup — generates secrets, writes .env and config.json
+python3 setup_auth.py
+
+# 4. Start the Python server
+./start.sh
+
+# 5. (Optional) Run the Electron menu bar app in dev mode
+cd macOS
+npm install
+npm start
+```
+
+---
+
+## Configuration
+
+### Environment variables (`.env`)
+
+Copy `.env.example` → `.env` before editing. `setup_auth.py` will populate secrets and prompt for optional Cloudflare values.
+
+| Variable                 | Required           | Default          | Purpose                                                       |
+| ------------------------ | ------------------ | ---------------- | ------------------------------------------------------------- |
+| `HOST`                   | No                 | `0.0.0.0`        | Server bind address (use `127.0.0.1` for localhost-only)      |
+| `PORT`                   | No                 | `8000`           | Server port                                                   |
+| `DEFAULT_WORKING_DIR`    | **Yes**            | —                | Directory where new project sessions are created              |
+| `SESSION_TIMEOUT`        | No                 | `3600`           | Session inactivity timeout (seconds)                          |
+| `LOG_DIRECTORY`          | **Yes**            | —                | Log output + `session_metadata.json` location                 |
+| `LOG_BUFFER_SIZE`        | No                 | `1000`           | In-memory log line buffer per session                         |
+| `LOG_FILE_RETENTION`     | No                 | `7`              | Days to retain on-disk log files                              |
+| `CLAUDE_CLI_PATH`        | No                 | auto-detect      | Absolute path to `claude` binary                              |
+| `TUNNEL_PROVIDER`        | No                 | `cloudflare`     | Tunnel backend (only `cloudflare` implemented)                |
+| `AUTO_CREATE_TUNNELS`    | No                 | `true`           | Automatically tunnel detected dev servers                     |
+| `TUNNEL_TIMEOUT`         | No                 | `30`             | Tunnel-creation timeout (seconds)                             |
+| `USE_NAMED_TUNNELS`      | No                 | `true`           | Use persistent named tunnels (vs. quick tunnels)              |
+| `CLOUDFLARE_API_TOKEN`   | If tunnels used    | —                | Needs `Zone.DNS:Edit` + `Account.Tunnel:Edit` permissions     |
+| `CLOUDFLARE_ZONE_ID`     | If tunnels used    | —                | Numeric zone ID for your domain                               |
+| `CLOUDFLARE_DOMAIN`      | If named tunnels   | —                | Base domain (e.g. `cloude.example.com`)                       |
+| `CLOUDFLARE_TUNNEL_NAME` | No                 | `claude-tunnel`  | Name used for the named tunnel                                |
+| `CLOUDFLARE_TUNNEL_ID`   | Auto               | —                | Populated by setup after first run                            |
+| `TOTP_SECRET`            | **Yes**            | generated        | Generated by `setup_auth.py` — do not edit manually           |
+| `JWT_SECRET`             | **Yes**            | generated        | Generated by `setup_auth.py` — do not edit manually           |
+| `API_KEY`                | No                 | —                | Reserved; currently unused                                    |
+| `ALLOWED_ORIGINS`        | No                 | `["*"]`          | CORS allowlist as JSON array — see Security Considerations    |
+| `AUTH_CONFIG_FILE`       | No                 | `./config.json`  | Path to projects + slash-command config                       |
+
+### `config.json`
+
+User-editable configuration for projects, template copying, and slash commands.
+
+<details>
+<summary>Example config.json</summary>
+
 ```json
 {
+  "jwt_expiry_minutes": 30,
+  "template_path": "~/my-templates",
+  "projects": [
+    {
+      "name": "my-app",
+      "path": "~/projects/my-app",
+      "description": "Primary dev project"
+    }
+  ],
   "common_slash_commands": [
     "/agents", "/clear", "/compact", "/context",
     "/hooks", "/mcp", "/resume", "/rewind", "/usage"
@@ -64,656 +295,331 @@ Edit `config.json` to customize "common commands" shown at the top:
 }
 ```
 
-### Mobile Features
-
-#### D-Pad Controls
-
-Virtual D-pad overlay for mobile terminal navigation (auto-appears on touch devices).
-
-<img width="388" alt="D-Pad Controls" src="docs/images/dpad.jpg">
-
-**Button mappings:**
-- **Arrow Keys**: UP, DOWN, LEFT, RIGHT navigation
-- **Center Button**: ENTER/Return
-- **ESC**: Escape key
-- **TAB**: Tab key (🐛 icon)
-- **⇧TAB**: Shift+Tab for reverse navigation (✨ icon)
-- **⬇SCROLL**: Force scroll to bottom and re-enable auto-scroll
-
-**Usage:**
-- Tap floating D-pad button to open/close
-- Touch-optimized with visual feedback
-- Desktop-compatible for testing
-
-#### Special Key Bindings
-
-Mobile keyboards often lack terminal control keys. Use these shortcuts:
-
-| Symbol | Function | Why |
-|--------|----------|-----|
-| `¥` (Yen) | Enter/Newline | iOS international keyboard |
-| `€` (Euro) | Tab | Easy access on mobile |
-| `£` (Pound) | Shift+Tab | Reverse tab navigation |
-
-These appear in the terminal startup message as a reminder.
-
-#### Smart Auto-Scroll
-
-Intelligent scrolling that follows terminal output but doesn't fight you:
-- **Auto-scrolls** when at bottom of terminal
-- **Auto-disables** when you scroll up to read history
-- **Re-enables** when you scroll back to bottom
-- **Force enable** with D-pad scroll button
-
-Prevents the annoying "fighting with auto-scroll" experience when reading logs.
-
-### Project Management
-
-<img width="388" alt="Project Launcher" src="docs/images/launchpad.jpg">
-
-> **Launchpad Interface:** Project management with quick-launch, descriptions, and emoji icons in a terminal-aesthetic UI.
-
-#### Template File Copying
-
-New projects automatically copy from a template directory (optional).
-
-**Configuration:**
-```json
-{
-  "template_path": "~/my-templates"
-}
-```
-
-**Behavior:**
-- Only copies for **new projects** (not existing ones)
-- Triggered by `copy_templates: true` flag when creating session
-- Smart exclusions: `.git`, `node_modules`, `venv`, `__pycache__`, `.env`, `.DS_Store`, etc.
-
-#### Project Features
-
-- **Auto-reordering**: Projects automatically sort by most recently used
-- **Descriptions**: Add descriptions when creating projects
-- **Quick Delete**: × button on each project with confirmation
-- **No-delete guarantee**: Deleting from launcher never deletes actual files
-
-### Pattern Detection Engine
-
-Monitors terminal output for intelligent automation triggers:
-
-| Pattern | Detects | Action |
-|---------|---------|--------|
-| **localhost_server** | `localhost:PORT`, `127.0.0.1:PORT`, `0.0.0.0:PORT`, `[::]:PORT` | Create tunnel |
-| **server_ready** | "server running", "development server started" | Create tunnel |
-| **listening_on_port** | "listening on port 3000", "running on :8080" | Create tunnel |
-| **error** | ERROR, Error, FAIL, Failed | Log detection |
-| **warning** | WARNING, WARN | Log detection |
-| **file_created** | "Created file:", "Saved file:" | Log detection |
-| **build_complete** | "build successful", "compilation finished" | Log detection |
-| **test_result** | "tests passed", "specs failed" | Log detection |
-
-### Smart Reliability Features
-
-#### Auto-Reconnect
-- WebSocket automatically reconnects if connection drops
-- Exponential backoff: 1s → 2s → 4s → 8s → 16s
-- Max 5 attempts with status shown in terminal
-
-#### WebSocket Keepalive
-- Ping sent every 30 seconds
-- Prevents timeout on mobile networks
-- Automatic pong response
-
-#### Session Conflict Resolution
-- Detects if session already running when creating new one
-- Prompts: Connect to existing OR destroy and create new
-- Prevents orphaned sessions
-
-### Advanced Configuration
-
-Additional `config.json` options:
-
-```json
-{
-  "jwt_expiry_minutes": 30,           // JWT token lifetime (default: 30)
-  "template_path": "~/my-templates",  // Template directory for new projects
-  "common_slash_commands": [          // Quick-access slash commands
-    "/agents", "/clear", "/usage"
-  ]
-}
-```
-
-## Use Cases
-
-- **Mobile Development**: Start Claude Code on your Mac, control it from your phone while away from your desk
-- **Remote Pair Programming**: Share tunnel URLs so others can see your Claude Code session in real-time
-- **Auto-Share Dev Servers**: Claude detects when you spin up a server and automatically creates a public URL
-- **Multi-Device Workflows**: Start coding on your desktop, continue on the couch with your tablet
-- **Live Demos**: Share live coding sessions and dev servers via public tunnel links
-
-## Prerequisites
-
-- **Python 3.11+**
-- **Claude CLI** - Installed and configured (`claude` command in PATH)
-- **cloudflared** - Cloudflare tunnel CLI ([install](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/))
-- **macOS/Linux** - Tested on macOS, should work on Linux
-
-Install system dependencies:
-```bash
-# macOS
-brew install cloudflared
-
-# Ensure Claude CLI is installed
-which claude  # Should return a path
-```
-
-## Quick Start
-
-### 1. Install Dependencies
-
-```bash
-# Clone and navigate to project
-cd "Cloude Code"
-
-# Create virtual environment and install Python packages
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-**IMPORTANT: Do this BEFORE running setup or auth scripts.**
-
-```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit .env and configure required settings:
-nano .env  # or use your preferred editor
-```
-
-**Required settings:**
-- `DEFAULT_WORKING_DIR` - Where new projects are created (e.g., `~/cloude-projects`)
-- `LOG_DIRECTORY` - Where logs are stored (e.g., `/tmp/cloude-code-logs`)
-
-**Optional settings:**
-- `CLOUDFLARE_API_TOKEN` - For named tunnels (can skip for now)
-- `CLOUDFLARE_ZONE_ID` - For named tunnels
-- `CLOUDFLARE_DOMAIN` - Your custom domain (e.g., `cloude.yourdomain.com`)
-- `CLOUDFLARE_TUNNEL_NAME` - Tunnel name (e.g., `cloude-controller`)
-
-### 3. Configure Authentication
-
-```bash
-# Generate TOTP secret and JWT key
-python3 setup_auth.py
-```
-
-This will:
-- Generate a TOTP secret for 2FA
-- Create JWT secret for token auth
-- Display a QR code for Google Authenticator/Authy
-- Save secrets to `.env` (TOTP_SECRET, JWT_SECRET)
-- Save configuration to `./config.json` (projects, template_path, etc.)
-- Save QR image to `./totp-qr.png`
-
-Scan the QR code with your authenticator app.
-
-<img width="388" alt="TOTP Authentication" src="docs/images/totp-login.jpg">
-
-> **Secure Access:** TOTP 2FA login screen - scan QR with Google Authenticator or Authy.
-
-### 4. Verify Setup
-
-```bash
-# Run setup script to check all dependencies
-./setup.sh
-```
-
-This validates that `cloudflared`, `claude`, Python, and all configuration is properly set up.
-
-### 5. Start the Server
-
-```bash
-# Start API server
-./start.sh
-
-# Or manually:
-source venv/bin/activate
-python3 -m src.main
-```
-
-Server runs on `http://0.0.0.0:8000`
-
-### 6. Access Launchpad
-
-Open `http://localhost:8000` in your browser (or `http://YOUR_IP:8000` from phone).
-
-- Enter your TOTP code to authenticate
-- Create a new project or select existing
-- Terminal loads with Claude Code running
-
-## Configuration
-
-### Environment Variables (.env)
-
-Key settings you might want to change:
-
-```bash
-# Server
-HOST=0.0.0.0              # Bind to all interfaces for network access
-PORT=8000                 # API server port
-
-# Sessions
-DEFAULT_WORKING_DIR=~/cloude-projects  # Where new projects are created
-SESSION_TIMEOUT=3600                   # Session idle timeout (seconds)
-
-# Authentication (generated by setup_auth.py - don't edit manually)
-TOTP_SECRET=              # TOTP secret for 2FA
-JWT_SECRET=               # JWT signing secret
-AUTH_CONFIG_FILE=./config.json  # Path to config.json
-
-# Tunnels
-AUTO_CREATE_TUNNELS=true               # Auto-create tunnels when ports detected
-USE_NAMED_TUNNELS=false                # Use named tunnels (requires Cloudflare config)
-
-# Cloudflare (for named tunnels only)
-CLOUDFLARE_API_TOKEN=your_token        # API token with DNS edit + Tunnel edit perms
-CLOUDFLARE_ZONE_ID=your_zone_id        # Zone ID for your domain
-CLOUDFLARE_DOMAIN=cloude.yourdomain.com  # Your custom domain
-CLOUDFLARE_TUNNEL_NAME=cloude-controller # Tunnel name
-CLOUDFLARE_TUNNEL_ID=                  # Optional: Skip tunnel lookup, uses auto-discovery if empty
-```
-
-### Cloudflare Tunnel Modes
-
-#### Quick Tunnels (Default)
-Uses `trycloudflare.com` - no account required.
-
-**Pros:**
-- Zero config
-- Instant creation
-- Free
-
-**Cons:**
-- Random URLs that change on restart
-- Less stable
-- Subject to rate limits
-
-**Usage:** Works out of the box, no setup needed.
+</details>
 
 ---
 
-#### Named Tunnels (Recommended)
-Uses your Cloudflare account with persistent custom domains.
+## Running
 
-**Pros:**
-- Stable URLs like `3000.cloude.yourdomain.com`
-- Single persistent tunnel, multiple ports
-- CNAMEs auto-created and reused
-- More reliable
+### Development (Python server only)
 
-**Cons:**
-- Requires Cloudflare account (free)
-- Initial setup needed
-
-**Setup:**
-
-1. **Authenticate cloudflared:**
-   ```bash
-   cloudflared login
-   ```
-   Opens browser for OAuth flow.
-
-2. **Create Cloudflare API Token:**
-   - Go to https://dash.cloudflare.com/profile/api-tokens
-   - "Create Token" → "Edit zone DNS" template
-   - Add permissions: `Zone.DNS:Edit` and `Account.Cloudflare Tunnel:Edit`
-   - Copy token
-
-3. **Get Zone ID:**
-   - Go to your domain's overview in Cloudflare dashboard
-   - Scroll to "API" section → Copy "Zone ID"
-
-4. **Update `.env`:**
-   ```bash
-   USE_NAMED_TUNNELS=true
-   CLOUDFLARE_API_TOKEN=your_token_here
-   CLOUDFLARE_ZONE_ID=your_zone_id
-   CLOUDFLARE_DOMAIN=cloude.yourdomain.com
-   CLOUDFLARE_TUNNEL_NAME=cloude-code
-   ```
-
-5. **Restart server** - Named tunnel will auto-create and persist.
-
-When dev servers start, CNAMEs like `3000.cloude.yourdomain.com` are automatically created and reused across restarts.
-
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│   Browser/Mobile Client             │
-│   ├── Auth (TOTP)                   │
-│   ├── Launchpad (Project Manager)   │
-│   └── xterm.js Terminal             │
-└──────────────┬──────────────────────┘
-               │ WebSocket + REST API
-┌──────────────┴──────────────────────┐
-│   FastAPI Server (Python)           │
-│   ├── Session Manager (PTY)         │
-│   ├── Log Monitor (Pattern Detect)  │
-│   ├── Hybrid Tunnel Manager         │
-│   ├── Auto-Tunnel Orchestrator      │
-│   └── Cloudflare API Integration    │
-└──────────────┬──────────────────────┘
-               │
-         ┌─────┴─────┐
-         │           │
-    ┌────┴───┐  ┌────┴─────────┐
-    │ PTY    │  │ Cloudflared  │
-    │ Process│  │ Tunnels      │
-    │ (Claude│  │ (Public URLs)│
-    │  Code) │  │              │
-    └────────┘  └──────────────┘
+```bash
+source venv/bin/activate
+python3 -m src.main
+# or
+./start.sh
 ```
 
-**Flow:**
-1. User authenticates with TOTP code
-2. Launchpad creates/connects to PTY session running Claude Code
-3. Terminal streams bidirectional I/O via WebSocket
-4. Log monitor watches terminal output for port patterns
-5. Auto-tunnel creates Cloudflare tunnel when `localhost:PORT` detected
-6. Tunnel URL broadcast to all connected clients
-7. Session persists across server restarts
+Server listens on `http://0.0.0.0:8000`. Open `http://localhost:8000` or `http://<mac-lan-ip>:8000` from a phone on the same network.
 
-## Project Structure
+### Development (Electron + server)
 
+```bash
+cd macOS
+npm start          # Launches Electron, which spawns the Python server
 ```
-CloudeCode/
-├── src/
-│   ├── main.py                      # FastAPI app entry
-│   ├── config.py                    # Environment config
-│   ├── models.py                    # Pydantic models
-│   ├── core/                        # Business logic
-│   │   ├── session_manager.py       # PTY session management
-│   │   ├── log_monitor.py           # Pattern detection
-│   │   ├── tunnel_manager.py        # Quick tunnels
-│   │   ├── named_tunnel_manager.py  # Named tunnels
-│   │   ├── hybrid_tunnel_manager.py # Tunnel strategy
-│   │   ├── auto_tunnel.py           # Auto-tunnel orchestration
-│   │   └── cloudflare_api.py        # Cloudflare DNS API
-│   ├── api/                         # API layer
-│   │   ├── routes.py                # REST endpoints
-│   │   ├── websocket.py             # WebSocket handlers
-│   │   └── auth.py                  # TOTP/JWT auth
-│   └── utils/                       # Utilities
-│       ├── pty_session.py           # PTY process wrapper
-│       ├── patterns.py              # Regex pattern matcher
-│       └── template_manager.py      # Project templates
-├── client/                          # Frontend
-│   ├── index.html                   # Single-page app
-│   ├── css/styles.css               # Terminal aesthetic
-│   └── js/
-│       ├── api.js                   # API client
-│       ├── auth.js                  # Auth module
-│       ├── launchpad.js             # Project launcher
-│       ├── terminal.js              # xterm.js integration
-│       ├── dpad.js                  # Mobile controls
-│       └── slash-commands.js        # Slash commands modal
-├── .env.example                     # Environment template
-├── .env                             # Secrets (TOTP, JWT) - gitignored
-├── config.json                      # Configuration (projects, templates, etc.)
-├── config.example.json              # Config template
-├── requirements.txt                 # Python deps
-├── setup.sh                         # Dependency checker
-├── setup_auth.py                    # TOTP setup script
-├── start.sh                         # Start server script
-├── stop.sh                          # Stop server script
-├── reset.sh                         # Restart server script
-└── README.md                        # This file
-```
+
+The menu bar tray icon shows server status. If a Python server is already running on port 8000, Electron will adopt it rather than spawning a duplicate.
+
+### Production (packaged DMG)
+
+Launch **Cloude Code.app** from `/Applications`. The Electron app copies default config to `~/Library/Application Support/cloude-code-menubar/` on first run, spawns the bundled Python server, and surfaces status + controls via the menu bar.
+
+### Shell helpers
+
+| Script      | Purpose                                                                 |
+| ----------- | ----------------------------------------------------------------------- |
+| `start.sh`  | Activates venv and starts the Python server                             |
+| `stop.sh`   | Graceful server shutdown                                                |
+| `reset.sh`  | Light reset — stops server, clears session metadata, preserves config   |
+
+---
 
 ## API Reference
 
-### Authentication
+Base URL: `http://localhost:8000`  ·  API prefix: `/api/v1`
 
-**Get TOTP Config:**
-```bash
-GET /api/v1/auth/totp/config
+### Unauthenticated endpoints
+
+| Method | Path                        | Body                 | Returns                             |
+| ------ | --------------------------- | -------------------- | ----------------------------------- |
+| `GET`  | `/health`                   | —                    | `{ status: "ok" }`                  |
+| `GET`  | `/api/v1/auth/qr`           | —                    | PNG image (TOTP QR)                 |
+| `GET`  | `/api/v1/auth/status`       | —                    | `{ authenticated: bool }`           |
+| `POST` | `/api/v1/auth/verify`       | `{ code: "123456" }` | `{ token: string, expires_in: n }`  |
+
+### Authenticated endpoints
+
+All require `Authorization: Bearer <jwt>` header.
+
+| Method   | Path                   | Body                                                                                      | Returns             |
+| -------- | ---------------------- | ----------------------------------------------------------------------------------------- | ------------------- |
+| `POST`   | `/api/v1/sessions`     | `{ working_dir, auto_start_claude?, copy_templates? }`                                    | `Session` object    |
+| `GET`    | `/api/v1/sessions`     | —                                                                                         | `Session` or `null` |
+| `DELETE` | `/api/v1/sessions`     | —                                                                                         | `204 No Content`    |
+| `GET`    | `/api/v1/tunnels`      | —                                                                                         | `Tunnel[]`          |
+| `POST`   | `/api/v1/tunnels`      | `{ port: number }`                                                                        | `Tunnel`            |
+| `DELETE` | `/api/v1/tunnels/{p}`  | —                                                                                         | `204`               |
+| `GET`    | `/api/v1/projects`     | —                                                                                         | `Project[]`         |
+| `POST`   | `/api/v1/projects`     | `{ name, path, description? }`                                                            | `Project`           |
+| `DELETE` | `/api/v1/projects/{n}` | —                                                                                         | `204`               |
+
+### WebSocket protocol
+
+**Endpoint:** `ws://localhost:8000/ws/terminal?token=<jwt>` (use `wss://` through tunnels)
+
+<details>
+<summary>Message types</summary>
+
+**Server → Client**
+
+```json
+{ "type": "pty_data", "data": "<base64>" }
+{ "type": "tunnel_created", "tunnel": { "port": 3000, "url": "..." } }
+{ "type": "tunnel_destroyed", "port": 3000 }
+{ "type": "ping" }
 ```
 
-**Verify TOTP:**
-```bash
-POST /api/v1/auth/totp/verify
-{"token": "123456"}
-```
-Returns JWT token.
+**Client → Server**
 
-### Sessions
-
-**Create Session:**
-```bash
-POST /api/v1/sessions
-{
-  "working_directory": "~/my-project",
-  "auto_start_claude": true
-}
+```json
+{ "type": "pty_data", "data": "echo hello\n" }
+{ "type": "pty_resize", "cols": 80, "rows": 24 }
+{ "type": "pong" }
 ```
 
-**Get Session Info:**
-```bash
-GET /api/v1/sessions
-```
-
-**Destroy Session:**
-```bash
-DELETE /api/v1/sessions
-```
-
-### Projects
-
-**List Projects:**
-```bash
-GET /api/v1/projects
-```
-
-**Create Project:**
-```bash
-POST /api/v1/projects
-{
-  "name": "my-app",
-  "path": "~/projects/my-app",
-  "description": "My new project"
-}
-```
-
-**Delete Project:**
-```bash
-DELETE /api/v1/projects/{name}
-```
-
-### Tunnels
-
-**List Active Tunnels:**
-```bash
-GET /api/v1/tunnels
-```
-
-**Create Manual Tunnel:**
-```bash
-POST /api/v1/tunnels
-{"port": 3000}
-```
-
-**Destroy Tunnel:**
-```bash
-DELETE /api/v1/tunnels/{port}
-```
-
-### WebSocket
-
-**Connect to Terminal:**
-```
-ws://localhost:8000/ws/terminal?token=YOUR_JWT_TOKEN
-```
-
-**Receive messages:**
-- Terminal output: `{"type": "output", "data": "base64_encoded_data"}`
-- Tunnel created: `{"type": "tunnel_created", "tunnel": {...}}`
-- Keepalive: `{"type": "ping"}`
-
-**Send messages:**
-- Terminal input: `{"type": "input", "data": "command text"}`
-- Resize: `{"type": "resize", "cols": 80, "rows": 24}`
-- Pong: `{"type": "pong"}`
-
-## Troubleshooting
-
-### Authentication Fails
-- **Symptom**: TOTP code rejected
-- **Fix**: Run `python3 setup_auth.py` again and re-scan QR code. Check system clock is synced (TOTP is time-based).
-
-### Tunnels Not Creating
-- **Symptom**: Dev servers start but no tunnel URL appears
-- **Check**:
-  - `which cloudflared` returns a path
-  - `AUTO_CREATE_TUNNELS=true` in `.env`
-  - Look for "Tunnel created" in terminal output
-- **Test manually**: `cloudflared tunnel --url http://localhost:3000`
-
-### Can't Connect from Phone
-- **Symptom**: `http://YOUR_IP:8000` times out
-- **Check**:
-  - Phone on same WiFi network
-  - Mac firewall allows port 8000: System Preferences → Security → Firewall
-  - Find Mac IP: `ifconfig | grep inet` (look for 192.168.x.x)
-  - Try `http://localhost:8000/health` on Mac first
-
-### Claude Not Starting
-- **Symptom**: Session created but Claude doesn't launch
-- **Check**:
-  - `which claude` or `ls ~/.claude/local/claude` works
-  - Claude CLI is authenticated: `claude --help`
-  - Check session logs via WebSocket or API
-- **Manual test**: Run `claude --dangerously-skip-permissions` in terminal
-
-### Session Lost After Reboot
-- **Symptom**: Can't reconnect to session after Mac restart
-- **Cause**: PTY processes don't survive reboots
-- **Fix**: Create new session (old session auto-cleaned on server start)
-
-### Named Tunnel CNAMEs Not Creating
-- **Symptom**: Tunnel works but DNS records not created
-- **Check**:
-  - `CLOUDFLARE_API_TOKEN` has `Zone.DNS:Edit` permission
-  - `CLOUDFLARE_ZONE_ID` matches your domain's Zone ID
-  - Check API logs in terminal output
-- **Manual test**: Use Cloudflare dashboard to create a test DNS record
-
-## macOS Menu Bar App
-
-A native macOS menu bar application that runs Cloude Code in the background with quick access to stats and controls.
-
-### Features
-
-- **Background server management**: Start/stop/restart the Python server
-- **Live stats**: Server status, current session, active tunnels
-- **Quick access**: Click to open terminal in browser
-- **Auto-launch**: Optional launch at login
-- **System tray integration**: Sits quietly in menu bar
-
-### Installation
-
-```bash
-cd macOS
-
-# Install dependencies
-npm install
-
-# Optional: Generate placeholder icons
-cd assets && ./generate-icons.sh && cd ..
-
-# Run in development mode
-npm start
-```
-
-### Building the App
-
-```bash
-cd macOS
-npm run build
-```
-
-This creates `dist/Cloude Code.dmg` - a macOS installer.
-
-### Menu Bar Controls
-
-The menu bar app provides:
-- **Server status** - Running/stopped indicator with colored dot
-- **Session info** - Current session name (or "None")
-- **Tunnel count** - Number of active Cloudflare tunnels
-- **Open Terminal** - Launches browser to localhost:8000
-- **Restart/Stop/Start Server** - Control server lifecycle
-- **Launch at Login** - Toggle auto-start on macOS boot
-- **Quit** - Stop server and quit app
-
-### How It Works
-
-1. Electron app spawns Python server as subprocess
-2. Polls `/api/v1/health` every 5 seconds for stats
-3. Web UI remains accessible for mobile/remote access
-4. Server logs pipe to Electron console for debugging
-
-### Auto-Launch Setup
-
-The app can install a LaunchAgent to start automatically:
-
-1. Click "Launch at Login" in menu
-2. App installs `~/Library/LaunchAgents/com.cloudecode.menubar.plist`
-3. Server starts on boot and keeps running
-4. Disable anytime by unchecking menu item
-
-### Icon Customization
-
-Replace placeholder icons in `macOS/assets/`:
-- `iconTemplate.png` - 22x22px menu bar icon
-- `iconTemplate@2x.png` - 44x44px retina icon
-- `icon.icns` - App bundle icon
-
-See `macOS/assets/README.md` for design guidelines.
+</details>
 
 ---
 
-## Development
+## Authentication
 
-### Running Tests
+Cloude Code uses a two-stage auth flow: TOTP for human verification, JWT for machine requests.
+
+1. **TOTP bootstrap** — `setup_auth.py` generates a random TOTP secret (RFC 6238, 30-second period, 6-digit codes) and writes it to `.env` as `TOTP_SECRET`. A QR code is generated via `qrcode` + `Pillow` and saved to `totp-qr.png`. Scan this with Google Authenticator, Authy, 1Password, or any compatible app.
+
+2. **Verification** — Client calls `POST /api/v1/auth/verify` with the current 6-digit code. Server calls `pyotp.TOTP(secret).verify(code, valid_window=1)`, which accepts the code from the previous, current, or next 30-second window (drift tolerance).
+
+3. **JWT issuance** — On successful TOTP, server signs a JWT with `JWT_SECRET` (HS256). Lifetime defaults to 30 minutes (configurable via `jwt_expiry_minutes` in `config.json`). Token payload contains `exp` claim only.
+
+4. **Session requests** — Client stores the JWT in `localStorage['claude_tunnel_token']` and sends `Authorization: Bearer <jwt>` on every REST call. WebSocket connections pass the token as a `?token=` query parameter (one-shot check at connection time).
+
+5. **Expiration handling** — On 401 response, the frontend clears the token and re-prompts for TOTP.
+
+> **Note on tunnel-level access:** The Cloudflare tunnel URL itself is public. API routes are protected by TOTP/JWT, but static assets at `/` are served without auth (they just redirect to the login page). Do not rely on URL obscurity as a security boundary.
+
+---
+
+## Tunneling
+
+Cloude Code supports two Cloudflare tunnel modes via `HybridTunnelManager`. Switch between them with `USE_NAMED_TUNNELS` in `.env`.
+
+### Quick tunnels (zero-config)
+
+Uses `trycloudflare.com` — no Cloudflare account required.
+
+- **Pros:** Instant, free, zero configuration
+- **Cons:** Random URLs that change on every restart, rate-limited, less stable
+- **Use when:** Testing, demos, one-off sharing
+
+### Named tunnels (recommended for regular use)
+
+Persistent tunnel tied to your Cloudflare account, with auto-managed DNS records on your custom domain.
+
+- **Pros:** Stable URLs (`3000.cloude.yourdomain.com`), CNAMEs created/reused automatically, single persistent tunnel multiplexes multiple ports
+- **Cons:** Requires free Cloudflare account + initial setup
+
+<details>
+<summary>Named tunnel setup steps</summary>
+
+1. `cloudflared login` — opens browser for Cloudflare OAuth
+2. Create API token at https://dash.cloudflare.com/profile/api-tokens
+   - Permissions needed: `Zone.DNS:Edit` and `Account.Cloudflare Tunnel:Edit`
+3. Copy your domain's **Zone ID** from the Cloudflare dashboard overview page
+4. Populate `.env`:
+   ```bash
+   USE_NAMED_TUNNELS=true
+   CLOUDFLARE_API_TOKEN=<your_token>
+   CLOUDFLARE_ZONE_ID=<your_zone_id>
+   CLOUDFLARE_DOMAIN=cloude.yourdomain.com
+   CLOUDFLARE_TUNNEL_NAME=cloude-tunnel
+   ```
+5. Restart the server. The named tunnel is created on first boot; subsequent boots reuse `CLOUDFLARE_TUNNEL_ID` written by setup.
+
+</details>
+
+### Pattern detection
+
+Auto-tunneling fires when `LogMonitor` matches these patterns in PTY output:
+
+| Pattern name          | Matches                                                             | Action         |
+| --------------------- | ------------------------------------------------------------------- | -------------- |
+| `localhost_server`    | `localhost:PORT`, `127.0.0.1:PORT`, `0.0.0.0:PORT`, `[::]:PORT`     | Create tunnel  |
+| `server_ready`        | "server running", "development server started"                      | Create tunnel  |
+| `listening_on_port`   | "listening on port 3000", "running on :8080"                        | Create tunnel  |
+| `error` / `warning`   | `ERROR`, `FAIL`, `WARN`, etc.                                       | Log event      |
+| `build_complete`      | "build successful", "compilation finished"                          | Log event      |
+
+---
+
+## Build & Distribution
+
+### Building the Electron app
 
 ```bash
-# Activate virtual environment
-source venv/bin/activate
-
-# Run all tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_session_manager.py -v
+cd macOS
+npm install
+npm run build        # Produces dist/Cloude Code.dmg
 ```
 
-### Contributing
+`electron-builder` configuration in `macOS/package.json` controls:
 
-Pull requests welcome. For major changes, open an issue first.
+- **App ID:** `com.cloudecode.menubar`
+- **Bundled assets:** Python source tree, `.env.example`, `client/`, `requirements.txt`
+- **Icon:** `assets/AppIcon-1024.png` (app), `assets/iconTemplate.png` (menu bar)
+- **Output:** `macOS/dist/Cloude Code.dmg`
 
-**Development setup:**
-1. Fork the repo
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Make changes and test
-4. Commit (`git commit -m 'Add amazing feature'`)
-5. Push (`git push origin feature/amazing-feature`)
-6. Open Pull Request
+### First-run behavior (packaged)
+
+On first launch, `ServerManager.ensureServerFiles()` copies the bundled Python tree and `.env.example` into `~/Library/Application Support/cloude-code-menubar/`. User-edited config survives app updates; bundled defaults are only copied if the target file does not exist.
+
+---
+
+## Scripts Reference
+
+| Script           | Invocation              | What it does                                                                                                                |
+| ---------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `setup.sh`       | `./setup.sh`            | Full installer: creates venv, installs `requirements.txt`, downloads `cloudflared` if missing, then invokes `setup_auth.py` |
+| `setup_auth.py`  | `python3 setup_auth.py` | Interactive wizard: generates `TOTP_SECRET` + `JWT_SECRET`, prompts for Cloudflare values, writes `.env` + `config.json`, saves `totp-qr.png` |
+| `start.sh`       | `./start.sh`            | Activates venv and starts the Python server                                                                                 |
+| `stop.sh`        | `./stop.sh`             | Graceful server shutdown                                                                                                    |
+| `reset.sh`       | `./reset.sh`            | Light reset — stops server, clears session metadata, preserves `.env` + `config.json`                                       |
+| `nuke.sh`        | `./nuke.sh`             | Complete uninstall: deletes `.env`, `config.json`, `venv/`, Cloudflare tunnels, DNS records, logs, and `~/Library/Application Support/cloude-code-menubar/` |
+
+> **Warning:** `nuke.sh` is destructive and deletes Cloudflare DNS records it created. Review before running on a shared account.
+
+---
+
+## Known Issues & Active Patches
+
+| Issue                                                | Cause                                                     | Mitigation                                                                                  | Status           |
+| ---------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------- |
+| Menu bar shows "Stopped" while server is running     | Electron loses subprocess PID reference on reload         | Health poll every 5s; adopts existing process on port 8000 if found                         | Partial fix      |
+| `CLOUDFLARE_DOMAIN` stays as placeholder after setup | `setup_auth.py` write timing issue                        | Placeholder detection in server → surfaces "Setup Required" state in UI                     | Workaround       |
+| `.env` location differs dev vs. packaged             | Bundled app reads from Application Support                | `ServerManager.ensureServerFiles()` copies `.env.example` to Application Support on boot    | Fixed            |
+| Python 3 detection fails on first run                | Varies by install method (brew, system, pyenv)            | Multi-path fallback in server-manager resolves all common install locations                 | Fixed            |
+| `ALLOWED_ORIGINS = ["*"]` is too permissive          | Default for ease of setup                                 | Restrict to your tunnel domain in `.env` — see Security Considerations                      | Documented       |
+| Stale session metadata survives crash                | Saved PID may no longer be alive after hard kill          | PID liveness check on load; stale entries cleaned up automatically                          | Fixed            |
+| `ALLOWED_ORIGINS` pydantic parse error               | Pydantic v2 strict JSON parsing of list env vars          | Pre-parse logic added — accepts both JSON array and comma-separated values                  | Fixed (`5c1eab8`) |
+| About dialog icon missing in packaged app            | Icon path resolution differed packaged vs. dev            | `getAssetPath()` helper with `app.isPackaged` awareness                                     | Fixed (`b0805ed`) |
+
+---
+
+## Security Considerations
+
+Read `SECURITY_GAPS.md` for the full analysis. Summary of known gaps:
+
+- **Single active session by design.** The server enforces one PTY session at a time. This is an intentional simplification, not a bug, but it means concurrent users cannot have independent shells.
+- **Tunnel URL is public.** The Cloudflare tunnel URL has no transport-level auth. API endpoints are TOTP/JWT-protected, but the static login page is world-reachable. Treat the URL as non-secret.
+- **`ALLOWED_ORIGINS` defaults to `["*"]`.** For production, restrict to your exact tunnel domain (e.g. `["https://cloude.yourdomain.com"]`). Update in `.env` and restart.
+- **PTY runs unsandboxed.** Commands typed into the terminal execute as your macOS user. Do not share tunnel access with untrusted parties.
+- **No rate limiting on auth endpoints.** `POST /api/v1/auth/verify` can be brute-forced against the 6-digit TOTP space. The ±1 window + 1M combinations is non-trivial but not infinite. Consider fronting with Cloudflare Access or a WAF rule for sensitive deployments.
+- **DNS cleanup on named tunnel deletion is manual.** When removing a named tunnel, run `nuke.sh` or manually delete CNAMEs from the Cloudflare dashboard.
+- **Secrets in `.env`.** `TOTP_SECRET` and `JWT_SECRET` live in plaintext `.env`. Ensure `.env` is in `.gitignore` (it is by default). File permissions should be `600`.
+
+---
+
+## Roadmap
+
+See `IOS_APP_PLAN.md` for full details.
+
+- **Native iOS app (planned post-MVP)** — Replace the mobile web wrapper with a native SwiftUI app using the SwiftTerm library. Goals: faster keyboard response, proper background handling, push notifications for long-running tasks, App Store distribution.
+- **Multi-session support (exploratory)** — Lift the single-session constraint; requires per-user PTY namespacing and revised auth scoping.
+- **Tighter default security posture** — Restrictive `ALLOWED_ORIGINS` out of the box, optional Cloudflare Access integration, auth-endpoint rate limiting.
+
+---
+
+## Troubleshooting
+
+### Server won't start
+
+- **Port 8000 in use:** Check with `lsof -i :8000`. Electron should adopt an existing process; if not, kill the orphan.
+- **`.env` missing or incomplete:** Re-run `setup_auth.py`. If running the packaged app, check `~/Library/Application Support/cloude-code-menubar/.env`.
+- **Python 3 not found:** `which python3`. If missing, install via `brew install python@3.11`.
+
+### TOTP code rejected
+
+- **Clock drift:** TOTP is time-based. Ensure macOS system clock is synced (`sudo sntp -sS time.apple.com`).
+- **Wrong secret:** Re-run `setup_auth.py` and re-scan the QR code. The old code becomes invalid immediately.
+
+### Tunnels not creating
+
+- `which cloudflared` — must return a path. If missing, re-run `setup.sh`.
+- `AUTO_CREATE_TUNNELS=true` in `.env`.
+- Test manually: `cloudflared tunnel --url http://localhost:3000` — if this fails, the problem is upstream (network, Cloudflare credentials).
+- Named tunnel issues: verify API token has both `Zone.DNS:Edit` AND `Account.Tunnel:Edit` permissions.
+
+### Can't connect from phone
+
+- Phone and Mac must share the same Wi-Fi (for LAN access) or use the tunnel URL (for WAN).
+- macOS firewall: **System Settings → Network → Firewall** must allow incoming connections on port 8000.
+- `ifconfig | grep 'inet '` to find your Mac's LAN IP.
+
+### Claude CLI doesn't start
+
+- `which claude` — must return a path, or set `CLAUDE_CLI_PATH` in `.env`.
+- Verify authentication: `claude --help` should show no auth prompts.
+- Sessions require: `claude --dangerously-skip-permissions` flag (auto-applied).
+
+### Menu bar says "Stopped" but server is running
+
+- Known issue (see Known Issues table). Click **Restart Server** to force Electron to re-adopt the process. Stats polling resumes after adoption.
+
+### Session lost after reboot
+
+- Expected. PTY processes do not survive reboots. Create a new session — the old metadata is cleaned up automatically by the liveness check on startup.
+
+---
+
+## Development History / Recent Changes
+
+Highlights from recent commits (newest first):
+
+- `b0805ed` — Fix About dialog icon loading in packaged app
+- `6951e6f` — Add menu bar enhancements and fix server status detection
+- `5c1eab8` — Fix `ALLOWED_ORIGINS` parsing error in pydantic v2
+- `51fa3ad` — Add `.env.example` to electron-builder packaging
+- `a965680` — Fix incomplete `.env` generation and server startup failures
+- `70a25f5` — Add missing critical setup steps to macOS app
+- `d3436f3` — Add prompts for optional settings in `setup_auth.py`
+- `a6bb6a3` — Add detailed Cloudflare setup instructions
+- `f85973c` — Fix `nuke.sh` to clean up `~/Library/Application Support`
+- `e9abd8e` — Complete setup automation with interactive `.env` config
+- `cf9bdd4` — Reorganize menu bar app with nested structure
+- `2758773` — Fix server state tracking and configuration management
+
+**Dominant theme:** Setup automation hardening, server state detection robustness, packaging/path fixes for the dev → packaged transition.
+
+---
+
+## Contributing
+
+Pull requests welcome. For substantial changes, open an issue first.
+
+```bash
+git checkout -b feature/your-feature
+# ...make changes, run tests...
+pytest tests/ -v
+git commit -am "feat: description"
+git push origin feature/your-feature
+# open PR
+```
+
+---
 
 ## License
 
-MIT
+MIT — see `LICENSE` file.
 
 ---
 
