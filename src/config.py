@@ -96,6 +96,16 @@ class NotificationsConfig(BaseModel):
     ntfy_topic: str = Field(default="")
     public_base_url: str = Field(default="")
     idle_threshold_seconds: float = Field(default=30.0, ge=1.0)
+    # Plan v3.1 Item 8 — rate limiter knobs (single global bucket + per-kind dedup).
+    # ``rate_limit_global_cap`` / ``rate_limit_window_seconds``: rolling-window
+    # cap on total notifications dispatched (default 10 per 60s). Guards against
+    # pattern-match storms.
+    # ``rate_limit_per_kind_cooldown_seconds``: minimum seconds between two
+    # emits of the same EventType (default 10s). Deduplicates bursts like
+    # repeated "Error:" pattern matches in test output.
+    rate_limit_global_cap: int = Field(default=10, ge=1)
+    rate_limit_window_seconds: float = Field(default=60.0, ge=1.0)
+    rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
 
 
 class AuthRateLimits(BaseModel):

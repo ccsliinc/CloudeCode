@@ -44,11 +44,21 @@ from src.core.notifications.router import NotificationRouter, _QUEUE_MAXSIZE
 @dataclass
 class _FakeNotificationsConfig:
     """Stand-in for AuthConfig.notifications — only the fields the
-    router reads matter."""
+    router reads matter.
+
+    Rate-limit fields (Item 8) are set PERMISSIVELY here so existing
+    router tests see uncapped dispatch. Item 8's dedicated test file
+    (``tests/test_rate_limiter.py``) exercises the limiter with the
+    real defaults.
+    """
     enabled: bool = True
     ntfy_topic: str = "test-topic"
     ntfy_base_url: str = "https://ntfy.sh"
     public_base_url: str = "http://lan.local:8000"
+    # Permissive: huge bucket + zero cooldown → all emits pass.
+    rate_limit_global_cap: int = 10_000
+    rate_limit_window_seconds: float = 60.0
+    rate_limit_per_kind_cooldown_seconds: float = 0.0
 
 
 def _make_event(

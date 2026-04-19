@@ -25,6 +25,7 @@ import structlog
 
 from src.core.notifications import ntfy
 from src.core.notifications.events import NotificationEvent
+from src.core.notifications.rate_limit import RateLimiter
 
 logger = structlog.get_logger()
 
@@ -59,6 +60,15 @@ class NotificationRouter:
         # doesn't half-apply mid-burst).
         self._public_base_url: str = getattr(config, "public_base_url", "") or ""
         self._topic_warned: bool = False
+        # Plan v3.1 Item 8 — rate limiter. Config-driven; defaults match plan.
+        # NOT thread-safe by design: only the single async worker invokes it.
+        self.rate_limiter = RateLimiter(
+            global_cap=int(getattr(config, "rate_limit_global_cap", 10)),
+            window_s=float(getattr(config, "rate_limit_window_seconds", 60.0)),
+            per_kind_cooldown_s=float(
+                getattr(config, "rate_limit_per_kind_cooldown_seconds", 10.0)
+            ),
+        )
 
     async def start(self) -> None:
         """Spawn the background worker task.
@@ -88,6 +98,12 @@ class NotificationRouter:
             enabled=getattr(self._config, "enabled", False),
             topic_set=bool(topic),
         )
+
+        # Cold-start seed: primes every EventType's last-emit timestamp so
+        # any notification storm racing startup (e.g., scrollback replay
+        # that slips past the replay guard) gets swallowed by the per-kind
+        # cooldown. Defense in depth.
+        self.rate_limiter.seed_cold_start()
 
     async def stop(self) -> None:
         """Cancel the worker and let pending dispatches drain best-effort.
@@ -166,6 +182,19 @@ class NotificationRouter:
         try:
             while True:
                 event = await self._queue.get()
+                # Plan v3.1 Item 8 — rate-limit gate. Suppressed events
+                # are logged + dropped; suppression is NOT an error so
+                # we still mark the queue item done and move on.
+                allowed, reason = self.rate_limiter.check(event)
+                if not allowed:
+                    logger.info(
+                        "notify.suppressed",
+                        kind=event.kind.value,
+                        session_slug=event.session_slug,
+                        reason=reason,
+                    )
+                    self._queue.task_done()
+                    continue
                 try:
                     await ntfy.send(event, public_base_url=self._public_base_url)
                 except Exception as e:  # pragma: no cover - ntfy already catches
