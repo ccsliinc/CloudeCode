@@ -228,12 +228,47 @@ class API {
     }
 
     /**
-     * Get WebSocket URL with token
-     * @returns {string} - WebSocket URL with token
+     * Get plain WebSocket base URL for the terminal endpoint.
+     * Does NOT append a token — JWT auth is carried in the
+     * Sec-WebSocket-Protocol header via openWebSocket() below.
+     *
+     * @param {string} path - WebSocket path (default '/ws/terminal')
+     * @returns {string} - WebSocket URL (no query string, no token)
      */
-    getWebSocketURL() {
+    getWebSocketURL(path = '/ws/terminal') {
+        return `${this.wsBaseURL}${path}`;
+    }
+
+    /**
+     * Open an authenticated WebSocket to the backend.
+     *
+     * Uses the Sec-WebSocket-Protocol subprotocol header to carry the JWT
+     * instead of a query string. The browser's WebSocket constructor accepts
+     * an array of subprotocol tokens as its second argument and serializes
+     * them into a comma-separated `Sec-WebSocket-Protocol` request header.
+     * The server validates the JWT, then echoes back the `cloude.jwt.v1`
+     * marker via the handshake response — required by RFC 6455 or the
+     * browser drops the connection.
+     *
+     * Why this instead of `?token=<jwt>`:
+     *   - JWTs in URLs leak into proxy/access logs, browser history, and
+     *     Referer headers.
+     *   - Subprotocol is a request header, not logged by default.
+     *
+     * Pattern modeled on the Kubernetes API server's WebSocket streams,
+     * which use a similar two-element subprotocol array for bearer tokens.
+     *
+     * @param {string} path - WebSocket path (default '/ws/terminal')
+     * @returns {WebSocket} - Open (pending) WebSocket
+     */
+    openWebSocket(path = '/ws/terminal') {
         const token = this.getToken();
-        return `${this.wsBaseURL}/ws/terminal${token ? `?token=${token}` : ''}`;
+        const url = `${this.wsBaseURL}${path}`;
+        // Two-element subprotocol array: marker + token. The server parses
+        // these out of the Sec-WebSocket-Protocol header and verifies the
+        // JWT before accepting. Do NOT collapse into a single string —
+        // the two-element form is what the server expects.
+        return new WebSocket(url, ['cloude.jwt.v1', token]);
     }
 
     /**

@@ -412,11 +412,13 @@ class Terminal {
 
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
 
-        // Get WebSocket URL with token
+        // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
+        // the Sec-WebSocket-Protocol header, NOT in the URL — so no token
+        // redaction is needed when logging the URL.
         const wsURL = window.API.getWebSocketURL();
-        console.log('Terminal: Connecting to WebSocket:', wsURL.replace(/token=[^&]+/, 'token=***'));
+        console.log('Terminal: Connecting to WebSocket:', wsURL);
 
-        this.ws = new WebSocket(wsURL);
+        this.ws = window.API.openWebSocket();
         this.ws.binaryType = 'arraybuffer';
         this.setupWebSocketHandlers();
     }

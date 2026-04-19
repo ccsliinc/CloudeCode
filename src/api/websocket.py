@@ -1,5 +1,7 @@
 """WebSocket endpoints for real-time PTY communication."""
 
+# JWT auth via Sec-WebSocket-Protocol: client sends ['cloude.jwt.v1', <token>].
+
 import asyncio
 import json
 import base64
@@ -15,7 +17,7 @@ from src.models import (
     WSPTYResizeMessage,
     WSErrorMessage
 )
-from src.api.auth import verify_jwt_token
+from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
 
 logger = structlog.get_logger()
 
@@ -33,10 +35,15 @@ class ConnectionManager:
         """
         Accept and register a new WebSocket connection.
 
+        NOTE: As of the subprotocol-auth change (Item 3), the handler is
+        responsible for calling `websocket.accept(subprotocol=...)` BEFORE
+        invoking this method — the browser requires the server to echo the
+        negotiated subprotocol, so accept() must happen at the auth site.
+        This method now only registers an already-accepted socket.
+
         Args:
-            websocket: WebSocket connection to register
+            websocket: WebSocket connection to register (already accepted)
         """
-        await websocket.accept()
         self.active_connections.add(websocket)
         logger.info("websocket_connected", total_connections=len(self.active_connections))
 
@@ -80,14 +87,44 @@ async def websocket_terminal(websocket: WebSocket):
 
     Args:
         websocket: WebSocket connection
+
+    Auth protocol:
+        Client opens WS with subprotocols=["cloude.jwt.v1", <jwt_token>].
+        Server validates the JWT, accepts the handshake echoing the marker
+        as the negotiated subprotocol. Failures close with:
+          - 4401 on missing marker / missing token / invalid token
+          - 4400 on malformed Sec-WebSocket-Protocol header
     """
-    # Check authentication via query parameter
-    token = websocket.query_params.get("token")
-    if not token or not verify_jwt_token(token):
-        logger.warning("websocket_auth_failed", query_params=websocket.query_params.keys())
-        await websocket.close(code=1008, reason="Authentication required")
+    # Validate auth BEFORE accepting. If we close pre-accept, FastAPI sends
+    # HTTP 403 (the browser sees the handshake fail), which is the correct
+    # behavior — no WS connection is ever established with an invalid token.
+    ok, detail = verify_jwt_from_subprotocol(websocket)
+    if not ok:
+        # Close codes in the 4xxx app range per RFC 6455 / IANA registry.
+        # 4401 = auth failure (our convention, modeled on HTTP 401).
+        # 4400 = bad request — header present but malformed (empty /
+        #        whitespace-only). Absence of the header is an auth failure
+        #        (client simply didn't present credentials), not a protocol
+        #        error.
+        raw_header = websocket.headers.get("sec-websocket-protocol")
+        header_present_but_empty = (
+            raw_header is not None
+            and (not raw_header.strip() or all(not p.strip() for p in raw_header.split(",")))
+        )
+        code = 4400 if header_present_but_empty else 4401
+        logger.warning(
+            "websocket_auth_failed",
+            reason=detail,
+            close_code=code,
+            has_header=raw_header is not None,
+        )
+        await websocket.close(code=code, reason=detail or "auth failed")
         return
 
+    # Echo the subprotocol marker back — required by RFC 6455 § 4.1. If we
+    # accept() without a matching subprotocol the browser will drop the
+    # connection client-side even though the TCP handshake "succeeded".
+    await websocket.accept(subprotocol=SUBPROTOCOL_MARKER)
     await connection_manager.connect(websocket)
 
     # Get app state
