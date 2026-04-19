@@ -431,6 +431,10 @@ button[data-tooltip]:hover::after {
     box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
 }
 
+.new-session-btn + .new-session-btn {
+    margin-top: 10px;
+}
+
 .reset-server-btn {
     width: 100%;
     padding: 16px 20px;
@@ -1174,6 +1178,104 @@ button[data-tooltip]:hover::after {
     line-height: 1.4;
 }
 
+/* Folder picker modal */
+.folder-picker-modal {
+    max-width: 640px;
+}
+
+.folder-picker-path {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    color: #d4d4d4;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    word-break: break-all;
+}
+
+.folder-picker-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.folder-picker-toolbar-btn {
+    background: rgba(215, 119, 87, 0.1);
+    border: 1px solid rgba(215, 119, 87, 0.3);
+    color: #d77757;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    width: auto;
+    height: auto;
+}
+
+.folder-picker-toolbar-btn:hover:not(:disabled) {
+    background: rgba(215, 119, 87, 0.2);
+    border-color: #d77757;
+    box-shadow: 0 0 8px rgba(215, 119, 87, 0.3);
+}
+
+.folder-picker-toolbar-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.folder-picker-list {
+    background: #1e1e1e;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+.folder-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    color: #d4d4d4;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-bottom: 1px solid #2d2d30;
+    transition: background 0.15s ease;
+}
+
+.folder-picker-item:last-child {
+    border-bottom: none;
+}
+
+.folder-picker-item:hover {
+    background: #2d2d30;
+    color: #d77757;
+}
+
+.folder-picker-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.folder-picker-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-picker-empty {
+    padding: 24px;
+    text-align: center;
+    color: #858585;
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .slash-commands-modal-content {
@@ -1202,5 +1304,9 @@ button[data-tooltip]:hover::after {
 
     .command-item {
         padding: 10px 12px;
+    }
+
+    .folder-picker-list {
+        max-height: 240px;
     }
 }

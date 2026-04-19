@@ -1,7 +1,7 @@
 """REST API routes for Claude Code Controller."""
 
 from fastapi import APIRouter, HTTPException, Request, Depends
-from typing import List
+from typing import List, Optional
 import structlog
 
 from src.models import (
@@ -14,7 +14,9 @@ from src.models import (
     LogEntry,
     SuccessResponse,
     ErrorResponse,
-    HealthResponse
+    HealthResponse,
+    BrowseResponse,
+    DirectoryEntry
 )
 from src.api.auth import require_auth
 from src.config import settings
@@ -295,6 +297,68 @@ async def reset_server(request: Request):
     except Exception as e:
         logger.error("server_reset_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to reset server: {str(e)}")
+
+
+@router.get("/filesystem/browse", response_model=BrowseResponse, dependencies=[Depends(require_auth)])
+async def browse_directory(path: Optional[str] = None):
+    """
+    List subdirectories of a given filesystem path for the project folder picker.
+
+    Args:
+        path: Directory path to list. Defaults to the configured default working dir,
+              or the user's home directory if that is unavailable.
+
+    Returns:
+        BrowseResponse with the absolute path, its parent, and subdirectories.
+
+    Raises:
+        HTTPException: 404 if the path does not exist, 400 if not a directory,
+                       403 if permission denied.
+    """
+    import os
+    from pathlib import Path
+
+    if path:
+        target = Path(path).expanduser()
+    else:
+        try:
+            target = settings.get_working_dir()
+        except Exception:
+            target = Path.home()
+
+    try:
+        resolved = target.resolve(strict=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {e}")
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {resolved}")
+
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {resolved}")
+
+    entries: List[DirectoryEntry] = []
+    try:
+        for child in sorted(resolved.iterdir(), key=lambda p: p.name.lower()):
+            if child.name.startswith('.'):
+                continue
+            try:
+                if child.is_dir():
+                    entries.append(DirectoryEntry(name=child.name, path=str(child)))
+            except (PermissionError, OSError):
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {resolved}")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read directory: {e}")
+
+    parent = str(resolved.parent) if resolved.parent != resolved else None
+
+    return BrowseResponse(
+        path=str(resolved),
+        parent=parent,
+        entries=entries,
+    )
 
 
 @router.get("/health", response_model=HealthResponse)
