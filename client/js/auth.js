@@ -120,16 +120,31 @@ class Auth {
      * Handle login button click
      */
     async handleLogin() {
+        // Re-entry guard: the `input` listener auto-submits at 6 digits AND
+        // the button click handler also calls handleLogin. Without this
+        // guard, a rapid sequence (auto-submit fires → fetch pending →
+        // post-error input clear → re-entry) can run client validation
+        // against an empty input, producing "must be 6 digits" that
+        // clobbers the real server error (e.g. a 429 rate-limit message)
+        // in the UI. Rule: exactly one in-flight submit at a time. Any
+        // re-entry while a fetch is pending is ignored, NOT re-validated.
+        if (this._submitting) {
+            return;
+        }
+        this._submitting = true;
+
         const totpCode = this.totpInput.value.trim();
 
         // Validate input
         if (totpCode.length !== 6) {
             this.showError('totp code must be 6 digits');
+            this._submitting = false;
             return;
         }
 
         if (!/^\d{6}$/.test(totpCode)) {
             this.showError('totp code must contain only numbers');
+            this._submitting = false;
             return;
         }
 
@@ -165,6 +180,7 @@ class Auth {
         } finally {
             this.loginButton.disabled = false;
             this.loginButton.textContent = 'login';
+            this._submitting = false;
         }
     }
 

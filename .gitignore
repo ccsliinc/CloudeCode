@@ -61,4 +61,4 @@ htmlcov/
 .pytest_cache/
 
 # Claude
-.prompt_history/
+.prompt_history/troubleshooting/

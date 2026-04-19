@@ -176,8 +176,36 @@ class API {
         });
 
         if (!response.ok) {
+            // Normalize error shape across sources:
+            //   - FastAPI HTTPException → { detail: "..." }
+            //   - slowapi rate-limit (429) → { error: "Rate limit exceeded: ..." }
+            //   - malformed / empty       → {}
+            // Prefer `error` (slowapi), fall back to `detail` (FastAPI),
+            // then a generic message. NEVER fall through to a hardcoded
+            // client-side message — that would silently overwrite the
+            // server's actual signal (e.g. hide a 429 behind "Invalid TOTP
+            // code").
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || 'Invalid TOTP code');
+            let message = errorData.error || errorData.detail || errorData.message || 'Unknown error';
+
+            // RFC 7231: Retry-After is either integer seconds or an HTTP-date.
+            // For rate-limit 429s slowapi emits integer seconds. Parse
+            // defensively — if unparseable, skip the suffix rather than
+            // showing "NaN".
+            if (response.status === 429) {
+                const retryAfterRaw = response.headers.get('Retry-After');
+                const retrySec = parseInt(retryAfterRaw, 10);
+                // slowapi's server body already includes "Try again in Ns."
+                // so only append our own suffix if the server didn't.
+                // Otherwise we end up with "... Try again in 58s. Try again in 58s."
+                if (Number.isFinite(retrySec) && retrySec > 0 && !/try again/i.test(message)) {
+                    message = `${message.replace(/\.$/, '')}. Try again in ${retrySec}s.`;
+                }
+            }
+
+            const err = new Error(message);
+            err.status = response.status;
+            throw err;
         }
 
         return await response.json();
