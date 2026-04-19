@@ -239,6 +239,49 @@ npm start
 
 ---
 
+## Deployment Modes
+
+Cloude Code ships in two supported modes. Pick one based on where you run your day-to-day dev work.
+
+### Mode 1 — macOS native (Electron menu bar app) [Primary]
+
+The default for macOS users. The Electron app lives in your menu bar and manages a local Python server as a subprocess. Claude Code CLI runs natively on your Mac, with full access to:
+
+- macOS Keychain (Claude Pro / Max OAuth tokens land here)
+- macOS-native MCPs (Shortcuts, AppleScript, Calendar, Reminders, Messages)
+- Your existing `~/.claude` directory, MCP server configuration, and shell environment
+
+Install via the DMG from releases (or `cd macOS && npm install && npm run build`).
+
+**Use Mode 1 if you're on macOS.** Best compatibility, lowest setup friction.
+
+### Mode 2 — Docker (pure container) [Alternative]
+
+A containerized deployment for Linux hosts, headless servers, or users who want full isolation. The Python server AND the Claude Code CLI both run inside the container.
+
+```bash
+cp .env.example .env
+# Edit .env — at minimum set JWT_SECRET and TOTP_SECRET (setup_auth.py can
+# mint these) and optionally CLOUDE_BIND_IP for LAN exposure
+bash scripts/preflight-bind-ip.sh       # validate your bind IP
+UID=$(id -u) GID=$(id -g) docker compose build
+docker compose up -d
+```
+
+**Mode 2 caveats:**
+
+- **Claude Pro / Max OAuth accounts are NOT supported in Mode 2** — macOS Keychain is not accessible from a Linux container. Use Mode 1, or set `ANTHROPIC_API_KEY` in `.env` if you have direct API billing.
+- **macOS-native MCPs do not work** — anything that calls Shortcuts, AppleScript, Calendar, Reminders, Messages, Finder, or any Keychain-backed service will fail inside the container. Network-based MCPs (Gmail, GDrive, n8n, Postgres, custom HTTP) work fine.
+- Default bind is `127.0.0.1` — the container is loopback-only unless you opt in to LAN exposure via `CLOUDE_BIND_IP`.
+
+See [docs/deployment-docker.md](docs/deployment-docker.md) for the full Docker walkthrough including volume layout, UID/GID mapping, and the preflight script.
+
+### Hybrid "server-in-container, Claude-on-host" is not supported in this release
+
+A third mode where the FastAPI server runs in Docker and the Claude process runs on the host via a Unix-socket-to-tmux bridge was evaluated and cut. Docker Desktop's LinuxKit VM boundary does not passthrough live Unix sockets reliably, and the UID-match + LaunchDaemon complexity exceeded the weekend scope. Mode 1 already covers the "Claude on host" case.
+
+---
+
 ## Configuration
 
 ### Environment variables (`.env`)
