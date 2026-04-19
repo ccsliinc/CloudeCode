@@ -1,4 +1,9 @@
-"""PTY-based terminal session for real-time interaction."""
+"""PTY-based terminal session for real-time interaction.
+
+Also hosts the `PTYBackend` adapter that wraps `PTYSession` under the
+`SessionBackend` ABC. Keeping both here keeps git history tight — the bulk
+of the logic still lives in `PTYSession`.
+"""
 
 import asyncio
 import os
@@ -9,8 +14,10 @@ import fcntl
 import termios
 import select
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Any, List, Optional, Callable
 import structlog
+
+from src.core.session_backend import SessionBackend
 
 logger = structlog.get_logger()
 
@@ -264,3 +271,82 @@ class PTYSession:
             return True
         except (ProcessLookupError, PermissionError):
             return False
+
+
+class PTYBackend(SessionBackend):
+    """SessionBackend adapter around the legacy `PTYSession`.
+
+    This is the fallback when tmux is unavailable or explicitly disabled. It
+    does NOT survive server restart — PTYs die with the parent process — so
+    `discover_existing()` always returns `[]` and `capture_scrollback()`
+    always returns `b""`. The browser keeps its own xterm.js history for the
+    PTY case.
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        working_dir: Path,
+        on_output: Optional[Callable[[bytes], Any]] = None,
+    ) -> None:
+        super().__init__(session_id, working_dir, on_output)
+        self._pty: Optional[PTYSession] = None
+
+    async def start(
+        self,
+        command: Optional[str] = None,
+        env: Optional[dict] = None,  # noqa: ARG002 - PTYSession reads os.environ directly
+    ) -> None:
+        """Start the PTY session."""
+        if self._pty is not None:
+            raise RuntimeError("PTYBackend already running")
+
+        self._pty = PTYSession(
+            session_id=self.session_id,
+            working_dir=self.working_dir,
+            on_output=self.on_output,
+        )
+        await self._pty.start(command=command)
+
+    async def stop(self) -> None:
+        """Stop the PTY session. Idempotent."""
+        if self._pty is None:
+            return
+        try:
+            await self._pty.stop()
+        finally:
+            self._pty = None
+
+    async def write(self, data: bytes) -> None:
+        """Forward bytes to the PTY master."""
+        if self._pty is None:
+            raise RuntimeError("PTYBackend is not running")
+        await self._pty.write(data)
+
+    def resize(self, cols: int, rows: int) -> None:
+        """Resize the PTY window (TIOCSWINSZ + SIGWINCH)."""
+        if self._pty is None:
+            return
+        self._pty.resize(cols, rows)
+
+    def is_alive(self) -> bool:
+        """True iff the child process is still alive."""
+        return self._pty is not None and self._pty.is_alive()
+
+    async def read_async(self) -> None:
+        """PTYSession starts its own reader task inside `start()`; no-op here."""
+        return None
+
+    def discover_existing(self) -> List[str]:
+        """PTYs don't survive restart — always empty."""
+        return []
+
+    def capture_scrollback(self, lines: int = 3000) -> bytes:  # noqa: ARG002
+        """No true scrollback for a raw PTY."""
+        return b""
+
+    # ---- Convenience passthrough (used by SessionManager.send_command) ----
+    @property
+    def pid(self) -> Optional[int]:
+        """Expose the PTY child pid — used by SessionManager for metadata."""
+        return self._pty.pid if self._pty is not None else None

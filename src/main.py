@@ -102,6 +102,9 @@ async def lifespan(app: FastAPI):
 
     # Initialize core components
     session_manager = SessionManager()
+    # Re-adopt a surviving tmux session (if any) from previous server run.
+    # No-op for PTY backend (PTYs die with the parent).
+    await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
     tunnel_manager = HybridTunnelManager(session_manager)
 

@@ -373,10 +373,13 @@ class ServerManager {
     this.logStream = fs.createWriteStream(this.logFile, { flags: 'a' });
     this.logStream.write(`\n\n=== Server starting at ${new Date().toISOString()} ===\n`);
 
-    // Add bin directory to PATH so python process can find cloudflared
+    // Add bin directory to PATH so python process can find cloudflared.
+    // Also prepend Homebrew bin dirs so the Python server can locate tmux
+    // under Electron's launchd environment (which strips user PATH).
+    // /opt/homebrew/bin = Apple Silicon, /usr/local/bin = Intel Homebrew.
     const binDir = path.join(this.baseDir, 'bin');
     const env = { ...process.env };
-    env.PATH = `${binDir}:${env.PATH}`;
+    env.PATH = `${binDir}:/opt/homebrew/bin:/usr/local/bin:${env.PATH}`;
 
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,

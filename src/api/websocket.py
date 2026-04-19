@@ -115,6 +115,27 @@ async def websocket_terminal(websocket: WebSocket):
     except Exception as e:
         logger.error("failed_to_send_welcome", error=str(e))
 
+    # Scrollback replay on re-attach. TmuxBackend returns recent pane history
+    # so the client can catch up before the live stream starts. PTYBackend
+    # returns b"" (no true scrollback) — we skip the replay frame entirely.
+    # IdleWatcher (Item 7) will use `backend.replay_in_progress` to suppress
+    # pattern-match callbacks on these bytes.
+    try:
+        scrollback = session_manager.capture_scrollback()
+        if scrollback:
+            logger.info("ws_scrollback_replay", bytes=len(scrollback))
+            # Mark replay-in-progress for the duration of the send so
+            # downstream consumers can skip pattern detection on these bytes.
+            if session_manager.backend is not None:
+                session_manager.backend.replay_in_progress = True
+            try:
+                await websocket.send_bytes(scrollback)
+            finally:
+                if session_manager.backend is not None:
+                    session_manager.backend.replay_in_progress = False
+    except Exception as e:
+        logger.debug("ws_scrollback_replay_failed", error=str(e))
+
     try:
         # Create tasks for receiving and sending
         receive_task = asyncio.create_task(
@@ -245,8 +266,17 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # Decode base64 to raw bytes
                 raw_bytes = base64.b64decode(encoded_data)
 
-                # Pattern detection: decode and analyze output
-                if log_monitor:
+                # Pattern detection: decode and analyze output.
+                # IdleWatcher (Item 7) hooks here. We also skip detection when
+                # the backend is in replay mode so replayed scrollback doesn't
+                # look like "new" activity to the idle state machine.
+                sm = websocket.app.state.session_manager
+                in_replay = (
+                    sm is not None
+                    and sm.backend is not None
+                    and getattr(sm.backend, "replay_in_progress", False)
+                )
+                if log_monitor and not in_replay:
                     try:
                         text = raw_bytes.decode('utf-8', errors='replace')
                         # Run pattern detection on the output

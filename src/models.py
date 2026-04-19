@@ -81,6 +81,10 @@ class SessionInfo(BaseModel):
     recent_logs: List[LogEntry] = Field(default_factory=list)
     active_tunnels: List[Tunnel] = Field(default_factory=list)
     stats: SessionStats = Field(default_factory=SessionStats)
+    session_backend: str = Field(
+        default="none",
+        description="Backend type driving this session: 'tmux', 'pty', or 'none'",
+    )
 
 
 # API Request Models

@@ -1,6 +1,11 @@
 {
   "jwt_expiry_minutes": 30,
   "template_path": "claude-template",
+  "session": {
+    "backend": "auto",
+    "tmux_socket_name": "cloude",
+    "scrollback_lines": 3000
+  },
   "common_slash_commands": [
     "/agents",
     "/clear",

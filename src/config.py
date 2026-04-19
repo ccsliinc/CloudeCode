@@ -1,7 +1,7 @@
 """Configuration management using pydantic-settings."""
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
@@ -15,6 +15,31 @@ class ProjectConfig(BaseModel):
     description: Optional[str] = None
 
 
+class SessionConfig(BaseModel):
+    """Session backend configuration.
+
+    - ``backend``: ``"auto"`` (tmux if available, else pty), ``"tmux"``, or ``"pty"``.
+    - ``tmux_socket_name``: name passed to ``tmux -L <name>``. Defaults to
+      ``"cloude"`` so we never touch the user's default tmux server.
+    - ``scrollback_lines``: how many lines the backend captures on re-attach
+      for scrollback replay. Too high = slow reconnects; too low = lost
+      context. 3000 lines is a reasonable middle ground.
+    """
+    backend: str = Field(
+        default="auto",
+        description="Session backend: 'auto' | 'tmux' | 'pty'",
+    )
+    tmux_socket_name: str = Field(
+        default="cloude",
+        description="Dedicated tmux socket name (tmux -L <name>)",
+    )
+    scrollback_lines: int = Field(
+        default=3000,
+        description="Lines of scrollback to capture on re-attach",
+        ge=0,
+    )
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
@@ -23,6 +48,7 @@ class AuthConfig(BaseModel):
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
+    session: SessionConfig = Field(default_factory=SessionConfig)
 
 
 class Settings(BaseSettings):
@@ -159,6 +185,21 @@ class Settings(BaseSettings):
             projects_data = data.get("projects", [])
             projects = [ProjectConfig(**p) for p in projects_data]
 
+            # Build SessionConfig from optional "session" block; missing keys
+            # fall back to SessionConfig defaults.
+            session_data = data.get("session", {}) or {}
+            try:
+                session_config = SessionConfig(**session_data)
+            except Exception:
+                # Malformed session block — log + use defaults rather than
+                # killing the whole config load.
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_session_config_block",
+                    raw=session_data,
+                )
+                session_config = SessionConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -167,7 +208,8 @@ class Settings(BaseSettings):
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
                 template_path=data.get("template_path"),
                 projects=projects,
-                common_slash_commands=data.get("common_slash_commands", [])
+                common_slash_commands=data.get("common_slash_commands", []),
+                session=session_config,
             )
 
             # Validate secrets are set

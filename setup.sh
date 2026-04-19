@@ -61,6 +61,19 @@ else
     echo "  Install from: https://claude.com/download"
 fi
 
+# Check tmux (required for session persistence across restarts)
+echo ""
+echo "Checking tmux..."
+if command -v tmux &> /dev/null; then
+    TMUX_VERSION=$(tmux -V | awk '{print $2}')
+    echo -e "${GREEN}✓${NC} tmux $TMUX_VERSION is installed"
+else
+    echo -e "${YELLOW}⚠${NC}  tmux not found — install with 'brew install tmux' or session persistence will be disabled"
+    echo "   Cloude Code will fall back to the PTY backend (sessions die on server restart)."
+    echo "   To force PTY mode and silence this warning, set \"session.backend\": \"pty\" in config.json."
+    # Intentionally NOT setting NEEDS_SETUP=true — tmux is optional, PTY fallback still works.
+fi
+
 # Check Python
 echo ""
 echo "Checking Python..."
