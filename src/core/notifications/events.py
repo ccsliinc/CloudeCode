@@ -66,13 +66,29 @@ def build_deep_link(
 
     Returns:
         ``"{public_base_url}/session/{slug-urlencoded}"`` or None.
+
+    Defense in depth:
+    - `session_slug` is already sanitized by `_slugify()` at the
+      `TmuxBackend` call site, but we re-apply the same rules here so
+      an in-process caller that constructs `NotificationEvent` directly
+      (tests, future code paths) can never ship an unsafe slug to the
+      push channel.
+    - `quote()` with `safe=""` encodes EVERY non-alphanumeric, so even
+      if the slug regex were loosened we could not smuggle `?`, `#`,
+      `/`, or `..` into the deep link.
     """
     if not public_base_url:
         return None
+    # Re-slugify defensively — ASCII-only, tmux-legal, never empty.
+    # Local import to avoid a circular dependency (tmux_backend imports
+    # from src.core.session_backend which is in the same package tree).
+    from src.core.tmux_backend import _slugify
+
+    safe_slug = _slugify(event.session_slug)
     # Strip trailing slashes so we don't double-up.
     base = public_base_url.rstrip("/")
     # quote() with safe="" so ALL non-alphanumerics get encoded — slugs
     # are normally URL-safe, but encoding defensively means a hostile
     # slug can't sneak query params or fragments into the deep link.
-    encoded_slug = quote(event.session_slug, safe="")
+    encoded_slug = quote(safe_slug, safe="")
     return f"{base}/session/{encoded_slug}"

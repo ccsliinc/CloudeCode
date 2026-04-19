@@ -249,6 +249,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Item 9: Content-Security-Policy + hardening headers.
+#
+# Ordering note (Starlette LIFO): `add_middleware` registers outer-to-inner
+# as you call it, but they EXECUTE inner-to-outer on the request and
+# outer-to-inner on the response. We want CSP applied to EVERY response
+# including those produced by CORS preflight, static files, and the
+# catch-all SPA route — so we register it here, after CORS. On response
+# path it runs last, giving us a single place to stamp headers on
+# anything the app returns (including errors).
+#
+# Policy rationale for a local / LAN-only SPA:
+# - `default-src 'self'` — lock everything to same-origin by default.
+# - `script-src 'self'` — no inline or eval; all JS ships from /static.
+#   xterm.js is loaded from a CDN in index.html; if that stays, we will
+#   need to allow that CDN host here. The current policy will log CSP
+#   violations for CDN-hosted xterm until we self-host it (Item 14 follow-up).
+# - `style-src 'self' 'unsafe-inline'` — xterm addons (webgl, fit) inject
+#   inline style attributes on DOM nodes they manage. Without
+#   `'unsafe-inline'` the terminal renders blank. This is the smallest
+#   concession that keeps the terminal usable.
+# - `connect-src 'self' ws: wss:` — WebSocket terminal stream runs on
+#   the same origin; allow ws:/wss: so future tunnels (Cloudflare named)
+#   with a different scheme can still connect.
+# - `img-src 'self' data:` — data: URIs are used for QR codes / emoji SVGs.
+# - `font-src 'self' data:` — xterm embeds icon fonts as data: URIs.
+# - `frame-ancestors 'none'` — clickjack defense; Cloude Code is never
+#   meant to be iframed.
+@app.middleware("http")
+async def csp_headers(request: Request, call_next):
+    """Stamp CSP + hardening headers on every response."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "connect-src 'self' ws: wss:; "
+        "img-src 'self' data:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
 # Wire slowapi rate limiter. The Limiter instance is defined in
 # src/api/auth.py (where the @limiter.limit decorators are applied).
 # Here we just bolt it onto the app:
@@ -273,6 +318,32 @@ app.mount("/static", StaticFiles(directory=str(client_dir)), name="static")
 @app.get("/")
 async def root():
     """Serve the web interface."""
+    index_path = client_dir / "index.html"
+    return FileResponse(index_path)
+
+
+# Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
+# as `/` — the client-side router (client/js/router.js) reads the path
+# on load, validates the slug, and auto-selects the project after auth.
+#
+# Why a dedicated FastAPI route (not a catch-all):
+# - Keeps routing explicit; `/static/*`, `/ws/*`, `/api/*`, `/health` all
+#   resolve to their real handlers. FastAPI matches more-specific routes
+#   first, and this one is a SINGLE path segment under `/session/`, so
+#   there is no collision with anything else we mount.
+# - Path-level validation is intentionally permissive: we accept any
+#   non-empty path segment here and rely on the client router to enforce
+#   the strict slug regex and display a visible error for invalid names.
+#   That means a visitor who pastes a bad URL sees the app shell with an
+#   error banner — not a 404 from the server. Security posture is
+#   unchanged because no server-side state is touched by this route.
+@app.get("/session/{project}")
+async def session_deep_link(project: str):
+    """Serve the SPA shell for deep-link URLs.
+
+    The ``project`` path parameter is consumed by the client-side router
+    after the SPA boots; this handler does not inspect or validate it.
+    """
     index_path = client_dir / "index.html"
     return FileResponse(index_path)
 

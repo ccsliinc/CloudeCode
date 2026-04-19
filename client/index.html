@@ -12,6 +12,10 @@
     <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
 <body>
+    <!-- Item 9: deep-link error banner. Populated by router.js when the
+         URL contains `/session/<invalid>`. Hidden by default. -->
+    <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
+
     <div class="header">
         <h1 id="appTitle">☁️ Cloude Code <span class="version">v0.2</span></h1>
         <div class="controls">
@@ -66,6 +70,9 @@
     <script src="/static/js/terminal.js"></script>
     <script src="/static/js/dpad.js"></script>
     <script src="/static/js/slash-commands.js"></script>
+    <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
+         so it can call into them once a `/session/<name>` URL is parsed. -->
+    <script src="/static/js/router.js"></script>
 
     <!-- App Controller -->
     <script>
@@ -344,6 +351,12 @@
         // Initialize on load
         window.addEventListener('load', () => {
             App.init();
+            // Item 9: kick off deep-link router AFTER App.init() so the
+            // auth state is already being resolved. router.js listens
+            // for the `authenticated` event to deliver stashed targets.
+            if (window.Router && typeof window.Router.init === 'function') {
+                window.Router.init();
+            }
         });
     </script>
 </body>

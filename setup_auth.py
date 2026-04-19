@@ -417,10 +417,18 @@ def _validate_url_reachable(url: str, timeout: float = 3.0) -> bool:
     Connection refused / timeout / DNS failure → False. We warn-and-
     continue rather than block setup; the user may be configuring on
     a different network than they'll deploy on.
+
+    TLS verification is disabled here on purpose: users on a LAN often
+    run Cloude Code behind self-signed certs (mkcert, Caddy local CA),
+    and this probe is a liveness check — not an authenticity check.
+    The real request a user makes from their phone will use whatever
+    trust store their OS provides. False negatives here are far more
+    painful than the zero-risk of accepting a self-signed response
+    from a host the user just typed.
     """
     try:
         import httpx
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=False, verify=False) as client:
             resp = client.head(url)
             # Any HTTP response means SOMETHING is listening.
             return 200 <= resp.status_code < 500
@@ -507,6 +515,23 @@ def setup_notifications_block(config_path: Path) -> None:
         print()
         print(f"Notifications configured in {config_path}")
         print()
+        # Item 9: tap-to-validate hint. After setup finishes, encourage
+        # the user to open the deep-link base URL on their phone so they
+        # confirm LAN reachability end-to-end before they rely on push
+        # notifications. We print the base URL itself (not a specific
+        # session deep link) because no session exists at setup time.
+        if public_base_url:
+            print("=" * 70)
+            print("Confirm LAN reachability from your phone")
+            print("=" * 70)
+            print()
+            print("Open this URL on the device where you'll receive ntfy pushes:")
+            print()
+            print(f"   {public_base_url}")
+            print()
+            print("If the Cloude Code login screen loads, push-notification")
+            print("deep links will work from your phone's lock-screen.")
+            print()
     except Exception as e:
         print(f"WARN: could not write {config_path}: {e}")
 

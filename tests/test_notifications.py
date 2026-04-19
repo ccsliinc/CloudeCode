@@ -107,12 +107,25 @@ def test_build_deep_link_strips_trailing_slash():
 
 
 def test_build_deep_link_url_encodes_slug():
+    # Item 9: build_deep_link now re-runs `_slugify` defensively before
+    # URL-encoding. That means a hostile raw slug like
+    # `weird slug/with?chars#frag` is first reduced to an ASCII-safe
+    # underscore-separated form, then URL-encoded. The original injection
+    # claim still holds — no raw `?` or `#` can reach the path segment —
+    # but the exact percent-encoded form no longer shows up because the
+    # dangerous chars are collapsed to `_` before encoding.
     event = _make_event(slug="weird slug/with?chars#frag")
     url = build_deep_link(event, "http://mac.lan:8000")
-    # Spaces, slashes, ?, # all encoded — defensive against slug injection.
-    assert "weird%20slug%2Fwith%3Fchars%23frag" in url
-    assert "?" not in url.split("/session/", 1)[1]
-    assert "#" not in url
+    # Defense in depth: the entire deep link must be path-safe.
+    path_part = url.split("/session/", 1)[1]
+    assert "?" not in path_part
+    assert "#" not in path_part
+    assert "/" not in path_part
+    assert " " not in path_part
+    # After slugify, the four non-alphanumerics (space, `/`, `?`, `#`)
+    # each collapse to `_`, yielding the string below. Update this if
+    # the slug rules in `src/core/tmux_backend._slugify` ever change.
+    assert url == "http://mac.lan:8000/session/weird_slug_with_chars_frag"
 
 
 def test_build_deep_link_returns_none_when_base_unset():

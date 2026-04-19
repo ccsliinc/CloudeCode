@@ -504,6 +504,47 @@ class Launchpad {
     }
 
     /**
+     * Open a project by name (used by the deep-link router, Item 9).
+     *
+     * The router already validated the name against a strict regex, but
+     * we re-verify membership in `this.projects` before calling into
+     * `selectProject` — if the user clicks a deep link for a project
+     * that was deleted / renamed, we surface a clear error instead of
+     * calling the backend with an unknown path.
+     *
+     * This method is idempotent and safe to call before `loadProjects()`
+     * completes — it waits up to ~2s for the project list to populate,
+     * which is normally ready within one tick of `App.showLaunchpad()`.
+     */
+    async openProjectByName(name) {
+        console.log('Launchpad: openProjectByName:', name);
+
+        // Wait for the project list if it hasn't loaded yet. App.showLaunchpad
+        // calls loadProjects() inline; this handles the race where the
+        // router fires right after auth but before loadProjects resolves.
+        const deadline = Date.now() + 2000;
+        while ((!this.projects || this.projects.length === 0) && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+
+        // Match by exact name first, then case-insensitive fallback.
+        let project = (this.projects || []).find(p => p.name === name);
+        if (!project) {
+            project = (this.projects || []).find(
+                p => p.name && p.name.toLowerCase() === name.toLowerCase()
+            );
+        }
+
+        if (!project) {
+            console.warn('Launchpad: deep-link project not found:', name);
+            this.showError(`project not found: ${name}`);
+            return;
+        }
+
+        await this.selectProject(project);
+    }
+
+    /**
      * Select and open existing project
      */
     async selectProject(project) {
