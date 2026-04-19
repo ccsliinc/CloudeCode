@@ -155,21 +155,33 @@ async def websocket_terminal(websocket: WebSocket):
     # Scrollback replay on re-attach. TmuxBackend returns recent pane history
     # so the client can catch up before the live stream starts. PTYBackend
     # returns b"" (no true scrollback) — we skip the replay frame entirely.
-    # IdleWatcher (Item 7) will use `backend.replay_in_progress` to suppress
-    # pattern-match callbacks on these bytes.
+    # IdleWatcher (Item 7) uses `idle_watcher.replay_in_progress` to suppress
+    # event emits on replayed bytes (the backend's own `replay_in_progress`
+    # flag is also set for symmetry with downstream consumers).
     try:
         scrollback = session_manager.capture_scrollback()
         if scrollback:
             logger.info("ws_scrollback_replay", bytes=len(scrollback))
-            # Mark replay-in-progress for the duration of the send so
-            # downstream consumers can skip pattern detection on these bytes.
+            # Mark replay-in-progress on BOTH the backend and the idle
+            # watcher for the duration of the send so neither treats these
+            # historical bytes as live activity.
             if session_manager.backend is not None:
                 session_manager.backend.replay_in_progress = True
+            if session_manager.idle_watcher is not None:
+                session_manager.idle_watcher.replay_in_progress = True
             try:
                 await websocket.send_bytes(scrollback)
+                # Feed the watcher's tail buffer with the scrollback so
+                # post-replay state tests (prompt-frame detection) see the
+                # correct tail. handle_chunk's replay guard ensures no
+                # emit fires here.
+                if session_manager.idle_watcher is not None:
+                    await session_manager.idle_watcher.handle_chunk(scrollback)
             finally:
                 if session_manager.backend is not None:
                     session_manager.backend.replay_in_progress = False
+                if session_manager.idle_watcher is not None:
+                    session_manager.idle_watcher.replay_in_progress = False
     except Exception as e:
         logger.debug("ws_scrollback_replay_failed", error=str(e))
 
@@ -303,10 +315,9 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # Decode base64 to raw bytes
                 raw_bytes = base64.b64decode(encoded_data)
 
-                # Pattern detection: decode and analyze output.
-                # IdleWatcher (Item 7) hooks here. We also skip detection when
-                # the backend is in replay mode so replayed scrollback doesn't
-                # look like "new" activity to the idle state machine.
+                # Pattern detection + idle watching. We skip both when the
+                # backend is in replay mode so replayed scrollback doesn't
+                # look like "new" activity to downstream consumers.
                 sm = websocket.app.state.session_manager
                 in_replay = (
                     sm is not None
@@ -316,11 +327,22 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 if log_monitor and not in_replay:
                     try:
                         text = raw_bytes.decode('utf-8', errors='replace')
-                        # Run pattern detection on the output
+                        # Run pattern detection on the output (Item 6 wiring)
                         log_monitor._detect_patterns(text)
                     except Exception as e:
                         # Don't let pattern detection errors break output streaming
                         logger.debug("pattern_detection_error", error=str(e))
+
+                # Item 7: feed the per-session IdleWatcher. It buffers the
+                # tail, classifies, and fires PERMISSION_PROMPT synchronously
+                # / TASK_COMPLETE from its background poll. Errors are
+                # swallowed — terminal streaming is load-bearing, notifications
+                # are not.
+                if sm is not None and sm.idle_watcher is not None and not in_replay:
+                    try:
+                        await sm.idle_watcher.handle_chunk(raw_bytes)
+                    except Exception as e:
+                        logger.debug("idle_watcher_chunk_error", error=str(e))
 
                 # Send as binary frame directly
                 await websocket.send_bytes(raw_bytes)

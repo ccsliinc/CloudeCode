@@ -86,11 +86,16 @@ class NotificationsConfig(BaseModel):
     - ``public_base_url``: e.g. ``"http://mac.lan:8000"``. When set,
       notifications include a Click deep link back to the session.
       When unset, notifications fire without a Click header.
+    - ``idle_threshold_seconds``: Item 7 — seconds of PTY silence after
+      which an IdleWatcher fires TASK_COMPLETE, provided the tail ends
+      on a Claude Code prompt frame. 30s is the plan v3.1 default;
+      operators may tune downward if false-positive rate is acceptable.
     """
     enabled: bool = False
     ntfy_base_url: str = Field(default="https://ntfy.sh")
     ntfy_topic: str = Field(default="")
     public_base_url: str = Field(default="")
+    idle_threshold_seconds: float = Field(default=30.0, ge=1.0)
 
 
 class AuthRateLimits(BaseModel):

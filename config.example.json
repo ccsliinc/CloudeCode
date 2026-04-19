@@ -20,7 +20,8 @@
     "enabled": false,
     "ntfy_base_url": "https://ntfy.sh",
     "ntfy_topic": "",
-    "public_base_url": ""
+    "public_base_url": "",
+    "idle_threshold_seconds": 30.0
   },
   "common_slash_commands": [
     "/agents",

@@ -149,6 +149,10 @@ async def lifespan(app: FastAPI):
     )
     await notification_router.start()
 
+    # Item 7: inject the live router into SessionManager so IdleWatcher
+    # instances created via create_session have a valid emit target.
+    session_manager.attach_notification_router(notification_router)
+
     tunnel_manager = TunnelManager.from_settings(
         settings, session_manager=session_manager
     )

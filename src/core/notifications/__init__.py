@@ -21,10 +21,13 @@ from src.core.notifications.events import (
     NotificationEvent,
     build_deep_link,
 )
+from src.core.notifications.idle_watcher import IdleState, IdleWatcher
 from src.core.notifications.router import NotificationRouter
 
 __all__ = [
     "EventType",
+    "IdleState",
+    "IdleWatcher",
     "NotificationEvent",
     "NotificationRouter",
     "build_deep_link",

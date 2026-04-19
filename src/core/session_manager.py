@@ -16,6 +16,7 @@ import structlog
 from src.config import settings
 from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEntry
 from src.core.session_backend import SessionBackend, build_backend
+from src.core.notifications.idle_watcher import IdleWatcher
 from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
 
@@ -32,9 +33,33 @@ class SessionManager:
         self.log_buffer: list[LogEntry] = []
         self.command_count: int = 0
         self._output_subscribers: list[asyncio.Queue] = []
+        # Item 7: per-session idle watcher. Constructed lazily at
+        # ``create_session`` so we can inject the live router from
+        # ``app.state``; cleared by ``destroy_session``. Exposed directly
+        # (not via a getter) so the WS chunk handler can bypass the
+        # property-lookup cost in its hot path.
+        self.idle_watcher: Optional[IdleWatcher] = None
+        # Notification router reference — set by ``attach_notification_router``
+        # during FastAPI lifespan startup (after both the SessionManager and
+        # the router are constructed). When None, IdleWatcher instantiation
+        # is skipped and no notification events fire.
+        self._notification_router = None
 
         # Load persisted session if it exists
         self._load_session_metadata()
+
+    # ---- notification wiring --------------------------------------------
+
+    def attach_notification_router(self, router) -> None:
+        """Inject the NotificationRouter after lifespan has built it.
+
+        Called from ``src/main.py`` once during FastAPI startup. Kept as an
+        explicit setter rather than a constructor arg so SessionManager can
+        still be built before the router exists (matches the current
+        lifespan ordering where the SessionManager is constructed first and
+        must be usable for pre-router operations like ``lifespan_startup``).
+        """
+        self._notification_router = router
 
     # ---- backend type introspection --------------------------------------
 
@@ -292,6 +317,27 @@ class SessionManager:
 
             self._save_session_metadata()
 
+            # Item 7: spin up the per-session IdleWatcher. Skipped silently
+            # when the router hasn't been attached (e.g. in tests that
+            # exercise SessionManager without a full app lifespan) so the
+            # session lifecycle doesn't break.
+            if self._notification_router is not None:
+                try:
+                    auth_config = settings.load_auth_config()
+                    threshold = getattr(
+                        auth_config.notifications,
+                        "idle_threshold_seconds",
+                        30.0,
+                    )
+                except Exception:
+                    threshold = 30.0
+                self.idle_watcher = IdleWatcher(
+                    session_slug=session_id,
+                    router=self._notification_router,
+                    threshold_s=threshold,
+                )
+                await self.idle_watcher.start()
+
             logger.info(
                 "session_created",
                 session_id=session_id,
@@ -310,13 +356,19 @@ class SessionManager:
             logger.error("session_creation_failed", error=str(e))
             if self.session:
                 self.session.status = SessionStatus.ERROR
-            # Also clean up a half-built backend.
+            # Also clean up a half-built backend + watcher.
             if self.backend is not None:
                 try:
                     await self.backend.stop()
                 except Exception:
                     pass
                 self.backend = None
+            if self.idle_watcher is not None:
+                try:
+                    await self.idle_watcher.stop()
+                except Exception:
+                    pass
+                self.idle_watcher = None
             raise ValueError(f"Failed to create session: {e}") from e
 
     async def destroy_session(self) -> bool:
@@ -327,6 +379,20 @@ class SessionManager:
         logger.info("destroying_session", session_id=self.session.id)
 
         try:
+            # Item 7: tear down the watcher FIRST. Stopping it before the
+            # backend guarantees no poll iteration races with the pending
+            # backend shutdown (the backend's final bytes could otherwise
+            # fire a last-gasp TASK_COMPLETE after the session is gone).
+            if self.idle_watcher is not None:
+                try:
+                    await self.idle_watcher.stop()
+                except Exception as exc:
+                    logger.warning(
+                        "idle_watcher_stop_error",
+                        error=str(exc),
+                    )
+                self.idle_watcher = None
+
             if self.backend is not None:
                 await self.backend.stop()
                 self.backend = None
