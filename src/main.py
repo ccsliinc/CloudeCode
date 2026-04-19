@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from src.config import settings
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
-from src.core.hybrid_tunnel_manager import HybridTunnelManager
+from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
@@ -89,7 +89,7 @@ async def verify_public_access():
 # Global instances (will be initialized in lifespan)
 session_manager: SessionManager = None
 log_monitor: LogMonitor = None
-tunnel_manager: HybridTunnelManager = None
+tunnel_manager: TunnelManager = None
 auto_tunnel: AutoTunnelOrchestrator = None
 
 
@@ -106,7 +106,9 @@ async def lifespan(app: FastAPI):
     # No-op for PTY backend (PTYs die with the parent).
     await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
-    tunnel_manager = HybridTunnelManager(session_manager)
+    tunnel_manager = TunnelManager.from_settings(
+        settings, session_manager=session_manager
+    )
 
     # Initialize tunnel manager
     await tunnel_manager.initialize()
@@ -127,9 +129,17 @@ async def lifespan(app: FastAPI):
 
     logger.info("application_ready")
 
-    # Verify public URL accessibility if using named tunnels
-    if tunnel_manager._is_named:
+    # Only probe public HTTPS when the active backend actually exposes
+    # the server publicly. LAN-only runs log the detected LAN URL instead.
+    if tunnel_manager.backend.supports_public():
         await verify_public_access()
+    else:
+        status = await tunnel_manager.backend.status()
+        logger.info(
+            "server_ready_local_only",
+            backend=status.get("backend"),
+            url=status.get("base_url"),
+        )
 
     yield
 

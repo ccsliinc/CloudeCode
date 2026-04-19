@@ -40,6 +40,38 @@ class SessionConfig(BaseModel):
     )
 
 
+class TunnelConfig(BaseModel):
+    """Tunnel backend configuration.
+
+    - ``backend``: ``"local_only"`` (default, LAN-only, zero deps),
+      ``"quick_cloudflare"`` (cloudflared --url quick tunnel), or
+      ``"named_cloudflare"`` (persistent named tunnel with CNAME ingress).
+    - ``enable_cloudflare``: second-layer feature flag. Cloudflare
+      backends refuse to instantiate unless this is True, even if
+      selected by name. This is the "double-flag guard" — you have to
+      both pick a Cloudflare backend AND flip the master switch to
+      actually go public.
+    - ``lan_hostname``: override for the LAN hostname used by
+      ``local_only``. Default ``"auto"`` triggers detection (socket →
+      netifaces → UDP-connect trick → 127.0.0.1 fallback).
+    """
+    backend: str = Field(
+        default="local_only",
+        description=(
+            "Tunnel backend: 'local_only' | 'quick_cloudflare' | "
+            "'named_cloudflare'"
+        ),
+    )
+    enable_cloudflare: bool = Field(
+        default=False,
+        description="Master flag — must be true to use any Cloudflare backend",
+    )
+    lan_hostname: str = Field(
+        default="auto",
+        description="LAN hostname/IP for local_only backend ('auto' = detect)",
+    )
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
@@ -49,6 +81,7 @@ class AuthConfig(BaseModel):
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
     session: SessionConfig = Field(default_factory=SessionConfig)
+    tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
 
 
 class Settings(BaseSettings):
@@ -200,6 +233,19 @@ class Settings(BaseSettings):
                 )
                 session_config = SessionConfig()
 
+            # Build TunnelConfig from optional "tunnel" block; same
+            # malformed-block tolerance as session.
+            tunnel_data = data.get("tunnel", {}) or {}
+            try:
+                tunnel_config = TunnelConfig(**tunnel_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_tunnel_config_block",
+                    raw=tunnel_data,
+                )
+                tunnel_config = TunnelConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -210,6 +256,7 @@ class Settings(BaseSettings):
                 projects=projects,
                 common_slash_commands=data.get("common_slash_commands", []),
                 session=session_config,
+                tunnel=tunnel_config,
             )
 
             # Validate secrets are set

@@ -1,4 +1,8 @@
-"""Named Cloudflare tunnel manager with single persistent tunnel."""
+"""Named Cloudflare tunnel manager with single persistent tunnel.
+
+# LEGACY: inlined behavior behind tunnel.backends.named_cloudflare.py;
+# slated for deletion in v3.2 follow-up PR.
+"""
 
 import asyncio
 import subprocess

@@ -6,6 +6,11 @@
     "tmux_socket_name": "cloude",
     "scrollback_lines": 3000
   },
+  "tunnel": {
+    "backend": "local_only",
+    "enable_cloudflare": false,
+    "lan_hostname": "auto"
+  },
   "common_slash_commands": [
     "/agents",
     "/clear",
