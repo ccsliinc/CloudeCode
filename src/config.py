@@ -94,7 +94,16 @@ class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
     jwt_secret: Optional[str] = None   # Populated from Settings (.env)
-    jwt_expiry_minutes: int = 30
+    jwt_expiry_minutes: int = 30       # Legacy — used only if access TTL unset.
+    # Item 5: access/refresh token pair. Access is short-lived (15m default)
+    # so a leaked token has a tight blast radius; refresh is long-lived
+    # (7d default) but stored server-side with rotation + reuse detection.
+    access_token_ttl_seconds: int = 900       # 15 minutes
+    refresh_token_ttl_seconds: int = 604800   # 7 days
+    # Grace window during which a just-rotated refresh token can still be
+    # used. Tolerates near-simultaneous requests (client fires two refreshes
+    # at once) without tripping reuse-detection.
+    refresh_grace_seconds: int = 10
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
@@ -284,6 +293,19 @@ class Settings(BaseSettings):
                 totp_secret=self.totp_secret,  # From .env via Settings
                 jwt_secret=self.jwt_secret,    # From .env via Settings
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
+                # Item 5 — optional JSON overrides for token lifetimes.
+                # Defaults (900s / 604800s / 10s) are sensible for the
+                # single-user LAN MVP; expose them so operators can tune
+                # without editing source.
+                access_token_ttl_seconds=int(
+                    data.get("access_token_ttl_seconds", 900)
+                ),
+                refresh_token_ttl_seconds=int(
+                    data.get("refresh_token_ttl_seconds", 604800)
+                ),
+                refresh_grace_seconds=int(
+                    data.get("refresh_grace_seconds", 10)
+                ),
                 template_path=data.get("template_path"),
                 projects=projects,
                 common_slash_commands=data.get("common_slash_commands", []),

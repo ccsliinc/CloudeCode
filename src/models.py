@@ -150,10 +150,31 @@ class SuccessResponse(BaseModel):
 
 
 class AuthTokenResponse(BaseModel):
-    """Response with JWT authentication token."""
+    """Response with JWT authentication token pair.
+
+    Item 5: the endpoint now returns BOTH an access token (short-lived,
+    ~15 min) and a refresh token (long-lived, ~7d) so the client can
+    silently rotate access tokens without prompting for TOTP.
+
+    ``token`` is a deprecated alias for ``access_token`` — populated for
+    one release (v3.1) so pre-Item-5 clients keep working, and will be
+    removed in v3.2. New clients should read ``access_token``.
+    """
     success: bool = True
-    token: str = Field(..., description="JWT authentication token")
-    expires_in: int = Field(..., description="Token expiry time in seconds")
+    access_token: Optional[str] = Field(
+        None, description="Short-lived JWT access token (~15 min)"
+    )
+    refresh_token: Optional[str] = Field(
+        None, description="Long-lived JWT refresh token (~7 days)"
+    )
+    expires_in: Optional[int] = Field(
+        None, description="Seconds until access token expires"
+    )
+    # DEPRECATED: alias for access_token — remove in v3.2.
+    token: Optional[str] = Field(
+        None,
+        description="Deprecated alias for access_token (will be removed in v3.2)",
+    )
 
 
 class HealthResponse(BaseModel):

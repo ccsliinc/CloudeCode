@@ -48,6 +48,9 @@ def patched_auth_config(monkeypatch):
     fake_auth = SimpleNamespace(
         jwt_secret=JWT_SECRET,
         jwt_expiry_minutes=60,
+        access_token_ttl_seconds=900,
+        refresh_token_ttl_seconds=604800,
+        refresh_grace_seconds=10,
         totp_secret="X" * 32,
         projects=[],
     )
@@ -73,10 +76,13 @@ def patched_auth_config(monkeypatch):
 
 
 def _mint_token(expiry_minutes: int = 60) -> str:
+    # Item 5: WS auth now requires `typ: "access"` — mint tokens shaped
+    # like real access tokens so the verifier accepts them.
     payload = {
         "exp": datetime.utcnow() + timedelta(minutes=expiry_minutes),
         "iat": datetime.utcnow(),
         "sub": "claudetunnel_user",
+        "typ": "access",
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -86,6 +92,7 @@ def _mint_expired_token() -> str:
         "exp": datetime.utcnow() - timedelta(minutes=5),
         "iat": datetime.utcnow() - timedelta(minutes=65),
         "sub": "claudetunnel_user",
+        "typ": "access",
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
 

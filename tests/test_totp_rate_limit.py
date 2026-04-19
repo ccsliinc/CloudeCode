@@ -51,6 +51,9 @@ def _make_fake_auth_config(trust_proxy: bool = False, per_minute: int = 5, per_h
         totp_secret=TOTP_SECRET,
         jwt_secret=JWT_SECRET,
         jwt_expiry_minutes=30,
+        access_token_ttl_seconds=900,
+        refresh_token_ttl_seconds=604800,
+        refresh_grace_seconds=10,
         projects=[],
         auth_rate_limits=rate_limits,
     )

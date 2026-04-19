@@ -1,11 +1,18 @@
 """API dependencies and authentication."""
 
-from fastapi import Header, HTTPException, WebSocket
-from typing import Optional, Tuple
+from fastapi import Header, HTTPException, Request, WebSocket
+from typing import Optional, Tuple, TYPE_CHECKING
 import structlog
 
 from src.config import settings
-from src.api.auth import verify_jwt_token
+# Item 5: WS auth goes through decode_access_token so `typ == "access"` is
+# enforced. decode_access_token raises HTTPException(401) on any failure;
+# we catch it here and translate to the (False, reason) tuple the WS
+# handler expects so close codes map cleanly.
+from src.api.auth import decode_access_token
+
+if TYPE_CHECKING:
+    from src.core.refresh_store import RefreshStore
 
 logger = structlog.get_logger()
 
@@ -109,8 +116,28 @@ def verify_jwt_from_subprotocol(websocket: WebSocket) -> Tuple[bool, Optional[st
     if not token:
         return False, "missing token"
 
-    # Actual JWT verification — reuses existing HS256/explicit-algorithms path.
-    if not verify_jwt_token(token):
+    # Actual JWT verification. decode_access_token enforces:
+    #   - HS256 algorithms list (RFC 8725 §3.2 guard against "alg": "none")
+    #   - exp > now
+    #   - typ == "access" (refresh tokens cannot be smuggled onto WS)
+    # Any failure raises HTTPException(401); translate back to the tuple
+    # shape the WS layer already consumes for close-code routing.
+    try:
+        decode_access_token(token)
+    except HTTPException:
         return False, "invalid token"
 
     return True, token
+
+
+def get_refresh_store(request: Request) -> "RefreshStore":
+    """FastAPI dependency — returns the RefreshStore mounted on app.state.
+
+    Raises 503 if the lifespan didn't wire one up (e.g. startup ordering
+    bug). Preferable to returning None and forcing every endpoint to
+    guard for it.
+    """
+    store = getattr(request.app.state, "refresh_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Refresh service not available")
+    return store

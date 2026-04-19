@@ -18,6 +18,7 @@ from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
+from src.core.refresh_store import RefreshStore
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
@@ -94,12 +95,36 @@ session_manager: SessionManager = None
 log_monitor: LogMonitor = None
 tunnel_manager: TunnelManager = None
 auto_tunnel: AutoTunnelOrchestrator = None
+refresh_store: RefreshStore = None
+_refresh_purge_task: asyncio.Task = None
+
+
+# Six-hour cadence for the purge loop. Keep a module-level constant so
+# tests can monkeypatch to something fast.
+_REFRESH_PURGE_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+async def _refresh_purge_loop(store: RefreshStore):
+    """Background task — sweeps expired refresh tokens every 6 hours."""
+    while True:
+        try:
+            await asyncio.sleep(_REFRESH_PURGE_INTERVAL_SECONDS)
+            await store.purge_expired()
+        except asyncio.CancelledError:
+            # Normal shutdown path — let it propagate.
+            raise
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("refresh_purge_loop_error", error=str(e))
+            # Brief back-off before retrying so we don't hot-loop on a
+            # persistent error condition.
+            await asyncio.sleep(60)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global session_manager, log_monitor, tunnel_manager, auto_tunnel
+    global refresh_store, _refresh_purge_task
 
     logger.info("application_starting", version="1.0.0")
 
@@ -124,11 +149,24 @@ async def lifespan(app: FastAPI):
     # Start log monitoring
     await log_monitor.start_monitoring()
 
+    # Item 5: refresh-token revocation store. Lives in the existing state
+    # directory (log_directory) so it rides along with the rest of the
+    # app's persistent state. Must be up BEFORE any request can hit
+    # /auth/verify — which in practice means before the yield below.
+    log_dir = settings.get_log_dir()
+    db_path = str(log_dir / "refresh_tokens.db")
+    refresh_store = RefreshStore(db_path)
+    await refresh_store.init()
+    _refresh_purge_task = asyncio.create_task(
+        _refresh_purge_loop(refresh_store)
+    )
+
     # Make components available to app state
     app.state.session_manager = session_manager
     app.state.log_monitor = log_monitor
     app.state.tunnel_manager = tunnel_manager
     app.state.auto_tunnel = auto_tunnel
+    app.state.refresh_store = refresh_store
 
     logger.info("application_ready")
 
@@ -148,6 +186,17 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown
     logger.info("application_shutting_down")
+
+    # Cancel the refresh-token purge loop first so it doesn't try to
+    # touch a closed DB connection.
+    if _refresh_purge_task is not None:
+        _refresh_purge_task.cancel()
+        try:
+            await _refresh_purge_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if refresh_store is not None:
+        await refresh_store.close()
 
     await log_monitor.stop_monitoring()
     await auto_tunnel.cleanup()

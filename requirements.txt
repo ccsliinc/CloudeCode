@@ -16,6 +16,9 @@ pyjwt>=2.8.0
 slowapi>=0.1.9
 cachetools>=5.3.0
 
+# Async SQLite (refresh-token revocation store)
+aiosqlite>=0.20.0
+
 # Logging
 structlog==23.2.0
 

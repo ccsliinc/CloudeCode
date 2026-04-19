@@ -12,6 +12,26 @@ class API {
 
         this.baseURL = `${protocol}//${host}/api/v1`;
         this.wsBaseURL = `${wsProtocol}//${host}`;
+
+        // Item 5: single-flight mutex for refresh-token rotation.
+        //
+        // When N requests race and all see 401 at roughly the same time,
+        // they must NOT each fire their own /auth/refresh. The server
+        // enforces reuse detection on the refresh token — so if two
+        // refresh calls land on the same refresh_token, the second is
+        // treated as a theft event and BOTH get revoked (chain burn).
+        //
+        // The fix is a classic Promise-based mutex: the first 401-victim
+        // creates a refresh Promise and stores it here; subsequent
+        // 401-victims await the SAME promise instead of starting their
+        // own. When it settles, everyone sees the same outcome and
+        // either all retry with the fresh access token or all fall
+        // through to the re-auth path.
+        //
+        // A boolean flag would race (flag-then-set is two operations);
+        // the Promise IS the primitive — storing it atomically captures
+        // both the "in flight" and "eventual result" states.
+        this._refreshPromise = null;
     }
 
     /**
@@ -22,16 +42,25 @@ class API {
     }
 
     /**
-     * Make authenticated API call
+     * Make authenticated API call.
+     *
+     * On a 401 from a protected endpoint we transparently run the
+     * refresh-token rotation dance and replay the original request with
+     * the new access token. If refresh fails (no refresh token stored,
+     * server says 401, network error, ...) we fall through to the
+     * handleUnauthorized() path so the UI can reauth via TOTP.
+     *
      * @param {string} endpoint - API endpoint (e.g., '/sessions')
      * @param {object} options - fetch options
+     * @param {object} [_meta] - internal; callers pass {_retrying: true}
+     *                           to break the refresh-then-retry loop.
      * @returns {Promise<any>} - Response data
      */
-    async call(endpoint, options = {}) {
+    async call(endpoint, options = {}, _meta = {}) {
         const token = this.getToken();
 
         // Prepare headers
-        const headers = options.headers || {};
+        const headers = { ...(options.headers || {}) };
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
         }
@@ -54,8 +83,22 @@ class API {
         try {
             const response = await fetch(url, fetchOptions);
 
-            // Handle 401 Unauthorized - trigger re-authentication
+            // Handle 401 Unauthorized.
+            //
+            // First 401: try to rotate the refresh token (single-flight —
+            // see constructor comment). If refresh wins, replay the
+            // original request once with the new access token.
+            //
+            // Second 401 (or refresh failure): give up, clear tokens,
+            // fire auth-required so the shell re-prompts for TOTP.
             if (response.status === 401) {
+                if (!_meta._retrying && window.Auth && window.Auth.getRefreshToken()) {
+                    const refreshed = await this._singleFlightRefresh();
+                    if (refreshed) {
+                        console.log('API: 401 recovered via refresh, retrying original request');
+                        return this.call(endpoint, options, { _retrying: true });
+                    }
+                }
                 console.log('API: 401 Unauthorized - triggering re-auth');
                 this.handleUnauthorized();
                 throw new Error('Authentication required. Please log in again.');
@@ -76,11 +119,45 @@ class API {
     }
 
     /**
-     * Handle unauthorized response
+     * Single-flight refresh wrapper. See constructor comment on
+     * _refreshPromise for the "why".
+     *
+     * @returns {Promise<boolean>}
+     */
+    async _singleFlightRefresh() {
+        if (this._refreshPromise) {
+            // Another in-flight request already kicked off refresh.
+            // Await the SAME promise so we don't burn the chain.
+            return this._refreshPromise;
+        }
+        // Store the promise atomically BEFORE awaiting, so any sibling
+        // 401 handler that checks `this._refreshPromise` on its next
+        // event-loop tick sees the same value and joins in.
+        this._refreshPromise = (async () => {
+            try {
+                return await window.Auth.refresh();
+            } finally {
+                // Clear the slot regardless of outcome so a subsequent
+                // 401 (say, the just-rotated access token itself expired
+                // a moment later) can trigger a fresh refresh.
+                this._refreshPromise = null;
+            }
+        })();
+        return this._refreshPromise;
+    }
+
+    /**
+     * Handle unauthorized response. Clears BOTH access + refresh tokens
+     * since we're bailing out to the TOTP prompt.
      */
     handleUnauthorized() {
-        // Clear token
-        localStorage.removeItem('claude_tunnel_token');
+        if (window.Auth) {
+            window.Auth.clearToken();
+        } else {
+            // Fallback if Auth hasn't initialized yet.
+            localStorage.removeItem('claude_tunnel_token');
+            localStorage.removeItem('claude_refresh_token');
+        }
 
         // Trigger auth required event
         window.dispatchEvent(new CustomEvent('auth-required'));
