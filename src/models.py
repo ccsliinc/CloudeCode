@@ -103,6 +103,19 @@ class CreateSessionRequest(BaseModel):
         False,
         description="Copy template files to working directory"
     )
+    # Optional client-measured terminal dims. When supplied, the backend
+    # births the pane at these dims instead of the INITIAL_COLS/INITIAL_ROWS
+    # defaults — closing the "80x24 or 132x40 birth" gap before the first
+    # WS resize frame arrives. Omitted by clients that don't know their
+    # dims at creation time; the WS resize handshake still reshapes later.
+    cols: Optional[int] = Field(
+        None,
+        description="Client-measured terminal columns (xterm cell grid width)"
+    )
+    rows: Optional[int] = Field(
+        None,
+        description="Client-measured terminal rows (xterm cell grid height)"
+    )
 
 
 class CommandRequest(BaseModel):
@@ -212,6 +225,16 @@ class WSMessageType(str, Enum):
     PONG = "pong"
     PTY_DATA = "pty_data"
     PTY_RESIZE = "pty_resize"
+    # Server -> client. Sent once on WS (re)connect BEFORE any scrollback
+    # or live stream. The client reacts by calling fitAddon.fit() and
+    # replying immediately with a pty_resize carrying its current cols/rows,
+    # bypassing its 100ms debounce. The server then applies the resize to
+    # the backend, waits briefly for SIGWINCH to propagate, and sends
+    # Ctrl+L so the foreground app redraws at the new size. This replaces
+    # the historical-scrollback replay that used to ship frozen bytes
+    # drawn at the PREVIOUS size — causing visible corruption whenever
+    # the reconnecting client had different dims than the stored session.
+    REQUEST_DIMS = "request_dims"
 
 
 class WSLogMessage(BaseModel):

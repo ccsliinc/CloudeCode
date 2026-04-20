@@ -7,7 +7,7 @@ import json
 import base64
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Set
+from typing import Optional, Set
 import structlog
 
 from src.models import (
@@ -152,38 +152,121 @@ async def websocket_terminal(websocket: WebSocket):
     except Exception as e:
         logger.error("failed_to_send_welcome", error=str(e))
 
-    # Scrollback replay on re-attach. TmuxBackend returns recent pane history
-    # so the client can catch up before the live stream starts. PTYBackend
-    # returns b"" (no true scrollback) — we skip the replay frame entirely.
-    # IdleWatcher (Item 7) uses `idle_watcher.replay_in_progress` to suppress
-    # event emits on replayed bytes (the backend's own `replay_in_progress`
-    # flag is also set for symmetry with downstream consumers).
+    # ---- Resize handshake (replaces legacy scrollback replay) ----
+    #
+    # Why the handshake: historical scrollback was captured at the pane's
+    # PREVIOUS geometry. If the reconnecting client's viewport is different
+    # (common — rotation, window resize, different device), replaying those
+    # frozen bytes paints them at the wrong coordinates and you get visible
+    # character shrapnel until the next full app redraw.
+    #
+    # New contract:
+    #   1. Server -> Client:  {"type": "request_dims"}
+    #   2. Client -> Server:  {"type": "pty_resize", cols, rows}  (bypasses
+    #                         the 100ms debounce client-side — this is the
+    #                         handshake path, not a normal user-driven
+    #                         resize)
+    #   3. Server applies backend.resize(cols, rows)
+    #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
+    #      process (Claude/bash/etc.) and that process has a chance to
+    #      finish any in-flight ANSI write before we stomp its buffer.
+    #   5. Server writes Ctrl+L (0x0c) to the pane. Claude/bash/readline
+    #      treat Ctrl+L as "redraw" — the app clears its own screen and
+    #      re-renders at the NEW size. Live-stream bytes then arrive via
+    #      pipe-pane as usual.
+    #
+    # Trade-off: user loses historical scrollback on reconnect. Accepted
+    # because a clean screen beats a corrupted one, and xterm.js retains
+    # its own client-side scrollback within a single page load anyway.
     try:
-        scrollback = session_manager.capture_scrollback()
-        if scrollback:
-            logger.info("ws_scrollback_replay", bytes=len(scrollback))
-            # Mark replay-in-progress on BOTH the backend and the idle
-            # watcher for the duration of the send so neither treats these
-            # historical bytes as live activity.
-            if session_manager.backend is not None:
-                session_manager.backend.replay_in_progress = True
-            if session_manager.idle_watcher is not None:
-                session_manager.idle_watcher.replay_in_progress = True
+        await websocket.send_text(json.dumps({
+            "type": WSMessageType.REQUEST_DIMS,
+        }))
+        logger.debug("ws_request_dims_sent")
+
+        # Wait for the client's handshake pty_resize. We accept the NEXT
+        # pty_resize message we see and ignore binary input and other
+        # control frames until it arrives. Bounded timeout: if the client
+        # never replies, we still proceed (backend stays at birth dims +
+        # the app redraw still fires via Ctrl+L at whatever size that is).
+        handshake_cols: Optional[int] = None
+        handshake_rows: Optional[int] = None
+        handshake_deadline_s = 2.0  # generous but bounded
+        handshake_start = asyncio.get_event_loop().time()
+        while True:
+            remaining = handshake_deadline_s - (
+                asyncio.get_event_loop().time() - handshake_start
+            )
+            if remaining <= 0:
+                logger.warning("ws_handshake_timeout")
+                break
             try:
-                await websocket.send_bytes(scrollback)
-                # Feed the watcher's tail buffer with the scrollback so
-                # post-replay state tests (prompt-frame detection) see the
-                # correct tail. handle_chunk's replay guard ensures no
-                # emit fires here.
-                if session_manager.idle_watcher is not None:
-                    await session_manager.idle_watcher.handle_chunk(scrollback)
-            finally:
-                if session_manager.backend is not None:
-                    session_manager.backend.replay_in_progress = False
-                if session_manager.idle_watcher is not None:
-                    session_manager.idle_watcher.replay_in_progress = False
-    except Exception as e:
-        logger.debug("ws_scrollback_replay_failed", error=str(e))
+                raw = await asyncio.wait_for(
+                    websocket.receive(),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("ws_handshake_timeout")
+                break
+
+            if "text" in raw and raw["text"]:
+                try:
+                    msg = json.loads(raw["text"])
+                except json.JSONDecodeError:
+                    continue
+                if msg.get("type") == WSMessageType.PTY_RESIZE:
+                    try:
+                        handshake_cols = int(msg["cols"])
+                        handshake_rows = int(msg["rows"])
+                    except (KeyError, ValueError, TypeError):
+                        logger.warning("ws_handshake_bad_dims", msg=msg)
+                    break
+                # Ignore other control frames during the handshake window
+                # (ping, etc.); they'll be processed by receive_messages
+                # once the loop starts.
+                continue
+            # Drop binary frames that arrive before the handshake — the
+            # user can't have typed anything yet. In practice clients
+            # don't send binary before their first resize, but be safe.
+
+        if handshake_cols and handshake_rows:
+            logger.info(
+                "ws_handshake_resize",
+                cols=handshake_cols,
+                rows=handshake_rows,
+            )
+            try:
+                session_manager.resize_terminal(handshake_cols, handshake_rows)
+            except Exception as exc:
+                logger.error("ws_handshake_resize_failed", error=str(exc))
+
+            # Let SIGWINCH propagate + foreground app finish any mid-flight
+            # write. 150ms is empirically enough for tmux -> pane delivery
+            # and for Claude/bash to ack the signal. We use asyncio.sleep
+            # so the event loop keeps draining other tasks.
+            await asyncio.sleep(0.15)
+
+            # Force a redraw at the new size. Ctrl+L is readline / tmux /
+            # Claude's "clear + repaint" convention — the app owns the
+            # repaint, which means it paints at its CURRENT (post-resize)
+            # cell grid, not the stale grid any cached output was drawn in.
+            if session_manager.backend is not None:
+                try:
+                    await session_manager.backend.write(b"\x0c")
+                    logger.debug("ws_handshake_ctrl_l_sent")
+                except Exception as exc:
+                    logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
+    except WebSocketDisconnect:
+        # Client bailed during the handshake. Let the outer handler deal
+        # with cleanup; no point proceeding to the live-stream loop.
+        logger.info("ws_handshake_client_disconnected")
+        session_manager.unsubscribe_output(pty_output_queue)
+        auto_tunnel.unsubscribe(tunnel_queue)
+        log_monitor.unsubscribe(log_queue)
+        connection_manager.disconnect(websocket)
+        return
+    except Exception as exc:
+        logger.error("ws_handshake_error", error=str(exc))
 
     try:
         # Create tasks for receiving and sending

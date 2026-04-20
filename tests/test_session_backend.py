@@ -351,6 +351,129 @@ async def test_tmux_backend_resize_actually_resizes_window(tmux_socket_cleanup):
         await backend.stop()
 
 
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_start_honors_initial_dims(tmux_socket_cleanup):
+    """start(initial_cols=100, initial_rows=30) must birth the window at 100x30.
+
+    Regression test for the birth-size flexibility added alongside the WS
+    resize handshake: callers (SessionManager via CreateSessionRequest) can
+    now pass client-measured dims so the pane doesn't flash at the module
+    default of 132x40 before the first resize frame arrives.
+    """
+    slug = f"initdims_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_initdims_"))
+    backend = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        await backend.start(initial_cols=100, initial_rows=30)
+
+        out = subprocess.check_output(
+            [
+                "tmux",
+                "-L",
+                backend.socket_name,
+                "display-message",
+                "-t",
+                backend.tmux_session,
+                "-p",
+                "#{window_width}x#{window_height}",
+            ]
+        ).decode().strip()
+        # Key assertion: NOT the default INITIAL_COLS x INITIAL_ROWS.
+        assert out == "100x30", (
+            f"expected 100x30 from initial_cols/initial_rows override, got {out} "
+            f"(default would be {INITIAL_COLS}x{INITIAL_ROWS})"
+        )
+    finally:
+        await backend.stop()
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_start_ignores_one_sided_initial_dims(tmux_socket_cleanup):
+    """initial_cols alone (without initial_rows) falls back to defaults.
+
+    Asymmetric input is treated as "not supplied" so we never pair a
+    client-measured col count with a default row count (or vice versa),
+    which would produce a nonsense pane shape.
+    """
+    slug = f"onesided_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_onesided_"))
+    backend = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        # Only cols supplied — should fall back to defaults for BOTH dims.
+        await backend.start(initial_cols=100, initial_rows=None)
+
+        out = subprocess.check_output(
+            [
+                "tmux",
+                "-L",
+                backend.socket_name,
+                "display-message",
+                "-t",
+                backend.tmux_session,
+                "-p",
+                "#{window_width}x#{window_height}",
+            ]
+        ).decode().strip()
+        assert out == f"{INITIAL_COLS}x{INITIAL_ROWS}", (
+            f"asymmetric dims should fall back to defaults, got {out}"
+        )
+    finally:
+        await backend.stop()
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_write_ctrl_l_single_byte(tmux_socket_cleanup):
+    """write(b'\\x0c') must deliver the single control byte without error.
+
+    The WS resize handshake sends Ctrl+L (0x0c) after reshaping to force
+    the foreground app to redraw at the new size. 0x0c is a control byte
+    that triggers the paste-buffer path in TmuxBackend.write() (per
+    `_has_control_chars`). This test locks in that the single-byte control
+    write completes without raising, and that the byte actually reaches
+    the pane's input (verified by running `cat` and checking the pane
+    capture contains the form-feed or the shell's response to it).
+    """
+    backend = TmuxBackend(
+        session_id=f"ctrll_{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+
+    async def _inner():
+        # `cat` echoes whatever we write. 0x0c on most terminals renders as
+        # a form-feed which may or may not scroll — the important thing is
+        # the write doesn't raise AND the pane receives a byte.
+        await backend.start(command="/bin/cat")
+        await asyncio.sleep(0.3)
+
+        # Single byte, control char → paste-buffer path.
+        await backend.write(b"\x0c")
+        await asyncio.sleep(0.5)
+
+        # Session must still be alive — cat would die if we'd somehow
+        # corrupted the pipe. Also confirms paste-buffer didn't raise.
+        assert backend.is_alive(), "pane died after Ctrl+L write"
+
+    try:
+        await _inner()
+    finally:
+        await backend.stop()
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

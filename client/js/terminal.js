@@ -28,6 +28,17 @@ class Terminal {
         this.autoScrollEnabled = true;
         this.resizeDebounceTimer = null;
 
+        // Track last-sent dims so we only log + ship when they actually
+        // change. Multiple event sources (window.resize + visualViewport +
+        // ResizeObserver + orientationchange) can all fire for a single
+        // physical layout change; dedupe at the sendResize gate.
+        this.lastSentCols = null;
+        this.lastSentRows = null;
+
+        // ResizeObserver tracking the xterm container. Listener-lifetime is
+        // tied to the Terminal object; cleaned up in destroy paths.
+        this._resizeObserver = null;
+
         // UI elements
         this.destroySessionBtn = null;
         this.statusEl = null;
@@ -186,18 +197,53 @@ class Terminal {
             }
         });
 
-        // Handle window resize with debouncing
-        window.addEventListener('resize', () => {
+        // ---- Dynamic resize pipeline ----
+        //
+        // All four sources funnel into a single 100ms debounced callback:
+        //   window.resize            - desktop viewport / browser window
+        //   orientationchange        - mobile device rotation
+        //   visualViewport.resize    - mobile keyboard popup / browser chrome
+        //                              show+hide / pinch-zoom. Provides more
+        //                              accurate viewport dims than window
+        //                              on iOS Safari.
+        //   ResizeObserver           - ANY layout change of the xterm
+        //                              container (sidebar collapse, split
+        //                              view, CSS transitions, font load).
+        //
+        // Single debounce gate means redundant fires during one layout
+        // change collapse to a single fit()+sendResize() call, and the
+        // sendResize dedup further suppresses duplicate frames when the
+        // cell grid hasn't actually changed. Graceful degradation: if any
+        // API is unavailable (old browser) the remaining listeners still
+        // catch their share of events.
+        const scheduleResize = (source) => {
             if (this.resizeDebounceTimer) {
                 clearTimeout(this.resizeDebounceTimer);
             }
             this.resizeDebounceTimer = setTimeout(() => {
                 if (this.fitAddon && this.term) {
                     this.fitAddon.fit();
-                    this.sendResize();
+                    this.sendResize(source);
                 }
             }, 100);
-        });
+        };
+
+        window.addEventListener('resize', () => scheduleResize('window.resize'));
+        window.addEventListener('orientationchange', () => scheduleResize('orientationchange'));
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => scheduleResize('visualViewport.resize'));
+        }
+
+        const termContainer = document.getElementById('terminal');
+        if (termContainer && typeof ResizeObserver !== 'undefined') {
+            try {
+                this._resizeObserver = new ResizeObserver(() => scheduleResize('ResizeObserver'));
+                this._resizeObserver.observe(termContainer);
+            } catch (e) {
+                console.warn('Terminal: ResizeObserver setup failed', e);
+            }
+        }
 
         // Setup scroll event listener for auto-scroll detection
         this.setupScrollListener();
@@ -322,16 +368,41 @@ class Terminal {
     }
 
     /**
-     * Send resize event to server
+     * Send resize event to server.
+     *
+     * Dedups on (cols, rows) so the four-source funnel doesn't ship
+     * redundant frames when a layout event fires but the cell grid
+     * didn't actually change (zoom-neutral pinch, background chrome
+     * collapse that stays within the same cell count, etc.).
+     *
+     * @param {string} source - Origin tag for the [TERM-RESIZE] log line.
+     *   Values: 'window.resize' | 'orientationchange' |
+     *   'visualViewport.resize' | 'ResizeObserver' | 'handshake' |
+     *   'ws.onopen'. Defaults to 'unknown' for callers that don't tag.
+     * @param {boolean} force - Bypass the dedup gate. Used by the
+     *   request_dims handshake so the server always gets a fresh frame
+     *   on reconnect even if the grid happens to match the last send.
      */
-    sendResize() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.term) {
-            this.ws.send(JSON.stringify({
-                type: 'pty_resize',
-                cols: this.term.cols,
-                rows: this.term.rows
-            }));
+    sendResize(source = 'unknown', force = false) {
+        if (!(this.ws && this.ws.readyState === WebSocket.OPEN && this.term)) return;
+
+        const cols = this.term.cols;
+        const rows = this.term.rows;
+
+        if (!force && cols === this.lastSentCols && rows === this.lastSentRows) {
+            return;
         }
+
+        this.ws.send(JSON.stringify({
+            type: 'pty_resize',
+            cols,
+            rows,
+        }));
+
+        console.log(`[TERM-RESIZE] ${cols}x${rows} source=${source}`);
+
+        this.lastSentCols = cols;
+        this.lastSentRows = rows;
     }
 
     /**
@@ -446,8 +517,10 @@ class Terminal {
                 this.term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
             }
 
-            // Send initial resize
-            this.sendResize();
+            // Send initial resize (legacy fallback path — the server's
+            // request_dims handshake will also arrive and trigger a
+            // handshake-tagged sendResize which dedupes if dims match).
+            this.sendResize('ws.onopen');
 
             // Start keepalive ping
             if (this.keepaliveInterval) {
@@ -523,6 +596,20 @@ class Terminal {
             }
         } else if (type === 'pong') {
             console.log('Terminal: Received pong');
+        } else if (type === 'request_dims') {
+            // Server-driven resize handshake. Fit and reply IMMEDIATELY —
+            // bypass the 100ms debounce because the server is waiting in
+            // a bounded timeout window (2s). Any debounce here would eat
+            // into that budget and risk the server proceeding with stale
+            // birth dims.
+            if (this.fitAddon && this.term) {
+                try {
+                    this.fitAddon.fit();
+                } catch (e) {
+                    console.warn('[TERM-RESIZE] handshake fit failed', e);
+                }
+                this.sendResize('handshake', true /* force: always ship on handshake */);
+            }
         }
     }
 

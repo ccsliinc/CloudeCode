@@ -237,13 +237,21 @@ class SessionManager:
         session_id: str,
         working_dir: Optional[str] = None,
         auto_start_claude: bool = True,
-        copy_templates: bool = False
+        copy_templates: bool = False,
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
         Preserves the single-active invariant: if a session is already live,
         this raises. If there's stale metadata without a live backend, clean
         it up first.
+
+        ``initial_cols`` / ``initial_rows`` are forwarded to the backend's
+        ``start()`` so the pane is birthed at the client's measured size.
+        Both must be supplied together or both omitted; backends fall back
+        to their own defaults otherwise. The WS resize handshake reshapes
+        later regardless — these are strictly a birth-time optimization.
         """
         if self.has_active_session():
             raise ValueError("A session is already running. Stop it before creating a new one.")
@@ -298,9 +306,16 @@ class SessionManager:
             if auto_start_claude:
                 claude_cli = settings.get_claude_cli_path()
                 command = f"{claude_cli} --dangerously-skip-permissions"
-                await self.backend.start(command=command)
+                await self.backend.start(
+                    command=command,
+                    initial_cols=initial_cols,
+                    initial_rows=initial_rows,
+                )
             else:
-                await self.backend.start()
+                await self.backend.start(
+                    initial_cols=initial_cols,
+                    initial_rows=initial_rows,
+                )
 
             # Best-effort PID for metadata: TmuxBackend doesn't track a single
             # pid, PTYBackend exposes one via `.pid`.

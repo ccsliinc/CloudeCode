@@ -69,6 +69,8 @@ class SessionBackend(ABC):
         self,
         command: Optional[str] = None,
         env: Optional[dict] = None,
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
     ) -> None:
         """Start the backend session.
 
@@ -77,6 +79,15 @@ class SessionBackend(ABC):
                 process. If None, a login shell is started.
             env: Optional env overlay. Backends SHOULD merge this with the
                 process environment rather than replacing it.
+            initial_cols: Optional client-measured terminal width in cells.
+                When supplied, the backend births the pane at these dims
+                instead of its built-in defaults. The WS resize handshake
+                still reshapes later if the client's dims drift — this is
+                purely a "birth size" optimization so TUI apps don't flash
+                at the wrong size before the first resize frame arrives.
+            initial_rows: See ``initial_cols``. Both MUST be provided together
+                or both omitted; a single None with the other set falls back
+                to backend defaults for both.
         """
 
     @abstractmethod

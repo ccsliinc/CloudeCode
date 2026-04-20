@@ -20,6 +20,32 @@ class Launchpad {
     }
 
     /**
+     * Best-effort: get current xterm cell-grid dims from the live Terminal
+     * instance so we can pass them to POST /sessions. Returns {} when the
+     * terminal isn't ready yet (the server falls back to its own defaults
+     * and the WS handshake reshapes shortly after anyway).
+     */
+    _getTerminalDims() {
+        try {
+            const t = window.TerminalController && window.TerminalController.term;
+            if (t && typeof t.cols === 'number' && typeof t.rows === 'number'
+                    && t.cols > 0 && t.rows > 0) {
+                // Try to fit first so we hand over the dims the xterm.js
+                // renderer will actually use post-connect.
+                try {
+                    if (window.TerminalController.fitAddon) {
+                        window.TerminalController.fitAddon.fit();
+                    }
+                } catch (_) { /* non-fatal */ }
+                return { cols: t.cols, rows: t.rows };
+            }
+        } catch (e) {
+            console.warn('Launchpad: _getTerminalDims failed', e);
+        }
+        return {};
+    }
+
+    /**
      * Load and display projects
      */
     async loadProjects() {
@@ -308,10 +334,15 @@ class Launchpad {
             // Show loading state
             this.updateStatus('creating new project...');
 
-            // Create session with auto-generated path and template copying
+            // Create session with auto-generated path and template copying.
+            // Include current xterm cell grid dims so the tmux pane is
+            // birthed at the right size (avoids the 132x40 default → resize
+            // flash before the WS handshake reshapes it).
+            const _dims = this._getTerminalDims();
             const session = await window.API.createSession({
                 auto_start_claude: true,
-                copy_templates: true
+                copy_templates: true,
+                ..._dims
             });
 
             console.log('Launchpad: New project created:', session);
@@ -788,11 +819,15 @@ class Launchpad {
             // Show loading state
             this.updateStatus(`opening ${project.name}...`);
 
-            // Create session with project path (no template copying for existing projects)
+            // Create session with project path (no template copying for existing projects).
+            // Include current xterm cell grid dims so the tmux pane is birthed
+            // at the right size — see the "new project" path for rationale.
+            const _dims = this._getTerminalDims();
             const session = await window.API.createSession({
                 working_dir: project.path,
                 auto_start_claude: true,
-                copy_templates: false
+                copy_templates: false,
+                ..._dims
             });
 
             console.log('Launchpad: Project session created:', session);

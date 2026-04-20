@@ -56,12 +56,23 @@ class PTYSession:
         # Output reader task
         self._reader_task: Optional[asyncio.Task] = None
 
-    async def start(self, command: Optional[str] = None):
+    async def start(
+        self,
+        command: Optional[str] = None,
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
+    ):
         """
         Start the PTY session with a shell.
 
         Args:
             command: Optional command to run (defaults to shell)
+            initial_cols: Client-measured columns; when paired with
+                ``initial_rows`` overrides the default 80x24 birth size so
+                the child process sees the correct window geometry on its
+                first read. Omitted → 80x24 default (the WS resize
+                handshake reshapes within milliseconds anyway).
+            initial_rows: See ``initial_cols``.
 
         Raises:
             PTYSessionError: If session start fails
@@ -101,8 +112,14 @@ class PTYSession:
                 # The PTY and xterm.js will handle line endings naturally
                 pass
 
-                # Set initial terminal size
-                self._set_terminal_size(80, 24)
+                # Set initial terminal size. Client dims override the
+                # 80x24 default when BOTH are provided; asymmetric inputs
+                # (only one side set) fall back to defaults to avoid a
+                # mismatched pane shape on first paint.
+                if initial_cols and initial_rows:
+                    self._set_terminal_size(initial_cols, initial_rows)
+                else:
+                    self._set_terminal_size(80, 24)
 
                 # Start output reader
                 self._reader_task = asyncio.create_task(self._read_output())
@@ -296,6 +313,8 @@ class PTYBackend(SessionBackend):
         self,
         command: Optional[str] = None,
         env: Optional[dict] = None,  # noqa: ARG002 - PTYSession reads os.environ directly
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
     ) -> None:
         """Start the PTY session."""
         if self._pty is not None:
@@ -306,7 +325,11 @@ class PTYBackend(SessionBackend):
             working_dir=self.working_dir,
             on_output=self.on_output,
         )
-        await self._pty.start(command=command)
+        await self._pty.start(
+            command=command,
+            initial_cols=initial_cols,
+            initial_rows=initial_rows,
+        )
 
     async def stop(self) -> None:
         """Stop the PTY session. Idempotent."""

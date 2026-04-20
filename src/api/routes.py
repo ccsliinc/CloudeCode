@@ -51,14 +51,18 @@ async def create_session(request: Request, body: CreateSessionRequest):
             "api_create_session_request",
             session_id=session_id,
             working_dir=body.working_dir,
-            copy_templates=body.copy_templates
+            copy_templates=body.copy_templates,
+            cols=body.cols,
+            rows=body.rows,
         )
 
         session = await session_manager.create_session(
             session_id=session_id,
             working_dir=body.working_dir,
             auto_start_claude=body.auto_start_claude,
-            copy_templates=body.copy_templates
+            copy_templates=body.copy_templates,
+            initial_cols=body.cols,
+            initial_rows=body.rows,
         )
 
         # Move this project to the top of the list (most recently used)

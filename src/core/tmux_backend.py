@@ -217,8 +217,18 @@ class TmuxBackend(SessionBackend):
         self,
         command: Optional[str] = None,
         env: Optional[dict] = None,
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
     ) -> None:
-        """Create the tmux session + start pipe-pane streaming."""
+        """Create the tmux session + start pipe-pane streaming.
+
+        ``initial_cols`` / ``initial_rows`` override the module-level
+        INITIAL_COLS / INITIAL_ROWS when BOTH are supplied. One without the
+        other is treated as "not supplied" — we don't mix a client dim with
+        a default, because that would create an asymmetric starting pane
+        (e.g. client gives cols=100, we'd pair with default rows=40 which
+        is almost certainly wrong for that viewport).
+        """
         if self._running:
             raise RuntimeError("TmuxBackend already running")
 
@@ -232,6 +242,13 @@ class TmuxBackend(SessionBackend):
         pipe_path.parent.mkdir(parents=True, exist_ok=True)
         # Truncate any stale file from a previous session with the same slug.
         pipe_path.write_bytes(b"")
+
+        # Resolve birth geometry: client-supplied dims win when BOTH are
+        # provided, otherwise fall back to module defaults. The WS resize
+        # handshake reshapes the pane after connect regardless, so this
+        # only matters for the brief window before the first resize frame.
+        use_cols = initial_cols if (initial_cols and initial_rows) else INITIAL_COLS
+        use_rows = initial_rows if (initial_cols and initial_rows) else INITIAL_ROWS
 
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
         # If a command is supplied, tmux runs that as pane 0's process; the
@@ -252,9 +269,9 @@ class TmuxBackend(SessionBackend):
             "-c",
             str(self.working_dir),
             "-x",
-            str(INITIAL_COLS),
+            str(use_cols),
             "-y",
-            str(INITIAL_ROWS),
+            str(use_rows),
         ]
         if command:
             args.append(command)
