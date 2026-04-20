@@ -55,6 +55,16 @@ MAX_LOG_BYTES: int = 10 * 1024 * 1024
 #: coding-session cadence.
 ROTATE_AGE_HOURS: int = 24
 
+#: Default starting window geometry for new tmux sessions. We never attach a
+#: client (output is streamed via pipe-pane), so tmux has no client dims to
+#: key off of. Without `-x/-y` + `window-size manual`, tmux clamps the
+#: window to its 80x24 birth size forever — making TUI apps like Claude CLI
+#: render at 80x24 while xterm.js draws at the browser's actual size.
+#: These are reasonable defaults; the WS client's first `resize` request
+#: replaces them within milliseconds of connect.
+INITIAL_COLS: int = 132
+INITIAL_ROWS: int = 40
+
 #: Bytes threshold above which we switch from ``send-keys -l`` to
 #: ``load-buffer``/``paste-buffer``. Below this AND no control chars → fast
 #: path. Above OR control chars → paste-buffer path.
@@ -228,7 +238,24 @@ class TmuxBackend(SessionBackend):
         # shell exits when the command ends unless ``remain-on-exit`` is set.
         # For our case (Claude CLI) we want the pane to stick around even if
         # Claude exits, so we enable remain-on-exit after creation.
-        args = ["new-session", "-d", "-s", self.tmux_session, "-c", str(self.working_dir)]
+        #
+        # ``-x`` / ``-y`` fix the window's birth geometry. Without them tmux
+        # uses 80x24 and — combined with default ``window-size latest`` and
+        # zero attached clients — stays there forever. We pair these with
+        # ``window-size manual`` below so `resize-window` is the ONLY thing
+        # that can change the size (no client-sizing surprises).
+        args = [
+            "new-session",
+            "-d",
+            "-s",
+            self.tmux_session,
+            "-c",
+            str(self.working_dir),
+            "-x",
+            str(INITIAL_COLS),
+            "-y",
+            str(INITIAL_ROWS),
+        ]
         if command:
             args.append(command)
 
@@ -257,6 +284,20 @@ class TmuxBackend(SessionBackend):
         # Keep the pane alive even after child exits so scrollback persists.
         await self._run_tmux(
             "set-option", "-t", self.tmux_session, "remain-on-exit", "on", check=False
+        )
+
+        # Critical for headless (no-client) operation: lock the window size to
+        # manual so only `resize-window` changes it. Default is ``latest``
+        # which sizes to the most recent attached client; with zero clients
+        # tmux never leaves the 80x24 birth size.
+        await self._run_tmux(
+            "set-option", "-t", self.tmux_session, "window-size", "manual", check=False
+        )
+        # Prevent size clamping based on other windows in the session.
+        # (We only ever have window 0, but be defensive — future code that
+        # adds a second window shouldn't silently shrink pane 0.)
+        await self._run_tmux(
+            "set-option", "-t", self.tmux_session, "aggressive-resize", "off", check=False
         )
 
         # Start pipe-pane — this streams pane output to our file.
@@ -392,16 +433,38 @@ class TmuxBackend(SessionBackend):
                 )
 
     def resize(self, cols: int, rows: int) -> None:
-        """Resize the client — tmux clamps pane to the smallest attached client."""
-        # `refresh-client -t <target> -C <width>,<height>` requests a client
-        # resize. Without an attached client, tmux still honors the size via
-        # the pane's default-size. We fire-and-forget so the WS thread
-        # doesn't block on tmux IPC.
+        """Resize the tmux window to match the xterm.js client geometry.
+
+        We use ``resize-window -x -y`` because:
+
+        - ``refresh-client -C`` only works when a client IS attached. We
+          never attach one (output is streamed via `pipe-pane`), so
+          `refresh-client` is a silent no-op.
+        - ``resize-window`` operates server-side. With ``window-size manual``
+          (set in `start()`), tmux honors the request regardless of client
+          state and emits SIGWINCH to the pane's foreground process so TUI
+          apps (Claude CLI, vim, less, etc.) re-render at the new geometry.
+
+        Fire-and-forget so the WS receive loop doesn't block on tmux IPC.
+        """
         try:
             self._run_tmux_sync(
+                "resize-window",
+                "-t",
+                self.tmux_session,
+                "-x",
+                str(cols),
+                "-y",
+                str(rows),
+                check=False,
+            )
+            # Defensive: older tmux versions may not auto-propagate SIGWINCH
+            # after a server-side resize. `refresh-client -S` is a no-op when
+            # no client is attached (our case) but documents intent and
+            # costs nothing.
+            self._run_tmux_sync(
                 "refresh-client",
-                "-C",
-                f"{cols}x{rows}",
+                "-S",
                 check=False,
             )
         except Exception as exc:

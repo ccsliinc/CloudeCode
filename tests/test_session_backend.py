@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
@@ -29,7 +31,13 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 # ruff: noqa: E402
 from src.core.session_backend import SessionBackend, build_backend
-from src.core.tmux_backend import TmuxBackend, _slugify, _has_control_chars
+from src.core.tmux_backend import (
+    INITIAL_COLS,
+    INITIAL_ROWS,
+    TmuxBackend,
+    _has_control_chars,
+    _slugify,
+)
 from src.utils.pty_session import PTYBackend
 
 
@@ -279,6 +287,68 @@ def test_tmux_backend_is_alive_lifecycle(tmux_socket_cleanup):
     # Give tmux a beat to reap the session.
     time.sleep(0.2)
     assert not backend.is_alive()
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_resize_actually_resizes_window(tmux_socket_cleanup):
+    """After resize(), `tmux display-message -p '#{window_width}'` should match.
+
+    Regression test for the headless-sizing bug: TmuxBackend used to create
+    sessions without `-x/-y` and call `refresh-client -C` (which requires an
+    attached client) to resize. Without an attached client the window stayed
+    at its 80x24 birth size forever, so Claude CLI rendered its TUI at 80x24
+    while the xterm.js client drew at the real browser geometry.
+
+    Fix: birth the window at INITIAL_COLS x INITIAL_ROWS, set
+    `window-size manual`, and use `resize-window -x -y` (server-side, works
+    with zero clients) for subsequent resizes. This test locks that in.
+    """
+    slug = f"resize_test_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_resize_"))
+    backend = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        await backend.start()
+
+        # Initial dims must match the module-level constants.
+        out = subprocess.check_output(
+            [
+                "tmux",
+                "-L",
+                backend.socket_name,
+                "display-message",
+                "-t",
+                backend.tmux_session,
+                "-p",
+                "#{window_width}x#{window_height}",
+            ]
+        ).decode().strip()
+        assert out == f"{INITIAL_COLS}x{INITIAL_ROWS}", f"initial dims wrong: {out}"
+
+        # Trigger a resize and wait for the fire-and-forget subprocess.
+        backend.resize(cols=100, rows=30)
+        await asyncio.sleep(0.3)
+
+        out = subprocess.check_output(
+            [
+                "tmux",
+                "-L",
+                backend.socket_name,
+                "display-message",
+                "-t",
+                backend.tmux_session,
+                "-p",
+                "#{window_width}x#{window_height}",
+            ]
+        ).decode().strip()
+        assert out == "100x30", f"after resize dims wrong: {out}"
+    finally:
+        await backend.stop()
 
 
 if __name__ == "__main__":
