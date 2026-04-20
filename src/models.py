@@ -134,6 +134,19 @@ class ProjectResponse(BaseModel):
     description: Optional[str] = Field(None, description="Project description")
 
 
+class DirectoryEntry(BaseModel):
+    """A single directory entry returned by the filesystem browser."""
+    name: str = Field(..., description="Directory name (basename)")
+    path: str = Field(..., description="Absolute directory path")
+
+
+class BrowseResponse(BaseModel):
+    """Response model for the filesystem browse endpoint."""
+    path: str = Field(..., description="Absolute path of the directory being listed")
+    parent: Optional[str] = Field(None, description="Absolute path of the parent directory, or null if at filesystem root")
+    entries: List[DirectoryEntry] = Field(default_factory=list, description="Subdirectories inside the listed path")
+
+
 # API Response Models
 
 class ErrorResponse(BaseModel):

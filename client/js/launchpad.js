@@ -47,6 +47,10 @@ class Launchpad {
                         <span>⚡</span>
                         <span>create new project</span>
                     </button>
+                    <button class="new-session-btn" id="open-folder-btn">
+                        <span>📁</span>
+                        <span>open project from folder</span>
+                    </button>
                 </div>
 
                 <div class="launchpad-section" id="projects-section">
@@ -81,6 +85,10 @@ class Launchpad {
         // Event listeners
         document.getElementById('new-session-btn').addEventListener('click', () => {
             this.createNewSession();
+        });
+
+        document.getElementById('open-folder-btn').addEventListener('click', () => {
+            this.openProjectFromFolder();
         });
 
         document.getElementById('reset-server-btn').addEventListener('click', () => {
@@ -348,19 +356,43 @@ class Launchpad {
 
     /**
      * Show modal to prompt for project name and description
+     * @param {object} [options]
+     * @param {string} [options.defaultName] - Prefill the name input
+     * @param {string} [options.title] - Override the modal title
+     * @param {string} [options.confirmLabel] - Override the confirm button label
+     * @param {string} [options.pathHint] - Display the path being added as a hint
      * @returns {Promise<{name: string, description: string}|null>} Project details or null if cancelled
      */
-    showProjectNameModal() {
+    showProjectNameModal(options = {}) {
+        const {
+            defaultName = '',
+            title = 'name this project',
+            confirmLabel = 'create session',
+            pathHint = null,
+        } = options;
+
         return new Promise((resolve) => {
             // Create modal overlay
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
 
+            const escapeHtml = (s) => String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            const pathHintHtml = pathHint
+                ? `<div class="modal-input-group"><div class="modal-label">folder</div><div class="folder-picker-path">${escapeHtml(pathHint)}</div></div>`
+                : '';
+
             // Create modal content
             overlay.innerHTML = `
                 <div class="modal-content">
-                    <div class="modal-header">» name this project</div>
+                    <div class="modal-header">» ${escapeHtml(title)}</div>
                     <div class="modal-body">
+                        ${pathHintHtml}
                         <div class="modal-input-group">
                             <label class="modal-label">project name</label>
                             <input
@@ -368,6 +400,7 @@ class Launchpad {
                                 class="modal-input"
                                 id="modal-project-name"
                                 placeholder="e.g., My Awesome Project"
+                                value="${escapeHtml(defaultName)}"
                                 autocomplete="off"
                             />
                             <div class="modal-description">
@@ -390,7 +423,7 @@ class Launchpad {
                     </div>
                     <div class="modal-footer">
                         <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">create session</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${escapeHtml(confirmLabel)}</button>
                     </div>
                 </div>
             `;
@@ -402,8 +435,13 @@ class Launchpad {
             const confirmBtn = overlay.querySelector('#modal-confirm');
             const cancelBtn = overlay.querySelector('#modal-cancel');
 
-            // Focus name input
-            setTimeout(() => nameInput.focus(), 100);
+            // Focus name input and select existing content if prefilled
+            setTimeout(() => {
+                nameInput.focus();
+                if (defaultName) {
+                    nameInput.select();
+                }
+            }, 100);
 
             // Handle Enter key on name input (moves to description)
             nameInput.addEventListener('keypress', (e) => {
@@ -542,6 +580,202 @@ class Launchpad {
         }
 
         await this.selectProject(project);
+    }
+
+    /**
+     * Open a project by picking a folder via the server-side filesystem browser,
+     * then save it to the project list (history) before opening.
+     */
+    async openProjectFromFolder() {
+        console.log('Launchpad: Opening project from folder');
+
+        try {
+            const selectedPath = await this.showFolderPickerModal();
+            if (!selectedPath) {
+                console.log('Launchpad: Folder selection cancelled');
+                return;
+            }
+
+            // Derive a default name from the folder basename
+            const defaultName = selectedPath.split('/').filter(Boolean).pop() || selectedPath;
+
+            // Ask the user to confirm/adjust name + description
+            const details = await this.showProjectNameModal({
+                defaultName,
+                title: 'add project',
+                confirmLabel: 'open project',
+                pathHint: selectedPath,
+            });
+            if (!details) {
+                console.log('Launchpad: Project metadata entry cancelled');
+                return;
+            }
+
+            this.updateStatus(`adding ${details.name}...`);
+
+            // Save to projects config so it shows up in history.
+            // If the name collides, append a short suffix until it's unique.
+            const savedName = await this.saveProjectWithUniqueName({
+                name: details.name,
+                path: selectedPath,
+                description: details.description || null,
+            });
+
+            // Refresh project list so the new entry shows up at the top
+            await this.loadProjects();
+
+            // Open the project
+            await this.selectProject({
+                name: savedName,
+                path: selectedPath,
+                description: details.description || null,
+            });
+        } catch (error) {
+            console.error('Launchpad: Failed to open project from folder:', error);
+            this.showError('failed to open folder: ' + error.message);
+        }
+    }
+
+    /**
+     * Try to save a project, appending a suffix if the name already exists.
+     * Returns the name that was actually saved, or the original name if the
+     * project already existed (we treat that as success).
+     */
+    async saveProjectWithUniqueName({ name, path, description }) {
+        let attempt = name;
+        for (let i = 0; i < 20; i++) {
+            try {
+                await window.API.createProject({ name: attempt, path, description });
+                return attempt;
+            } catch (error) {
+                if (!error.message || !error.message.includes('already exists')) {
+                    throw error;
+                }
+                // If an existing project already has this path, reuse it
+                const existing = this.projects.find(p => p.path === path);
+                if (existing) {
+                    return existing.name;
+                }
+                attempt = `${name} (${i + 2})`;
+            }
+        }
+        throw new Error('could not find a unique name for this project');
+    }
+
+    /**
+     * Show a folder-picker modal that browses the server filesystem.
+     * Resolves with the chosen absolute path, or null if cancelled.
+     */
+    showFolderPickerModal() {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            overlay.innerHTML = `
+                <div class="modal-content folder-picker-modal">
+                    <div class="modal-header">» select a folder</div>
+                    <div class="modal-body">
+                        <div class="folder-picker-path" id="folder-picker-path">loading...</div>
+                        <div class="folder-picker-toolbar">
+                            <button class="folder-picker-toolbar-btn" id="folder-picker-up" title="go to parent directory">⬆ up</button>
+                            <button class="folder-picker-toolbar-btn" id="folder-picker-home" title="go to home directory">🏠 home</button>
+                        </div>
+                        <div class="folder-picker-list" id="folder-picker-list">
+                            <div class="folder-picker-empty">loading...</div>
+                        </div>
+                        <div class="modal-description">
+                            select a folder, then click "open here" to use it as the project root.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="folder-picker-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="folder-picker-confirm">open here</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const pathEl = overlay.querySelector('#folder-picker-path');
+            const listEl = overlay.querySelector('#folder-picker-list');
+            const upBtn = overlay.querySelector('#folder-picker-up');
+            const homeBtn = overlay.querySelector('#folder-picker-home');
+            const confirmBtn = overlay.querySelector('#folder-picker-confirm');
+            const cancelBtn = overlay.querySelector('#folder-picker-cancel');
+
+            let currentPath = null;
+            let currentParent = null;
+
+            const close = (value) => {
+                document.body.removeChild(overlay);
+                resolve(value);
+            };
+
+            const loadPath = async (targetPath) => {
+                listEl.innerHTML = '<div class="folder-picker-empty">loading...</div>';
+                try {
+                    const data = await window.API.browseDirectory(targetPath);
+                    currentPath = data.path;
+                    currentParent = data.parent;
+                    pathEl.textContent = data.path;
+                    upBtn.disabled = !data.parent;
+
+                    if (!data.entries || data.entries.length === 0) {
+                        listEl.innerHTML = '<div class="folder-picker-empty">no subfolders here</div>';
+                        return;
+                    }
+
+                    listEl.innerHTML = data.entries.map(entry => `
+                        <div class="folder-picker-item" data-path="${entry.path.replace(/"/g, '&quot;')}">
+                            <span class="folder-picker-icon">📁</span>
+                            <span class="folder-picker-name">${entry.name}</span>
+                        </div>
+                    `).join('');
+
+                    listEl.querySelectorAll('.folder-picker-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            loadPath(item.dataset.path);
+                        });
+                    });
+                } catch (error) {
+                    console.error('Launchpad: Folder browse failed:', error);
+                    listEl.innerHTML = `<div class="folder-picker-empty">error: ${error.message}</div>`;
+                }
+            };
+
+            upBtn.addEventListener('click', () => {
+                if (currentParent) {
+                    loadPath(currentParent);
+                }
+            });
+
+            homeBtn.addEventListener('click', () => {
+                loadPath('~');
+            });
+
+            confirmBtn.addEventListener('click', () => {
+                if (currentPath) {
+                    close(currentPath);
+                }
+            });
+
+            cancelBtn.addEventListener('click', () => close(null));
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    close(null);
+                }
+            });
+
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') close(null);
+            });
+
+            // Start at the server's default location
+            loadPath(null);
+
+            setTimeout(() => confirmBtn.focus(), 100);
+        });
     }
 
     /**

@@ -272,6 +272,16 @@ class API {
     }
 
     /**
+     * Filesystem: Browse a directory on the server
+     * @param {string|null} path - Directory path to list, or null to start at the default location
+     * @returns {Promise<{path: string, parent: string|null, entries: Array<{name: string, path: string}>}>}
+     */
+    async browseDirectory(path = null) {
+        const query = path ? `?path=${encodeURIComponent(path)}` : '';
+        return await this.call(`/filesystem/browse${query}`);
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean}
      * @returns {Promise<object>} - Session data
