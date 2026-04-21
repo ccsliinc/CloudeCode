@@ -214,25 +214,20 @@ def test_tmux_backend_discover_existing_finds_created_session(tmux_socket_cleanu
 
 
 @requires_tmux
-def test_tmux_backend_binary_safe_write(tmux_socket_cleanup):
-    """Writing bytes containing 0x03 and long payloads must not corrupt.
+def test_tmux_backend_write_large_paste_delivers_content_to_pane(tmux_socket_cleanup):
+    """Large payloads (>PASTE_THRESHOLD_BYTES) route through the paste path
+    (load-buffer + paste-buffer -d -p) and the content reaches the pane.
 
-    We write a large control-char-containing payload, then capture-pane and
-    verify that tmux didn't interpret 0x03 as a signal (which would abort the
-    running shell) and that we got reasonable content back.
-
-    The test shell is `cat`, which echoes its input to the pane. Why cat?
-    Because a login shell would eat our 0x03 bytes (SIGINT handling) and also
-    writes a prompt we'd have to mask. `cat` just echoes.
-
-    Strategy: start `cat`, write a payload of repeated "\\x03abc" (2000 bytes,
-    way over PASTE_THRESHOLD_BYTES), send EOF, then capture the pane buffer.
-    The pane should contain the literal `abc` sequences echoed back. If
-    send-keys had interpreted 0x03 as ETX, `cat` would have died early and
-    we'd see truncated output.
+    tmux's own emulator consumes the bracketed-paste markers (\\x1b[200~ /
+    \\x1b[201~) before they appear in `capture-pane` output, so we can't
+    assert on the markers here — that contract is locked by the mocked argv
+    test ``test_tmux_backend_write_large_payload_uses_load_and_paste_buffer``.
+    What we CAN verify end-to-end is that a large payload actually reaches
+    the pane (the paste path is wired up correctly and doesn't swallow the
+    bytes).
     """
     backend = TmuxBackend(
-        session_id=f"binsafe-{uuid.uuid4().hex[:6]}",
+        session_id=f"bigpaste-{uuid.uuid4().hex[:6]}",
         working_dir=Path.home(),
         on_output=None,
         socket_name=tmux_socket_cleanup,
@@ -244,29 +239,195 @@ def test_tmux_backend_binary_safe_write(tmux_socket_cleanup):
         # Give cat time to start up.
         await asyncio.sleep(0.3)
 
-        payload = b"\x03abc" * 500  # 2000 bytes, control chars → paste path
+        payload = b"abc" * 700  # 2100 bytes, > PASTE_THRESHOLD_BYTES → paste path
         await backend.write(payload)
 
         # Let the paste buffer flush through the pane.
         await asyncio.sleep(0.8)
 
-        # Capture pane contents — this is what the user would see.
         cap = backend.capture_scrollback(lines=500)
-
-        # The paste path writes to the pane's stdin. `cat` echoes it back
-        # to the pane's stdout. We should see `abc` in the captured output.
-        # If 0x03 had been interpreted as ETX, cat would have died on the
-        # first one and we'd see zero `abc` occurrences.
         text = cap.decode("utf-8", errors="replace")
-        abc_count = text.count("abc")
-        assert abc_count > 0, (
+
+        # `cat` echoes whatever lands on stdin, so we should see 'abc' in
+        # the pane. If paste-buffer had failed, the pane would be empty.
+        assert "abc" in text, (
             f"expected 'abc' in capture, got {len(cap)} bytes: {text[:200]!r}"
         )
+        assert backend.is_alive()
 
     try:
         asyncio.run(_inner())
     finally:
         asyncio.run(backend.stop())
+
+
+# ---- write() path-routing argv assertions (mocked) -----------------------
+#
+# These tests pin the argv shape that TmuxBackend.write() feeds to tmux for
+# each of the three routing paths. Mocking `_run_tmux` avoids needing a real
+# tmux server and makes the contract with tmux explicit — if someone ever
+# "simplifies" the routing back into a two-path world, these tests scream.
+
+
+def _make_backend_for_write_tests() -> TmuxBackend:
+    """Build a backend and mark it running without touching tmux."""
+    backend = TmuxBackend(
+        session_id=f"write-routing-{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+    )
+    backend._running = True  # bypass start()
+    return backend
+
+
+def _patch_run_tmux(backend: TmuxBackend):
+    """Return an AsyncMock bound to backend._run_tmux that records argv.
+
+    Each call is appended to `calls` as the positional `args` tuple (which
+    is the argv AFTER the ``tmux -L <socket>`` prefix — exactly the contract
+    we care about for routing correctness).
+    """
+    calls: list[tuple] = []
+
+    async def fake(*args, stdin_bytes=None, check=True):
+        calls.append(args)
+        return 0, b"", b""
+
+    backend._run_tmux = fake  # type: ignore[assignment]
+    return calls
+
+
+def test_tmux_backend_write_plain_text_uses_send_keys_l():
+    """Plain ASCII text → send-keys -l <text> (fast path)."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"hello"))
+
+    assert len(calls) == 1, f"expected exactly 1 tmux call, got {len(calls)}"
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-l"
+    assert argv[2] == "-t"
+    assert argv[3] == f"{backend.tmux_session}:0.0"
+    assert argv[4] == "hello"
+
+
+def test_tmux_backend_write_backspace_uses_hex_keys():
+    """Single-byte Backspace (0x7f) → send-keys -H 7f."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"\x7f"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-H"
+    assert argv[2] == "-t"
+    assert argv[3] == f"{backend.tmux_session}:0.0"
+    # Hex pair is the ONLY trailing argv — one byte, one pair.
+    assert argv[4:] == ("7f",), f"expected hex pair '7f', got trailing {argv[4:]}"
+
+
+def test_tmux_backend_write_escape_single_byte():
+    """Single-byte Escape (0x1b) → send-keys -H 1b (no bracketed-paste wrap)."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"\x1b"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-H"
+    assert argv[4:] == ("1b",)
+
+
+def test_tmux_backend_write_arrow_sequence_no_paste_wrap():
+    """Up arrow (\\x1b[A) → send-keys -H 1b 5b 41 (three hex pairs, no paste path)."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"\x1b[A"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-H"
+    # Three hex pairs, one per byte: \x1b -> 1b, '[' -> 5b, 'A' -> 41
+    assert argv[4:] == ("1b", "5b", "41"), f"expected 1b 5b 41, got {argv[4:]}"
+
+
+def test_tmux_backend_write_ctrl_c_uses_hex_keys():
+    """Ctrl+C (0x03) → send-keys -H 03 (keystroke path, NOT paste)."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"\x03"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-H"
+    assert argv[4:] == ("03",)
+
+
+def test_tmux_backend_write_shift_tab_uses_hex_keys():
+    """Shift+Tab (\\x1b[Z) → send-keys -H 1b 5b 5a."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b"\x1b[Z"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "send-keys"
+    assert argv[1] == "-H"
+    assert argv[4:] == ("1b", "5b", "5a")
+
+
+def test_tmux_backend_write_large_payload_uses_load_and_paste_buffer():
+    """Large payloads (>PASTE_THRESHOLD_BYTES) → load-buffer then paste-buffer -d -p."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    # 500 bytes of plain ASCII — no control chars, but over the threshold.
+    payload = b"A" * 500
+    asyncio.run(backend.write(payload))
+
+    assert len(calls) == 2, f"paste path should issue two tmux calls, got {len(calls)}"
+    load_argv, paste_argv = calls
+    assert load_argv[0] == "load-buffer"
+    assert "-b" in load_argv
+    assert load_argv[-1] == "-"  # read stdin
+    assert paste_argv[0] == "paste-buffer"
+    assert "-d" in paste_argv  # delete buffer after paste
+    assert "-p" in paste_argv  # bracketed paste
+    assert "-b" in paste_argv
+    assert "-t" in paste_argv
+
+
+def test_tmux_backend_write_empty_is_noop():
+    """Empty payload must NOT invoke tmux at all."""
+    backend = _make_backend_for_write_tests()
+    calls = _patch_run_tmux(backend)
+
+    asyncio.run(backend.write(b""))
+
+    assert calls == [], f"empty write must be a no-op, got {calls}"
+
+
+def test_tmux_backend_write_raises_when_not_running():
+    """write() before start() must raise (guard against ordering bugs)."""
+    backend = TmuxBackend(
+        session_id=f"not-running-{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+    )
+    # _running defaults to False.
+    with pytest.raises(RuntimeError, match="not running"):
+        asyncio.run(backend.write(b"hello"))
 
 
 @requires_tmux
@@ -439,12 +600,10 @@ async def test_tmux_backend_write_ctrl_l_single_byte(tmux_socket_cleanup):
     """write(b'\\x0c') must deliver the single control byte without error.
 
     The WS resize handshake sends Ctrl+L (0x0c) after reshaping to force
-    the foreground app to redraw at the new size. 0x0c is a control byte
-    that triggers the paste-buffer path in TmuxBackend.write() (per
-    `_has_control_chars`). This test locks in that the single-byte control
-    write completes without raising, and that the byte actually reaches
-    the pane's input (verified by running `cat` and checking the pane
-    capture contains the form-feed or the shell's response to it).
+    the foreground app to redraw at the new size. 0x0c is a short
+    control byte that triggers the ``send-keys -H`` keystroke path
+    (short + has control bytes). This test locks in that the single-byte
+    control write completes without raising and the session stays alive.
     """
     backend = TmuxBackend(
         session_id=f"ctrll_{uuid.uuid4().hex[:6]}",

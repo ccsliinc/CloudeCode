@@ -5,11 +5,20 @@ the user's default tmux server. Sessions are named ``cloude_<slug>``.
 
 Key design points:
 
-- **Binary-safe writes**: any chunk containing control bytes (notably
-  ``0x03`` SIGINT / ``0x1b`` ESC-prefixed sequences) or longer than
-  ``PASTE_THRESHOLD_BYTES`` (256) is written via ``load-buffer -`` + then
-  ``paste-buffer -d -p``. Short plain text goes through ``send-keys -l``.
-  ``send-keys -H`` is BANNED — it requires hex-pair input, not raw bytes.
+- **Binary-safe writes** (three-path routing):
+
+  ``send-keys -l <text>`` for short, control-free UTF-8 — the fast path
+  for regular typing.
+
+  ``send-keys -H <hex pairs>`` for short byte sequences that contain
+  control chars (arrow keys, Ctrl-X, Esc, Backspace — real keystrokes).
+  tmux treats each hex pair as a literal byte delivered via key event,
+  which interactive TUIs interpret correctly.
+
+  ``load-buffer`` + ``paste-buffer -d -p`` reserved for LARGE payloads
+  (actual clipboard pastes). Bracketed-paste markers let Claude
+  distinguish paste from typed input — correct behavior for paste,
+  wrong behavior for keystrokes.
 
 - **Output streaming**: ``tmux pipe-pane -o 'cat >> <fifo>'`` streams every
   pane byte to a file. We tail that file asynchronously and call
@@ -386,17 +395,20 @@ class TmuxBackend(SessionBackend):
     async def write(self, data: bytes) -> None:
         """Binary-safe write to pane 0.
 
-        Path selection:
-        - Short (<=PASTE_THRESHOLD_BYTES) AND no control bytes  → send-keys -l
-        - Everything else                                        → load-buffer + paste-buffer -d -p
+        Three paths:
+        - Short + control-free           → send-keys -l <text>
+        - Short + has control bytes      → send-keys -H <hex pairs>
+        - Large (paste payload)          → load-buffer + paste-buffer -d -p
 
-        ``send-keys -l`` treats the payload literally (no key-name lookup) but
-        tmux still parses the argv — which means we can't safely pass NUL,
-        newline-only carriage returns, or raw escape bytes. Paste-buffer
-        bypasses the key translator entirely by writing the buffer to the
-        pane's stdin. ``-d`` deletes the buffer after paste; ``-p`` uses
-        bracketed-paste mode so apps that care can distinguish paste from
-        typed input.
+        ``send-keys -l`` treats the payload literally as UTF-8 text with no
+        key-name lookup — fastest path for regular typing. ``send-keys -H``
+        delivers each 2-hex-digit argv token as a literal byte *as a key
+        event* — the correct vehicle for keystrokes like Backspace (0x7f),
+        Escape (0x1b), arrow keys (\\x1b[A), Ctrl chords (0x01-0x1f), and
+        F-keys. ``paste-buffer -d -p`` wraps the payload in bracketed-paste
+        markers (\\x1b[200~ ... \\x1b[201~); Claude's TUI uses those to tell
+        paste-from-clipboard apart from typed input, so we reserve this path
+        for genuinely large payloads that can only be pastes.
         """
         if not self._running:
             raise RuntimeError("TmuxBackend is not running")
@@ -404,50 +416,75 @@ class TmuxBackend(SessionBackend):
         if not data:
             return
 
-        use_paste = len(data) > PASTE_THRESHOLD_BYTES or _has_control_chars(data)
-
-        if use_paste:
-            # Load bytes into a named buffer then paste. Buffer name is
-            # derived from the slug so concurrent backends (shouldn't happen
-            # under single-session, but be safe) don't collide.
-            buf_name = f"cloude_{self.slug}"
-            rc, _, err = await self._run_tmux(
-                "load-buffer",
-                "-b",
-                buf_name,
-                "-",
-                stdin_bytes=data,
-            )
-            if rc != 0:
-                raise RuntimeError(
-                    f"tmux load-buffer failed: {err.decode('utf-8', errors='replace').strip()}"
-                )
-            rc, _, err = await self._run_tmux(
-                "paste-buffer",
-                "-d",
-                "-p",
-                "-b",
-                buf_name,
-                "-t",
-                f"{self.tmux_session}:0.0",
-            )
-            if rc != 0:
-                raise RuntimeError(
-                    f"tmux paste-buffer failed: {err.decode('utf-8', errors='replace').strip()}"
-                )
+        if len(data) > PASTE_THRESHOLD_BYTES:
+            # True paste — use bracketed paste so Claude distinguishes from typed input
+            await self._write_via_paste_buffer(data)
+        elif _has_control_chars(data):
+            # Short keystroke with control bytes (arrow, Ctrl-X, Esc, Backspace, F-keys)
+            await self._write_via_hex_keys(data)
         else:
-            text = data.decode("utf-8", errors="replace")
-            rc, _, err = await self._run_tmux(
-                "send-keys",
-                "-l",
-                "-t",
-                f"{self.tmux_session}:0.0",
-                text,
+            # Short plain text — fastest path
+            await self._write_via_send_keys_literal(data)
+
+    async def _write_via_send_keys_literal(self, data: bytes) -> None:
+        text = data.decode("utf-8", errors="replace")
+        rc, _, err = await self._run_tmux(
+            "send-keys",
+            "-l",
+            "-t",
+            f"{self.tmux_session}:0.0",
+            text,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"tmux send-keys -l failed: {err.decode('utf-8', errors='replace').strip()}"
             )
-            if rc != 0:
-                raise RuntimeError(
-                    f"tmux send-keys failed: {err.decode('utf-8', errors='replace').strip()}"
-                )
+
+    async def _write_via_hex_keys(self, data: bytes) -> None:
+        # tmux send-keys -H takes each hex pair as ONE argv element.
+        # e.g., Backspace (\x7f) -> ["7f"]; Arrow Up (\x1b[A) -> ["1b","5b","41"]
+        hex_args = [f"{b:02x}" for b in data]
+        rc, _, err = await self._run_tmux(
+            "send-keys",
+            "-H",
+            "-t",
+            f"{self.tmux_session}:0.0",
+            *hex_args,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"tmux send-keys -H failed: {err.decode('utf-8', errors='replace').strip()}"
+            )
+
+    async def _write_via_paste_buffer(self, data: bytes) -> None:
+        # Load bytes into a named buffer then paste. Buffer name is
+        # derived from the slug so concurrent backends (shouldn't happen
+        # under single-session, but be safe) don't collide.
+        buf_name = f"cloude_{self.slug}"
+        rc, _, err = await self._run_tmux(
+            "load-buffer",
+            "-b",
+            buf_name,
+            "-",
+            stdin_bytes=data,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"tmux load-buffer failed: {err.decode('utf-8', errors='replace').strip()}"
+            )
+        rc, _, err = await self._run_tmux(
+            "paste-buffer",
+            "-d",
+            "-p",
+            "-b",
+            buf_name,
+            "-t",
+            f"{self.tmux_session}:0.0",
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"tmux paste-buffer failed: {err.decode('utf-8', errors='replace').strip()}"
+            )
 
     def resize(self, cols: int, rows: int) -> None:
         """Resize the tmux window to match the xterm.js client geometry.
