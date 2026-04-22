@@ -181,6 +181,20 @@ class Terminal {
 
         this.term.open(document.getElementById('terminal'));
 
+        // Intercept Shift+Enter → send ESC + CR so Claude CLI treats it as
+        // "insert newline without submitting" instead of the default behavior
+        // where xterm.js collapses it to plain Enter.
+        this.term.attachCustomKeyEventHandler((ev) => {
+            if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
+                !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(new TextEncoder().encode('\x1b\r'));
+                }
+                return false;  // swallow the event so xterm doesn't also emit \r
+            }
+            return true;  // all other keys pass through to default handling
+        });
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
