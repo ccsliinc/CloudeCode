@@ -27,15 +27,16 @@
     "rate_limit_per_kind_cooldown_seconds": 10.0
   },
   "common_slash_commands": [
-    "/agents",
     "/clear",
     "/compact",
     "/context",
-    "/hooks",
-    "/mcp",
     "/resume",
     "/rewind",
-    "/usage"
+    "/model",
+    "/effort",
+    "/plan",
+    "/tasks",
+    "/diff"
   ],
   "projects": [
     {
