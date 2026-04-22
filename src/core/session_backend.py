@@ -124,6 +124,22 @@ class SessionBackend(ABC):
         reads directly from the master fd.
         """
 
+    async def attach_existing(self) -> None:
+        """Rehydrate state for a session that already exists on the backend.
+
+        Called by SessionManager.lifespan_startup() when it has matched existing
+        backend state against persisted metadata. The backend should mark itself
+        running, re-open any file handles or pipes needed to stream output, and
+        spawn the reader task.
+
+        Unlike ``start()``, this must NOT create a new underlying session — it
+        re-wires the Python-side state to an already-alive backend entity.
+
+        Default implementation raises NotImplementedError; backends that
+        actually persist across process boundaries (tmux) MUST override.
+        """
+        raise NotImplementedError("This backend does not support rehydration")
+
     @abstractmethod
     def discover_existing(self) -> List[str]:
         """Enumerate backend-owned sessions that survived a server restart.

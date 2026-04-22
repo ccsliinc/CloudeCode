@@ -131,9 +131,27 @@ class SessionManager:
         # For PTYBackend, `discover_existing()` is always empty so we never reach here.
         target_name = getattr(backend, "tmux_session", None)
         if target_name and target_name in existing:
+            try:
+                await backend.attach_existing()
+            except NotImplementedError:
+                logger.warning(
+                    "session_backend_cannot_rehydrate",
+                    session_id=self.session.id,
+                    backend=type(backend).__name__,
+                )
+                self._clear_stale_metadata()
+                return
+            except RuntimeError as e:
+                logger.warning(
+                    "session_backend_attach_failed",
+                    session_id=self.session.id,
+                    error=str(e),
+                )
+                self._clear_stale_metadata()
+                return
+
             self.backend = backend
             self.session.status = SessionStatus.RUNNING
-            await self.backend.read_async()
             logger.info(
                 "session_re_registered_from_backend",
                 session_id=self.session.id,

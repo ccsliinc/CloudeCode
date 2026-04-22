@@ -360,6 +360,20 @@ class PTYBackend(SessionBackend):
         """PTYSession starts its own reader task inside `start()`; no-op here."""
         return None
 
+    async def attach_existing(self) -> None:
+        """PTYs die with the parent process — rehydration is not possible.
+
+        ``discover_existing()`` returns ``[]`` for this backend, so
+        ``SessionManager.lifespan_startup`` will never reach this path in
+        normal flow. The explicit override is here for documentation and
+        defense-in-depth: if something ever calls it anyway, fail loud
+        rather than silently entering a bogus "running" state.
+        """
+        raise NotImplementedError(
+            "PTYBackend does not persist across process restarts; "
+            "use a fresh start() instead"
+        )
+
     def discover_existing(self) -> List[str]:
         """PTYs don't survive restart — always empty."""
         return []

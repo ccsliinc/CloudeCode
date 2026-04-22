@@ -633,6 +633,131 @@ async def test_tmux_backend_write_ctrl_l_single_byte(tmux_socket_cleanup):
         await backend.stop()
 
 
+# ---- attach_existing() rehydration path ---------------------------------
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_attach_existing_flips_running(tmux_socket_cleanup):
+    """Simulate a server restart: create a session with one TmuxBackend, then
+    build a SECOND instance pointing at the same slug/socket and call
+    attach_existing(). It must flip _running=True and stay alive.
+    """
+    slug = f"attach_flip_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_attach_"))
+    first = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        # First instance births the tmux session.
+        await first.start()
+        assert first.is_alive()
+
+        # Second instance — fresh Python-side state, same tmux session on the socket.
+        # This is what SessionManager builds on server restart via build_backend().
+        second = TmuxBackend(
+            session_id=slug,
+            working_dir=wd,
+            on_output=None,
+            socket_name=tmux_socket_cleanup,
+        )
+        assert second._running is False, "fresh instance must start with _running=False"
+        assert second.tmux_session in second.discover_existing()
+
+        await second.attach_existing()
+
+        assert second._running is True, "attach_existing must flip _running=True"
+        assert second.is_alive(), "attached instance must see the live tmux session"
+
+        # Calling attach_existing a second time must be a no-op, not an error.
+        await second.attach_existing()
+        assert second._running is True
+    finally:
+        # Clean up: kill via whichever instance still has references. Since
+        # the tmux session is shared, either stop() will do the job — but
+        # the second instance's reader task is the one we spun up, so tear
+        # it down explicitly to avoid leaking the asyncio task.
+        try:
+            await second.stop()
+        except Exception:
+            pass
+        try:
+            await first.stop()
+        except Exception:
+            pass
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_attach_existing_raises_if_session_gone(tmux_socket_cleanup):
+    """Attaching to a slug with no live tmux session must raise RuntimeError."""
+    slug = f"attach_gone_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_attach_gone_"))
+    backend = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    # No start() — the tmux session does not exist on the socket.
+    assert not backend.is_alive()
+    with pytest.raises(RuntimeError, match="is not alive"):
+        await backend.attach_existing()
+    # And _running must NOT have been flipped despite the attempt.
+    assert backend._running is False
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_tmux_backend_attach_existing_write_works_after(tmux_socket_cleanup):
+    """After attach_existing(), write() must succeed (the original bug)."""
+    slug = f"attach_write_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_attach_write_"))
+    first = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    second = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        await first.start(command="/bin/cat")
+        await asyncio.sleep(0.2)
+
+        await second.attach_existing()
+
+        # The original bug: write() raised "TmuxBackend is not running" after
+        # rehydrate. This must NOT raise now.
+        await second.write(b"\x7f")  # Backspace — hex-keys path
+        await second.write(b"hello")  # Plain text — send-keys -l path
+
+        assert second.is_alive()
+    finally:
+        try:
+            await second.stop()
+        except Exception:
+            pass
+        try:
+            await first.stop()
+        except Exception:
+            pass
+
+
+def test_pty_backend_attach_existing_raises_not_implemented():
+    """PTYBackend cannot rehydrate — attach_existing must raise NotImplementedError."""
+    backend = PTYBackend("attach-not-impl", Path.home(), None)
+    with pytest.raises(NotImplementedError, match="does not persist"):
+        asyncio.run(backend.attach_existing())
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

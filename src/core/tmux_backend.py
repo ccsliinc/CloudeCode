@@ -356,6 +356,60 @@ class TmuxBackend(SessionBackend):
             pipe=str(pipe_path),
         )
 
+    async def attach_existing(self) -> None:
+        """Rehydrate state for an existing cloude_<slug> tmux session.
+
+        Precondition: `discover_existing()` has already confirmed the session
+        is alive on the configured socket. pipe-pane is still active on the
+        tmux server side (tmux, not us, holds that pipe), so the pipe file
+        is still being appended to. We open it and tail from the END so we
+        don't re-emit historical output as if it were new.
+
+        This MUST be idempotent: calling it twice is fine. Calling it after
+        stop() is not supported.
+        """
+        if self._running:
+            logger.debug("tmux_backend_attach_noop", session=self.tmux_session)
+            return
+
+        # Verify the session is actually alive on the socket. If it's not,
+        # caller made a mistake — raise loudly so the upstream rehydrate
+        # path can clean up stale metadata instead of entering a bogus state.
+        if not self.is_alive():
+            raise RuntimeError(
+                f"attach_existing: tmux session {self.tmux_session} is not alive"
+            )
+
+        # Recompute / re-resolve pipe file path. It was written to by the
+        # old Python process; the tmux server kept pipe-pane running, so
+        # the file is still being appended to. We tail from current EOF.
+        pipe_path = self._resolve_pipe_path()
+        if not pipe_path.exists():
+            # Shouldn't happen if tmux's pipe-pane is alive, but handle gracefully
+            # by re-running pipe-pane to re-establish the pipe. This is a
+            # defensive reconnect — the old pipe-pane process inside tmux
+            # continues, we just make sure our file target exists.
+            logger.warning(
+                "tmux_backend_pipe_missing_recreating",
+                session=self.tmux_session,
+                pipe=str(pipe_path),
+            )
+            pipe_path.parent.mkdir(parents=True, exist_ok=True)
+            pipe_path.touch()
+
+        self._pipe_path = pipe_path
+        self._running = True
+        self._rotation_started_at = time.monotonic()
+
+        await self.read_async()
+
+        logger.info(
+            "tmux_backend_attached_existing",
+            session=self.tmux_session,
+            socket=self.socket_name,
+            pipe=str(pipe_path),
+        )
+
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""
         if not self._running and self._reader_task is None:
