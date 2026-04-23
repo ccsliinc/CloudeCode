@@ -397,52 +397,6 @@ button[data-tooltip]:hover::after {
     margin-bottom: 30px;
 }
 
-/* Active-session banner — pinned at the top of the launchpad when the
- * server reports a live session. Reuses the project-item visual weight
- * (1px border, left-accent) but with a brighter accent tint so it reads
- * as a status row rather than a clickable project. */
-.active-session-banner {
-    background: rgba(215, 119, 87, 0.08);
-    border: 1px solid rgba(215, 119, 87, 0.35);
-    border-left: 3px solid #d77757;
-    border-radius: 4px;
-    padding: 14px 16px;
-    margin-bottom: 30px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-.active-session-banner[hidden] { display: none; }
-.active-session-info { flex: 1 1 auto; min-width: 0; }
-.active-session-title {
-    color: #d77757;
-    font-size: 1rem;
-    font-weight: bold;
-    margin-bottom: 4px;
-}
-.active-session-name { color: #e5e5e5; }
-.active-session-meta {
-    color: #858585;
-    font-size: 0.85rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.active-session-actions {
-    display: flex;
-    gap: 8px;
-    flex: 0 0 auto;
-}
-.active-session-actions .modal-btn {
-    width: auto;
-    height: auto;
-    padding: 8px 14px;
-    font-size: 0.85rem;
-    border-radius: 4px;
-}
-
 .launchpad-section {
     margin-bottom: 30px;
 }
@@ -1371,4 +1325,113 @@ button[data-tooltip]:hover::after {
     .folder-picker-list {
         max-height: 240px;
     }
+}
+
+/* ---- Running sessions section (Task 8) -------------------------- */
+
+.running-sessions-section {
+    margin-bottom: 1.5rem;
+}
+
+.running-session-row {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    background: rgba(215, 119, 87, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.running-session-row:hover {
+    background: rgba(215, 119, 87, 0.14);
+}
+
+.running-session-row.owned {
+    border-left: 3px solid #4ade80;
+}
+
+.running-session-row.external {
+    border-left: 3px solid #fbbf24;
+}
+
+.running-session-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.running-session-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.running-session-row.owned .running-session-dot {
+    background: #4ade80;
+    box-shadow: 0 0 8px #4ade80;
+}
+
+.running-session-row.external .running-session-dot {
+    background: #fbbf24;
+    box-shadow: 0 0 8px #fbbf24;
+}
+
+.running-session-name {
+    flex: 1;
+    font-weight: bold;
+    color: var(--accent, #d77757);
+}
+
+.running-session-kill {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #e88;
+    border-radius: 4px;
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.running-session-kill:hover {
+    color: #ff6b6b;
+    transform: scale(1.15);
+    background: rgba(255, 107, 107, 0.12);
+}
+
+.running-session-badges {
+    display: flex;
+    gap: 6px;
+    margin-left: 18px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.badge {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+}
+
+.badge-running { background: #2a3a2a; color: #4ade80; }
+.badge-tmux    { background: #2a2a3a; color: #8899ff; }
+.badge-external { background: #4a3a2a; color: #fbbf24; }
+
+.running-session-age {
+    color: #888;
+    font-size: 0.75em;
+    align-self: center;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
 }
