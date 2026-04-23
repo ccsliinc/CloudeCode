@@ -8,11 +8,13 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
-        // Attachable (external) tmux sessions on the `cloude` socket.
-        // Populated by loadAttachableSessions(); empty array means either
-        // "not loaded yet" or "loaded and none exist" — the render pass
-        // uses the DOM state (loading vs empty-list) to disambiguate.
-        this.attachableSessions = [];
+        // Running tmux sessions on the `cloude` socket. Populated by
+        // loadRunningSessions() — a merged view of:
+        //   (a) the currently-active backend (from GET /sessions), and
+        //   (b) attachable/external sessions (from GET /sessions/attachable).
+        // Each row carries an is_active flag so the render pass can style
+        // the live one differently without a second DOM query.
+        this.runningSessions = [];
     }
 
     /**
@@ -51,7 +53,9 @@ class Launchpad {
     }
 
     /**
-     * Load and display projects
+     * Load and display projects, then refresh the running-sessions list.
+     * Both fetches are non-fatal — the projects error path shows a UI
+     * error, the sessions path is logged and silently renders empty.
      */
     async loadProjects() {
         try {
@@ -61,164 +65,130 @@ class Launchpad {
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
         }
-        // Refresh attachable sessions in parallel with the projects view.
-        // Failure here is non-fatal — it just means the adopt section shows
-        // its empty state instead of listing external sessions.
-        this.loadAttachableSessions();
-        // Refresh the "session running" banner. The user may have
-        // destroyed / timed-out the session from another tab between
-        // launchpad visits, so every entry re-fetches authoritatively.
-        this.refreshActiveSessionBanner();
+        // Refresh running sessions in parallel with the projects view.
+        // Failure is non-fatal and handled inside loadRunningSessions.
+        this.loadRunningSessions();
     }
 
     /**
-     * Fetch current-session state from the server and repaint the
-     * active-session banner accordingly.
+     * Fetch the unified "running sessions" list and repaint the section.
      *
-     * The server's ``GET /sessions`` returns 404 when no session exists;
-     * ``API.getCurrentSession()`` translates that to null so we can treat
-     * "no session" as a normal state instead of an error. On any other
-     * error we log and hide the banner — better a missing banner than a
-     * broken launchpad.
+     * Combines two server endpoints:
+     *   - ``GET /sessions/attachable`` — external tmux sessions on the
+     *     cloude socket, plus cloude-owned sessions NOT currently bound
+     *     to an active backend (detached-but-alive).
+     *   - ``GET /sessions`` — the currently-active backend, if any. The
+     *     server's /attachable filter drops this row to prevent a
+     *     self-adopt footgun, so we refetch and merge it in here.
+     *
+     * Each merged row gains an ``is_active`` flag and the list is sorted:
+     * active first, then owned (cloude-created), then external; within
+     * each bucket, newest first by ``created_at_epoch``.
      */
-    async refreshActiveSessionBanner() {
-        let info = null;
+    async loadRunningSessions() {
         try {
-            info = await window.API.getCurrentSession();
-        } catch (error) {
-            console.warn('Launchpad: active-session fetch failed, hiding banner:', error && error.message);
-            info = null;
+            const list = await window.API.listAttachableSessions();
+            this.runningSessions = Array.isArray(list) ? list : [];
+        } catch (err) {
+            console.warn('Launchpad: listAttachableSessions failed:', err);
+            this.runningSessions = [];
         }
-        this.renderActiveSessionBanner(info);
+        // Augment with the CURRENTLY ACTIVE backend, which the server filters
+        // out of /sessions/attachable to prevent self-adopt. Refetch via GET
+        // /sessions (returns 404 when none active) and merge.
+        try {
+            const current = await window.API.getCurrentSession();
+            if (current && current.tmux_session) {
+                const already = this.runningSessions.some(s => s.name === current.tmux_session);
+                if (!already) {
+                    this.runningSessions.unshift({
+                        name: current.tmux_session,
+                        created_by_cloude: true,
+                        created_at_epoch: current.created_at_epoch || 0,
+                        window_count: 1,
+                        is_active: true,
+                    });
+                } else {
+                    const row = this.runningSessions.find(s => s.name === current.tmux_session);
+                    if (row) row.is_active = true;
+                }
+            }
+        } catch (err) {
+            // 404 = no active session, fine
+        }
+        // Sort: active first, then owned, then external; within each, newest first
+        this.runningSessions.sort((a, b) => {
+            if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
+            if (!!a.created_by_cloude !== !!b.created_by_cloude) {
+                return a.created_by_cloude ? -1 : 1;
+            }
+            return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
+        });
+        this.renderRunningSessions();
     }
 
     /**
-     * Paint (or hide) the active-session banner at the top of the
-     * launchpad. Pass null/undefined to hide.
+     * Paint (or hide) the Running Sessions section. Hides via display:none
+     * when empty — opacity:0 would still capture clicks, which we don't want.
      *
-     * Display-name rules:
-     *   - If info.tmux_session is present, use it (works for both owned
-     *     and adopted sessions — matches what the user typed at
-     *     ``tmux new -s <name>``).
-     *   - Else if session.id starts with ``adopted:``, strip the prefix.
-     *   - Else fall back to the basename of working_dir (matches the
-     *     menu-bar health endpoint's convention).
-     *   - Final fallback: session.id as-is.
+     * Click handlers (row → return/adopt, X → kill) land in Task 10; this
+     * pass only builds the DOM. ``data-name`` / ``data-active`` attributes
+     * are the hooks event delegation will use.
      */
-    renderActiveSessionBanner(info) {
-        const banner = document.getElementById('active-session-banner');
-        if (!banner) return;
-
-        const session = info && (info.session || info) || null;
-        if (!info || !session || !session.id) {
-            banner.hidden = true;
+    renderRunningSessions() {
+        const container = document.getElementById('running-sessions-list');
+        if (!container) return;
+        const section = document.getElementById('running-sessions-section');
+        if (!this.runningSessions || this.runningSessions.length === 0) {
+            if (section) section.style.display = 'none';
+            container.innerHTML = '';
             return;
         }
-
-        let displayName = info.tmux_session || null;
-        if (!displayName && typeof session.id === 'string' && session.id.startsWith('adopted:')) {
-            displayName = session.id.slice('adopted:'.length);
-        }
-        if (!displayName && session.working_dir) {
-            const parts = session.working_dir.split('/').filter(Boolean);
-            displayName = parts.length ? parts[parts.length - 1] : session.working_dir;
-        }
-        if (!displayName) displayName = session.id;
-
-        const backendLabel = info.session_backend || 'unknown';
-        const nameEl = banner.querySelector('.active-session-name');
-        const cwdEl = banner.querySelector('.active-session-cwd');
-        const backendEl = banner.querySelector('.active-session-backend');
-        if (nameEl) nameEl.textContent = displayName;
-        if (cwdEl) cwdEl.textContent = session.working_dir || '';
-        if (backendEl) backendEl.textContent = `backend: ${backendLabel}`;
-
-        // Stash the fresh session on the button handlers' closure source
-        // so clicks always act on the latest state (prevents stale-session
-        // races if the user leaves the launchpad open for a long time).
-        this._activeSession = session;
-
-        banner.hidden = false;
+        if (section) section.style.display = '';
+        container.innerHTML = this.runningSessions.map(s => {
+            const owned = !!s.created_by_cloude;
+            const displayName = this._deriveRunningSessionDisplayName(s.name);
+            const ageStr = s.created_at_epoch ? this._formatRelativeTime(s.created_at_epoch) : '';
+            const escapedName = this._escapeHtml(s.name);
+            const escapedDisplay = this._escapeHtml(displayName);
+            return `
+                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}">
+                  <div class="running-session-top">
+                    <span class="running-session-dot" aria-hidden="true"></span>
+                    <span class="running-session-name">${escapedDisplay}</span>
+                    <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                        <line x1="6" y1="18" x2="18" y2="6"/>
+                      </svg>
+                    </span>
+                  </div>
+                  <div class="running-session-badges">
+                    <span class="badge badge-running">RUNNING</span>
+                    <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
+                    ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
+                  </div>
+                </div>
+            `;
+        }).join('');
     }
 
     /**
-     * "Return to terminal" click handler. Delegates to App, which owns
-     * screen-transition state — we just pass the session and let App
-     * re-open the WS against the existing backend.
+     * Strip the ``cloude_`` prefix from tmux session names for display.
+     * Non-cloude (external) names are rendered verbatim.
      */
-    async handleReturnToTerminal() {
-        const session = this._activeSession;
-        if (!session) {
-            console.warn('Launchpad: return clicked but no active session cached');
-            this.refreshActiveSessionBanner();
-            return;
+    _deriveRunningSessionDisplayName(tmuxName) {
+        if (tmuxName && tmuxName.startsWith('cloude_')) {
+            return tmuxName.slice('cloude_'.length);
         }
-        if (window.App && typeof window.App.returnToExistingTerminal === 'function') {
-            await window.App.returnToExistingTerminal(session);
-        } else {
-            console.error('Launchpad: App.returnToExistingTerminal unavailable');
-        }
-    }
-
-    /**
-     * "End session" click handler. Reuses the shared confirmation-modal
-     * pattern and the existing destroy-session API. On success we hide
-     * the banner (and the user stays on the launchpad to pick what's next).
-     */
-    async handleEndActiveSession() {
-        const session = this._activeSession;
-        const label = (session && (session.id || '')).replace(/^adopted:/, '') || 'this session';
-        const confirmed = await this.showConfirmModal(
-            'end session',
-            `are you sure you want to end "${this._escapeHtml(label)}"?`,
-            'the tmux pane will be killed. any unsaved shell state will be lost.'
-        );
-        if (!confirmed) return;
-
-        try {
-            this.updateStatus('ending session...');
-            await window.API.destroySession();
-            this._activeSession = null;
-            // Refresh both projects (LRU ordering) and banner. Keep the
-            // adopt list in sync too — once the active backend is gone,
-            // any previously-filtered external session may reappear.
-            await this.loadProjects();
-        } catch (error) {
-            console.error('Launchpad: failed to end session:', error);
-            this.showError('failed to end session: ' + (error.message || error));
-        }
-    }
-
-    /**
-     * Fetch externally-started tmux sessions that can be adopted and
-     * refresh the "Adopt an external session" panel.
-     *
-     * Fails soft: on any error we clear the list and let the empty-state
-     * render explain the situation. Never throws to the caller — the
-     * launchpad's main flow should work even if this endpoint 500s.
-     */
-    async loadAttachableSessions() {
-        try {
-            const sessions = await window.API.listAttachableSessions();
-            // Defensive filter: even though the server already excludes the
-            // currently-active backend, we also drop any row whose name
-            // matches the live session. Covers races where the server
-            // responded before our own session was registered.
-            const activeName = this._getActiveSessionName();
-            this.attachableSessions = (sessions || []).filter(
-                s => !activeName || s.name !== activeName
-            );
-        } catch (error) {
-            console.error('Launchpad: Failed to load attachable sessions:', error);
-            this.attachableSessions = [];
-        }
-        this.renderAttachableList();
+        return tmuxName;
     }
 
     /**
      * Best-effort read of the currently-active backend's tmux session name.
-     * Used for the self-adopt UI filter. Returns null when no session is
-     * active or the controller isn't wired up yet.
+     * Used for the self-adopt UI filter and the session-collision modal copy.
+     * Returns null when no session is active or the controller isn't wired
+     * up yet.
      */
     _getActiveSessionName() {
         try {
@@ -231,9 +201,9 @@ class Launchpad {
     }
 
     /**
-     * HTML-escape helper used by adopt section renderer. Session names come
-     * from the tmux daemon and are technically user-controlled — any
-     * embedded `<`, `>`, `"`, `'`, `&` in a name would break innerHTML.
+     * HTML-escape helper. Session names come from the tmux daemon and are
+     * technically user-controlled — any embedded `<`, `>`, `"`, `'`, `&`
+     * in a name would break innerHTML.
      */
     _escapeHtml(s) {
         return String(s)
@@ -255,53 +225,6 @@ class Launchpad {
         if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
         if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
         return `${Math.floor(delta / 86400)}d ago`;
-    }
-
-    /**
-     * Render the "Adopt an external session" panel.
-     *
-     * Three states handled:
-     *   - empty: friendly prompt explaining how to make sessions appear
-     *   - populated: one row per session with attach button
-     * The disclosure (`<details>`) above the list is static and rendered
-     * once in renderLaunchpadUI — we only repaint the list body here.
-     */
-    renderAttachableList() {
-        const listEl = document.getElementById('adopt-list');
-        if (!listEl) return;
-
-        if (!this.attachableSessions || this.attachableSessions.length === 0) {
-            listEl.innerHTML = `
-                <div class="launchpad-empty">
-                    no external sessions detected<br>
-                    <small style="color: #666;">start one with <code>tmux -L cloude new -s &lt;name&gt;</code></small>
-                </div>
-            `;
-            return;
-        }
-
-        listEl.innerHTML = this.attachableSessions.map((s) => {
-            const name = this._escapeHtml(s.name);
-            const windows = typeof s.window_count === 'number' ? s.window_count : '?';
-            const rel = this._formatRelativeTime(s.created_at_epoch);
-            return `
-                <div class="project-item adopt-item" data-name="${name}">
-                    <div class="project-name">» ${name}</div>
-                    <div class="project-description">${windows} window${windows === 1 ? '' : 's'} · created ${rel}</div>
-                    <button class="modal-btn modal-btn-primary adopt-attach-btn" data-name="${name}">attach</button>
-                </div>
-            `;
-        }).join('');
-
-        // Wire attach buttons. Stop propagation so clicking the button
-        // doesn't also bubble to the row click (if we ever add one).
-        listEl.querySelectorAll('.adopt-attach-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const name = btn.dataset.name;
-                if (name) await this.handleAttachClick(name);
-            });
-        });
     }
 
     /**
@@ -393,19 +316,12 @@ class Launchpad {
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
-                <div class="active-session-banner" id="active-session-banner" hidden>
-                    <div class="active-session-info">
-                        <div class="active-session-title" title="Your browser has detached but the tmux session is still alive on the server. Click Return to re-attach and continue streaming.">⏸ session running: <span class="active-session-name"></span></div>
-                        <div class="active-session-meta">
-                            <span class="active-session-cwd"></span>
-                            <span class="active-session-sep"> · </span>
-                            <span class="active-session-backend"></span>
-                        </div>
+                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
+                    <div class="launchpad-section-title">
+                        ► running sessions
+                        <!-- Task 11 will relocate the adopt-disclosure to here -->
                     </div>
-                    <div class="active-session-actions">
-                        <button class="modal-btn modal-btn-primary active-session-return" id="active-session-return">return to terminal</button>
-                        <button class="modal-btn modal-btn-secondary active-session-end" id="active-session-end">end session</button>
-                    </div>
+                    <div id="running-sessions-list"></div>
                 </div>
 
                 <div class="launchpad-section">
@@ -418,27 +334,6 @@ class Launchpad {
                         <span>📁</span>
                         <span>open project from folder</span>
                     </button>
-                </div>
-
-                <div class="launchpad-section" id="launchpad-adopt">
-                    <div class="launchpad-section-title">
-                        ► adopt an external session
-                        <details class="adopt-disclosure">
-                            <summary>?</summary>
-                            <div class="adopt-disclosure-body">
-                                <p>Only sessions started under <code>tmux -L cloude</code> appear here. Start a plain session with <code>tmux -L cloude new -s &lt;name&gt;</code>.</p>
-                                <p>To launch claude in one line, pipe it in as the pane's root command:</p>
-                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec $SHELL"</code></pre>
-                                <p>The <code>exec $SHELL</code> trick keeps the pane alive with a shell prompt after claude exits — otherwise the pane closes with claude.</p>
-                                <p>Using a custom launcher alias (e.g. <code>cld</code>) from your <code>~/.zshrc</code> or <code>~/.bashrc</code>? tmux spawns a non-interactive shell by default, so your alias won't resolve. Wrap the command in an interactive shell:</p>
-                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "$SHELL -ic 'cld; exec $SHELL'"</code></pre>
-                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
-                            </div>
-                        </details>
-                    </div>
-                    <div id="adopt-list" class="project-list">
-                        <div class="launchpad-empty">scanning for external sessions...</div>
-                    </div>
                 </div>
 
                 <div class="launchpad-section" id="projects-section">
@@ -483,19 +378,9 @@ class Launchpad {
             this.resetServer();
         });
 
-        // Active-session banner buttons. Wired once at UI-render time;
-        // refreshActiveSessionBanner() just shows/hides and repopulates
-        // the name/cwd/backend spans — no need to re-bind on every load.
-        const returnBtn = document.getElementById('active-session-return');
-        if (returnBtn) {
-            returnBtn.addEventListener('click', () => this.handleReturnToTerminal());
-        }
-        const endBtn = document.getElementById('active-session-end');
-        if (endBtn) {
-            endBtn.addEventListener('click', () => this.handleEndActiveSession());
-        }
-
-        // Note: loadProjects() will be called by App.showLaunchpad()
+        // Note: loadProjects() will be called by App.showLaunchpad().
+        // Running-sessions row/X click handlers land in Task 10 via event
+        // delegation on #running-sessions-list.
     }
 
     /**
@@ -1258,19 +1143,19 @@ class Launchpad {
 
     /**
      * Best-effort label for the running server-side session, used by the
-     * session-collision modal copy. Prefers the cached banner session
-     * (freshest, includes tmux_session name), falls back to the terminal
-     * controller's local cache. Returns null if nothing is known.
+     * session-collision modal copy. Prefers the runningSessions row flagged
+     * ``is_active`` (freshest, includes tmux_session name), falls back to
+     * the terminal controller's local cache. Returns null if nothing is
+     * known.
      */
     _getCurrentSessionLabel() {
         try {
-            const s = this._activeSession;
-            if (s) {
-                if (s.tmux_session) return s.tmux_session;
-                if (typeof s.id === 'string') return s.id.replace(/^adopted:/, '');
+            const active = (this.runningSessions || []).find(s => s.is_active);
+            if (active && active.name) {
+                return this._deriveRunningSessionDisplayName(active.name);
             }
             const name = this._getActiveSessionName();
-            if (name) return name;
+            if (name) return this._deriveRunningSessionDisplayName(name);
         } catch (_) { /* non-fatal */ }
         return null;
     }
