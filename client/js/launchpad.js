@@ -718,6 +718,7 @@ class Launchpad {
             const session = await window.API.createSession({
                 auto_start_claude: true,
                 copy_templates: true,
+                project_name: projectDetails.name,
                 ..._dims
             });
 
@@ -1214,6 +1215,7 @@ class Launchpad {
                 working_dir: project.path,
                 auto_start_claude: true,
                 copy_templates: false,
+                project_name: project.name,
                 ..._dims
             });
 
