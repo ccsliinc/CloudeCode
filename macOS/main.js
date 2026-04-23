@@ -15,7 +15,10 @@ let currentStats = null;
 function showAboutDialog() {
   const { BrowserWindow } = require('electron');
 
-  // Create a small modal window
+  // Create a small modal window.
+  // Uses Electron-recommended secure defaults: no node integration, context isolation on.
+  // The window HTML is static display only — no Node APIs needed. External links
+  // are intercepted via setWindowOpenHandler below and routed through shell.openExternal.
   const aboutWindow = new BrowserWindow({
     width: 500,
     height: 400,
@@ -26,9 +29,16 @@ function showAboutDialog() {
     show: false,
     backgroundColor: '#1a1a1a',
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
     }
+  });
+
+  // Intercept target="_blank" / window.open and route to external browser
+  aboutWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   // Get the icon path and convert to data URL for reliable display
@@ -44,7 +54,7 @@ function showAboutDialog() {
   const iconDataUrl = `data:image/png;base64,${iconBase64}`;
 
   const currentYear = new Date().getFullYear();
-  const appVersion = 'v0.1';
+  const appVersion = `v${app.getVersion()}`;
 
   // HTML content for the about dialog
   const html = `
@@ -87,6 +97,7 @@ function showAboutDialog() {
           line-height: 1.5;
         }
         .github-btn {
+          display: inline-block;
           padding: 12px 30px;
           background: #CC785C;
           color: white;
@@ -95,6 +106,7 @@ function showAboutDialog() {
           font-size: 15px;
           font-weight: 600;
           cursor: pointer;
+          text-decoration: none;
           transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
           box-shadow: 0 4px 12px rgba(204, 120, 92, 0.3);
         }
@@ -121,16 +133,10 @@ function showAboutDialog() {
         Your AI coding sidekick in the menu bar.<br/>
         Command Claude from anywhere, build anywhere.
       </p>
-      <button class="github-btn" onclick="openGitHub()">View on GitHub</button>
+      <a class="github-btn" href="https://github.com/Adoom666/CloudeCode" target="_blank" rel="noopener noreferrer">View on GitHub</a>
       <div class="copyright">
         Copyright © ${currentYear} Psyance, LLC. All rights reserved.
       </div>
-
-      <script>
-        function openGitHub() {
-          require('electron').shell.openExternal('https://github.com/Adoom666/CloudeCode');
-        }
-      </script>
     </body>
     </html>
   `;

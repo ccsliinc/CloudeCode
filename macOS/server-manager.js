@@ -9,6 +9,7 @@ class ServerManager {
   constructor() {
     this.process = null;
     this.processPid = null;
+    this.ownedProcess = false; // true if we spawned the server, false if adopted
     this.logStream = null;
 
     // Determine base directory based on whether app is packaged
@@ -339,8 +340,9 @@ class ServerManager {
         console.log('Server already running on port, adopting it');
         this.state = 'running';
         this.startTime = Date.now(); // Approximate
+        this.ownedProcess = false; // We didn't spawn this — don't kill it on quit
 
-        // Try to capture the PID of the existing process
+        // Try to capture the PID of the existing process (for display only)
         try {
           exec(`lsof -ti:${this.port}`, (err, stdout) => {
             if (!err && stdout) {
@@ -388,6 +390,7 @@ class ServerManager {
     });
 
     this.processPid = this.process.pid;
+    this.ownedProcess = true; // We spawned it — we can safely kill it on quit
     this.startTime = Date.now();
     console.log(`Server process started with PID: ${this.processPid}`);
 
@@ -437,6 +440,7 @@ class ServerManager {
 
       this.process = null;
       this.processPid = null;
+      this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
     });
@@ -454,6 +458,7 @@ class ServerManager {
 
       this.process = null;
       this.processPid = null;
+      this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
     });
@@ -492,48 +497,45 @@ class ServerManager {
   }
 
   /**
-   * Stop the server gracefully
+   * Stop the server.
+   *
+   * Only stops servers we own (spawned). Adopted servers are left alone —
+   * we don't own them, we don't kill them. Shutdown is process-signal based
+   * (SIGTERM → 3s grace → SIGKILL). No HTTP shutdown call — the /api/v1/shutdown
+   * endpoint now requires auth, and signaling a PID we own is strictly simpler.
    */
   async stop() {
     console.log('Stopping server...');
 
-    // Try graceful shutdown via API first
-    try {
-      await axios.post(`${this.apiUrl}/api/v1/shutdown`, {}, {
-        timeout: 2000
-      });
-      console.log('Sent shutdown signal to server');
-      // Wait a bit for graceful shutdown
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (err) {
-      console.log('API shutdown failed:', err.message);
+    // Adopted server: we didn't start it, we don't stop it.
+    if (!this.ownedProcess) {
+      console.log('Server was adopted, not owned — leaving it running.');
+      // Clear our local references so menu reflects "stopped" from app's POV.
+      this.processPid = null;
+      this.state = 'stopped';
+      this.startTime = null;
+      return;
     }
 
-    // Kill by process reference if we have it
+    // Owned server: SIGTERM via process ref or PID, then SIGKILL after grace period.
     if (this.process && !this.process.killed) {
-      console.log('Killing server process by reference...');
+      console.log('Sending SIGTERM to owned server process...');
       this.process.kill('SIGTERM');
 
-      // Force kill after 3 seconds if still running
-      setTimeout(() => {
-        if (this.process && !this.process.killed) {
-          console.log('Force killing server process');
-          this.process.kill('SIGKILL');
-        }
-      }, 3000);
-    }
-    // Otherwise kill by PID if we have it
-    else if (this.processPid) {
-      console.log(`Killing server by PID ${this.processPid}...`);
-      await this.killByPid(this.processPid, 'SIGTERM');
+      // Give uvicorn ~3s to flush connections, then force kill.
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Wait a bit, then force kill if needed
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (this.process && !this.process.killed) {
+        console.log('Server did not exit on SIGTERM, sending SIGKILL');
+        this.process.kill('SIGKILL');
+      }
+    } else if (this.processPid) {
+      // Process object lost but we have PID (edge case: app restart mid-lifecycle).
+      console.log(`Sending SIGTERM to owned PID ${this.processPid}...`);
+      await this.killByPid(this.processPid, 'SIGTERM');
+      await new Promise(resolve => setTimeout(resolve, 3000));
       await this.killByPid(this.processPid, 'SIGKILL');
     }
-
-    // Fallback: kill any process on port 8000
-    await this.killByPort();
 
     // Close log stream
     if (this.logStream) {
@@ -541,13 +543,12 @@ class ServerManager {
       this.logStream = null;
     }
 
-    // Wait for process to fully exit before clearing state
+    // Wait briefly for exit event to fire, then clean up state if it didn't.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // If process still exists, wait for exit event to clean up
-    // Otherwise clean up now
     if (!this.process) {
       this.processPid = null;
+      this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
     }
