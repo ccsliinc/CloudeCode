@@ -7,6 +7,12 @@ class AppController {
         this.currentScreen = null;
         this.logoutBtn = null;
         this.destroyBtn = null;
+        // Health poller state. Poll every 15s against /health so the
+        // top-right status dot reflects server reachability on the
+        // auth + launchpad screens. The terminal screen manages the
+        // same dot via its WS updateStatus() calls, so the poller
+        // yields whenever currentScreen === 'terminal'.
+        this._healthPollerInterval = null;
     }
 
     /**
@@ -24,6 +30,11 @@ class AppController {
         // Initialize auth module (always needed first)
         window.Auth.init();
 
+        // Kick off server health polling before auth resolves — the
+        // /health endpoint is unauthenticated, so the dot works on the
+        // auth screen too.
+        this._startHealthPoller();
+
         // Check if user is authenticated
         if (window.Auth.isAuthenticated()) {
             console.log('App: User has token, verifying...');
@@ -37,6 +48,47 @@ class AppController {
         } else {
             console.log('App: No token, showing auth');
             this.showAuth();
+        }
+    }
+
+    /**
+     * Start the server-health poller. Idempotent — safe to call more
+     * than once. Fires an initial probe immediately, then every 15s.
+     */
+    _startHealthPoller() {
+        if (this._healthPollerInterval) return;
+        this._healthPollerInterval = setInterval(() => this._pollHealth(), 15000);
+        this._pollHealth();
+    }
+
+    /**
+     * Probe GET /health and paint the top-right status dot.
+     *
+     * States:
+     *   - green (.connected): HTTP 200
+     *   - red (.error):       network error, timeout, or non-2xx
+     *   - orange (default):   initial state before first probe
+     *
+     * Yields to the terminal screen's WS updateStatus() by returning
+     * early when currentScreen === 'terminal' — otherwise the 15s
+     * tick would clobber the live WS status (e.g. "Connected").
+     */
+    async _pollHealth() {
+        if (this.currentScreen === 'terminal') return;
+        const statusEl = document.getElementById('statusText');
+        if (!statusEl) return;
+        try {
+            const r = await fetch('/health', { method: 'GET', cache: 'no-store' });
+            if (r.ok) {
+                statusEl.className = 'status connected';
+                statusEl.setAttribute('data-status', 'server OK');
+            } else {
+                statusEl.className = 'status error';
+                statusEl.setAttribute('data-status', `server error · HTTP ${r.status}`);
+            }
+        } catch (err) {
+            statusEl.className = 'status error';
+            statusEl.setAttribute('data-status', `server unreachable · ${err && err.message ? err.message : err}`);
         }
     }
 
