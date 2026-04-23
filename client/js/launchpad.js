@@ -420,7 +420,10 @@ class Launchpad {
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
-                                <p>Only sessions started under <code>tmux -L cloude</code> appear here. Start your next session with <code>tmux -L cloude new -s &lt;name&gt;</code> and it'll appear here.</p>
+                                <p>Only sessions started under <code>tmux -L cloude</code> appear here. Start a plain session with <code>tmux -L cloude new -s &lt;name&gt;</code>.</p>
+                                <p>To launch claude in one line, pipe it in as the pane's root command:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec $SHELL"</code></pre>
+                                <p>The <code>exec $SHELL</code> trick keeps the pane alive with a shell prompt after claude exits — otherwise the pane closes with claude.</p>
                             </div>
                         </details>
                     </div>
