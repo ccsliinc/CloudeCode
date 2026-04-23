@@ -1608,6 +1608,27 @@ def test_tmux_backend_without_session_name_uses_legacy_slug():
     assert "abc123" in backend.tmux_session
 
 
+def test_create_session_request_accepts_project_name():
+    from src.models import CreateSessionRequest
+    req = CreateSessionRequest(
+        working_dir="/tmp",
+        auto_start_claude=False,
+        copy_templates=False,
+        project_name="Cloude Code Dev",
+    )
+    assert req.project_name == "Cloude Code Dev"
+
+
+def test_create_session_request_project_name_defaults_to_none():
+    from src.models import CreateSessionRequest
+    req = CreateSessionRequest(
+        working_dir="/tmp",
+        auto_start_claude=False,
+        copy_templates=False,
+    )
+    assert req.project_name is None
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

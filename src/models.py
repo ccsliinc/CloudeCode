@@ -112,6 +112,10 @@ class CreateSessionRequest(BaseModel):
         False,
         description="Copy template files to working directory"
     )
+    project_name: Optional[str] = Field(
+        None,
+        description="Optional human-readable project display name"
+    )
     # Optional client-measured terminal dims. When supplied, the backend
     # births the pane at these dims instead of the INITIAL_COLS/INITIAL_ROWS
     # defaults — closing the "80x24 or 132x40 birth" gap before the first
