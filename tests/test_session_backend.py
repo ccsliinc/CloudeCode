@@ -1583,6 +1583,31 @@ def test_sanitize_tmux_name_strips_newlines_and_tabs():
     assert _sanitize_tmux_name("foo\n\tbar") == "foo bar"
 
 
+def test_tmux_backend_accepts_verbatim_session_name_override():
+    """When session_name= is passed to __init__, it's used verbatim
+    instead of applying the slug+prefix transformation to session_id."""
+    backend = TmuxBackend(
+        session_id="ses_abc123",
+        working_dir=Path(tempfile.mkdtemp(prefix="cc_t2_")),
+        session_name="cloude_Cloude Code Dev",
+    )
+    assert backend.tmux_session == "cloude_Cloude Code Dev"
+    # session_id still recorded for metadata
+    assert backend.session_id == "ses_abc123"
+
+
+def test_tmux_backend_without_session_name_uses_legacy_slug():
+    """Backward compat: no session_name kwarg → legacy cloude_<slug> naming."""
+    backend = TmuxBackend(
+        session_id="ses_abc123",
+        working_dir=Path(tempfile.mkdtemp(prefix="cc_t2b_")),
+    )
+    # Existing code derives slug from session_id; we assert prefix and
+    # that the session_id content appears somewhere.
+    assert backend.tmux_session.startswith("cloude_")
+    assert "abc123" in backend.tmux_session
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

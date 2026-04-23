@@ -169,13 +169,21 @@ class TmuxBackend(SessionBackend):
         on_output: Optional[Callable[[bytes], Any]] = None,
         socket_name: str = DEFAULT_SOCKET_NAME,
         scrollback_lines: int = 3000,
+        session_name: Optional[str] = None,
     ) -> None:
         super().__init__(session_id, working_dir, on_output)
 
         self.socket_name = socket_name
         self.scrollback_lines = scrollback_lines
         self.slug = _slugify(session_id)
-        self.tmux_session = f"{SESSION_PREFIX}{self.slug}"
+        # If an explicit session_name is provided (used by create_session with
+        # project_name for verbatim naming), it OVERRIDES the legacy
+        # cloude_<slug> derivation. Otherwise default to the legacy hex-based
+        # name so existing call sites are unchanged.
+        if session_name is not None:
+            self.tmux_session = session_name
+        else:
+            self.tmux_session = f"{SESSION_PREFIX}{self.slug}"
 
         # Per-session pipe-pane output file lives under the log directory.
         # We resolve lazily to avoid importing settings at module import time.
