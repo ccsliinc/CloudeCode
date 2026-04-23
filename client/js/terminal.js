@@ -453,6 +453,33 @@ class Terminal {
             fifoStartOffset,
         });
 
+        // If a prior session was active, tear it down cleanly before painting the new one.
+        // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
+        // WebSocket readers competing for the same backend FIFO.
+        if (this.ws) {
+            try {
+                // Flag so our onclose handler doesn't trigger a reconnect loop.
+                this._intentionalClose = true;
+                this.ws.close();
+            } catch (e) {
+                console.warn('Terminal: error closing prior WS:', e);
+            }
+            this.ws = null;
+        }
+        // Reset the xterm buffer and cursor. term.reset() clears scrollback +
+        // alt-buffer + wraps state; term.clear() only clears the visible screen.
+        // We want reset() so the VT parser starts fresh for the new session.
+        if (this.term) {
+            try {
+                this.term.reset();
+            } catch (e) {
+                console.warn('Terminal: xterm reset failed:', e);
+            }
+        }
+        this._currentSession = null;
+        this.sessionActive = false;
+        this.reconnectAttempts = 0;
+
         // Stash session on the controller so other modules (launchpad
         // self-adopt filter, debug) can introspect without refetching.
         this._currentSession = session;
@@ -523,6 +550,33 @@ class Terminal {
     reconnectToExistingSession(session) {
         console.log('Terminal: Reconnecting to existing session:', session && session.id);
 
+        // If a prior session was active, tear it down cleanly before painting the new one.
+        // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
+        // WebSocket readers competing for the same backend FIFO.
+        if (this.ws) {
+            try {
+                // Flag so our onclose handler doesn't trigger a reconnect loop.
+                this._intentionalClose = true;
+                this.ws.close();
+            } catch (e) {
+                console.warn('Terminal: error closing prior WS:', e);
+            }
+            this.ws = null;
+        }
+        // Reset the xterm buffer and cursor. term.reset() clears scrollback +
+        // alt-buffer + wraps state; term.clear() only clears the visible screen.
+        // We want reset() so the VT parser starts fresh for the new session.
+        if (this.term) {
+            try {
+                this.term.reset();
+            } catch (e) {
+                console.warn('Terminal: xterm reset failed:', e);
+            }
+        }
+        this._currentSession = null;
+        this.sessionActive = false;
+        this.reconnectAttempts = 0;
+
         // Stash so launchpad self-adopt filter + debug can introspect.
         this._currentSession = session;
         this.sessionActive = true;
@@ -535,16 +589,8 @@ class Terminal {
             this.destroySessionBtn.disabled = false;
         }
 
-        // If a WS is already open to the same backend, nothing to do —
-        // the stream is live and xterm is already bound. This covers the
-        // quick bounce case where the user clicked logo → banner return
-        // faster than any idle close could fire.
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('Terminal: WS already open, skipping reconnect');
-            return;
-        }
-
-        // Otherwise reopen on the same delay connectToSession uses, so
+        // Always reopen a fresh WS after teardown above, on the same delay
+        // connectToSession uses, so
         // the terminal screen transition has time to settle and the
         // fit/font readiness dance in connectWebSocket() has a stable
         // container to measure.
@@ -621,6 +667,9 @@ class Terminal {
             // Reset reconnect state
             this.reconnectAttempts = 0;
             this.isReconnecting = false;
+            // Clear intentional-close flag now that a fresh WS is open —
+            // any FUTURE close is a natural disconnect and should reconnect.
+            this._intentionalClose = false;
             if (this.reconnectTimeout) {
                 clearTimeout(this.reconnectTimeout);
                 this.reconnectTimeout = null;
@@ -677,6 +726,15 @@ class Terminal {
             if (this.keepaliveInterval) {
                 clearInterval(this.keepaliveInterval);
                 this.keepaliveInterval = null;
+            }
+
+            // If the close was triggered by a deliberate session swap,
+            // skip the disconnect banner + reconnect loop — the new
+            // session's connect flow will paint its own state.
+            if (this._intentionalClose) {
+                console.log('Terminal: intentional close, skipping reconnect');
+                this._intentionalClose = false;
+                return;
             }
 
             if (this.term) {
