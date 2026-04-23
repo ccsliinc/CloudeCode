@@ -543,7 +543,7 @@ class Launchpad {
             const confirmed = await this.showConfirmModal(
                 'reset server',
                 'are you sure you want to reset the server?',
-                'this will stop and restart the server. any active sessions will be terminated.'
+                'the python server will restart and re-attach your tmux sessions — sessions keep running, only the web connection briefly drops.'
             );
 
             if (!confirmed) {
