@@ -14,7 +14,7 @@ import fcntl
 import termios
 import select
 from pathlib import Path
-from typing import Any, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable
 import structlog
 
 from src.core.session_backend import SessionBackend
@@ -376,6 +376,17 @@ class PTYBackend(SessionBackend):
 
     def discover_existing(self) -> List[str]:
         """PTYs don't survive restart — always empty."""
+        return []
+
+    def list_attachable_sessions(
+        self, owned_names: Optional[set] = None  # noqa: ARG002
+    ) -> List[Dict[str, Any]]:
+        """PTYs have no cross-process addressable surface — always empty.
+
+        Explicit override (not relying on the ABC default) to document the
+        invariant: unlike tmux, a PTY dies with its parent, so there is
+        never anything to "adopt" from a previous process.
+        """
         return []
 
     def capture_scrollback(self, lines: int = 3000) -> bytes:  # noqa: ARG002

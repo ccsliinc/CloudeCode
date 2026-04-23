@@ -44,7 +44,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
@@ -122,6 +122,40 @@ def _has_control_chars(data: bytes) -> bool:
     return any((b < 0x20 and b not in safe) or b == 0x7f for b in data)
 
 
+def _safe_target(session_name: str, pane: str = "0.0") -> str:
+    """Compose a tmux target string (``<session>:<window>.<pane>``) safely.
+
+    tmux parses ``:`` as the window/pane separator and ``.`` as the pane
+    separator within a target. If either appears inside ``session_name``
+    the command tmux actually executes is NOT the one we meant to send —
+    it selects a different (possibly wrong) target.
+
+    We use list-form argv everywhere (``asyncio.create_subprocess_exec``,
+    ``subprocess.run`` with a list), so shell-metacharacter injection is
+    already impossible. This helper is about the OTHER vector: tmux's own
+    target-parsing semantics. We refuse to format a target that would be
+    interpreted differently than intended.
+
+    Args:
+        session_name: tmux session name. MUST NOT contain ``:`` or ``.``.
+        pane: pane specifier within the session. Defaults to ``"0.0"``
+            (window 0, pane 0). Callers SHOULD keep this as a literal —
+            we don't validate it since it's never user-controlled.
+
+    Returns:
+        Formatted target string suitable for ``-t``.
+
+    Raises:
+        ValueError: if ``session_name`` contains ``:`` or ``.``.
+    """
+    if ":" in session_name or "." in session_name:
+        raise ValueError(
+            f"unsafe tmux session name {session_name!r}: "
+            f"contains ':' or '.' which tmux parses as target separators"
+        )
+    return f"{session_name}:{pane}"
+
+
 # ---- Backend --------------------------------------------------------------
 
 
@@ -152,6 +186,20 @@ class TmuxBackend(SessionBackend):
         self._last_rotate_check = time.monotonic()
         self._rotation_started_at = time.monotonic()
 
+        # Set to True by ``TmuxBackend.for_external()`` to mark this backend
+        # as an adoption of a user-started tmux session. Changes adopt-time
+        # behavior in ``attach_existing()`` (refuses dead panes, starts
+        # pipe-pane defensively, enforces remain-on-exit, warns on
+        # non-manual window-size) without affecting the normal create flow.
+        self._is_external: bool = False
+
+        # Byte offset recorded right after pipe-pane is confirmed active on
+        # adoption. The tail loop seeks here on open so bytes that were
+        # already captured in the initial scrollback (and painted
+        # client-side before the WS opened) aren't streamed again. None
+        # means "seek to EOF" — the normal create/rehydrate behavior.
+        self._adopt_tail_start_offset: Optional[int] = None
+
     # ---- internal helpers ------------------------------------------------
 
     def _tmux_base(self) -> List[str]:
@@ -168,7 +216,18 @@ class TmuxBackend(SessionBackend):
             log_dir = settings.get_log_dir()
         except Exception:
             log_dir = Path("/tmp")
-        self._pipe_path = log_dir / f"tmux_{self.slug}{PIPE_SUFFIX}"
+
+        # External sessions may keep a literal tmux name in self.slug that
+        # isn't safe as a filename (spaces, unicode, etc.). Normalize with
+        # ``_slugify`` here; cloude-owned slugs are already safe so this is
+        # a no-op in the normal path. External names add an ``ext_``
+        # prefix to guarantee filename distinctness from any accidentally
+        # colliding cloude-owned slug.
+        if self._is_external:
+            fname_slug = f"ext_{_slugify(self.slug)}"
+        else:
+            fname_slug = self.slug
+        self._pipe_path = log_dir / f"tmux_{fname_slug}{PIPE_SUFFIX}"
         return self._pipe_path
 
     async def _run_tmux(
@@ -332,7 +391,7 @@ class TmuxBackend(SessionBackend):
         rc, _, err = await self._run_tmux(
             "pipe-pane",
             "-t",
-            f"{self.tmux_session}:0.0",
+            _safe_target(self.tmux_session),
             "-o",
             pipe_cmd,
         )
@@ -356,17 +415,37 @@ class TmuxBackend(SessionBackend):
             pipe=str(pipe_path),
         )
 
-    async def attach_existing(self) -> None:
-        """Rehydrate state for an existing cloude_<slug> tmux session.
+    async def attach_existing(self, needs_pipe_setup: bool = False) -> None:
+        """Rehydrate state for an existing tmux session on our socket.
 
         Precondition: `discover_existing()` has already confirmed the session
-        is alive on the configured socket. pipe-pane is still active on the
-        tmux server side (tmux, not us, holds that pipe), so the pipe file
-        is still being appended to. We open it and tail from the END so we
-        don't re-emit historical output as if it were new.
+        is alive on the configured socket. For OUR OWN sessions (``cloude_*``
+        born via ``start()``), pipe-pane is still active on the tmux server
+        side (tmux, not us, holds that pipe), so the pipe file is still being
+        appended to. We open it and tail from the END so we don't re-emit
+        historical output as if it were new.
+
+        For EXTERNAL sessions (Track 1 "Adopt an external session" flow —
+        user started it via ``tmux -L cloude new -s <name>``), there is
+        likely NO pipe-pane active yet, so the caller passes
+        ``needs_pipe_setup=True`` to trigger:
+
+        1. Refuse if ``#{pane_dead}`` is ``"1"`` — a dead pane can't be
+           usefully adopted.
+        2. ``ensure_pipe_pane()`` — query first, start only if not already
+           active (non-toggle).
+        3. ``set-option remain-on-exit on`` defensively so an external
+           child exiting doesn't silently collapse the pane while our
+           adoption is live.
+        4. WARN if ``window-size`` isn't ``manual`` — ``resize-window``
+           may oscillate against tmux's auto-sizing.
+
+        External mode is also auto-triggered when ``self._is_external`` is
+        True (set by ``TmuxBackend.for_external``), so the caller can pass
+        ``needs_pipe_setup=False`` and still get the right behavior.
 
         This MUST be idempotent: calling it twice is fine. Calling it after
-        stop() is not supported.
+        ``stop()`` is not supported.
         """
         if self._running:
             logger.debug("tmux_backend_attach_noop", session=self.tmux_session)
@@ -379,6 +458,75 @@ class TmuxBackend(SessionBackend):
             raise RuntimeError(
                 f"attach_existing: tmux session {self.tmux_session} is not alive"
             )
+
+        do_external_setup = needs_pipe_setup or self._is_external
+
+        if do_external_setup:
+            target = _safe_target(self.tmux_session)
+
+            # 1. Refuse dead panes — nothing to stream from, and our attempts
+            # to set options on them produce confusing errors further down.
+            rc, out, err = await self._run_tmux(
+                "display-message", "-t", target, "-p", "#{pane_dead}",
+                check=False,
+            )
+            if rc != 0:
+                raise RuntimeError(
+                    f"cannot adopt {self.tmux_session}: pane-dead probe failed: "
+                    f"{err.decode('utf-8', errors='replace').strip()}"
+                )
+            if out.decode("utf-8", errors="replace").strip() == "1":
+                raise RuntimeError(
+                    f"cannot adopt {self.tmux_session}: pane already dead"
+                )
+
+            # 2. Ensure pipe-pane is active WITHOUT clobbering a user's
+            # existing pipe-pane (e.g. personal logging).
+            await self.ensure_pipe_pane()
+
+            # 2b. Record the FIFO offset NOW — immediately after
+            # pipe-pane is confirmed active. The tail loop will seek
+            # here on open instead of EOF so nothing between "pipe-pane
+            # started" and "tail loop actually opens fd" is lost. The
+            # scrollback capture (step 5 in ``adopt_external_session``)
+            # pulls from tmux's visible-pane buffer, so there's no
+            # overlap contest here.
+            try:
+                pipe_path = self._resolve_pipe_path()
+                if pipe_path.exists():
+                    self._adopt_tail_start_offset = pipe_path.stat().st_size
+                else:
+                    self._adopt_tail_start_offset = 0
+            except OSError as exc:
+                logger.warning(
+                    "adopt_fifo_offset_stat_failed",
+                    session=self.tmux_session,
+                    error=str(exc),
+                )
+                self._adopt_tail_start_offset = 0
+
+            # 3. Defensive remain-on-exit so external death doesn't silently
+            # collapse the pane mid-adoption. Users who need tear-down
+            # semantics can flip it back themselves.
+            await self._run_tmux(
+                "set-option", "-t", target, "remain-on-exit", "on",
+                check=False,
+            )
+
+            # 4. Surface window-size divergence. ``show-option -sv``
+            # queries the server-level option; ``resize-window -x -y``
+            # may oscillate when this isn't ``manual``.
+            rc_ws, out_ws, _ = await self._run_tmux(
+                "show-option", "-sv", "window-size", check=False,
+            )
+            ws_val = out_ws.decode("utf-8", errors="replace").strip() if rc_ws == 0 else ""
+            if ws_val and ws_val != "manual":
+                logger.warning(
+                    "external_session_window_size_not_manual",
+                    session=self.tmux_session,
+                    window_size=ws_val,
+                    note="resize-window -x -y may oscillate with tmux auto-resize",
+                )
 
         # Recompute / re-resolve pipe file path. It was written to by the
         # old Python process; the tmux server kept pipe-pane running, so
@@ -408,7 +556,204 @@ class TmuxBackend(SessionBackend):
             session=self.tmux_session,
             socket=self.socket_name,
             pipe=str(pipe_path),
+            external=self._is_external,
         )
+
+    async def ensure_pipe_pane(self) -> None:
+        """Start ``pipe-pane`` on pane 0 iff no pipe is currently active.
+
+        Why query-then-act instead of just calling ``pipe-pane``:
+        ``pipe-pane -o`` is explicitly a TOGGLE in tmux (since 1.8) — running
+        it on a pane that already has an active pipe STOPS piping. That's
+        catastrophic when the user has their own ``pipe-pane`` running
+        (e.g. personal session logging). We query ``#{pane_pipe}`` first
+        (``"0"`` = no pipe, ``"1"`` = pipe active) and only start our pipe
+        when none is active. If a pipe is already running we log and return
+        — the disclosure tooltip tells the user to stop theirs first.
+
+        We also use ``pipe-pane`` WITHOUT ``-o`` when we DO start it — ``-o``
+        is the toggle form and we've already proven no pipe is active, so
+        we want the explicit non-toggle start semantics.
+        """
+        if not self._running and not self._is_external:
+            raise RuntimeError("backend not running")
+
+        target = _safe_target(self.tmux_session)
+
+        rc, out, err = await self._run_tmux(
+            "display-message", "-t", target, "-p", "#{pane_pipe}",
+            check=False,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"display-message #{{pane_pipe}} failed: "
+                f"{err.decode('utf-8', errors='replace').strip()}"
+            )
+        state = out.decode("utf-8", errors="replace").strip()
+
+        if state == "1":
+            logger.info(
+                "pipe_pane_already_active",
+                session=self.tmux_session,
+                note="user had their own pipe-pane; adoption will not clobber",
+            )
+            return
+
+        pipe_path = self._resolve_pipe_path()
+        pipe_path.parent.mkdir(parents=True, exist_ok=True)
+        if not pipe_path.exists():
+            pipe_path.touch()
+
+        pipe_cmd = f"cat >> {shlex.quote(str(pipe_path))}"
+        rc2, _, err2 = await self._run_tmux(
+            "pipe-pane", "-t", target, pipe_cmd,
+            check=False,
+        )
+        if rc2 != 0:
+            raise RuntimeError(
+                f"pipe-pane failed: "
+                f"{err2.decode('utf-8', errors='replace').strip()}"
+            )
+        logger.info(
+            "pipe_pane_started",
+            session=self.tmux_session,
+            pipe=str(pipe_path),
+        )
+
+    @classmethod
+    def for_external(
+        cls,
+        session_name: str,
+        working_dir: Path,
+        on_output: Optional[Callable[[bytes], Any]] = None,
+        socket_name: str = DEFAULT_SOCKET_NAME,
+        scrollback_lines: int = 3000,
+    ) -> "TmuxBackend":
+        """Build a TmuxBackend bound to an EXTERNALLY-created tmux session.
+
+        Alternative constructor for the Track 1 "Adopt an external session"
+        flow. Unlike the normal ``TmuxBackend(...)`` path, which slugifies
+        ``session_id`` into ``cloude_<slug>``, this preserves the literal
+        tmux name the user gave their session — we're adopting, not
+        creating.
+
+        Also flips ``self._is_external = True`` so ``attach_existing()``
+        takes the adopt-time branch (pipe-pane setup, remain-on-exit,
+        window-size WARN) without the caller having to pass the flag.
+
+        Args:
+            session_name: literal tmux session name as shown in
+                ``tmux -L cloude list-sessions``. MUST NOT contain ``:``
+                or ``.`` (tmux target separators).
+            working_dir: for metadata only; we never chdir the pane.
+            on_output: fan-out callback for streamed bytes.
+            socket_name: tmux socket. Defaults to the Cloude Code
+                dedicated socket so we only adopt from where we look.
+            scrollback_lines: lines captured on adopt for initial paint.
+
+        Raises:
+            ValueError: if ``session_name`` is unsafe for a tmux target.
+        """
+        # Fail fast on unsafe names before any state mutation.
+        _safe_target(session_name)
+
+        inst = cls(
+            session_id=session_name,
+            working_dir=working_dir,
+            on_output=on_output,
+            socket_name=socket_name,
+            scrollback_lines=scrollback_lines,
+        )
+        # Bypass the slugified ``cloude_<slug>`` naming — we're adopting.
+        inst.tmux_session = session_name
+        inst.slug = session_name  # used in the pipe-file filename
+        inst._is_external = True
+        return inst
+
+    def list_attachable_sessions(
+        self, owned_names: Optional[set] = None
+    ) -> List[Dict[str, Any]]:
+        """Enumerate tmux sessions on our socket for the adopt UI.
+
+        Runs ``tmux -L <socket> list-sessions -F
+        '#{session_name}|#{session_created}|#{session_windows}'`` and
+        splits each line on ``|``. No server running / no sessions → [].
+
+        ``created_by_cloude`` is set by cross-referencing each name
+        against ``owned_names`` (the SessionManager-persisted set of
+        session names Cloude Code created). When ``owned_names`` is
+        None, we fall back to the ``cloude_`` prefix heuristic AND log
+        a debug note — callers from the live app path should always
+        pass the owned set so a user's ``cloude_whatever`` external
+        session doesn't masquerade as ours.
+
+        If ``owned_names`` contains a name that's NOT in the live tmux
+        listing, log a WARN (stale metadata — the reconciler should
+        prune, but we surface it here too for observability).
+        """
+        if not shutil.which("tmux"):
+            return []
+
+        rc, out, _ = self._run_tmux_sync(
+            "list-sessions",
+            "-F",
+            "#{session_name}|#{session_created}|#{session_windows}",
+            check=False,
+        )
+        if rc != 0:
+            # Exit 1 w/ "no server running" — expected when no sessions yet.
+            return []
+
+        raw_lines = out.decode("utf-8", errors="replace").splitlines()
+        live_names: set = set()
+        results: List[Dict[str, Any]] = []
+
+        for line in raw_lines:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) < 3:
+                logger.debug(
+                    "list_attachable_sessions_unparseable_row", raw=line
+                )
+                continue
+            name, created_raw, windows_raw = parts[0], parts[1], parts[2]
+            live_names.add(name)
+
+            try:
+                created_at_epoch = int(created_raw)
+            except ValueError:
+                created_at_epoch = 0
+            try:
+                window_count = int(windows_raw)
+            except ValueError:
+                window_count = 0
+
+            if owned_names is not None:
+                created_by_cloude = name in owned_names
+            else:
+                # Fallback heuristic; caller from live path should pass
+                # the owned set so we're not trusting a spoofable prefix.
+                created_by_cloude = name.startswith(SESSION_PREFIX)
+
+            results.append({
+                "name": name,
+                "created_by_cloude": created_by_cloude,
+                "created_at_epoch": created_at_epoch,
+                "window_count": window_count,
+            })
+
+        if owned_names:
+            stale = owned_names - live_names
+            if stale:
+                logger.warning(
+                    "owned_tmux_sessions_not_in_live_listing",
+                    stale=sorted(stale),
+                    note="reconciler should prune these on next startup",
+                )
+
+        return results
 
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""
@@ -432,7 +777,7 @@ class TmuxBackend(SessionBackend):
         await self._run_tmux(
             "pipe-pane",
             "-t",
-            f"{self.tmux_session}:0.0",
+            _safe_target(self.tmux_session),
             check=False,
         )
 
@@ -486,7 +831,7 @@ class TmuxBackend(SessionBackend):
             "send-keys",
             "-l",
             "-t",
-            f"{self.tmux_session}:0.0",
+            _safe_target(self.tmux_session),
             text,
         )
         if rc != 0:
@@ -502,7 +847,7 @@ class TmuxBackend(SessionBackend):
             "send-keys",
             "-H",
             "-t",
-            f"{self.tmux_session}:0.0",
+            _safe_target(self.tmux_session),
             *hex_args,
         )
         if rc != 0:
@@ -533,7 +878,7 @@ class TmuxBackend(SessionBackend):
             "-b",
             buf_name,
             "-t",
-            f"{self.tmux_session}:0.0",
+            _safe_target(self.tmux_session),
         )
         if rc != 0:
             raise RuntimeError(
@@ -626,7 +971,7 @@ class TmuxBackend(SessionBackend):
                 "-S",
                 f"-{lines}",
                 "-t",
-                f"{self.tmux_session}:0.0",
+                _safe_target(self.tmux_session),
                 check=False,
             )
             if rc != 0:
@@ -666,11 +1011,43 @@ class TmuxBackend(SessionBackend):
             return
 
         try:
-            # Seek to end — we only want bytes produced after we started reading.
-            try:
-                os.lseek(fd, 0, os.SEEK_END)
-            except OSError:
-                pass
+            # Seek position:
+            #   - Adoption path: to the recorded post-pipe-pane byte
+            #     offset so we resume exactly where the initial
+            #     scrollback painted. Bounded to actual file size —
+            #     an offset larger than the file (shouldn't happen
+            #     but defensive) degrades to SEEK_END.
+            #   - Normal path (create / rehydrate): SEEK_END — we
+            #     only want bytes produced after we started reading.
+            if self._adopt_tail_start_offset is not None:
+                try:
+                    current_size = os.fstat(fd).st_size
+                except OSError:
+                    current_size = 0
+                seek_to = min(self._adopt_tail_start_offset, current_size)
+                try:
+                    os.lseek(fd, seek_to, os.SEEK_SET)
+                except OSError:
+                    # Fall back to EOF — no worse than normal rehydrate.
+                    try:
+                        os.lseek(fd, 0, os.SEEK_END)
+                    except OSError:
+                        pass
+                logger.info(
+                    "tmux_tail_seek_adopt_offset",
+                    session=self.tmux_session,
+                    offset=seek_to,
+                    recorded=self._adopt_tail_start_offset,
+                    file_size=current_size,
+                )
+                # Single-use — clear so subsequent fd reopens (rotation)
+                # use SEEK_END like the normal path.
+                self._adopt_tail_start_offset = None
+            else:
+                try:
+                    os.lseek(fd, 0, os.SEEK_END)
+                except OSError:
+                    pass
 
             while self._running:
                 # Rotation check — once a second is plenty.

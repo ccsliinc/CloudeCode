@@ -276,6 +276,8 @@ docker compose up -d
 
 See [docs/deployment-docker.md](docs/deployment-docker.md) for the full Docker walkthrough including volume layout, UID/GID mapping, and the preflight script.
 
+**Windsurf / VS Code users:** open the integrated terminal and run `tmux -L cloude new -s <name>`; the launchpad's "Adopt an external session" section will list it. iTerm2 `-CC` users can use `tmux -L cloude -CC new -s <name>` too.
+
 ### Hybrid "server-in-container, Claude-on-host" is not supported in this release
 
 A third mode where the FastAPI server runs in Docker and the Claude process runs on the host via a Unix-socket-to-tmux bridge was evaluated and cut. Docker Desktop's LinuxKit VM boundary does not passthrough live Unix sockets reliably, and the UID-match + LaunchDaemon complexity exceeded the weekend scope. Mode 1 already covers the "Claude on host" case.

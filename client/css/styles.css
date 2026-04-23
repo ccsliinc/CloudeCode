@@ -540,6 +540,21 @@ button[data-tooltip]:hover::after {
     text-align: center;
 }
 
+/* Adopt-external-session disclosure. Native <details>/<summary> — we
+ * only restyle the summary marker so it's visible on the dark theme
+ * and reads as an inline help affordance next to the section title. */
+.adopt-disclosure { display: inline-block; margin-left: 8px; font-size: 0.85rem; font-weight: normal; }
+.adopt-disclosure > summary { cursor: help; color: #d77757; list-style: none; display: inline; padding: 0 6px; border: 1px solid rgba(215,119,87,0.4); border-radius: 50%; }
+.adopt-disclosure > summary::-webkit-details-marker { display: none; }
+.adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: #2d2d30; border: 1px solid #3e3e42; border-left: 3px solid #d77757; border-radius: 4px; color: #d4d4d4; font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
+.adopt-disclosure-body p + p { margin-top: 10px; }
+.adopt-disclosure-body code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 3px; color: #d77757; }
+
+/* Adopt row: reuses .project-item base; overlays an attach button
+ * in the upper-right slot the delete button normally occupies. */
+.adopt-item { padding-right: 100px; }
+.adopt-attach-btn { position: absolute; top: 12px; right: 12px; width: auto; height: auto; padding: 6px 14px; font-size: 0.85rem; }
+
 .launchpad-footer {
     margin-top: 40px;
     padding: 20px 0;

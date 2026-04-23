@@ -153,6 +153,74 @@ class DirectoryEntry(BaseModel):
     path: str = Field(..., description="Absolute directory path")
 
 
+# Track 1 — Adopt-external-session models.
+#
+# ``AttachableSession`` is the shape of each row in the launchpad "Adopt an
+# external session" list. ``AdoptSessionRequest`` is the POST body for the
+# adopt endpoint; ``confirm_teardown`` is the explicit consent flag required
+# when an active session already exists (409-on-false semantics). The
+# response embeds the existing ``Session`` model plus a base64-encoded
+# scrollback blob (binary-safe over JSON) and the FIFO byte offset the WS
+# tailer must seek to so the client never sees a scrollback-vs-stream
+# duplicate or gap.
+class AttachableSession(BaseModel):
+    """A tmux session on our socket that the UI may adopt.
+
+    ``created_by_cloude`` is True iff the name is in the server's persisted
+    ``owned_tmux_sessions`` set — i.e. we birthed it via ``POST /sessions``.
+    False means the user started it externally (the intended adopt target).
+    """
+    name: str = Field(..., description="Literal tmux session name")
+    created_by_cloude: bool = Field(
+        ..., description="True if Cloude Code created this session"
+    )
+    created_at_epoch: int = Field(
+        ..., description="tmux session creation time (Unix epoch seconds)"
+    )
+    window_count: int = Field(..., description="Number of windows in the session")
+
+
+class AdoptSessionRequest(BaseModel):
+    """Request body for ``POST /sessions/adopt``."""
+    session_name: str = Field(
+        ..., description="Literal tmux session name to adopt"
+    )
+    confirm_teardown: bool = Field(
+        False,
+        description=(
+            "Explicit consent to tear down an already-active session before "
+            "adopting. Required (must be True) when a session is live; the "
+            "server returns 409 otherwise."
+        ),
+    )
+
+
+class AdoptSessionResponse(BaseModel):
+    """Response body for ``POST /sessions/adopt``.
+
+    ``initial_scrollback_b64`` is base64-encoded raw pane bytes captured at
+    adopt time — the client decodes and paints into xterm BEFORE opening
+    the WebSocket. ``fifo_start_offset`` is the byte offset the server's
+    WS tailer seeks to on first read, so post-adopt live bytes resume
+    exactly where the painted scrollback ended (no duplicate, no gap).
+    """
+    session: Session = Field(..., description="The adopted session record")
+    initial_scrollback_b64: str = Field(
+        ...,
+        description=(
+            "Base64-encoded scrollback bytes captured from the tmux pane at "
+            "adopt time. May be empty if capture returned nothing."
+        ),
+    )
+    fifo_start_offset: int = Field(
+        ...,
+        description=(
+            "Byte offset into the pipe-pane FIFO recorded immediately after "
+            "pipe-pane became active. WS tailer seeks here on first read."
+        ),
+    )
+
+
 class BrowseResponse(BaseModel):
     """Response model for the filesystem browse endpoint."""
     path: str = Field(..., description="Absolute path of the directory being listed")

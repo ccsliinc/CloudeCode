@@ -8,6 +8,11 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // Attachable (external) tmux sessions on the `cloude` socket.
+        // Populated by loadAttachableSessions(); empty array means either
+        // "not loaded yet" or "loaded and none exist" — the render pass
+        // uses the DOM state (loading vs empty-list) to disambiguate.
+        this.attachableSessions = [];
     }
 
     /**
@@ -56,6 +61,199 @@ class Launchpad {
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
         }
+        // Refresh attachable sessions in parallel with the projects view.
+        // Failure here is non-fatal — it just means the adopt section shows
+        // its empty state instead of listing external sessions.
+        this.loadAttachableSessions();
+    }
+
+    /**
+     * Fetch externally-started tmux sessions that can be adopted and
+     * refresh the "Adopt an external session" panel.
+     *
+     * Fails soft: on any error we clear the list and let the empty-state
+     * render explain the situation. Never throws to the caller — the
+     * launchpad's main flow should work even if this endpoint 500s.
+     */
+    async loadAttachableSessions() {
+        try {
+            const sessions = await window.API.listAttachableSessions();
+            // Defensive filter: even though the server already excludes the
+            // currently-active backend, we also drop any row whose name
+            // matches the live session. Covers races where the server
+            // responded before our own session was registered.
+            const activeName = this._getActiveSessionName();
+            this.attachableSessions = (sessions || []).filter(
+                s => !activeName || s.name !== activeName
+            );
+        } catch (error) {
+            console.error('Launchpad: Failed to load attachable sessions:', error);
+            this.attachableSessions = [];
+        }
+        this.renderAttachableList();
+    }
+
+    /**
+     * Best-effort read of the currently-active backend's tmux session name.
+     * Used for the self-adopt UI filter. Returns null when no session is
+     * active or the controller isn't wired up yet.
+     */
+    _getActiveSessionName() {
+        try {
+            const t = window.TerminalController;
+            if (t && t.sessionActive && t._currentSession && t._currentSession.tmux_session) {
+                return t._currentSession.tmux_session;
+            }
+        } catch (_) { /* non-fatal */ }
+        return null;
+    }
+
+    /**
+     * HTML-escape helper used by adopt section renderer. Session names come
+     * from the tmux daemon and are technically user-controlled — any
+     * embedded `<`, `>`, `"`, `'`, `&` in a name would break innerHTML.
+     */
+    _escapeHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * Format "N seconds / minutes / hours / days ago" for a unix epoch
+     * timestamp. Mirrors standard UX copy for session-age display.
+     */
+    _formatRelativeTime(epochSeconds) {
+        if (!epochSeconds || typeof epochSeconds !== 'number') return 'unknown';
+        const delta = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+        if (delta < 60) return `${delta}s ago`;
+        if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+        if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+        return `${Math.floor(delta / 86400)}d ago`;
+    }
+
+    /**
+     * Render the "Adopt an external session" panel.
+     *
+     * Three states handled:
+     *   - empty: friendly prompt explaining how to make sessions appear
+     *   - populated: one row per session with attach button
+     * The disclosure (`<details>`) above the list is static and rendered
+     * once in renderLaunchpadUI — we only repaint the list body here.
+     */
+    renderAttachableList() {
+        const listEl = document.getElementById('adopt-list');
+        if (!listEl) return;
+
+        if (!this.attachableSessions || this.attachableSessions.length === 0) {
+            listEl.innerHTML = `
+                <div class="launchpad-empty">
+                    no external sessions detected<br>
+                    <small style="color: #666;">start one with <code>tmux -L cloude new -s &lt;name&gt;</code></small>
+                </div>
+            `;
+            return;
+        }
+
+        listEl.innerHTML = this.attachableSessions.map((s) => {
+            const name = this._escapeHtml(s.name);
+            const windows = typeof s.window_count === 'number' ? s.window_count : '?';
+            const rel = this._formatRelativeTime(s.created_at_epoch);
+            return `
+                <div class="project-item adopt-item" data-name="${name}">
+                    <div class="project-name">» ${name}</div>
+                    <div class="project-description">${windows} window${windows === 1 ? '' : 's'} · created ${rel}</div>
+                    <button class="modal-btn modal-btn-primary adopt-attach-btn" data-name="${name}">attach</button>
+                </div>
+            `;
+        }).join('');
+
+        // Wire attach buttons. Stop propagation so clicking the button
+        // doesn't also bubble to the row click (if we ever add one).
+        listEl.querySelectorAll('.adopt-attach-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const name = btn.dataset.name;
+                if (name) await this.handleAttachClick(name);
+            });
+        });
+    }
+
+    /**
+     * Attach-button click handler.
+     *
+     * Flow:
+     *   1. If a session is active (cheap local check + server-authoritative
+     *      cross-check), prompt for teardown confirmation.
+     *   2. Call the adopt endpoint — server handles the destroy + rebirth.
+     *   3. On success, dispatch `session-created` with the adopt-specific
+     *      detail payload so App.showTerminal() can plumb scrollback to
+     *      the terminal controller.
+     *   4. On 409, surface an actionable error — another session appeared
+     *      between our check and the server's view of the world.
+     */
+    async handleAttachClick(name) {
+        console.log('Launchpad: attach click for', name);
+
+        // Check active session. Local flag is cheap; if set OR the server
+        // says we have one, we must confirm teardown.
+        let hasActive = !!(window.TerminalController && window.TerminalController.sessionActive);
+        let activeDesc = null;
+        try {
+            const data = await window.API.getSession();
+            const s = (data && (data.session || data)) || null;
+            if (s && s.id) {
+                hasActive = true;
+                activeDesc = s.tmux_session || s.id || null;
+            }
+        } catch (err) {
+            // 404 = no active session; anything else we treat conservatively
+            // as "no confirmation needed" only if the local flag is also false.
+            if (!hasActive) {
+                console.log('Launchpad: getSession() non-OK while checking active; treating as no active session', err && err.message);
+            }
+        }
+
+        if (hasActive) {
+            const descSuffix = activeDesc ? ` "${this._escapeHtml(activeDesc)}"` : '';
+            const ok = await this.showConfirmModal(
+                'end current session?',
+                `attaching to "${this._escapeHtml(name)}" will end your current session${descSuffix}.`,
+                'your current session\'s tmux pane will be killed. the external session you\'re adopting keeps running — detaching from the web UI later will not kill it.'
+            );
+            if (!ok) {
+                console.log('Launchpad: adopt cancelled by user');
+                return;
+            }
+        }
+
+        try {
+            this.updateStatus(`adopting ${name}...`);
+            const response = await window.API.adoptSession(name, hasActive);
+            console.log('Launchpad: adopt succeeded', response);
+
+            const session = response.session || response;
+            const initialScrollbackB64 = response.initial_scrollback_b64 || '';
+            const fifoStartOffset = typeof response.fifo_start_offset === 'number'
+                ? response.fifo_start_offset
+                : null;
+
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
+            }));
+        } catch (error) {
+            console.error('Launchpad: adopt failed:', error);
+            // 409 = race between our local check and the server's view.
+            // The server's message is already descriptive; surface it.
+            if (error && /409|confirm_teardown|Active session/i.test(error.message || '')) {
+                this.showError('another session is active — refresh and try again, or destroy the current session first.');
+            } else {
+                this.showError(`failed to adopt "${name}": ${error.message || error}`);
+            }
+        }
     }
 
     /**
@@ -77,6 +275,33 @@ class Launchpad {
                         <span>📁</span>
                         <span>open project from folder</span>
                     </button>
+                </div>
+
+                <div class="launchpad-section" id="launchpad-adopt">
+                    <div class="launchpad-section-title">
+                        ► adopt an external session
+                        <details class="adopt-disclosure">
+                            <summary>?</summary>
+                            <div class="adopt-disclosure-body">
+                                <p>Only sessions started under <code>tmux -L cloude</code> appear here.
+                                Attaching to a bash/claude shell that wasn't started under tmux isn't
+                                possible on macOS — Darwin's <code>ptrace(2)</code> doesn't expose the
+                                register/memory primitives that tools like <code>reptyr</code> use on Linux,
+                                and the Mach-port alternative (<code>task_for_pid</code>) requires an
+                                Apple-signed entitlement. <code>lldb</code>, <code>dtrace</code>, and
+                                <code>script</code> were evaluated and don't provide clean PTY reparenting
+                                either. Start your next session with <code>tmux -L cloude new -s &lt;name&gt;</code>
+                                and it'll appear here.</p>
+                                <p>Note: if your existing tmux session already has its own
+                                <code>pipe-pane</code> running (e.g. for logging), our adoption will not
+                                override it — run <code>tmux -L cloude pipe-pane</code> to stop yours first,
+                                then re-click attach.</p>
+                            </div>
+                        </details>
+                    </div>
+                    <div id="adopt-list" class="project-list">
+                        <div class="launchpad-empty">scanning for external sessions...</div>
+                    </div>
                 </div>
 
                 <div class="launchpad-section" id="projects-section">

@@ -16,7 +16,10 @@ from src.models import (
     ErrorResponse,
     HealthResponse,
     BrowseResponse,
-    DirectoryEntry
+    DirectoryEntry,
+    AttachableSession,
+    AdoptSessionRequest,
+    AdoptSessionResponse,
 )
 from src.api.auth import require_auth
 from src.config import settings
@@ -130,6 +133,67 @@ async def destroy_session(request: Request):
     except Exception as e:
         logger.error("session_destruction_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to destroy session: {str(e)}")
+
+
+@router.get(
+    "/sessions/attachable",
+    response_model=List[AttachableSession],
+    dependencies=[Depends(require_auth)],
+)
+async def list_attachable_sessions(request: Request):
+    """List tmux sessions on our socket that are available for adoption.
+
+    Excludes the currently-active backend's session name so the UI never
+    offers self-adopt as a valid action (the client also filters defensively).
+    Each row carries ``created_by_cloude`` sourced from the SessionManager's
+    persisted ``owned_tmux_sessions`` set — not a spoofable prefix match.
+    """
+    session_manager = request.app.state.session_manager
+
+    sessions = session_manager.list_attachable_sessions()
+
+    # Filter out the currently-active backend's name to prevent self-adopt.
+    active_name: Optional[str] = None
+    if session_manager.backend is not None:
+        active_name = getattr(session_manager.backend, "tmux_session", None)
+    if active_name:
+        sessions = [s for s in sessions if s.get("name") != active_name]
+
+    return sessions
+
+
+@router.post(
+    "/sessions/adopt",
+    response_model=AdoptSessionResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def adopt_session(request: Request, body: AdoptSessionRequest):
+    """Adopt an externally-started tmux session into Cloude Code's active slot.
+
+    Returns 409 if a session is already active and ``confirm_teardown`` is
+    False — the client must present a confirmation modal and retry with
+    ``confirm_teardown=True``. Other failures (pane dead, tmux not running,
+    unsafe session name) propagate as 500 via the app's error middleware;
+    we deliberately do NOT wrap them here — keep handlers clean.
+    """
+    session_manager = request.app.state.session_manager
+
+    logger.info(
+        "api_adopt_session_request",
+        session_name=body.session_name,
+        confirm_teardown=body.confirm_teardown,
+    )
+
+    # ``adopt_external_session`` raises HTTPException(409) directly when the
+    # single-active invariant would be violated without explicit consent —
+    # FastAPI propagates it as-is. It returns a dict shaped exactly like
+    # AdoptSessionResponse, so ``**result`` wires straight through pydantic.
+    result = await session_manager.adopt_external_session(
+        name=body.session_name,
+        confirm_teardown=body.confirm_teardown,
+    )
+
+    return AdoptSessionResponse(**result)
 
 
 @router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])

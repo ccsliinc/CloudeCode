@@ -434,9 +434,28 @@ class Terminal {
     /**
      * Connect to session
      * @param {object} session - Session data
+     * @param {object} [opts]
+     * @param {string} [opts.initialScrollbackB64] - Base64-encoded bytes
+     *   captured server-side from `tmux capture-pane` for the external
+     *   session being adopted. Painted into xterm BEFORE the WS opens so
+     *   the server's WS tailer can seek the fifo to `fifoStartOffset`
+     *   without risking a tear or duplicate output. Ignored on normal
+     *   (non-adopt) session creates.
+     * @param {number} [opts.fifoStartOffset] - Byte offset into the
+     *   pipe-pane fifo that the server's tailer should begin streaming
+     *   from. Client doesn't consume this directly; it's the server's
+     *   contract — we accept it for symmetry and logging only.
      */
-    async connectToSession(session) {
-        console.log('Terminal: Connecting to session:', session.id);
+    async connectToSession(session, opts = {}) {
+        const { initialScrollbackB64 = '', fifoStartOffset = null } = opts;
+        console.log('Terminal: Connecting to session:', session.id, {
+            adopted: !!initialScrollbackB64,
+            fifoStartOffset,
+        });
+
+        // Stash session on the controller so other modules (launchpad
+        // self-adopt filter, debug) can introspect without refetching.
+        this._currentSession = session;
 
         this.sessionActive = true;
         this.sessionInfoEl.textContent =
@@ -445,7 +464,32 @@ class Terminal {
         // Enable destroy button
         this.destroySessionBtn.disabled = false;
 
-        this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
+        // Adopt path: paint server-captured scrollback into xterm BEFORE
+        // the WS opens. Must be synchronous relative to the WS connect so
+        // the VT parser state is correct when the first streamed byte
+        // arrives at fifoStartOffset. atob() decodes to a binary string
+        // whose charCodeAt values are the raw bytes — we MUST NOT run
+        // these through TextDecoder, which would mangle non-UTF8 ANSI
+        // escape bytes. xterm.write() accepts Uint8Array directly and
+        // feeds the parser without re-encoding.
+        if (initialScrollbackB64) {
+            try {
+                const bin = atob(initialScrollbackB64);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) {
+                    bytes[i] = bin.charCodeAt(i) & 0xff;
+                }
+                this.term.write(bytes);
+                console.log(`Terminal: painted ${bytes.length} bytes of adopt scrollback`);
+            } catch (e) {
+                // Non-fatal — if the b64 is malformed we still want the
+                // session to come up. The user will just miss the pre-
+                // adopt scrollback, not the live stream.
+                console.warn('Terminal: scrollback paint failed, continuing without it:', e);
+            }
+        } else {
+            this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
+        }
 
         // Connect WebSocket
         setTimeout(() => this.connectWebSocket(), 500);

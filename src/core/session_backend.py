@@ -22,7 +22,7 @@ from __future__ import annotations
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
@@ -154,6 +154,38 @@ class SessionBackend(ABC):
         one (the slug stored in ``session_metadata.json``). Other discovered
         sessions are logged and left alone — orphan cleanup is out of scope.
         """
+
+    def list_attachable_sessions(
+        self, owned_names: Optional[set] = None
+    ) -> List[Dict[str, Any]]:
+        """Return all sessions on this backend's addressable surface.
+
+        Intended for the "Adopt an external session" UI flow (Track 1): list
+        every tmux session reachable on our dedicated socket and flag which
+        ones WE own vs. the user started outside Cloude Code.
+
+        Each dict MUST contain:
+            - ``name`` (str): tmux session name as returned by
+              ``#{session_name}``.
+            - ``created_by_cloude`` (bool): True iff ``name`` appears in
+              ``owned_names``. Backends that don't cross-reference an
+              owned-set fall back to backend-specific heuristics.
+            - ``created_at_epoch`` (int): UNIX epoch seconds from
+              ``#{session_created}``.
+            - ``window_count`` (int): from ``#{session_windows}``.
+
+        Args:
+            owned_names: the SessionManager-persisted set of session names
+                Cloude Code created. Used to set ``created_by_cloude``
+                truthfully rather than leaning on the ``cloude_*`` prefix
+                heuristic (which a user could spoof with their own
+                ``tmux -L cloude new -s cloude_whatever``).
+
+        Default implementation returns ``[]`` — backends that can't
+        enumerate cross-process state (PTY) inherit that behavior. Tmux
+        overrides.
+        """
+        return []
 
     @abstractmethod
     def capture_scrollback(self, lines: int = 3000) -> bytes:

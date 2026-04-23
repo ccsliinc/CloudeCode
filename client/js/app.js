@@ -60,10 +60,17 @@ class AppController {
             this.showAuth();
         });
 
-        // Session events
+        // Session events. The `detail` payload may include adopt-path
+        // extras (`initialScrollbackB64`, `fifoStartOffset`) when the
+        // launchpad dispatched after adopting an external session —
+        // forward the whole thing so showTerminal() can plumb to the
+        // terminal controller's connectToSession() opts.
         window.addEventListener('session-created', (e) => {
             console.log('App: Session created', e.detail);
-            this.showTerminal(e.detail.session);
+            this.showTerminal(e.detail.session, {
+                initialScrollbackB64: e.detail.initialScrollbackB64,
+                fifoStartOffset: e.detail.fifoStartOffset,
+            });
         });
 
         window.addEventListener('session-destroyed', () => {
@@ -125,8 +132,15 @@ class AppController {
 
     /**
      * Show terminal screen
+     * @param {object} session - Session data from the backend
+     * @param {object} [opts]
+     * @param {string} [opts.initialScrollbackB64] - Adopt-path: base64
+     *   scrollback bytes to paint into xterm before the WS opens.
+     * @param {number} [opts.fifoStartOffset] - Adopt-path: fifo byte
+     *   offset the server's tailer will start from. Passed through for
+     *   symmetry/logging; not directly consumed by the client.
      */
-    async showTerminal(session) {
+    async showTerminal(session, opts = {}) {
         console.log('App: Showing terminal screen');
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
@@ -162,8 +176,11 @@ class AppController {
             window.SlashCommandsModal.show();
         }
 
-        // Connect terminal to session
-        window.TerminalController.connectToSession(session);
+        // Connect terminal to session. Adopt-path opts (scrollback,
+        // fifo offset) are forwarded through — a plain new-session
+        // create leaves them undefined and connectToSession treats
+        // that as a normal (non-adopt) path.
+        window.TerminalController.connectToSession(session, opts);
     }
 
     /**

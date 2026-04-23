@@ -7,10 +7,12 @@ Backend type (tmux vs PTY) is selected at construction via
 
 import asyncio
 import json
+import os
 import base64
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from fastapi import HTTPException
 import structlog
 
 from src.config import settings
@@ -44,6 +46,34 @@ class SessionManager:
         # the router are constructed). When None, IdleWatcher instantiation
         # is skipped and no notification events fire.
         self._notification_router = None
+
+        # Track 1 — adopt-external-session support.
+        #
+        # ``owned_tmux_sessions`` holds the full tmux session names that
+        # Cloude Code itself created (e.g. ``cloude_myproject``). Persisted
+        # in ``session_metadata.json`` so the UI can reliably tell
+        # OUR-sessions apart from USER-started tmux sessions on the same
+        # ``-L cloude`` socket (rather than spoof-able prefix matching).
+        # Populated by ``create_session`` BEFORE return, pruned by
+        # ``destroy_session``, reconciled on ``lifespan_startup``.
+        self.owned_tmux_sessions: set[str] = set()
+
+        # Set True by ``_load_session_metadata`` when reading a pre-v3
+        # metadata file that lacks ``owned_tmux_sessions``. In that case
+        # we treat the single active slug as owned for ONE rehydrate, then
+        # re-persist the new schema on first successful round-trip. Guards
+        # against stranding in-flight sessions on upgrade.
+        self._legacy_metadata_needs_backfill: bool = False
+
+        # Byte offset into the external session's pipe-pane FIFO at the
+        # moment the adoption captured its initial scrollback. The WS
+        # tailer reads this ONCE (clearing to None) before entering the
+        # live-stream loop, so the first bytes a client sees after the
+        # painted scrollback are the ones that arrived AFTER capture —
+        # no duplicated replay, no missed bytes. Only set by
+        # ``adopt_external_session``; normal ``create_session`` leaves
+        # it None (tailer seeks to EOF as before).
+        self.adopt_fifo_start_offset: Optional[int] = None
 
         # Load persisted session if it exists
         self._load_session_metadata()
@@ -84,26 +114,51 @@ class SessionManager:
         Behavior:
         - Build a probe backend using the metadata slug (if any).
         - Ask it to `discover_existing()`.
-        - If the metadata's slug is present in the discovered list, re-register
-          the session as active and start the backend's read loop.
-        - Log other discovered sessions and leave them alone (orphan cleanup
-          is out of scope — a v2 `cloude-cleanup` script will handle that).
+        - Reconcile ``owned_tmux_sessions`` against the live listing —
+          prune entries whose tmux session no longer exists. Prevents
+          indefinite growth from orphaned records after crashes.
+        - If the metadata's slug is present in the discovered list AND
+          (new-schema case) is in ``owned_tmux_sessions`` OR (legacy
+          case) the backfill flag is set, re-register the session as
+          active and start the backend's read loop.
+        - On first successful rehydrate of legacy metadata, add the
+          slug to the owned set and re-persist so subsequent boots use
+          the new schema directly.
+        - Log other discovered sessions and leave them alone (orphan
+          cleanup is out of scope — a v2 ``cloude-cleanup`` script).
         """
+        # Probe tmux state once, upfront. We use this for both the
+        # reconciler and the rehydrate path.
+        probe = build_backend(
+            settings,
+            session_id="__probe__",
+            working_dir=Path.home(),
+            on_output=None,
+        )
+        tmux_alive = set(probe.discover_existing())
+
+        # Reconciler: prune owned-set entries no longer alive on tmux.
+        # Persist the pruned set only if we also have an active session
+        # on record (otherwise there's nothing else to write and we'd
+        # just emit a shell metadata file).
+        if self.owned_tmux_sessions:
+            stale = self.owned_tmux_sessions - tmux_alive
+            if stale:
+                logger.info(
+                    "owned_tmux_sessions_pruning_stale",
+                    stale=sorted(stale),
+                )
+                self.owned_tmux_sessions -= stale
+                if self.session is not None:
+                    self._save_session_metadata()
+
         if self.session is None:
             # No metadata on disk → nothing to re-adopt.
-            # Still probe with a temp backend so we log any orphans.
-            probe = build_backend(
-                settings,
-                session_id="__probe__",
-                working_dir=Path.home(),
-                on_output=None,
-            )
-            existing = probe.discover_existing()
-            if existing:
+            if tmux_alive:
                 logger.info(
                     "session_backend_discovered_orphans",
-                    count=len(existing),
-                    names=existing,
+                    count=len(tmux_alive),
+                    names=sorted(tmux_alive),
                     hint="no metadata on disk — leaving orphans alone",
                 )
             return
@@ -117,8 +172,7 @@ class SessionManager:
             on_output=self._handle_backend_output,
         )
 
-        existing = backend.discover_existing()
-        if not existing:
+        if not tmux_alive:
             # No tmux sessions at all — treat metadata as stale.
             logger.info(
                 "session_metadata_has_no_backend_match",
@@ -130,7 +184,20 @@ class SessionManager:
         # For TmuxBackend, the registered name is `cloude_<slug>`. Match against it.
         # For PTYBackend, `discover_existing()` is always empty so we never reach here.
         target_name = getattr(backend, "tmux_session", None)
-        if target_name and target_name in existing:
+
+        # Ownership gate: we only rehydrate OUR sessions. A user-created
+        # tmux session on our socket (``cloude_foo`` they made themselves)
+        # must NOT be rehydrated as if it were ours; it'll surface in the
+        # adopt UI instead.
+        ownership_ok = (
+            target_name is not None
+            and (
+                target_name in self.owned_tmux_sessions
+                or self._legacy_metadata_needs_backfill
+            )
+        )
+
+        if target_name and target_name in tmux_alive and ownership_ok:
             try:
                 await backend.attach_existing()
             except NotImplementedError:
@@ -152,22 +219,47 @@ class SessionManager:
 
             self.backend = backend
             self.session.status = SessionStatus.RUNNING
+
+            # Legacy backfill: first successful rehydrate populates the
+            # owned-set and re-persists under the new schema.
+            if self._legacy_metadata_needs_backfill:
+                self.owned_tmux_sessions.add(target_name)
+                self._save_session_metadata()
+                logger.info(
+                    "session_metadata_legacy_backfilled",
+                    session_id=self.session.id,
+                    owned=sorted(self.owned_tmux_sessions),
+                )
+
             logger.info(
                 "session_re_registered_from_backend",
                 session_id=self.session.id,
                 backend_session=target_name,
             )
             # Log strangers so the operator knows they're there.
-            orphans = [n for n in existing if n != target_name]
+            orphans = [n for n in tmux_alive if n != target_name]
             if orphans:
-                logger.info("session_backend_orphans_ignored", names=orphans)
+                logger.info(
+                    "session_backend_orphans_ignored", names=sorted(orphans)
+                )
         else:
-            logger.warning(
-                "session_metadata_slug_not_in_backend",
-                session_id=self.session.id,
-                target=target_name,
-                discovered=existing,
-            )
+            # Either the tmux session died, or the slug isn't ours to
+            # rehydrate. Log the reason and clear stale metadata.
+            if target_name and target_name in tmux_alive and not ownership_ok:
+                logger.warning(
+                    "session_metadata_slug_not_owned",
+                    session_id=self.session.id,
+                    target=target_name,
+                    owned=sorted(self.owned_tmux_sessions),
+                    note="not rehydrating a non-owned session",
+                )
+            else:
+                logger.warning(
+                    "session_metadata_slug_not_in_backend",
+                    session_id=self.session.id,
+                    target=target_name,
+                    discovered=sorted(tmux_alive),
+                )
             self._clear_stale_metadata()
 
     def _clear_stale_metadata(self) -> None:
@@ -189,6 +281,12 @@ class SessionManager:
         Unlike the pre-refactor code, we do NOT probe the process here — at
         `__init__` time we don't yet know which backend to build. The probe
         happens in `lifespan_startup()`.
+
+        Schema v3 adds ``owned_tmux_sessions`` (a list). Missing field
+        triggers the legacy-backfill path: populate the set with the
+        active session's slug for ONE rehydrate, flip a sentinel flag,
+        and re-persist with the new schema on the first successful save.
+        This avoids stranding in-flight sessions on upgrade.
         """
         metadata_path = settings.get_session_metadata_path()
 
@@ -198,28 +296,91 @@ class SessionManager:
 
         try:
             with open(metadata_path, "r") as f:
-                data = json.load(f)
-                self.session = Session(**data)
+                raw = json.load(f)
+
+            # Extract the new schema field BEFORE handing the rest to
+            # ``Session(**)``, which would reject unknown keys with
+            # ``extra='forbid'`` if we ever tightened it.
+            owned = raw.pop("owned_tmux_sessions", None)
+
+            self.session = Session(**raw)
+
+            if owned is None and raw.get("id"):
+                # Pre-v3 metadata: no owned-set was persisted. Mark for
+                # backfill on next save; the reconciler in
+                # ``lifespan_startup`` will populate the set once the
+                # slug is confirmed live on the tmux socket.
+                self.owned_tmux_sessions = set()
+                self._legacy_metadata_needs_backfill = True
+                logger.info(
+                    "session_metadata_legacy_detected",
+                    session_id=self.session.id,
+                    note="owned_tmux_sessions will be backfilled on rehydrate",
+                )
+            else:
+                self.owned_tmux_sessions = set(owned or [])
+                self._legacy_metadata_needs_backfill = False
+
             logger.info(
                 "session_metadata_loaded",
                 session_id=self.session.id,
+                owned_count=len(self.owned_tmux_sessions),
                 note="probe deferred to lifespan_startup",
             )
         except Exception as e:
             logger.error("failed_to_load_session_metadata", error=str(e))
 
+    def _write_metadata_atomic(self, data: dict) -> None:
+        """Durable, crash-consistent metadata write.
+
+        Protocol: write to a sibling ``.tmp`` file → ``f.flush()`` →
+        ``os.fsync(fd)`` → ``os.replace(tmp, final)``. ``os.replace`` is
+        the only rename primitive guaranteed atomic across POSIX and
+        Windows. ``fsync`` before the rename prevents a kernel panic
+        from stranding a zero-byte file at the final path (which, on
+        ext4 ``data=ordered``, is a real scenario).
+
+        The directory's own ``fsync`` (for rename durability) is skipped
+        — this is metadata, not a source of truth for money. Losing
+        the very last write to a sudden power failure is acceptable;
+        losing SESSION OWNERSHIP isn't, which is what the atomic rename
+        prevents.
+        """
+        path = settings.get_session_metadata_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+
+        with tmp.open("w") as f:
+            json.dump(data, f, indent=2, default=str)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError as exc:
+                # tmpfs and some network FS don't support fsync; log and
+                # continue — the rename is still atomic per POSIX.
+                logger.debug("metadata_fsync_unsupported", error=str(exc))
+
+        os.replace(str(tmp), str(path))
+
     def _save_session_metadata(self):
-        """Save session metadata to disk."""
+        """Save session metadata atomically, including the owned-set."""
         if not self.session:
             return
 
-        metadata_path = settings.get_session_metadata_path()
-
         try:
-            with open(metadata_path, "w") as f:
-                json.dump(self.session.model_dump(), f, indent=2, default=str)
+            payload = self.session.model_dump()
+            payload["owned_tmux_sessions"] = sorted(self.owned_tmux_sessions)
+            self._write_metadata_atomic(payload)
 
-            logger.debug("session_metadata_saved", session_id=self.session.id)
+            # Clear the backfill sentinel once we've successfully persisted
+            # the new schema — one successful save is the migration.
+            self._legacy_metadata_needs_backfill = False
+
+            logger.debug(
+                "session_metadata_saved",
+                session_id=self.session.id,
+                owned_count=len(self.owned_tmux_sessions),
+            )
 
         except Exception as e:
             logger.error("failed_to_save_session_metadata", error=str(e))
@@ -348,6 +509,14 @@ class SessionManager:
                 last_activity=datetime.utcnow()
             )
 
+            # Track 1: record tmux-backend ownership BEFORE returning, so
+            # a post-create crash still leaves the name recoverable from
+            # ``session_metadata.json`` — and the adopt UI correctly
+            # flags it as ``created_by_cloude=True``.
+            owned_name = getattr(self.backend, "tmux_session", None)
+            if owned_name:
+                self.owned_tmux_sessions.add(owned_name)
+
             self._save_session_metadata()
 
             # Item 7: spin up the per-session IdleWatcher. Skipped silently
@@ -426,6 +595,14 @@ class SessionManager:
                     )
                 self.idle_watcher = None
 
+            # Track 1: drop ownership record BEFORE we lose the handle to
+            # ``self.backend.tmux_session``. Persistence happens via the
+            # unlink-then-reset below — no separate save needed since the
+            # whole metadata file is about to be removed.
+            owned_name = getattr(self.backend, "tmux_session", None) if self.backend else None
+            if owned_name:
+                self.owned_tmux_sessions.discard(owned_name)
+
             if self.backend is not None:
                 await self.backend.stop()
                 self.backend = None
@@ -440,6 +617,8 @@ class SessionManager:
             self.log_buffer.clear()
             self.command_count = 0
             self._output_subscribers.clear()
+            # FIFO offset is single-use and session-scoped; reset on teardown.
+            self.adopt_fifo_start_offset = None
 
             logger.info("session_destroyed")
             return True
@@ -574,3 +753,236 @@ class SessionManager:
             and self.backend is not None
             and self.backend.is_alive()
         )
+
+    # ---- Track 1: adopt an externally-started tmux session ----------------
+
+    def list_attachable_sessions(self) -> list[dict]:
+        """Enumerate tmux sessions on our socket, flagged by ownership.
+
+        Thin pass-through to ``backend.list_attachable_sessions``, but we
+        always instantiate a fresh PROBE backend rather than using
+        ``self.backend`` — the user should be able to list external
+        sessions whether or not they currently have an active session
+        (the adopt-UI fetch happens at launchpad render time).
+        """
+        probe = build_backend(
+            settings,
+            session_id="__probe__",
+            working_dir=Path.home(),
+            on_output=None,
+        )
+        return probe.list_attachable_sessions(
+            owned_names=set(self.owned_tmux_sessions)
+        )
+
+    async def adopt_external_session(
+        self, name: str, confirm_teardown: bool = False
+    ) -> dict:
+        """Adopt an externally-created tmux session on our socket.
+
+        Ordered sequence (plan v3 — fixes the scrollback/WS race):
+
+          1. Gate on single-active invariant: if a session is live and
+             ``confirm_teardown`` is False, raise 409. If confirmed,
+             destroy the prior backend (logged).
+          2. Build a ``TmuxBackend.for_external(name, ...)`` instance.
+          3. ``attach_existing(needs_pipe_setup=True)`` — starts pipe-pane
+             BEFORE any scrollback capture so the FIFO is warm.
+          4. Record ``fifo_start_offset = os.path.getsize(pipe_path)``
+             immediately after pipe-pane is confirmed active. This is the
+             handoff contract for the WS tailer: seek to this offset on
+             first read so the client doesn't see bytes that were already
+             painted via the scrollback.
+          5. Capture scrollback via ``backend.capture_scrollback()`` —
+             reads from tmux's visible-pane buffer, NOT the FIFO.
+          6. Register the backend and stash the offset on ``self`` for
+             the WS handler to consume.
+
+        The adopted session is NOT added to ``owned_tmux_sessions`` —
+        it isn't ours, we're borrowing it.
+
+        Args:
+            name: literal tmux session name as shown in the launchpad.
+            confirm_teardown: explicit consent to destroy the current
+                active session if any. False + active session = 409.
+
+        Returns:
+            dict with ``session``, ``initial_scrollback_b64``, and
+            ``fifo_start_offset`` keys. The route layer wraps this in
+            the ``AdoptSessionResponse`` pydantic model.
+
+        Raises:
+            HTTPException(409): active session exists and
+                ``confirm_teardown`` wasn't explicitly True.
+            RuntimeError: pane already dead, or pipe-pane setup failed.
+            ValueError: if ``name`` contains tmux target separators.
+        """
+        if self.has_active_session() and not confirm_teardown:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Active session will be destroyed; "
+                    "retry with confirm_teardown=True"
+                ),
+            )
+        if self.has_active_session():
+            prior = self.session.id if self.session else "?"
+            logger.info(
+                "session_swapped_for_adopt", prior=prior, new=name
+            )
+            await self.destroy_session()
+
+        # Resolve the adopted pane's cwd via a one-shot tmux probe. We
+        # use this for metadata display only — we never chdir.
+        working_dir = await self._resolve_external_cwd(name)
+
+        # Late import: src.core.tmux_backend imports SessionBackend from
+        # session_backend, which we already import — no cycle — but
+        # keeping the import local matches the pattern in build_backend.
+        from src.core.tmux_backend import TmuxBackend
+
+        backend = TmuxBackend.for_external(
+            session_name=name,
+            working_dir=working_dir,
+            on_output=self._handle_backend_output,
+            socket_name=settings.load_auth_config().session.tmux_socket_name,
+            scrollback_lines=settings.load_auth_config().session.scrollback_lines,
+        )
+
+        # Step 3 — ensure pipe-pane BEFORE capturing scrollback so the
+        # FIFO is guaranteed warm at the moment we read its size.
+        await backend.attach_existing(needs_pipe_setup=True)
+
+        # Step 4 — record FIFO offset immediately. Any bytes that hit
+        # the FIFO between this line and the scrollback capture below
+        # will be BOTH in the scrollback AND after the offset — that's
+        # fine; the client paints the scrollback first and the tailer
+        # seeks past the offset, so the overlap is bounded and
+        # well-defined.
+        #
+        # We use ``os.path.getsize`` over ``Path.stat().st_size`` to
+        # avoid constructing a Path just for this read; the backend
+        # already resolved the path.
+        try:
+            fifo_start_offset = os.path.getsize(str(backend._pipe_path))
+        except OSError as exc:
+            logger.warning(
+                "adopt_fifo_offset_read_failed",
+                session=name,
+                error=str(exc),
+            )
+            fifo_start_offset = 0
+
+        # Step 5 — capture scrollback AFTER the offset read so anything
+        # that arrives mid-capture is safely past the offset (the tailer
+        # will stream it without duplication).
+        scrollback = backend.capture_scrollback()
+
+        sb_b64 = (
+            base64.b64encode(scrollback).decode("ascii")
+            if scrollback else ""
+        )
+
+        # Step 6 — register.
+        self.backend = backend
+        self.session = Session(
+            id=f"adopted:{name}",
+            pty_pid=None,
+            working_dir=str(working_dir),
+            status=SessionStatus.RUNNING,
+            created_at=datetime.utcnow(),
+            last_activity=datetime.utcnow(),
+        )
+        # External sessions are intentionally NOT added to
+        # ``owned_tmux_sessions`` — we don't own them; we adopted them.
+        # They'll appear in the adopt UI with ``created_by_cloude=False``
+        # during the adoption window, which is correct.
+        self._save_session_metadata()
+
+        # Stash the offset for the WS tailer to consume on its first read.
+        self.adopt_fifo_start_offset = fifo_start_offset
+
+        # Spin up IdleWatcher per the normal create path so notifications
+        # fire for adopted sessions too. Router may be None in tests.
+        if self._notification_router is not None:
+            try:
+                auth_config = settings.load_auth_config()
+                threshold = getattr(
+                    auth_config.notifications,
+                    "idle_threshold_seconds",
+                    30.0,
+                )
+            except Exception:
+                threshold = 30.0
+            self.idle_watcher = IdleWatcher(
+                session_slug=self.session.id,
+                router=self._notification_router,
+                threshold_s=threshold,
+            )
+            await self.idle_watcher.start()
+
+        logger.info(
+            "session_adopted_external",
+            session=name,
+            working_dir=str(working_dir),
+            fifo_start_offset=fifo_start_offset,
+            scrollback_bytes=len(scrollback),
+        )
+
+        return {
+            "session": self.session,
+            "initial_scrollback_b64": sb_b64,
+            "fifo_start_offset": fifo_start_offset,
+        }
+
+    async def _resolve_external_cwd(self, name: str) -> Path:
+        """Best-effort cwd probe for an adopted tmux pane.
+
+        Reads ``#{pane_current_path}`` via ``tmux display-message``.
+        Falls back to ``~`` on any failure — metadata only, never chdir.
+        """
+        from src.core.tmux_backend import _safe_target, DEFAULT_SOCKET_NAME
+
+        try:
+            socket_name = settings.load_auth_config().session.tmux_socket_name
+        except Exception:
+            socket_name = DEFAULT_SOCKET_NAME
+
+        try:
+            target = _safe_target(name)
+        except ValueError as exc:
+            logger.warning(
+                "adopt_cwd_unsafe_target", name=name, error=str(exc)
+            )
+            return Path.home()
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "-L", socket_name, "display-message",
+                "-t", target, "-p", "#{pane_current_path}",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return Path.home()
+            raw = out.decode("utf-8", errors="replace").strip()
+            if not raw:
+                return Path.home()
+            path = Path(raw)
+            return path if path.exists() else Path.home()
+        except Exception as exc:
+            logger.debug("adopt_cwd_probe_failed", name=name, error=str(exc))
+            return Path.home()
+
+    def consume_adopt_fifo_offset(self) -> Optional[int]:
+        """One-shot read of the adopt FIFO offset (None if not set / already consumed).
+
+        The WS tailer calls this exactly once on connect. We clear the
+        stashed value so a reconnect later doesn't try to re-seek to
+        a stale offset against a (by then) much larger FIFO.
+        """
+        offset = self.adopt_fifo_start_offset
+        self.adopt_fifo_start_offset = None
+        return offset
