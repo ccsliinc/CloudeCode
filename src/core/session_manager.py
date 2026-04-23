@@ -519,6 +519,36 @@ class SessionManager:
             if sanitized:
                 tmux_session_name = f"{SESSION_PREFIX}{sanitized}"
 
+        # Adopt-on-collision: if project_name resolves to a tmux session name
+        # that is already alive on our socket, reuse it rather than erroring.
+        # Matches "open project X" == "resume my X session whether alive or not."
+        # The probe is a throwaway — never assigned to self.backend, never started.
+        if tmux_session_name:
+            probe = build_backend(
+                settings,
+                session_id="__collision_probe__",
+                working_dir=Path.home(),
+                on_output=None,
+            )
+            try:
+                existing = probe.discover_existing() or []
+            except Exception as exc:
+                logger.debug("collision_probe_failed", error=str(exc))
+                existing = []
+            if tmux_session_name in existing:
+                logger.info(
+                    "session_create_redirected_to_adopt",
+                    project=project_name,
+                    existing_tmux=tmux_session_name,
+                )
+                result = await self.adopt_external_session(
+                    name=tmux_session_name,
+                    confirm_detach=True,
+                )
+                # adopt_external_session returns dict {session, initial_scrollback_b64,
+                # fifo_start_offset}; create_session must return Session — unwrap.
+                return result["session"] if isinstance(result, dict) else result
+
         try:
             # Build a fresh backend for the new session.
             self.backend = build_backend(

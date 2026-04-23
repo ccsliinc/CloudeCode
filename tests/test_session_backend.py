@@ -1712,6 +1712,66 @@ async def test_session_manager_create_session_without_project_name_uses_legacy(
                 pass
 
 
+# ---- Task 5: adopt-on-collision -----------------------------------------
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_create_session_adopts_when_target_name_exists(tmp_path, monkeypatch):
+    """If a tmux session with the derived name already exists on our
+    socket, create_session should adopt it rather than fail with 'already
+    running' or create a duplicate."""
+    from src.core.session_manager import SessionManager
+
+    # Sandbox so we don't touch the real metadata file.
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    project_name = f"adopt_collide_{secrets.token_hex(4)}"
+    target_tmux = f"cloude_{project_name}"
+
+    # Pre-create the tmux session on our socket so the collision fires.
+    subprocess.run(
+        ["tmux", "-L", "cloude", "new-session", "-d", "-s", target_tmux],
+        check=True,
+    )
+    try:
+        wd = Path(tempfile.mkdtemp(prefix="cc_t5_"))
+        with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+            sm = SessionManager()
+        try:
+            await sm.create_session(
+                session_id=f"ses_{secrets.token_hex(4)}",
+                working_dir=str(wd),
+                auto_start_claude=False,
+                copy_templates=False,
+                project_name=project_name,
+            )
+            assert sm.backend is not None
+            assert sm.backend.tmux_session == target_tmux, (
+                f"expected adopted tmux_session {target_tmux!r}, "
+                f"got {sm.backend.tmux_session!r}"
+            )
+            # Session existed BEFORE create_session — verify not wiped.
+            assert subprocess.call(
+                ["tmux", "-L", "cloude", "has-session", "-t", target_tmux],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ) == 0, "adopted tmux session was unexpectedly killed"
+        finally:
+            if sm.backend is not None:
+                try:
+                    await sm.detach_current_session()
+                except Exception:
+                    pass
+    finally:
+        subprocess.run(
+            ["tmux", "-L", "cloude", "kill-session", "-t", target_tmux],
+            check=False,
+            capture_output=True,
+        )
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
