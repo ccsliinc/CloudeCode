@@ -283,7 +283,7 @@ class API {
 
     /**
      * Sessions: Create new session
-     * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean}
+     * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
      * @returns {Promise<object>} - Session data
      */
     async createSession(params = {}) {
