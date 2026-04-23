@@ -171,6 +171,10 @@ class Launchpad {
                 </div>
             `;
         }).join('');
+        // Idempotent — re-calling after subsequent renders is a no-op
+        // because the listener is bound to the (stable) container element,
+        // not the (re-painted) row children, and the flag gates re-bind.
+        this._bindRunningSessionClicks();
     }
 
     /**
@@ -228,82 +232,130 @@ class Launchpad {
     }
 
     /**
-     * Attach-button click handler.
+     * Bind a single delegated click listener on #running-sessions-list.
      *
-     * Flow:
-     *   1. If a session is active (cheap local check + server-authoritative
-     *      cross-check), prompt for detach confirmation. Switching never
-     *      kills — the prior session stays alive in tmux and the user can
-     *      re-adopt it later from the banner or Adopt list.
-     *   2. Call the adopt endpoint — server detaches prior, attaches new.
-     *   3. On success, dispatch `session-created` with the adopt-specific
-     *      detail payload so App.showTerminal() can plumb scrollback to
-     *      the terminal controller.
-     *   4. On 409, surface an actionable error — another session appeared
-     *      between our check and the server's view of the world.
+     * Event delegation over per-row listeners: avoids re-binding on every
+     * render and survives DOM swaps. The `__boundRunningClicks` flag is
+     * a one-shot idempotence guard — re-calling from renderRunningSessions
+     * is a no-op after the first paint.
+     *
+     * Click target disambiguation:
+     *   - `.running-session-kill` (or its SVG child) → kill flow
+     *   - anywhere else on `.running-session-row`   → return/swap flow
+     *
+     * stopPropagation on the kill branch is the important bit — without it
+     * the row handler would also fire and we'd race a swap against a
+     * destroy.
      */
-    async handleAttachClick(name) {
-        console.log('Launchpad: attach click for', name);
+    _bindRunningSessionClicks() {
+        const container = document.getElementById('running-sessions-list');
+        if (!container || container.__boundRunningClicks) return;
+        container.addEventListener('click', async (e) => {
+            const killEl = e.target.closest('.running-session-kill');
+            const rowEl = e.target.closest('.running-session-row');
+            if (!rowEl) return;
 
-        // Check active session. Local flag is cheap; if set OR the server
-        // says we have one, we must confirm detach.
-        let hasActive = !!(window.TerminalController && window.TerminalController.sessionActive);
-        let activeDesc = null;
-        try {
-            const data = await window.API.getSession();
-            const s = (data && (data.session || data)) || null;
-            if (s && s.id) {
-                hasActive = true;
-                activeDesc = s.tmux_session || s.id || null;
-            }
-        } catch (err) {
-            // 404 = no active session; anything else we treat conservatively
-            // as "no confirmation needed" only if the local flag is also false.
-            if (!hasActive) {
-                console.log('Launchpad: getSession() non-OK while checking active; treating as no active session', err && err.message);
-            }
-        }
-
-        if (hasActive) {
-            const currentLabel = activeDesc
-                ? this._escapeHtml(activeDesc)
-                : (this._getCurrentSessionLabel() || 'running session');
-            const ok = await this.showConfirmModal(
-                'switch session?',
-                `attaching to "${this._escapeHtml(name)}" will detach from your current session "${currentLabel}".`,
-                'the tmux session will keep running — you can rejoin it later from the existing-projects list or banner. cancel to stay on the launchpad with the banner intact.',
-                `attach to ${name}`,
-                'cancel'
-            );
-            if (!ok) {
-                console.log('Launchpad: adopt cancelled by user');
+            // X icon path — explicit destroy
+            if (killEl) {
+                e.stopPropagation();
+                const name = killEl.dataset.kill;
+                await this._handleKillRunningSession(name);
                 return;
             }
-        }
 
+            // Row click — return or swap
+            const name = rowEl.dataset.name;
+            const isActive = rowEl.dataset.active === '1';
+            if (isActive) {
+                // Already the active backend → jump straight to terminal
+                try {
+                    const current = await window.API.getCurrentSession();
+                    if (current) {
+                        window.App.returnToExistingTerminal(current);
+                    }
+                } catch (err) {
+                    this.showError('failed to return to terminal: ' + (err.message || err));
+                }
+                return;
+            }
+            // Different session → swap
+            await this._handleAttachRunningSession(name);
+        });
+        container.__boundRunningClicks = true;
+    }
+
+    /**
+     * Kill flow for a running tmux session.
+     *
+     * Two paths, both end at destroySession():
+     *   1. Target IS the currently-active backend → destroy directly.
+     *   2. Target is a different session → adopt-then-destroy. destroy
+     *      only works on the currently-attached backend, so we pivot the
+     *      active session to the target first, then tear it down.
+     *
+     * confirmDetach=true on the adopt call avoids a 409 when there was a
+     * prior active session.
+     */
+    async _handleKillRunningSession(tmuxName) {
+        const display = this._deriveRunningSessionDisplayName(tmuxName);
+        const confirmed = await this.showConfirmModal(
+            'end session?',
+            `destroy "${this._escapeHtml(display)}"? this kills the tmux session permanently.`,
+            'this is the only destructive action. session data in the pane will be lost.',
+            'destroy',
+            'cancel'
+        );
+        if (!confirmed) return;
         try {
-            this.updateStatus(`adopting ${name}...`);
-            const response = await window.API.adoptSession(name, hasActive);
-            console.log('Launchpad: adopt succeeded', response);
+            const current = await window.API.getCurrentSession().catch(() => null);
+            if (current && current.tmux_session === tmuxName) {
+                await window.API.destroySession();
+            } else {
+                await window.API.adoptSession(tmuxName, true);
+                await window.API.destroySession();
+            }
+        } catch (err) {
+            this.showError(`destroy failed: ${err.message || err}`);
+        }
+        await this.loadRunningSessions();
+    }
 
+    /**
+     * Attach/swap flow for a running tmux session (non-active row click).
+     *
+     * If a different session is currently active, prompt for detach
+     * confirmation — swap, not kill, so the prior session stays alive in
+     * tmux. On adopt success, dispatch `session-created` with the full
+     * adopt-specific detail payload (initialScrollbackB64, fifoStartOffset,
+     * adopted:true) so App.showTerminal() can plumb scrollback into the
+     * terminal controller.
+     */
+    async _handleAttachRunningSession(tmuxName) {
+        const display = this._deriveRunningSessionDisplayName(tmuxName);
+        const current = await window.API.getCurrentSession().catch(() => null);
+        if (current && current.tmux_session && current.tmux_session !== tmuxName) {
+            const currentDisplay = this._deriveRunningSessionDisplayName(current.tmux_session);
+            const ok = await this.showConfirmModal(
+                'switch session?',
+                `attaching to "${this._escapeHtml(display)}" will detach from your current session "${this._escapeHtml(currentDisplay)}".`,
+                'the tmux session will keep running — you can rejoin it later from the running-sessions list. cancel to stay on the launchpad.',
+                `attach to ${display}`,
+                'cancel'
+            );
+            if (!ok) return;
+        }
+        try {
+            const response = await window.API.adoptSession(tmuxName, true);
             const session = response.session || response;
             const initialScrollbackB64 = response.initial_scrollback_b64 || '';
             const fifoStartOffset = typeof response.fifo_start_offset === 'number'
                 ? response.fifo_start_offset
                 : null;
-
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
             }));
-        } catch (error) {
-            console.error('Launchpad: adopt failed:', error);
-            // 409 = race between our local check and the server's view.
-            // The server's message is already descriptive; surface it.
-            if (error && /409|confirm_detach|Active session/i.test(error.message || '')) {
-                this.showError('another session is active — refresh and try again, or end the current session first from the banner.');
-            } else {
-                this.showError(`failed to adopt "${name}": ${error.message || error}`);
-            }
+        } catch (err) {
+            this.showError(`attach failed: ${err.message || err}`);
         }
     }
 
