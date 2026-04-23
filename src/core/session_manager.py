@@ -573,6 +573,148 @@ class SessionManager:
                 self.idle_watcher = None
             raise ValueError(f"Failed to create session: {e}") from e
 
+    async def detach_current_session(self) -> bool:
+        """Detach from the current backend WITHOUT killing tmux.
+
+        This is the "soft" counterpart to ``destroy_session``: it tears down
+        the Python-side handles (reader task, idle watcher, backend refs,
+        output subscribers, stashed offsets) and stops our pipe-pane so the
+        server-side tmux session can be cleanly re-adopted later — but it
+        leaves the tmux session itself alive. The user's shell state and
+        any running foreground process (Claude CLI, vim, long build, ...)
+        continue as if the web UI were never connected.
+
+        Why stop pipe-pane here (vs leaving it attached): our pipe-pane
+        writes into ``tmux_<slug>.pipe``; the subsequent re-adopt via
+        ``TmuxBackend.for_external`` derives its pipe path as
+        ``tmux_ext_<slug>.pipe`` — a DIFFERENT file. If we leave the old
+        pipe-pane active, the re-adopt's ``ensure_pipe_pane`` sees
+        ``#{pane_pipe} == 1`` and refuses to clobber it, then the tailer
+        opens the new (empty) path and silently streams nothing.
+        Turning our pipe off on detach means re-adopt gets a fresh pipe
+        at the new path — correct and unambiguous. The tmux session
+        itself is untouched.
+
+        We keep ``owned_tmux_sessions`` intact so the Adopt UI correctly
+        labels the detached session as ``created_by_cloude=True`` — the
+        user can re-adopt it from there, or start a fresh session without
+        losing the old one.
+
+        On-disk metadata is unlinked so a server restart doesn't silently
+        auto-rehydrate the detached session; it'll appear as an adoptable
+        external session (pragmatic trade-off — the ``created_by_cloude``
+        flag degrades to False after a restart, but the session remains
+        recoverable).
+
+        Returns False (no-op) when no session is active. True otherwise.
+        """
+        if not self.session or self.backend is None:
+            logger.info("detach_current_session_noop")
+            return False
+
+        logger.info("detaching_session", session_id=self.session.id)
+
+        try:
+            # Tear down the idle watcher first — mirrors destroy ordering so
+            # a trailing poll iteration can't fire after the backend is gone.
+            if self.idle_watcher is not None:
+                try:
+                    await self.idle_watcher.stop()
+                except Exception as exc:
+                    logger.warning(
+                        "idle_watcher_stop_error_on_detach",
+                        error=str(exc),
+                    )
+                self.idle_watcher = None
+
+            # Cancel the backend's reader task so no more pipe bytes land
+            # in the output fan-out after detach. TmuxBackend.stop() does
+            # this as part of its shutdown; we mirror the part we want
+            # (reader teardown) without the part we don't (kill-session).
+            reader_task = getattr(self.backend, "_reader_task", None)
+            if reader_task is not None:
+                try:
+                    reader_task.cancel()
+                    try:
+                        await reader_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "reader_task_teardown_error_on_detach",
+                            error=str(exc),
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "reader_task_cancel_error_on_detach",
+                        error=str(exc),
+                    )
+                try:
+                    self.backend._reader_task = None
+                except Exception:
+                    pass
+
+            # Stop OUR pipe-pane so a subsequent re-adopt can cleanly set up
+            # its own pipe at the (different) external-path. Best-effort —
+            # if this fails the re-adopt still works because
+            # ``ensure_pipe_pane`` logs and returns without clobbering.
+            try:
+                if hasattr(self.backend, "_run_tmux"):
+                    # tmux_backend internals — reach for them only if
+                    # present so PTYBackend stays unaffected.
+                    from src.core.tmux_backend import _safe_target
+                    target_name = getattr(self.backend, "tmux_session", None)
+                    if target_name:
+                        await self.backend._run_tmux(
+                            "pipe-pane",
+                            "-t",
+                            _safe_target(target_name),
+                            check=False,
+                        )
+                # Flag the backend as no-longer-running so any lingering
+                # write attempt raises loudly instead of touching tmux.
+                try:
+                    self.backend._running = False
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.warning(
+                    "pipe_pane_stop_failed_on_detach",
+                    error=str(exc),
+                )
+
+            # Clear references — leave tmux alive.
+            self.backend = None
+            self.session = None
+            self.log_buffer.clear()
+            self.command_count = 0
+            self._output_subscribers.clear()
+            # FIFO offset is single-use and session-scoped; reset on detach.
+            self.adopt_fifo_start_offset = None
+
+            # Unlink the on-disk metadata so a server restart doesn't try
+            # to auto-rehydrate — the detached session is meant to surface
+            # in the Adopt list, not silently reclaim the active slot.
+            # ``owned_tmux_sessions`` stays in memory for the remainder of
+            # this process so the Adopt UI correctly labels the detached
+            # session as cloude-owned during the current server lifetime.
+            metadata_path = settings.get_session_metadata_path()
+            try:
+                if metadata_path.exists():
+                    metadata_path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "session_metadata_unlink_failed_on_detach",
+                    error=str(exc),
+                )
+
+            logger.info("session_detached")
+            return True
+
+        except Exception as e:
+            logger.error("session_detach_failed", error=str(e))
+            raise
+
     async def destroy_session(self) -> bool:
         """Destroy the current session."""
         if not self.session:

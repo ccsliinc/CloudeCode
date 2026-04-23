@@ -337,6 +337,24 @@ class API {
     }
 
     /**
+     * Sessions: Detach from the current session WITHOUT killing tmux.
+     *
+     * Soft counterpart to ``destroySession`` — the server tears down its
+     * Python-side handles (reader task, idle watcher, pipe-pane) but
+     * leaves the tmux session alive so it can be re-adopted later from
+     * the Adopt list. Used by the "switch to a different project" flow
+     * so the user doesn't lose their running Claude / shell state when
+     * they swap projects from the launchpad.
+     *
+     * @returns {Promise<object>}
+     */
+    async detachSession() {
+        return await this.call('/sessions/detach', {
+            method: 'POST'
+        });
+    }
+
+    /**
      * Sessions: List externally-started tmux sessions that can be adopted.
      *
      * Returns sessions on the `cloude` tmux socket that were NOT created by

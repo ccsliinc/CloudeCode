@@ -135,6 +135,33 @@ async def destroy_session(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to destroy session: {str(e)}")
 
 
+@router.post(
+    "/sessions/detach",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def detach_session(request: Request):
+    """Detach from the current session WITHOUT killing tmux.
+
+    Soft counterpart to ``DELETE /sessions`` — tears down the server-side
+    backend refs (reader task, idle watcher, our pipe-pane) while leaving
+    the tmux session alive. The user can re-adopt the detached session
+    from the Adopt list later, or just return to it via the active-session
+    banner before swapping to a different project.
+
+    Returns 404 when no session is active. Other failures propagate as 500.
+    """
+    session_manager = request.app.state.session_manager
+
+    logger.info("api_detach_session_request")
+
+    detached = await session_manager.detach_current_session()
+    if not detached:
+        raise HTTPException(status_code=404, detail="No active session to detach")
+
+    return SuccessResponse(message="Session detached")
+
+
 @router.get(
     "/sessions/attachable",
     response_model=List[AttachableSession],

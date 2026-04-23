@@ -426,7 +426,7 @@ class Launchpad {
                                 <p>The <code>exec $SHELL</code> trick keeps the pane alive with a shell prompt after claude exits — otherwise the pane closes with claude.</p>
                                 <p>Using a custom launcher alias (e.g. <code>cld</code>) from your <code>~/.zshrc</code> or <code>~/.bashrc</code>? tmux spawns a non-interactive shell by default, so your alias won't resolve. Wrap the command in an interactive shell:</p>
                                 <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "$SHELL -ic 'cld; exec $SHELL'"</code></pre>
-                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCodeDev#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
                             </div>
                         </details>
                     </div>
@@ -742,19 +742,19 @@ class Launchpad {
 
             // If a session already exists, the user's stated intent was
             // "create a new project". Primary = carry out that intent
-            // (destroy + create). Cancel = safe no-op. Rejoin the running
+            // (detach + create). Cancel = safe no-op. Rejoin the running
             // session via the banner's "return to terminal" button.
             if (error.message.includes('already running')) {
                 const currentName = this._getCurrentSessionLabel() || 'running session';
                 const confirmed = await this.showConfirmModal(
                     'switch session?',
-                    `creating a new project will end your current session "${this._escapeHtml(currentName)}".`,
-                    'the tmux session will be killed. to keep it instead, cancel and use "return to terminal" on the banner above.',
+                    `creating a new project will detach from your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
                     'create new session',
                     'cancel'
                 );
                 if (confirmed) {
-                    this.destroyAndCreateNew();
+                    this.detachAndCreateNew();
                 }
                 // Cancelled → deliberate no-op.
             } else {
@@ -935,18 +935,21 @@ class Launchpad {
     }
 
     /**
-     * Destroy existing session and create new one
+     * Detach from the existing session (tmux keeps running) and create a
+     * fresh one. Mirror of ``detachAndOpenProject`` for the "new project"
+     * path — prior session lingers and can be re-adopted later.
      */
-    async destroyAndCreateNew() {
+    async detachAndCreateNew() {
         try {
-            this.updateStatus('destroying old session...');
-            await window.API.destroySession();
+            this.updateStatus('detaching from current session...');
+            await window.API.detachSession();
 
-            // Wait a moment, then create new
+            // Wait a moment, then create new. Same race-avoidance rationale
+            // as ``detachAndOpenProject``.
             setTimeout(() => this.createNewSession(), 500);
         } catch (error) {
-            console.error('Launchpad: Failed to destroy session:', error);
-            this.showError('failed to destroy session: ' + error.message);
+            console.error('Launchpad: Failed to detach session:', error);
+            this.showError('failed to detach session: ' + error.message);
         }
     }
 
@@ -1220,23 +1223,24 @@ class Launchpad {
 
             // If a session already exists, offer to SWAP to the project the
             // user just clicked. Primary button = user's stated intent
-            // (open the new project, which requires killing the old tmux
-            // session). Cancel = strict no-op: stays on the launchpad, the
-            // banner still shows the running session, user can rejoin it
-            // via the banner's "Return to terminal" button if they want.
+            // (open the new project, which DETACHES — not destroys — the
+            // old tmux session so it keeps running on the server). Cancel
+            // = strict no-op: stays on the launchpad, the banner still
+            // shows the running session, user can rejoin it via the
+            // banner's "Return to terminal" button if they want.
             if (error.message.includes('already running')) {
                 const currentName = this._getCurrentSessionLabel() || 'running session';
                 const confirmed = await this.showConfirmModal(
                     'switch session?',
-                    `opening "${this._escapeHtml(project.name)}" will end your current session "${this._escapeHtml(currentName)}".`,
-                    'the tmux session will be killed. to keep it instead, cancel and use "return to terminal" on the banner above.',
+                    `opening "${this._escapeHtml(project.name)}" will detach from your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
                     `open ${project.name}`,
                     'cancel'
                 );
                 if (confirmed) {
-                    this.destroyAndOpenProject(project);
+                    this.detachAndOpenProject(project);
                 }
-                // Cancelled → deliberate no-op. Do NOT destroy, do NOT
+                // Cancelled → deliberate no-op. Do NOT detach, do NOT
                 // reconnect. User stays on launchpad with banner intact.
             } else {
                 this.showError(`failed to open ${project.name}: ${error.message}`);
@@ -1264,18 +1268,24 @@ class Launchpad {
     }
 
     /**
-     * Destroy existing session and open project
+     * Detach from the existing session (tmux keeps running) and open the
+     * selected project in a fresh session. The prior session lingers on
+     * the tmux side and shows up in the Adopt list tagged as cloude-owned,
+     * so the user can rejoin it later without losing any state.
      */
-    async destroyAndOpenProject(project) {
+    async detachAndOpenProject(project) {
         try {
-            this.updateStatus('destroying old session...');
-            await window.API.destroySession();
+            this.updateStatus('detaching from current session...');
+            await window.API.detachSession();
 
-            // Wait a moment, then open project
+            // Wait a moment, then open project. The brief delay lets the
+            // server finish clearing its backend handles before the new
+            // create-session call lands — avoids a race where we try to
+            // create while the old backend is still tearing down.
             setTimeout(() => this.selectProject(project), 500);
         } catch (error) {
-            console.error('Launchpad: Failed to destroy session:', error);
-            this.showError('failed to destroy session: ' + error.message);
+            console.error('Launchpad: Failed to detach session:', error);
+            this.showError('failed to detach session: ' + error.message);
         }
     }
 

@@ -1343,6 +1343,95 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
                 pass
 
 
+# ---- Test N: detach_current_session keeps tmux alive --------------------
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
+    """``SessionManager.detach_current_session`` must tear down Python-side
+    handles (backend refs, session, reader task) WITHOUT killing the tmux
+    session on the server. The tmux pane should still pass ``has-session``
+    after detach so the user can re-adopt it from the launchpad.
+
+    Also asserts ``owned_tmux_sessions`` is preserved — the detached
+    session should still be labeled as cloude-owned in the Adopt UI for
+    the remainder of this server lifetime.
+    """
+    from src.core.session_manager import SessionManager
+
+    # Sandbox env so we don't tamper with a real metadata file.
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+
+    session_id = f"detach_itest_{secrets.token_hex(4)}"
+
+    try:
+        # Create a real cloude-owned session on the real socket.
+        await sm.create_session(
+            session_id=session_id,
+            working_dir=str(tmp_path),
+            auto_start_claude=False,
+        )
+        assert sm.backend is not None
+        tmux_name = sm.backend.tmux_session
+        # The newly-created session is tracked as owned.
+        assert tmux_name in sm.owned_tmux_sessions
+
+        # Sanity: tmux says the session is alive BEFORE detach.
+        alive_before = subprocess.run(
+            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name],
+            capture_output=True,
+        )
+        assert alive_before.returncode == 0, (
+            "baseline: tmux session should be alive after create_session"
+        )
+
+        # Act: detach.
+        detached = await sm.detach_current_session()
+        assert detached is True
+
+        # Python-side invariants.
+        assert sm.backend is None, "detach must clear backend ref"
+        assert sm.session is None, "detach must clear session ref"
+        assert sm.idle_watcher is None, "detach must stop idle watcher"
+
+        # owned_tmux_sessions must persist so Adopt UI still flags the
+        # detached session as cloude-owned.
+        assert tmux_name in sm.owned_tmux_sessions, (
+            "owned_tmux_sessions entry must survive detach so the Adopt "
+            "UI labels the detached session as created_by_cloude=True"
+        )
+
+        # The tmux session must still be alive on the server — the whole
+        # point of detach-vs-destroy.
+        alive_after = subprocess.run(
+            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name],
+            capture_output=True,
+        )
+        assert alive_after.returncode == 0, (
+            f"tmux session {tmux_name} must still be alive after detach "
+            "(stderr: {!r})".format(alive_after.stderr.decode(errors='replace'))
+        )
+
+        # A second detach call is a no-op (returns False, doesn't raise).
+        assert await sm.detach_current_session() is False
+
+    finally:
+        # Always clean up the tmux session we created, whether the test
+        # passed or failed. Use the real cloude socket since that's where
+        # we created it.
+        subprocess.run(
+            ["tmux", "-L", "cloude", "kill-session", "-t",
+             f"cloude_{session_id}"],
+            check=False,
+            capture_output=True,
+        )
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
