@@ -302,6 +302,31 @@ class API {
     }
 
     /**
+     * Sessions: Fetch current session or null when none is active.
+     *
+     * Thin wrapper over ``getSession`` that translates the 404-on-no-session
+     * into a ``null`` return so callers (e.g. the launchpad active-session
+     * banner) can render without try/catch boilerplate. Any non-404 error
+     * rethrows so the caller can surface or log it.
+     *
+     * @returns {Promise<object|null>} - SessionInfo or null on 404
+     */
+    async getCurrentSession() {
+        try {
+            return await this.getSession();
+        } catch (error) {
+            // Our ``call`` wrapper throws Error with a message that starts
+            // with the backend's detail string. "No active session" is what
+            // ``GET /sessions`` returns when none exists — treat it as null.
+            const msg = (error && error.message) || '';
+            if (/No active session|HTTP 404|404/i.test(msg)) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Sessions: Destroy current session
      * @returns {Promise<object>}
      */

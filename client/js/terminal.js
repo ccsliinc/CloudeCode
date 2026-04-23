@@ -499,6 +499,63 @@ class Terminal {
     }
 
     /**
+     * Reconnect to an ALREADY-ACTIVE backend session.
+     *
+     * Used when the user returns to the launchpad while a session is
+     * running and clicks "return to terminal". The backend is already
+     * alive — we must NOT POST /sessions (would try to create) or
+     * POST /sessions/adopt (would re-pipe-pane the tmux session). We
+     * just re-open the WebSocket against the existing backend.
+     *
+     * Contract parity with connectToSession(): stashes the session on
+     * the controller, marks it active, wires the destroy button, then
+     * opens the WS on the same delay so the UI transition settles first.
+     *
+     * Safe to call multiple times. If a live WS is already open, we
+     * do nothing beyond re-painting the status (the server stream is
+     * unaffected). If xterm already holds state from the previous
+     * session view, we leave it alone — returning to an existing
+     * session should feel seamless, not like a reload.
+     *
+     * @param {object} session - Session object (shape matches what
+     *   GET /sessions returns under the ``session`` key).
+     */
+    reconnectToExistingSession(session) {
+        console.log('Terminal: Reconnecting to existing session:', session && session.id);
+
+        // Stash so launchpad self-adopt filter + debug can introspect.
+        this._currentSession = session;
+        this.sessionActive = true;
+
+        if (this.sessionInfoEl) {
+            this.sessionInfoEl.textContent =
+                `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
+        }
+        if (this.destroySessionBtn) {
+            this.destroySessionBtn.disabled = false;
+        }
+
+        // If a WS is already open to the same backend, nothing to do —
+        // the stream is live and xterm is already bound. This covers the
+        // quick bounce case where the user clicked logo → banner return
+        // faster than any idle close could fire.
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            console.log('Terminal: WS already open, skipping reconnect');
+            return;
+        }
+
+        // Otherwise reopen on the same delay connectToSession uses, so
+        // the terminal screen transition has time to settle and the
+        // fit/font readiness dance in connectWebSocket() has a stable
+        // container to measure.
+        setTimeout(() => this.connectWebSocket(), 500);
+
+        // Refresh tunnels panel in case tunnels were created/destroyed
+        // while the user was away on the launchpad.
+        this.loadTunnels();
+    }
+
+    /**
      * Wait for fonts and layout to be ready
      */
     async waitForFontsAndLayout(container) {

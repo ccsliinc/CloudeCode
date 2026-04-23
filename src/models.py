@@ -85,6 +85,15 @@ class SessionInfo(BaseModel):
         default="none",
         description="Backend type driving this session: 'tmux', 'pty', or 'none'",
     )
+    # Tmux session name (when backend is tmux). Surfaced to the web UI so
+    # the active-session banner on the launchpad can display a human-
+    # readable handle — especially useful for adopted sessions whose
+    # ``session.id`` is prefixed with ``adopted:`` and thus not a clean
+    # display string on its own. None when backend is non-tmux.
+    tmux_session: Optional[str] = Field(
+        default=None,
+        description="tmux session name (tmux backend only; None otherwise)",
+    )
 
 
 # API Request Models

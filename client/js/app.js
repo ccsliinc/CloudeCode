@@ -184,6 +184,52 @@ class AppController {
     }
 
     /**
+     * Return to an ALREADY-ACTIVE terminal session without creating or
+     * adopting anything. Used by the launchpad's active-session banner
+     * when the user clicks "return to terminal" after navigating away
+     * via the logo.
+     *
+     * The screen-transition side of this mirrors showTerminal() exactly
+     * (so D-pad/slash-commands/header buttons land in the same state),
+     * but the terminal-controller side calls reconnectToExistingSession
+     * instead of connectToSession — the backend is already alive and a
+     * POST /sessions would either error (single-session invariant) or
+     * silently birth a new unrelated pane.
+     *
+     * @param {object} session - Session object (from GET /sessions).
+     */
+    async returnToExistingTerminal(session) {
+        console.log('App: Returning to existing terminal', session && session.id);
+        this.hideAllScreens();
+        document.getElementById('terminal-screen').classList.add('active');
+        this.logoutBtn.classList.remove('hidden');
+        this.destroyBtn.classList.remove('hidden');
+        this.currentScreen = 'terminal';
+
+        // First-time init if the user never hit showTerminal() this page load
+        // (e.g. refreshed directly onto launchpad while session was running).
+        if (!window.TerminalController.term) {
+            await window.TerminalController.init();
+        }
+        if (window.DPad && !window.DPad.floatingButton) {
+            window.DPad.init();
+        }
+        if (window.DPad) {
+            window.DPad.show();
+        }
+        if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
+            await window.SlashCommandsModal.init((command) => {
+                window.TerminalController.insertText(command);
+            });
+        }
+        if (window.SlashCommandsModal) {
+            window.SlashCommandsModal.show();
+        }
+
+        window.TerminalController.reconnectToExistingSession(session);
+    }
+
+    /**
      * Hide all screens
      */
     hideAllScreens() {
@@ -287,6 +333,10 @@ class AppController {
 
 // Create app instance
 const App = new AppController();
+// Expose on window so other modules (launchpad active-session banner,
+// future deep-link targets) can call App.returnToExistingTerminal
+// without re-wiring via custom events.
+window.App = App;
 
 // Initialize on load
 window.addEventListener('load', () => {

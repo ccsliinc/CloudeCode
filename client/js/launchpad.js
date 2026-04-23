@@ -65,6 +65,128 @@ class Launchpad {
         // Failure here is non-fatal — it just means the adopt section shows
         // its empty state instead of listing external sessions.
         this.loadAttachableSessions();
+        // Refresh the "currently attached" banner. The user may have
+        // destroyed / timed-out the session from another tab between
+        // launchpad visits, so every entry re-fetches authoritatively.
+        this.refreshActiveSessionBanner();
+    }
+
+    /**
+     * Fetch current-session state from the server and repaint the
+     * active-session banner accordingly.
+     *
+     * The server's ``GET /sessions`` returns 404 when no session exists;
+     * ``API.getCurrentSession()`` translates that to null so we can treat
+     * "no session" as a normal state instead of an error. On any other
+     * error we log and hide the banner — better a missing banner than a
+     * broken launchpad.
+     */
+    async refreshActiveSessionBanner() {
+        let info = null;
+        try {
+            info = await window.API.getCurrentSession();
+        } catch (error) {
+            console.warn('Launchpad: active-session fetch failed, hiding banner:', error && error.message);
+            info = null;
+        }
+        this.renderActiveSessionBanner(info);
+    }
+
+    /**
+     * Paint (or hide) the active-session banner at the top of the
+     * launchpad. Pass null/undefined to hide.
+     *
+     * Display-name rules:
+     *   - If info.tmux_session is present, use it (works for both owned
+     *     and adopted sessions — matches what the user typed at
+     *     ``tmux new -s <name>``).
+     *   - Else if session.id starts with ``adopted:``, strip the prefix.
+     *   - Else fall back to the basename of working_dir (matches the
+     *     menu-bar health endpoint's convention).
+     *   - Final fallback: session.id as-is.
+     */
+    renderActiveSessionBanner(info) {
+        const banner = document.getElementById('active-session-banner');
+        if (!banner) return;
+
+        const session = info && (info.session || info) || null;
+        if (!info || !session || !session.id) {
+            banner.hidden = true;
+            return;
+        }
+
+        let displayName = info.tmux_session || null;
+        if (!displayName && typeof session.id === 'string' && session.id.startsWith('adopted:')) {
+            displayName = session.id.slice('adopted:'.length);
+        }
+        if (!displayName && session.working_dir) {
+            const parts = session.working_dir.split('/').filter(Boolean);
+            displayName = parts.length ? parts[parts.length - 1] : session.working_dir;
+        }
+        if (!displayName) displayName = session.id;
+
+        const backendLabel = info.session_backend || 'unknown';
+        const nameEl = banner.querySelector('.active-session-name');
+        const cwdEl = banner.querySelector('.active-session-cwd');
+        const backendEl = banner.querySelector('.active-session-backend');
+        if (nameEl) nameEl.textContent = displayName;
+        if (cwdEl) cwdEl.textContent = session.working_dir || '';
+        if (backendEl) backendEl.textContent = `backend: ${backendLabel}`;
+
+        // Stash the fresh session on the button handlers' closure source
+        // so clicks always act on the latest state (prevents stale-session
+        // races if the user leaves the launchpad open for a long time).
+        this._activeSession = session;
+
+        banner.hidden = false;
+    }
+
+    /**
+     * "Return to terminal" click handler. Delegates to App, which owns
+     * screen-transition state — we just pass the session and let App
+     * re-open the WS against the existing backend.
+     */
+    async handleReturnToTerminal() {
+        const session = this._activeSession;
+        if (!session) {
+            console.warn('Launchpad: return clicked but no active session cached');
+            this.refreshActiveSessionBanner();
+            return;
+        }
+        if (window.App && typeof window.App.returnToExistingTerminal === 'function') {
+            await window.App.returnToExistingTerminal(session);
+        } else {
+            console.error('Launchpad: App.returnToExistingTerminal unavailable');
+        }
+    }
+
+    /**
+     * "End session" click handler. Reuses the shared confirmation-modal
+     * pattern and the existing destroy-session API. On success we hide
+     * the banner (and the user stays on the launchpad to pick what's next).
+     */
+    async handleEndActiveSession() {
+        const session = this._activeSession;
+        const label = (session && (session.id || '')).replace(/^adopted:/, '') || 'this session';
+        const confirmed = await this.showConfirmModal(
+            'end session',
+            `are you sure you want to end "${this._escapeHtml(label)}"?`,
+            'the tmux pane will be killed. any unsaved shell state will be lost.'
+        );
+        if (!confirmed) return;
+
+        try {
+            this.updateStatus('ending session...');
+            await window.API.destroySession();
+            this._activeSession = null;
+            // Refresh both projects (LRU ordering) and banner. Keep the
+            // adopt list in sync too — once the active backend is gone,
+            // any previously-filtered external session may reappear.
+            await this.loadProjects();
+        } catch (error) {
+            console.error('Launchpad: failed to end session:', error);
+            this.showError('failed to end session: ' + (error.message || error));
+        }
     }
 
     /**
@@ -265,6 +387,21 @@ class Launchpad {
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
+                <div class="active-session-banner" id="active-session-banner" hidden>
+                    <div class="active-session-info">
+                        <div class="active-session-title">▶ currently attached: <span class="active-session-name"></span></div>
+                        <div class="active-session-meta">
+                            <span class="active-session-cwd"></span>
+                            <span class="active-session-sep"> · </span>
+                            <span class="active-session-backend"></span>
+                        </div>
+                    </div>
+                    <div class="active-session-actions">
+                        <button class="modal-btn modal-btn-primary active-session-return" id="active-session-return">return to terminal</button>
+                        <button class="modal-btn modal-btn-secondary active-session-end" id="active-session-end">end session</button>
+                    </div>
+                </div>
+
                 <div class="launchpad-section">
                     <div class="launchpad-section-title">► new project</div>
                     <button class="new-session-btn" id="new-session-btn">
@@ -283,19 +420,7 @@ class Launchpad {
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
-                                <p>Only sessions started under <code>tmux -L cloude</code> appear here.
-                                Attaching to a bash/claude shell that wasn't started under tmux isn't
-                                possible on macOS — Darwin's <code>ptrace(2)</code> doesn't expose the
-                                register/memory primitives that tools like <code>reptyr</code> use on Linux,
-                                and the Mach-port alternative (<code>task_for_pid</code>) requires an
-                                Apple-signed entitlement. <code>lldb</code>, <code>dtrace</code>, and
-                                <code>script</code> were evaluated and don't provide clean PTY reparenting
-                                either. Start your next session with <code>tmux -L cloude new -s &lt;name&gt;</code>
-                                and it'll appear here.</p>
-                                <p>Note: if your existing tmux session already has its own
-                                <code>pipe-pane</code> running (e.g. for logging), our adoption will not
-                                override it — run <code>tmux -L cloude pipe-pane</code> to stop yours first,
-                                then re-click attach.</p>
+                                <p>Only sessions started under <code>tmux -L cloude</code> appear here. Start your next session with <code>tmux -L cloude new -s &lt;name&gt;</code> and it'll appear here.</p>
                             </div>
                         </details>
                     </div>
@@ -345,6 +470,18 @@ class Launchpad {
         document.getElementById('reset-server-btn').addEventListener('click', () => {
             this.resetServer();
         });
+
+        // Active-session banner buttons. Wired once at UI-render time;
+        // refreshActiveSessionBanner() just shows/hides and repopulates
+        // the name/cwd/backend spans — no need to re-bind on every load.
+        const returnBtn = document.getElementById('active-session-return');
+        if (returnBtn) {
+            returnBtn.addEventListener('click', () => this.handleReturnToTerminal());
+        }
+        const endBtn = document.getElementById('active-session-end');
+        if (endBtn) {
+            endBtn.addEventListener('click', () => this.handleEndActiveSession());
+        }
 
         // Note: loadProjects() will be called by App.showLaunchpad()
     }

@@ -737,12 +737,20 @@ class SessionManager:
             active_tunnels=len(self.session.tunnels)
         )
 
+        # Pull tmux_session from the backend when available. The tmux backend
+        # exposes the attribute directly; pty backend does not. Using getattr
+        # with a None default keeps this backend-agnostic.
+        tmux_session_name = (
+            getattr(self.backend, "tmux_session", None) if self.backend else None
+        )
+
         return SessionInfo(
             session=self.session,
             recent_logs=self.get_recent_logs(),
             active_tunnels=self.session.tunnels,
             stats=stats,
             session_backend=self.backend_name,
+            tmux_session=tmux_session_name,
         )
 
     def has_active_session(self) -> bool:
