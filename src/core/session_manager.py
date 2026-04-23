@@ -8,6 +8,7 @@ Backend type (tmux vs PTY) is selected at construction via
 import asyncio
 import json
 import os
+import re
 import base64
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,31 @@ from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
 
 logger = structlog.get_logger()
+
+
+_TMUX_FORBIDDEN_CHARS = re.compile(r"[.:]")
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def _sanitize_tmux_name(name: str) -> str:
+    """Transform a project name into a tmux-safe session name (verbatim where possible).
+
+    tmux forbids only '.' (pane separator) and ':' (window separator) — everything else
+    (spaces, case, unicode, emoji, punctuation) is legal. This helper preserves the
+    original name as closely as possible.
+
+    Rules:
+      1. Replace any '.' or ':' with '_'.
+      2. Collapse runs of whitespace (including newlines/tabs) into a single space.
+      3. Strip leading and trailing whitespace.
+
+    Returns empty string for truly empty/whitespace-only input (caller's fallback signal).
+    """
+    if not name:
+        return ""
+    replaced = _TMUX_FORBIDDEN_CHARS.sub("_", name)
+    collapsed = _WHITESPACE_RUN.sub(" ", replaced)
+    return collapsed.strip()
 
 
 class SessionManager:

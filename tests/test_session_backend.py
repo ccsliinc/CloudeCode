@@ -1544,6 +1544,45 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
                 pass
 
 
+# ---- sanitize_tmux_name -------------------------------------------------
+
+def test_sanitize_tmux_name_preserves_verbatim_input():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("Cloude Code Dev") == "Cloude Code Dev"
+
+
+def test_sanitize_tmux_name_replaces_dot_and_colon():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("Dotted.Name:Thing") == "Dotted_Name_Thing"
+
+
+def test_sanitize_tmux_name_preserves_emoji_and_unicode():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("🔥 cool 🔥") == "🔥 cool 🔥"
+
+
+def test_sanitize_tmux_name_collapses_whitespace_runs():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("   many   spaces   ") == "many spaces"
+
+
+def test_sanitize_tmux_name_returns_empty_for_unusable_input():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("") == ""
+    assert _sanitize_tmux_name("   ") == ""
+    assert _sanitize_tmux_name(":::...") == "______"
+
+
+def test_sanitize_tmux_name_only_separators_yields_underscore_run():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("...") == "___"
+
+
+def test_sanitize_tmux_name_strips_newlines_and_tabs():
+    from src.core.session_manager import _sanitize_tmux_name
+    assert _sanitize_tmux_name("foo\n\tbar") == "foo bar"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

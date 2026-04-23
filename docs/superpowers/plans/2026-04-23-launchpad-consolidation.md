@@ -70,7 +70,7 @@ def test_sanitize_tmux_name_returns_empty_for_unusable_input():
     from src.core.session_manager import _sanitize_tmux_name
     assert _sanitize_tmux_name("") == ""
     assert _sanitize_tmux_name("   ") == ""
-    assert _sanitize_tmux_name(":::...") == "___"  # dots+colons replaced, not empty
+    assert _sanitize_tmux_name(":::...") == "______"  # dots+colons replaced, not empty
 
 
 def test_sanitize_tmux_name_only_separators_yields_underscore_run():
