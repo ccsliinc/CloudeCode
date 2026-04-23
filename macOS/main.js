@@ -350,30 +350,116 @@ function updateMenu() {
         },
         {
           label: 'Show QR for TOTP',
-          click: () => {
-            const fs = require('fs');
-            const qrPath = path.join(serverManager.getProjectRoot(), 'totp-qr.png');
+          click: async () => {
+            // Fetch the QR image live from the running server so it ALWAYS
+            // matches the .env the server was started with — no more stale
+            // on-disk copies out of sync with the active secret.
+            const axios = require('axios');
+            const { BrowserWindow, dialog } = require('electron');
+            const port = serverManager.port || 8000;
+            const url = `http://127.0.0.1:${port}/api/v1/auth/qr`;
 
-            if (fs.existsSync(qrPath)) {
-              // Open QR code image with default viewer
-              shell.openPath(qrPath).then((error) => {
-                if (error) {
-                  const { dialog } = require('electron');
-                  dialog.showMessageBox({
-                    type: 'error',
-                    title: 'Error Opening QR Code',
-                    message: 'Could not open QR code image',
-                    detail: error
-                  });
+            try {
+              const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 5000
+              });
+
+              const qrBase64 = Buffer.from(response.data).toString('base64');
+              const qrDataUrl = `data:image/png;base64,${qrBase64}`;
+
+              const qrWindow = new BrowserWindow({
+                width: 420,
+                height: 520,
+                resizable: false,
+                minimizable: false,
+                maximizable: false,
+                fullscreenable: false,
+                show: false,
+                backgroundColor: '#1a1a1a',
+                title: 'Cloude Code — TOTP QR',
+                webPreferences: {
+                  nodeIntegration: false,
+                  contextIsolation: true,
+                  sandbox: true
                 }
               });
-            } else {
-              const { dialog } = require('electron');
+
+              const html = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <meta charset="utf-8">
+                  <style>
+                    body {
+                      margin: 0;
+                      padding: 32px;
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                      background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+                      color: #ffffff;
+                      display: flex;
+                      flex-direction: column;
+                      align-items: center;
+                      justify-content: center;
+                      height: 100vh;
+                      box-sizing: border-box;
+                    }
+                    h1 {
+                      margin: 0 0 8px 0;
+                      font-size: 22px;
+                      font-weight: 600;
+                      color: #CC785C;
+                    }
+                    p {
+                      margin: 0 0 20px 0;
+                      font-size: 13px;
+                      color: #999;
+                      text-align: center;
+                      max-width: 340px;
+                      line-height: 1.5;
+                    }
+                    .qr {
+                      width: 320px;
+                      height: 320px;
+                      background: #ffffff;
+                      border-radius: 12px;
+                      padding: 14px;
+                      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+                    }
+                    .footer {
+                      margin-top: 20px;
+                      font-size: 11px;
+                      color: #666;
+                    }
+                  </style>
+                </head>
+                <body>
+                  <h1>☁️ Scan with your authenticator</h1>
+                  <p>Google Authenticator, 1Password, Authy — any TOTP app works.</p>
+                  <img src="${qrDataUrl}" class="qr" alt="TOTP QR code" />
+                  <div class="footer">Already set up? You can close this window.</div>
+                </body>
+                </html>
+              `;
+
+              qrWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+              qrWindow.once('ready-to-show', () => {
+                qrWindow.show();
+              });
+              qrWindow.setMenu(null);
+            } catch (err) {
+              const isConnErr = err.code === 'ECONNREFUSED' ||
+                                err.code === 'ETIMEDOUT' ||
+                                err.code === 'ECONNABORTED';
               dialog.showMessageBox({
-                type: 'info',
-                title: 'QR Code Not Found',
-                message: 'TOTP QR code not found',
-                detail: `QR code image does not exist at: ${qrPath}\n\nRun setup_auth.py to generate it.`
+                type: 'error',
+                title: 'QR Code Unavailable',
+                message: isConnErr
+                  ? 'The Cloude Code server isn\'t running.'
+                  : 'Could not fetch TOTP QR code',
+                detail: isConnErr
+                  ? 'Start the server from the menu, then try again.'
+                  : `GET ${url} failed: ${err.message}`
               });
             }
           }
