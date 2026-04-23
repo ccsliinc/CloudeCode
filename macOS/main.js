@@ -361,12 +361,13 @@ function updateMenu() {
 
             try {
               const response = await axios.get(url, {
-                responseType: 'arraybuffer',
                 timeout: 5000
               });
 
-              const qrBase64 = Buffer.from(response.data).toString('base64');
-              const qrDataUrl = `data:image/png;base64,${qrBase64}`;
+              const qrDataUrl = response.data && response.data.qr_image;
+              if (!qrDataUrl || !qrDataUrl.startsWith('data:image/png;base64,')) {
+                throw new Error('Server returned unexpected QR response shape');
+              }
 
               const qrWindow = new BrowserWindow({
                 width: 420,
