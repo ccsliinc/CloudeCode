@@ -63,3 +63,5 @@ htmlcov/
 # Claude
 .prompt_history/
 troubleshooting/
+
+.superpowers/
