@@ -371,7 +371,18 @@ class Launchpad {
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
                     <div class="launchpad-section-title">
                         ► running sessions
-                        <!-- Task 11 will relocate the adopt-disclosure to here -->
+                        <details class="adopt-disclosure">
+                            <summary>?</summary>
+                            <div class="adopt-disclosure-body">
+                                <p>Sessions shown here run on the <code>cloude</code> tmux socket. Start one externally with <code>tmux -L cloude new -s &lt;name&gt;</code> — it'll appear here.</p>
+                                <p>To launch claude in one line:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
+                                <p>The <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
+                                <p>If you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
+                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                            </div>
+                        </details>
                     </div>
                     <div id="running-sessions-list"></div>
                 </div>
