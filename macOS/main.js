@@ -2,12 +2,98 @@ const { app, Tray, Menu, shell, nativeImage } = require('electron');
 const path = require('path');
 const ServerManager = require('./server-manager');
 const LaunchAgentInstaller = require('./launchagent-installer');
+const { bootstrapIfNeeded } = require('./bootstrap');
 
 let tray = null;
 let serverManager = null;
 let launchAgentInstaller = null;
 let statsUpdateInterval = null;
 let currentStats = null;
+
+// Human-readable labels for each bootstrap state, surfaced via tray tooltip.
+// Keep these concise — the tooltip is the ONLY UI surface during first-run
+// provisioning (no modals, no toasts; this is a menu-bar app).
+const BOOTSTRAP_TOOLTIPS = {
+  'checking': 'Cloude Code — checking setup...',
+  'preparing': 'Cloude Code — preparing first-run...',
+  'copying-files': 'Cloude Code — copying server files...',
+  'creating-venv': 'Cloude Code — creating Python venv...',
+  'installing-deps': 'Cloude Code — installing dependencies (60-120s)...',
+  'generating-secrets': 'Cloude Code — generating auth secrets...',
+  'generating-config': 'Cloude Code — writing config...',
+  'ready': 'Cloude Code',
+};
+
+/**
+ * Show the TOTP QR pairing window by fetching it live from the running
+ * server. Used for both the manual menu action and the auto-pop on fresh
+ * installs. Swallows errors silently — caller is responsible for surfacing
+ * them if this is user-initiated.
+ */
+async function showQrPairingWindow() {
+  const axios = require('axios');
+  const { BrowserWindow } = require('electron');
+  const port = serverManager.port || 8000;
+  const url = `http://127.0.0.1:${port}/api/v1/auth/qr`;
+
+  try {
+    const response = await axios.get(url, { timeout: 5000 });
+    const qrDataUrl = response.data && response.data.qr_image;
+    if (!qrDataUrl || !qrDataUrl.startsWith('data:image/png;base64,')) {
+      throw new Error('Server returned unexpected QR response shape');
+    }
+    const qrWindow = new BrowserWindow({
+      width: 420,
+      height: 520,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      show: false,
+      backgroundColor: '#1a1a1a',
+      title: 'Cloude Code — Pair Your Authenticator',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true
+      }
+    });
+    const html = `
+      <!DOCTYPE html><html><head><meta charset="utf-8"><style>
+        body{margin:0;padding:32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          background:linear-gradient(135deg,#1a1a1a 0%,#2d2d2d 100%);color:#fff;display:flex;
+          flex-direction:column;align-items:center;justify-content:center;height:100vh;box-sizing:border-box;}
+        h1{margin:0 0 8px 0;font-size:22px;font-weight:600;color:#CC785C;}
+        p{margin:0 0 20px 0;font-size:13px;color:#999;text-align:center;max-width:340px;line-height:1.5;}
+        .qr{width:320px;height:320px;background:#fff;border-radius:12px;padding:14px;
+          box-shadow:0 8px 32px rgba(0,0,0,0.4);}
+        .footer{margin-top:20px;font-size:11px;color:#666;}
+      </style></head><body>
+        <h1>☁️ Welcome to Cloude Code</h1>
+        <p>Scan this QR with Google Authenticator, 1Password, Authy — any TOTP app.</p>
+        <img src="${qrDataUrl}" class="qr" alt="TOTP QR code" />
+        <div class="footer">Paired already? You can close this window.</div>
+      </body></html>`;
+    qrWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    qrWindow.once('ready-to-show', () => qrWindow.show());
+    qrWindow.setMenu(null);
+  } catch (err) {
+    console.warn('[first-run] could not auto-show QR:', err.message);
+  }
+}
+
+/**
+ * Poll health endpoint until server is ready or timeout.
+ */
+async function waitForServerHealth(timeoutMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const health = await serverManager.getHealth();
+    if (health) return true;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
 
 /**
  * Show About dialog with app info and GitHub link
@@ -162,10 +248,58 @@ app.whenReady().then(async () => {
   serverManager = new ServerManager();
   launchAgentInstaller = new LaunchAgentInstaller();
 
-  // Create tray icon
+  // Create tray icon FIRST so the user sees the app is alive even if first-run
+  // provisioning takes 60-120s (pip install). No progress bars, no modals —
+  // the tray tooltip is our only status surface.
   createTray();
 
-  // Start server automatically
+  // First-run auto-provisioning. Packaged app bundles server resources under
+  // app.getAppPath()/../ (i.e. <Contents>/Resources/). ServerManager already
+  // stages them to Application Support/Cloude Code/server/ — but bootstrap
+  // completes the picture by adding venv + .env + config.json + deps-hash.
+  const serverDir = path.join(app.getPath('userData'), 'server');
+  const bundleResourcesDir = app.isPackaged
+    ? path.join(app.getAppPath(), '..')  // packaged: <Contents>/Resources/
+    : path.join(__dirname, '..');         // dev: project root
+  const bootstrapResult = await bootstrapIfNeeded({
+    serverDir,
+    bundleResourcesDir,
+    onStateChange: (state) => {
+      const tooltip = BOOTSTRAP_TOOLTIPS[state] || `Cloude Code — ${state}`;
+      if (tray) tray.setToolTip(tooltip);
+      console.log('[bootstrap]', state);
+    },
+  });
+
+  if (bootstrapResult.status === 'python-missing') {
+    const { dialog, clipboard } = require('electron');
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: 'Python 3.12+ required',
+      message: 'Cloude Code needs Python 3.12 or later.',
+      detail: 'Install via Homebrew:\n\n  brew install python@3.12\n\nThen re-launch Cloude Code.',
+      buttons: ['Copy command', 'Quit'],
+      defaultId: 0,
+    });
+    if (result.response === 0) {
+      clipboard.writeText('brew install python@3.12');
+    }
+    app.quit();
+    return;
+  }
+
+  if (bootstrapResult.status === 'error') {
+    const { dialog } = require('electron');
+    dialog.showErrorBox(
+      'Cloude Code setup failed',
+      bootstrapResult.details || 'Unknown error during first-run provisioning. Check Console.app for [bootstrap] logs.'
+    );
+    app.quit();
+    return;
+  }
+
+  // Start server automatically (ensureServerFiles + ensureVenv inside are
+  // idempotent and will short-circuit since bootstrap already did the work).
   await serverManager.start();
 
   // Force immediate health check to sync state before first menu update
@@ -183,6 +317,20 @@ app.whenReady().then(async () => {
 
   // Start polling for stats
   startStatsPolling();
+
+  // Fresh install: auto-pop the TOTP QR so the user pairs their authenticator
+  // before they ever need to log in. Fire-and-forget; server health poll has
+  // a 30s ceiling.
+  if (bootstrapResult.freshInstall) {
+    console.log('[first-run] fresh install detected, awaiting server health before showing QR');
+    waitForServerHealth().then((ok) => {
+      if (ok) {
+        showQrPairingWindow();
+      } else {
+        console.warn('[first-run] server did not become healthy in time; skipping auto-QR');
+      }
+    });
+  }
 
   console.log('App ready!');
 });
