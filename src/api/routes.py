@@ -66,6 +66,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             copy_templates=body.copy_templates,
             initial_cols=body.cols,
             initial_rows=body.rows,
+            project_name=body.project_name,
         )
 
         # Move this project to the top of the list (most recently used)

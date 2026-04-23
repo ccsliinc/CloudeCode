@@ -19,6 +19,7 @@ import structlog
 from src.config import settings
 from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEntry
 from src.core.session_backend import SessionBackend, build_backend
+from src.core.tmux_backend import SESSION_PREFIX
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
@@ -445,6 +446,7 @@ class SessionManager:
         copy_templates: bool = False,
         initial_cols: Optional[int] = None,
         initial_rows: Optional[int] = None,
+        project_name: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -457,6 +459,15 @@ class SessionManager:
         Both must be supplied together or both omitted; backends fall back
         to their own defaults otherwise. The WS resize handshake reshapes
         later regardless — these are strictly a birth-time optimization.
+
+        ``project_name`` (optional) is the human-readable project label from
+        the launchpad. When supplied and non-empty after sanitization, the
+        resulting tmux session is named ``cloude_<sanitized name>`` verbatim
+        instead of falling back to the legacy ``cloude_ses_<hex>`` derivation
+        keyed off ``session_id``. An empty/whitespace-only value (or one that
+        sanitizes to empty) silently falls back to legacy naming — this is
+        by design so the launchpad can always send the field without special-
+        casing blanks. PTYBackend ignores the override entirely.
         """
         if self.has_active_session():
             raise ValueError("A session is already running. Stop it before creating a new one.")
@@ -499,6 +510,15 @@ class SessionManager:
             except Exception as e:
                 logger.error("template_copy_error", error=str(e))
 
+        # Derive a verbatim tmux session-name override from project_name when
+        # supplied. Empty sanitized result → None (fall back to legacy hex
+        # naming via the backend's own slug derivation from session_id).
+        tmux_session_name: Optional[str] = None
+        if project_name:
+            sanitized = _sanitize_tmux_name(project_name)
+            if sanitized:
+                tmux_session_name = f"{SESSION_PREFIX}{sanitized}"
+
         try:
             # Build a fresh backend for the new session.
             self.backend = build_backend(
@@ -506,6 +526,7 @@ class SessionManager:
                 session_id=session_id,
                 working_dir=work_path,
                 on_output=self._handle_backend_output,
+                session_name=tmux_session_name,
             )
 
             if auto_start_claude:

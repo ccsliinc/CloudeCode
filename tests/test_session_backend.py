@@ -1629,6 +1629,89 @@ def test_create_session_request_project_name_defaults_to_none():
     assert req.project_name is None
 
 
+# ---- Task 4: project_name end-to-end plumbing ---------------------------
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_session_manager_create_session_verbatim_name(tmp_path, monkeypatch):
+    """create_session(project_name="T4 Verbatim Test") must yield
+    tmux_session == "cloude_T4 Verbatim Test" — project_name flows through
+    SessionManager → build_backend → TmuxBackend verbatim (with prefix).
+    """
+    from src.core.session_manager import SessionManager
+
+    # Sandbox so we don't touch a real metadata file.
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    session_id = f"t4verbatim_{secrets.token_hex(4)}"
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+    try:
+        await sm.create_session(
+            session_id=session_id,
+            working_dir=str(tmp_path),
+            auto_start_claude=False,
+            copy_templates=False,
+            project_name="T4 Verbatim Test",
+        )
+        assert sm.backend is not None
+        assert sm.backend.tmux_session == "cloude_T4 Verbatim Test", (
+            f"expected verbatim tmux_session cloude_T4 Verbatim Test, "
+            f"got {sm.backend.tmux_session!r}"
+        )
+    finally:
+        if sm.backend is not None:
+            try:
+                await sm.destroy_session()
+            except Exception:
+                # Belt-and-suspenders: kill by literal name in case
+                # destroy_session fails mid-teardown.
+                subprocess.run(
+                    ["tmux", "-L", "cloude", "kill-session",
+                     "-t", "cloude_T4 Verbatim Test"],
+                    check=False,
+                    capture_output=True,
+                )
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_session_manager_create_session_without_project_name_uses_legacy(
+    tmp_path, monkeypatch
+):
+    """create_session without project_name → legacy ``cloude_ses_<hex>``
+    naming is preserved (backward compat — nothing else should change).
+    """
+    from src.core.session_manager import SessionManager
+
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    session_id = f"ses_{secrets.token_hex(4)}"
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+    try:
+        await sm.create_session(
+            session_id=session_id,
+            working_dir=str(tmp_path),
+            auto_start_claude=False,
+            copy_templates=False,
+        )
+        assert sm.backend is not None
+        assert sm.backend.tmux_session.startswith("cloude_ses_"), (
+            f"expected legacy cloude_ses_<hex> naming, "
+            f"got {sm.backend.tmux_session!r}"
+        )
+    finally:
+        if sm.backend is not None:
+            try:
+                await sm.destroy_session()
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

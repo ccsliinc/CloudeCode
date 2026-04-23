@@ -207,6 +207,7 @@ def build_backend(
     session_id: str,
     working_dir: Path,
     on_output: Optional[Callable[[bytes], Any]] = None,
+    session_name: Optional[str] = None,
 ) -> SessionBackend:
     """Factory. Picks a backend based on settings + tmux availability.
 
@@ -217,6 +218,13 @@ def build_backend(
         session_id: Passed through to the backend.
         working_dir: Passed through to the backend.
         on_output: Passed through to the backend.
+        session_name: Optional verbatim tmux session name override. When
+            supplied AND the selected backend is tmux, this is used as
+            the literal ``tmux_session`` attribute instead of the legacy
+            ``cloude_<slug>`` derivation. Ignored by ``PTYBackend`` (PTY
+            has no concept of a named session). Callers must already have
+            sanitized the name and included the ``cloude_`` prefix —
+            ``SessionManager.create_session`` is the canonical source.
 
     Returns:
         A concrete `SessionBackend` instance. Never raises on missing tmux.
@@ -255,7 +263,9 @@ def build_backend(
     # auto, or explicit tmux with binary present
     if tmux_available:
         logger.info("session_backend_selected", backend="tmux", reason=requested)
-        return TmuxBackend(session_id, working_dir, on_output)
+        return TmuxBackend(
+            session_id, working_dir, on_output, session_name=session_name
+        )
 
     logger.warning(
         "session_backend_auto_fallback_to_pty",
