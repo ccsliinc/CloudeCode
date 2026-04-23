@@ -309,8 +309,10 @@ class Launchpad {
      *
      * Flow:
      *   1. If a session is active (cheap local check + server-authoritative
-     *      cross-check), prompt for teardown confirmation.
-     *   2. Call the adopt endpoint — server handles the destroy + rebirth.
+     *      cross-check), prompt for detach confirmation. Switching never
+     *      kills — the prior session stays alive in tmux and the user can
+     *      re-adopt it later from the banner or Adopt list.
+     *   2. Call the adopt endpoint — server detaches prior, attaches new.
      *   3. On success, dispatch `session-created` with the adopt-specific
      *      detail payload so App.showTerminal() can plumb scrollback to
      *      the terminal controller.
@@ -321,7 +323,7 @@ class Launchpad {
         console.log('Launchpad: attach click for', name);
 
         // Check active session. Local flag is cheap; if set OR the server
-        // says we have one, we must confirm teardown.
+        // says we have one, we must confirm detach.
         let hasActive = !!(window.TerminalController && window.TerminalController.sessionActive);
         let activeDesc = null;
         try {
@@ -340,11 +342,15 @@ class Launchpad {
         }
 
         if (hasActive) {
-            const descSuffix = activeDesc ? ` "${this._escapeHtml(activeDesc)}"` : '';
+            const currentLabel = activeDesc
+                ? this._escapeHtml(activeDesc)
+                : (this._getCurrentSessionLabel() || 'running session');
             const ok = await this.showConfirmModal(
-                'end current session?',
-                `attaching to "${this._escapeHtml(name)}" will end your current session${descSuffix}.`,
-                'your current session\'s tmux pane will be killed. the external session you\'re adopting keeps running — detaching from the web UI later will not kill it.'
+                'switch session?',
+                `attaching to "${this._escapeHtml(name)}" will detach from your current session "${currentLabel}".`,
+                'the tmux session will keep running — you can rejoin it later from the existing-projects list or banner. cancel to stay on the launchpad with the banner intact.',
+                `attach to ${name}`,
+                'cancel'
             );
             if (!ok) {
                 console.log('Launchpad: adopt cancelled by user');
@@ -370,8 +376,8 @@ class Launchpad {
             console.error('Launchpad: adopt failed:', error);
             // 409 = race between our local check and the server's view.
             // The server's message is already descriptive; surface it.
-            if (error && /409|confirm_teardown|Active session/i.test(error.message || '')) {
-                this.showError('another session is active — refresh and try again, or destroy the current session first.');
+            if (error && /409|confirm_detach|Active session/i.test(error.message || '')) {
+                this.showError('another session is active — refresh and try again, or end the current session first from the banner.');
             } else {
                 this.showError(`failed to adopt "${name}": ${error.message || error}`);
             }

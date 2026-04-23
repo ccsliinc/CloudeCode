@@ -926,15 +926,16 @@ class SessionManager:
         )
 
     async def adopt_external_session(
-        self, name: str, confirm_teardown: bool = False
+        self, name: str, confirm_detach: bool = False
     ) -> dict:
         """Adopt an externally-created tmux session on our socket.
 
         Ordered sequence (plan v3 — fixes the scrollback/WS race):
 
           1. Gate on single-active invariant: if a session is live and
-             ``confirm_teardown`` is False, raise 409. If confirmed,
-             destroy the prior backend (logged).
+             ``confirm_detach`` is False, raise 409. If confirmed,
+             DETACH the prior backend (Python-side handles torn down,
+             tmux session kept alive — user can re-adopt it later).
           2. Build a ``TmuxBackend.for_external(name, ...)`` instance.
           3. ``attach_existing(needs_pipe_setup=True)`` — starts pipe-pane
              BEFORE any scrollback capture so the FIFO is warm.
@@ -948,12 +949,18 @@ class SessionManager:
           6. Register the backend and stash the offset on ``self`` for
              the WS handler to consume.
 
+        Switching never kills. Destruction only happens via the explicit
+        destroy button. The prior session's tmux pane remains alive on
+        the ``-L cloude`` socket and its entry in ``owned_tmux_sessions``
+        stays intact so it re-appears in the Adopt list tagged
+        ``created_by_cloude=True``.
+
         The adopted session is NOT added to ``owned_tmux_sessions`` —
         it isn't ours, we're borrowing it.
 
         Args:
             name: literal tmux session name as shown in the launchpad.
-            confirm_teardown: explicit consent to destroy the current
+            confirm_detach: explicit consent to detach from the current
                 active session if any. False + active session = 409.
 
         Returns:
@@ -963,24 +970,27 @@ class SessionManager:
 
         Raises:
             HTTPException(409): active session exists and
-                ``confirm_teardown`` wasn't explicitly True.
+                ``confirm_detach`` wasn't explicitly True.
             RuntimeError: pane already dead, or pipe-pane setup failed.
             ValueError: if ``name`` contains tmux target separators.
         """
-        if self.has_active_session() and not confirm_teardown:
+        if self.has_active_session() and not confirm_detach:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Active session will be destroyed; "
-                    "retry with confirm_teardown=True"
+                    "Active session will be detached (kept alive in tmux); "
+                    "retry with confirm_detach=True"
                 ),
             )
         if self.has_active_session():
             prior = self.session.id if self.session else "?"
             logger.info(
-                "session_swapped_for_adopt", prior=prior, new=name
+                "session_swapped_for_adopt",
+                prior=prior,
+                new=name,
+                action="detach",
             )
-            await self.destroy_session()
+            await self.detach_current_session()
 
         # Resolve the adopted pane's cwd via a one-shot tmux probe. We
         # use this for metadata display only — we never chdir.

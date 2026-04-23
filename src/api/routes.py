@@ -197,18 +197,20 @@ async def list_attachable_sessions(request: Request):
 async def adopt_session(request: Request, body: AdoptSessionRequest):
     """Adopt an externally-started tmux session into Cloude Code's active slot.
 
-    Returns 409 if a session is already active and ``confirm_teardown`` is
+    Returns 409 if a session is already active and ``confirm_detach`` is
     False — the client must present a confirmation modal and retry with
-    ``confirm_teardown=True``. Other failures (pane dead, tmux not running,
-    unsafe session name) propagate as 500 via the app's error middleware;
-    we deliberately do NOT wrap them here — keep handlers clean.
+    ``confirm_detach=True``. Switching never kills the prior session; it
+    detaches (tmux stays alive, re-adoptable). Destruction only happens
+    via the explicit destroy button. Other failures (pane dead, tmux not
+    running, unsafe session name) propagate as 500 via the app's error
+    middleware; we deliberately do NOT wrap them here — keep handlers clean.
     """
     session_manager = request.app.state.session_manager
 
     logger.info(
         "api_adopt_session_request",
         session_name=body.session_name,
-        confirm_teardown=body.confirm_teardown,
+        confirm_detach=body.confirm_detach,
     )
 
     # ``adopt_external_session`` raises HTTPException(409) directly when the
@@ -217,7 +219,7 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
     # AdoptSessionResponse, so ``**result`` wires straight through pydantic.
     result = await session_manager.adopt_external_session(
         name=body.session_name,
-        confirm_teardown=body.confirm_teardown,
+        confirm_detach=body.confirm_detach,
     )
 
     return AdoptSessionResponse(**result)

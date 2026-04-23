@@ -379,23 +379,25 @@ class API {
      * Client paints the scrollback into xterm BEFORE opening the WS so
      * the tailer's seek-to-offset doesn't cause a tear.
      *
-     * If the user has an active session and `confirmTeardown` is false,
+     * If the user has an active session and `confirmDetach` is false,
      * the server returns 409 — caller should show a confirmation modal
-     * and retry with `confirmTeardown=true`.
+     * and retry with `confirmDetach=true`. The prior session is detached
+     * (tmux keeps running), never killed. Destruction is only via the
+     * explicit destroy button.
      *
      * @param {string} sessionName - tmux session name (as seen in launchpad)
-     * @param {boolean} confirmTeardown - user consented to destroying the
-     *   current session to make room for the adopted one. Required when
-     *   any session is already active.
+     * @param {boolean} confirmDetach - user consented to detaching from
+     *   the current session so the adopted one can take the active slot.
+     *   Required when any session is already active.
      * @returns {Promise<{session: object, initial_scrollback_b64: string,
      *   fifo_start_offset: number}>}
      */
-    async adoptSession(sessionName, confirmTeardown = false) {
+    async adoptSession(sessionName, confirmDetach = false) {
         return await this.call('/sessions/adopt', {
             method: 'POST',
             body: {
                 session_name: sessionName,
-                confirm_teardown: confirmTeardown,
+                confirm_detach: confirmDetach,
             },
         });
     }

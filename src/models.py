@@ -166,8 +166,11 @@ class DirectoryEntry(BaseModel):
 #
 # ``AttachableSession`` is the shape of each row in the launchpad "Adopt an
 # external session" list. ``AdoptSessionRequest`` is the POST body for the
-# adopt endpoint; ``confirm_teardown`` is the explicit consent flag required
-# when an active session already exists (409-on-false semantics). The
+# adopt endpoint; ``confirm_detach`` is the explicit consent flag required
+# when an active session already exists (409-on-false semantics). The prior
+# session is DETACHED — tmux keeps running, the user can re-adopt it from
+# the launchpad list later. Destruction only happens via the explicit
+# destroy button, never as a side effect of switching sessions. The
 # response embeds the existing ``Session`` model plus a base64-encoded
 # scrollback blob (binary-safe over JSON) and the FIFO byte offset the WS
 # tailer must seek to so the client never sees a scrollback-vs-stream
@@ -194,12 +197,14 @@ class AdoptSessionRequest(BaseModel):
     session_name: str = Field(
         ..., description="Literal tmux session name to adopt"
     )
-    confirm_teardown: bool = Field(
+    confirm_detach: bool = Field(
         False,
         description=(
-            "Explicit consent to tear down an already-active session before "
-            "adopting. Required (must be True) when a session is live; the "
-            "server returns 409 otherwise."
+            "Explicit consent to detach from an already-active session "
+            "before adopting. The prior session's tmux pane stays alive "
+            "on the socket and can be re-adopted later. Required (must "
+            "be True) when a session is live; the server returns 409 "
+            "otherwise."
         ),
     )
 

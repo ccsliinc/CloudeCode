@@ -988,14 +988,14 @@ def test_for_external_rejects_unsafe_session_name():
         )
 
 
-# ---- Test 4: adopt_external_session 409 / teardown-on-confirm -----------
+# ---- Test 4: adopt_external_session 409 / detach-on-confirm -------------
 
 
 @pytest.mark.asyncio
 async def test_adopt_external_session_raises_409_without_confirm():
     """If a session is already active, adopt must raise HTTPException(409)
-    unless ``confirm_teardown=True`` — silent teardown of a user's live
-    session is unacceptable.
+    unless ``confirm_detach=True`` — silent detach of a user's live
+    session is unacceptable (the user should see the swap modal first).
     """
     from fastapi import HTTPException
 
@@ -1009,23 +1009,25 @@ async def test_adopt_external_session_raises_409_without_confirm():
     sm.has_active_session = MagicMock(return_value=True)  # type: ignore[assignment]
 
     with pytest.raises(HTTPException) as excinfo:
-        await sm.adopt_external_session("some_external", confirm_teardown=False)
+        await sm.adopt_external_session("some_external", confirm_detach=False)
 
     assert excinfo.value.status_code == 409, (
-        f"expected 409 when active session exists and confirm_teardown=False, "
+        f"expected 409 when active session exists and confirm_detach=False, "
         f"got {excinfo.value.status_code}"
     )
-    assert "confirm_teardown" in excinfo.value.detail.lower(), (
-        f"409 detail should mention confirm_teardown; got {excinfo.value.detail!r}"
+    assert "confirm_detach" in excinfo.value.detail.lower(), (
+        f"409 detail should mention confirm_detach; got {excinfo.value.detail!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_adopt_external_session_tears_down_prior_when_confirmed():
-    """With ``confirm_teardown=True``, adopt must invoke destroy_session on
-    the prior backend BEFORE building the new one. Mocks the TmuxBackend
-    factory so we don't touch tmux at all — this is purely a control-flow
-    test of the adopt sequence.
+async def test_adopt_external_session_detaches_prior_when_confirmed():
+    """With ``confirm_detach=True``, adopt must invoke ``detach_current_session``
+    (NOT ``destroy_session``) on the prior backend BEFORE building the new
+    one. Switching never kills — the prior tmux session stays alive so the
+    user can re-adopt it later. Destruction is only via the explicit
+    destroy button. Mocks the TmuxBackend factory so we don't touch tmux
+    at all — this is purely a control-flow test of the adopt sequence.
     """
     from src.core.session_manager import SessionManager
     from src.models import Session, SessionStatus
@@ -1034,7 +1036,7 @@ async def test_adopt_external_session_tears_down_prior_when_confirmed():
         sm = SessionManager()
 
     # Pretend there's an active session. has_active_session() must report
-    # True initially so the confirm-gate sees it and triggers destroy.
+    # True initially so the confirm-gate sees it and triggers detach.
     sm.session = Session(
         id="prior_session",
         pty_pid=None,
@@ -1047,7 +1049,10 @@ async def test_adopt_external_session_tears_down_prior_when_confirmed():
     sm.backend.is_alive = MagicMock(return_value=True)
     sm.backend.tmux_session = "cloude_prior"
 
-    # Track destroy call.
+    # Track detach call. The old destroy path must NOT be invoked —
+    # destruction is reserved for the explicit destroy button.
+    detach_mock = AsyncMock(return_value=True)
+    sm.detach_current_session = detach_mock  # type: ignore[assignment]
     destroy_mock = AsyncMock(return_value=True)
     sm.destroy_session = destroy_mock  # type: ignore[assignment]
 
@@ -1075,10 +1080,16 @@ async def test_adopt_external_session_tears_down_prior_when_confirmed():
 
         result = await sm.adopt_external_session(
             "external_target",
-            confirm_teardown=True,
+            confirm_detach=True,
         )
 
-    destroy_mock.assert_awaited_once(), "destroy_session must be awaited on confirmed teardown"
+    detach_mock.assert_awaited_once(), (
+        "detach_current_session must be awaited on confirmed detach"
+    )
+    destroy_mock.assert_not_awaited(), (
+        "destroy_session must NEVER be called on adopt-swap — "
+        "switching is detach-only; destruction is only via the destroy button"
+    )
     assert "session" in result, "adopt response must contain 'session'"
     assert "initial_scrollback_b64" in result, "adopt response must contain 'initial_scrollback_b64'"
     assert "fifo_start_offset" in result, "adopt response must contain 'fifo_start_offset'"
@@ -1130,7 +1141,7 @@ async def test_adopt_external_session_refuses_dead_pane():
         mock_settings.load_auth_config.return_value = auth_cfg
 
         with pytest.raises(RuntimeError, match="pane already dead"):
-            await sm.adopt_external_session("foo", confirm_teardown=True)
+            await sm.adopt_external_session("foo", confirm_detach=True)
 
 
 # ---- Test 6: lifespan_startup honors owned_tmux_sessions + legacy fallback
@@ -1293,7 +1304,7 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
         # Let the echo land in the pane.
         await asyncio.sleep(0.6)
 
-        result = await sm.adopt_external_session(name, confirm_teardown=True)
+        result = await sm.adopt_external_session(name, confirm_detach=True)
 
         # Contract assertions on the response shape.
         assert "session" in result
@@ -1430,6 +1441,107 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
             check=False,
             capture_output=True,
         )
+
+
+# ---- Test N+1: adopt-swap detaches prior (keeps it alive) ---------------
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
+    tmp_path, monkeypatch
+):
+    """Adopt-swap must DETACH the prior active session, not destroy it.
+
+    Switching never kills — only the explicit destroy button should kill
+    tmux. This test encodes that invariant end-to-end against a real
+    ``tmux -L cloude`` socket:
+
+      1. Create a cloude-owned session A via ``create_session``.
+      2. Create an external session B via ``tmux new -d -s B``.
+      3. Call ``adopt_external_session(B, confirm_detach=True)``.
+      4. Assert ``has-session A`` still returns 0 (alive).
+      5. Assert ``sm.backend.tmux_session == B``.
+    """
+    from src.core.session_manager import SessionManager
+
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+
+    session_id_a = f"swap_prior_{secrets.token_hex(4)}"
+    name_b = f"swap_ext_{secrets.token_hex(4)}"
+    tmux_name_a: str | None = None
+
+    try:
+        # --- Step 1: bring up cloude-owned session A on the real socket.
+        await sm.create_session(
+            session_id=session_id_a,
+            working_dir=str(tmp_path),
+            auto_start_claude=False,
+        )
+        assert sm.backend is not None, "A must be the active backend"
+        tmux_name_a = sm.backend.tmux_session
+        assert tmux_name_a in sm.owned_tmux_sessions
+
+        alive_a_before = subprocess.run(
+            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name_a],
+            capture_output=True,
+        )
+        assert alive_a_before.returncode == 0, (
+            "baseline: prior session A must be alive before adopt-swap"
+        )
+
+        # --- Step 2: spawn external session B (the target of the adopt).
+        subprocess.run(
+            ["tmux", "-L", "cloude", "new-session", "-d", "-s", name_b],
+            check=True,
+            capture_output=True,
+        )
+
+        # --- Step 3: adopt-swap with explicit consent to detach.
+        result = await sm.adopt_external_session(name_b, confirm_detach=True)
+        assert "session" in result
+        assert sm.backend is not None
+        assert sm.backend.tmux_session == name_b, (
+            f"post-swap backend must point at B={name_b!r}, "
+            f"got {sm.backend.tmux_session!r}"
+        )
+
+        # --- Step 4: the INVARIANT — A's tmux session is STILL ALIVE.
+        alive_a_after = subprocess.run(
+            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name_a],
+            capture_output=True,
+        )
+        assert alive_a_after.returncode == 0, (
+            f"prior session A={tmux_name_a!r} must still be alive after "
+            "adopt-swap (detach-not-destroy); "
+            f"stderr={alive_a_after.stderr.decode(errors='replace')!r}"
+        )
+
+        # --- Step 5: A stays in owned_tmux_sessions so the Adopt UI
+        # re-offers it tagged created_by_cloude=True.
+        assert tmux_name_a in sm.owned_tmux_sessions, (
+            "owned_tmux_sessions entry for A must survive adopt-swap "
+            "so the launchpad re-lists A as cloude-owned"
+        )
+
+    finally:
+        # Clean up both sessions; ignore failures (e.g. already gone).
+        for tname in filter(None, [tmux_name_a, name_b]):
+            subprocess.run(
+                ["tmux", "-L", "cloude", "kill-session", "-t", tname],
+                check=False,
+                capture_output=True,
+            )
+        # Tear down the adopted backend to avoid a leaked tail task.
+        if sm.backend is not None:
+            try:
+                await sm.backend.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
