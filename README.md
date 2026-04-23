@@ -284,6 +284,94 @@ A third mode where the FastAPI server runs in Docker and the Claude process runs
 
 ---
 
+## Launching Claude with a custom alias
+
+If you use a custom shell alias or function to launch Claude (e.g. `cld` for
+`claude --dangerously-skip-permissions`), you can't just pass the alias name
+as the tmux session's inline command — tmux spawns a *non-interactive*
+shell for inline commands, which does NOT source your `~/.zshrc` or
+`~/.bashrc`. Aliases defined there are invisible. The `exec $SHELL` tail
+drops you into an interactive shell *after* the command fails, which is
+what makes the failure mode extra misleading — you land at a prompt where
+`cld` works fine, but the launcher already bailed with `command not found`.
+
+The fix: force tmux to spawn an *interactive* shell via `$SHELL -ic '...'`.
+The `-i` flag tells the shell to source your rc file before running the
+command.
+
+### Quick form
+
+Run this directly from any terminal on the Mac hosting Cloude Code:
+
+```bash
+tmux -L cloude new -s mywork "$SHELL -ic 'cld; exec $SHELL'"
+```
+
+Breakdown:
+- `-L cloude` — tmux's dedicated socket for Cloude Code (required for the
+  web UI to discover the session)
+- `-s mywork` — the session name (will appear in the launchpad's
+  "Adopt an external session" list)
+- `$SHELL -ic '...'` — interactive shell, sources `~/.zshrc` or `~/.bashrc`
+- `cld; exec $SHELL` — run your custom launcher, then when it exits
+  replace the shell process with a fresh interactive shell so the pane
+  stays alive and you land at a prompt
+
+### Reusable shell function
+
+Add this to your `~/.zshrc` or `~/.bashrc` so you can launch with one short
+command:
+
+```bash
+cloude() {
+    local name="${1:-mywork}"
+    local dir="${2:-$PWD}"
+    tmux -L cloude new -s "$name" -c "$dir" "$SHELL -ic 'cld; exec $SHELL'"
+}
+```
+
+Usage:
+
+```bash
+cloude                                    # session "mywork" in current dir
+cloude api                                # session "api" in current dir
+cloude api ~/projects/some-repo           # session "api" in that repo
+```
+
+Detach the CLI with `Ctrl+B d` and the Cloude Code launchpad will list the
+session under "Adopt an external session".
+
+### If your launcher is a function, not an alias
+
+Shell functions defined in your rc file work the same way — `$SHELL -ic`
+sources the rc and makes the function available:
+
+```bash
+# in ~/.zshrc
+claude-fast() {
+    claude --dangerously-skip-permissions --model opus-4-7 "$@"
+}
+
+# then:
+tmux -L cloude new -s mywork "$SHELL -ic 'claude-fast; exec $SHELL'"
+```
+
+### Why not source ~/.zshrc directly?
+
+You can — `"source ~/.zshrc && cld; exec $SHELL"` also works. But `-ic` is
+shorter, matches the mental model of "open an interactive shell and run
+this," and handles both zsh and bash uniformly without caring which rc
+file lives where.
+
+### Why not put the alias in ~/.zshenv?
+
+`~/.zshenv` IS sourced by non-interactive shells, so the original
+`tmux -L cloude new -s mywork "cld; exec $SHELL"` form would work if `cld`
+lives there. But `.zshenv` runs for every zsh invocation including scripts,
+so putting slow stuff there is painful. Aliases are cheap — your call.
+
+---
+
 ## Configuration
 
 ### Environment variables (`.env`)

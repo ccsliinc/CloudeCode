@@ -424,6 +424,9 @@ class Launchpad {
                                 <p>To launch claude in one line, pipe it in as the pane's root command:</p>
                                 <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec $SHELL"</code></pre>
                                 <p>The <code>exec $SHELL</code> trick keeps the pane alive with a shell prompt after claude exits — otherwise the pane closes with claude.</p>
+                                <p>Using a custom launcher alias (e.g. <code>cld</code>) from your <code>~/.zshrc</code> or <code>~/.bashrc</code>? tmux spawns a non-interactive shell by default, so your alias won't resolve. Wrap the command in an interactive shell:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "$SHELL -ic 'cld; exec $SHELL'"</code></pre>
+                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCodeDev#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
                             </div>
                         </details>
                     </div>
