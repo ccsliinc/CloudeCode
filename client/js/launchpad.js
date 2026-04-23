@@ -65,7 +65,7 @@ class Launchpad {
         // Failure here is non-fatal — it just means the adopt section shows
         // its empty state instead of listing external sessions.
         this.loadAttachableSessions();
-        // Refresh the "currently attached" banner. The user may have
+        // Refresh the "session running" banner. The user may have
         // destroyed / timed-out the session from another tab between
         // launchpad visits, so every entry re-fetches authoritatively.
         this.refreshActiveSessionBanner();
@@ -389,7 +389,7 @@ class Launchpad {
 
                 <div class="active-session-banner" id="active-session-banner" hidden>
                     <div class="active-session-info">
-                        <div class="active-session-title">▶ currently attached: <span class="active-session-name"></span></div>
+                        <div class="active-session-title" title="Your browser has detached but the tmux session is still alive on the server. Click Return to re-attach and continue streaming.">⏸ session running: <span class="active-session-name"></span></div>
                         <div class="active-session-meta">
                             <span class="active-session-cwd"></span>
                             <span class="active-session-sep"> · </span>
@@ -616,10 +616,12 @@ class Launchpad {
      * Show confirmation modal
      * @param {string} title - Modal title
      * @param {string} message - Main message
-     * @param {string} details - Additional details (optional)
-     * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+     * @param {string} [details] - Additional details (optional)
+     * @param {string} [primaryLabel='confirm'] - Label for the primary (destructive / intent) button
+     * @param {string} [secondaryLabel='cancel'] - Label for the safe no-op button
+     * @returns {Promise<boolean>} - True if confirmed, false if cancelled. Cancel is ALWAYS a no-op — callers must never map cancel to a destructive action.
      */
-    showConfirmModal(title, message, details = null) {
+    showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
         return new Promise((resolve) => {
             // Create modal overlay
             const overlay = document.createElement('div');
@@ -634,8 +636,8 @@ class Launchpad {
                         ${details ? `<div class="modal-description">${details}</div>` : ''}
                     </div>
                     <div class="modal-footer">
-                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">${this._escapeHtml(secondaryLabel)}</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${this._escapeHtml(primaryLabel)}</button>
                     </div>
                 </div>
             `;
@@ -732,15 +734,23 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to create session:', error);
 
-            // If session already exists, offer to connect or destroy
+            // If a session already exists, the user's stated intent was
+            // "create a new project". Primary = carry out that intent
+            // (destroy + create). Cancel = safe no-op. Rejoin the running
+            // session via the banner's "return to terminal" button.
             if (error.message.includes('already running')) {
-                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and create new)')) {
-                    // Connect to existing session
-                    this.connectToExistingSession();
-                } else {
-                    // Destroy and recreate
+                const currentName = this._getCurrentSessionLabel() || 'running session';
+                const confirmed = await this.showConfirmModal(
+                    'switch session?',
+                    `creating a new project will end your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will be killed. to keep it instead, cancel and use "return to terminal" on the banner above.',
+                    'create new session',
+                    'cancel'
+                );
+                if (confirmed) {
                     this.destroyAndCreateNew();
                 }
+                // Cancelled → deliberate no-op.
             } else {
                 this.showError('failed to create session: ' + error.message);
             }
@@ -1202,19 +1212,49 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to open project:', error);
 
-            // If session already exists, offer to connect or destroy
+            // If a session already exists, offer to SWAP to the project the
+            // user just clicked. Primary button = user's stated intent
+            // (open the new project, which requires killing the old tmux
+            // session). Cancel = strict no-op: stays on the launchpad, the
+            // banner still shows the running session, user can rejoin it
+            // via the banner's "Return to terminal" button if they want.
             if (error.message.includes('already running')) {
-                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and open this project)')) {
-                    // Connect to existing session
-                    this.connectToExistingSession();
-                } else {
-                    // Destroy and recreate with this project
+                const currentName = this._getCurrentSessionLabel() || 'running session';
+                const confirmed = await this.showConfirmModal(
+                    'switch session?',
+                    `opening "${this._escapeHtml(project.name)}" will end your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will be killed. to keep it instead, cancel and use "return to terminal" on the banner above.',
+                    `open ${project.name}`,
+                    'cancel'
+                );
+                if (confirmed) {
                     this.destroyAndOpenProject(project);
                 }
+                // Cancelled → deliberate no-op. Do NOT destroy, do NOT
+                // reconnect. User stays on launchpad with banner intact.
             } else {
                 this.showError(`failed to open ${project.name}: ${error.message}`);
             }
         }
+    }
+
+    /**
+     * Best-effort label for the running server-side session, used by the
+     * session-collision modal copy. Prefers the cached banner session
+     * (freshest, includes tmux_session name), falls back to the terminal
+     * controller's local cache. Returns null if nothing is known.
+     */
+    _getCurrentSessionLabel() {
+        try {
+            const s = this._activeSession;
+            if (s) {
+                if (s.tmux_session) return s.tmux_session;
+                if (typeof s.id === 'string') return s.id.replace(/^adopted:/, '');
+            }
+            const name = this._getActiveSessionName();
+            if (name) return name;
+        } catch (_) { /* non-fatal */ }
+        return null;
     }
 
     /**
