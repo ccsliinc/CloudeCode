@@ -87,25 +87,26 @@ The `session running: <name>` banner is removed entirely.
 
 ### Session naming
 
-When creating a new session for a project, the tmux session name is derived from the project name:
+When creating a new session for a project, the tmux session name is the project name **verbatim**, with a single transformation step to satisfy tmux's only hard constraints:
 
 ```
 project.name = "Cloude Code Dev"
-  ↓ slugify()
-slug = "cloude-code-dev"
+  ↓ sanitize_for_tmux() — ONLY strips `.` and `:` (tmux pane/window separators)
+sanitized = "Cloude Code Dev"
   ↓
-tmux_session = "cloude_cloude-code-dev"
+tmux_session = "cloude_Cloude Code Dev"
 ```
 
-Slug rules:
-- Lowercase
-- Spaces, dots, underscores → hyphens
-- Strip any char outside `[a-z0-9-]`
-- Collapse runs of hyphens
-- Strip leading/trailing hyphens
-- If result is empty after stripping → fall back to `cloude_ses_<hex>` (the legacy naming)
+Sanitization rules (minimal — preserve what the user sees):
+- Replace `.` → `_` (tmux pane separator)
+- Replace `:` → `_` (tmux window separator)
+- Collapse any run of multiple consecutive whitespace chars into a single space
+- Strip leading and trailing whitespace
+- If the result is empty after stripping → fall back to `cloude_ses_<hex>` (the legacy naming)
 
-Collision behavior: **before creating a tmux session with name `cloude_<slug>`, check if it already exists on our socket. If yes, adopt it instead** (via the existing `adopt_external_session(name, confirm_detach=True)` path). This is the core user expectation: "open Cloude Code Dev" = "resume my Cloude Code Dev session" whether it's alive or not.
+Case, spaces, hyphens, emoji, apostrophes, quotes, parens — all preserved. tmux tolerates them all.
+
+Collision behavior: **before creating a tmux session with name `cloude_<sanitized>`, check if it already exists on our socket. If yes, adopt it instead** (via the existing `adopt_external_session(name, confirm_detach=True)` path). This is the core user expectation: "open Cloude Code Dev" = "resume my Cloude Code Dev session" whether it's alive or not.
 
 Legacy `cloude_ses_<hex>` sessions are left alone. They continue to appear in the running-sessions list with their hex names until they're ended.
 
@@ -117,14 +118,21 @@ Legacy `cloude_ses_<hex>` sessions are left alone. They continue to appear in th
 
 Add helper:
 ```python
-def _slugify_project_name(name: str) -> str:
-    """project.name → tmux-session slug. Returns empty string for unsalvageable input."""
+def _sanitize_tmux_name(name: str) -> str:
+    """Make a project name safe as a tmux session name.
+
+    tmux forbids '.' (pane separator) and ':' (window separator). Everything
+    else — spaces, case, punctuation, emoji — is fine. Replace forbidden
+    chars with '_', collapse whitespace runs, strip edges. Returns empty
+    string if the result is unusable, in which case the caller falls back
+    to legacy hex-based naming.
+    """
 ```
 
 Extend `create_session()` signature with optional `project_name: str | None = None`. Flow:
-1. If `project_name` provided → `slug = _slugify_project_name(project_name)` → `target_name = f"cloude_{slug}"`
+1. If `project_name` provided → `sanitized = _sanitize_tmux_name(project_name)` → `target_name = f"cloude_{sanitized}"`
 2. Else → existing hex-based `ses_<hex>` flow (legacy path preserved)
-3. If `slug` non-empty AND `target_name` appears in `tmux -L cloude list-sessions`:
+3. If `sanitized` non-empty AND `target_name` appears in `tmux -L cloude list-sessions`:
    - Log `session_create_redirected_to_adopt project=<name> existing_tmux=<target_name>`
    - Call `self.adopt_external_session(target_name, confirm_detach=<same as incoming>)` and return its result
 4. Else construct `TmuxBackend(session_name=target_name, ...)` and proceed with the existing create path
@@ -233,16 +241,17 @@ The current `?` disclosure next to "Adopt an external session" has the `tmux -L 
 ### Testing
 
 **Unit (`tests/test_session_backend.py`):**
-1. `_slugify_project_name("Cloude Code Dev")` == `"cloude-code-dev"`
-2. `_slugify_project_name("UPPER ... CaSe!! 123")` collapses runs of punctuation/hyphens, lowercases
-3. `_slugify_project_name("🔥 cool 🔥")` strips emoji, yields `"cool"`
-4. `_slugify_project_name("!!!")` returns empty string
-5. `create_session(project_name=X)` with no pre-existing tmux session → creates `cloude_<slug>` and returns; backend.tmux_session matches
-6. `create_session(project_name=X)` with pre-existing tmux session `cloude_<slug>` → calls adopt_external_session internally, does NOT create a duplicate
-7. `create_session(project_name=None)` → falls back to legacy `cloude_ses_<hex>` flow
+1. `_sanitize_tmux_name("Cloude Code Dev")` == `"Cloude Code Dev"` (verbatim preservation — case + spaces intact)
+2. `_sanitize_tmux_name("Dotted.Name:Thing")` == `"Dotted_Name_Thing"` (tmux separators replaced)
+3. `_sanitize_tmux_name("🔥 cool 🔥")` == `"🔥 cool 🔥"` (emoji preserved — tmux tolerates them)
+4. `_sanitize_tmux_name("   many   spaces   ")` == `"many spaces"` (run-collapse + strip)
+5. `_sanitize_tmux_name("")` and `_sanitize_tmux_name("   ")` and `_sanitize_tmux_name(":::...")` all return empty string
+6. `create_session(project_name=X)` with no pre-existing tmux session → creates `cloude_<sanitized>` and returns; `backend.tmux_session` matches
+7. `create_session(project_name=X)` with pre-existing tmux session `cloude_<sanitized>` → calls `adopt_external_session` internally, does NOT create a duplicate
+8. `create_session(project_name=None)` → falls back to legacy `cloude_ses_<hex>` flow
 
 **Integration:**
-8. End-to-end open-project with renamed flow: `POST /sessions {working_dir, project_name: "X"}` → `tmux -L cloude has-session -t cloude_x` returns 0. Second call to same endpoint (with the session still alive) → adopts rather than errors.
+9. End-to-end open-project with renamed flow: `POST /sessions {working_dir, project_name: "Cloude Code Dev"}` → `tmux -L cloude has-session -t "cloude_Cloude Code Dev"` returns 0. Second call to same endpoint (with the session still alive) → adopts rather than errors.
 
 **Client / manual smoke (validator-agent after code lands):**
 - Launchpad with 0 running sessions → "running sessions" section hidden
@@ -250,13 +259,13 @@ The current `?` disclosure next to "Adopt an external session" has the `tmux -L 
 - Launchpad with 1 external running → yellow pulse + EXTERNAL badge
 - Click row → return to terminal
 - Click X → modal → confirm → row disappears, tmux session killed
-- Open "Cloude Code Dev" from existing projects → tmux has `cloude_cloude-code-dev` (not `cloude_ses_*`)
+- Open "Cloude Code Dev" from existing projects → tmux has `cloude_Cloude Code Dev` (not `cloude_ses_*`)
 - Open same project second time → adopts existing instead of 409
 
 ## Files modified
 
 ### Backend
-- `src/core/session_manager.py` — `_slugify_project_name` helper, `create_session(project_name=…)` param, adopt-on-collision branch
+- `src/core/session_manager.py` — `_sanitize_tmux_name` helper, `create_session(project_name=…)` param, adopt-on-collision branch
 - `src/core/tmux_backend.py` — `session_name` kwarg on `__init__`
 - `src/api/routes.py` — pass-through of `project_name`
 - `src/models.py` — `CreateSessionRequest.project_name`
@@ -271,9 +280,10 @@ The current `?` disclosure next to "Adopt an external session" has the `tmux -L 
 
 ## Risks
 
-1. **Slug collision across different projects** — "My App" and "my-app" both slugify to `my-app`. Mitigated by "adopt on collision" — second project to open shares the first's session. Acceptable for a single-user tool; user can rename the project config if they want separation.
+1. **Name collision across different projects** — "Cloude Code Dev" and "Cloude Code Dev " (trailing space) both sanitize to `Cloude Code Dev`. Whitespace-run-collapse + strip handles most accidental cases. "Cloude" and "Cloude" (different unicode homoglyph) would still collide — acceptable edge case. Adopt-on-collision means the second open reuses the first's session rather than erroring.
 2. **CSS shuffle breaks responsive layout** — pulsing dots + flex rows may look different on narrow mobile widths. Validator-agent smoke must verify on phone viewport.
-3. **Legacy session names look ugly next to slug names** — `cloude_ses_7c2419e4` next to `cloude_cloude-code-dev` in the same list. Acceptable — they'll age out as users end them.
+3. **Legacy hex session names alongside meaningful names** — `cloude_ses_7c2419e4` next to `cloude_Cloude Code Dev` in the same list. Acceptable — legacy ones age out as users end them.
+4. **Session name with special chars in tmux CLI quoting** — a name like `cloude_My Project (old)` needs proper quoting when the user runs `tmux -L cloude attach -t "cloude_My Project (old)"` manually. The web UI quotes correctly internally; user docs in the disclosure note this.
 
 ## Out of scope
 
