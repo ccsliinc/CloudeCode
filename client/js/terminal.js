@@ -181,17 +181,31 @@ class Terminal {
 
         this.term.open(document.getElementById('terminal'));
 
-        // Intercept Shift+Enter → send raw LF (0x0a) so Claude CLI's Ink-based
-        // prompt treats it as "insert newline without submitting". Claude CLI
-        // differentiates CR (\r, submit) from LF (\n, literal newline insert).
-        // xterm.js by default collapses Shift+Enter to plain CR which submits,
-        // so we intercept and emit \n directly. This matches the ¥ mobile
-        // shortcut below which already uses \n successfully for newline insert.
+        // Intercept Shift+Enter → send CSI u sequence `\x1b[13;2u` — the
+        // modifyOtherKeys / kitty keyboard protocol encoding for Shift+Enter
+        // that Claude Code CLI's Ink input parser recognizes as "insert newline
+        // without submitting". Reference: anthropics/claude-code issue #1259,
+        // iTerm2 recipe maps Shift+Enter → `Esc+[13;2u`.
+        //
+        // Why not `\n` (LF) alone: Claude CLI treats bare LF identically to
+        // CR (submit) — LF does NOT insert a newline. Confirmed in testing.
+        //
+        // Why not `\x1b\r` (Alt+Enter) alone: without tmux `extended-keys on`
+        // tmux may re-interpret ESC+CR as Meta+Return and mangle it. Server
+        // side now enables extended-keys so both CSI u and Alt+Enter pass
+        // through intact; we pick CSI u as the documented Anthropic path.
+        //
+        // Server-side (src/core/tmux_backend.py) MUST have:
+        //   set-option -s extended-keys on
+        //   set-option -as terminal-features 'xterm-256color:extkeys'
+        // so tmux forwards CSI u bytes to the pane without re-encoding.
         this.term.attachCustomKeyEventHandler((ev) => {
             if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
                 !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(new TextEncoder().encode('\n'));
+                    const bytes = new Uint8Array([0x1b, 0x5b, 0x31, 0x33, 0x3b, 0x32, 0x75]);
+                    console.log('[SHIFT-ENTER] sending CSI u sequence \\x1b[13;2u', bytes);
+                    this.ws.send(bytes);
                 }
                 return false;  // swallow the event so xterm doesn't also emit \r
             }
