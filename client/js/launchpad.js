@@ -507,7 +507,7 @@ class Launchpad {
                 </div>
 
                 <div class="launchpad-section" id="projects-section">
-                    <div class="launchpad-section-title">► existing projects</div>
+                    <div class="launchpad-section-title">► recent projects</div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
