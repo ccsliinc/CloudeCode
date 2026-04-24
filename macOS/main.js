@@ -33,8 +33,9 @@ const BOOTSTRAP_TOOLTIPS = {
 async function showQrPairingWindow() {
   const axios = require('axios');
   const { BrowserWindow } = require('electron');
-  const port = serverManager.port || 8000;
-  const url = `http://127.0.0.1:${port}/api/v1/auth/qr`;
+  // Probe the actual bound host — loopback is unreachable when uvicorn
+  // is bound to a specific LAN IP.
+  const url = `${serverManager.getLocalApiUrl()}/api/v1/auth/qr`;
 
   try {
     const response = await axios.get(url, { timeout: 5000 });
@@ -532,7 +533,10 @@ function updateMenu() {
     {
       label: 'Open in Browser',
       click: () => {
-        shell.openExternal('http://localhost:8000');
+        // Use the published URL so remote LAN bindings work from the
+        // user's browser — 'localhost' is dead when uvicorn binds to
+        // a specific LAN interface.
+        shell.openExternal(serverManager.getPublishedUrl());
       },
       enabled: isRunning
     },
@@ -574,6 +578,33 @@ function updateMenu() {
             setTimeout(updateMenu, 100);
           }
         },
+        (() => {
+          // "Copy OTP: 123456" — surfaces the live 6-digit code so users
+          // can paste into the web client without digging out their phone.
+          // Code is recomputed on every menu rebuild (5s health poll
+          // cadence), so it stays fresh. Label shows "(rolls in Xs)" when
+          // the window is within 5s of rollover — hints the user to wait.
+          const otp = serverManager.getCurrentOtp();
+          const remaining = serverManager.getOtpSecondsRemaining();
+          const rollHint = (otp && remaining <= 5) ? `  (rolls in ${remaining}s)` : '';
+          const label = otp ? `Copy OTP: ${otp}${rollHint}` : 'Copy OTP: (not configured)';
+          return {
+            label,
+            enabled: !!otp,
+            click: () => {
+              const fresh = serverManager.getCurrentOtp();
+              if (!fresh) return;
+              clipboard.writeText(fresh);
+              console.log(`[clipboard] wrote OTP: ${fresh}`);
+              // Brief tooltip flash — no macOS notification permission
+              // prompt, no modal. 2s matches typical copy-feedback patterns.
+              if (tray) {
+                tray.setToolTip('OTP copied to clipboard');
+                setTimeout(() => { if (tray) tray.setToolTip('Cloude Code'); }, 2000);
+              }
+            }
+          };
+        })(),
         {
           label: 'Show QR for TOTP',
           click: async () => {
@@ -582,8 +613,9 @@ function updateMenu() {
             // on-disk copies out of sync with the active secret.
             const axios = require('axios');
             const { BrowserWindow, dialog } = require('electron');
-            const port = serverManager.port || 8000;
-            const url = `http://127.0.0.1:${port}/api/v1/auth/qr`;
+            // Probe the actual bound host — hardcoded 127.0.0.1 fails
+            // when uvicorn binds exclusively to a LAN interface.
+            const url = `${serverManager.getLocalApiUrl()}/api/v1/auth/qr`;
 
             try {
               const response = await axios.get(url, {
