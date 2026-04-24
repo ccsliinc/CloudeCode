@@ -181,14 +181,17 @@ class Terminal {
 
         this.term.open(document.getElementById('terminal'));
 
-        // Intercept Shift+Enter → send ESC + CR so Claude CLI treats it as
-        // "insert newline without submitting" instead of the default behavior
-        // where xterm.js collapses it to plain Enter.
+        // Intercept Shift+Enter → send raw LF (0x0a) so Claude CLI's Ink-based
+        // prompt treats it as "insert newline without submitting". Claude CLI
+        // differentiates CR (\r, submit) from LF (\n, literal newline insert).
+        // xterm.js by default collapses Shift+Enter to plain CR which submits,
+        // so we intercept and emit \n directly. This matches the ¥ mobile
+        // shortcut below which already uses \n successfully for newline insert.
         this.term.attachCustomKeyEventHandler((ev) => {
             if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
                 !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(new TextEncoder().encode('\x1b\r'));
+                    this.ws.send(new TextEncoder().encode('\n'));
                 }
                 return false;  // swallow the event so xterm doesn't also emit \r
             }
