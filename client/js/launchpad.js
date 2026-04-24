@@ -24,6 +24,33 @@ class Launchpad {
         this.launchpadScreen = document.getElementById('launchpad-screen');
         this.renderLaunchpadUI();
         // Note: loadProjects() will be called by App.showLaunchpad()
+        this._startRunningSessionsPoller();
+    }
+
+    /**
+     * Kick off a 5s interval that re-fetches the running-sessions list.
+     *
+     * Idempotent — guarded by ``this._runningPollInterval`` so repeated
+     * calls (e.g. re-entering the launchpad after a session swap) don't
+     * stack multiple intervals. Auth-gated per tick: skips the fetch
+     * entirely when the user isn't logged in, so we don't hammer /sessions
+     * with anonymous requests before the OTP flow completes.
+     *
+     * Runs forever; does not pause on tab hide — external tmux sessions
+     * born while the tab is backgrounded should still surface the moment
+     * the user returns.
+     */
+    _startRunningSessionsPoller() {
+        if (this._runningPollInterval) return;
+        this._runningPollInterval = setInterval(() => {
+            if (!(window.Auth && typeof window.Auth.isAuthenticated === 'function' && window.Auth.isAuthenticated())) {
+                return;
+            }
+            this.loadRunningSessions().catch(err => {
+                console.warn('Launchpad: running-sessions poll tick failed:', err);
+            });
+        }, 5000);
+        console.log('Launchpad: running-sessions poller started (5s)');
     }
 
     /**
@@ -140,10 +167,32 @@ class Launchpad {
         if (!container) return;
         const section = document.getElementById('running-sessions-section');
         if (!this.runningSessions || this.runningSessions.length === 0) {
-            if (section) section.style.display = 'none';
-            container.innerHTML = '';
+            // Only rewrite the DOM when transitioning into the empty state —
+            // repeated renders while already empty would thrash the
+            // section's display flip for no reason.
+            if (this._lastRunningSig !== 'empty') {
+                this._lastRunningSig = 'empty';
+                if (section) section.style.display = 'none';
+                container.innerHTML = '';
+            }
             return;
         }
+        // Signature-diff: skip the innerHTML rewrite when the set of rows
+        // (name + ownership + active flag) hasn't changed. Previously the
+        // 5s poller was restarting the `.running-session-row` pulse-glow
+        // CSS animations every tick, which visibly flickered. Age labels
+        // still need updating each tick, so we punt those through a
+        // cheap text-only DOM update instead.
+        const sig = JSON.stringify(this.runningSessions.map(s => ({
+            name: s.name,
+            owned: !!s.created_by_cloude,
+            active: !!s.is_active,
+        })));
+        if (sig === this._lastRunningSig) {
+            this._updateRunningSessionAges();
+            return;
+        }
+        this._lastRunningSig = sig;
         if (section) section.style.display = '';
         container.innerHTML = this.runningSessions.map(s => {
             const owned = !!s.created_by_cloude;
@@ -175,6 +224,30 @@ class Launchpad {
         // because the listener is bound to the (stable) container element,
         // not the (re-painted) row children, and the flag gates re-bind.
         this._bindRunningSessionClicks();
+    }
+
+    /**
+     * Text-only age refresh — walks existing rows and rewrites just the
+     * ``.running-session-age`` textContent. Used on poll ticks when the
+     * row set is unchanged so we avoid the innerHTML rewrite that would
+     * restart the pulse-glow CSS animations.
+     *
+     * Guarded for all the obvious missing-data cases: row without a
+     * data-name, session no longer in the list, session without an
+     * epoch, row without an age element. Any miss is a silent skip —
+     * the next full render will reconcile.
+     */
+    _updateRunningSessionAges() {
+        const rows = document.querySelectorAll('#running-sessions-list .running-session-row');
+        rows.forEach(row => {
+            const name = row.dataset.name;
+            if (!name) return;
+            const s = this.runningSessions.find(x => x.name === name);
+            if (!s || !s.created_at_epoch) return;
+            const ageEl = row.querySelector('.running-session-age');
+            if (!ageEl) return;
+            ageEl.textContent = this._formatRelativeTime(s.created_at_epoch);
+        });
     }
 
     /**
