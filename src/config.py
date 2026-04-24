@@ -462,6 +462,14 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
+    def get_project(self, name: str) -> Optional[ProjectConfig]:
+        """Look up a project by display name. Returns None if not found."""
+        auth_config = self.load_auth_config()
+        for p in auth_config.projects:
+            if p.name == name:
+                return p
+        return None
+
     def save_project(self, project: ProjectConfig) -> None:
         """
         Add a new project to the configuration file.

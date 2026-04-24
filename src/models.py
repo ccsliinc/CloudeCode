@@ -170,6 +170,34 @@ class UpdateProjectRequest(BaseModel):
     description: Optional[str] = Field(None, description="New description (omit to keep current; empty string clears)")
 
 
+class CloneProjectRequest(BaseModel):
+    """Request model for cloning a GitHub repo into a new project.
+
+    The server runs ``gh repo clone <repo_url> <parent_dir>/<repo_name>``,
+    then registers the result as a project (display name = ``project_name``
+    if supplied, else the repo basename). The parent directory is created
+    if it doesn't exist; the target ``<parent_dir>/<repo_name>`` must NOT
+    exist (server returns 409 otherwise).
+    """
+    repo_url: str = Field(
+        ...,
+        description=(
+            "GitHub repo URL — accepts https://github.com/owner/repo, "
+            "https://github.com/owner/repo.git, git@github.com:owner/repo.git, "
+            "github.com/owner/repo, or owner/repo (gh CLI shorthand)."
+        ),
+    )
+    parent_dir: str = Field(
+        default="~/projects",
+        description="Directory on the server in which the cloned folder will be created.",
+    )
+    description: Optional[str] = Field(None, description="Project description")
+    project_name: Optional[str] = Field(
+        None,
+        description="Override auto-detected repo name as the project display name.",
+    )
+
+
 class DirectoryEntry(BaseModel):
     """A single directory entry returned by the filesystem browser."""
     name: str = Field(..., description="Directory name (basename)")

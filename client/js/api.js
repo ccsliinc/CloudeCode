@@ -298,6 +298,29 @@ class API {
     }
 
     /**
+     * Projects: Clone a GitHub repo (server runs `gh repo clone`) and
+     * register the result as a project.
+     *
+     * @param {object} params
+     * @param {string} params.repoUrl - GitHub URL or owner/repo shorthand.
+     * @param {string} [params.parentDir] - Directory in which the cloned
+     *   folder is created (server default: ~/projects).
+     * @param {string} [params.projectName] - Override auto-detected name.
+     * @param {string} [params.description] - Optional project description.
+     * @returns {Promise<{name: string, path: string, description: ?string}>}
+     */
+    async cloneProjectFromGithub({ repoUrl, parentDir, projectName, description } = {}) {
+        const body = { repo_url: repoUrl };
+        if (parentDir !== undefined && parentDir !== '') body.parent_dir = parentDir;
+        if (projectName !== undefined && projectName !== '') body.project_name = projectName;
+        if (description !== undefined) body.description = description;
+        return await this.call('/projects/clone', {
+            method: 'POST',
+            body
+        });
+    }
+
+    /**
      * Filesystem: Browse a directory on the server
      * @param {string|null} path - Directory path to list, or null to start at the default location
      * @returns {Promise<{path: string, parent: string|null, entries: Array<{name: string, path: string}>}>}

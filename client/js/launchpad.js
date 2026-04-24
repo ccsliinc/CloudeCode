@@ -504,6 +504,10 @@ class Launchpad {
                         <span>📁</span>
                         <span>open project from folder</span>
                     </button>
+                    <button class="new-session-btn" id="clone-github-btn">
+                        <span>⤓</span>
+                        <span>clone from github</span>
+                    </button>
                 </div>
 
                 <div class="launchpad-section" id="projects-section">
@@ -541,6 +545,10 @@ class Launchpad {
 
         document.getElementById('open-folder-btn').addEventListener('click', () => {
             this.openProjectFromFolder();
+        });
+
+        document.getElementById('clone-github-btn').addEventListener('click', () => {
+            this.showCloneFromGithubModal();
         });
 
         document.getElementById('reset-server-btn').addEventListener('click', () => {
@@ -1151,6 +1159,215 @@ class Launchpad {
                     resolve(null);
                 }
             });
+        });
+    }
+
+    /**
+     * Show the "clone from github" modal — collects URL + parent dir +
+     * description, calls the backend ``POST /projects/clone`` endpoint
+     * (which runs ``gh repo clone``), then refreshes the project list and
+     * lands the user in a session pointed at the freshly cloned folder.
+     *
+     * Errors are surfaced inline (no alert()) and mapped from HTTP status:
+     *   401 → gh auth failed
+     *   404 → repo not found / no access
+     *   409 → folder or project name collision
+     *   503 → gh CLI missing on server
+     *   504 → clone took >5 min
+     *   other → server-provided detail text.
+     */
+    async showCloneFromGithubModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+
+        const escapeHtml = (s) => String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        overlay.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">» clone from github</div>
+                <div class="modal-body">
+                    <div class="modal-input-group">
+                        <label class="modal-label">github repo url</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-url"
+                            placeholder="https://github.com/owner/repo or owner/repo"
+                            autocomplete="off"
+                            spellcheck="false"
+                        />
+                        <div class="modal-description">
+                            paste the full url or use gh shorthand (owner/repo). server runs <code>gh repo clone</code> — gh must be authenticated.
+                        </div>
+                    </div>
+                    <div class="modal-input-group">
+                        <label class="modal-label">parent directory</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-parent"
+                            placeholder="~/projects"
+                            value="~/projects"
+                            autocomplete="off"
+                            spellcheck="false"
+                        />
+                        <div class="modal-description">
+                            the cloned folder will be created inside this directory.
+                        </div>
+                    </div>
+                    <div class="modal-input-group">
+                        <label class="modal-label">description (optional)</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-description"
+                            placeholder="e.g., upstream library i'm patching"
+                            autocomplete="off"
+                        />
+                    </div>
+                    <div class="modal-description" id="modal-clone-status" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn modal-btn-secondary" id="modal-clone-cancel">cancel</button>
+                    <button class="modal-btn modal-btn-primary" id="modal-clone-confirm">clone &amp; open</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const urlInput = overlay.querySelector('#modal-clone-url');
+        const parentInput = overlay.querySelector('#modal-clone-parent');
+        const descInput = overlay.querySelector('#modal-clone-description');
+        const confirmBtn = overlay.querySelector('#modal-clone-confirm');
+        const cancelBtn = overlay.querySelector('#modal-clone-cancel');
+        const statusEl = overlay.querySelector('#modal-clone-status');
+
+        let busy = false;
+
+        const closeModal = () => {
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
+        };
+
+        const setStatus = (msg, isError = false) => {
+            statusEl.style.display = msg ? 'block' : 'none';
+            statusEl.textContent = msg;
+            statusEl.style.color = isError ? '#d77757' : '';
+        };
+
+        const mapErrorToMessage = (error) => {
+            // api.js throws Error(errorData.detail || `HTTP <code>`). Match
+            // on signature substrings the backend embeds in its detail text.
+            const msg = String(error && error.message || error || '');
+            const lower = msg.toLowerCase();
+            if (lower.includes('not authenticated') || lower.includes('auth/network') || lower.includes('gh auth login')) {
+                return 'gh CLI not authenticated. run `gh auth login` in a terminal on the server.';
+            }
+            if (lower.includes('repository not found') || lower.includes('repo not found') || lower.startsWith('not found')) {
+                return 'repo not found or no access. check the url and your gh auth scopes.';
+            }
+            if (lower.includes('already exists')) {
+                return 'folder or project name already exists.';
+            }
+            if (lower.includes('gh cli not') || lower.includes('install with `brew install gh`')) {
+                return 'gh CLI not installed on server. install with `brew install gh`.';
+            }
+            if (lower.includes('timed out') || lower.includes('timeout')) {
+                return 'clone timed out after 5 minutes.';
+            }
+            // Strip a bare "HTTP NNN" prefix if api.js fell back to it.
+            const cleaned = msg.replace(/^HTTP\s+\d{3}:?\s*/i, '').trim();
+            return cleaned || 'clone failed.';
+        };
+
+        const submit = async () => {
+            if (busy) return;
+            const repoUrl = urlInput.value.trim();
+            if (!repoUrl) {
+                setStatus('paste a github url first.', true);
+                urlInput.focus();
+                return;
+            }
+            const parentDir = parentInput.value.trim() || '~/projects';
+            const description = descInput.value.trim();
+
+            busy = true;
+            confirmBtn.disabled = true;
+            cancelBtn.disabled = true;
+            urlInput.disabled = true;
+            parentInput.disabled = true;
+            descInput.disabled = true;
+            setStatus('cloning... (may take a minute)');
+
+            try {
+                const project = await window.API.cloneProjectFromGithub({
+                    repoUrl,
+                    parentDir,
+                    description: description || undefined,
+                });
+                // Success — refresh project list, close modal, open session
+                // in the cloned dir. selectProject does the heavy lifting.
+                await this.loadProjects();
+                closeModal();
+                await this.selectProject({
+                    name: project.name,
+                    path: project.path,
+                    description: project.description || null,
+                });
+            } catch (error) {
+                console.error('Launchpad: clone-from-github failed:', error);
+                setStatus(mapErrorToMessage(error), true);
+                busy = false;
+                confirmBtn.disabled = false;
+                cancelBtn.disabled = false;
+                urlInput.disabled = false;
+                parentInput.disabled = false;
+                descInput.disabled = false;
+            }
+        };
+
+        // Focus url input.
+        setTimeout(() => urlInput.focus(), 100);
+
+        // Enter on url → focus parent. Enter on parent → focus desc.
+        // Enter on desc → submit. Escape anywhere → cancel.
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (urlInput.value.trim()) parentInput.focus();
+            }
+        });
+        parentInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                descInput.focus();
+            }
+        });
+        descInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+            }
+        });
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !busy) {
+                closeModal();
+            }
+        });
+
+        confirmBtn.addEventListener('click', submit);
+        cancelBtn.addEventListener('click', () => {
+            if (!busy) closeModal();
+        });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay && !busy) closeModal();
         });
     }
 
