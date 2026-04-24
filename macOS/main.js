@@ -15,6 +15,7 @@ let currentStats = null;
 // provisioning (no modals, no toasts; this is a menu-bar app).
 const BOOTSTRAP_TOOLTIPS = {
   'checking': 'Cloude Code — checking setup...',
+  'syncing-assets': 'Cloude Code — syncing bundled files...',
   'preparing': 'Cloude Code — preparing first-run...',
   'copying-files': 'Cloude Code — copying server files...',
   'creating-venv': 'Cloude Code — creating Python venv...',
@@ -265,6 +266,7 @@ app.whenReady().then(async () => {
   const bootstrapResult = await bootstrapIfNeeded({
     serverDir,
     bundleResourcesDir,
+    isPackaged: app.isPackaged,
     onStateChange: (state) => {
       const tooltip = BOOTSTRAP_TOOLTIPS[state] || `Cloude Code — ${state}`;
       if (tray) tray.setToolTip(tooltip);
