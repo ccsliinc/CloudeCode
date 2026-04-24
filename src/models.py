@@ -160,6 +160,16 @@ class ProjectResponse(BaseModel):
     description: Optional[str] = Field(None, description="Project description")
 
 
+class UpdateProjectRequest(BaseModel):
+    """Request model for updating a project's display name and/or description.
+
+    Both fields are optional — clients send only what they want to change.
+    Display name only — the folder on disk is never touched.
+    """
+    new_name: Optional[str] = Field(None, description="New display name (omit to keep current)")
+    description: Optional[str] = Field(None, description="New description (omit to keep current; empty string clears)")
+
+
 class DirectoryEntry(BaseModel):
     """A single directory entry returned by the filesystem browser."""
     name: str = Field(..., description="Directory name (basename)")

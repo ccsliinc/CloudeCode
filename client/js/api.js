@@ -279,6 +279,25 @@ class API {
     }
 
     /**
+     * Projects: Rename / update description (display name only — never
+     * touches the folder on disk). Pass only the fields you want to change.
+     *
+     * @param {string} currentName - Current display name (URL identifier).
+     * @param {object} fields - {newName?: string, description?: string}.
+     *   ``description: ""`` is honored as an intentional clear.
+     * @returns {Promise<object>} - Updated project (canonical form).
+     */
+    async updateProject(currentName, { newName, description } = {}) {
+        const body = {};
+        if (newName !== undefined) body.new_name = newName;
+        if (description !== undefined) body.description = description;
+        return await this.call(`/projects/${encodeURIComponent(currentName)}`, {
+            method: 'PATCH',
+            body
+        });
+    }
+
+    /**
      * Filesystem: Browse a directory on the server
      * @param {string|null} path - Directory path to list, or null to start at the default location
      * @returns {Promise<{path: string, parent: string|null, entries: Array<{name: string, path: string}>}>}

@@ -532,6 +532,37 @@ button[data-tooltip]:hover::after {
     transform: scale(1.1);
 }
 
+/* Edit (pencil) button — sits immediately left of the delete ×. Calm
+ * neutral default, amber on hover so it never competes with the
+ * destructive red of delete. */
+.project-edit-btn {
+    position: absolute;
+    top: 8px;
+    right: 40px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    background: transparent;
+    color: #858585;
+    border: 1px solid transparent;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.project-edit-btn:hover {
+    background: rgba(251, 191, 36, 0.18);
+    color: #fbbf24;
+    border-color: #fbbf24;
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
+    transform: scale(1.1);
+}
+
 .launchpad-empty {
     color: #858585;
     font-size: 0.9rem;

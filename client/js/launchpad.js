@@ -573,6 +573,7 @@ class Launchpad {
             const description = project.description || 'no description';
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
+                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project">✎</button>
                     <button class="project-delete-btn" data-name="${project.name}" title="Delete project">×</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
@@ -585,8 +586,9 @@ class Launchpad {
         const projectItems = projectListEl.querySelectorAll('.project-item');
         projectItems.forEach(item => {
             item.addEventListener('click', (e) => {
-                // Don't open project if clicking delete button
-                if (e.target.classList.contains('project-delete-btn')) {
+                // Don't open project if clicking an inline action button
+                if (e.target.classList.contains('project-delete-btn') ||
+                    e.target.classList.contains('project-edit-btn')) {
                     return;
                 }
                 const index = parseInt(item.dataset.index);
@@ -601,6 +603,19 @@ class Launchpad {
                 e.stopPropagation(); // Prevent project selection
                 const projectName = btn.dataset.name;
                 await this.deleteProject(projectName);
+            });
+        });
+
+        // Add click handlers for edit buttons
+        const editButtons = projectListEl.querySelectorAll('.project-edit-btn');
+        editButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent project selection
+                const projectName = btn.dataset.name;
+                const project = this.projects.find(p => p.name === projectName);
+                if (project) {
+                    this.editProject(project);
+                }
             });
         });
     }
@@ -638,6 +653,171 @@ class Launchpad {
             console.error('Launchpad: Failed to delete project:', error);
             this.showError('failed to delete project: ' + error.message);
         }
+    }
+
+    /**
+     * Open the edit-project modal for ``project`` and persist any changes.
+     *
+     * Display name only — the folder on disk is never touched.
+     */
+    async editProject(project) {
+        try {
+            const result = await this.showEditProjectModal(project);
+            if (!result) {
+                return; // user cancelled
+            }
+
+            const { name: newName, description: newDescription } = result;
+            const nameChanged = newName !== project.name;
+            const descChanged = (newDescription || '') !== (project.description || '');
+
+            if (!nameChanged && !descChanged) {
+                return; // nothing to do
+            }
+
+            this.updateStatus(`updating ${project.name}...`);
+
+            const fields = {};
+            if (nameChanged) fields.newName = newName;
+            if (descChanged) fields.description = newDescription;
+
+            await window.API.updateProject(project.name, fields);
+
+            console.log('Launchpad: Project updated:', project.name, '→', newName);
+
+            // Refresh the list so the row reflects the new label
+            await this.loadProjects();
+
+            this.updateStatus('project updated');
+        } catch (error) {
+            console.error('Launchpad: Failed to update project:', error);
+            this.showError('failed to update project: ' + error.message);
+        }
+    }
+
+    /**
+     * Show the edit-project modal pre-filled with the current name and
+     * description. Resolves with ``{name, description}`` on save, or
+     * ``null`` on cancel/escape/click-outside.
+     *
+     * Inline 409 conflicts are reported via ``API.updateProject`` rejecting
+     * with an error whose ``message`` contains "already exists" — handled
+     * by ``editProject`` via ``showError``.
+     */
+    showEditProjectModal(project) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const escapeHtml = (s) => String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            overlay.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">» edit project</div>
+                    <div class="modal-body">
+                        <div class="modal-input-group">
+                            <div class="modal-label">folder</div>
+                            <div class="folder-picker-path">${escapeHtml(project.path)}</div>
+                            <div class="modal-description">
+                                the folder on disk is never renamed — only the launcher label changes.
+                            </div>
+                        </div>
+                        <div class="modal-input-group">
+                            <label class="modal-label">project name</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="edit-project-name"
+                                value="${escapeHtml(project.name)}"
+                                autocomplete="off"
+                            />
+                        </div>
+                        <div class="modal-input-group">
+                            <label class="modal-label">description (optional)</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="edit-project-description"
+                                placeholder="e.g., Building an AI-powered chatbot"
+                                value="${escapeHtml(project.description || '')}"
+                                autocomplete="off"
+                            />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="edit-modal-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="edit-modal-save">save</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const nameInput = overlay.querySelector('#edit-project-name');
+            const descInput = overlay.querySelector('#edit-project-description');
+            const saveBtn = overlay.querySelector('#edit-modal-save');
+            const cancelBtn = overlay.querySelector('#edit-modal-cancel');
+
+            // Focus name input and select existing content
+            setTimeout(() => {
+                nameInput.focus();
+                nameInput.select();
+            }, 100);
+
+            const submit = () => {
+                const name = nameInput.value.trim();
+                if (!name) {
+                    nameInput.focus();
+                    return;
+                }
+                const description = descInput.value.trim();
+                document.body.removeChild(overlay);
+                resolve({ name, description });
+            };
+
+            const cancel = () => {
+                document.body.removeChild(overlay);
+                resolve(null);
+            };
+
+            // Enter on name → move to description; Enter on description → submit
+            nameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (nameInput.value.trim()) {
+                        descInput.focus();
+                    }
+                }
+            });
+            descInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submit();
+                }
+            });
+
+            // Escape cancels
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    cancel();
+                }
+            });
+
+            saveBtn.addEventListener('click', submit);
+            cancelBtn.addEventListener('click', cancel);
+
+            // Click outside cancels
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    cancel();
+                }
+            });
+        });
     }
 
     /**

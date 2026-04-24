@@ -22,7 +22,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
-from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, SuccessResponse
+from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, UpdateProjectRequest, SuccessResponse
 
 
 def _totp_paired_sentinel_path() -> Path:
@@ -776,6 +776,83 @@ async def delete_project(project_name: str):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete project: {str(e)}"
+        )
+
+
+@router.patch(
+    "/projects/{project_name}",
+    response_model=ProjectResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def update_project(project_name: str, body: UpdateProjectRequest):
+    """
+    Update a project's display name and/or description.
+
+    Display name only — the folder on disk is never touched. After a rename,
+    subsequent calls must use the NEW name (the URL path identifier changes).
+
+    Args:
+        project_name: Current display name (URL path).
+        body: Fields to update. Both ``new_name`` and ``description`` are
+            optional; sending neither yields 400.
+
+    Returns:
+        The updated project (canonical form, post-mutation).
+
+    Raises:
+        HTTPException 400: if no fields are supplied.
+        HTTPException 404: if no project named ``project_name`` exists.
+        HTTPException 409: if ``new_name`` collides with another project.
+    """
+    if body.new_name is None and body.description is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    try:
+        updated = settings.update_project(project_name, body.new_name, body.description)
+
+        logger.info(
+            "project_updated",
+            old_name=project_name,
+            new_name=updated.name,
+            description_changed=body.description is not None,
+        )
+
+        return ProjectResponse(
+            name=updated.name,
+            path=updated.path,
+            description=updated.description,
+        )
+
+    except KeyError:
+        logger.warning("project_update_not_found", name=project_name)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found",
+        )
+    except ValueError as e:
+        if "name conflict" in str(e):
+            logger.warning(
+                "project_update_name_conflict",
+                old_name=project_name,
+                new_name=body.new_name,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=f"A project named '{body.new_name}' already exists",
+            )
+        logger.warning("project_update_failed_validation", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first.",
+        )
+    except Exception as e:
+        logger.error("project_update_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update project: {str(e)}",
         )
 
 

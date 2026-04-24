@@ -562,6 +562,97 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
+    def update_project(
+        self,
+        old_name: str,
+        new_name: Optional[str],
+        description: Optional[str],
+    ) -> ProjectConfig:
+        """
+        Update a project's display name and/or description.
+
+        Display name only — the folder on disk is never touched.
+
+        Args:
+            old_name: Current display name (used as the lookup key)
+            new_name: New display name. ``None`` = leave unchanged. If equal to
+                ``old_name`` it's treated as a no-op for the name field.
+            description: New description. ``None`` = leave unchanged. An empty
+                string is honored as an intentional clear.
+
+        Returns:
+            The updated ``ProjectConfig`` (reflecting the new name/description).
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist.
+            KeyError: If no project named ``old_name`` exists.
+            ValueError: ``"name conflict"`` if renaming to a name another
+                project already has, or for invalid JSON in the config file.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            # Read current config
+            with open(config_path) as f:
+                data = json.load(f)
+
+            projects_data = data.get("projects", [])
+
+            # Locate the target project (case-sensitive exact match)
+            target_index = None
+            for i, p in enumerate(projects_data):
+                if p.get("name") == old_name:
+                    target_index = i
+                    break
+
+            if target_index is None:
+                raise KeyError(old_name)
+
+            # Apply name change (with collision check)
+            if new_name is not None and new_name != old_name:
+                # Collision: any OTHER project (different index) with new_name
+                for i, p in enumerate(projects_data):
+                    if i != target_index and p.get("name") == new_name:
+                        raise ValueError("name conflict")
+                projects_data[target_index]["name"] = new_name
+
+            # Apply description change (None = no-op; "" = intentional clear)
+            if description is not None:
+                projects_data[target_index]["description"] = description
+
+            # Update data and persist atomically:
+            # write to .tmp → fsync → os.replace() (atomic on same filesystem).
+            data["projects"] = projects_data
+
+            tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, config_path)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+
+            updated = projects_data[target_index]
+            return ProjectConfig(
+                name=updated["name"],
+                path=updated.get("path", ""),
+                description=updated.get("description"),
+            )
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
     def move_project_to_top(self, working_dir: str) -> None:
         """
         Move a project to the top of the projects list (most recently used).
