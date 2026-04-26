@@ -386,6 +386,28 @@ class API {
     }
 
     /**
+     * Sessions: Destroy an external (non-active) tmux session by name.
+     *
+     * Direct kill via the server's `DELETE /sessions/external/{name}`
+     * endpoint. Used by the launchpad "X" button when the target row
+     * is NOT the currently-active backend — bypasses the old
+     * adopt-then-destroy flow which 500'd on dead panes (foreground
+     * process exited, e.g. user Ctrl-D'd `claude`).
+     *
+     * Idempotent: if the session is already gone server-side, the
+     * server returns 200 with an "already gone" message.
+     *
+     * @param {string} sessionName - tmux session name (as seen in launchpad)
+     * @returns {Promise<{success: boolean, message: string}>}
+     */
+    async destroyExternalSession(sessionName) {
+        return await this.call(
+            `/sessions/external/${encodeURIComponent(sessionName)}`,
+            { method: 'DELETE' }
+        );
+    }
+
+    /**
      * Sessions: Detach from the current session WITHOUT killing tmux.
      *
      * Soft counterpart to ``destroySession`` — the server tears down its
