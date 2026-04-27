@@ -71,38 +71,6 @@ class SessionConfig(BaseModel):
     )
 
 
-class TunnelConfig(BaseModel):
-    """Tunnel backend configuration.
-
-    - ``backend``: ``"local_only"`` (default, LAN-only, zero deps),
-      ``"quick_cloudflare"`` (cloudflared --url quick tunnel), or
-      ``"named_cloudflare"`` (persistent named tunnel with CNAME ingress).
-    - ``enable_cloudflare``: second-layer feature flag. Cloudflare
-      backends refuse to instantiate unless this is True, even if
-      selected by name. This is the "double-flag guard" — you have to
-      both pick a Cloudflare backend AND flip the master switch to
-      actually go public.
-    - ``lan_hostname``: override for the LAN hostname used by
-      ``local_only``. Default ``"auto"`` triggers detection (socket →
-      netifaces → UDP-connect trick → 127.0.0.1 fallback).
-    """
-    backend: str = Field(
-        default="local_only",
-        description=(
-            "Tunnel backend: 'local_only' | 'quick_cloudflare' | "
-            "'named_cloudflare'"
-        ),
-    )
-    enable_cloudflare: bool = Field(
-        default=False,
-        description="Master flag — must be true to use any Cloudflare backend",
-    )
-    lan_hostname: str = Field(
-        default="auto",
-        description="LAN hostname/IP for local_only backend ('auto' = detect)",
-    )
-
-
 class NotificationsConfig(BaseModel):
     """Push notification configuration (Item 6).
 
@@ -175,7 +143,6 @@ class AuthConfig(BaseModel):
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
     session: SessionConfig = Field(default_factory=SessionConfig)
-    tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -203,19 +170,6 @@ class Settings(BaseSettings):
     log_buffer_size: int = 1000  # lines to keep in memory
     log_file_retention: int = 7  # days
     log_directory: str  # Required in .env
-
-    # Tunnel Configuration
-    tunnel_provider: str = "cloudflare"
-    auto_create_tunnels: bool = True
-    tunnel_timeout: int = 30  # seconds to wait for tunnel URL
-    use_named_tunnels: bool = True  # Use Cloudflare named tunnels
-
-    # Cloudflare Configuration
-    cloudflare_api_token: Optional[str] = None
-    cloudflare_zone_id: Optional[str] = None
-    cloudflare_domain: Optional[str] = None
-    cloudflare_tunnel_name: Optional[str] = None
-    cloudflare_tunnel_id: Optional[str] = None  # Will be set after tunnel creation
 
     # Security Configuration
     api_key: Optional[str] = None
@@ -326,6 +280,19 @@ class Settings(BaseSettings):
     def get_session_metadata_path(self) -> Path:
         """Get the path for session metadata JSON file."""
         return Path(self.log_directory).expanduser() / "session_metadata.json"
+
+    def get_pinned_themes_path(self) -> Path:
+        """Path for the per-tmux-session pinned-theme map.
+
+        SESSION-IDENTITY-V2 — kept in its OWN file, distinct from
+        ``session_metadata.json``. The active-session metadata file is
+        unlinked on detach and overwritten on swap, so we cannot use it
+        as durable per-name storage. This file is name-keyed and survives
+        the full detach → swap → re-adopt round-trip; it is pruned only
+        when a session is explicitly destroyed (X button) or its tmux
+        session disappears at startup-reconciliation time.
+        """
+        return Path(self.log_directory).expanduser() / "pinned_themes.json"
 
     def get_claude_cli_path(self) -> str:
         """
@@ -460,21 +427,8 @@ class Settings(BaseSettings):
                 )
                 session_config = SessionConfig()
 
-            # Build TunnelConfig from optional "tunnel" block; same
-            # malformed-block tolerance as session.
-            tunnel_data = data.get("tunnel", {}) or {}
-            try:
-                tunnel_config = TunnelConfig(**tunnel_data)
-            except Exception:
-                import structlog
-                structlog.get_logger().warning(
-                    "invalid_tunnel_config_block",
-                    raw=tunnel_data,
-                )
-                tunnel_config = TunnelConfig()
-
             # Build AuthRateLimits from optional "auth_rate_limits" block;
-            # same malformed-block tolerance as session/tunnel.
+            # same malformed-block tolerance as session.
             rate_limits_data = data.get("auth_rate_limits", {}) or {}
             try:
                 rate_limits_config = AuthRateLimits(**rate_limits_data)
@@ -538,7 +492,6 @@ class Settings(BaseSettings):
                 projects=projects,
                 common_slash_commands=data.get("common_slash_commands", []),
                 session=session_config,
-                tunnel=tunnel_config,
                 auth_rate_limits=rate_limits_config,
                 notifications=notifications_config,
                 agents=agents_config,

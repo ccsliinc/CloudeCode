@@ -7,13 +7,16 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from typing import List, Optional
 import structlog
 
+from datetime import datetime
+
 from src.models import (
     Session,
     SessionInfo,
+    SessionStats,
+    SessionStatus,
     CreateSessionRequest,
     CommandRequest,
-    CreateTunnelRequest,
-    Tunnel,
+    LocalServerInfo,
     LogEntry,
     SuccessResponse,
     ErrorResponse,
@@ -123,13 +126,21 @@ async def destroy_session(request: Request):
         HTTPException: If session destruction fails
     """
     session_manager = request.app.state.session_manager
-    tunnel_manager = request.app.state.tunnel_manager
+    local_servers = request.app.state.local_servers
 
     try:
         logger.info("api_destroy_session_request")
 
-        # Clean up tunnels first
-        await tunnel_manager.destroy_all_tunnels()
+        # Drop any local-server detections owned by the active session
+        # before tearing the session down. Best-effort: we look up the
+        # active backend's tmux name (the same key local_servers tracks
+        # entries under) and clear it.
+        backend = getattr(session_manager, "backend", None)
+        active_name = (
+            getattr(backend, "tmux_session", None) if backend else None
+        )
+        if active_name:
+            await local_servers.clear_session(active_name)
 
         # Destroy session
         await session_manager.destroy_session()
@@ -293,45 +304,108 @@ async def set_pinned_theme(
     """Pin (or clear) a theme on a session by tmux session name.
 
     SESSION-IDENTITY-V2 — the pinned theme overrides the user's global
-    localStorage theme whenever this session is active. ``pinned_theme``
-    null/None clears the pin. The matching session must be the currently
-    active one (single-active-session model); other names return 404.
+    localStorage theme whenever the session is active. ``pinned_theme``
+    null/None clears the pin.
+
+    Persistence is keyed by tmux session name in a dedicated
+    ``pinned_themes.json`` map that survives detach + swap + re-adopt
+    cycles. The session does NOT need to be the currently-active one —
+    pinning a theme to a session is conceptually about the session, not
+    about the active backend slot. ``adopt_external_session`` reads the
+    map on re-entry to seed ``Session.pinned_theme``; the attachable-
+    sessions endpoint decorates rows from the same map so the launchpad
+    can paint the pin without entering the session first.
+
+    Validation: ``session_name`` must be either the currently-active
+    backend's tmux name OR a tmux session known to our socket (live
+    name in ``list_attachable_sessions`` or owned name on file). This
+    keeps the endpoint from becoming an arbitrary KV store while still
+    accepting pins for detached-but-alive sessions.
     """
     session_manager = request.app.state.session_manager
 
-    if not session_manager.has_active_session():
-        raise HTTPException(status_code=404, detail="No active session")
+    # Defense in depth: strip the "adopted:" prefix if a stale frontend
+    # ever sends it (Session.id is "adopted:<name>" for adopted rows).
+    # The pinned_themes map is keyed on bare tmux names.
+    if session_name.startswith("adopted:"):
+        session_name = session_name[len("adopted:"):]
 
-    session = session_manager.session
-    backend = session_manager.backend
-    active_name = getattr(backend, "tmux_session", None) if backend else None
+    # Build the set of tmux names we recognize: live attachable rows
+    # (caught by tmux probe) ∪ owned_tmux_sessions ∪ active backend.
+    known_names: set[str] = set(session_manager.owned_tmux_sessions)
+    if session_manager.backend is not None:
+        active_name = getattr(session_manager.backend, "tmux_session", None)
+        if active_name:
+            known_names.add(active_name)
+    try:
+        for row in session_manager.list_attachable_sessions():
+            n = row.get("name")
+            if n:
+                known_names.add(n)
+    except Exception as exc:
+        # Probe failure shouldn't 500 a pin update; fall back to the
+        # owned/active set we already have.
+        logger.warning("pinned_theme_attachable_probe_failed", error=str(exc))
 
-    # Match either the tmux session name (the canonical client-side handle)
-    # or the internal Session.id — covers both adopt-path callers (where
-    # session.name = tmux name) and create-path callers that may only know
-    # the session id locally.
-    if session_name not in (active_name, session.id):
+    if session_name not in known_names:
+        # Diagnostic so a future "pin doesn't stick" report can be debugged
+        # by reading one log line instead of stepping through 5 layers.
+        logger.info(
+            "pinned_theme_set_404",
+            session_name=session_name,
+            known_names=sorted(known_names),
+        )
         raise HTTPException(
             status_code=404,
-            detail=f"Session {session_name!r} is not the active session",
+            detail=f"Unknown session {session_name!r}",
         )
 
-    session.pinned_theme = body.pinned_theme
-    session_manager._save_session_metadata()
+    session_manager.set_pinned_theme(session_name, body.pinned_theme)
 
     logger.info(
         "api_set_pinned_theme",
         session_name=session_name,
         pinned_theme=body.pinned_theme,
+        all_pin_keys=sorted(session_manager.pinned_themes.keys()),
     )
 
+    # Return the current SessionInfo when the pinned name is the active
+    # backend (the most useful response shape for the live caller). When
+    # the pin targets a non-active session, synthesize a minimal echo so
+    # the route's response_model contract still holds.
     info = await session_manager.get_session_info()
-    if info is None:
-        # Should be unreachable given the has_active_session() guard above,
-        # but pydantic-typed return demands a concrete value.
-        raise HTTPException(status_code=404, detail="Session vanished mid-update")
-    info.pinned_theme = session.pinned_theme
-    return info
+    if info is not None:
+        active_name = (
+            getattr(session_manager.backend, "tmux_session", None)
+            if session_manager.backend else None
+        )
+        if active_name == session_name:
+            # set_pinned_theme already mirrored onto session.pinned_theme.
+            return info
+    # Non-active pin update — return a minimal SessionInfo-shaped echo
+    # that carries the pin (the client only consumes pinned_theme on this
+    # path; the rest is filler to satisfy the pydantic contract).
+    placeholder_session = Session(
+        id=f"pinned:{session_name}",
+        pty_pid=None,
+        working_dir="",
+        status=SessionStatus.STOPPED,
+        created_at=datetime.utcnow(),
+        last_activity=datetime.utcnow(),
+        pinned_theme=body.pinned_theme,
+    )
+    return SessionInfo(
+        session=placeholder_session,
+        recent_logs=[],
+        local_servers=[],
+        stats=SessionStats(
+            total_commands=0, uptime_seconds=0, log_lines=0, local_servers=0
+        ),
+        session_backend="none",
+        tmux_session=session_name,
+        agent_type=None,
+        pinned_theme=body.pinned_theme,
+    )
 
 
 @router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
@@ -387,78 +461,25 @@ async def get_logs(request: Request, limit: int = 100):
     return logs
 
 
-@router.get("/tunnels", response_model=List[Tunnel], dependencies=[Depends(require_auth)])
-async def get_tunnels(request: Request):
+@router.get(
+    "/sessions/{session_name}/local-servers",
+    response_model=List[LocalServerInfo],
+    dependencies=[Depends(require_auth)],
+)
+async def get_local_servers(request: Request, session_name: str):
+    """List dev servers detected for ``session_name``.
+
+    Replaces the old ``GET /api/v1/tunnels`` surface. Pure read — never
+    triggers detection / probes; the LocalServersTracker maintains the
+    list as a side effect of pattern matches plus a 30s janitor sweep.
+
+    Returns an empty list when the session has no tracked servers (or
+    when the session name is unknown to the tracker — we don't 404 on
+    "no servers yet" because the UI polls speculatively before any have
+    been detected).
     """
-    Get all active tunnels.
-
-    Returns:
-        List of active tunnels
-    """
-    tunnel_manager = request.app.state.tunnel_manager
-
-    tunnels = tunnel_manager.get_active_tunnels()
-    return tunnels
-
-
-@router.post("/tunnels", response_model=Tunnel, status_code=201, dependencies=[Depends(require_auth)])
-async def create_tunnel(request: Request, body: CreateTunnelRequest):
-    """
-    Manually create a tunnel for a specific port.
-
-    Args:
-        body: Tunnel creation parameters
-
-    Returns:
-        Created tunnel object
-
-    Raises:
-        HTTPException: If tunnel creation fails
-    """
-    tunnel_manager = request.app.state.tunnel_manager
-
-    try:
-        logger.info("api_create_tunnel_request", port=body.port)
-
-        tunnel = await tunnel_manager.create_tunnel(port=body.port)
-
-        return tunnel
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("tunnel_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to create tunnel: {str(e)}")
-
-
-@router.delete("/tunnels/{tunnel_id}", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
-async def destroy_tunnel(request: Request, tunnel_id: str):
-    """
-    Destroy a specific tunnel.
-
-    Args:
-        tunnel_id: ID of the tunnel to destroy
-
-    Returns:
-        Success response
-
-    Raises:
-        HTTPException: If tunnel destruction fails
-    """
-    tunnel_manager = request.app.state.tunnel_manager
-
-    try:
-        logger.info("api_destroy_tunnel_request", tunnel_id=tunnel_id)
-
-        await tunnel_manager.destroy_tunnel(tunnel_id)
-
-        return SuccessResponse(message="Tunnel destroyed successfully")
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error("tunnel_destruction_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to destroy tunnel: {str(e)}")
+    local_servers = request.app.state.local_servers
+    return local_servers.list_for_session(session_name)
 
 
 @router.post("/server/reset", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
@@ -571,7 +592,7 @@ async def browse_directory(path: Optional[str] = None):
 async def health_endpoint(request: Request):
     """
     Health check endpoint for menu bar app.
-    Returns server status, uptime, session info, and tunnel count.
+    Returns server status, uptime, session info, and detected-server count.
 
     Note: This endpoint does NOT require authentication to allow menu bar app
     to poll before user logs in via web UI.
@@ -579,11 +600,10 @@ async def health_endpoint(request: Request):
     Returns:
         Health status with stats
     """
-    import time
     import os
 
     session_manager = request.app.state.session_manager
-    tunnel_manager = request.app.state.tunnel_manager
+    local_servers = getattr(request.app.state, "local_servers", None)
 
     # Get session info
     session_name = None
@@ -593,11 +613,16 @@ async def health_endpoint(request: Request):
             # Use basename of working directory as session name
             session_name = os.path.basename(session_info.session.working_dir)
 
-    # Get tunnel count
-    tunnel_count = 0
-    if tunnel_manager:
-        tunnels = tunnel_manager.get_active_tunnels()
-        tunnel_count = len(tunnels)
+    # Count detected local dev servers across every tracked session.
+    # Replaces the old ``tunnel_count``; the menu-bar tray reads this.
+    local_server_count = 0
+    if local_servers is not None:
+        try:
+            local_server_count = sum(
+                len(v) for v in local_servers.snapshot().values()
+            )
+        except Exception:  # pragma: no cover - defensive
+            local_server_count = 0
 
     # Calculate uptime (we don't track server start time, so use session uptime as proxy)
     uptime_seconds = 0
@@ -610,7 +635,7 @@ async def health_endpoint(request: Request):
         status="running",
         uptime=uptime_seconds,
         session_name=session_name,
-        tunnel_count=tunnel_count
+        local_server_count=local_server_count,
     )
 
 

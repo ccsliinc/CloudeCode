@@ -613,8 +613,8 @@ class Terminal {
         // Connect WebSocket
         setTimeout(() => this.connectWebSocket(), 500);
 
-        // Load tunnels
-        this.loadTunnels();
+        // Load any locally-detected dev servers for this session
+        this.loadLocalServers();
     }
 
     /**
@@ -692,9 +692,9 @@ class Terminal {
         // container to measure.
         setTimeout(() => this.connectWebSocket(), 500);
 
-        // Refresh tunnels panel in case tunnels were created/destroyed
-        // while the user was away on the launchpad.
-        this.loadTunnels();
+        // Refresh local-servers panel in case dev servers came up or
+        // shut down while the user was away on the launchpad.
+        this.loadLocalServers();
     }
 
     /**
@@ -854,11 +854,17 @@ class Terminal {
             if (this.term && message.content) {
                 this.term.writeln(`\x1b[1;33m${message.content}\x1b[0m`);
             }
-        } else if (type === 'tunnel_created') {
-            if (this.term) {
-                this.term.writeln(`\x1b[1;36m[Tunnel created: ${message.tunnel.public_url}]\x1b[0m`);
+        } else if (type === 'local_server_detected') {
+            // Plan v3.2 — A dev server was detected on the host and
+            // confirmed as a live TCP listener. Merge into local state
+            // and re-render.
+            if (this.term && message.url) {
+                this.term.writeln(`\x1b[1;36m[Local server detected: ${message.url}]\x1b[0m`);
             }
-            this.loadTunnels();
+            this._mergeLocalServer({ port: message.port, url: message.url });
+        } else if (type === 'local_server_lost') {
+            // The janitor sweep stopped seeing this listener — drop it.
+            this._dropLocalServer(message.port);
         } else if (type === 'error') {
             if (this.term) {
                 this.term.writeln(`\x1b[1;31m[Error: ${message.message}]\x1b[0m`);
@@ -928,28 +934,85 @@ class Terminal {
     }
 
     /**
-     * Load tunnels
+     * Resolve the tmux session name to query the local-servers endpoint
+     * for. Returns null when no session is active or the name can't be
+     * read (e.g. fresh session view, server not yet replied).
      */
-    async loadTunnels() {
-        try {
-            const tunnels = await window.API.getTunnels();
-            const container = document.getElementById('tunnelsContainer');
-            const list = document.getElementById('tunnelsList');
+    _activeSessionName() {
+        const sess = this._currentSession;
+        if (!sess) return null;
+        return sess.tmux_session || sess.id || null;
+    }
 
-            if (tunnels.length > 0) {
-                container.style.display = 'block';
-                list.innerHTML = tunnels.map(tunnel => `
-                    <div class="tunnel-item">
-                        <strong>Port ${tunnel.port}:</strong>
-                        <a href="${tunnel.public_url}" target="_blank">${tunnel.public_url}</a>
-                    </div>
-                `).join('');
-            } else {
-                container.style.display = 'none';
-            }
-        } catch (error) {
-            console.error('Terminal: Error loading tunnels:', error);
+    /**
+     * Load locally-detected dev servers for the active session and paint
+     * them into the Local Servers panel. Detection is server-side only;
+     * this call is a pure read.
+     */
+    async loadLocalServers() {
+        const name = this._activeSessionName();
+        if (!name) {
+            this._localServers = [];
+            this._renderLocalServers();
+            return;
         }
+        try {
+            const list = await window.API.getLocalServers(name);
+            this._localServers = Array.isArray(list) ? list : [];
+            this._renderLocalServers();
+        } catch (error) {
+            console.error('Terminal: Error loading local servers:', error);
+        }
+    }
+
+    /**
+     * Merge a single local-server entry into local state (idempotent on
+     * port). Triggered by the `local_server_detected` WS event.
+     */
+    _mergeLocalServer(entry) {
+        if (!entry || !entry.port) return;
+        if (!Array.isArray(this._localServers)) this._localServers = [];
+        const idx = this._localServers.findIndex(s => s.port === entry.port);
+        if (idx === -1) {
+            this._localServers.push({ port: entry.port, url: entry.url });
+        } else {
+            this._localServers[idx] = { ...this._localServers[idx], url: entry.url };
+        }
+        this._localServers.sort((a, b) => a.port - b.port);
+        this._renderLocalServers();
+    }
+
+    /**
+     * Drop a local-server entry by port. Triggered by `local_server_lost`.
+     */
+    _dropLocalServer(port) {
+        if (!Array.isArray(this._localServers)) return;
+        this._localServers = this._localServers.filter(s => s.port !== port);
+        this._renderLocalServers();
+    }
+
+    /**
+     * Repaint the Local Servers panel from `this._localServers`. Hides
+     * the container when no entries are tracked.
+     */
+    _renderLocalServers() {
+        const container = document.getElementById('localServersContainer');
+        const list = document.getElementById('localServersList');
+        if (!container || !list) return;
+
+        const entries = Array.isArray(this._localServers) ? this._localServers : [];
+        if (entries.length === 0) {
+            container.style.display = 'none';
+            list.innerHTML = '';
+            return;
+        }
+        container.style.display = 'block';
+        list.innerHTML = entries.map(entry => `
+            <div class="local-server-item">
+                <span class="local-server-port">${entry.port}</span>
+                <a class="local-server-url" href="${entry.url}" target="_blank" rel="noopener">${entry.url}</a>
+            </div>
+        `).join('');
     }
 
     /**

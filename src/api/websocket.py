@@ -129,14 +129,15 @@ async def websocket_terminal(websocket: WebSocket):
 
     # Get app state
     session_manager = websocket.app.state.session_manager
-    auto_tunnel = websocket.app.state.auto_tunnel
+    local_servers = websocket.app.state.local_servers
     log_monitor = websocket.app.state.log_monitor
 
     # Subscribe to PTY output
     pty_output_queue = session_manager.subscribe_output()
 
-    # Subscribe to tunnel events (keep for port detection)
-    tunnel_queue = auto_tunnel.subscribe()
+    # Subscribe to local-server events (replaces the old tunnel queue —
+    # carries `local_server_detected` / `local_server_lost` payloads).
+    local_servers_queue = local_servers.subscribe()
 
     # Subscribe to log events (keep for system messages)
     log_queue = log_monitor.subscribe()
@@ -261,7 +262,7 @@ async def websocket_terminal(websocket: WebSocket):
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
         session_manager.unsubscribe_output(pty_output_queue)
-        auto_tunnel.unsubscribe(tunnel_queue)
+        local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
         return
@@ -276,8 +277,8 @@ async def websocket_terminal(websocket: WebSocket):
         send_pty_task = asyncio.create_task(
             send_pty_output(websocket, pty_output_queue, log_monitor)
         )
-        send_tunnels_task = asyncio.create_task(
-            send_queue_messages(websocket, tunnel_queue)
+        send_local_servers_task = asyncio.create_task(
+            send_queue_messages(websocket, local_servers_queue)
         )
         send_logs_task = asyncio.create_task(
             send_queue_messages(websocket, log_queue)
@@ -285,7 +286,7 @@ async def websocket_terminal(websocket: WebSocket):
 
         # Wait for any task to complete (or fail)
         done, pending = await asyncio.wait(
-            [receive_task, send_pty_task, send_tunnels_task, send_logs_task],
+            [receive_task, send_pty_task, send_local_servers_task, send_logs_task],
             return_when=asyncio.FIRST_COMPLETED
         )
 
@@ -300,7 +301,7 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup
         session_manager.unsubscribe_output(pty_output_queue)
-        auto_tunnel.unsubscribe(tunnel_queue)
+        local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
 

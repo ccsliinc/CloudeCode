@@ -474,34 +474,18 @@ class API {
     }
 
     /**
-     * Tunnels: Get all tunnels
-     * @returns {Promise<Array>}
+     * Local servers: list dev servers detected on the host for a given
+     * tmux session. Pure read — never triggers detection.
+     *
+     * @param {string} sessionName - tmux session name (the value the
+     *   server tracks entries under).
+     * @returns {Promise<Array<{port: number, url: string,
+     *   first_seen: string, last_seen: string}>>}
      */
-    async getTunnels() {
-        return await this.call('/tunnels');
-    }
-
-    /**
-     * Tunnels: Create tunnel
-     * @param {number} port - Port number
-     * @returns {Promise<object>} - Tunnel data
-     */
-    async createTunnel(port) {
-        return await this.call('/tunnels', {
-            method: 'POST',
-            body: { port }
-        });
-    }
-
-    /**
-     * Tunnels: Destroy tunnel
-     * @param {string} tunnelId - Tunnel ID
-     * @returns {Promise<object>}
-     */
-    async destroyTunnel(tunnelId) {
-        return await this.call(`/tunnels/${tunnelId}`, {
-            method: 'DELETE'
-        });
+    async getLocalServers(sessionName) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionName)}/local-servers`
+        );
     }
 
     /**

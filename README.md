@@ -46,8 +46,7 @@ JWT never lands in a query string or a proxy access log.
 Tailscale, or a similar identity-aware overlay network. Cloude Code ships with
 hardened defaults (strict CSP, rate-limited auth, JWT typ enforcement, owned-set
 ACL for adopt), but this is **not** designed to stand naked on the public
-internet. The optional Cloudflare-tunnel backend exists for convenience, not
-because the app has been hardened for hostile traffic.
+internet — bring your own overlay.
 
 ---
 
@@ -80,9 +79,12 @@ because the app has been hardened for hostile traffic.
 - **ntfy push notifications** — opt-in. IdleWatcher FSM detects permission
   prompts and task completion from the byte stream. Rate-limited, privacy-
   preserving (no project names in ntfy payloads).
-- **Pluggable tunnel backend** — `local_only` (default), `quick_cloudflare`,
-  `named_cloudflare`. Double-flag guard: you have to pick a Cloudflare backend
-  *and* flip `enable_cloudflare=true` to actually go public.
+- **Local servers detection** — when a session prints a dev-server URL
+  (Vite, Next, Flask, plain `python3 -m http.server`...), the server
+  validates the listener is live and surfaces it in a "Local Servers"
+  panel under the terminal. Pure read-only — Cloude never spawns or
+  proxies anything; click to open in a new tab. Tightened pattern regex
+  rejects digits in TUI status text (`"15.3k tokens"`, `"31%"`).
 - **Electron menu bar (macOS)** — tray icon, server start/stop, health polling
   (against the configured bind host), launch-at-login via LaunchAgent.
   Tray menu surfaces a **Bind IP submenu** (loopback / LAN / `0.0.0.0`),
@@ -154,11 +156,11 @@ because the app has been hardened for hostile traffic.
   │  │   PTYBackend   ────── fallback (no tmux on PATH) ───────        │     │
   │  └─────────────────────────────────────────────────────────────────┘     │
   │                                                                         │
-  │  ┌── NotificationRouter ──┐    ┌── TunnelBackend (ABC) ──┐              │
-  │  │ · IdleWatcher FSM      │    │ · local_only (default)  │              │
-  │  │ · RateLimiter          │    │ · quick_cloudflare      │              │
-  │  │ · ntfy.sh backend      │    │ · named_cloudflare      │              │
-  │  └────────────────────────┘    └─────────────────────────┘              │
+  │  ┌── NotificationRouter ──┐    ┌── LocalServersTracker ──┐             │
+  │  │ · IdleWatcher FSM      │    │ · pattern detect → port │             │
+  │  │ · RateLimiter          │    │ · is_valid_dev_port gate│             │
+  │  │ · ntfy.sh backend      │    │ · 30s janitor sweep     │             │
+  │  └────────────────────────┘    └─────────────────────────┘             │
   └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,10 +194,10 @@ cloudecode/
 │
 ├── src/                                 # Python backend
 │   ├── main.py                          # FastAPI app, lifespan, CSP middleware
-│   ├── config.py                        # pydantic-settings + AuthConfig/SessionConfig/TunnelConfig
+│   ├── config.py                        # pydantic-settings + AuthConfig/SessionConfig
 │   ├── models.py                        # pydantic request/response models
 │   ├── api/
-│   │   ├── routes.py                    # REST endpoints (sessions, tunnels, projects)
+│   │   ├── routes.py                    # REST endpoints (sessions, projects, local-servers)
 │   │   ├── auth.py                      # TOTP verify + JWT refresh + slowapi
 │   │   ├── deps.py                      # WS subprotocol auth helper
 │   │   └── websocket.py                 # /ws/terminal + resize handshake
@@ -205,20 +207,13 @@ cloudecode/
 │   │   ├── tmux_backend.py              # tmux -L cloude impl + binary-safe writes
 │   │   ├── refresh_store.py             # aiosqlite JWT refresh-token store
 │   │   ├── log_monitor.py               # pattern detection on pane output
-│   │   ├── auto_tunnel.py               # auto-tunnel orchestrator
-│   │   ├── notifications/
-│   │   │   ├── router.py                # bounded-queue dispatcher + rate limiter
-│   │   │   ├── idle_watcher.py          # FSM: prompt / permission / task-complete
-│   │   │   ├── rate_limit.py            # global cap + per-kind cooldown
-│   │   │   ├── ntfy.py                  # ntfy.sh backend (privacy-preserving)
-│   │   │   └── events.py                # EventType + NotificationEvent
-│   │   └── tunnel/
-│   │       ├── manager.py               # TunnelManager router
-│   │       └── backends/
-│   │           ├── base.py              # TunnelBackend ABC
-│   │           ├── local_only.py        # LAN-only (default)
-│   │           ├── quick_cloudflare.py  # *.trycloudflare.com
-│   │           └── named_cloudflare.py  # persistent Cloudflare named tunnel
+│   │   ├── local_servers.py             # detection-only dev-server tracker + 30s janitor
+│   │   └── notifications/
+│   │       ├── router.py                # bounded-queue dispatcher + rate limiter
+│   │       ├── idle_watcher.py          # FSM: prompt / permission / task-complete
+│   │       ├── rate_limit.py            # global cap + per-kind cooldown
+│   │       ├── ntfy.py                  # ntfy.sh backend (privacy-preserving)
+│   │       └── events.py                # EventType + NotificationEvent
 │   └── utils/                           # pty_session, templates, patterns
 │
 ├── client/                              # Web frontend (vanilla JS)
@@ -242,7 +237,7 @@ cloudecode/
 │   ├── test_notifications.py
 │   ├── test_rate_limiter.py
 │   ├── test_idle_watcher.py
-│   ├── test_tunnel_manager.py
+│   ├── test_local_servers.py
 │   └── test_deep_link_routing.py
 │
 ├── docs/
@@ -255,8 +250,8 @@ cloudecode/
 ├── requirements.txt                     # Python deps
 ├── config.example.json                  # Reference config
 ├── .env.example                         # Reference env vars
-├── setup.sh                             # venv + pip + cloudflared installer
-├── setup_auth.py                        # Interactive TOTP/JWT/Cloudflare/ntfy wizard
+├── setup.sh                             # venv + pip installer
+├── setup_auth.py                        # Interactive TOTP/JWT/ntfy wizard
 ├── start.sh / stop.sh / reset.sh / nuke.sh   # Shell helpers
 └── README.md
 ```
@@ -272,7 +267,6 @@ cloudecode/
 | tmux            | 3.2+         | `brew install tmux` — required for the tmux backend             |
 | Node.js         | 20+          | Only required to build/run the Electron app                     |
 | Claude CLI      | Latest       | `claude` on `PATH` or `CLAUDE_CLI_PATH` in `.env`               |
-| cloudflared     | Any recent   | Only if you enable a Cloudflare tunnel backend                  |
 
 Quick sanity check:
 
@@ -325,8 +319,8 @@ with full access to:
 git clone <repo-url> cloudecode
 cd cloudecode
 
-./setup.sh                    # creates venv, installs requirements, cloudflared (if needed)
-python3 setup_auth.py         # interactive secrets + Cloudflare/ntfy wizard
+./setup.sh                    # creates venv, installs requirements
+python3 setup_auth.py         # interactive secrets + ntfy wizard
 ./start.sh                    # starts uvicorn on 0.0.0.0:8000
 
 # Optional — run the Electron menu bar app in dev mode:
@@ -383,7 +377,7 @@ case natively. Mode 1 on macOS, Mode 2 on Linux. That's it.
 ### `.env` — runtime environment
 
 Copy `.env.example` → `.env`. `setup_auth.py` populates secrets and prompts for
-optional Cloudflare/ntfy values.
+optional ntfy values.
 
 | Variable                 | Required           | Default          | Purpose                                                       |
 | ------------------------ | ------------------ | ---------------- | ------------------------------------------------------------- |
@@ -399,10 +393,6 @@ optional Cloudflare/ntfy values.
 | `JWT_SECRET`             | **Yes**            | generated        | Generated by `setup_auth.py` — do not edit manually           |
 | `ALLOWED_ORIGINS`        | No                 | `["*"]`          | CORS allowlist — JSON array or comma-separated                |
 | `AUTH_CONFIG_FILE`       | No                 | `./config.json`  | Path to projects + slash commands + feature config            |
-| `CLOUDFLARE_API_TOKEN`   | If `named_cloudflare` | —             | Needs `Zone.DNS:Edit` + `Cloudflare Tunnel:Edit`              |
-| `CLOUDFLARE_ZONE_ID`     | If `named_cloudflare` | —             | Zone ID for your domain                                       |
-| `CLOUDFLARE_DOMAIN`      | If `named_cloudflare` | —             | e.g. `cloude.example.com`                                     |
-| `CLOUDFLARE_TUNNEL_NAME` | No                 | `claude-tunnel`  | Name used for the named tunnel                                |
 | `CLOUDE_BIND_IP`         | Docker only        | `127.0.0.1`      | Host IP to publish port 8000 on (Mode 2)                      |
 | `CLOUDE_PROJECT_PATH`    | Docker only        | `./projects`     | Host path mounted as `/workspace` in the container            |
 | `CLOUDE_LOG_DIR`         | Docker only        | `./logs`         | Host path for state (`refresh_tokens.db`, FIFOs)              |
@@ -420,14 +410,6 @@ loaded by `src/config.py::Settings.load_auth_config()`:
 | `backend`           | str     | `"auto"`   | `"auto"` (tmux if present else pty) / `"tmux"` / `"pty"`       |
 | `tmux_socket_name`  | str     | `"cloude"` | Passed to `tmux -L <name>` — dedicated socket                  |
 | `scrollback_lines`  | int     | `3000`     | Lines captured on re-attach                                    |
-
-**`tunnel` (`TunnelConfig`)**
-
-| Key                  | Type  | Default        | Purpose                                                                    |
-| -------------------- | ----- | -------------- | -------------------------------------------------------------------------- |
-| `backend`            | str   | `"local_only"` | `"local_only"` / `"quick_cloudflare"` / `"named_cloudflare"`               |
-| `enable_cloudflare`  | bool  | `false`        | Master switch — must be `true` for Cloudflare backends (double-flag guard) |
-| `lan_hostname`       | str   | `"auto"`       | Override LAN host for `local_only` (`"auto"` = detect)                     |
 
 **`auth_rate_limits` (`AuthRateLimits`)**
 
@@ -501,10 +483,7 @@ config to `~/Library/Application Support/cloude-code-menubar/`.
 | `start.sh`    | Activates venv and starts the Python server                                            |
 | `stop.sh`     | Graceful server shutdown                                                               |
 | `reset.sh`    | Light reset — stops server, clears session metadata, preserves `.env` + `config.json`  |
-| `nuke.sh`     | Destructive: deletes `.env`, `config.json`, `venv/`, Cloudflare tunnels, DNS records   |
-
-`nuke.sh` deletes remote Cloudflare resources. Review before running on a shared
-account.
+| `nuke.sh`     | Destructive: deletes `.env`, `config.json`, `venv/`, logs, App Support data            |
 
 ### Local development against the packaged menu-bar venv
 
@@ -652,9 +631,7 @@ Base URL: `http://<host>:8000` · REST prefix: `/api/v1`
 | `POST`   | `/api/v1/sessions/adopt`             | `AdoptSessionRequest`    | `AdoptSessionResponse`     |
 | `POST`   | `/api/v1/sessions/command`           | `CommandRequest`         | `SuccessResponse`          |
 | `GET`    | `/api/v1/sessions/logs?limit=N`      | —                        | `List[LogEntry]`           |
-| `GET`    | `/api/v1/tunnels`                    | —                        | `List[Tunnel]`             |
-| `POST`   | `/api/v1/tunnels`                    | `CreateTunnelRequest`    | `Tunnel`                   |
-| `DELETE` | `/api/v1/tunnels/{id}`               | —                        | `SuccessResponse`          |
+| `GET`    | `/api/v1/sessions/{name}/local-servers` | —                     | `List[LocalServerInfo]`    |
 | `GET`    | `/api/v1/projects`                   | —                        | `List[ProjectResponse]`    |
 | `POST`   | `/api/v1/projects`                   | `CreateProjectRequest`   | `ProjectResponse`          |
 | `DELETE` | `/api/v1/projects/{name}`            | —                        | `SuccessResponse`          |
@@ -688,7 +665,8 @@ SIGWINCH to propagate, and writes Ctrl+L (0x0c) to force a clean redraw.
 - `{"type": "request_dims"}` — resize handshake open
 - Binary frames — raw pane bytes (post-handshake live stream)
 - `{"type": "log", ...}` — system messages
-- `{"type": "tunnel_created", "tunnel": Tunnel}` — auto-tunnel event
+- `{"type": "local_server_detected", "session": str, "port": int, "url": str}` — dev server detected on host
+- `{"type": "local_server_lost", "session": str, "port": int}` — janitor sweep dropped a stale entry
 - `{"type": "session_status", ...}` — session state change
 - `{"type": "pong"}` — keepalive reply
 
@@ -931,7 +909,6 @@ ntfy.sh.
 | `ERROR`             | Error pattern detected                                              | 3        |
 | `BUILD_COMPLETE`    | Build-success pattern detected                                      | 3        |
 | `TEST_RESULT`       | Test runner finished                                                | 3        |
-| `TUNNEL_CREATED`    | Auto-tunnel brought a port online                                   | 3        |
 
 ### IdleWatcher FSM
 
@@ -1002,7 +979,7 @@ a unique value prop.
 ## Development
 
 ```bash
-./setup.sh                         # venv + pip + cloudflared
+./setup.sh                         # venv + pip
 source venv/bin/activate
 python3 setup_auth.py              # generate .env + config.json
 python3 -m src.main                # dev server (reload=True)
@@ -1018,7 +995,7 @@ Test suite covers:
 - `test_totp_rate_limit.py` — slowapi + TTLCache replay dedup
 - `test_notifications.py` / `test_rate_limiter.py` / `test_idle_watcher.py` —
   notification pipeline
-- `test_tunnel_manager.py` — backend selection + double-flag guard
+- `test_local_servers.py` — tightened port regex + listener-probe gate + janitor TTL
 - `test_deep_link_routing.py` — `/session/<project>` deep link
 
 Tmux-adjacent tests skip cleanly when tmux isn't on PATH. Install tmux for
@@ -1094,13 +1071,11 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 | Issue                                      | Mitigation                                                               | Status         |
 | ------------------------------------------ | ------------------------------------------------------------------------ | -------------- |
-| Tunnel URL is public                       | TOTP + JWT on every API route; Cloudflare Access in front is recommended | Documented     |
 | `ALLOWED_ORIGINS = ["*"]` out of the box   | Restrict to your LAN origin in `.env`                                    | Documented     |
 | ntfy topic is a shared credential          | Treat like a password; self-host ntfy if you don't trust sh.ntfy.sh      | Documented     |
 | PTY runs unsandboxed                       | Single-user LAN model; don't share access with untrusted parties         | Accepted       |
 | Legacy `cloude_ses_<hex>` sessions         | Continue to work; no migration                                           | By design      |
 | Menu bar "Stopped" while server is running | Health poll adopts existing process on port 8000                         | Partial fix    |
-| `CLOUDFLARE_DOMAIN` placeholder after setup| UI surfaces "Setup Required" state on placeholder detection              | Workaround     |
 | Docker Desktop Unix-socket passthrough     | Hybrid mode was cut — use Mode 1 or Mode 2                               | Won't fix      |
 
 ---
@@ -1206,11 +1181,19 @@ Short version of how we got here. Commit messages tell the full story.
 - **Single access token → access + refresh pair.** Short-lived access (15m)
   limits blast radius of a leak; long-lived refresh (7d) with SQLite
   persistence, rotation, reuse detection, and chain revocation.
-- **HybridTunnelManager → pluggable TunnelBackend ABC.** One class grew to
-  handle local + quick + named + DNS. Refactored to a `TunnelBackend` ABC
-  with `local_only`, `quick_cloudflare`, `named_cloudflare` implementations
-  selected by `tunnel.backend` config. Double-flag guard requires
-  `enable_cloudflare=true` in addition to picking a Cloudflare backend.
+- **Tunnel system demolished → Local Servers panel.** Cloude shipped an
+  auto-tunnel orchestrator that spawned Cloudflare tunnels for any port
+  detected in pane output. The detection regex was loose enough to match
+  digits in the Claude TUI status row (`"15.3k tokens"`, `"31% context
+  left"`) and started binding tunnels for nonsense privileged ports.
+  Whole subsystem cut: `auto_tunnel.py`, `tunnel/`, the legacy
+  `tunnel_manager`/`hybrid_tunnel_manager`/`named_tunnel_manager`/`cloudflare_api`
+  modules, every `/api/v1/tunnels` route, the Cloudflare prompts in
+  `setup_auth.py`, all `CLOUDFLARE_*` env vars. Replacement is a pure
+  detection panel: tightened regex (URL host:port, `port` keyword, narrow
+  verb set; 2-5 digit bound + word boundaries), `is_valid_dev_port`
+  privileged-port gate, `port_is_listening` socket probe, and a 30s
+  janitor sweep that retires entries whose listener has stopped.
 - **v0.2 → v0.5.** Version bump reflects the weekend-MVP → hardened-LAN-app
   transition. Menu-bar status dot now polls `/health` directly.
 

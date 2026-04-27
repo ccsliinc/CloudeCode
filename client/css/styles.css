@@ -18,7 +18,7 @@
     --color-bg:               #1e1e1e;            /* body / terminal / modal */
     --color-bg-page:          #0a0a0a;            /* header / tooltip surface */
     --color-bg-elevated:      #2d2d30;            /* panels / inputs / cards */
-    --color-bg-card:          #252526;            /* tunnels card */
+    --color-bg-card:          #252526;            /* local servers card */
     --color-bg-hover:         #323235;            /* row hover state */
     --color-bg-overlay:       rgba(0, 0, 0, 0.85); /* modal scrim */
     --color-header-bg: var(--color-bg);
@@ -96,7 +96,7 @@
     --badge-color-hermes:    #8899ff;
     --badge-color-openclaw:  #fbbf24;
 
-    /* ---- Syntax-ish accents (tunnels link / heading) ------------ */
+    /* ---- Syntax-ish accents (local-servers link / heading) ------ */
     --color-syntax-cyan: #4ec9b0;
     --color-syntax-blue: #569cd6;
 
@@ -359,33 +359,70 @@ button[data-tooltip]:hover::after {
     color: var(--color-fg-muted);
 }
 
-/* Tunnels section */
-.tunnels {
+/* ---------------------------------------------------------------------- */
+/* Local Servers panel — pure detection readout. The server tracks any   */
+/* dev port detected in pane output (Vite, Next, Flask, etc.) and pushes */
+/* `local_server_detected` / `local_server_lost` over the WebSocket. The */
+/* row is intentionally minimal: monospace port chip on the left, the    */
+/* clickable URL on the right. No CRUD affordances — display-only.       */
+/* ---------------------------------------------------------------------- */
+.local-servers {
     background: var(--color-bg-card);
-    padding: 15px 20px;
+    padding: 14px 20px 16px;
     border-top: 1px solid var(--color-border);
 }
 
-.tunnels h3 {
-    margin-bottom: 10px;
+.local-servers h3 {
+    margin: 0 0 10px;
     color: var(--color-syntax-cyan);
-    font-size: 1.1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
-.tunnel-item {
+.local-server-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     background: var(--color-bg-elevated);
-    padding: 10px;
-    margin-bottom: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
     border-radius: var(--radius-md);
     border-left: 3px solid var(--color-syntax-cyan);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.tunnel-item a {
+.local-server-item:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.12);
+}
+
+.local-server-item:last-child {
+    margin-bottom: 0;
+}
+
+.local-server-port {
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    font-size: 0.85rem;
+    color: var(--color-syntax-cyan);
+    font-weight: 600;
+    min-width: 56px;
+    text-align: right;
+    opacity: 0.85;
+}
+
+.local-server-url {
     color: var(--color-syntax-blue);
     text-decoration: none;
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.tunnel-item a:hover {
+.local-server-url:hover {
     text-decoration: underline;
 }
 
@@ -1704,10 +1741,15 @@ button[data-tooltip]:hover::after {
     align-items: center;
     justify-content: flex-end;
     pointer-events: auto;
-    /* Stay above sibling content but no longer needs to clear a fixed
-     * header. Menu/backdrop still get their own z layers below. */
+    /* Default z stays low so neighboring rows can paint normally. */
     z-index: 2;
 }
+
+/* When open, lift ABOVE the backdrop (1050) so item clicks land on the
+ * pills, not the backdrop. Without this, the backdrop intercepts every
+ * click and silently closes the menu — which presents to the user as
+ * "the buttons don't do anything." */
+.new-fab--open { z-index: 1100; }
 
 .new-fab.hidden { display: none; }
 
