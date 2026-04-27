@@ -131,3 +131,6 @@ CLI invocations (corrected per user 2026-04-24):
 [MATRIX-SELECTOR-FIX] [2026-04-25]: dead #launchpad → #launchpad-screen
 
 [SESSION-IDENTITY-V2] [2026-04-26]: per-session pinned theme + header identity swap
+[DMG-BUILD] [2026-04-26]: built Cloude.Code-0.5.4-arm64.dmg, sha256=35aed1af
+
+[FAB-MOVE] [2026-04-24]: + button moved from recent-projects heading to running-sessions heading

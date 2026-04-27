@@ -599,8 +599,8 @@ class Launchpad {
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
-                    <div class="launchpad-section-title">
-                        ► running sessions
+                    <div class="launchpad-section-title launchpad-section-title--row">
+                        <span class="launchpad-section-title__text">► running sessions</span>
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
@@ -613,20 +613,6 @@ class Launchpad {
                                 <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
                             </div>
                         </details>
-                    </div>
-                    <div id="running-sessions-list"></div>
-                </div>
-
-                <!-- "new project" actions live in the inline speed-dial FAB
-                     to the right of the "recent projects" heading. The FAB
-                     trigger sits as a sibling of the heading text inside a
-                     flex row (justify-content: space-between). The fan-out
-                     menu anchors absolutely off the .new-fab wrapper.
-                     Wired in setupNewFab(). -->
-
-                <div class="launchpad-section" id="projects-section">
-                    <div class="launchpad-section-title launchpad-section-title--row">
-                        <span class="launchpad-section-title__text">► recent projects</span>
                         <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
@@ -663,6 +649,14 @@ class Launchpad {
                             </div>
                         </div>
                     </div>
+                    <div id="running-sessions-list"></div>
+                </div>
+
+                <!-- "new project" actions live in the inline speed-dial FAB
+                     to the right of the "running sessions" heading. Wired in setupNewFab(). -->
+
+                <div class="launchpad-section" id="projects-section">
+                    <div class="launchpad-section-title">► recent projects</div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
