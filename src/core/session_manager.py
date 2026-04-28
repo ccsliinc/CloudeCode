@@ -847,6 +847,32 @@ class SessionManager:
             if self.session:
                 self.session.status = SessionStatus.ERROR
             raise ValueError(f"Failed to create session: {e}") from e
+        except RuntimeError as e:
+            # Backend.start() raises RuntimeError for hard infrastructure
+            # failures: tmux missing on PATH, ``new-session`` non-zero exit,
+            # OR — added in the dead-on-arrival probe — when the spawned
+            # agent process exits immediately and tmux's remain-on-exit
+            # would otherwise leave the user staring at a frozen welcome
+            # screen. Preserve the type (do NOT rewrap as ValueError) so
+            # the route layer can return 502 Bad Gateway with the original
+            # message visible to the client. Same teardown as the generic
+            # branch — half-built state still needs cleanup.
+            logger.error("session_creation_failed_runtime", error=str(e))
+            if self.session:
+                self.session.status = SessionStatus.ERROR
+            if self.backend is not None:
+                try:
+                    await self.backend.stop()
+                except Exception:
+                    pass
+                self.backend = None
+            if self.idle_watcher is not None:
+                try:
+                    await self.idle_watcher.stop()
+                except Exception:
+                    pass
+                self.idle_watcher = None
+            raise
         except Exception as e:
             logger.error("session_creation_failed", error=str(e))
             if self.session:

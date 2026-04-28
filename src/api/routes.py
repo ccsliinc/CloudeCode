@@ -88,6 +88,18 @@ async def create_session(request: Request, body: CreateSessionRequest):
     except ValueError as e:
         logger.error("session_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        # SessionManager.create_session re-raises RuntimeError verbatim for
+        # backend infrastructure failures — tmux missing, new-session exec
+        # error, or (most importantly) the dead-on-arrival agent probe in
+        # TmuxBackend.start() catching a child that exited before writing
+        # a byte. 502 Bad Gateway is the right semantic: our upstream (the
+        # agent CLI / tmux subsystem) failed, this isn't a client mistake
+        # (400) nor a generic server bug (500). The original message
+        # ("agent failed to launch: ...") is forwarded as the detail so
+        # the launchpad's catch can surface it directly to the user.
+        logger.error("session_creation_failed_backend", error=str(e))
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error("session_creation_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
