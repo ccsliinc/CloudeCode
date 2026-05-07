@@ -20,7 +20,7 @@ Drag the app into Applications, double-click. First launch auto-provisions a Pyt
 
 ```bash
 shasum -a 256 Cloude.Code-0.5.6-arm64.dmg
-# expected: <computed after build>
+# expected: fc3da613bb2eb446881b5b7d796705fc3b3a00760ee2d80e7761e2154c5095ef
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
