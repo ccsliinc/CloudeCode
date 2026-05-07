@@ -68,6 +68,7 @@ class Launchpad {
             'clone-github':     () => this.showCloneFromGithubModal(),
             'connect-openclaw': () => this.createNewSessionWithAgent('openclaw'),
             'connect-hermes':   () => this.createNewSessionWithAgent('hermes'),
+            'new-console':      () => this.createConsoleSession(),
         };
 
         trigger.addEventListener('click', (e) => {
@@ -583,6 +584,26 @@ class Launchpad {
             const fifoStartOffset = typeof response.fifo_start_offset === 'number'
                 ? response.fifo_start_offset
                 : null;
+
+            // Auto-add adopted session to Recent Projects so the user can
+            // relaunch it after tmux dies. Mirrors the create-flow pattern
+            // (lines 1164-1177). Skip if working_dir is missing (shouldn't
+            // happen for adopted sessions but defensive).
+            if (session && session.working_dir) {
+                try {
+                    await window.API.createProject({
+                        name: session.tmux_session || tmuxName,
+                        path: session.working_dir,
+                        description: ''
+                    });
+                } catch (error) {
+                    // If project already exists, that's ok - continue anyway
+                    if (!error.message.includes('already exists')) {
+                        console.error('Launchpad: Failed to save adopted project:', error);
+                    }
+                }
+            }
+
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
             }));
@@ -667,6 +688,15 @@ class Launchpad {
                                         </svg>
                                     </span>
                                     <span class="new-fab__label">connect to hermes</span>
+                                </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-console" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="4 7 9 12 4 17"/>
+                                            <line x1="12" y1="18" x2="20" y2="18"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">new console</span>
                                 </button>
                             </div>
                         </div>
@@ -1109,6 +1139,65 @@ class Launchpad {
      */
     async createNewSessionWithAgent(agentType) {
         return this._createNewSessionInner(agentType);
+    }
+
+    /**
+     * Create a plain "console" tmux session in ~/ running $SHELL — no
+     * Claude/codex/hermes/openclaw. For quick shell work straight from the
+     * launchpad.
+     *
+     * Auto-generates a name (console-<base36 ts>) — no modal prompt, since
+     * a bare shell isn't a "project" in the conventional sense. Still
+     * registers a Recent Projects entry so a killed pane can be relaunched
+     * the same way every other create path works.
+     */
+    async createConsoleSession() {
+        console.log('Launchpad: Creating new console session');
+
+        const sessionName = `console-${Date.now().toString(36)}`;
+
+        try {
+            this.updateStatus('creating new console...');
+
+            const _dims = this._getTerminalDims();
+            const payload = {
+                auto_start_claude: true,   // server gates on this to spawn the command
+                copy_templates: false,
+                project_name: sessionName,
+                working_dir: '~',          // server-side os.path.expanduser
+                agent_type: 'shell',
+                ..._dims
+            };
+            const session = await window.API.createSession(payload);
+
+            console.log('Launchpad: New console created:', session);
+
+            // Auto-add the project entry (mirrors _createNewSessionInner).
+            try {
+                await window.API.createProject({
+                    name: sessionName,
+                    path: session.working_dir,
+                    description: 'console session',
+                });
+            } catch (error) {
+                if (!error.message.includes('already exists')) {
+                    console.error('Launchpad: Failed to save console project:', error);
+                }
+            }
+
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session }
+            }));
+
+        } catch (error) {
+            console.error('Launchpad: Failed to create console session:', error);
+            if (error.message && error.message.includes('already running')) {
+                // Reuse the same detach-and-create handoff the agent paths use.
+                this.detachAndCreateNew('shell');
+            } else {
+                this.showError('failed to create console: ' + (error.message || error));
+            }
+        }
     }
 
     /**

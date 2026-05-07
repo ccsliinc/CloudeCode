@@ -58,6 +58,12 @@ async def create_session(request: Request, body: CreateSessionRequest):
         import uuid
         session_id = f"ses_{uuid.uuid4().hex[:8]}"
 
+        # Expand ~ / ~user in client-supplied working_dir (e.g. "New console"
+        # FAB sends "~"). tmux's -c <dir> doesn't expand tildes, and
+        # SessionManager/Path.expanduser is the canonical resolution point.
+        if body.working_dir:
+            body.working_dir = os.path.expanduser(body.working_dir)
+
         logger.info(
             "api_create_session_request",
             session_id=session_id,

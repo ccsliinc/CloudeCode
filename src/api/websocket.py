@@ -257,6 +257,19 @@ async def websocket_terminal(websocket: WebSocket):
                     logger.debug("ws_handshake_ctrl_l_sent")
                 except Exception as exc:
                     logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
+        else:
+            # Degraded-mode fallback: client never delivered handshake dims
+            # (timeout, bad dims, or disconnect-during-handshake recovered).
+            # A frozen banner is the worst possible UX — at least force a
+            # redraw at the pane's current (birth) size so the user sees
+            # SOMETHING. Ctrl+L is harmless if the foreground app can't honor it.
+            if session_manager.backend is not None:
+                try:
+                    await asyncio.sleep(0.15)
+                    await session_manager.backend.write(b"\x0c")
+                    logger.info("ws_handshake_ctrl_l_sent_fallback")
+                except Exception as exc:
+                    logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.

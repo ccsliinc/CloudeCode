@@ -722,12 +722,22 @@ class TmuxBackend(SessionBackend):
         state = out.decode("utf-8", errors="replace").strip()
 
         if state == "1":
+            # Adoption contract: when the user hands the session over to
+            # CloudeCode, our pipe MUST be the one delivering bytes — otherwise
+            # the WS streaming loop tails an empty file forever and the
+            # browser sees a frozen banner. Close whatever pipe is already
+            # active (typically the user's own logging pipe-pane) before
+            # starting ours. `pipe-pane` with no command closes any
+            # currently-piped command on the target pane.
             logger.info(
-                "pipe_pane_already_active",
+                "pipe_pane_replacing_existing",
                 session=self.tmux_session,
-                note="user had their own pipe-pane; adoption will not clobber",
+                note="closing user's pipe-pane so adoption can stream output",
             )
-            return
+            await self._run_tmux(
+                "pipe-pane", "-t", target,
+                check=False,
+            )
 
         pipe_path = self._resolve_pipe_path()
         pipe_path.parent.mkdir(parents=True, exist_ok=True)

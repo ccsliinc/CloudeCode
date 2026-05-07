@@ -44,6 +44,10 @@ class AgentsConfig(BaseModel):
     codex_command: str = "codex"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
+    # Plain interactive shell — no agent CLI. Used by the "New console"
+    # FAB action so users can spawn a bare tmux session in ~/ for quick
+    # shell work. ``$SHELL -i`` ensures rc files (.zshrc/.bashrc) load.
+    shell_command: str = "$SHELL -i"
 
 
 class SessionConfig(BaseModel):
@@ -364,6 +368,8 @@ class Settings(BaseSettings):
             return agents.hermes_command
         if normalized == "openclaw":
             return agents.openclaw_command
+        if normalized == "shell":
+            return agents.shell_command
 
         # claude (or unknown → fall back to claude). Honor CLAUDE_CLI_PATH
         # env var when the operator hasn't customized claude_command in
