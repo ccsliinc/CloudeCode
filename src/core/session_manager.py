@@ -764,7 +764,14 @@ class SessionManager:
         # naming via the backend's own slug derivation from session_id).
         tmux_session_name: Optional[str] = None
         if project_name:
-            sanitized = _sanitize_tmux_name(project_name)
+            # Defensive idempotency: if an older client (or stale Recent
+            # Project entry) hands us a name that already begins with the
+            # tmux namespace prefix, strip ALL leading copies before we
+            # prepend our own. Prevents `cloude_cloude_*` regressions.
+            stripped = project_name
+            while stripped.startswith(SESSION_PREFIX):
+                stripped = stripped[len(SESSION_PREFIX):]
+            sanitized = _sanitize_tmux_name(stripped)
             if sanitized:
                 tmux_session_name = f"{SESSION_PREFIX}{sanitized}"
 
