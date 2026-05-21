@@ -29,7 +29,92 @@ function setHeaderIdentity(opts) {
     if (textEl) {
         textEl.textContent = opts.title || 'Cloude Code';
     }
+    // v0.7.2 — when we're painting a session identity (icon='cloude'),
+    // make the title span itself the click target for inline rename.
+    // On the launchpad / auth screens we unwire so the affordance never
+    // bleeds across screen transitions.
+    if (opts.icon === 'cloude') {
+        _wireHeaderTitleRename();
+    } else {
+        _unwireHeaderTitleRename();
+    }
 }
+
+/**
+ * v0.7.2 — Turn ``#header-title-text`` itself into the click target for
+ * inline rename. Adds ``.header-title-editable`` (cursor + hover) and a
+ * ``title`` tooltip. The click handler is delegated to the
+ * TerminalController which owns the rename input state.
+ *
+ * Idempotent — listener is attached only once per element via the
+ * ``__renameWired`` flag. (setHeaderIdentity may be called repeatedly
+ * across a single session attach.)
+ */
+function _wireHeaderTitleRename() {
+    var titleEl = document.getElementById('header-title-text');
+    if (!titleEl) return;
+    titleEl.classList.add('header-title-editable');
+    titleEl.setAttribute('title', 'click to rename');
+    if (titleEl.__renameWired) return;
+    titleEl.addEventListener('click', function (e) {
+        // Gated on the class — if the affordance is unwired (launchpad /
+        // auth screens), do nothing. This lets the listener stay bound
+        // across screen transitions without leaking rename intent into
+        // non-session screens.
+        if (!titleEl.classList.contains('header-title-editable')) return;
+        // If a rename input is already open, the title span is hidden
+        // and we shouldn't re-enter edit mode.
+        if (document.querySelector('.header-rename-input')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (window.TerminalController
+            && typeof window.TerminalController._enterHeaderRename === 'function') {
+            window.TerminalController._enterHeaderRename();
+        }
+    });
+    titleEl.__renameWired = true;
+}
+
+function _unwireHeaderTitleRename() {
+    var titleEl = document.getElementById('header-title-text');
+    if (!titleEl) return;
+    titleEl.classList.remove('header-title-editable');
+    titleEl.removeAttribute('title');
+    // Note: we keep ``__renameWired`` so re-attaching doesn't double-bind
+    // when the user returns to a terminal. The class/title removal alone
+    // is enough to hide the affordance — the listener early-bails when
+    // no rename input is open AND _enterHeaderRename itself no-ops when
+    // not on the terminal screen.
+}
+
+/**
+ * v0.7.1 — Browser tab title sync.
+ *
+ * The page title reflects whichever session is active for the user's
+ * current screen. On the launchpad / auth screens it falls back to the
+ * brand. On the terminal screen we use ``<name> — Cloude Code`` so the
+ * window title in a multi-tab browser is identifiable at a glance
+ * (matches the convention used by VS Code, IntelliJ, etc.).
+ *
+ * Called from:
+ *   - showTerminal / returnToExistingTerminal — paint session name
+ *   - showLaunchpad — clear back to brand
+ *   - terminal.js WS handler on session.renamed — live-update for the
+ *     attached session
+ *
+ * @param {?string} sessionName  Session name or null/empty to reset.
+ */
+function setPageTitle(sessionName) {
+    var brand = 'Cloude Code';
+    if (sessionName && String(sessionName).trim()) {
+        document.title = String(sessionName).trim() + ' — ' + brand;
+    } else {
+        document.title = brand;
+    }
+}
+// Expose so terminal.js's WS message handler can call it without
+// reaching into the app instance.
+window.setPageTitle = setPageTitle;
 
 /**
  * App Controller - Manages application state and screen transitions
@@ -236,6 +321,8 @@ class AppController {
             }
         }
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
+        // v0.7.1 — auth screen has no session context; reset tab title.
+        setPageTitle(null);
     }
 
     /**
@@ -267,6 +354,8 @@ class AppController {
             }
         }
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
+        // v0.7.1 — back on the launchpad, no active session; reset tab title.
+        setPageTitle(null);
 
         // Hide D-pad on launchpad
         if (window.DPad) {
@@ -316,16 +405,21 @@ class AppController {
             window.Themes.setActiveSession(sessionName);
         }
         // If a pinned theme came back on the session payload, paint it WITHOUT
-        // persisting (server is already authoritative on the pin).
+        // persisting (server is already authoritative on the pin). forXterm:true
+        // forces the xterm repaint regardless of activeSessionAgent ordering —
+        // the freshly-attached session must immediately have its terminal
+        // palette styled (not just the page chrome).
         if (session && session.pinned_theme && window.Themes
             && typeof window.Themes.applyTheme === 'function') {
-            window.Themes.applyTheme(session.pinned_theme, { persist: false });
+            window.Themes.applyTheme(session.pinned_theme, { persist: false, forXterm: true });
         }
         // Header identity: brand icon + session name as title.
         setHeaderIdentity({
             icon: 'cloude',
             title: sessionName || 'session'
         });
+        // v0.7.1 — reflect the attached session in the browser tab title.
+        setPageTitle(sessionName);
 
         // Phase 4-5: scope the terminal screen + xterm palette to this
         // session's agent theme. If session.agent_type is null/undefined
@@ -410,12 +504,17 @@ class AppController {
             window.Themes.setActiveSession(sessionName);
         }
         if (pinnedTheme && window.Themes && typeof window.Themes.applyTheme === 'function') {
-            window.Themes.applyTheme(pinnedTheme, { persist: false });
+            // forXterm:true — see showTerminal() for rationale. Re-entry to an
+            // already-running session must immediately repaint the xterm pane,
+            // not just page chrome.
+            window.Themes.applyTheme(pinnedTheme, { persist: false, forXterm: true });
         }
         setHeaderIdentity({
             icon: 'cloude',
             title: sessionName || 'session'
         });
+        // v0.7.1 — sync browser tab title to the re-entered session.
+        setPageTitle(sessionName);
 
         // Phase 4-5: re-scope to the session's theme on re-entry. Same
         // null-tolerant semantics as showTerminal() — agent_type may be

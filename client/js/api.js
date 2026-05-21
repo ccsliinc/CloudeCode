@@ -492,6 +492,33 @@ class API {
     }
 
     /**
+     * Sessions: Rename a live session's tmux backend in place.
+     *
+     * PATCH /api/v1/sessions/{id}/name. Server validates the name against
+     * ``^[A-Za-z0-9_-]{1,64}$`` and uniqueness against every live + owned
+     * tmux name. On success the server broadcasts ``session.renamed`` over
+     * every WS bound to this session id — the caller does NOT need to
+     * manually mutate displayed state, just await success and rely on the
+     * WS handler in terminal.js to update header text + document.title.
+     *
+     * @param {string} sessionId - Session id (NOT tmux name).
+     * @param {string} newName - Proposed new tmux name. Caller may
+     *   pre-validate but server is authoritative.
+     * @returns {Promise<object>} Updated SessionInfo payload.
+     * @throws on 400 (invalid name), 404 (unknown id), 409 (name collision),
+     *   500 (tmux command failed).
+     */
+    async renameSession(sessionId, newName) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionId)}/name`,
+            {
+                method: 'PATCH',
+                body: { new_name: newName },
+            }
+        );
+    }
+
+    /**
      * Sessions: Detach from the current session WITHOUT killing tmux.
      *
      * Soft counterpart to ``destroySession`` — the server tears down its

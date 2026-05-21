@@ -181,6 +181,87 @@ h1:hover {
     display: block;
 }
 
+/* v0.7.2 — inline rename affordance in the page header. The title span
+ * itself (``#header-title-text``) is the click target when an active
+ * session is attached — clicking it swaps the span for the input below.
+ * Esc / blur cancels, Enter saves via PATCH. The ``.header-title-editable``
+ * class is toggled by setHeaderIdentity in app.js. */
+.header-title-editable {
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    padding: 1px 4px;
+    margin-left: -4px;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.header-title-editable:hover {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+.header-rename-input {
+    background: var(--color-bg-elevated, #1a1a1a);
+    color: var(--color-fg-strong, #fff);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 0.9em;
+    margin-left: 4px;
+    min-width: 120px;
+    max-width: 320px;
+}
+
+.header-rename-error {
+    color: var(--color-danger-strong, #e64);
+    font-size: 0.75em;
+    margin-left: 8px;
+}
+
+/* v0.7.2 — inline rename affordance on the launchpad's running-sessions
+ * rows. The pencil button triggers inline-edit mode (swaps the name span
+ * for an input). Only rows with a known session_id render the pencil
+ * (toggled in renderRunningSessions); external adopt-target rows get no
+ * pencil — the user can adopt first, then rename from the in-session header. */
+.running-session-rename {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+    font-size: 14px;
+}
+
+.running-session-rename:hover {
+    color: var(--color-accent);
+    transform: scale(1.15);
+    background: var(--color-accent-bg-soft);
+}
+
+.running-session-rename-input {
+    flex: 1;
+    background: var(--color-bg-elevated, #1a1a1a);
+    color: var(--color-fg-strong, #fff);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font: inherit;
+    font-weight: bold;
+    min-width: 0;
+}
+
+.running-session-rename-error {
+    color: var(--color-danger-strong, #e64);
+    font-size: 0.75em;
+    margin-left: 6px;
+    align-self: center;
+}
+
 .controls {
     display: flex;
     gap: 8px;

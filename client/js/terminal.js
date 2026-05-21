@@ -951,6 +951,174 @@ class Terminal {
     }
 
     /**
+     * Resolve the current tmux session name from ``_currentSession``
+     * (bare Session or SessionInfo shape).
+     */
+    _currentTmuxName() {
+        const s = this._currentSession;
+        if (!s) return null;
+        if (s.tmux_session) return s.tmux_session;
+        if (s.session && s.session.tmux_session) return s.session.tmux_session;
+        return null;
+    }
+
+    /**
+     * v0.7.1 — swap the in-session header title span for an inline input
+     * so the user can edit the session name. Triggered by the pencil
+     * button next to #header-title-text. Enter/blur saves; Esc cancels.
+     *
+     * Idempotent: if a rename input is already showing, this is a no-op.
+     */
+    _enterHeaderRename() {
+        const titleEl = document.getElementById('header-title-text');
+        if (!titleEl) return;
+        if (titleEl.style.display === 'none') return; // already editing
+        const current = this._currentTmuxName();
+        if (!current) return;
+
+        // Build the input.
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = 'header-rename-input';
+        input.className = 'header-rename-input';
+        input.value = current;
+        input.maxLength = 64;
+        input.spellcheck = false;
+        input.autocomplete = 'off';
+        input.setAttribute('aria-label', 'New session name');
+
+        // Inline error label (hidden until needed). Sits below the input.
+        const err = document.createElement('span');
+        err.id = 'header-rename-error';
+        err.className = 'header-rename-error';
+        err.style.display = 'none';
+
+        // Hide the title span + pencil button while editing.
+        titleEl.style.display = 'none';
+        const pencilEl = document.getElementById('header-rename-pencil');
+        if (pencilEl) pencilEl.style.display = 'none';
+
+        // Insert input + error label right after the (now hidden) title.
+        titleEl.insertAdjacentElement('afterend', input);
+        input.insertAdjacentElement('afterend', err);
+
+        // Track whether we already saved/cancelled so blur after Enter
+        // doesn't double-fire.
+        let settled = false;
+
+        const cleanup = () => {
+            try {
+                if (input.parentNode) input.parentNode.removeChild(input);
+            } catch (_) { /* non-fatal */ }
+            try {
+                if (err.parentNode) err.parentNode.removeChild(err);
+            } catch (_) { /* non-fatal */ }
+            titleEl.style.display = '';
+            if (pencilEl) pencilEl.style.display = '';
+        };
+
+        const cancel = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+        };
+
+        const save = async () => {
+            if (settled) return;
+            const raw = (input.value || '').trim();
+            // Empty / unchanged → cancel.
+            if (!raw || raw === current) {
+                cancel();
+                return;
+            }
+            // Client-side pre-flight; server is still authoritative on the
+            // regex. We mirror the server regex so the user gets immediate
+            // feedback without a round-trip on obvious typos.
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) {
+                err.textContent = 'Use 1-64 chars: A-Z a-z 0-9 _ -';
+                err.style.display = '';
+                input.focus();
+                input.select();
+                return;
+            }
+            const sid = this._sessionId();
+            if (!sid) {
+                err.textContent = 'No active session';
+                err.style.display = '';
+                return;
+            }
+            settled = true;
+            try {
+                await window.API.renameSession(sid, raw);
+                // On success the server's WS broadcast (session.renamed)
+                // will repaint the header + tab title + launchpad row.
+                // We tear down the input either way via _exitHeaderRename
+                // (which is also invoked by the WS handler). Calling here
+                // covers the case where the broadcast races us.
+                cleanup();
+            } catch (e) {
+                settled = false; // let the user retry
+                let msg = (e && e.message) ? e.message : 'Rename failed';
+                // Surface common error codes more readably.
+                if (/409/.test(msg) || /already in use/i.test(msg)) {
+                    msg = 'Name already in use';
+                } else if (/400/.test(msg) || /Invalid session name/i.test(msg)) {
+                    msg = 'Invalid name';
+                } else if (/404/.test(msg)) {
+                    msg = 'Session not found';
+                }
+                err.textContent = msg;
+                err.style.display = '';
+                input.focus();
+                input.select();
+            }
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                save();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+            }
+        });
+        input.addEventListener('blur', () => {
+            // A blur immediately after a successful save would no-op
+            // (settled=true short-circuits both branches), so we just
+            // call save() — if the user blurred with an unchanged value
+            // it cancels; otherwise we attempt the rename.
+            save();
+        });
+
+        // Focus + select so the user can immediately type a replacement.
+        setTimeout(() => { input.focus(); input.select(); }, 0);
+    }
+
+    /**
+     * Tear down the inline rename input (if any). Called from the WS
+     * ``session.renamed`` handler so the input swaps back to display
+     * mode with the new value already painted via setHeaderIdentity.
+     */
+    _exitHeaderRename(newName) {
+        const input = document.getElementById('header-rename-input');
+        const err = document.getElementById('header-rename-error');
+        const titleEl = document.getElementById('header-title-text');
+        const pencilEl = document.getElementById('header-rename-pencil');
+        if (input && input.parentNode) {
+            try { input.parentNode.removeChild(input); } catch (_) { /* */ }
+        }
+        if (err && err.parentNode) {
+            try { err.parentNode.removeChild(err); } catch (_) { /* */ }
+        }
+        if (titleEl) {
+            titleEl.style.display = '';
+            if (newName) titleEl.textContent = newName;
+        }
+        if (pencilEl) pencilEl.style.display = '';
+    }
+
+    /**
      * Setup WebSocket event handlers
      */
     setupWebSocketHandlers() {
@@ -1109,6 +1277,49 @@ class Terminal {
             // the local card without re-syncing to the server.
             if (window.ToastManager && message && message.toast_id) {
                 window.ToastManager.dismiss(message.toast_id, { syncToServer: false });
+            }
+        } else if (type === 'session.renamed') {
+            // v0.7.1 — server broadcast: this session was renamed (could be
+            // us OR another browser tab that initiated the PATCH). Update
+            // local copies + the in-session header + the browser tab title
+            // when the rename targets THIS attached session. We always
+            // poke the launchpad poller so it refreshes immediately rather
+            // than waiting on its 5s tick.
+            try {
+                const myId = this._sessionId();
+                const sess = this._currentSession;
+                if (message && message.session_id === myId && sess && message.new_name) {
+                    // Update the in-memory session record so the rest of the
+                    // controller (active-name resolver, header re-paint on
+                    // reconnect) sees the new value immediately.
+                    if (sess.session && typeof sess.session === 'object') {
+                        sess.session.tmux_session = message.new_name;
+                    }
+                    sess.tmux_session = message.new_name;
+                    if (typeof window.setHeaderIdentity === 'function') {
+                        window.setHeaderIdentity({
+                            icon: 'cloude',
+                            title: message.new_name,
+                        });
+                    }
+                    if (typeof window.setPageTitle === 'function') {
+                        window.setPageTitle(message.new_name);
+                    }
+                    // If a rename input is showing in the header, swap it
+                    // back to display mode so the user sees the new name
+                    // reflected even when the broadcast originated here.
+                    if (typeof this._exitHeaderRename === 'function') {
+                        this._exitHeaderRename(message.new_name);
+                    }
+                }
+                // Force the launchpad to re-render its running-sessions
+                // list immediately (it polls every 5s, but a rename should
+                // appear instantly).
+                if (window.Launchpad && typeof window.Launchpad.loadRunningSessions === 'function') {
+                    try { window.Launchpad.loadRunningSessions(); } catch (_) { /* non-fatal */ }
+                }
+            } catch (err) {
+                console.warn('Terminal: session.renamed handling failed:', err);
             }
         } else if (type === 'request_dims') {
             // Server-driven resize handshake. Fit and reply IMMEDIATELY —

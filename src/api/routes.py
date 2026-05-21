@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from typing import List, Optional
@@ -34,6 +35,8 @@ from src.models import (
     ToastNewMessage,
     ToastAckMessage,
     CreateToastRequest,
+    RenameSessionRequest,
+    SessionRenamedMessage,
 )
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
@@ -559,6 +562,113 @@ async def set_pinned_theme(
     return await _apply_session_theme(
         session_manager, session_name, body.pinned_theme
     )
+
+
+# ---------------------------------------------------------------------------
+# Session rename
+# ---------------------------------------------------------------------------
+# v0.7.1 — PATCH /sessions/{session_id}/name renames a live tmux session
+# on the ``-L cloude`` socket via ``tmux rename-session`` and broadcasts a
+# ``session.renamed`` WS event so every browser bound to that session id
+# updates its displayed name + ``document.title``. See SessionManager's
+# ``rename_session`` for the re-keying semantics (owned set, pinned-themes
+# map, session metadata).
+#
+# Name validation is intentionally STRICTER than ``_sanitize_tmux_name``
+# in the SessionManager — that helper accepts spaces, unicode, emoji, and
+# only escapes ``.``/``:`` because tmux's own grammar requires it. The
+# rename surface, by contrast, is user-facing and edits via an inline
+# input — we hold it to ``^[A-Za-z0-9_-]{1,64}$`` to avoid shell-quoting
+# weirdness, filesystem-path collisions (the FIFO log filename is derived
+# from the slug), and visually confusing whitespace runs in the launchpad
+# row. Existing sessions whose names contain spaces / unicode keep working
+# fine — they just can't be re-named to a value containing those chars.
+_RENAME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+@router.patch(
+    "/sessions/{session_id}/name",
+    response_model=SessionInfo,
+    dependencies=[Depends(require_auth)],
+)
+async def rename_session_endpoint(
+    request: Request, session_id: str, body: RenameSessionRequest
+):
+    """Rename a live session's tmux backend in-place.
+
+    Validates ``new_name`` against ``^[A-Za-z0-9_-]{1,64}$`` (strict ASCII
+    so the value is safe inside a tmux target, a FIFO filename, and a
+    JSON-shaped WS payload). Returns:
+
+      * 400 — invalid name (empty, too long, or contains a disallowed char)
+      * 404 — unknown session id
+      * 409 — name already in use by another live OR owned-but-detached session
+      * 500 — tmux ``rename-session`` itself failed
+      * 200 — success; body is the updated ``SessionInfo``
+
+    On success the server broadcasts ``session.renamed`` to every WS bound
+    to ``session_id`` so all attached tabs update their displayed name +
+    ``document.title``. The broadcast is best-effort — broadcast failures
+    log a warning but do not roll back the rename (the in-memory state is
+    already authoritative).
+    """
+    session_manager = request.app.state.session_manager
+
+    new_name = (body.new_name or "").strip()
+    if not _RENAME_NAME_RE.match(new_name):
+        logger.info(
+            "api_rename_session_rejected_invalid_name",
+            session_id=session_id,
+            new_name=new_name[:80],
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid session name. Must be 1-64 chars from "
+                "[A-Za-z0-9_-]."
+            ),
+        )
+
+    logger.info(
+        "api_rename_session_request",
+        session_id=session_id,
+        new_name=new_name,
+    )
+
+    try:
+        info = await session_manager.rename_session(session_id, new_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        logger.error(
+            "api_rename_session_tmux_failed",
+            session_id=session_id,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Broadcast to every WS bound to this session so attached tabs update
+    # their header text + document.title without a round-trip. Failures on
+    # individual sockets are absorbed inside ``broadcast_to_session``; an
+    # outer-level exception (shouldn't happen) is logged and swallowed so
+    # the HTTP response still surfaces the successful rename.
+    try:
+        await connection_manager.broadcast_to_session(
+            session_id,
+            SessionRenamedMessage(
+                session_id=session_id, new_name=new_name
+            ).model_dump_json(),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "rename_session_broadcast_failed",
+            session_id=session_id,
+            error=str(exc),
+        )
+
+    return info
 
 
 @router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])

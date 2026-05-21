@@ -384,11 +384,21 @@ class Launchpad {
             const escapedName = this._escapeHtml(s.name);
             const escapedDisplay = this._escapeHtml(displayName);
             const sidAttr = s.session_id ? ` data-session-id="${this._escapeHtml(s.session_id)}"` : '';
+            // Pencil rename button — only for sessions whose id we know
+            // (rename PATCH requires session_id, not the tmux name).
+            // Detached-but-known rows qualify since their id is in
+            // ``session_id``. External adopt-target rows (no session_id
+            // until adopted) get no pencil — the user can adopt first,
+            // then rename from the in-session header.
+            const renamePencil = s.session_id
+                ? `<span class="running-session-rename" role="button" aria-label="Rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename">✎</span>`
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
                   <div class="running-session-top">
                     <span class="running-session-dot" aria-hidden="true"></span>
                     <span class="running-session-name">${escapedDisplay}</span>
+                    ${renamePencil}
                     <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="6" y1="6" x2="18" y2="18"/>
@@ -509,6 +519,7 @@ class Launchpad {
         if (!container || container.__boundRunningClicks) return;
         container.addEventListener('click', async (e) => {
             const killEl = e.target.closest('.running-session-kill');
+            const renameEl = e.target.closest('.running-session-rename');
             const rowEl = e.target.closest('.running-session-row');
             if (!rowEl) return;
 
@@ -518,6 +529,22 @@ class Launchpad {
                 const name = killEl.dataset.kill;
                 const sid = rowEl.dataset.sessionId || null;
                 await this._handleKillRunningSession(name, sid);
+                return;
+            }
+
+            // Pencil icon path: inline-edit the session name. Stop
+            // propagation so the row click handler (return/adopt) doesn't
+            // also fire and race the edit. Only pencil buttons with a
+            // ``data-rename-sid`` appear in rows with a known session_id.
+            // External adopt-target rows have no pencil — the user can
+            // adopt first, then rename from the in-session header.
+            if (renameEl) {
+                e.stopPropagation();
+                const sid = renameEl.dataset.renameSid;
+                const currentName = renameEl.dataset.renameName;
+                if (sid) {
+                    this._handleRenameRunningSession(rowEl, sid, currentName);
+                }
                 return;
             }
 
@@ -561,6 +588,121 @@ class Launchpad {
      *      adoption entirely and is also idempotent if the session is
      *      already gone server-side.
      */
+    /**
+     * v0.7.1 — Inline-edit a running session's name from the launchpad row.
+     *
+     * Replaces the row's name span with a text input pre-filled with the
+     * current tmux name. Enter saves (calls PATCH /sessions/{id}/name);
+     * Esc cancels (restores the span). On success the server broadcasts
+     * ``session.renamed`` over WS to every attached browser; we ALSO
+     * force-refresh the launchpad list immediately so the new name shows
+     * without waiting on the 5s poller.
+     *
+     * @param {HTMLElement} rowEl - The ``.running-session-row`` host.
+     * @param {string} sessionId - Server-side session id (not tmux name).
+     * @param {string} currentName - Current tmux name (for the input default).
+     */
+    _handleRenameRunningSession(rowEl, sessionId, currentName) {
+        const nameEl = rowEl.querySelector('.running-session-name');
+        if (!nameEl) return;
+        // Idempotent — bail if an input is already showing in this row.
+        if (rowEl.querySelector('.running-session-rename-input')) return;
+
+        // Build the input + inline error label.
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'running-session-rename-input';
+        input.value = currentName;
+        input.maxLength = 64;
+        input.spellcheck = false;
+        input.autocomplete = 'off';
+        input.setAttribute('aria-label', 'New session name');
+
+        const err = document.createElement('span');
+        err.className = 'running-session-rename-error';
+        err.style.display = 'none';
+
+        // Hide the name span while editing.
+        nameEl.style.display = 'none';
+
+        nameEl.insertAdjacentElement('afterend', input);
+        input.insertAdjacentElement('afterend', err);
+
+        let settled = false;
+        const cleanup = () => {
+            try { if (input.parentNode) input.parentNode.removeChild(input); } catch (_) { /* */ }
+            try { if (err.parentNode) err.parentNode.removeChild(err); } catch (_) { /* */ }
+            nameEl.style.display = '';
+        };
+        const cancel = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+        };
+        const save = async () => {
+            if (settled) return;
+            const raw = (input.value || '').trim();
+            if (!raw || raw === currentName) {
+                cancel();
+                return;
+            }
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) {
+                err.textContent = 'Use 1-64 chars: A-Z a-z 0-9 _ -';
+                err.style.display = '';
+                input.focus();
+                input.select();
+                return;
+            }
+            settled = true;
+            // Stopping the row's swallow-click handlers is already done by
+            // the caller (stopPropagation on the renameEl branch).
+            try {
+                await window.API.renameSession(sessionId, raw);
+                cleanup();
+                // Immediate refresh so the row paints the new name without
+                // waiting on the 5s poller. The WS broadcast (received by
+                // the terminal controller) ALSO triggers a refresh —
+                // duplicate calls are idempotent; the load itself is
+                // signature-diffed inside renderRunningSessions.
+                await this.loadRunningSessions();
+            } catch (e) {
+                settled = false;
+                let msg = (e && e.message) ? e.message : 'Rename failed';
+                if (/409/.test(msg) || /already in use/i.test(msg)) {
+                    msg = 'Name already in use';
+                } else if (/400/.test(msg) || /Invalid session name/i.test(msg)) {
+                    msg = 'Invalid name';
+                } else if (/404/.test(msg)) {
+                    msg = 'Session not found';
+                }
+                err.textContent = msg;
+                err.style.display = '';
+                input.focus();
+                input.select();
+            }
+        };
+
+        input.addEventListener('keydown', (e) => {
+            // Don't let row-level keyboard nav reach the container.
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                save();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+            }
+        });
+        input.addEventListener('click', (e) => {
+            // Clicks inside the input must not bubble to the row's
+            // return/adopt handler.
+            e.stopPropagation();
+        });
+        input.addEventListener('blur', () => { save(); });
+
+        setTimeout(() => { input.focus(); input.select(); }, 0);
+    }
+
     async _handleKillRunningSession(tmuxName, sessionId = null) {
         const display = this._deriveRunningSessionDisplayName(tmuxName);
         const confirmed = await this.showConfirmModal(
