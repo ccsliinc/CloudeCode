@@ -60,6 +60,7 @@ class Terminal {
 
         // Auto-scroll behavior
         this.autoScrollEnabled = true;
+        this._programmaticScrollLock = 0;
         this.resizeDebounceTimer = null;
 
         // Track last-sent dims so we only log + ship when they actually
@@ -608,6 +609,8 @@ class Terminal {
                     scrollTimeout = setTimeout(() => {
                         if (!this.term) return;
 
+                        if (this._programmaticScrollLock > 0) return;
+
                         // Check if user scrolled to bottom
                         const isAtBottom = this.isScrolledToBottom(viewport);
 
@@ -622,6 +625,29 @@ class Terminal {
                 });
             }
         }, 500);
+    }
+
+    _forceScrollToBottom(holdMs = 400) {
+        if (!this.term) return;
+        this._programmaticScrollLock++;
+        this.autoScrollEnabled = true;
+        const pin = () => {
+            if (!this.term) return;
+            try { this.term.scrollToBottom(); } catch (_) { /* */ }
+            const vp = document.querySelector('.xterm-viewport');
+            if (vp) vp.scrollTop = vp.scrollHeight;
+        };
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                pin();
+                setTimeout(pin, 50);
+                setTimeout(pin, 150);
+                setTimeout(() => {
+                    pin();
+                    this._programmaticScrollLock = Math.max(0, this._programmaticScrollLock - 1);
+                }, holdMs);
+            });
+        });
     }
 
     /**
@@ -766,6 +792,27 @@ class Terminal {
         // escape bytes. xterm.write() accepts Uint8Array directly and
         // feeds the parser without re-encoding.
         if (initialScrollbackB64) {
+            // Let layout settle (screen-swap CSS toggle in app.js needs a
+            // paint tick before clientWidth/clientHeight read truthful
+            // values). Double-rAF is the canonical "wait for layout" guard.
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+            // Fit xterm to the container BEFORE painting scrollback so the
+            // captured bytes land at the correct column width. xterm.js
+            // doesn't reflow already-buffered content on resize, so painting
+            // at the default 80-col geometry leaves the scrollback wrong
+            // even after a later fit. If the container isn't visible yet,
+            // fit() may throw or compute zeros — we swallow and continue;
+            // the resize pipeline / handshake fit will still recover the
+            // live screen, just not the already-painted scrollback rows.
+            try {
+                if (this.fitAddon && typeof this.fitAddon.fit === 'function') {
+                    this.fitAddon.fit();
+                }
+            } catch (e) {
+                console.warn('pre-paint fit failed (continuing):', e);
+            }
+
             try {
                 const bin = atob(initialScrollbackB64);
                 const bytes = new Uint8Array(bin.length);
@@ -777,10 +824,13 @@ class Terminal {
                 // state (the bytes carry escape sequences relative to the tmux pane's
                 // screen state at capture time — we have none of that here).
                 this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
-                this.term.write(bytes);
+                this.term.write(bytes, () => {
+                    this._forceScrollToBottom();
+                });
                 console.log(`Terminal: painted ${bytes.length} bytes of adopt scrollback`);
                 // Flag to send Ctrl+L in ws.onopen after dims handshake settles
                 this._needsReplayCtrlL = true;
+                this._pendingPostConnectScroll = true;
             } catch (e) {
                 // Non-fatal — if the b64 is malformed we still want the
                 // session to come up. The user will just miss the pre-
@@ -820,7 +870,7 @@ class Terminal {
      * @param {object} session - Session object (shape matches what
      *   GET /sessions returns under the ``session`` key).
      */
-    reconnectToExistingSession(session) {
+    async reconnectToExistingSession(session) {
         console.log('Terminal: Reconnecting to existing session:', session && session.id);
 
         // If a prior session was active, tear it down cleanly before painting the new one.
@@ -864,6 +914,61 @@ class Terminal {
         }
         if (this.destroySessionBtn) {
             this.destroySessionBtn.disabled = false;
+        }
+
+        // Launchpad-rejoin scrollback replay — same treatment as the adopt
+        // path in connectToSession(). The launchpad asks the server for
+        // ``initial_scrollback_b64`` on the SessionInfo (via
+        // ``getSession(..., { includeScrollback: true })``); when present we
+        // paint those bytes into the freshly-reset xterm BEFORE the WS opens
+        // so the user sees the pre-existing history immediately. The Ctrl+L
+        // follow-up after the WS handshake (gated on ``_needsReplayCtrlL``)
+        // forces the foreground app to redraw the live screen at the new
+        // dims, on top of the painted history.
+        const initialScrollbackB64 = session && session.initial_scrollback_b64;
+        if (initialScrollbackB64) {
+            // Let layout settle (screen-swap CSS toggle in app.js needs a
+            // paint tick before clientWidth/clientHeight read truthful
+            // values). Double-rAF is the canonical "wait for layout" guard.
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+            // Fit xterm to the container BEFORE painting scrollback so the
+            // captured bytes land at the correct column width. xterm.js
+            // doesn't reflow already-buffered content on resize, so painting
+            // at the default 80-col geometry leaves the scrollback wrong
+            // even after a later fit. If the container isn't visible yet,
+            // fit() may throw or compute zeros — we swallow and continue;
+            // the resize pipeline / handshake fit will still recover the
+            // live screen, just not the already-painted scrollback rows.
+            try {
+                if (this.fitAddon && typeof this.fitAddon.fit === 'function') {
+                    this.fitAddon.fit();
+                }
+            } catch (e) {
+                console.warn('pre-paint fit failed (continuing):', e);
+            }
+
+            try {
+                const bin = atob(initialScrollbackB64);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) {
+                    bytes[i] = bin.charCodeAt(i) & 0xff;
+                }
+                // Exit any alt-screen state + clear + home cursor so the
+                // captured bytes paint into a known-clean parser state.
+                this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
+                this.term.write(bytes, () => {
+                    this._forceScrollToBottom();
+                });
+                console.log(`Terminal: painted ${bytes.length} bytes of rejoin scrollback`);
+                this._needsReplayCtrlL = true;
+                this._pendingPostConnectScroll = true;
+            } catch (e) {
+                // Non-fatal: fall through to the clean-screen rejoin. The
+                // live stream over WS still works; user just misses the
+                // pre-existing history paint.
+                console.warn('reconnectToExistingSession: failed to paint initial scrollback', e);
+            }
         }
 
         // Always reopen a fresh WS after teardown above, on the same delay
@@ -1174,6 +1279,11 @@ class Terminal {
                         this.ws.send(new Uint8Array([0x0c]));  // Ctrl+L — repaint after replay
                     }
                 }, 50);
+            }
+
+            if (this._pendingPostConnectScroll) {
+                this._pendingPostConnectScroll = false;
+                this._forceScrollToBottom(800);
             }
 
             // Start keepalive ping
