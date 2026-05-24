@@ -134,6 +134,22 @@ class SessionInfo(BaseModel):
         default=None,
         description="Theme id pinned to this session (mirrors Session.pinned_theme)",
     )
+    # v0.7.0 — launchpad rejoin scrollback replay. Populated ONLY when
+    # ``GET /sessions?session_id=<id>&include_scrollback=1`` is requested
+    # by the launchpad's "return to running session" path. Mirrors the
+    # adopt-path's ``AdoptSessionResponse.initial_scrollback_b64`` — the
+    # client base64-decodes and paints these bytes into xterm BEFORE the
+    # WS opens so the rejoined terminal shows the same pre-existing
+    # history the adopt path shows. None for every other caller (default-
+    # off; existing GET /sessions consumers see no change on the wire).
+    initial_scrollback_b64: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base64-encoded captured tmux scrollback bytes. Only populated "
+            "when GET /sessions/{id}?include_scrollback=1, to support the "
+            "launchpad rejoin path painting history before the WS opens."
+        ),
+    )
 
 
 # API Request Models

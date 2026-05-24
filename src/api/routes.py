@@ -1,5 +1,6 @@
 """REST API routes for Claude Code Controller."""
 
+import base64
 import json
 import os
 import re
@@ -130,13 +131,40 @@ async def create_session(request: Request, body: CreateSessionRequest):
 
 
 @router.get("/sessions", response_model=SessionInfo, dependencies=[Depends(require_auth)])
-async def get_session(request: Request, session_id: Optional[str] = None):
+async def get_session(
+    request: Request,
+    session_id: Optional[str] = None,
+    include_scrollback: bool = False,
+    cols: Optional[int] = None,
+    rows: Optional[int] = None,
+):
     """
     Get information about a session.
 
     ``session_id`` (query, optional) selects a specific session; omitted
     returns the current (most-recently-created) one. Back-compat: existing
     clients call ``GET /sessions`` with no params and get "the" session.
+
+    ``include_scrollback`` (query, optional, default False) — when True
+    and the resolved session has a live tmux backend, the response's
+    ``initial_scrollback_b64`` field is populated with base64-encoded
+    pane-capture bytes. Used by the launchpad's "return to running
+    session" path so the client can paint pre-existing history into
+    xterm before the WS opens, mirroring the adopt path. Off by default
+    so existing callers see no change.
+
+    ``cols`` / ``rows`` (query, optional) — when ``include_scrollback`` is
+    True AND both are positive ints, the pane is pre-resized to the
+    client's xterm geometry BEFORE the capture call. ``tmux capture-pane``
+    snapshots at the pane's CURRENT width, which is whatever the most-
+    recent attached client set it to. Without this pre-resize, a mobile
+    client (~80 cols) rejoining a session whose pane was last sized by a
+    desktop client (~144 cols) gets desktop-width scrollback bytes that
+    xterm paints at mobile width — the upper/older history reflows into
+    garbled rows. Forcing tmux to re-render at the client's true width
+    eliminates that mismatch. The subsequent WS-handshake resize becomes
+    a no-op (same dims) on this client; other attached clients see a
+    window-event and negotiate to their own width on their own handshake.
 
     Raises:
         HTTPException: 404 if the requested (or current) session doesn't exist
@@ -147,6 +175,54 @@ async def get_session(request: Request, session_id: Optional[str] = None):
 
     if not session_info:
         raise HTTPException(status_code=404, detail="No active session")
+
+    if include_scrollback:
+        # Resolve the id we actually loaded info for — when session_id was
+        # omitted, get_session_info returned the "current" session; we need
+        # the same canonical id for the capture call so we don't reach for
+        # a different backend.
+        resolved_sid = session_info.session.id
+
+        # Pre-resize the pane to the client's current xterm geometry so the
+        # captured bytes are emitted at the same width xterm will render
+        # them at. Without this, scrollback for a desktop-width session
+        # rejoined from a mobile-width client (or any width mismatch)
+        # paints with reflow artifacts. resize_terminal is sync + no-ops
+        # when the session/backend isn't live, so it's safe to call
+        # unconditionally whenever cols/rows look sane.
+        if cols and rows and cols > 0 and rows > 0:
+            try:
+                session_manager.resize_terminal(
+                    cols=cols, rows=rows, session_id=resolved_sid
+                )
+            except Exception as exc:
+                logger.warning(
+                    "rejoin_pre_resize_failed",
+                    session_id=resolved_sid,
+                    cols=cols,
+                    rows=rows,
+                    error=str(exc),
+                )
+
+        try:
+            # Mirror the depth used elsewhere (see SessionManager.adopt
+            # path) so rejoin and adopt paint the same amount of history.
+            lines = settings.load_auth_config().session.scrollback_lines
+            raw = session_manager.capture_scrollback(
+                lines=lines,
+                session_id=resolved_sid,
+            )
+            if raw:
+                session_info.initial_scrollback_b64 = base64.b64encode(raw).decode("ascii")
+        except Exception as exc:
+            # Non-fatal. Leave the field as default None so the client
+            # falls through to a clean-screen rejoin (still functional;
+            # just no pre-paint of history).
+            logger.warning(
+                "rejoin_scrollback_capture_failed",
+                session_id=resolved_sid,
+                error=str(exc),
+            )
 
     return session_info
 

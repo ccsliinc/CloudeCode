@@ -346,10 +346,39 @@ class API {
      * Sessions: Get session info.
      * @param {string|null} sessionId - specific session id, or null for the
      *   current (most-recently-created) one (back-compat).
+     * @param {object} [opts]
+     * @param {boolean} [opts.includeScrollback=false] - when true, asks the
+     *   server to populate ``initial_scrollback_b64`` on the response. Used
+     *   by the launchpad rejoin path so the client can paint pre-existing
+     *   history into xterm BEFORE the WS opens (mirrors the adopt path).
+     *   Default false keeps every existing caller wire-identical.
+     * @param {number|null} [opts.cols=null] - client's current xterm cols;
+     *   forwarded ONLY when includeScrollback is true so the server can
+     *   pre-resize the pane to this width before capture-pane snapshots
+     *   it. Without this, a width-mismatched rejoin (e.g. mobile rejoining
+     *   a desktop-width session) gets scrollback bytes emitted at the
+     *   pane's last-attached width and xterm renders them at the mobile
+     *   width — older history reflows into garbled rows.
+     * @param {number|null} [opts.rows=null] - client's current xterm rows;
+     *   paired with ``cols`` for the pre-capture resize. Both must be
+     *   positive ints for the server to act.
      * @returns {Promise<object>} - SessionInfo
      */
-    async getSession(sessionId = null) {
-        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    async getSession(sessionId = null, { includeScrollback = false, cols = null, rows = null } = {}) {
+        const params = [];
+        if (sessionId) {
+            params.push(`session_id=${encodeURIComponent(sessionId)}`);
+        }
+        if (includeScrollback) {
+            params.push('include_scrollback=1');
+        }
+        if (cols && cols > 0) {
+            params.push(`cols=${encodeURIComponent(String(cols))}`);
+        }
+        if (rows && rows > 0) {
+            params.push(`rows=${encodeURIComponent(String(rows))}`);
+        }
+        const q = params.length ? `?${params.join('&')}` : '';
         return await this.call(`/sessions${q}`);
     }
 

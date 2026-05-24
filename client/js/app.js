@@ -41,50 +41,49 @@ function setHeaderIdentity(opts) {
 }
 
 /**
- * v0.7.2 — Turn ``#header-title-text`` itself into the click target for
- * inline rename. Adds ``.header-title-editable`` (cursor + hover) and a
- * ``title`` tooltip. The click handler is delegated to the
- * TerminalController which owns the rename input state.
- *
- * Idempotent — listener is attached only once per element via the
- * ``__renameWired`` flag. (setHeaderIdentity may be called repeatedly
- * across a single session attach.)
+ * v0.7.2 — Mount a small pencil button next to ``#header-title-text`` for
+ * inline rename. The button is idempotent (re-wiring does not double-mount).
+ * Click handler delegates to TerminalController which owns the rename input state.
  */
 function _wireHeaderTitleRename() {
-    var titleEl = document.getElementById('header-title-text');
+    const titleEl = document.getElementById('header-title-text');
     if (!titleEl) return;
-    titleEl.classList.add('header-title-editable');
-    titleEl.setAttribute('title', 'click to rename');
-    if (titleEl.__renameWired) return;
-    titleEl.addEventListener('click', function (e) {
-        // Gated on the class — if the affordance is unwired (launchpad /
-        // auth screens), do nothing. This lets the listener stay bound
-        // across screen transitions without leaking rename intent into
-        // non-session screens.
-        if (!titleEl.classList.contains('header-title-editable')) return;
-        // If a rename input is already open, the title span is hidden
-        // and we shouldn't re-enter edit mode.
-        if (document.querySelector('.header-rename-input')) return;
-        e.preventDefault();
+    // Drop legacy editable behavior on the title text itself
+    titleEl.classList.remove('header-title-editable');
+    titleEl.removeAttribute('title');
+    // Mount a small pencil button next to the title (idempotent)
+    let pencilEl = document.getElementById('header-rename-pencil');
+    if (!pencilEl) {
+        pencilEl = document.createElement('span');
+        pencilEl.id = 'header-rename-pencil';
+        pencilEl.className = 'header-rename-pencil';
+        pencilEl.setAttribute('role', 'button');
+        pencilEl.setAttribute('tabindex', '0');
+        pencilEl.setAttribute('title', 'rename');
+        pencilEl.textContent = '✎'; // ✎
+        titleEl.insertAdjacentElement('afterend', pencilEl);
+    }
+    const trigger = (e) => {
         e.stopPropagation();
-        if (window.TerminalController
-            && typeof window.TerminalController._enterHeaderRename === 'function') {
+        if (window.TerminalController && typeof window.TerminalController._enterHeaderRename === 'function') {
             window.TerminalController._enterHeaderRename();
         }
-    });
-    titleEl.__renameWired = true;
+    };
+    pencilEl.onclick = trigger;
+    pencilEl.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') trigger(e);
+    };
 }
 
 function _unwireHeaderTitleRename() {
-    var titleEl = document.getElementById('header-title-text');
-    if (!titleEl) return;
-    titleEl.classList.remove('header-title-editable');
-    titleEl.removeAttribute('title');
-    // Note: we keep ``__renameWired`` so re-attaching doesn't double-bind
-    // when the user returns to a terminal. The class/title removal alone
-    // is enough to hide the affordance — the listener early-bails when
-    // no rename input is open AND _enterHeaderRename itself no-ops when
-    // not on the terminal screen.
+    const titleEl = document.getElementById('header-title-text');
+    if (titleEl) {
+        titleEl.classList.remove('header-title-editable');
+        titleEl.removeAttribute('title');
+        titleEl.onclick = null;
+    }
+    const pencilEl = document.getElementById('header-rename-pencil');
+    if (pencilEl && pencilEl.parentNode) pencilEl.parentNode.removeChild(pencilEl);
 }
 
 /**
@@ -149,6 +148,14 @@ class AppController {
             try { window.Themes.applyStoredThemeIdSync(); } catch (_) { /* no-op */ }
         }
 
+        // v0.7.0+ — initialize per-theme background-music plumbing and wire
+        // the header 🔊 / 🔇 toggle button. Default state is muted; the first
+        // click is the user-gesture that grants AudioContext autoplay.
+        if (window.ThemeAudio && typeof window.ThemeAudio.init === 'function') {
+            try { window.ThemeAudio.init(); } catch (_) { /* no-op */ }
+        }
+        this._wireAudioToggle();
+
         // Setup event listeners
         this.setupEventListeners();
 
@@ -200,6 +207,33 @@ class AppController {
         } catch (e) {
             console.warn('App: ThemeSelector.mount failed', e);
         }
+    }
+
+    /**
+     * v0.7.0+ — bind the header audio toggle button to ThemeAudio.toggleMute().
+     * The icon (🔊 / 🔇), `aria-pressed`, and tooltip all reflect the current
+     * mute state. Idempotent — only wires once.
+     */
+    _wireAudioToggle() {
+        const btn = document.getElementById('audioToggleBtn');
+        if (!btn || btn._audioToggleWired) return;
+        btn._audioToggleWired = true;
+
+        const paint = () => {
+            const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
+            btn.textContent = muted ? '🔇' : '🔊';
+            btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+            btn.setAttribute('data-tooltip', muted ? 'Enable theme music' : 'Mute theme music');
+        };
+        paint();
+
+        btn.addEventListener('click', () => {
+            if (!window.ThemeAudio) return;
+            try { window.ThemeAudio.toggleMute(); } catch (e) {
+                console.warn('App: ThemeAudio.toggleMute threw', e);
+            }
+            paint();
+        });
     }
 
     /**

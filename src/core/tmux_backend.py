@@ -1175,6 +1175,11 @@ class TmuxBackend(SessionBackend):
         ``capture-pane -p`` writes to stdout. ``-S -<N>`` sets start line N
         lines above the cursor. ``-e`` preserves ANSI escape sequences
         so xterm.js can replay colors/positioning faithfully.
+        ``-J`` joins hardware-wrapped lines back into logical lines, so xterm.js
+        can re-wrap them cleanly at the browser viewport width. Without ``-J``,
+        tmux emits each pane-width-wrapped visual line as a separate output line,
+        and xterm's re-wrap conflicts with tmux's pane-width wraps, producing
+        visually jumbled scrollback when the user scrolls above the live viewport.
         """
         if lines <= 0:
             lines = self.scrollback_lines
@@ -1185,6 +1190,7 @@ class TmuxBackend(SessionBackend):
                 "capture-pane",
                 "-p",
                 "-e",
+                "-J",
                 "-S",
                 f"-{lines}",
                 "-t",

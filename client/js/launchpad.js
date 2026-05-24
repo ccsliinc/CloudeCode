@@ -555,8 +555,84 @@ class Launchpad {
             if (isActive) {
                 // Already a live backend → jump straight to ITS terminal
                 // (multi-session: this row may not be the "current" one).
+                // includeScrollback:true asks the server to ship the captured
+                // tmux scrollback on the SessionInfo so the terminal controller
+                // can paint pre-existing history into xterm BEFORE the WS opens,
+                // matching the adopt-path UX. Other getSession callers stay
+                // wire-identical (default-off).
+                //
+                // Width-mismatch fix: BEFORE the GET we must pre-show the
+                // terminal screen, ensure xterm is initialized, and run a fit
+                // so we can measure THIS client's true cols/rows. Those dims
+                // are forwarded to the server which pre-resizes the tmux pane
+                // to match before capture-pane snapshots scrollback. Without
+                // this, a mobile client rejoining a desktop-width session
+                // gets desktop-width scrollback bytes and xterm renders them
+                // at mobile width → upper/older scrollback reflows into garbled
+                // rows. returnToExistingTerminal repeats hideAllScreens →
+                // add .active (idempotent toggle), so pre-showing here is
+                // safe — the second toggle is synchronous, no layout flush in
+                // between, no flicker.
                 try {
-                    const info = await window.API.getSession(rowSessionId);
+                    // 1. Pre-show terminal screen so xterm can measure layout.
+                    //    hideAllScreens lives on window.App; the optional
+                    //    chain guards against an early-boot race where App
+                    //    isn't fully constructed yet (shouldn't happen on a
+                    //    user-triggered click, but it's free defense).
+                    window.App && window.App.hideAllScreens
+                        ? window.App.hideAllScreens()
+                        : document.querySelectorAll('.screen').forEach((s) =>
+                              s.classList.remove('active')
+                          );
+                    const termScreen = document.getElementById('terminal-screen');
+                    if (termScreen) termScreen.classList.add('active');
+                    // 2. First-time init of xterm if the user never visited
+                    //    the terminal this page load (e.g. refresh on launchpad).
+                    if (window.TerminalController && !window.TerminalController.term) {
+                        await window.TerminalController.init();
+                    }
+                    // 3. Yield two animation frames so the layout actually
+                    //    flushes before fitAddon measures the container.
+                    await new Promise((r) =>
+                        requestAnimationFrame(() => requestAnimationFrame(r))
+                    );
+                    // 4. Fit + read measured geometry. Wrap in try/catch —
+                    //    fit can throw if the container isn't laid out yet;
+                    //    we tolerate and fall back to 0 (server treats 0 as
+                    //    "skip pre-resize").
+                    let cols = 0;
+                    let rows = 0;
+                    try {
+                        if (
+                            window.TerminalController &&
+                            window.TerminalController.fitAddon &&
+                            typeof window.TerminalController.fitAddon.fit === 'function'
+                        ) {
+                            window.TerminalController.fitAddon.fit();
+                        }
+                        cols =
+                            (window.TerminalController &&
+                                window.TerminalController.term &&
+                                window.TerminalController.term.cols) ||
+                            0;
+                        rows =
+                            (window.TerminalController &&
+                                window.TerminalController.term &&
+                                window.TerminalController.term.rows) ||
+                            0;
+                    } catch (fitErr) {
+                        // Tolerated — fall through with 0/0; server skips
+                        // the pre-resize and behavior is identical to the
+                        // pre-fix path for THIS request (same-width clients
+                        // are unaffected anyway).
+                        console.warn('rejoin pre-fit failed', fitErr);
+                    }
+
+                    const info = await window.API.getSession(rowSessionId, {
+                        includeScrollback: true,
+                        cols,
+                        rows,
+                    });
                     if (info) {
                         window.App.returnToExistingTerminal(info);
                     }

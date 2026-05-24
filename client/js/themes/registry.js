@@ -536,6 +536,18 @@
                 console.warn('Themes: maybeLoadEffects rejected', e);
             });
         }
+
+        // v0.7.0+ — per-theme background audio plumbing.
+        // Optional `audio` manifest field; null = silence current track.
+        // ThemeAudio gracefully no-ops when the field is absent or the
+        // referenced asset fails to load (404 / CORS / codec).
+        if (window.ThemeAudio && typeof window.ThemeAudio.setTheme === 'function') {
+            try {
+                window.ThemeAudio.setTheme(m.audio || null);
+            } catch (e) {
+                console.warn('Themes: ThemeAudio.setTheme threw', e);
+            }
+        }
         return true;
     }
 
