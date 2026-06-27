@@ -118,3 +118,23 @@ Originally planned as v0.7.0; pivoted to v0.7.2 because v0.7.0 and v0.7.1 were a
 [FRONTEND-SME] [done]: api.js — call() now sets err.status on non-2xx (~line 132) + new makeDirectory(path) POST /filesystem/mkdir (~line 357). launchpad.js — rewrote showFolderPickerModal() (~2078-2310): editable .folder-picker-path input, type-ahead (800ms buffer, startsWith match, .folder-picker-item-active highlight + scrollIntoView), ↑/↓ nav, Enter-on-active opens folder, path-bar Enter browses→on 404 auto-mkdir+navigate w/ inline "created <path>" status; capture-phase doc keydown removed on close (no leak); default focus = list.
 [FRONTEND-SME] [done]: styles.css — .folder-picker-path now an address-bar input w/ focus glow + placeholder (~1555), .folder-picker-status success/error variants, .folder-picker-item-active (accent bg + inset accent bar, ~1631). node --check passed on both JS files.
 
+---
+
+## Release v0.7.5 — Full Prod Publish (in progress)
+
+- [x] Bump version 0.7.4 -> 0.7.5 (all package.json + version chip sources) and commit "release: v0.7.5"
+- [x] Verify codesigning identity (TeamID 3ZVEJNEQ9G) present
+- [x] Build DMG: cd macOS && npm run package -> macOS/dist/Cloude Code-0.7.5-arm64.dmg
+- [x] Verify new folder-picker code is inside the DMG bundle (mkdir endpoint in routes.py, type-ahead in launchpad.js)
+- [x] Compute DMG sha256
+- [x] git tag v0.7.5 + push tag
+- [x] gh release create v0.7.5 with DMG asset
+- [x] Update README download URL + sha256 (if present) and push
+- [ ] rsync DEV->PROD (/Prod/CloudeCode, branch main) DRY-RUN, analyze deletions
+- [ ] rsync real (only if dry-run clean), commit "release: v0.7.5 — sync from DEV"
+- [ ] git fetch + check prod main not ahead, then push origin main
+
+[RELEASE-BUILD] [done]: v0.7.5 bumped (macOS/package.json) + committed 0759288; signing identity "Apple Development: Adam Callen" TeamID 3ZVEJNEQ9G confirmed on signed .app; DMG built at macOS/dist/Cloude Code-0.7.5-arm64.dmg (97697844 bytes, sha256 236a08f7d0b7f1b5e80ce421ed1c16f2b1cbc6b50036d513b2d842c10b2807e0); in-DMG new-code verify PASS (routes.py filesystem/mkdir + launchpad.js folder-picker-status/type-ahead); .app signed+valid, DMG wrapper unsigned (normal for electron-builder), notarization absent (expected).
+
+[RELEASE-PUBLISH] [done]: Pushed weekend-mvp-v3.1 (b12f491..0759288) to origin Adoom666/CloudeCodeDev; annotated tag v0.7.5 created at 0759288 + pushed; GitHub release live at https://github.com/Adoom666/CloudeCodeDev/releases/tag/v0.7.5 with DMG asset https://github.com/Adoom666/CloudeCodeDev/releases/download/v0.7.5/Cloude.Code-0.7.5-arm64.dmg (97697844 bytes); README bumped 0.7.4->0.7.5 + sha256 236a08f7... — PROD CloudeCode host PRESERVED (README link is promoted DEV->PROD, so it must keep pointing at public repo, not CloudeCodeDev).
+
