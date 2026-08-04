@@ -176,10 +176,18 @@ def _settings_with_agents(agents_cfg: AgentsConfig, claude_cli_path=_SENTINEL):
     return s
 
 
+# Provider-selector modal (v3.1) — the ``claude`` agent_type ALWAYS builds
+# its command from the ``cld`` / ``cldor`` zsh functions now (never
+# ``agents.claude_command`` / ``CLAUDE_CLI_PATH``, which are legacy /
+# bypassed — see their field comments in src/config.py). These are the
+# exact wrapper strings, empirically verified against a real detached
+# tmux session (see TODO.md findings log for the capture-pane evidence).
+_EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+
+
 @pytest.mark.parametrize(
     "agent_type,expected_attr",
     [
-        ("claude", "claude_command"),
         ("codex", "codex_command"),
         ("hermes", "hermes_command"),
         ("openclaw", "openclaw_command"),
@@ -189,6 +197,12 @@ def test_get_agent_command_known_types(agent_type, expected_attr):
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
     assert s.get_agent_command(agent_type) == getattr(agents, expected_attr)
+
+
+def test_get_agent_command_claude_no_model_runs_cld():
+    agents = AgentsConfig()
+    s = _settings_with_agents(agents)
+    assert s.get_agent_command("claude") == _EXPECT_CLD
 
 
 def test_get_agent_command_case_insensitive():
@@ -201,30 +215,28 @@ def test_get_agent_command_case_insensitive():
 def test_get_agent_command_unknown_falls_back_to_claude():
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
-    assert s.get_agent_command("totally-bogus") == agents.claude_command
+    assert s.get_agent_command("totally-bogus") == _EXPECT_CLD
 
 
 def test_get_agent_command_none_falls_back_to_claude():
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
-    assert s.get_agent_command(None) == agents.claude_command
+    assert s.get_agent_command(None) == _EXPECT_CLD
 
 
 def test_get_agent_command_empty_falls_back_to_claude():
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
-    assert s.get_agent_command("") == agents.claude_command
+    assert s.get_agent_command("") == _EXPECT_CLD
 
 
 def test_get_agent_command_tolerates_auth_config_failure():
-    """When load_auth_config raises, fall back to AgentsConfig defaults."""
+    """When load_auth_config raises, fall back to AgentsConfig defaults
+    for the OTHER agent types; claude doesn't need AgentsConfig at all."""
     s = Settings(
         default_working_dir=os.environ["DEFAULT_WORKING_DIR"],
         log_directory=os.environ["LOG_DIRECTORY"],
     )
-    # Pin claude_cli_path to "claude" so the env-override branch in
-    # get_agent_command is a no-op and we get the default string verbatim.
-    s.claude_cli_path = "claude"
 
     def boom():
         raise RuntimeError("auth config missing")
@@ -232,36 +244,65 @@ def test_get_agent_command_tolerates_auth_config_failure():
     object.__setattr__(s, "load_auth_config", boom)
     defaults = AgentsConfig()
     assert s.get_agent_command("codex") == defaults.codex_command
-    assert s.get_agent_command("claude") == defaults.claude_command
+    assert s.get_agent_command("claude") == _EXPECT_CLD
 
 
-def test_claude_cli_path_override_applies_when_command_is_default():
-    """``CLAUDE_CLI_PATH`` (settings.claude_cli_path) honored for claude
-    iff the configured ``claude_command`` is still the model default."""
-    agents = AgentsConfig()  # default claude_command
-    s = _settings_with_agents(agents, claude_cli_path="/opt/custom/claude")
-    cmd = s.get_agent_command("claude")
-    assert cmd == "/opt/custom/claude --dangerously-skip-permissions"
+def test_get_agent_command_claude_with_model_runs_cldor():
+    """model set -> ``cldor <model>``, shlex-quoted (nested — once for the
+    inner ``cldor`` arg, once for the outer ``zsh -c`` boundary)."""
+    agents = AgentsConfig()
+    s = _settings_with_agents(agents)
+    cmd = s.get_agent_command("claude", model="openai/gpt-5.6-sol")
+    assert cmd == "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor openai/gpt-5.6-sol'"
 
 
-def test_claude_cli_path_override_ignored_when_command_customized():
-    """If the operator customized ``agents.claude_command`` in config.json,
-    the env override yields to the explicit config value."""
+def test_get_agent_command_claude_model_shell_injection_defused():
+    """A malicious model string (which CreateSessionRequest / the
+    provider-add endpoint would already reject with 400 before this is
+    ever called) must still come out fully neutralized here — the double
+    shlex.quote nesting is defense-in-depth, not the only guard. Verified
+    by round-tripping the produced command through the SAME mechanism
+    tmux uses internally (``exec $SHELL -c <command_string>``) and
+    confirming the payload never executes / never splits into extra argv
+    entries."""
+    import subprocess
+
+    agents = AgentsConfig()
+    s = _settings_with_agents(agents)
+    payload = "foo; touch /tmp/should_never_exist_pwn_marker; echo"
+    cmd = s.get_agent_command("claude", model=payload)
+
+    # Swap the real cldor for a harmless probe function that just echoes
+    # its argv, then run the EXACT command string through zsh -c (mirrors
+    # tmux's internal invocation) to prove the payload stays one literal
+    # argument and nothing executes.
+    probed = cmd.replace(
+        "source ~/.zshrc >/dev/null 2>&1; cldor",
+        "cldor() { echo \"ARGC:$#|GOT:[$1]\"; }; cldor",
+    )
+    proc = subprocess.run(
+        ["zsh", "-c", probed], capture_output=True, text=True, timeout=5
+    )
+    # The payload text legitimately appears INSIDE the single echoed
+    # argument (that's the point — it stayed one literal token, ARGC:1).
+    # What must NOT happen is the embedded "; touch ..." being split out
+    # and actually executed as a second command.
+    assert proc.stdout.strip() == f"ARGC:1|GOT:[{payload}]"
+    import os as _os
+    assert not _os.path.exists("/tmp/should_never_exist_pwn_marker")
+
+
+def test_claude_command_and_cli_path_legacy_no_longer_affect_claude():
+    """Provider-selector pivot (v3.1): a customized ``agents.claude_command``
+    and/or ``claude_cli_path`` (CLAUDE_CLI_PATH) must NOT change the
+    claude command anymore — it's always the cld wrapper (or cldor when a
+    model is supplied). Both fields are LEGACY / silently bypassed now."""
     agents = AgentsConfig(claude_command="claude --my-custom-flag")
     s = _settings_with_agents(agents, claude_cli_path="/opt/custom/claude")
-    cmd = s.get_agent_command("claude")
-    assert cmd == "claude --my-custom-flag"
-
-
-def test_claude_cli_path_bare_claude_returns_default_string_verbatim():
-    """When the resolved CLI path is just ``"claude"`` (no explicit path,
-    just the bare command name), return the model default string verbatim
-    — no rewrite. Production code: ``if cli_path and cli_path != "claude":``
-    short-circuits the rewrite when the resolved path equals "claude"."""
-    agents = AgentsConfig()
-    s = _settings_with_agents(agents, claude_cli_path="claude")
-    cmd = s.get_agent_command("claude")
-    assert cmd == "claude --dangerously-skip-permissions"
+    assert s.get_agent_command("claude") == _EXPECT_CLD
+    assert s.get_agent_command("claude", model="x/y") == (
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor x/y'"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -323,6 +364,58 @@ def test_create_session_request_accepts_arbitrary_string():
     arrive in a request before the server is upgraded)."""
     req = CreateSessionRequest(agent_type="future_agent")
     assert req.agent_type == "future_agent"
+
+
+# --------------------------------------------------------------------------- #
+# CreateSessionRequest.model — provider-selector modal (v3.1) validation
+# --------------------------------------------------------------------------- #
+
+
+def test_create_session_request_model_none_by_default():
+    req = CreateSessionRequest()
+    assert req.model is None
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["openai/gpt-5.6-sol", "qwen/qwen3.8-max", "a", "a" * 120, "~anthropic/x"],
+)
+def test_create_session_request_model_accepts_valid_ids(model):
+    req = CreateSessionRequest(model=model)
+    assert req.model == model
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "foo; rm -rf /",
+        "foo`whoami`",
+        "foo$(whoami)",
+        "foo bar",
+        "foo\nbar",
+        "a" * 121,
+        "",
+    ],
+)
+def test_create_session_request_model_rejects_invalid_ids(model):
+    with pytest.raises(ValidationError):
+        CreateSessionRequest(model=model)
+
+
+def test_session_model_field_round_trip():
+    """Session.model persists alongside agent_type."""
+    s = Session(
+        id="ses_abc", working_dir="/tmp", agent_type="claude", model="openai/gpt-5.6-sol"
+    )
+    dumped = s.model_dump()
+    assert dumped["model"] == "openai/gpt-5.6-sol"
+    reloaded = Session(**dumped)
+    assert reloaded.model == "openai/gpt-5.6-sol"
+
+
+def test_session_model_field_defaults_to_none():
+    s = Session(id="ses_abc", working_dir="/tmp")
+    assert s.model is None
 
 
 # --------------------------------------------------------------------------- #

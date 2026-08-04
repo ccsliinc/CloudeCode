@@ -7,9 +7,11 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -224,6 +226,24 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+
+# Provider-selector modal (v3.1) — remap FastAPI's default 422 to 400 for
+# request-BODY validation failures. Needed so the model-id shell-injection
+# guard on ``CreateSessionRequest.model`` (a pydantic field_validator in
+# src/models.py, which raises before the route body ever runs) surfaces as
+# 400 — matching the sibling ``POST /api/v1/providers/models`` endpoint,
+# which validates the same regex manually and returns an explicit 400. No
+# other route in this app asserts on the literal 422 status code (grepped
+# at introduction time), so this is a safe app-wide remap rather than a
+# narrowly-scoped one.
+@app.exception_handler(RequestValidationError)
+async def _validation_error_as_400(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content=jsonable_encoder({"detail": exc.errors()}),
+    )
+
 
 # Configure CORS
 app.add_middleware(

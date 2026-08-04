@@ -1434,6 +1434,7 @@ class SessionManager:
         initial_rows: Optional[int] = None,
         project_name: Optional[str] = None,
         agent_type: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -1456,6 +1457,15 @@ class SessionManager:
         sanitizes to empty) silently falls back to legacy naming — this is
         by design so the launchpad can always send the field without special-
         casing blanks. PTYBackend ignores the override entirely.
+
+        ``model`` (provider-selector modal, v3.1) — only meaningful when
+        the resolved agent_type is ``"claude"``. None launches Claude
+        directly via the ``cld`` zsh function; set launches it OpenRouter-
+        routed via ``cldor <model>`` (see ``Settings.get_agent_command``).
+        Ignored (harmlessly) for every other agent_type. Persisted on the
+        resulting ``Session`` alongside ``agent_type`` regardless of
+        ``auto_start_claude``, so it survives for the life of the session
+        even on a manual/no-autostart create.
         """
         # Clean up a zombie entry for this exact id (stale metadata / dead
         # backend) — but leave any OTHER live sessions alone.
@@ -1594,7 +1604,7 @@ class SessionManager:
                 # default config this yields the same string the old
                 # ``f"{claude_cli} --dangerously-skip-permissions"`` did
                 # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
-                command = settings.get_agent_command(resolved_agent_type)
+                command = settings.get_agent_command(resolved_agent_type, model=model)
                 await backend.start(
                     command=command,
                     env=spawn_env,
@@ -1625,6 +1635,7 @@ class SessionManager:
                 created_at=datetime.utcnow(),
                 last_activity=datetime.utcnow(),
                 agent_type=resolved_agent_type,
+                model=model,
                 pinned_theme=prior_pin,
                 # PIN-FIX-EXECUTE — carry the bare tmux name on the inner
                 # Session so frontend can use it as the pin-key handle

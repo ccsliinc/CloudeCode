@@ -783,7 +783,9 @@ class Launchpad {
         const display = this._deriveRunningSessionDisplayName(tmuxName);
         const confirmed = await this.showConfirmModal(
             'end session?',
-            `destroy "${this._escapeHtml(display)}"? this kills the tmux session permanently.`,
+            // showConfirmModal escapes the whole message itself now — don't
+            // pre-escape `display` here or it would be double-escaped.
+            `destroy "${display}"? this kills the tmux session permanently.`,
             'this is the only destructive action. session data in the pane will be lost.',
             'destroy',
             'cancel'
@@ -1325,13 +1327,22 @@ class Launchpad {
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
 
+            // title/message/details are attacker-reachable in some callers
+            // (e.g. providers.js interpolates a stored model id, which may
+            // originate from a hand-edited config.json). Escape here, once,
+            // at the shared sink, rather than trusting every caller to have
+            // pre-escaped its own interpolated values.
+            const safeTitle = this._escapeHtml(title);
+            const safeMessage = this._escapeHtml(message);
+            const safeDetails = details ? this._escapeHtml(details) : null;
+
             // Create modal content
             overlay.innerHTML = `
                 <div class="modal-content">
-                    <div class="modal-header">» ${title}</div>
+                    <div class="modal-header">» ${safeTitle}</div>
                     <div class="modal-body">
-                        <div class="modal-message">${message}</div>
-                        ${details ? `<div class="modal-description">${details}</div>` : ''}
+                        <div class="modal-message">${safeMessage}</div>
+                        ${safeDetails ? `<div class="modal-description">${safeDetails}</div>` : ''}
                     </div>
                     <div class="modal-footer">
                         <button class="modal-btn modal-btn-secondary" id="modal-cancel">${this._escapeHtml(secondaryLabel)}</button>
@@ -1465,6 +1476,17 @@ class Launchpad {
         console.log('Launchpad: Creating new project', agentType ? `(agent: ${agentType})` : '');
 
         try {
+            // Gate: pick claude vs an OpenRouter model BEFORE asking for a
+            // project name. Keyboard-first, defaults to the last choice —
+            // this is the hot path of every launch so it must be
+            // dismissable in one keystroke. null = user cancelled the
+            // whole launch.
+            const providerChoice = await this.showProviderModal();
+            if (!providerChoice) {
+                console.log('Launchpad: Provider selection cancelled');
+                return;
+            }
+
             // Show modal to get project details. Title reflects the agent
             // so users know which CLI is about to spawn in the new pane.
             const modalTitle = agentType
@@ -1500,6 +1522,10 @@ class Launchpad {
             // continues to work for the default "new-project" button.
             if (agentType) {
                 payload.agent_type = agentType;
+            }
+            // Omit for claude (server default); set for an OpenRouter model.
+            if (providerChoice.model) {
+                payload.model = providerChoice.model;
             }
             const session = await window.API.createSession(payload);
 
@@ -1705,6 +1731,17 @@ class Launchpad {
      *   other → server-provided detail text.
      */
     async showCloneFromGithubModal() {
+        // Gate: pick claude vs an OpenRouter model BEFORE showing the clone
+        // form. The backend's POST /projects/clone both clones the repo to
+        // disk AND persists the project entry in one shot, so that request
+        // must never fire before the user has committed to launching —
+        // null = cancelled, back to the launchpad, nothing touched.
+        const providerChoice = await this.showProviderModal();
+        if (!providerChoice) {
+            console.log('Launchpad: Provider selection cancelled');
+            return;
+        }
+
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay';
 
@@ -1844,11 +1881,13 @@ class Launchpad {
                 // in the cloned dir. selectProject does the heavy lifting.
                 await this.loadProjects();
                 closeModal();
+                // Provider already chosen above — pass it through so
+                // selectProject doesn't prompt a second time.
                 await this.selectProject({
                     name: project.name,
                     path: project.path,
                     description: project.description || null,
-                });
+                }, providerChoice);
             } catch (error) {
                 console.error('Launchpad: clone-from-github failed:', error);
                 setStatus(mapErrorToMessage(error), true);
@@ -2016,6 +2055,16 @@ class Launchpad {
                 return;
             }
 
+            // Gate: pick claude vs an OpenRouter model BEFORE persisting
+            // anything. null = user cancelled the whole launch — abort
+            // cleanly with no project entry written to config.json (avoids
+            // orphaning a project row for a session that was never created).
+            const providerChoice = await this.showProviderModal();
+            if (!providerChoice) {
+                console.log('Launchpad: Provider selection cancelled');
+                return;
+            }
+
             this.updateStatus(`adding ${details.name}...`);
 
             // Save to projects config so it shows up in history.
@@ -2029,12 +2078,13 @@ class Launchpad {
             // Refresh project list so the new entry shows up at the top
             await this.loadProjects();
 
-            // Open the project
+            // Open the project (provider already chosen above — pass it
+            // through so selectProject doesn't prompt a second time).
             await this.selectProject({
                 name: savedName,
                 path: selectedPath,
                 description: details.description || null,
-            });
+            }, providerChoice);
         } catch (error) {
             console.error('Launchpad: Failed to open project from folder:', error);
             this.showError('failed to open folder: ' + error.message);
@@ -2302,12 +2352,29 @@ class Launchpad {
     }
 
     /**
-     * Select and open existing project
+     * Select and open existing project.
+     * @param {object} project
+     * @param {{model: string|null}|undefined} [providerChoice] - Pass a
+     *   already-resolved choice when the caller gated its own pre-session
+     *   side effect (e.g. persisting a new project entry) on the provider
+     *   modal first — avoids prompting the user twice. Omit to have this
+     *   function show the modal itself (existing-project paths).
      */
-    async selectProject(project) {
+    async selectProject(project, providerChoice = undefined) {
         console.log('Launchpad: Selecting project:', project.name);
 
         try {
+            // Gate: pick claude vs an OpenRouter model BEFORE opening the
+            // project. null = user cancelled the whole launch — abort
+            // cleanly, no session created, no error toast.
+            if (providerChoice === undefined) {
+                providerChoice = await this.showProviderModal();
+                if (!providerChoice) {
+                    console.log('Launchpad: Provider selection cancelled');
+                    return;
+                }
+            }
+
             // Show loading state
             this.updateStatus(`opening ${project.name}...`);
 
@@ -2315,13 +2382,18 @@ class Launchpad {
             // Include current xterm cell grid dims so the tmux pane is birthed
             // at the right size — see the "new project" path for rationale.
             const _dims = this._getTerminalDims();
-            const session = await window.API.createSession({
+            const payload = {
                 working_dir: project.path,
                 auto_start_claude: true,
                 copy_templates: false,
                 project_name: project.name,
                 ..._dims
-            });
+            };
+            // Omit for claude (server default); set for an OpenRouter model.
+            if (providerChoice.model) {
+                payload.model = providerChoice.model;
+            }
+            const session = await window.API.createSession(payload);
 
             console.log('Launchpad: Project session created:', session);
 
