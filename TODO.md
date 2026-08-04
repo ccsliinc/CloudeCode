@@ -1,3 +1,132 @@
+# ACTIVE: Provider selector modal on session launch
+
+## Goal
+Every path that spawns a NEW CLI session first shows a provider-selection modal.
+- Pick **Claude** → launch `cld`
+- Pick any OpenRouter model → launch `cldor <model>`
+- Models are add/remove-able inline in the same modal, persisted in `config.json`.
+
+Rejoin/adopt of an already-running tmux session is OUT OF SCOPE (no command is built there).
+
+## Established facts (recon complete — do NOT re-derive)
+
+**Architecture:** Electron (`macOS/main.js`) is only a tray + Python-server supervisor;
+`macOS/preload.js` exposes an EMPTY api. There is NO Electron IPC launch surface.
+Real app = vanilla-JS client (`client/js/`, no build step) → HTTP → Python FastAPI → tmux.
+
+**Single choke point for command construction:**
+- `SessionManager.create_session` — `src/core/session_manager.py:1427`
+- resolves command at `src/core/session_manager.py:1597` via `settings.get_agent_command(agent_type)`
+- spawns at `src/core/session_manager.py:1598`
+- builder: `Settings.get_agent_command()` — `src/config.py:380-432` (returns ONE shell string)
+- tmux spawn: `src/core/tmux_backend.py:359-372` — command appended as a single argv
+  element; **tmux itself shell-parses it** (no shlex.split on our side).
+
+**agent_type precedence already implemented server-side:** request → ProjectConfig → "claude"
+(`src/core/session_manager.py:1473-1487`).
+
+**`cld` / `cldor` are zsh FUNCTIONS in `~/.zshrc` (subshell form), NOT executables.**
+- `cld` (~/.zshrc:247-286): pulls OAuth token from macOS Keychain (`claude-cld-oauth`),
+  unsets all OpenRouter/Bedrock/Vertex vars, runs `command claude --dangerously-skip-permissions "$@"`.
+- `cldor` (~/.zshrc:297-360): pulls key from Keychain (`claude-cldor-openrouter`),
+  sets `CLAUDE_CONFIG_DIR=$HOME/.claude-cldor`, `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
+  `ANTHROPIC_AUTH_TOKEN`, blank `ANTHROPIC_API_KEY`, and maps
+  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` + `CLAUDE_CODE_SUBAGENT_MODEL` to `$1`.
+  Takes first non-option arg as the model, `shift`s, forwards `"$@"` to
+  `$HOME/.local/bin/claude --dangerously-skip-permissions --model <model>`.
+- **Consequence:** tmux spawns a NON-interactive shell which does not source `.zshrc`,
+  so the command MUST be wrapped so the functions exist. NO secret is ever handled by
+  this app — the Keychain lookup happens inside the zsh function.
+
+**Existing client conventions to REUSE (do not invent):**
+- Modal pattern: `client/js/launchpad.js:1322` `showConfirmModal` (canonical smallest example).
+  DOM shape `.modal-overlay > .modal-content > .modal-header/.modal-body/.modal-footer`,
+  built imperatively, `document.body.appendChild`, returns a Promise.
+- **Esc bug to avoid:** `overlay.addEventListener('keydown')` only fires when focus is inside.
+  Use the folder-picker fix: capture-phase `document.addEventListener('keydown', fn, true)`
+  removed on close (`client/js/launchpad.js:2125,2262`).
+- Keyboard list (arrows + Enter + type-ahead + hover-sync): folder picker
+  `client/js/launchpad.js:2145,2225-2260`; styles `client/css/styles.css:1634-1690`
+  (`.folder-picker-list`, `.folder-picker-item`, `.folder-picker-item-active`).
+- Modal CSS tokens: `client/css/styles.css:1201-1340`. Theme vars at `client/css/styles.css:13`.
+- API wrapper: `client/js/api.js:59` `call()` (auth headers, propagates `error.status`).
+- **CSP is `script-src 'self'`** (`src/main.py:252`) — no inline scripts, no eval.
+- Copy tone: lowercase labels, headers prefixed `» `.
+
+**Launch entry points that must be gated (all in `client/js/launchpad.js`):**
+- `_createNewSessionInner()` :1464 → builds payload, calls `API.createSession` :1504
+  (covers FAB `new-project` :1386, and `createNewSessionWithAgent()` :1395 for openclaw/hermes)
+- `selectProject()` :2307 → `API.createSession` :2318
+  (covers existing-project row click :1040, folder-picker open :1994/:2078,
+   clone-from-github success :1845, deep link `/session/<name>` via router.js:36-48 → :1962,
+   `detachAndOpenProject()` :2354)
+- `createConsoleSession()` :1409 — agent_type `shell`, NOT gated (no Claude CLI involved)
+- `detachAndCreateNew()` :1928 — re-enters `_createNewSessionInner`, inherits the gate
+
+Gating those TWO functions covers every path. Do NOT add a gate per call site.
+
+## Contract (both workstreams code against this — do not deviate)
+
+### config.json (repo root, `Settings.auth_config_file` — `src/config.py:250`)
+New top-level block. Absent = defaults apply.
+```json
+"providers": { "models": ["qwen/qwen3.8-max", "moonshotai/kimi-k3", "openai/gpt-5.6-sol"] }
+```
+"Claude" is implicit, always the first option, never stored in this list, never removable.
+
+### Model id validation (BOTH server and client)
+Regex: `^[A-Za-z0-9._~/-]{1,120}$`. Reject anything else with 400.
+This is the shell-injection guard — enforce it server-side regardless of client checks.
+
+### REST API (new)
+- `GET    /api/v1/providers`                     → `{"models": [...]}`
+- `POST   /api/v1/providers/models`              body `{"model": "..."}` → `{"models": [...]}`
+                                                   400 invalid format, 409 duplicate
+- `DELETE /api/v1/providers/models/{model:path}` → `{"models": [...]}`, 404 if absent
+
+### Session create
+`CreateSessionRequest` (`src/models.py:157-196`) gains:
+`model: str | None = None`  — None => Claude (`cld`). Set => OpenRouter (`cldor <model>`).
+Same validation regex. Persist onto the Session alongside `agent_type`
+(`src/core/session_manager.py:1620`).
+
+### Command building — `Settings.get_agent_command(agent_type, model=None)` (`src/config.py:380`)
+- `agent_type == "claude"`, `model` falsy → run `cld`
+- `agent_type == "claude"`, `model` set   → run `cldor <model>`
+- all other agent_types (codex/hermes/openclaw/shell) → UNCHANGED
+Must be wrapped so `~/.zshrc` is sourced. Quote with `shlex.quote`; never raw-concat the model.
+
+## Tasks
+- [ ] **BACKEND** — config schema, `get_agent_command`, `CreateSessionRequest.model`,
+      provider REST endpoints, validation. Empirically verify the zsh wrapper actually
+      starts Claude Code inside a real tmux session.
+- [ ] **FRONTEND** — provider selector modal (keyboard-first, reuses folder-picker list
+      pattern) with inline add/remove rows; gate `_createNewSessionInner` + `selectProject`;
+      CSS in `client/css/styles.css`.
+- [ ] **VALIDATE** — validator-agent confirms modal appears on every new-session path and
+      that both `cld` and `cldor <model>` sessions actually come up live.
+
+## Findings log
+<!-- [AGENT-NAME] [TIMESTAMP]: finding -->
+
+[FIX-SME] [2026-08-03]: Fixed pre-commit-persist ordering bug. `openProjectFromFolder` (:2022) called `saveProjectWithUniqueName` (config.json write) BEFORE `selectProject`'s internal provider-modal await, orphaning the project row on Esc — hoisted `showProviderModal()` to right after the project-name modal, before the persist call. `showCloneFromGithubModal` (:1722) had the same shape one level deeper: backend `POST /projects/clone` clones to disk AND persists the project entry atomically in a single call, invoked before `selectProject`'s gate — hoisted the provider modal to the very top of `showCloneFromGithubModal`, before the clone form is even shown, so the clone/persist request never fires pre-commit. Both hoisted (no rollback needed — the clone's disk write is real user data pre-existing before the gate even applies now, so it's a non-issue, not an excused side effect). To avoid double-prompting, extended `selectProject(project, providerChoice)` with an optional pre-resolved second arg — callers that already gated pass their choice through; existing-project/deep-link/detach-retry callers still call it with one arg and get the original single-prompt behavior. `_createNewSessionInner` (:1464) was already correctly ordered (provider modal → project name modal → createSession → createProject persist) — audited, no bug, no change. `node --check` passes.
+
+[FRONTEND-SME] [2026-08-03]: Built provider selector modal in NEW file client/js/providers.js (340 lines, attaches showProviderModal() onto window.Launchpad; loaded after launchpad.js in client/index.html:94-97). Reuses .folder-picker-list/-item/-active/-status markup+CSS and the folder-picker's capture-phase document keydown pattern (removed on close) verbatim — no new nav implementation. Added 4 new CSS classes only (.provider-item-name, .provider-item-remove, .provider-add-row, .provider-add-input) in client/css/styles.css, all on theme vars. api.js gained getProviders()/addProviderModel()/removeProviderModel() (DELETE URL-encodes the model id for the `/` in ids). Gated _createNewSessionInner (launchpad.js:1473) and selectProject (launchpad.js:2329) — provider modal awaited before payload build; null=abort, payload.model set only when a model was chosen (omitted for claude). createConsoleSession left ungated as specified. Verified detachAndCreateNew/detachAndOpenProject re-enter the two gated functions via setTimeout and so re-show the provider modal on retry — this matches the PRE-EXISTING behavior where the project-name modal also re-prompts on that same retry path, so it's not a new regression, just consistent with how retry-after-detach already worked.
+
+Nested-modal handling: removing a model opens showConfirmModal on top of the provider modal; a `confirmPending` flag makes the provider modal's document-capture keydown listener go inert while the confirm dialog is up, so Escape/Enter there don't also get intercepted by the outer modal. Add-model Escape closes just the inline add-input (revert to "+ add model" row) rather than the whole modal, via the same capture listener checking an `addInputOpen` flag before falling through to the default close(null).
+
+Last-used choice persisted under single localStorage key `cloude_provider_last_model` (empty string = claude). Client-side regex `^[A-Za-z0-9._~/-]{1,120}$` enforced before POST, matching the contract; server 400/409 still surfaced inline via .folder-picker-status--error on top of that.
+
+Not covered by frontend (per contract, backend's job): actual config.json persistence, server-side validation, get_agent_command wiring, CreateSessionRequest.model field — could not live-test end-to-end since GET/POST/DELETE /api/v1/providers and the session model field 404/ignore until backend lands (expected per task notes, not a frontend bug).
+
+[BACKEND-SME] [2026-08-03]: Empirically settled the zsh wrapper: `zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'` (and `cldor <model>` variant) — chosen over `zsh -ic 'cld'`. Both rendered the Claude Code TUI cleanly with zero leading garbage in a real detached scratch-socket tmux session (`tmux -L cloude_test_N`, verified via `tmux capture-pane -p -S -100`), and BOTH Keychain entries (`claude-cld-oauth`, `claude-cldor-openrouter`) resolved headlessly with NO ACL/GUI prompt — so the documented Keychain-headless risk did NOT materialize on this machine. Picked `zsh -c 'source ...'` anyway: narrower surface (explicit rc source, `>/dev/null 2>&1` silences any stray output, skips interactive-shell machinery/job-control/oh-my-zsh update checks entirely) vs `-ic` which is more exposed to future rc-file noise. Model is shlex-quoted TWICE (inner `cldor <model>` token boundary + outer `zsh -c` boundary via `shlex.quote(inner_script)`) — proven via direct `subprocess.run(["zsh","-c",cmd])` round-trip (mirrors tmux's internal `$SHELL -c <string>` exec) that `; rm -rf /`, backticks, `$(...)`, and a leading `~` all stay a single literal argv token (ARGC:1), no execution, no tilde-expansion. Full end-to-end proof: created a REAL session via the live API with `model="openai/gpt-5.6-sol"`, tmux pane rendered the OpenRouter-routed Claude Code TUI cleanly (capture-pane confirmed), cleaned up after. CRITICAL FINDING: none — no blockers. Implemented `providers` config block + `get_provider_models/add_provider_model/remove_provider_model` (src/config.py, cache-invalidated same pattern as save_project), `get_agent_command(agent_type, model=None)` rewrite (claude branch now ALWAYS uses cld/cldor, `agents.claude_command`/`CLAUDE_CLI_PATH` marked LEGACY/bypassed — this is a deliberate behavior change per the contract, existing tests in tests/test_session_agent_type.py updated accordingly, all 56 pass), `CreateSessionRequest.model` + `Session.model` with regex `^[A-Za-z0-9._~/-]{1,120}$` (src/models.py, shared `MODEL_ID_PATTERN`/`_MODEL_ID_RE`), 3 REST endpoints (src/api/routes.py) matching the contract exactly incl. `{model:path}` for slash-containing ids. Added a global `RequestValidationError`→400 handler in src/main.py so `CreateSessionRequest.model`'s pydantic validator surfaces 400 (not FastAPI's default 422), matching the provider-add endpoint's explicit 400 — verified no other route asserts on 422. All live-curl-tested: GET/POST(400/409)/DELETE(404) on /api/v1/providers*, and POST /api/v1/sessions with malicious model strings (backticks, `$()`) both correctly 400. Full test suite: 393 passed, 1 pre-existing unrelated failure (confirmed via git stash — test_ensure_pipe_pane_does_not_clobber_existing_pipe fails identically on clean tree).
+
+[SECFIX-SME] [2026-08-03]: Fixed all 4 security-review findings pre-commit. (1+2) `MODEL_ID_PATTERN` (src/models.py) changed from `^[A-Za-z0-9._~/-]{1,120}$` to `^(?!-)[A-Za-z0-9._~/-]{1,120}$`, and validation centralized into one new `is_valid_model_id(v)` helper using `.fullmatch()` instead of `.match()` — fixes the `$`-matches-before-trailing-newline bypass (`"openai/gpt-4\n"` now correctly rejected) and blocks a leading `-` (fixes the `cldor` `"$1" != -*` argument-injection path; `"--continue"`/`"-p"` now 400). Both `src/models.py` (CreateSessionRequest field_validator) and `src/api/routes.py` (`add_provider_model` route) now call `is_valid_model_id()` — no call site touches `_MODEL_ID_RE` directly anymore. `client/js/providers.js`'s independent JS-side regex updated to match (`(?!-)` added) for UX consistency; server remains authoritative. (3) Root-caused the stored DOM XSS: `Launchpad.showConfirmModal` (client/js/launchpad.js:1322) now escapes `title`/`message`/`details` via `this._escapeHtml()` before building `innerHTML` — was previously only escaping the button labels. Audited all 4 callers (3 in launchpad.js, 1 in providers.js `removeModel`): none intentionally embed HTML; one caller (`_handleKillRunningSession`) was pre-escaping its own interpolated value and had to be adapted (pre-escape removed) to avoid double-encoding now that the shared function escapes centrally. `app.js` has a separate, non-shared, copy-pasted `showConfirmModal` with the same unescaped-innerHTML pattern, but its one caller (`logout()`) only ever passes static strings — no attacker-controlled data reaches it, so left untouched as out-of-scope for this finding (flagged here for awareness, not fixed). (4) Added a pydantic `field_validator` on `ProvidersConfig.models` (src/config.py) that filters each entry through `is_valid_model_id()` at config-load time; DROPS invalid entries with a `structlog` warning rather than raising — chosen over raise because raising would blow up the enclosing `try/except` in `load_auth_config()` and replace the ENTIRE providers block with the 3-model default (losing every valid entry over one bad one), whereas every other malformed sub-block in that function already follows the same drop/fallback-soft philosophy; a single bad hand-edited entry shouldn't be able to hard-brick app startup. Verification: full pytest suite 393 passed / 1 pre-existing unrelated failure (identical baseline). Empirical HTTP-shaped checks via FastAPI TestClient (isolated temp config.json, never touched the real one after an initial scratch-script mistake was caught and reverted) — 14/14 passed: both bad ids 400 at pydantic layer AND `/api/v1/providers/models`, all 4 valid ids (incl. leading-`~`) still accepted. XSS pipeline simulated end-to-end in Node (render→browser-attribute-decode→showConfirmModal escape) confirming `<img src=x onerror=alert(1)>` never survives as a raw tag into the final `innerHTML`. `node --check` clean on both touched JS files. Also: `.claude/scheduled_tasks.lock` (tracked runtime PID/session lock, was showing as churning staged-deleted) added to `.gitignore` and `git rm --cached`'d — not committed.
+
+---
+
+# ARCHIVE — previous work below
+
 # ACTIVE BUG: session-click injects `/clear` and wipes context
 
 ## Symptom (confirmed via user screenshots)

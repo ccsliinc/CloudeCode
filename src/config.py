@@ -9,12 +9,15 @@ The ``uploads`` block governs the browser-paste image upload feature
 """
 
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
 import json
+import shlex
 import socket
+
+from src.models import is_valid_model_id, MODEL_ID_PATTERN
 
 
 class ProjectConfig(BaseModel):
@@ -48,6 +51,11 @@ class AgentsConfig(BaseModel):
       - hermes:   ``hermes``        (NOT ``hermes-agent``)
       - openclaw: ``openclaw tui``  (NOT bare ``openclaw``)
     """
+    # LEGACY (v3.1) — no longer consulted by ``Settings.get_agent_command()``
+    # for ``agent_type == "claude"``. The provider-selector modal always
+    # launches claude via the ``cld`` / ``cldor`` zsh functions instead (see
+    # get_agent_command's docstring). Kept as a config.json field for
+    # backward-compat deserialization; not read anywhere else in this repo.
     claude_command: str = "claude --dangerously-skip-permissions"
     codex_command: str = "codex"
     hermes_command: str = "hermes"
@@ -56,6 +64,64 @@ class AgentsConfig(BaseModel):
     # FAB action so users can spawn a bare tmux session in ~/ for quick
     # shell work. ``$SHELL -i`` ensures rc files (.zshrc/.bashrc) load.
     shell_command: str = "$SHELL -i"
+
+
+# Provider-selector modal (v3.1) default catalog — shown alongside the
+# implicit "Claude" option. Module-level so both ``ProvidersConfig``'s
+# pydantic default AND the raw-JSON add/remove methods below (which must
+# seed from the same defaults when config.json has no "providers" block
+# yet) stay in sync.
+_DEFAULT_PROVIDER_MODELS: List[str] = [
+    "qwen/qwen3.8-max",
+    "moonshotai/kimi-k3",
+    "openai/gpt-5.6-sol",
+]
+
+
+class ProvidersConfig(BaseModel):
+    """OpenRouter model catalog for the provider-selector modal.
+
+    ``models`` is the add/remove-able list shown alongside the implicit
+    "Claude" option (never stored here, never removable — the client
+    always prepends it). A missing/absent "providers" block in
+    config.json deserializes to the curated default trio via
+    ``_DEFAULT_PROVIDER_MODELS``.
+    """
+    models: List[str] = Field(default_factory=lambda: list(_DEFAULT_PROVIDER_MODELS))
+
+    @field_validator("models")
+    @classmethod
+    def _drop_invalid_model_ids(cls, v: List[str]) -> List[str]:
+        """Defense-in-depth: ``add_provider_model`` / the POST route only
+        guard entries added through the API. A hand-edited config.json
+        bypasses that guard entirely, and this list is trusted downstream
+        both server-side (``Settings.get_agent_command`` interpolates it
+        into a shell command) and client-side (rendered into the provider
+        modal's DOM, including the remove-confirm dialog). Validate here
+        too, at load time, so a corrupted/tampered entry can't reach
+        either surface unvalidated.
+
+        Drop-with-a-warning-log rather than raise: this mirrors the
+        fail-soft philosophy ``load_auth_config`` already applies to each
+        malformed sub-block (session, auth_rate_limits, notifications,
+        agents, uploads) — one bad entry should not hard-brick the whole
+        app on startup or wipe out the rest of an otherwise-valid list.
+        """
+        valid: List[str] = []
+        dropped: List[str] = []
+        for m in v:
+            if isinstance(m, str) and is_valid_model_id(m):
+                valid.append(m)
+            else:
+                dropped.append(m)
+        if dropped:
+            import structlog
+            structlog.get_logger().warning(
+                "dropped_invalid_provider_model_ids",
+                dropped=dropped,
+                pattern=MODEL_ID_PATTERN,
+            )
+        return valid
 
 
 class SessionConfig(BaseModel):
@@ -196,6 +262,7 @@ class AuthConfig(BaseModel):
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
 
 
 class Settings(BaseSettings):
@@ -250,6 +317,9 @@ class Settings(BaseSettings):
     auth_config_file: str = "./config.json"
 
     # Claude CLI Configuration
+    # LEGACY (v3.1) — no longer consulted for agent_type == "claude" (see
+    # get_agent_command / AgentsConfig.claude_command). Kept for .env
+    # back-compat; setting CLAUDE_CLI_PATH is now a silent no-op.
     claude_cli_path: Optional[str] = None
 
     _auth_config_cache: Optional[AuthConfig] = None
@@ -346,6 +416,12 @@ class Settings(BaseSettings):
 
     def get_claude_cli_path(self) -> str:
         """
+        LEGACY (v3.1) — no longer called by ``get_agent_command()`` for
+        ``agent_type == "claude"`` (the provider-selector modal always
+        launches via the ``cld`` / ``cldor`` zsh functions instead). Kept
+        for any external callers / back-compat; ``CLAUDE_CLI_PATH`` is now
+        a silent no-op as far as session launch is concerned.
+
         Get the path to the Claude CLI binary with auto-detection fallback.
 
         Detection order:
@@ -377,7 +453,9 @@ class Settings(BaseSettings):
         # 4. Fallback to just "claude" and trust PATH
         return "claude"
 
-    def get_agent_command(self, agent_type: Optional[str]) -> str:
+    def get_agent_command(
+        self, agent_type: Optional[str], model: Optional[str] = None
+    ) -> str:
         """Resolve the shell command string for a given agent_type.
 
         Phase 6 — agent-type labeling. Returns the shell-string command
@@ -386,21 +464,57 @@ class Settings(BaseSettings):
         back to the AgentsConfig defaults if the auth config can't be
         loaded (e.g. unit-test paths that bypass setup_auth.py).
 
-        For ``"claude"`` specifically, the env-var ``CLAUDE_CLI_PATH``
-        (a.k.a. ``settings.claude_cli_path``) still wins iff the user
-        hasn't customized ``agents.claude_command`` in config.json —
-        i.e. when the configured value still equals the model default.
-        This preserves the existing pre-Phase-6 env-override behavior
-        without forcing operators to migrate their .env to config.json.
+        Provider-selector modal (v3.1) — for ``"claude"`` specifically, the
+        command is ALWAYS built from the ``cld`` / ``cldor`` zsh FUNCTIONS
+        defined in the user's ``~/.zshrc`` (NOT ``agents.claude_command`` /
+        ``CLAUDE_CLI_PATH``, which are now LEGACY and bypassed for this
+        type — see their field comments). ``model`` falsy → ``cld``
+        (Claude via the user's subscription OAuth token, from macOS
+        Keychain entry ``claude-cld-oauth``). ``model`` set → ``cldor
+        <model>`` (OpenRouter-routed, Keychain entry
+        ``claude-cldor-openrouter``). Neither secret ever passes through
+        this app — the Keychain lookup happens inside the zsh function, in
+        the spawned tmux pane, not here.
 
-        Returned shape: a single shell string (e.g. ``"claude --foo"``),
-        which the tmux backend hands directly to ``new-session ... <cmd>``.
-        Matches the existing claude path that builds
-        ``f"{claude_cli} --dangerously-skip-permissions"``.
+        Why the wrapper: tmux's spawned pane shell does NOT source
+        ``~/.zshrc`` (non-interactive, non-login — see TmuxBackend.start /
+        tmux's own ``$SHELL -c <command>`` invocation), so a bare ``cld``
+        would be "command not found". Empirically verified (real detached
+        tmux session on a scratch ``-L`` socket, ``tmux capture-pane``)
+        against two candidate wrappers:
+          - ``zsh -ic '<cmd>'`` — worked cleanly in this environment
+            (oh-my-zsh/robbyrussell, no powerlevel10k instant-prompt
+            configured), but pulls in the full interactive-shell startup
+            path (job control, completions, update checks) — a bigger,
+            less predictable surface for future rc-file noise to leak
+            into the TUI's alt-screen.
+          - ``zsh -c 'source ~/.zshrc >/dev/null 2>&1; <cmd>'`` (CHOSEN) —
+            also verified clean end-to-end: Claude Code's TUI rendered
+            with zero leading garbage for both ``cld`` and ``cldor
+            <model>``, and the Keychain lookup succeeded headlessly with
+            NO ACL prompt for either secret. More surgical than ``-ic``:
+            sources exactly the one rc file needed, explicitly silences
+            any stray stdout/stderr from the source step, and skips
+            interactive-shell machinery entirely.
+        The model, when present, is shlex-quoted TWICE — once for its own
+        token boundary (inner ``cldor <model>`` command), once for the
+        outer ``zsh -c`` argument boundary — so it can never break out of
+        either quoting layer or be reinterpreted (verified against
+        ``; rm -rf /``, backticks, ``$(...)``, and a leading ``~`` which
+        would otherwise undergo tilde-expansion inside the inner shell).
+        ``CreateSessionRequest.model`` / the provider-add endpoint already
+        restrict model ids to ``^[A-Za-z0-9._~/-]{1,120}$`` before this is
+        ever called — this quoting is defense-in-depth, not the only guard.
+
+        Returned shape: a single shell string, which the tmux backend
+        hands directly to ``new-session ... <cmd>`` (tmux itself execs it
+        via the pane's default shell, ``-c <string>`` — one level of shell
+        parsing on our returned string, hence the two-level quoting above).
         """
         # Resolve AgentsConfig — tolerate auth-config load failure so the
         # caller (create_session) doesn't blow up if config.json is missing
-        # in a degraded environment.
+        # in a degraded environment. Not needed for the claude branch below
+        # (which no longer reads AgentsConfig), only for the other types.
         try:
             agents = self.load_auth_config().agents
         except Exception:
@@ -417,19 +531,11 @@ class Settings(BaseSettings):
         if normalized == "shell":
             return agents.shell_command
 
-        # claude (or unknown → fall back to claude). Honor CLAUDE_CLI_PATH
-        # env var when the operator hasn't customized claude_command in
-        # config.json (i.e. it's still the model default).
-        default_claude = AgentsConfig.model_fields["claude_command"].default
-        if agents.claude_command == default_claude:
-            cli_path = self.get_claude_cli_path()
-            # Only swap in the env-resolved path when it actually differs
-            # from a bare ``claude`` (otherwise just use the model default
-            # verbatim — keeps the string identical for assertion-friendly
-            # callers).
-            if cli_path and cli_path != "claude":
-                return f"{cli_path} --dangerously-skip-permissions"
-        return agents.claude_command
+        # claude (or unknown → fall back to claude).
+        if model:
+            inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
+            return f"zsh -c {shlex.quote(inner)}"
+        return "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
 
     def load_auth_config(self) -> AuthConfig:
         """
@@ -535,6 +641,20 @@ class Settings(BaseSettings):
                 )
                 uploads_config = UploadsConfig()
 
+            # Build ProvidersConfig from optional "providers" block; same
+            # malformed-block tolerance as session/tunnel/etc. Missing block
+            # → defaults (the curated 3-model trio, _DEFAULT_PROVIDER_MODELS).
+            providers_data = data.get("providers", {}) or {}
+            try:
+                providers_config = ProvidersConfig(**providers_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_providers_config_block",
+                    raw=providers_data,
+                )
+                providers_config = ProvidersConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -562,6 +682,7 @@ class Settings(BaseSettings):
                 notifications=notifications_config,
                 agents=agents_config,
                 uploads=uploads_config,
+                providers=providers_config,
             )
 
             # Validate secrets are set
@@ -846,6 +967,128 @@ class Settings(BaseSettings):
             import structlog
             logger = structlog.get_logger()
             logger.warning("failed_to_reorder_projects", error=str(e), working_dir=working_dir)
+
+    # ---- provider-selector modal (v3.1) ----------------------------------
+
+    def get_provider_models(self) -> List[str]:
+        """Return the persisted list of add/remove-able OpenRouter model ids.
+
+        "Claude" is implicit and never included — callers that need the
+        full picker list prepend it themselves. Missing "providers" block
+        in config.json yields ``_DEFAULT_PROVIDER_MODELS`` (via
+        ``ProvidersConfig``'s pydantic default).
+        """
+        return list(self.load_auth_config().providers.models)
+
+    def add_provider_model(self, model: str) -> List[str]:
+        """
+        Add an OpenRouter model id to config.json's ``providers.models`` list.
+
+        Format validation (the shell-injection guard) is the CALLER's
+        responsibility — see ``MODEL_ID_PATTERN`` in ``src/models.py`` and
+        the route handler for ``POST /api/v1/providers/models``, which
+        validates before calling this. This method only enforces
+        uniqueness, matching ``save_project``'s duplicate-name guard.
+
+        Args:
+            model: Model id to add.
+
+        Returns:
+            The updated models list (does NOT include "Claude").
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist.
+            ValueError: If the model is already present, or the config
+                file is invalid JSON.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+
+            providers_data = data.get("providers") or {}
+            # ``.get("models", _DEFAULT...)`` mirrors ProvidersConfig's
+            # pydantic default_factory semantics: only fall back to the
+            # curated trio when the key is ABSENT, not when it's present
+            # but empty (an explicit `"models": []` is honored verbatim).
+            models = list(providers_data.get("models", _DEFAULT_PROVIDER_MODELS))
+
+            if model in models:
+                raise ValueError(f"Model '{model}' already exists")
+
+            models.append(model)
+            providers_data["models"] = models
+            data["providers"] = providers_data
+
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+            return models
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
+    def remove_provider_model(self, model: str) -> List[str]:
+        """
+        Remove an OpenRouter model id from config.json's ``providers.models``.
+
+        Args:
+            model: Model id to remove.
+
+        Returns:
+            The updated models list (does NOT include "Claude").
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist.
+            ValueError: If the model isn't present, or the config file is
+                invalid JSON.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+
+            providers_data = data.get("providers") or {}
+            models = list(providers_data.get("models", _DEFAULT_PROVIDER_MODELS))
+
+            if model not in models:
+                raise ValueError(f"Model '{model}' not found")
+
+            models.remove(model)
+            providers_data["models"] = models
+            data["providers"] = providers_data
+
+            with open(config_path, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+            return models
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
 
 
 # Global settings instance

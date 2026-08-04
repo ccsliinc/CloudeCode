@@ -92,6 +92,10 @@
          toast.new / toast.ack frames. -->
     <script src="/static/js/toast.js"></script>
     <script src="/static/js/launchpad.js"></script>
+    <!-- Provider selector modal (new project / open-folder / clone-github /
+         existing-project launch gate). Must load AFTER launchpad.js — it
+         attaches showProviderModal() onto the window.Launchpad instance. -->
+    <script src="/static/js/providers.js"></script>
     <script src="/static/js/terminal.js"></script>
     <script src="/static/js/dpad.js"></script>
     <script src="/static/js/slash-commands.js"></script>

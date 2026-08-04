@@ -374,6 +374,42 @@ class API {
     }
 
     /**
+     * Providers: list configured OpenRouter models (Claude is implicit and
+     * never included here — the provider selector modal pins it as the
+     * first, non-removable option client-side).
+     * @returns {Promise<{models: Array<string>}>}
+     */
+    async getProviders() {
+        return await this.call('/providers');
+    }
+
+    /**
+     * Providers: add a model id to the OpenRouter model list.
+     * @param {string} model - e.g. "openai/gpt-5.6-sol". Server validates
+     *   against ^[A-Za-z0-9._~/-]{1,120}$ — throws (err.status 400) on a
+     *   malformed id, (err.status 409) on a duplicate.
+     * @returns {Promise<{models: Array<string>}>}
+     */
+    async addProviderModel(model) {
+        return await this.call('/providers/models', {
+            method: 'POST',
+            body: { model }
+        });
+    }
+
+    /**
+     * Providers: remove a model id from the OpenRouter model list.
+     * Model ids contain "/" so the path segment is URL-encoded.
+     * @param {string} model
+     * @returns {Promise<{models: Array<string>}>} - throws (err.status 404) if absent
+     */
+    async removeProviderModel(model) {
+        return await this.call(`/providers/models/${encodeURIComponent(model)}`, {
+            method: 'DELETE'
+        });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
      * @returns {Promise<object>} - Session data

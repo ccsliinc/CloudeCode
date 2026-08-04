@@ -1689,6 +1689,66 @@ button[data-tooltip]:hover::after {
     font-style: italic;
 }
 
+/* Provider selector modal — reuses .folder-picker-list/-item/-status above.
+   provider-item-name gets flex:1 so the remove "x" (model rows only) and
+   the "+ add model" affordance line up flush right. */
+.provider-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.provider-item-remove {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.15s ease;
+}
+
+.provider-item-remove:hover {
+    background: var(--color-danger-bg);
+    border-color: var(--color-danger-border);
+    color: var(--color-danger);
+}
+
+.provider-add-row {
+    color: var(--color-accent);
+}
+
+.provider-add-row .folder-picker-icon {
+    color: var(--color-accent);
+}
+
+.provider-add-input {
+    flex: 1;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    padding: 6px 10px;
+}
+
+.provider-add-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-glow);
+}
+
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .slash-commands-modal-content {
@@ -1721,6 +1781,11 @@ button[data-tooltip]:hover::after {
 
     .folder-picker-list {
         max-height: 240px;
+    }
+
+    .provider-item-remove {
+        width: 28px;
+        height: 28px;
     }
 }
 

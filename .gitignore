@@ -73,3 +73,6 @@ htmlcov/
 troubleshooting/
 
 .superpowers/
+
+# Runtime lock files (session-scoped, PID-stamped — never meant to be tracked)
+.claude/scheduled_tasks.lock

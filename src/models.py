@@ -1,6 +1,7 @@
 """Data models for Claude Code Controller."""
 
-from pydantic import BaseModel, Field
+import re
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
@@ -12,6 +13,40 @@ class SessionStatus(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     ERROR = "error"
+
+
+# Provider-selector modal (v3.1) — model id validation shared by
+# ``CreateSessionRequest.model`` and ``POST /api/v1/providers/models``.
+# This IS the shell-injection guard: ``Settings.get_agent_command()``
+# interpolates the model into a ``zsh -c '...'`` command string handed to
+# tmux (double shlex-quoted there as defense-in-depth), but this regex is
+# the primary gate — anything outside this charset is rejected before it
+# ever reaches a shell. Keep in sync with the TODO.md contract regex.
+#
+# The ``(?!-)`` negative lookahead blocks a leading ``-``: without it, a
+# model id like ``--continue`` or ``-p`` would pass the charset check, sail
+# past ``cldor``'s own ``[[ "$1" != -* ]]`` guard (which just skips
+# consuming it as the model and forwards it into ``"$@"``), and land as an
+# injected flag on ``claude --dangerously-skip-permissions``.
+MODEL_ID_PATTERN = r"^(?!-)[A-Za-z0-9._~/-]{1,120}$"
+_MODEL_ID_RE = re.compile(MODEL_ID_PATTERN)
+
+
+def is_valid_model_id(v: str) -> bool:
+    """Single source of truth for OpenRouter model-id validation.
+
+    Used by both ``CreateSessionRequest.model`` (field_validator below) and
+    the ``POST /api/v1/providers/models`` route handler
+    (``src/api/routes.py``) — every call site MUST go through this
+    function rather than calling ``_MODEL_ID_RE`` directly, so the
+    validation rule only ever lives in one place.
+
+    ``fullmatch`` (not ``match``) is required: Python's ``$`` matches
+    immediately before a trailing newline even in non-MULTILINE mode, so
+    ``_MODEL_ID_RE.match("openai/gpt-4\\n")`` would incorrectly succeed and
+    let a newline-suffixed id get persisted to config.json.
+    """
+    return bool(_MODEL_ID_RE.fullmatch(v))
 
 
 # Plan v3.2 — replaces the old ``Tunnel`` model. Pure detection record:
@@ -71,6 +106,16 @@ class Session(BaseModel):
     tmux_session: Optional[str] = Field(
         None,
         description="Bare tmux session name (canonical pin-key handle)",
+    )
+    # Provider-selector modal (v3.1). Persisted alongside ``agent_type`` so
+    # the launch choice survives for the life of the session. None => this
+    # session's Claude was launched directly via ``cld`` (or agent_type
+    # isn't "claude" at all). Set => launched via ``cldor <model>``
+    # (OpenRouter-routed). Same regex-validated shell-injection guard as
+    # ``CreateSessionRequest.model``.
+    model: Optional[str] = Field(
+        None,
+        description="OpenRouter model id this session was launched with (None = Claude direct via 'cld')",
     )
 
     class Config:
@@ -193,11 +238,62 @@ class CreateSessionRequest(BaseModel):
         None,
         description="Agent CLI to launch ('claude' | 'codex' | 'hermes' | 'openclaw'); overrides project default",
     )
+    # Provider-selector modal (v3.1). Only meaningful when the resolved
+    # agent_type is "claude" (see Settings.get_agent_command). None =>
+    # Claude direct via `cld`. Set => OpenRouter-routed via `cldor <model>`.
+    model: Optional[str] = Field(
+        None,
+        description="OpenRouter model id; None launches Claude directly via 'cld'",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model_id(cls, v: Optional[str]) -> Optional[str]:
+        """Shell-injection guard — enforced regardless of client-side checks.
+
+        ``Settings.get_agent_command()`` interpolates this value into a
+        shell command string; anything outside the allowed charset is
+        rejected here, before it ever reaches ``session_manager`` or a
+        shell. See ``MODEL_ID_PATTERN`` above.
+        """
+        if v is None:
+            return v
+        if not is_valid_model_id(v):
+            raise ValueError(f"model must match {MODEL_ID_PATTERN}")
+        return v
 
 
 class CommandRequest(BaseModel):
     """Request model for sending a command."""
     command: str = Field(..., description="Command to execute in the session")
+
+
+# Provider-selector modal (v3.1) — GET/POST/DELETE /api/v1/providers*.
+# "Claude" is implicit and never included in ``models`` — it's the
+# client's always-present first option, never stored/removable.
+
+
+class ProviderModelsResponse(BaseModel):
+    """Response for all three provider-model endpoints.
+
+    GET returns the current list unchanged; POST/DELETE return the list
+    AFTER the mutation. The client always re-renders from this
+    authoritative list rather than optimistically patching its own state.
+    """
+    models: List[str] = Field(default_factory=list)
+
+
+class AddProviderModelRequest(BaseModel):
+    """Request body for ``POST /api/v1/providers/models``.
+
+    ``model`` format is validated in the route handler (not a pydantic
+    field_validator here) so a malformed id returns a precise 400 with a
+    clear message — matching the explicit REST contract (400 invalid
+    format, 409 duplicate) — rather than FastAPI's generic 422 body.
+    """
+    model: str = Field(
+        ..., description="OpenRouter model id to add, e.g. 'openai/gpt-5.6-sol'"
+    )
 
 
 class VerifyTOTPRequest(BaseModel):

@@ -39,6 +39,10 @@ from src.models import (
     CreateToastRequest,
     RenameSessionRequest,
     SessionRenamedMessage,
+    ProviderModelsResponse,
+    AddProviderModelRequest,
+    is_valid_model_id,
+    MODEL_ID_PATTERN,
 )
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
@@ -92,6 +96,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             cols=body.cols,
             rows=body.rows,
             agent_type=body.agent_type,
+            model=body.model,
         )
 
         session = await session_manager.create_session(
@@ -103,6 +108,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             initial_rows=body.rows,
             project_name=body.project_name,
             agent_type=body.agent_type,
+            model=body.model,
         )
 
         # Move this project to the top of the list (most recently used)
@@ -1360,6 +1366,80 @@ async def make_directory(body: MkdirRequest):
         raise HTTPException(status_code=400, detail=f"Failed to create directory: {e}")
 
     return _build_browse_response(resolved)
+
+
+# ---- provider-selector modal (v3.1) --------------------------------------
+#
+# "Claude" is implicit and never appears in this list — it's the client's
+# always-present first option, never stored/removable. These endpoints
+# manage ONLY the add/remove-able OpenRouter model catalog persisted at
+# config.json's top-level "providers.models" (see ``Settings.get_provider_models``
+# / ``add_provider_model`` / ``remove_provider_model`` in src/config.py).
+# Model id format (the shell-injection guard — ``Settings.get_agent_command``
+# interpolates the id into a shell command string) is enforced here with an
+# explicit 400, matching ``CreateSessionRequest.model``'s pydantic validator
+# (src/models.py) which guards the session-create path the same way.
+
+
+@router.get(
+    "/providers",
+    response_model=ProviderModelsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def list_provider_models():
+    """List the persisted OpenRouter model catalog for the provider modal."""
+    return ProviderModelsResponse(models=settings.get_provider_models())
+
+
+@router.post(
+    "/providers/models",
+    response_model=ProviderModelsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def add_provider_model(body: AddProviderModelRequest):
+    """Add an OpenRouter model id to the provider catalog.
+
+    Raises:
+        HTTPException(400): model id doesn't match ``MODEL_ID_PATTERN``.
+        HTTPException(409): model id already present.
+    """
+    if not is_valid_model_id(body.model):
+        raise HTTPException(
+            status_code=400,
+            detail=f"model must match {MODEL_ID_PATTERN}",
+        )
+
+    try:
+        models = settings.add_provider_model(body.model)
+    except ValueError as e:
+        # add_provider_model only raises ValueError for a duplicate (format
+        # was already checked above) — 409 Conflict is the right semantic.
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return ProviderModelsResponse(models=models)
+
+
+@router.delete(
+    "/providers/models/{model:path}",
+    response_model=ProviderModelsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def remove_provider_model(model: str):
+    """Remove an OpenRouter model id from the provider catalog.
+
+    ``{model:path}`` (not the default ``{model}``) because model ids
+    contain ``/`` (e.g. ``openai/gpt-5.6-sol``) — the plain converter
+    would truncate at the first slash.
+
+    Raises:
+        HTTPException(404): model id isn't in the catalog.
+    """
+    try:
+        models = settings.remove_provider_model(model)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return ProviderModelsResponse(models=models)
 
 
 @router.get("/health", response_model=HealthResponse)
