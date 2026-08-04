@@ -1818,23 +1818,26 @@ async def test_session_manager_create_session_without_project_name_uses_legacy(
                 pass
 
 
-# ---- Task 5: adopt-on-collision -----------------------------------------
+# ---- Task 5: uniquify-on-collision (multi-session, never adopt) ---------
 
 
 @requires_tmux
 @pytest.mark.asyncio
-async def test_create_session_adopts_when_target_name_exists(tmp_path, monkeypatch):
+async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monkeypatch):
     """If a tmux session with the derived name already exists on our
-    socket, create_session should adopt it rather than fail with 'already
-    running' or create a duplicate."""
+    socket, create_session must mint a NEW, distinct tmux session with a
+    numeric-suffixed name (``cloude_<x>-2``) rather than adopting the
+    existing one. The pre-existing session must be left completely alone —
+    still alive, untouched, unrenamed."""
     from src.core.session_manager import SessionManager
 
     # Sandbox so we don't touch the real metadata file.
     monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
     monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
 
-    project_name = f"adopt_collide_{secrets.token_hex(4)}"
+    project_name = f"collide_{secrets.token_hex(4)}"
     target_tmux = f"cloude_{project_name}"
+    expected_new_tmux = f"{target_tmux}-2"
 
     # Pre-create the tmux session on our socket so the collision fires.
     subprocess.run(
@@ -1854,20 +1857,25 @@ async def test_create_session_adopts_when_target_name_exists(tmp_path, monkeypat
                 project_name=project_name,
             )
             assert sm.backend is not None
-            assert sm.backend.tmux_session == target_tmux, (
-                f"expected adopted tmux_session {target_tmux!r}, "
+            assert sm.backend.tmux_session == expected_new_tmux, (
+                f"expected uniquified tmux_session {expected_new_tmux!r}, "
                 f"got {sm.backend.tmux_session!r}"
             )
-            # Session existed BEFORE create_session — verify not wiped.
+            # Both the pre-existing session AND the new one must be alive.
             assert subprocess.call(
                 ["tmux", "-L", "cloude", "has-session", "-t", target_tmux],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-            ) == 0, "adopted tmux session was unexpectedly killed"
+            ) == 0, "pre-existing tmux session was unexpectedly touched"
+            assert subprocess.call(
+                ["tmux", "-L", "cloude", "has-session", "-t", expected_new_tmux],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ) == 0, "new uniquified tmux session was not created"
         finally:
             if sm.backend is not None:
                 try:
-                    await sm.detach_current_session()
+                    await sm.destroy_session()
                 except Exception:
                     pass
     finally:
@@ -1876,6 +1884,68 @@ async def test_create_session_adopts_when_target_name_exists(tmp_path, monkeypat
             check=False,
             capture_output=True,
         )
+        subprocess.run(
+            ["tmux", "-L", "cloude", "kill-session", "-t", expected_new_tmux],
+            check=False,
+            capture_output=True,
+        )
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_create_session_uniquifies_third_collision(tmp_path, monkeypatch):
+    """A THIRD create_session call against an already-double-collided name
+    must mint ``cloude_<x>-3``, proving the uniquifier walks past -2 when
+    that's also taken."""
+    from src.core.session_manager import SessionManager
+
+    monkeypatch.setenv("DEFAULT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIRECTORY", str(tmp_path / "logs"))
+
+    project_name = f"collide3_{secrets.token_hex(4)}"
+    target_tmux = f"cloude_{project_name}"
+    second_tmux = f"{target_tmux}-2"
+    expected_third_tmux = f"{target_tmux}-3"
+
+    # Pre-create BOTH the base name and the "-2" name on our socket.
+    subprocess.run(
+        ["tmux", "-L", "cloude", "new-session", "-d", "-s", target_tmux],
+        check=True,
+    )
+    subprocess.run(
+        ["tmux", "-L", "cloude", "new-session", "-d", "-s", second_tmux],
+        check=True,
+    )
+    try:
+        wd = Path(tempfile.mkdtemp(prefix="cc_t5c_"))
+        with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+            sm = SessionManager()
+        try:
+            await sm.create_session(
+                session_id=f"ses_{secrets.token_hex(4)}",
+                working_dir=str(wd),
+                auto_start_claude=False,
+                copy_templates=False,
+                project_name=project_name,
+            )
+            assert sm.backend is not None
+            assert sm.backend.tmux_session == expected_third_tmux, (
+                f"expected uniquified tmux_session {expected_third_tmux!r}, "
+                f"got {sm.backend.tmux_session!r}"
+            )
+        finally:
+            if sm.backend is not None:
+                try:
+                    await sm.destroy_session()
+                except Exception:
+                    pass
+    finally:
+        for name in (target_tmux, second_tmux, expected_third_tmux):
+            subprocess.run(
+                ["tmux", "-L", "cloude", "kill-session", "-t", name],
+                check=False,
+                capture_output=True,
+            )
 
 
 if __name__ == "__main__":

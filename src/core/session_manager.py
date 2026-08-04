@@ -1544,10 +1544,22 @@ class SessionManager:
             if sanitized:
                 tmux_session_name = f"{SESSION_PREFIX}{sanitized}"
 
-        # Adopt-on-collision: if project_name resolves to a tmux session name
-        # that is already alive on our socket, reuse it rather than erroring.
-        # Matches "open project X" == "resume my X session whether alive or not."
-        # The probe is a throwaway — never assigned to self.backend, never started.
+        # Uniquify-on-collision: a project click must ALWAYS spawn a NEW
+        # session against the working_dir, never adopt/reuse an existing
+        # one — the user runs multiple concurrent sessions per directory.
+        # If the derived name is already taken, append a numeric suffix
+        # (``cloude_foo`` -> ``cloude_foo-2`` -> ``cloude_foo-3`` ...)
+        # until we find one that's free against EVERY source of truth:
+        #   - the live tmux socket (probe.discover_existing()) — tmux
+        #     itself hard-fails "duplicate session" on collision
+        #   - self.active_tmux_names() — in-memory live backends
+        #   - self.owned_tmux_sessions — persisted names we've taken,
+        #     including detached-but-not-destroyed sessions
+        # This mirrors rename_session's collision check (active OR
+        # owned_tmux_sessions) so a name minted here can never be
+        # rejected by the rename guard later. Explicit attach-to-a-
+        # specific-session still goes through adopt_external_session
+        # via the running-sessions list — untouched by this path.
         if tmux_session_name:
             probe = build_backend(
                 settings,
@@ -1556,23 +1568,32 @@ class SessionManager:
                 on_output=None,
             )
             try:
-                existing = probe.discover_existing() or []
+                tmux_existing = set(probe.discover_existing() or [])
             except Exception as exc:
                 logger.debug("collision_probe_failed", error=str(exc))
-                existing = []
-            if tmux_session_name in existing:
+                tmux_existing = set()
+            taken = tmux_existing | self.active_tmux_names() | self.owned_tmux_sessions
+
+            base_name = tmux_session_name
+            if base_name in taken:
+                MAX_SUFFIX_ATTEMPTS = 999
+                candidate = base_name
+                for suffix in range(2, MAX_SUFFIX_ATTEMPTS + 2):
+                    candidate = f"{base_name}-{suffix}"
+                    if candidate not in taken:
+                        break
+                else:
+                    raise RuntimeError(
+                        f"Could not find a free tmux session name for "
+                        f"{base_name!r} after {MAX_SUFFIX_ATTEMPTS} attempts"
+                    )
                 logger.info(
-                    "session_create_redirected_to_adopt",
+                    "session_create_name_uniquified",
                     project=project_name,
-                    existing_tmux=tmux_session_name,
+                    base_tmux_name=base_name,
+                    uniquified_tmux_name=candidate,
                 )
-                result = await self.adopt_external_session(
-                    name=tmux_session_name,
-                    confirm_detach=True,
-                )
-                # adopt_external_session returns dict {session, initial_scrollback_b64,
-                # fifo_start_offset}; create_session must return Session — unwrap.
-                return result["session"] if isinstance(result, dict) else result
+                tmux_session_name = candidate
 
         backend: Optional[SessionBackend] = None
         new_session: Optional[Session] = None

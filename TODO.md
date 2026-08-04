@@ -1,3 +1,57 @@
+## ACTIVE: always-new-session on project click
+
+[MULTISESSION-SME] [2026-08-04]: Changed `SessionManager.create_session`'s
+"adopt-on-collision" block (`src/core/session_manager.py:1547-1595`, was
+lines 1547-1575 pre-change) from redirecting into `adopt_external_session`
+on a tmux-name collision to a **uniquifier**: appends `-2`, `-3`, ... to the
+derived `cloude_<name>` until free, capped at 999 attempts (raises
+`RuntimeError` if exhausted — should never happen in practice). Collision
+check is the UNION of three sources: `probe.discover_existing()` (live tmux
+socket — tmux's own hard-fail source), `self.active_tmux_names()` (live
+in-memory backends), and `self.owned_tmux_sessions` (persisted, includes
+detached-but-not-destroyed). This matches `rename_session`'s own collision
+guard (`active OR owned_tmux_sessions`, line ~2010) so a name minted here
+can never later be rejected by the rename guard. Suffix is appended AFTER
+`_sanitize_tmux_name` so it's never mangled.
+
+Client-side (`client/js/launchpad.js`): NO changes. `selectProject()`
+(`:2363`) already unconditionally POSTs `/sessions` — no gating change
+needed; the fix is entirely server-side and also covers
+`_createNewSessionInner`'s same `/sessions` call for free. Investigated the
+"already running" dead-code claim from recon (`detachAndOpenProject` at
+`:2426`, catch blocks at `:1460`/`:1561`/`:2412`): confirmed the ONLY
+server-side "already running" strings are internal double-`start()` guards
+in `tmux_backend.py`/`pty_session.py` that can't fire through
+`create_session`'s fresh-backend-per-call path — genuinely unreachable dead
+code. Left it in place anyway per task scope discipline (not the point of
+this task, no upside to the risk of missing a caller).
+
+Tests: replaced `test_create_session_adopts_when_target_name_exists` (old
+adopt-on-collision behavior, now wrong) with
+`test_create_session_uniquifies_when_target_name_exists` (asserts `-2`,
+asserts the pre-existing session is untouched) and added
+`test_create_session_uniquifies_third_collision` (asserts `-3` when both
+base and `-2` are taken). Both pass. Full suite: 394/395 passing, same 1
+pre-existing unrelated failure (`test_ensure_pipe_pane_does_not_clobber_existing_pipe`)
+confirmed present on `git stash` (unmodified branch) too.
+
+Empirical verification against a real dev server (port 5051, scratch
+config/working-dir, same shared `cloude` tmux socket as the live app — did
+NOT touch any real `cloude_*` session or the live app's `config.json`,
+sha256 confirmed byte-identical before/after): 3x `POST /sessions` with
+identical `project_name`/`working_dir` → `cloude_zz_multisession_scratch_test`,
+`-2`, `-3`, all three live tmux sessions in the same working_dir, all three
+rows in `GET /sessions/list`. Destroyed `-2` → `-3` and the base session
+unaffected. Detached the base session, then `POST /sessions/adopt` targeted
+it by exact tmux name → landed in that exact session, `-3` untouched
+throughout. All 6 success criteria met.
+
+Known acceptable degradations (per-directory theme, shared uploads dir,
+name-based deep link) — did not fix, confirmed no crash: all 3 sessions
+created and ran fine in the same working_dir with no exceptions.
+
+---
+
 # ACTIVE: Provider selector modal on session launch
 
 ## Goal
