@@ -264,6 +264,13 @@ class Terminal {
         this._applyPasteHandler();
         this._applyImageAttachButton();
 
+        // TOUCH-SELECT — long-press drag selection + floating copy button
+        // on coarse-pointer devices. Implementation lives in touch-select.js
+        // (loaded after clipboard.js); it no-ops on fine pointers so
+        // desktop is untouched. Listeners ride on #terminal / document,
+        // so term.reset() during session swap does not wipe them.
+        this._applyTouchSelection();
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -496,6 +503,22 @@ class Terminal {
         // static fetch (button simply goes inert rather than throwing).
         if (window.ClipboardTools && typeof window.ClipboardTools.wireAttachButton === 'function') {
             window.ClipboardTools.wireAttachButton(this, btn, input);
+        }
+    }
+
+    /**
+     * TOUCH-SELECT — long-press selection hook point.
+     *
+     * Hands the Terminal wrapper to touch-select.js, which wires the
+     * long-press → drag → floating-copy flow on coarse-pointer devices.
+     * Same load-order guarantee as _applyImageAttachButton(): touch-select.js
+     * is loaded right after this file and initTerminal() only runs after
+     * the async xterm CDN wait; the guard covers a failed static fetch
+     * (touch selection simply goes inert rather than throwing).
+     */
+    _applyTouchSelection() {
+        if (window.TouchSelect && typeof window.TouchSelect.init === 'function') {
+            window.TouchSelect.init(this);
         }
     }
 

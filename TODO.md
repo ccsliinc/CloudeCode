@@ -16,12 +16,22 @@
 - DMG build: `cd macOS && npm run package`. Signing identity "Apple Development: Adam Callen" (3ZVEJNEQ9G) previously present.
 - sme skill NOT installed in this env — sub-agents skip it.
 
-## Tasks
-- [ ] IMPLEMENT — clipboard.js (paperclip paste option + copy chord) wired into terminal.js/index.html
-- [ ] VALIDATE — validator-agent in a real browser: text paste injects, image paste still uploads, Cmd+C copies selection, Ctrl+C with no selection still sends SIGINT
-- [ ] BUILD — DMG via npm run package
-- [ ] DEPLOY — kill existing instance, install new .app locally, relaunch, verify server up + new client code served
-- [ ] COMMIT — git commit on weekend-mvp-v3.1
+## Tasks — ALL COMPLETE ✅ (2026-08-06)
+- [x] IMPLEMENT — clipboard.js (paperclip paste option + copy chord) wired into terminal.js/index.html
+- [x] VALIDATE — 6/6 PASS in headed Chromium (menu, 1-frame text paste, SIGINT safety, copy, image upload 201, no regressions)
+- [x] BUILD — macOS/dist/Cloude Code-0.8.1-arm64.dmg (97,760,585 B, sha256 388a374d…25440, signed, clipboard.js verified in bundle)
+- [x] DEPLOY — old instance quit, new .app rsynced into /Applications, relaunched (PID 23562), server 200 on :8000, clipboard.js served, 6/6 live tmux sessions untouched
+- [x] COMMIT — b28df6c on weekend-mvp-v3.1 (5 files, secret scan clean, not pushed)
+
+## Known non-issues surfaced during validation
+- 📎 button is display:none except on coarse-pointer (touch) devices — intended mobile UX; flip the media query in styles.css if desktop should see it too.
+- Pre-existing (NOT from this change): session.tmux_socket_name in config.json is dead config for new sessions — build_backend() (src/core/session_backend.py:264) never passes socket_name, hardcoded `cloude` wins; only adopt-external honors it. Flagged for a future fix.
+
+## ROUND 2 — touch-device bugs (reported by user on phone, 2026-08-06)
+- [ ] FIX menu anchoring: 📎 menu renders bottom-left corner / partially offscreen on touch device. Likely transformed ancestor breaking position:fixed (viewport coords resolve against container). Diagnose clipboard.js openMenu + button DOM ancestry; anchor correctly.
+- [ ] FEATURE touch copy: xterm.js has NO touch selection — tap/double-tap does nothing on phone. Add: long-press (~500ms) on terminal → select mode → touch drag synthesizes selection → floating "copy" button near selection → navigator.clipboard.writeText(term.getSelection()). Plain touch-drag must still scroll (only long-press enters select mode).
+- [ ] VALIDATE on emulated iPhone (playwright, coarse pointer + touch) — reuse harness in /Users/Adam/Dropbox/llmScratch/clipboard-validate/
+- [ ] BUILD DMG → DEPLOY locally → COMMIT
 
 ## Findings log
 <!-- [AGENT-NAME] [TIMESTAMP]: finding -->
@@ -352,3 +362,5 @@ Originally planned as v0.7.0; pivoted to v0.7.2 because v0.7.0 and v0.7.1 were a
 
 [RELEASE-PUBLISH] [done]: Pushed weekend-mvp-v3.1 (b12f491..0759288) to origin Adoom666/CloudeCodeDev; annotated tag v0.7.5 created at 0759288 + pushed; GitHub release live at https://github.com/Adoom666/CloudeCodeDev/releases/tag/v0.7.5 with DMG asset https://github.com/Adoom666/CloudeCodeDev/releases/download/v0.7.5/Cloude.Code-0.7.5-arm64.dmg (97697844 bytes); README bumped 0.7.4->0.7.5 + sha256 236a08f7... — PROD CloudeCode host PRESERVED (README link is promoted DEV->PROD, so it must keep pointing at public repo, not CloudeCodeDev).
 
+
+[TOUCH-FIX] [2026-08-06]: Fixed 📎 menu misplacement on real iPhone (clipboard.js positionMenu mixed window.innerWidth/innerHeight with getBoundingClientRect — iOS layout/visual viewport divergence under URL-bar collapse / pinch-zoom / keyboard pushed the computed right/bottom off-screen; now uses rect-relative left/top + visualViewport clamping with 8px margins, body-appended) and added touch selection (new client/js/touch-select.js: long-press 500ms/10px tolerance enters select mode, synthesizes mousedown/mousemove/mouseup with detail:1 at touch coords so xterm 5.3's own SelectionService does pixel→cell mapping — WebGL-safe; floating "copy" button at lift point, clamped; outside tap exits; coarse-pointer gated, desktop inert). Playwright iPhone-13 emu 6/6 PASS (menu in-viewport+above-button, long-press select+clipboard round-trip, plain drag still scrolls, outside-tap dismiss, desktop mouse select untouched). Files: client/js/clipboard.js (positionMenu), client/js/touch-select.js (new), client/js/terminal.js (_applyTouchSelection hook), client/index.html (script tag), client/css/styles.css (.cloude-touch-copy + touch-callout guard).

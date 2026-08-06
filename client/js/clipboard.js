@@ -172,11 +172,49 @@
         return item;
     }
 
-    /** Anchor the menu directly above the 📎 button, right-aligned to it. */
+    /**
+     * Anchor the menu directly above the 📎 button, right-aligned to it,
+     * clamped fully inside the VISIBLE viewport.
+     *
+     * Uses left/top taken straight from the button's viewport rect so the
+     * menu and the measurement always live in the same coordinate space.
+     * (The previous version positioned via right/bottom computed from
+     * window.innerWidth/innerHeight minus the rect — on iOS Safari the
+     * layout and visual viewports diverge whenever the URL bar collapses,
+     * the keyboard opens, or the page is pinch/auto-zoomed, which made
+     * that subtraction produce out-of-range offsets and parked the menu
+     * at the bottom-left corner, half off-screen.)
+     *
+     * Clamp bounds come from window.visualViewport when available (the
+     * actually-visible area under keyboard/zoom), offset into layout
+     * coordinates via offsetLeft/offsetTop so position:fixed resolves
+     * correctly; falls back to innerWidth/innerHeight elsewhere. Even a
+     * bogus rect can no longer push the menu off-screen — worst case it
+     * lands flush against a screen edge with an 8px margin.
+     */
     function positionMenu(el, btn) {
         const rect = btn.getBoundingClientRect();
-        el.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
-        el.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+        const vp = window.visualViewport || null;
+        const vw = vp ? vp.width : window.innerWidth;
+        const vh = vp ? vp.height : window.innerHeight;
+        const offL = vp ? vp.offsetLeft : 0;
+        const offT = vp ? vp.offsetTop : 0;
+        const MARGIN = 8;
+
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+
+        // Preferred spot: above the button, right edges aligned. If there
+        // is no room above, drop below the button instead.
+        let left = rect.right - w;
+        let top = rect.top - h - MARGIN;
+        if (top < offT + MARGIN) top = rect.bottom + MARGIN;
+
+        left = Math.min(Math.max(left, offL + MARGIN), offL + vw - w - MARGIN);
+        top = Math.min(Math.max(top, offT + MARGIN), offT + vh - h - MARGIN);
+
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
     }
 
     function closeMenu() {
