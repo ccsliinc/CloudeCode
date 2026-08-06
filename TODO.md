@@ -1,4 +1,35 @@
-## ACTIVE: always-new-session on project click
+# ACTIVE: clipboard paste (paperclip menu) + terminal copy in browser — ship as DMG, deploy locally
+
+## Goal
+1. Paperclip (📎 attach) menu gains a "Paste from local clipboard" option: clipboard TEXT is injected into the terminal input; clipboard IMAGE keeps the existing upload flow (`_uploadAndInjectImage`, terminal.js:519 → POST /sessions/upload-image).
+2. Copy from the web terminal: selecting text in xterm.js + Cmd+C (mac) / Ctrl+Shift+C (win/linux) writes selection to system clipboard via navigator.clipboard.writeText. Must NOT swallow Ctrl+C (SIGINT) when no selection. Also add a "copy" affordance for touch users if trivially in scope.
+3. Validate both in a real browser, build the DMG, kill the running instance, install + relaunch.
+
+## Established facts (from recon — do NOT re-derive)
+- App = FastAPI server (src/main.py) wrapping Claude Code in tmux; client = vanilla JS + xterm.js over WebSocket (client/js/terminal.js, 1727 lines); packaged as Electron tray app (macOS/, electron-builder, `npm run package` builds DMG into macOS/dist).
+- Input path: terminal.js:268 `term.onData` → binary WS frame → websocket.py:452 → session_manager.send_input → tmux_backend.py:959-991 (>256B or control chars → bracketed paste via load-buffer/paste-buffer -p; else send-keys).
+- terminal.js:383 `attachCustomKeyEventHandler` currently intercepts ONLY Shift+Enter — extend here for copy chord.
+- Image paste already intercepted: terminal.js:439 `_applyPasteHandler` (capture-phase paste listener on #terminal). iOS 📎 attach path ~line 485 uses `navigator.clipboard.read()`.
+- CSP `script-src 'self'` (src/main.py:252) — no inline scripts. Theme vars client/css/styles.css:13. Copy tone: lowercase labels.
+- Keep files <500 lines: put clipboard logic in NEW module (e.g. client/js/clipboard.js) loaded after terminal.js; wire minimally.
+- navigator.clipboard.read()/readText() need a secure context (localhost/LAN http OK? — verify; app is served on LAN http, so check actual availability and degrade gracefully with a status toast, no crash).
+- DMG build: `cd macOS && npm run package`. Signing identity "Apple Development: Adam Callen" (3ZVEJNEQ9G) previously present.
+- sme skill NOT installed in this env — sub-agents skip it.
+
+## Tasks
+- [ ] IMPLEMENT — clipboard.js (paperclip paste option + copy chord) wired into terminal.js/index.html
+- [ ] VALIDATE — validator-agent in a real browser: text paste injects, image paste still uploads, Cmd+C copies selection, Ctrl+C with no selection still sends SIGINT
+- [ ] BUILD — DMG via npm run package
+- [ ] DEPLOY — kill existing instance, install new .app locally, relaunch, verify server up + new client code served
+- [ ] COMMIT — git commit on weekend-mvp-v3.1
+
+## Findings log
+<!-- [AGENT-NAME] [TIMESTAMP]: finding -->
+[CLIPBOARD-IMPL] [2026-08-06]: Implemented in NEW client/js/clipboard.js (287 lines, loaded after terminal.js in index.html:103): paperclip 📎 now opens a fixed menu ("paste from clipboard" → navigator.clipboard.read() image→_uploadAndInjectImage / text→insertText as ONE WS frame for the >256B bracketed-paste heuristic, readText() fallback, pill degradation on LAN-http/denial; "attach image" → original file picker) + copy chord (Cmd+C / Ctrl+Shift+C with term.hasSelection() → navigator.clipboard.writeText, selection kept; bare Ctrl+C never intercepted). terminal.js edits are hook-points only: _applyKeyHandlers delegates to ClipboardTools.handleCopyChord (terminal.js:389), _applyImageAttachButton delegates to ClipboardTools.wireAttachButton (terminal.js:497). Reused: insertText (send path), _showStatusPill (status), _uploadAndInjectImage (image flow). Menu CSS appended at styles.css:2333 (z-index 71). node --check passes both files. NOT yet browser-validated.
+
+---
+
+## ARCHIVE: always-new-session on project click (SHIPPED)
 
 [MULTISESSION-SME] [2026-08-04]: Changed `SessionManager.create_session`'s
 "adopt-on-collision" block (`src/core/session_manager.py:1547-1595`, was

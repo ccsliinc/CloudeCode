@@ -97,6 +97,10 @@
          attaches showProviderModal() onto the window.Launchpad instance. -->
     <script src="/static/js/providers.js"></script>
     <script src="/static/js/terminal.js"></script>
+    <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
+         Must load AFTER terminal.js — terminal.js calls into
+         window.ClipboardTools from its key/attach-button hook points. -->
+    <script src="/static/js/clipboard.js"></script>
     <script src="/static/js/dpad.js"></script>
     <script src="/static/js/slash-commands.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
