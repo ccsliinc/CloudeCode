@@ -221,9 +221,12 @@ class AppController {
 
         const paint = () => {
             const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
+            const label = muted ? 'Enable theme music' : 'Mute theme music';
             btn.textContent = muted ? '🔇' : '🔊';
             btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
-            btn.setAttribute('data-tooltip', muted ? 'Enable theme music' : 'Mute theme music');
+            btn.setAttribute('data-tooltip', label);
+            btn.setAttribute('aria-label', label);
+            btn.setAttribute('title', label);
         };
         paint();
 
