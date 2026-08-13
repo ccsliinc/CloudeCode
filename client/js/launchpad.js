@@ -894,7 +894,7 @@ class Launchpad {
                             </div>
                         </details>
                         <div class="new-fab" id="new-fab">
-                            <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" aria-haspopup="menu" aria-expanded="false">
+                            <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" title="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
                                     <line x1="12" y1="5" x2="12" y2="19"/>
                                     <line x1="5" y1="12" x2="19" y2="12"/>
@@ -1027,8 +1027,8 @@ class Launchpad {
             const description = project.description || 'no description';
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
-                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project">✎</button>
-                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project">×</button>
+                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project" aria-label="Edit project">✎</button>
+                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project" aria-label="Delete project">×</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
                     <div class="project-description">${description}</div>
