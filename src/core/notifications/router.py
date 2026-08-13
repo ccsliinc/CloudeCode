@@ -4,16 +4,17 @@ Design contract:
 - ``emit()`` is SYNCHRONOUS and non-blocking. It is called from the
   WebSocket / PTY chunk handler (Item 7's IdleWatcher) and MUST NOT
   await or stall — that would back up the terminal stream.
-- The worker task drains the queue async and calls ``ntfy.send()``
-  per event. Send failures never propagate — ntfy.send already
+- The worker task drains the queue async and calls ``ntfy.send()``,
+  ``slack.send()``, and ``pushover.send()`` per event, in that order.
+  Send failures never propagate — each backend's ``send`` already
   catches and logs.
 - Queue size 100. On overflow we drop the OLDEST event (best-effort:
   the most recent signal is usually most relevant) and log both the
   drop and the enqueue at WARN.
 
 Lifecycle: ``start()`` in the FastAPI lifespan, ``stop()`` on shutdown.
-``ntfy.init()`` MUST be called before ``start()`` so the worker has a
-client to dispatch through.
+``ntfy.init()``, ``slack.init()``, and ``pushover.init()`` MUST be
+called before ``start()`` so the worker has clients to dispatch through.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Optional
 
 import structlog
 
-from src.core.notifications import ntfy, slack
+from src.core.notifications import ntfy, pushover, slack
 from src.core.notifications.events import NotificationEvent
 from src.core.notifications.rate_limit import RateLimiter
 
@@ -149,11 +150,15 @@ class NotificationRouter:
 
         # v0.7.0 Part 4 — at least one channel must be configured for an
         # emit to be worth queueing. ntfy needs a topic; slack needs a
-        # webhook URL. If BOTH are empty, drop silently (we already
-        # warned at start()).
+        # webhook URL; pushover needs BOTH a token and a user key. If
+        # ALL are empty/incomplete, drop silently (we already warned at
+        # start()).
         has_ntfy = bool(getattr(self._config, "ntfy_topic", ""))
         has_slack = bool(getattr(self._config, "slack_webhook_url", ""))
-        if not (has_ntfy or has_slack):
+        has_pushover = bool(
+            getattr(self._config, "pushover_token", "")
+        ) and bool(getattr(self._config, "pushover_user_key", ""))
+        if not (has_ntfy or has_slack or has_pushover):
             return
 
         try:
@@ -223,6 +228,18 @@ class NotificationRouter:
                         error=str(e),
                         kind=event.kind.value,
                         channel="slack",
+                    )
+                # Pushover fanout — same fire-and-forget posture as ntfy
+                # and slack above. Dispatched last so it never delays
+                # either of the other two channels.
+                try:
+                    await pushover.send(event, public_base_url=self._public_base_url)
+                except Exception as e:  # pragma: no cover - pushover already catches
+                    logger.warning(
+                        "notifications.worker_dispatch_error",
+                        error=str(e),
+                        kind=event.kind.value,
+                        channel="pushover",
                     )
                 finally:
                     # Always mark done so queue.join() in tests resolves.

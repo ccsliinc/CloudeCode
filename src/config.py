@@ -167,6 +167,9 @@ class NotificationsConfig(BaseModel):
       which an IdleWatcher fires TASK_COMPLETE, provided the tail ends
       on a Claude Code prompt frame. 30s is the plan v3.1 default;
       operators may tune downward if false-positive rate is acceptable.
+    - ``pushover_token`` / ``pushover_user_key``: Pushover push backend.
+      Both are EMPTY by default and both must be set for the channel to
+      activate — see ``NotificationRouter.emit``'s ``has_pushover`` gate.
     """
     enabled: bool = False
     ntfy_base_url: str = Field(default="https://ntfy.sh")
@@ -196,6 +199,16 @@ class NotificationsConfig(BaseModel):
     # Format: ``https://hooks.slack.com/services/T.../B.../...`` — treat
     # as a credential.
     slack_webhook_url: str = Field(default="")
+    # Pushover push backend. Both fields are required together — the
+    # router's ``has_pushover`` guard treats a partial config (only one
+    # of the two set) as unconfigured. Empty defaults = the Pushover
+    # channel is silently disabled.
+    # ``pushover_token``: the application/API token created at
+    # pushover.net/apps/build. Treat as a credential.
+    pushover_token: str = Field(default="")
+    # ``pushover_user_key``: the user or group key from the Pushover
+    # dashboard. Treat as a credential.
+    pushover_user_key: str = Field(default="")
 
 
 class UploadsConfig(BaseModel):
