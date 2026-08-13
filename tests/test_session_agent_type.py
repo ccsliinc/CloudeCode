@@ -120,7 +120,11 @@ def test_attachable_session_agent_type_round_trip():
 
 def test_agents_config_defaults():
     cfg = AgentsConfig()
-    assert cfg.claude_command == "claude --dangerously-skip-permissions"
+    # Default is the empty-string sentinel meaning "not configured" — see
+    # get_agent_command's resolution order. An unset claude_command must
+    # fall back to the cld/cldor zsh-function launcher, never to a bare
+    # "claude" invocation.
+    assert cfg.claude_command == ""
     assert cfg.codex_command == "codex"
     assert cfg.hermes_command == "hermes"
     assert cfg.openclaw_command == "openclaw tui"
@@ -176,12 +180,13 @@ def _settings_with_agents(agents_cfg: AgentsConfig, claude_cli_path=_SENTINEL):
     return s
 
 
-# Provider-selector modal (v3.1) — the ``claude`` agent_type ALWAYS builds
-# its command from the ``cld`` / ``cldor`` zsh functions now (never
-# ``agents.claude_command`` / ``CLAUDE_CLI_PATH``, which are legacy /
-# bypassed — see their field comments in src/config.py). These are the
-# exact wrapper strings, empirically verified against a real detached
-# tmux session (see TODO.md findings log for the capture-pane evidence).
+# The ``claude`` agent_type falls back to building its command from the
+# ``cld`` / ``cldor`` zsh functions ONLY when ``agents.claude_command`` is
+# unset/empty (the AgentsConfig default). These are the exact wrapper
+# strings, empirically verified against a real detached tmux session (see
+# TODO.md findings log for the capture-pane evidence). ``CLAUDE_CLI_PATH``
+# remains legacy / bypassed for this type — see its field comment in
+# src/config.py.
 _EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
 
 
@@ -292,17 +297,68 @@ def test_get_agent_command_claude_model_shell_injection_defused():
     assert not _os.path.exists("/tmp/should_never_exist_pwn_marker")
 
 
-def test_claude_command_and_cli_path_legacy_no_longer_affect_claude():
-    """Provider-selector pivot (v3.1): a customized ``agents.claude_command``
-    and/or ``claude_cli_path`` (CLAUDE_CLI_PATH) must NOT change the
-    claude command anymore — it's always the cld wrapper (or cldor when a
-    model is supplied). Both fields are LEGACY / silently bypassed now."""
-    agents = AgentsConfig(claude_command="claude --my-custom-flag")
+def test_claude_cli_path_legacy_still_ignored():
+    """``claude_cli_path`` (CLAUDE_CLI_PATH) remains LEGACY / silently
+    bypassed for agent_type == "claude" — only agents.claude_command is
+    consulted now."""
+    agents = AgentsConfig()  # claude_command unset -> cld fallback
     s = _settings_with_agents(agents, claude_cli_path="/opt/custom/claude")
     assert s.get_agent_command("claude") == _EXPECT_CLD
-    assert s.get_agent_command("claude", model="x/y") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor x/y'"
+
+
+def test_get_agent_command_explicit_claude_command_wins():
+    """An explicit, non-empty agents.claude_command takes precedence over
+    the cld/cldor fallback, wrapped the same way (source ~/.zshrc first)
+    so both a plain binary and a shell function work."""
+    agents = AgentsConfig(claude_command="claude --my-custom-flag")
+    s = _settings_with_agents(agents)
+    assert s.get_agent_command("claude") == (
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; claude --my-custom-flag'"
     )
+
+
+def test_get_agent_command_explicit_claude_command_wins_over_model():
+    """Step 1 (explicit claude_command) wins outright, even when a model
+    is also supplied — opting into a custom command opts out of the
+    cldor/model routing entirely."""
+    agents = AgentsConfig(claude_command="claude --my-custom-flag")
+    s = _settings_with_agents(agents)
+    assert s.get_agent_command("claude", model="x/y") == (
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; claude --my-custom-flag'"
+    )
+
+
+def test_get_agent_command_empty_claude_command_falls_back_to_cld():
+    """Explicitly setting claude_command to "" (or whitespace) must not be
+    treated as "set" -- it falls back exactly like the unset default."""
+    agents = AgentsConfig(claude_command="")
+    s = _settings_with_agents(agents)
+    assert s.get_agent_command("claude") == _EXPECT_CLD
+
+    agents_ws = AgentsConfig(claude_command="   ")
+    s_ws = _settings_with_agents(agents_ws)
+    assert s_ws.get_agent_command("claude") == _EXPECT_CLD
+
+
+def test_get_agent_command_default_claude_command_falls_back_to_cld():
+    """Backward compat: the author's own machine has no reason to ever set
+    agents.claude_command, so the untouched AgentsConfig default must keep
+    resolving to the cld wrapper with zero config change."""
+    s = _settings_with_agents(AgentsConfig())
+    assert s.get_agent_command("claude") == _EXPECT_CLD
+    assert s.get_agent_command("claude", model="openai/gpt-5.6-sol") == (
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor openai/gpt-5.6-sol'"
+    )
+
+
+@pytest.mark.parametrize("agent_type", ["codex", "hermes", "openclaw"])
+def test_get_agent_command_other_types_unaffected_by_claude_command(agent_type):
+    """Setting agents.claude_command must not leak into the other agent
+    types' command resolution."""
+    agents = AgentsConfig(claude_command="claude --my-custom-flag")
+    s = _settings_with_agents(agents)
+    expected = getattr(agents, f"{agent_type}_command")
+    assert s.get_agent_command(agent_type) == expected
 
 
 # --------------------------------------------------------------------------- #
