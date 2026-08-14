@@ -274,7 +274,12 @@ h1:hover {
     display: flex;
     gap: 8px;
     align-items: center;
-    overflow: hidden;
+    /* Was `overflow: hidden`. Children never exceed this box's static
+     * bounds (fixed-size buttons + gap), so hidden was only ever clipping
+     * intentional overflow effects: the button:hover scale/glow and the
+     * button[data-tooltip]::after / .status::after tooltips, which are
+     * absolutely positioned below the box. Visible restores both. */
+    overflow: visible;
 }
 
 /* v0.7.0+ — header background-music toggle. Muted by default; click is the
@@ -379,6 +384,10 @@ button[data-tooltip]::after {
     pointer-events: none;
     transition: opacity 0.2s;
     border: 1px solid var(--color-accent);
+    /* Explicit stacking so the tooltip always paints above any sibling
+     * control it overlaps inside .header's own z-index:1000 context, now
+     * that .controls no longer clips it with overflow:hidden. */
+    z-index: 1;
 }
 
 button[data-tooltip]:hover::after {
@@ -430,6 +439,10 @@ button[data-tooltip]:hover::after {
     pointer-events: none;
     transition: opacity 0.2s;
     border: 1px solid var(--color-accent);
+    /* See button[data-tooltip]::after — same reasoning, .status is the
+     * last child of .controls so this also guards against sitting behind
+     * an earlier sibling's own tooltip. */
+    z-index: 1;
 }
 
 .status:hover::after {
@@ -726,6 +739,51 @@ button[data-tooltip]:hover::after {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Real disclosure control for a launchpad section heading (running
+ * sessions / recent projects / server management). Resets the generic
+ * `button` rule (circular icon-button sizing) back to a plain inline
+ * heading so it reads identically to the old static "► label" text,
+ * while gaining native button semantics (click + Enter/Space + focus). */
+.launchpad-section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    height: auto;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 0;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.launchpad-section-toggle:hover:not(:disabled) {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+    transform: none;
+    color: var(--color-accent);
+}
+
+/* The ► glyph's natural orientation is "right", which reads as collapsed.
+ * Expanded (the default, `aria-expanded="true"`) rotates it 90deg so it
+ * points down. Only the glyph rotates, never the label text. */
+.launchpad-section-chevron {
+    display: inline-block;
+    flex-shrink: 0;
+    transition: transform 150ms ease;
+}
+
+.launchpad-section-toggle[aria-expanded="true"] .launchpad-section-chevron {
+    transform: rotate(90deg);
 }
 
 .new-session-btn {
