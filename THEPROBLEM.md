@@ -6,6 +6,53 @@
 
 ---
 
+## Status update (verified against code 2026-06-25)
+
+Both bugs described in this report are **RESOLVED** in the current codebase.
+This report is kept as-is below for history; do not treat any of its
+"proposed solutions" as still-pending work — they shipped, in a slightly
+different shape than sketched here.
+
+- **Bug 1 (setup script never writes Cloudflare config to `.env`) — FIXED.**
+  `setup.sh` (the actual current entry point) writes `CLOUDFLARE_API_TOKEN`,
+  `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_DOMAIN`, and `CLOUDFLARE_TUNNEL_NAME` into
+  `.env` via `sed` (`setup.sh:281-284`) after prompting for them
+  (`setup.sh:231-242`), before it hands off to `setup_auth.py` for secret
+  generation. The specific complaint below — that `update_env_file()` in
+  `setup_auth.py` only ever touched `TOTP_SECRET`/`JWT_SECRET` — is still
+  literally true of that one function, but it was never supposed to carry the
+  Cloudflare values; `setup.sh` does that part before `setup_auth.py` runs.
+  Worth knowing for context, not part of this bug: `setup_auth.py`'s own
+  `setup_env_file()` docstring now says the Cloudflare tunnel wizard prompts
+  were removed from *that* script as of "Plan v3.2", and README.md's
+  changelog (search for "Tunnels nuked") says the Cloudflare tunnel UI was
+  later pulled from the shipping app entirely, with `local_only` as the only
+  backend the UI exposes. `setup.sh` itself was not updated to match that
+  change and still hard-requires `cloudflared` to be installed (exits 1 if
+  missing, `setup.sh:46`) and still prompts for Cloudflare credentials
+  unconditionally — that's a real inconsistency between `setup.sh` and the
+  rest of the app, but it is a *different* bug from the one originally
+  reported here (this one never fails to persist values; it just still asks
+  for values a LAN-only build may not need). Flagging it rather than fixing
+  it, since it's out of scope for a doc-accuracy pass.
+
+- **Bug 2 (menu bar misreports "Server: Stopped") — FIXED.**
+  `macOS/server-manager.js` now tracks adopted (not-spawned-by-us) processes
+  correctly: `start()` sets `this.processPid` via `lsof -ti:<port>` when it
+  adopts an already-running server (`server-manager.js:539-568`), and
+  `isProcessRunning()` (`server-manager.js:834-859`) checks `this.processPid`
+  with a signal-0 `process.kill()` liveness probe, not just
+  `this.process !== null`. `macOS/main.js`'s `startStatsPolling()` also
+  checks `state === 'running' || state === 'starting' ||
+  serverManager.isProcessRunning()` rather than only the process reference,
+  matching the fix this report proposed. Separately, `checkConfiguration()`
+  in `server-manager.js` (around line 972) now detects placeholder
+  `CLOUDFLARE_DOMAIN` values (`yourdomain.com`, `your-subdomain`,
+  `example.com`) and surfaces a "Setup Required" state, addressing the
+  domain-placeholder half of the original complaint too.
+
+---
+
 ## Executive Summary
 
 The Cloude Code macOS menu bar application consistently shows "○ Server: Stopped" despite the Python FastAPI server actually running and responding to health checks on localhost:8000. The menu bar app cannot detect or manage the server process it starts, leading to:
