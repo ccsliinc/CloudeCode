@@ -862,3 +862,85 @@ class ThemeManifest(BaseModel):
     source: Literal["builtin", "user"] = Field(
         ..., description="Where the manifest was discovered — server-stamped"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Settings screen (feat/settings-screen) — GET/PATCH /config/settings.
+#
+# Two update sub-models (AgentCommandsUpdate, NotificationSecretsUpdate)
+# mirror the PATCH-semantics already established by UpdateProjectRequest:
+# a field OMITTED from the request body means "leave unchanged"; a field
+# explicitly SENT (including empty string) is applied verbatim. The route
+# handler distinguishes the two cases via ``model_fields_set`` (Pydantic
+# v2), not by treating None specially, since None/"" are both valid
+# values for some of these fields (e.g. clearing ``claude_command`` back
+# to the cld/cldor fallback is an explicit empty-string write).
+#
+# ``extra="forbid"`` on every one of these — a payload with an unknown
+# key is a 422, not a silent no-op merge. This is the "strict payload,
+# reject unknown keys" requirement from the settings-screen spec.
+# --------------------------------------------------------------------------- #
+
+
+class AgentCommandsUpdate(BaseModel):
+    """PATCH body sub-block for ``AuthConfig.agents``.
+
+    All four fields are optional and independently settable; omit a
+    field to leave it unchanged. ``claude_command`` MAY be sent as an
+    empty string to explicitly clear it back to the cld/cldor fallback
+    (see ``Settings.get_agent_command``) — that is a legitimate, common
+    settings-screen action, not an error. The other three commands have
+    no such fallback (an empty command would just fail to launch), so
+    the route handler rejects a blank value for them.
+    """
+    model_config = {"extra": "forbid"}
+
+    claude_command: Optional[str] = Field(
+        None, description="Empty string clears back to the cld/cldor fallback"
+    )
+    codex_command: Optional[str] = Field(None, description="Must be non-blank if provided")
+    hermes_command: Optional[str] = Field(None, description="Must be non-blank if provided")
+    openclaw_command: Optional[str] = Field(None, description="Must be non-blank if provided")
+
+
+class NotificationSecretsUpdate(BaseModel):
+    """PATCH body sub-block for ``AuthConfig.notifications``.
+
+    Secret-shaped fields (``ntfy_topic``, ``slack_webhook_url``,
+    ``pushover_token``, ``pushover_user_key``) are write-only from the
+    client's perspective — the GET side of this endpoint never echoes
+    them back in plain text (see ``Settings.get_settings_summary``'s
+    masking). "Leave unchanged" is expressed by omitting the field
+    entirely; sending an empty string is an explicit clear (disables
+    that channel). Applies live to config.json on write, but the
+    running ``NotificationRouter`` was constructed once at process
+    startup with a snapshot of this block (see ``src/main.py`` lifespan)
+    and does not hot-reload it — a restart is required, surfaced in the
+    settings UI next to this section.
+    """
+    model_config = {"extra": "forbid"}
+
+    enabled: Optional[bool] = None
+    ntfy_base_url: Optional[str] = None
+    ntfy_topic: Optional[str] = None
+    slack_webhook_url: Optional[str] = None
+    pushover_token: Optional[str] = None
+    pushover_user_key: Optional[str] = None
+
+
+class ConfigSettingsUpdateRequest(BaseModel):
+    """Request body for ``PATCH /api/v1/config/settings``.
+
+    Top-level keys are the only two writable blocks the settings screen
+    exposes (``agents``, ``notifications``) — HOST/server bind is
+    deliberately absent: it lives in ``.env``, not ``config.json``, has
+    no atomic-write convention in this codebase, and a bad value can
+    strand the server (the launchd wrapper refuses to boot on a
+    wildcard bind). The settings screen shows HOST read-only instead of
+    exposing it here. ``extra="forbid"`` rejects any other top-level key
+    outright rather than silently ignoring it.
+    """
+    model_config = {"extra": "forbid"}
+
+    agents: Optional[AgentCommandsUpdate] = None
+    notifications: Optional[NotificationSecretsUpdate] = None

@@ -429,6 +429,32 @@ class API {
     }
 
     /**
+     * Settings screen: fetch the effective agents/notifications/server
+     * config. Notification secrets come back masked as
+     * {configured: boolean} — never in plain text.
+     * @returns {Promise<{agents: object, notifications: object, server: object}>}
+     */
+    async getSettings() {
+        return await this.call('/config/settings');
+    }
+
+    /**
+     * Settings screen: apply a partial update. Only include a top-level
+     * section (agents / notifications) if it has fields to change; only
+     * include a field within it if the user actually edited it — an
+     * omitted field means "leave unchanged" server-side. Never send a
+     * masked "configured" placeholder back as a value.
+     * @param {{agents?: object, notifications?: object}} patch
+     * @returns {Promise<object>} - the post-write settings summary (same shape as getSettings())
+     */
+    async updateSettings(patch) {
+        return await this.call('/config/settings', {
+            method: 'PATCH',
+            body: patch
+        });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
      * @returns {Promise<object>} - Session data

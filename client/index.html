@@ -117,6 +117,29 @@
                     <path d="M10.5 5.25L13.25 8L10.5 10.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <!-- Settings: gear/cog — a ring with six radial teeth, the one
+                 icon in this family built from a circle rather than a
+                 closed silhouette (house/box/door/trash) or an open
+                 speaker-shape, so it reads as structurally distinct from
+                 all five neighbors at a glance. Opens SettingsPanel (see
+                 client/js/settings-panel.js), which now owns the theme
+                 chooser that used to live directly in this header — see
+                 that file for why it mounts ThemeSelector into the panel
+                 instead of `.header .controls`. Always visible (not
+                 gated behind session state like home/detach/logout)
+                 because settings apply whether or not a session is open. -->
+            <button type="button" id="settingsBtn" class="hidden" aria-label="Settings" title="settings" data-tooltip="Settings">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="4.2" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="8" cy="8" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M8 3.8V2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11.64 5.9L13.02 5.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11.64 10.1L13.02 10.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M8 12.2V13.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M4.36 10.1L2.98 10.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M4.36 5.9L2.98 5.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
             <span class="status" id="statusText" data-status="Ready" role="status" aria-live="polite" aria-label="Ready"></span>
         </div>
     </div>
@@ -214,6 +237,16 @@
          window.SessionSidebar; script order below only needs it defined
          before those methods RUN, not before app.js parses). -->
     <script src="/static/js/session-sidebar.js"></script>
+
+    <!-- Settings panel — gear-icon modal folding in the theme chooser
+         (moved here from the header, see #settingsBtn's comment) plus the
+         agent/notifications/server sections. Must load AFTER api.js
+         (window.API), themes/registry.js + themes/themeSelector.js
+         (window.Themes / window.ThemeSelector — mounted into the panel's
+         appearance section on open, not into `.header .controls` any
+         more), and BEFORE app.js so App.init() can wire #settingsBtn's
+         click handler to window.SettingsPanel.open(). -->
+    <script src="/static/js/settings-panel.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

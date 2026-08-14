@@ -1987,9 +1987,11 @@ button[data-tooltip]:hover::after {
 /* =====================================================================
  * Phase 2 — Theme selector
  * ---------------------------------------------------------------------
- * Native <select> mounted into `.header .controls` by themeSelector.js.
- * Sits to the LEFT of the destroy button. Theme-aware via CSS vars so
- * each bundled theme re-skins it automatically with no per-theme rule.
+ * Native <select> mounted by themeSelector.js. feat/settings-screen:
+ * mount point moved from `.header .controls` into the settings panel's
+ * appearance section (see settings-panel.js's mountThemeSlot) — this
+ * class itself is unchanged, still theme-aware via CSS vars so each
+ * bundled theme re-skins it automatically with no per-theme rule.
  * Native control = free keyboard nav + accessible by default. The
  * dropdown is constrained to 60vh via `size` proxy on the popup
  * (browser-specific; we set max-height as a hint where supported).
@@ -2036,6 +2038,14 @@ button[data-tooltip]:hover::after {
     background: var(--color-bg-elevated);
     color: var(--color-fg);
     max-height: 60vh;
+}
+
+/* Inside the settings panel there's a full-width field column to work
+ * with (unlike the cramped header), so drop the 160px cap that kept it
+ * from crowding the other header controls. */
+#settings-theme-slot .theme-selector {
+    max-width: none;
+    width: 100%;
 }
 
 /* =====================================================================
@@ -2493,4 +2503,156 @@ button[data-tooltip]:hover::after {
     #terminal .xterm {
         -webkit-touch-callout: none;
     }
+}
+
+/* ===========================================================================
+ * Settings panel (feat/settings-screen) — client/js/settings-panel.js.
+ * Reuses the app's existing .modal-overlay / .modal-input / .modal-btn
+ * primitives (see the "Modals" block above) for the chrome; this block
+ * only adds the settings-specific layout (wide scrollable content, one
+ * `.settings-section` per APPEARANCE/AGENT/NOTIFICATIONS/SERVER block,
+ * and the field/hint/warning styles data-driven fields render into).
+ * =========================================================================== */
+
+.settings-modal-content {
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
+    width: 92%;
+    max-width: 560px;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+    position: relative;
+}
+
+.settings-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0;
+}
+
+.settings-panel-header h2 {
+    color: var(--color-accent);
+    font-size: 1.2rem;
+    margin: 0;
+    font-weight: bold;
+    text-transform: lowercase;
+}
+
+.settings-panel-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.settings-section {
+    margin-bottom: 28px;
+}
+
+.settings-section:last-child {
+    margin-bottom: 4px;
+}
+
+.settings-section-title {
+    color: var(--color-accent);
+    font-size: 1rem;
+    margin: 0 0 4px 0;
+    font-weight: bold;
+    text-transform: lowercase;
+}
+
+.settings-section-description {
+    color: var(--color-fg-muted);
+    font-size: 0.82rem;
+    margin-bottom: 12px;
+}
+
+.settings-restart-note {
+    color: var(--color-warning);
+    font-size: 0.78rem;
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    border-radius: var(--radius-md);
+    display: inline-block;
+}
+
+.settings-field {
+    margin-bottom: 14px;
+}
+
+.settings-field-checkbox .settings-field-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-fg);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.settings-field-checkbox input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    accent-color: var(--color-accent);
+}
+
+.settings-field-label {
+    color: var(--color-accent);
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+    display: block;
+    text-transform: lowercase;
+}
+
+.settings-field-hint {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    margin-top: 4px;
+}
+
+.settings-field-effective {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    margin-top: 6px;
+}
+
+.settings-field-effective code {
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.settings-warning {
+    color: var(--color-warning);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    padding: 10px 12px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    border-radius: var(--radius-md);
+    margin-top: 10px;
+}
+
+.settings-panel-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid var(--color-border);
+    margin-top: 0;
+}
+
+.settings-save-status {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    margin-right: auto;
 }

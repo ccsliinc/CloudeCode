@@ -153,6 +153,10 @@ class AppController {
         // Home: go back to the launcher without touching the session
         // (see goHome()). Same visibility wiring as detachBtn.
         this.homeBtn = null;
+        // Settings gear — visible whenever authenticated (launchpad AND
+        // terminal), hidden pre-auth. Same visibility wiring as
+        // logoutBtn, not gated to a single screen like homeBtn/detachBtn.
+        this.settingsBtn = null;
         // Health poller state. Poll every 15s against /health so the
         // top-right status dot reflects server reachability on the
         // auth + launchpad screens. The terminal screen manages the
@@ -170,6 +174,7 @@ class AppController {
         this.logoutBtn = document.getElementById('logoutBtn');
         this.detachBtn = document.getElementById('detachSessionBtn');
         this.homeBtn = document.getElementById('homeBtn');
+        this.settingsBtn = document.getElementById('settingsBtn');
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
         // any async work — kills FOUC for repeat visitors. The full manifest
@@ -219,9 +224,16 @@ class AppController {
     }
 
     /**
-     * Phase 2: bring up the theme registry and mount the header selector.
-     * Called post-auth so the manifest fetch goes through with a valid
-     * Bearer token. Idempotent — safe to call again on re-auth.
+     * Phase 2: bring up the theme registry. Called post-auth so the
+     * manifest fetch goes through with a valid Bearer token. Idempotent —
+     * safe to call again on re-auth.
+     *
+     * feat/settings-screen: no longer mounts a `<select>` into the
+     * header — the theme chooser moved into the settings panel (gear
+     * icon; see settings-panel.js's renderAppearanceSection /
+     * mountThemeSlot, which calls window.ThemeSelector.mount() itself
+     * the first time the panel opens). Only the registry needs to be
+     * live at boot; the picker DOM is built lazily on demand.
      */
     async _initThemes() {
         if (!window.Themes) return;
@@ -229,14 +241,6 @@ class AppController {
             await window.Themes.init();
         } catch (e) {
             console.warn('App: Themes.init failed — registry will use fallback', e);
-        }
-        try {
-            const controls = document.querySelector('.header .controls');
-            if (controls && window.ThemeSelector) {
-                window.ThemeSelector.mount(controls);
-            }
-        } catch (e) {
-            console.warn('App: ThemeSelector.mount failed', e);
         }
     }
 
@@ -392,6 +396,14 @@ class AppController {
         if (this.homeBtn) {
             this.homeBtn.addEventListener('click', () => this.goHome());
         }
+
+        // Settings gear — click wiring only; visibility is toggled
+        // alongside logoutBtn in showAuth/showLaunchpad/showTerminal.
+        if (this.settingsBtn) {
+            this.settingsBtn.addEventListener('click', () => {
+                if (window.SettingsPanel) window.SettingsPanel.open(this.settingsBtn);
+            });
+        }
     }
 
     /**
@@ -434,6 +446,7 @@ class AppController {
         this.logoutBtn.classList.add('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (this.homeBtn) this.homeBtn.classList.add('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         // Leaving the terminal: drop any session-scoped theme so xterm
@@ -472,6 +485,7 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (this.homeBtn) this.homeBtn.classList.add('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
@@ -549,6 +563,7 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         if (this.homeBtn) this.homeBtn.classList.remove('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
@@ -664,6 +679,7 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         if (this.homeBtn) this.homeBtn.classList.remove('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session

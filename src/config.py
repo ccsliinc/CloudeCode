@@ -1144,6 +1144,163 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
+    # ---- settings screen (feat/settings-screen) ---------------------------
+
+    @staticmethod
+    def _mask_secret(value: str) -> dict:
+        """Reduce a secret string to a UI-safe presence flag.
+
+        Description: never returns any fragment of ``value`` — the
+          settings screen's contract is "never render an existing value
+          in plain text", and a partial reveal (e.g. last 4 chars) is
+          still a plain-text leak of real secret material. A boolean is
+          enough for the UI to say "configured" vs "not set" and offer
+          a "leave unchanged" no-op save.
+        Inputs: value (str) - the raw secret from config.json, "" if unset.
+        Output: dict - ``{"configured": bool}``.
+        """
+        return {"configured": bool(value)}
+
+    def get_settings_summary(self) -> dict:
+        """Build the payload for ``GET /api/v1/config/settings``.
+
+        Description: assembles the three settings-screen sections from
+          the currently loaded auth config plus the live server bind
+          address. Secret-shaped notification fields are masked (see
+          ``_mask_secret``) — this method is the ONLY place that reads
+          those fields for the settings screen, so the masking can't be
+          skipped by a call site forgetting to apply it.
+        Inputs: none.
+        Output: dict with keys ``agents``, ``notifications``, ``server``.
+          ``agents.effective_claude_command`` is the literal shell string
+          ``get_agent_command("claude")`` would return right now, so the
+          UI can show exactly what will run when ``claude_command`` is
+          empty (the cld/cldor fallback) without re-deriving that logic
+          client-side.
+        Raises:
+          FileNotFoundError: if config.json is missing.
+        """
+        cfg = self.load_auth_config()
+        agents = cfg.agents
+        notif = cfg.notifications
+
+        wildcard_bind = self.host in ("0.0.0.0", "", None)
+        return {
+            "agents": {
+                "claude_command": agents.claude_command,
+                "codex_command": agents.codex_command,
+                "hermes_command": agents.hermes_command,
+                "openclaw_command": agents.openclaw_command,
+                "effective_claude_command": self.get_agent_command("claude"),
+            },
+            "notifications": {
+                "enabled": notif.enabled,
+                "ntfy_base_url": notif.ntfy_base_url,
+                "ntfy_topic": self._mask_secret(notif.ntfy_topic),
+                "slack_webhook_url": self._mask_secret(notif.slack_webhook_url),
+                "pushover_token": self._mask_secret(notif.pushover_token),
+                "pushover_user_key": self._mask_secret(notif.pushover_user_key),
+                "restart_required": True,
+            },
+            "server": {
+                "host": self.host,
+                "port": self.port,
+                "wildcard_bind": wildcard_bind,
+                "editable": False,
+            },
+        }
+
+    def update_settings_config(
+        self,
+        agents_update: Optional[dict] = None,
+        notifications_update: Optional[dict] = None,
+    ) -> dict:
+        """
+        Merge partial ``agents`` / ``notifications`` updates into config.json.
+
+        Description: reads config.json, backs up the pre-write bytes to
+          ``config.json.bak`` (overwritten each call — one generation of
+          history, matching the granularity of the atomic writes already
+          used elsewhere in this file), applies ONLY the keys present in
+          the given dicts (an absent key is left untouched — "leave
+          unchanged" semantics), re-validates the merged sub-blocks
+          through their pydantic models so a bad merge can't reach disk,
+          then writes via the same tmp-file + fsync + os.replace pattern
+          as ``update_project`` (atomic on the same filesystem — no
+          crash-mid-write can corrupt config.json).
+        Inputs:
+          agents_update (dict|None) - keys already filtered by the route
+            handler to only those the client actually set (via
+            ``model_fields_set``); values are the new strings.
+          notifications_update (dict|None) - same shape, for the
+            ``notifications`` block.
+        Output: dict - ``get_settings_summary()`` computed AFTER the
+          write, so the caller/UI can repaint from the authoritative
+          post-write state in one round trip.
+        Raises:
+          FileNotFoundError: if config.json is missing.
+          ValueError: invalid JSON, or a merged sub-block fails pydantic
+            validation (caller already did field-level checks; this is
+            defense-in-depth against a hand-edited config.json having
+            put the file in a state a valid partial update can't fix).
+        Security: never logs a value from ``notifications_update`` — only
+          the list of changed key names, at the call site in the route
+          handler.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            with open(config_path) as f:
+                raw = f.read()
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
+        if agents_update:
+            agents_data = dict(data.get("agents") or {})
+            agents_data.update(agents_update)
+            # Re-validate the merged block — raises on garbage before
+            # anything touches disk.
+            AgentsConfig(**agents_data)
+            data["agents"] = agents_data
+
+        if notifications_update:
+            notifications_data = dict(data.get("notifications") or {})
+            notifications_data.update(notifications_update)
+            NotificationsConfig(**notifications_data)
+            data["notifications"] = notifications_data
+
+        # Backup the pre-write bytes. Best-effort: a backup failure must
+        # not block the write itself (matches the fail-soft posture the
+        # rest of this file uses for non-critical side effects).
+        try:
+            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+            backup_path.write_text(raw)
+        except OSError as e:
+            import structlog
+            structlog.get_logger().warning(
+                "config_settings_backup_failed", error=str(e)
+            )
+
+        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, config_path)
+
+        self._auth_config_cache = None
+        return self.get_settings_summary()
+
 
 # Global settings instance
 # Wrap in try/catch to provide helpful error messages if .env is misconfigured

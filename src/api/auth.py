@@ -22,7 +22,16 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
-from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, UpdateProjectRequest, CloneProjectRequest, SuccessResponse
+from src.models import (
+    VerifyTOTPRequest,
+    AuthTokenResponse,
+    ProjectResponse,
+    CreateProjectRequest,
+    UpdateProjectRequest,
+    CloneProjectRequest,
+    SuccessResponse,
+    ConfigSettingsUpdateRequest,
+)
 from src.core.slash_command_discovery import build_command_groups, command_groups_to_dict
 
 
@@ -1176,4 +1185,128 @@ async def get_slash_commands(project_path: Optional[str] = None):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve slash commands: {str(e)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Settings screen (feat/settings-screen) — the config write path.
+#
+# No config WRITE endpoint existed before this: every prior config.json
+# mutation (add_provider_model, update_project, ...) had its own narrow
+# route. This is the first general settings surface, so it gets its own
+# strict validation instead of accepting an arbitrary merge — see
+# ConfigSettingsUpdateRequest's docstring for the "extra=forbid" reasoning.
+# ---------------------------------------------------------------------------
+
+_AGENT_COMMAND_NO_FALLBACK_FIELDS = ("codex_command", "hermes_command", "openclaw_command")
+
+
+@router.get("/config/settings", dependencies=[Depends(require_auth)])
+async def get_settings():
+    """
+    Get the settings-screen payload: agent launch commands, notification
+    channel config (secrets masked), and the server bind address
+    (read-only — see ``Settings.get_settings_summary``).
+
+    Returns:
+        dict with keys ``agents``, ``notifications``, ``server``.
+
+    Raises:
+        HTTPException: 500 if config.json is missing or unreadable.
+    """
+    try:
+        return settings.get_settings_summary()
+    except FileNotFoundError as e:
+        logger.error("settings_summary_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except Exception as e:
+        logger.error("settings_summary_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve settings: {str(e)}"
+        )
+
+
+@router.patch("/config/settings", dependencies=[Depends(require_auth)])
+async def update_settings(body: ConfigSettingsUpdateRequest):
+    """
+    Apply a partial update to the ``agents`` and/or ``notifications``
+    blocks of config.json.
+
+    Only the fields the client actually SET are written (Pydantic's
+    ``model_fields_set``, not "is not None") — this is what makes
+    omitting a secret field mean "leave unchanged" while still allowing
+    an explicit empty-string write to clear it. Unknown top-level or
+    nested keys are already rejected by ``ConfigSettingsUpdateRequest``'s
+    ``extra="forbid"`` before this handler runs (FastAPI returns 422).
+
+    Args:
+        body: partial settings update. Both ``agents`` and
+            ``notifications`` are optional; a request with neither is
+            a harmless no-op that returns the unchanged summary.
+
+    Returns:
+        The full post-write settings summary (same shape as GET).
+
+    Raises:
+        HTTPException: 400 on a value that fails validation (e.g. a
+            blank codex/hermes/openclaw command — those have no
+            fallback, unlike claude_command), 500 on a config.json I/O
+            or JSON error.
+    """
+    agents_update: dict = {}
+    if body.agents is not None:
+        agents_update = body.agents.model_dump(
+            include=body.agents.model_fields_set
+        )
+        blank_required = [
+            field
+            for field in _AGENT_COMMAND_NO_FALLBACK_FIELDS
+            if field in agents_update and not (agents_update[field] or "").strip()
+        ]
+        if blank_required:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{', '.join(blank_required)} cannot be blank — only "
+                    "claude_command has a built-in fallback"
+                ),
+            )
+
+    notifications_update: dict = {}
+    if body.notifications is not None:
+        notifications_update = body.notifications.model_dump(
+            include=body.notifications.model_fields_set
+        )
+
+    logger.info(
+        "settings_update_requested",
+        agents_fields=sorted(agents_update.keys()),
+        # Never log notification VALUES (several are secrets) — only
+        # which field names changed.
+        notifications_fields=sorted(notifications_update.keys()),
+    )
+
+    try:
+        return settings.update_settings_config(
+            agents_update=agents_update or None,
+            notifications_update=notifications_update or None,
+        )
+    except FileNotFoundError as e:
+        logger.error("settings_update_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except ValueError as e:
+        logger.error("settings_update_validation_error", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("settings_update_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update settings: {str(e)}"
         )
