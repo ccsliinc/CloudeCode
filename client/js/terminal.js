@@ -2000,6 +2000,44 @@ class Terminal {
     }
 
     /**
+     * Leave the terminal view for the launcher WITHOUT detaching or
+     * destroying the session server-side (the Home control's counterpart
+     * to detachSession()/destroySession()).
+     *
+     * Description: the tmux session and the server's in-memory session
+     *   record both stay alive; only the browser-side WebSocket is closed,
+     *   using the SAME `_intentionalClose` flag connectToSession() /
+     *   reconnectToExistingSession() already set when swapping sessions,
+     *   so onclose skips the "[Disconnected]" banner and the reconnect
+     *   loop. `sessionActive` is deliberately left untouched (true) —
+     *   unlike detach/destroy this is not an exit, it is a screen change,
+     *   and the code path that runs on return (reconnectToExistingSession(),
+     *   used by both the launchpad's running-session row click and
+     *   App.returnToExistingTerminal()) already force-closes any stale WS
+     *   and repaints fresh scrollback from the server, so leaving the
+     *   socket open would cost nothing functionally — closing it here only
+     *   saves battery/data while the tab sits on the launcher.
+     * Inputs: none.
+     * Output: void.
+     * Example: called from App.goHome(), wired to #homeBtn's click handler.
+     */
+    pauseForHome() {
+        if (this.ws) {
+            try {
+                this._intentionalClose = true;
+                this.ws.close();
+            } catch (e) {
+                console.warn('Terminal: error closing WS on Home:', e);
+            }
+            this.ws = null;
+        }
+        if (this.keepaliveInterval) {
+            clearInterval(this.keepaliveInterval);
+            this.keepaliveInterval = null;
+        }
+    }
+
+    /**
      * Insert text into terminal without pressing Enter
      * Used for slash commands
      */

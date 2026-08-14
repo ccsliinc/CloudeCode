@@ -854,7 +854,7 @@ class Launchpad {
             // showConfirmModal escapes the whole message itself now — don't
             // pre-escape `display` here or it would be double-escaped.
             `destroy "${display}"? this kills the tmux session permanently.`,
-            'this is the only destructive action. session data in the pane will be lost.',
+            'the running session is terminated. this cannot be undone. the transcript is not deleted and stays under ~/.claude/projects.',
             'destroy',
             'cancel'
         );

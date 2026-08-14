@@ -150,6 +150,9 @@ class AppController {
         // No destroyBtn: delete is no longer reachable from the session
         // header (see the conversation sidebar + launcher rows instead).
         this.detachBtn = null;
+        // Home: go back to the launcher without touching the session
+        // (see goHome()). Same visibility wiring as detachBtn.
+        this.homeBtn = null;
         // Health poller state. Poll every 15s against /health so the
         // top-right status dot reflects server reachability on the
         // auth + launchpad screens. The terminal screen manages the
@@ -166,6 +169,7 @@ class AppController {
 
         this.logoutBtn = document.getElementById('logoutBtn');
         this.detachBtn = document.getElementById('detachSessionBtn');
+        this.homeBtn = document.getElementById('homeBtn');
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
         // any async work — kills FOUC for repeat visitors. The full manifest
@@ -380,6 +384,44 @@ class AppController {
                 this.showLaunchpad();
             }
         });
+
+        // Home button - same "leave without touching the session"
+        // navigation as the title click above, wired separately so it has
+        // its own visible, tappable affordance (the title click has no
+        // visual cue and is useless on a phone).
+        if (this.homeBtn) {
+            this.homeBtn.addEventListener('click', () => this.goHome());
+        }
+    }
+
+    /**
+     * Home: return to the launcher while leaving the current session
+     * fully attached and running server-side.
+     *
+     * Description: never calls API.detachSession() or destroySession(),
+     *   and never touches TerminalController.sessionActive — the session
+     *   stays adopted on the server exactly as if the user had done
+     *   nothing, so it keeps appearing in GET /sessions/list (not just
+     *   /attachable) and clicking its launcher row reconnects immediately
+     *   via TerminalController.reconnectToExistingSession(), the same
+     *   path the launcher's existing "return to running session" row
+     *   click already uses. Closes the browser-side WebSocket first (via
+     *   TerminalController.pauseForHome()) purely to save battery/data
+     *   while the session sits unattended on the launcher screen — the
+     *   return path force-closes and reopens the socket regardless, so
+     *   this costs nothing functionally on re-entry. No confirmation: this
+     *   is pure navigation, not a destructive action.
+     * Inputs: none.
+     * Output: void. No-op if not currently on the terminal screen (the
+     *   button is hidden everywhere else, but this guards direct calls).
+     */
+    goHome() {
+        if (this.currentScreen !== 'terminal') return;
+        console.log('App: Home clicked, returning to launcher (session stays attached)');
+        if (window.TerminalController && typeof window.TerminalController.pauseForHome === 'function') {
+            window.TerminalController.pauseForHome();
+        }
+        this.showLaunchpad();
     }
 
     /**
@@ -391,6 +433,7 @@ class AppController {
         document.getElementById('auth-screen').classList.add('active');
         this.logoutBtn.classList.add('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
+        if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         // Leaving the terminal: drop any session-scoped theme so xterm
@@ -428,6 +471,7 @@ class AppController {
         document.getElementById('launchpad-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
+        if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
@@ -504,6 +548,7 @@ class AppController {
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
+        if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
@@ -618,6 +663,7 @@ class AppController {
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
+        if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session
