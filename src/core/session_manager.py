@@ -2690,15 +2690,24 @@ class SessionManager:
         # back-compat fallback only when no dotfile exists; the
         # migration helper below ferries old entries into the new format.
         prior_pin = self.resolve_project_theme(working_dir, name)
-        # fix/adopted-session-pid — None here is intentional and harmless:
-        # ``_session_info_for`` resolves ``pty_pid`` LIVE off the bulk
-        # ``list_pane_status_all()`` status map on every read (a tmux
-        # pane's foreground pid changes over the session's life, so a
-        # value captured once at adopt time would go stale anyway). This
-        # is just the initial in-memory value before the first read.
+        # fix/adopt-response-pid — ``_session_info_for`` still resolves
+        # ``pty_pid`` LIVE on every subsequent read (a tmux pane's
+        # foreground pid changes over the session's life, so any value
+        # captured here goes stale eventually regardless). But the
+        # ADOPT RESPONSE ITSELF (``AdoptSessionResponse.session``) is
+        # built from THIS ``adopted_session`` object directly in
+        # ``routes.adopt_session`` — it never goes through
+        # ``_session_info_for``. Leaving this None meant the client's
+        # very first paint (and everything cached from it — see
+        # client/js/terminal.js ``connectToSession``) showed "PID: ?"
+        # forever, even though a later GET /sessions would have shown
+        # the real pid. Reusing ``TmuxBackend.pid`` (same property
+        # ``create_session`` already uses below) instead of inventing a
+        # third pid-resolution path — one extra ``display-message``
+        # call, paid once per adopt, not on a hot path.
         adopted_session = Session(
             id=adopted_id,
-            pty_pid=None,
+            pty_pid=getattr(backend, "pid", None),
             working_dir=str(working_dir),
             status=SessionStatus.RUNNING,
             created_at=datetime.utcnow(),
