@@ -51,12 +51,17 @@ class AgentsConfig(BaseModel):
       - hermes:   ``hermes``        (NOT ``hermes-agent``)
       - openclaw: ``openclaw tui``  (NOT bare ``openclaw``)
     """
-    # LEGACY (v3.1) — no longer consulted by ``Settings.get_agent_command()``
-    # for ``agent_type == "claude"``. The provider-selector modal always
-    # launches claude via the ``cld`` / ``cldor`` zsh functions instead (see
-    # get_agent_command's docstring). Kept as a config.json field for
-    # backward-compat deserialization; not read anywhere else in this repo.
-    claude_command: str = "claude --dangerously-skip-permissions"
+    # Optional override for ``agent_type == "claude"``, consulted by
+    # ``Settings.get_agent_command()`` BEFORE the built-in ``cld`` / ``cldor``
+    # zsh-function fallback (see get_agent_command's docstring for the full
+    # precedence). Empty string (the default) means "not configured" — the
+    # command falls back to ``cld`` / ``cldor``, which is what the author's
+    # own ``~/.zshrc``-based setup relies on and must keep working with zero
+    # config change. Set this to a plain CLI invocation (e.g.
+    # ``"claude --dangerously-skip-permissions"``, see config.example.json)
+    # to run Claude Code directly on machines that don't have ``cld`` /
+    # ``cldor`` defined.
+    claude_command: str = ""
     codex_command: str = "codex"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
@@ -464,17 +469,28 @@ class Settings(BaseSettings):
         back to the AgentsConfig defaults if the auth config can't be
         loaded (e.g. unit-test paths that bypass setup_auth.py).
 
-        Provider-selector modal (v3.1) — for ``"claude"`` specifically, the
-        command is ALWAYS built from the ``cld`` / ``cldor`` zsh FUNCTIONS
-        defined in the user's ``~/.zshrc`` (NOT ``agents.claude_command`` /
-        ``CLAUDE_CLI_PATH``, which are now LEGACY and bypassed for this
-        type — see their field comments). ``model`` falsy → ``cld``
-        (Claude via the user's subscription OAuth token, from macOS
-        Keychain entry ``claude-cld-oauth``). ``model`` set → ``cldor
-        <model>`` (OpenRouter-routed, Keychain entry
-        ``claude-cldor-openrouter``). Neither secret ever passes through
-        this app — the Keychain lookup happens inside the zsh function, in
-        the spawned tmux pane, not here.
+        For ``"claude"`` specifically, resolution order is:
+          1. ``agents.claude_command`` — if explicitly set to a non-empty
+             string in the loaded auth config, USE IT VERBATIM (still run
+             through the ``~/.zshrc``-sourcing wrapper below, so both a
+             plain binary invocation and a shell function work). This is
+             the escape hatch for machines that don't have the author's
+             ``cld`` / ``cldor`` zsh functions defined — set it to e.g.
+             ``"claude --dangerously-skip-permissions"`` and everything
+             downstream (tmux launch, model param) is unaffected. Empty
+             string (the default) means "not configured".
+          2. Otherwise, the ``cld`` / ``cldor`` zsh FUNCTIONS defined in the
+             user's ``~/.zshrc`` (unchanged from before — this is the
+             author's own setup and the default for everyone who hasn't
+             opted into step 1). ``model`` falsy → ``cld`` (Claude via the
+             user's subscription OAuth token, from macOS Keychain entry
+             ``claude-cld-oauth``). ``model`` set → ``cldor <model>``
+             (OpenRouter-routed, Keychain entry ``claude-cldor-openrouter``).
+             Neither secret ever passes through this app — the Keychain
+             lookup happens inside the zsh function, in the spawned tmux
+             pane, not here.
+        ``CLAUDE_CLI_PATH`` remains LEGACY / a no-op for this type — see its
+        field comment on ``Settings.claude_cli_path``.
 
         Why the wrapper: tmux's spawned pane shell does NOT source
         ``~/.zshrc`` (non-interactive, non-login — see TmuxBackend.start /
@@ -513,8 +529,9 @@ class Settings(BaseSettings):
         """
         # Resolve AgentsConfig — tolerate auth-config load failure so the
         # caller (create_session) doesn't blow up if config.json is missing
-        # in a degraded environment. Not needed for the claude branch below
-        # (which no longer reads AgentsConfig), only for the other types.
+        # in a degraded environment. Needed for every branch below,
+        # including claude (step 1 of its resolution order reads
+        # agents.claude_command).
         try:
             agents = self.load_auth_config().agents
         except Exception:
@@ -532,6 +549,13 @@ class Settings(BaseSettings):
             return agents.shell_command
 
         # claude (or unknown → fall back to claude).
+        # Step 1: an explicit, non-empty agents.claude_command wins outright,
+        # regardless of ``model`` — a user who opted into a custom command
+        # is opting out of the cld/cldor provider-selector path entirely.
+        if agents.claude_command and agents.claude_command.strip():
+            inner = f"source ~/.zshrc >/dev/null 2>&1; {agents.claude_command}"
+            return f"zsh -c {shlex.quote(inner)}"
+        # Step 2: unchanged cld/cldor fallback.
         if model:
             inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
             return f"zsh -c {shlex.quote(inner)}"
