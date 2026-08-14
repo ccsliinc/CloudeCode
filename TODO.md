@@ -27,6 +27,8 @@
 - [ ] `cloudflare` and `pyyaml` remain in requirements.txt, wired to nothing.
 - [ ] `docs/assets/social-card.png` was generated (1280x640) but is intentionally unreferenced by README — set it as the repo's social preview in GitHub repo Settings → General → Social preview.
 - [ ] Old v0.2 screenshots still sit in `docs/images/` and are no longer referenced. Delete if unwanted.
+- [ ] **D-pad renders two right-arrows and no distinct up-arrow.** In the up-arrow slot the glyph is mostly hidden behind the Claude mascot's feet, and the row below shows `→ → ` instead of `↑`. Confirmed a genuine app rendering bug, not a screenshot artifact — the same pattern is present in the untouched source photo from the device. Visible in `docs/assets/screenshots/phone/phone-dpad.png`. The Features table describes the D-pad as "arrows, Enter, Esc, Tab, Shift+Tab" with no qualification; if this isn't fixed, it belongs in Honest Limits.
+- [ ] Retired headless mobile screenshots are still on disk but unreferenced by README: `mobile-terminal-live`, `mobile-launchpad`, `mobile-fab-open`, `mobile-provider-modal`, `mobile-dpad`, `mobile-slash-commands`, `mobile-paperclip-menu`, and the 4 `mobile-theme-*` files, all in `docs/assets/screenshots/`. Delete if you don't want them in git history.
 
 **Accuracy guardrails (MUST NOT violate):**
 - Cloudflare tunnel subsystem was DEMOLISHED in branch weekend-mvp-v3.1 — do NOT describe as a live feature

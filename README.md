@@ -50,35 +50,35 @@ The session never restarted, never lost context, and never needed an SSH client.
 
 <div align="center">
 
-<img src="docs/assets/screenshots/mobile-terminal-live.png" width="280" alt="Mobile terminal view running a live Claude Code session with colored tool-call output on a black background with coral accents">
-<br><b>Live terminal, mid-session</b><br><sub>Real pane bytes streamed to your phone — not a text summary.</sub>
+<img src="docs/assets/screenshots/phone/phone-terminal-snes.png" width="320" alt="SNES-themed terminal session showing a nerd-joke conversation exchange">
+<br><b>Live terminal, mid-session</b><br><sub>Real iPhone screenshot, not a headless-browser render — an actual reply streaming in over the WebSocket.</sub>
 
 <br><br>
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-auth-screen.png" width="220" alt="Cloude Code login screen showing a 6-digit TOTP code entry field with a coral login button on a near-black background"><br><b>TOTP login</b><br><sub>No password. Six digits from your authenticator app.</sub></td>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-launchpad.png" width="220" alt="Cloude Code launcher screen listing several running Claude Code sessions with RUNNING and EXTERNAL badges and relative timestamps"><br><b>Launchpad</b><br><sub>Every running session, Cloude-owned or adopted.</sub></td>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-fab-open.png" width="220" alt="Launcher screen with a floating action button expanded into six session-launch options"><br><b>Six-way speed dial</b><br><sub>New project, folder, GitHub clone, OpenClaw, Hermes, or a bare console.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-speed-dial.png" width="200" alt="Speed dial menu open over the session list with six quick-action buttons"><br><b>Six-way speed dial</b><br><sub>New project, folder, GitHub clone, OpenClaw, Hermes, or a bare console.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-provider-select.png" width="200" alt="Provider picker modal listing Claude as the pinned default alongside three other models"><br><b>Provider selector</b><br><sub>Pinned Claude, plus qwen, kimi, and gpt models saved from OpenRouter.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-slash-palette.png" width="200" alt="Slash commands modal showing a nine-command quick grid and the full command reference below"><br><b>Slash palette</b><br><sub>74 Claude Code commands, grouped and tappable.</sub></td>
 </tr>
 <tr>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-provider-modal.png" width="220" alt="Modal dialog titled select provider listing claude plus three OpenRouter model options with an add-model row"><br><b>Provider selector</b><br><sub>Pinned Claude or any saved OpenRouter model, picked at launch.</sub></td>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-dpad.png" width="220" alt="Circular directional pad overlay with arrow buttons, ESC, and scroll-to-bottom controls over a terminal"><br><b>Virtual D-pad</b><br><sub>Arrows, Esc, Tab, Shift+Tab — the keys phones don't have.</sub></td>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-slash-commands.png" width="220" alt="Modal listing Claude Code slash commands grouped by category with quick-access buttons for common commands"><br><b>Slash palette</b><br><sub>74 Claude Code commands, grouped and tappable.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-paperclip-menu.png" width="200" alt="Paperclip attachment menu open above the message input, with paste-from-clipboard and attach-image options"><br><b>📎 clipboard menu</b><br><sub>Paste from clipboard or attach an image — no reliable paste event on iOS Safari.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-dpad.png" width="200" alt="Expanded D-pad control overlay with directional buttons over the terminal session"><br><b>Virtual D-pad</b><br><sub>Arrows, Esc, Tab, Shift+Tab, jump-to-bottom — the keys phones don't have.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-new-project.png" width="200" alt="Name-this-project modal with a placeholder project name and optional description field"><br><b>New project</b><br><sub>Name it, describe it (optional), and it's in the launcher for good.</sub></td>
 </tr>
 <tr>
-<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-paperclip-menu.png" width="220" alt="Small popup menu with paste from clipboard and attach image options anchored above a paperclip button"><br><b>📎 clipboard menu</b><br><sub>Paste from clipboard or attach an image — no reliable paste event on iOS Safari.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-session-list.png" width="200" alt="Cloude Code launcher showing five running terminal sessions with status badges"><br><b>Running sessions</b><br><sub>Every RUNNING / TMUX session at a glance, refreshed every 5s.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-recent-projects.png" width="200" alt="Recent projects list showing six project cards with generic names and home-directory paths"><br><b>Recent projects</b><br><sub>Name, path, and description for every registered project.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-auth-screen.png" width="200" alt="Cloude Code login screen showing a 6-digit TOTP code entry field with a coral login button on a near-black background"><br><b>TOTP login</b><br><sub>No password. Six digits from your authenticator app.</sub></td>
 </tr>
 </table>
 
-<sub><b>Theme gallery</b> — 4 of 23 hand-built themes, same live session:</sub>
+<sub><b>23 themes, one live session</b></sub>
 
 <table>
 <tr>
-<td align="center" width="25%"><img src="docs/assets/screenshots/mobile-theme-matrix.png" width="170" alt="Same terminal session re-themed in a green Matrix-style CRT color scheme"><br><b>Matrix</b></td>
-<td align="center" width="25%"><img src="docs/assets/screenshots/mobile-theme-blade-runner.png" width="170" alt="Same terminal session re-themed with a cool cyberpunk Blade Runner color palette"><br><b>Blade Runner</b></td>
-<td align="center" width="25%"><img src="docs/assets/screenshots/mobile-theme-gameboy.png" width="170" alt="Same terminal session re-themed as a monochrome olive-green Game Boy LCD screen"><br><b>Game Boy</b></td>
-<td align="center" width="25%"><img src="docs/assets/screenshots/mobile-theme-dracula.png" width="170" alt="Same terminal session re-themed with the popular purple and dark Dracula color scheme"><br><b>Dracula</b></td>
+<td align="center" width="50%"><img src="docs/assets/screenshots/phone/phone-theme-picker.png" width="260" alt="iOS native theme picker dropdown listing available terminal themes with Claude checked"><br><b>Native theme picker</b><br><sub>The real iOS dropdown — headless Chromium can't render this control. ~15 of 23 themes visible in one scroll.</sub></td>
+<td align="center" width="50%"><img src="docs/assets/screenshots/phone/phone-terminal-idle.png" width="260" alt="Idle terminal session showing the welcome banner, active model, and effort indicator"><br><b>Claude theme, live</b><br><sub>The theme the picker has checked, running in the same session.</sub></td>
 </tr>
 </table>
 
