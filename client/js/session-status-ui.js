@@ -271,6 +271,64 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Disclosure chevron, shared by every collapsible-tree/section control
+     * in the app (launchpad's disclosures use plain CSS rotation on a
+     * text glyph; this is the one used by DOM-built trees like the
+     * config editor - client/js/config-editor-panel.js). Points right when
+     * collapsed; the caller rotates it 90deg via the
+     * `.config-editor-toggle[aria-expanded="true"]` CSS rule rather than
+     * this module tracking state, so one glyph serves both orientations.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   chevronIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function chevronIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" class="config-editor-chevron">' +
+            '<path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
+     * Folder glyph for directory rows in the config editor tree. Same
+     * family as trashIconSvg/pencilIconSvg (16x16, stroke=currentColor,
+     * fill=none, stroke-width 1.5) so it recolors with the row via CSS.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   folderIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function folderIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M2 4.25C2 3.69772 2.44772 3.25 3 3.25H6.5L7.75 4.75H13C13.5523 4.75 14 5.19772 14 5.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V4.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
+     * Plain-document glyph for file rows in the config editor tree -
+     * deliberately distinct in silhouette from folderIconSvg (a folded
+     * corner, no tab) so directory vs. file is legible even to a user who
+     * can't tell fill from stroke color at a glance. Same 16x16/stroke
+     * family as the rest of this module.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   fileIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function fileIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M4.5 2.5H9L11.5 5V13C11.5 13.2761 11.2761 13.5 11 13.5H4.5C4.22386 13.5 4 13.2761 4 13V3C4 2.72386 4.22386 2.5 4.5 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+            '<path d="M9 2.5V5H11.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         normalizeStatus,
         dotHtml,
@@ -280,6 +338,9 @@ console.log('[SessionStatusUI Module] Loading...');
         pencilIconSvg,
         envelopeOutlineSvg,
         envelopeFilledSvg,
+        chevronIconSvg,
+        folderIconSvg,
+        fileIconSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

@@ -174,11 +174,14 @@
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
     </aside>
 
-    <!-- Claude-config file tree + editor — peer to the session sidebar
-         above (same body-level/backdrop/slide-over pattern), toggled by
+    <!-- Claude-config file tree — peer to the session sidebar above (same
+         body-level/backdrop/slide-over pattern), toggled by
          #configEditorBtn. Scope is Claude config ONLY (~/.claude plus the
          active project's .claude/), never a general filesystem browser.
-         See client/js/config-editor-panel.js. -->
+         Full-height tree, no inline editor — opening a file launches a
+         modal instead (built dynamically by client/js/config-editor-
+         modal.js, same convention as SettingsPanel's overlay). See
+         client/js/config-editor-panel.js. -->
     <div class="config-editor-backdrop" id="config-editor-backdrop" hidden></div>
     <aside id="config-editor-panel" class="config-editor-panel" aria-hidden="true" aria-label="Claude config">
         <div class="config-editor-header">
@@ -187,7 +190,6 @@
         </div>
         <div class="config-editor-body">
             <div id="config-editor-tree" class="config-editor-tree"></div>
-            <div id="config-editor-editor" class="config-editor-editor" hidden></div>
         </div>
     </aside>
 
@@ -284,6 +286,8 @@
     <!-- Claude-config file tree + editor. Must load AFTER api.js
          (window.API) and BEFORE app.js so App.init() can wire
          #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
+    <script src="/static/js/markdown-lite.js"></script>
+    <script src="/static/js/config-editor-modal.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->

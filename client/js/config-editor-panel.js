@@ -1,22 +1,44 @@
 /**
- * Claude-config file tree + editor panel.
+ * Claude-config file tree panel.
  *
  * Peer to the session sidebar (client/js/session-sidebar.js) - same
  * body-level backdrop + slide-over panel pattern, opened from
- * #configEditorBtn in the header. Browses and edits Claude's OWN config
- * ONLY: `~/.claude` ("user" root) plus the active project's `.claude/`
+ * #configEditorBtn in the header. Browses Claude's OWN config ONLY:
+ * `~/.claude` ("user" root) plus the active project's `.claude/`
  * ("project" root, when a session is attached) - never a general
  * filesystem browser. All list/read/write logic and the allowed-roots /
  * hide-list live server-side in src/core/config_files.py; this module
- * only renders the tree, drives the editor, and enforces the same
- * confirm-before-executable-write UX every other destructive action in
- * this app uses.
+ * only renders the tree. Opening a file hands off to
+ * window.ConfigEditorModal (client/js/config-editor-modal.js), which
+ * owns the editor - split into two files purely for the project's
+ * 500-line file-size rule; the two together are one feature.
  *
- * Must load AFTER api.js (window.API) and BEFORE app.js (App.init()
- * wires #configEditorBtn's click handler to ConfigEditorPanel.open()).
+ * The panel is tree-only now: full height, no inline editor sliver (the
+ * editor lives in a real modal - see config-editor-modal.js).
+ *
+ * Tree rendering is lazy: a directory's children are not built into the
+ * DOM until it is first expanded, and every directory starts collapsed
+ * (READONLY_COLLAPSED_DIRS roots like plugins/ additionally IGNORE any
+ * persisted "expanded" state - see _startsCollapsed). This is what keeps
+ * a repo with thousands of files under plugins/ or skills/ from building
+ * thousands of DOM nodes on open - previously ALL of it rendered eagerly
+ * (~965 DOM nodes observed against this user's ~/.claude), burying
+ * CLAUDE.md in the wall.
+ *
+ * Must load AFTER api.js (window.API), session-status-ui.js
+ * (window.SessionStatusUI, shared icons), config-editor-modal.js
+ * (window.ConfigEditorModal) and BEFORE app.js (App.init() wires
+ * #configEditorBtn's click handler to ConfigEditorPanel.open()).
  */
 
 console.log('[ConfigEditorPanel Module] Loading...');
+
+// Directories that are read-only in the tree (see config_files.py's
+// READONLY_COLLAPSED_DIRS) always start collapsed, and stay collapsed
+// across reloads regardless of what a user previously expanded - a
+// stray persisted "expanded" flag for a 1000+ file directory would
+// reintroduce the exact wall-of-nodes bug this rebuild fixes.
+const CONFIG_EDITOR_FORCE_COLLAPSED_DIRS = new Set(['plugins']);
 
 class ConfigEditorPanelController {
     constructor() {
@@ -24,14 +46,14 @@ class ConfigEditorPanelController {
         this.backdrop = null;
         this.closeBtn = null;
         this.treeEl = null;
-        this.editorEl = null;
 
         this.isOpen = false;
         this._wired = false;
 
-        // { root: "user"|"project", path: string, isExecutable: bool,
-        //   readOnly: bool, originalContent: string }
-        this._activeFile = null;
+        // localStorage-backed map of "root:relPath" -> collapsed (bool),
+        // following the cloude.* convention (cloude.theme,
+        // cloude.launchpad.collapsed, ...). Lazily loaded on first use.
+        this._collapsedState = null;
     }
 
     /**
@@ -61,7 +83,6 @@ class ConfigEditorPanelController {
         this.backdrop = document.getElementById('config-editor-backdrop');
         this.closeBtn = document.getElementById('config-editor-close');
         this.treeEl = document.getElementById('config-editor-tree');
-        this.editorEl = document.getElementById('config-editor-editor');
         if (!this.panel || !this.backdrop) return;
 
         this.closeBtn.addEventListener('click', () => this.close());
@@ -91,238 +112,246 @@ class ConfigEditorPanelController {
     }
 
     /**
-     * Close the panel, discarding any unsaved editor state.
-     * Inputs: none. Output: void.
+     * Close the panel. Refuses to close over an unsaved editor without
+     * asking first - the modal may be layered on top of this panel, and
+     * an Escape/backdrop-click here must not silently drop an edit any
+     * more than the modal's own dismissal handlers would.
+     * Inputs: none. Output: Promise<void>.
      */
-    close() {
+    async close() {
         if (!this.panel) return;
+        if (window.ConfigEditorModal && window.ConfigEditorModal.isDirty()) {
+            if (!(await window.ConfigEditorModal.confirmDiscardIfDirty())) return;
+        }
+        if (window.ConfigEditorModal) window.ConfigEditorModal.close();
         this.isOpen = false;
         this.panel.classList.remove('config-editor-panel--open');
         this.panel.setAttribute('aria-hidden', 'true');
         this.backdrop.hidden = true;
-        this._activeFile = null;
-        this.editorEl.hidden = true;
-        this.editorEl.innerHTML = '';
         if (this._triggerEl) {
             this._triggerEl.setAttribute('aria-expanded', 'false');
             this._triggerEl.focus();
         }
     }
 
+    // ---- collapsed-state persistence (cloude.* localStorage convention) --
+
+    /**
+     * Read the persisted collapsed-state map, lazily.
+     * Inputs: none. Output: Object<string, boolean> - "root:relPath" ->
+     *   collapsed.
+     */
+    _loadCollapsedState() {
+        if (this._collapsedState) return this._collapsedState;
+        try {
+            const raw = localStorage.getItem('cloude.configEditor.collapsed');
+            this._collapsedState = raw ? JSON.parse(raw) : {};
+        } catch (err) {
+            console.warn('ConfigEditorPanel: failed to read collapsed-state:', err);
+            this._collapsedState = {};
+        }
+        return this._collapsedState;
+    }
+
+    /**
+     * Persist one node's collapsed flag.
+     * Inputs: key (string) - "root:relPath"; collapsed (bool).
+     * Output: void.
+     */
+    _setNodeCollapsed(key, collapsed) {
+        const state = this._loadCollapsedState();
+        state[key] = collapsed;
+        try {
+            localStorage.setItem('cloude.configEditor.collapsed', JSON.stringify(state));
+        } catch (err) {
+            console.warn('ConfigEditorPanel: failed to persist collapsed-state:', err);
+        }
+    }
+
+    /**
+     * Resolve whether one directory node should start collapsed: forced
+     * collapsed dirs (plugins/) always win; otherwise a persisted user
+     * choice wins; otherwise every directory defaults to collapsed (the
+     * "collapsed by default" requirement) regardless of the server's
+     * per-node `collapsed` hint, which today only flags read-only roots.
+     * Inputs: rootId (string); node (object) - server TreeNode.
+     * Output: bool.
+     */
+    _startsCollapsed(rootId, node) {
+        if (CONFIG_EDITOR_FORCE_COLLAPSED_DIRS.has(node.name)) return true;
+        const key = `${rootId}:${node.rel_path}`;
+        const state = this._loadCollapsedState();
+        if (Object.prototype.hasOwnProperty.call(state, key)) return state[key];
+        return true;
+    }
+
+    // ---- tree loading / rendering -----------------------------------
+
     /**
      * Load and render both roots' trees ("user" always, "project" only
-     * when a session is attached).
+     * when a session is attached AND that project has a `.claude/`
+     * directory).
      * Inputs: none. Output: Promise<void>.
      */
     async _loadTree() {
         this.treeEl.innerHTML = '<div class="config-editor-loading">loading...</div>';
         const projectPath = this._currentProjectPath();
-        const sections = [];
+        this.treeEl.innerHTML = '';
 
         try {
             const userTree = await window.API.getConfigFileTree('user');
-            sections.push(this._renderRootSection('user', '~/.claude', userTree.tree));
+            this.treeEl.appendChild(this._renderRootSection('user', '~/.claude', userTree.tree));
         } catch (err) {
-            sections.push(`<div class="config-editor-error">failed to load ~/.claude: ${this._esc(err.message || err)}</div>`);
+            this.treeEl.appendChild(this._errorEl(`failed to load ~/.claude: ${err.message || err}`));
         }
 
         if (projectPath) {
             try {
                 const projectTree = await window.API.getConfigFileTree('project', projectPath);
                 if (projectTree.tree && projectTree.tree.length) {
-                    sections.push(this._renderRootSection('project', 'project .claude', projectTree.tree));
+                    this.treeEl.appendChild(this._renderRootSection('project', 'project .claude', projectTree.tree));
                 }
             } catch (err) {
-                // A project without a .claude/ dir is normal, not an error
-                // worth surfacing - config_files.list_tree() already
-                // returns [] for that case rather than raising, so a
-                // thrown error here is a real failure.
-                sections.push(`<div class="config-editor-error">failed to load project .claude: ${this._esc(err.message || err)}</div>`);
+                // A project working directory with no .claude/ subdirectory
+                // is the ordinary case, not a failure: config_files.py's
+                // resolve_roots() only registers the "project" root when
+                // the directory exists, so list_tree() raises "unknown or
+                // unavailable root: project" (HTTP 400) for every project
+                // that simply hasn't got project-scoped config yet. That
+                // 400 is the server's designed signal for "not available
+                // here", not "something broke" - render it as a calm empty
+                // state. Any OTHER status (401/403/5xx, or no status at all
+                // for a network failure) is a real failure and still
+                // surfaces as an error.
+                if (err.status === 400) {
+                    this.treeEl.appendChild(this._emptyStateEl('this project has no .claude config'));
+                } else {
+                    this.treeEl.appendChild(this._errorEl(`failed to load project .claude: ${err.message || err}`));
+                }
             }
         }
-
-        this.treeEl.innerHTML = sections.join('');
-        this._bindTreeClicks();
     }
 
     /**
-     * Render one root's section header + nested <ul> tree.
-     * Inputs: rootId (string); label (string); nodes (object[]).
-     * Output: string - HTML.
+     * Build one root's section header + top-level list.
+     * Inputs: rootId (string); label (string); nodes (object[]) - server
+     *   TreeNode dicts.
+     * Output: Element.
      */
     _renderRootSection(rootId, label, nodes) {
-        return (
-            `<div class="config-editor-root-label">${this._esc(label)}</div>` +
-            `<ul class="config-editor-list">${nodes.map(n => this._renderNode(rootId, n, 0)).join('')}</ul>`
-        );
+        const heading = document.createElement('div');
+        heading.className = 'config-editor-root-label';
+        heading.textContent = label;
+
+        const list = document.createElement('ul');
+        list.className = 'config-editor-list';
+        nodes.forEach((node) => list.appendChild(this._buildNodeEl(rootId, node, 0)));
+
+        const container = document.createElement('div');
+        container.appendChild(heading);
+        container.appendChild(list);
+        return container;
     }
 
     /**
-     * Render one tree node (file or directory) and its children.
-     * Inputs: rootId (string); node (object) - server TreeNode dict;
-     *   depth (number).
-     * Output: string - HTML for one <li>.
+     * Build one <li> for a tree node. Directories get a toggle button
+     * (chevron + folder icon, aria-expanded) and an EMPTY children <ul>
+     * that is only populated the first time it is expanded - the lazy-
+     * render mechanism that keeps a 1000+ entry directory from costing
+     * 1000+ DOM nodes until the user actually asks to see them. Files
+     * get a single tappable <button> row that opens the editor modal;
+     * the whole row is the hit target, not a small glyph, and its icon
+     * (a document, distinct from the folder glyph) makes the file/
+     * directory distinction visible at a glance.
+     * Inputs: rootId (string); node (object) - server TreeNode; depth
+     *   (number) - for indentation.
+     * Output: Element - <li>.
      */
-    _renderNode(rootId, node, depth) {
-        const indent = `style="padding-left: ${depth * 14}px"`;
+    _buildNodeEl(rootId, node, depth) {
+        const li = document.createElement('li');
+        li.className = `config-editor-node config-editor-node--${node.is_dir ? 'dir' : 'file'}`;
+
         if (node.is_dir) {
-            const openAttr = node.collapsed ? '' : ' open';
-            const roLabel = node.read_only ? ' <span class="config-editor-badge">read-only</span>' : '';
-            return (
-                `<li class="config-editor-node config-editor-node--dir">` +
-                `<details${openAttr}><summary ${indent}>${this._esc(node.name)}${roLabel}</summary>` +
-                `<ul class="config-editor-list">${node.children.map(c => this._renderNode(rootId, c, depth + 1)).join('')}</ul>` +
-                `</details></li>`
+            const collapsed = this._startsCollapsed(rootId, node);
+            const key = `${rootId}:${node.rel_path}`;
+
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'config-editor-toggle';
+            toggle.style.paddingLeft = `${depth * 14 + 6}px`;
+            toggle.setAttribute('aria-expanded', String(!collapsed));
+            toggle.innerHTML = (
+                window.SessionStatusUI.chevronIconSvg() +
+                window.SessionStatusUI.folderIconSvg() +
+                `<span class="config-editor-node-name">${this._esc(node.name)}</span>` +
+                (node.read_only ? ' <span class="config-editor-badge">read-only</span>' : '')
             );
-        }
-        const execLabel = node.is_executable ? ' <span class="config-editor-badge config-editor-badge--exec">runs automatically</span>' : '';
-        return (
-            `<li class="config-editor-node config-editor-node--file" ${indent} ` +
-            `data-root="${this._esc(rootId)}" data-path="${this._esc(node.rel_path)}" ` +
-            `data-executable="${node.is_executable ? '1' : '0'}" data-readonly="${node.read_only ? '1' : '0'}" ` +
-            `role="button" tabindex="0">${this._esc(node.name)}${execLabel}</li>`
-        );
-    }
 
-    /**
-     * Bind click/keyboard activation for file rows (event delegation,
-     * bound once per tree render).
-     * Inputs: none. Output: void.
-     */
-    _bindTreeClicks() {
-        const handler = async (e) => {
-            const el = e.target.closest('.config-editor-node--file');
-            if (!el || !this.treeEl.contains(el)) return;
-            await this._openFile(el.dataset.root, el.dataset.path, el.dataset.readonly === '1');
-        };
-        this.treeEl.addEventListener('click', handler);
-        this.treeEl.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            const el = e.target.closest('.config-editor-node--file');
-            if (!el) return;
-            e.preventDefault();
-            handler(e);
-        });
-    }
+            const childList = document.createElement('ul');
+            childList.className = 'config-editor-list';
+            childList.hidden = collapsed;
+            let built = false;
 
-    /**
-     * Load one file into the editor pane.
-     * Inputs: rootId (string); relPath (string); readOnly (bool) - from
-     *   the tree node's data attribute (plugins/ etc.); the editor
-     *   renders view-only when true, no server round trip needed to
-     *   find that out.
-     * Output: Promise<void>.
-     */
-    async _openFile(rootId, relPath, readOnly) {
-        const projectPath = rootId === 'project' ? this._currentProjectPath() : null;
-        this.editorEl.hidden = false;
-        this.editorEl.innerHTML = '<div class="config-editor-loading">loading...</div>';
-        try {
-            const result = await window.API.readConfigFile(rootId, relPath, projectPath);
-            this._activeFile = {
-                root: rootId,
-                path: relPath,
-                projectPath,
-                isExecutable: result.is_executable,
-                readOnly: readOnly || result.read_only,
-                originalContent: result.content,
-            };
-            this._renderEditor();
-        } catch (err) {
-            this.editorEl.innerHTML = `<div class="config-editor-error">failed to open: ${this._esc(err.message || err)}</div>`;
-        }
-    }
-
-    /**
-     * Render the editor pane for `this._activeFile`.
-     * Inputs: none. Output: void.
-     */
-    _renderEditor() {
-        const f = this._activeFile;
-        const execNote = f.isExecutable
-            ? '<div class="config-editor-exec-warning">this file is code claude code runs automatically. saving requires confirmation and is always backed up first.</div>'
-            : '';
-        const roNote = f.readOnly ? '<div class="config-editor-ro-warning">read-only - this file is under a read-only root.</div>' : '';
-        this.editorEl.innerHTML = (
-            `<div class="config-editor-editor-header">
-                <span class="config-editor-editor-path">${this._esc(f.root)}/${this._esc(f.path)}</span>
-                <div class="config-editor-editor-actions">
-                    <button type="button" id="config-editor-save" ${f.readOnly ? 'disabled' : ''}>save</button>
-                    <button type="button" id="config-editor-cancel">cancel</button>
-                </div>
-            </div>
-            ${execNote}${roNote}
-            <div id="config-editor-save-error" class="config-editor-error" hidden></div>
-            <textarea id="config-editor-textarea" class="config-editor-textarea" spellcheck="false" ${f.readOnly ? 'readonly' : ''}>${this._esc(f.originalContent)}</textarea>`
-        );
-
-        document.getElementById('config-editor-cancel').addEventListener('click', () => {
-            this.editorEl.hidden = true;
-            this.editorEl.innerHTML = '';
-            this._activeFile = null;
-        });
-
-        if (!f.readOnly) {
-            document.getElementById('config-editor-save').addEventListener('click', () => this._save());
-        }
-    }
-
-    /**
-     * Save the editor's current content, enforcing the same confirm-
-     * before-executable-write flow as every other destructive action in
-     * the app (App.showConfirmModal). Client-side JSON pre-validation is
-     * a fast-fail UX nicety only - the server re-validates and is the
-     * real enforcement point (config_files.write_file).
-     * Inputs: none. Output: Promise<void>.
-     */
-    async _save() {
-        const f = this._activeFile;
-        if (!f) return;
-        const textarea = document.getElementById('config-editor-textarea');
-        const errorEl = document.getElementById('config-editor-save-error');
-        errorEl.hidden = true;
-        const content = textarea.value;
-
-        if (f.path.endsWith('.json')) {
-            try {
-                JSON.parse(content);
-            } catch (err) {
-                errorEl.hidden = false;
-                errorEl.textContent = `invalid json - not saved: ${err.message}`;
-                return;
-            }
-        }
-
-        let acknowledgeExecutable = false;
-        if (f.isExecutable) {
-            const confirmed = await window.App.showConfirmModal(
-                'save executable file?',
-                `"${f.path}" is code claude code runs automatically.`,
-                'a backup of the current version is made before saving. this cannot be undone.',
-                'save',
-                'cancel'
-            );
-            if (!confirmed) return;
-            acknowledgeExecutable = true;
-        }
-
-        try {
-            const result = await window.API.writeConfigFile({
-                root: f.root,
-                path: f.path,
-                content,
-                project_path: f.projectPath,
-                acknowledge_executable: acknowledgeExecutable,
+            toggle.addEventListener('click', () => {
+                const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+                if (nowExpanded && !built) {
+                    node.children.forEach((child) => childList.appendChild(this._buildNodeEl(rootId, child, depth + 1)));
+                    built = true;
+                }
+                toggle.setAttribute('aria-expanded', String(nowExpanded));
+                childList.hidden = !nowExpanded;
+                if (!CONFIG_EDITOR_FORCE_COLLAPSED_DIRS.has(node.name)) {
+                    this._setNodeCollapsed(key, !nowExpanded);
+                }
             });
-            f.originalContent = content;
-            errorEl.hidden = false;
-            errorEl.classList.add('config-editor-success');
-            errorEl.textContent = result.backed_up ? 'saved (previous version backed up to .bak)' : 'saved';
-        } catch (err) {
-            errorEl.hidden = false;
-            errorEl.classList.remove('config-editor-success');
-            errorEl.textContent = `save failed: ${err.message || err}`;
+
+            li.appendChild(toggle);
+            li.appendChild(childList);
+            return li;
         }
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'config-editor-file';
+        btn.style.paddingLeft = `${depth * 14 + 6}px`;
+        btn.dataset.root = rootId;
+        btn.dataset.path = node.rel_path;
+        btn.dataset.readonly = node.read_only ? '1' : '0';
+        btn.innerHTML = (
+            window.SessionStatusUI.fileIconSvg() +
+            `<span class="config-editor-node-name">${this._esc(node.name)}</span>` +
+            (node.is_executable ? ' <span class="config-editor-badge config-editor-badge--exec">runs automatically</span>' : '')
+        );
+        btn.addEventListener('click', () => {
+            const projectPath = rootId === 'project' ? this._currentProjectPath() : null;
+            window.ConfigEditorModal.open(rootId, node.rel_path, node.read_only, projectPath);
+        });
+        li.appendChild(btn);
+        return li;
+    }
+
+    /**
+     * Build an error message block for the tree.
+     * Inputs: message (string). Output: Element.
+     */
+    _errorEl(message) {
+        const el = document.createElement('div');
+        el.className = 'config-editor-error';
+        el.textContent = message;
+        return el;
+    }
+
+    /**
+     * Build a calm (non-error) empty-state block for the tree, used when
+     * a project legitimately has no .claude/ config rather than when a
+     * request failed.
+     * Inputs: message (string). Output: Element.
+     */
+    _emptyStateEl(message) {
+        const el = document.createElement('div');
+        el.className = 'config-editor-empty';
+        el.textContent = message;
+        return el;
     }
 
     /**
