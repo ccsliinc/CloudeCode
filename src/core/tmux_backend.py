@@ -1098,6 +1098,123 @@ class TmuxBackend(SessionBackend):
         )
         return rc == 0
 
+    @property
+    def pid(self) -> Optional[int]:
+        """The OS pid of pane 0's foreground process, or None if unknown.
+
+        Description: Queries ``#{pane_pid}`` via ``list-panes`` for this
+            backend's session/pane. Mirrors ``PTYBackend.pid`` so
+            ``SessionManager`` can call ``getattr(backend, "pid", None)``
+            uniformly across both backends. Unlike PTYBackend (which tracks
+            a single forked pid for the life of the process), a tmux pane's
+            foreground pid can change as commands run inside it - this
+            always reflects the CURRENT foreground process, not the shell
+            that was originally spawned.
+
+        Inputs: none (reads ``self.tmux_session`` / ``self.socket_name``).
+
+        Output:
+            Optional[int]: The pane's current foreground pid, or None if
+                the session is gone or the query fails.
+
+        Example:
+            >>> backend.pid
+            48213
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-t",
+            _safe_target(self.tmux_session),
+            "-p",
+            "#{pane_pid}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        raw = out.decode("utf-8", errors="replace").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def list_pane_status_all(self) -> List[Dict[str, Any]]:
+        """Bulk-query activity status for every pane on this tmux server.
+
+        Description: One ``list-panes -a`` call across the WHOLE dedicated
+            tmux server, so callers building a status view for many sessions
+            (owned + external) pay a single subprocess cost instead of one
+            query per session. Only pane 0 of each session is meaningful for
+            this app (we never create a second window/pane), so when a
+            session reports multiple panes we keep the first line tmux
+            returns for that session name.
+
+        Inputs: none (reads ``self.socket_name``).
+
+        Output:
+            List[Dict[str, Any]]: One row per LIVE tmux session on the
+                socket, each ``{"name": str, "pane_dead": str,
+                "pane_current_command": str, "pid": Optional[int],
+                "status": str}``. ``status`` is pre-resolved via
+                ``resolve_pane_status()`` so callers never touch the raw
+                fields unless they want to. Empty list when no server /
+                no sessions is running (not an error case).
+
+        Example:
+            >>> backend.list_pane_status_all()
+            [{'name': 'cloude_myproj', 'pane_dead': '0',
+              'pane_current_command': 'claude', 'pid': 4821,
+              'status': 'running'}]
+        """
+        # Local import avoids a module-level cycle: session_status has no
+        # dependency back on tmux_backend, but keeping the import at the
+        # call site matches this file's existing lazy-import convention
+        # for settings (see _resolve_pipe_path).
+        from src.core.session_status import resolve_pane_status
+
+        if not shutil.which("tmux"):
+            return []
+
+        rc, out, _ = self._run_tmux_sync(
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}",
+            check=False,
+        )
+        if rc != 0:
+            # "no server running" - expected when no sessions exist yet.
+            return []
+
+        seen: set = set()
+        results: List[Dict[str, Any]] = []
+        for line in out.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) < 4:
+                logger.debug("list_pane_status_all_unparseable_row", raw=line)
+                continue
+            name, pane_dead, current_command, pid_raw = parts[0], parts[1], parts[2], parts[3]
+            if name in seen:
+                # Keep only the first pane per session (our sessions are
+                # always single-window/single-pane; defensive for any
+                # externally-created session with extra panes).
+                continue
+            seen.add(name)
+            try:
+                pid_val: Optional[int] = int(pid_raw)
+            except ValueError:
+                pid_val = None
+            results.append({
+                "name": name,
+                "pane_dead": pane_dead,
+                "pane_current_command": current_command,
+                "pid": pid_val,
+                "status": resolve_pane_status(pane_dead, current_command),
+            })
+        return results
+
     async def rename_session(self, new_name: str) -> None:
         """Rename this tmux session in-place via ``rename-session``.
 

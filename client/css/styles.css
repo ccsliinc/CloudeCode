@@ -1883,23 +1883,9 @@ button[data-tooltip]:hover::after {
     margin-bottom: 4px;
 }
 
-.running-session-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
-    display: inline-block;
-    animation: pulse-glow 1.5s ease-in-out infinite;
-}
-
-.running-session-row.owned .running-session-dot {
-    background: var(--color-success);
-    box-shadow: 0 0 8px var(--color-success);
-}
-
-.running-session-row.external .running-session-dot {
-    background: var(--color-warning);
-    box-shadow: 0 0 8px var(--color-warning);
-}
+/* .running-session-dot replaced by the shared .status-dot classes
+ * (client/css/session-sidebar.css) which color by REAL activity status
+ * (running/idle/dead/unknown) instead of by ownership. */
 
 .running-session-name {
     flex: 1;
@@ -1941,7 +1927,6 @@ button[data-tooltip]:hover::after {
     letter-spacing: 0.5px;
 }
 
-.badge-running  { background: var(--color-badge-owned-bg);    color: var(--color-badge-owned-fg); }
 .badge-tmux     { background: var(--color-badge-tmux-bg);     color: var(--color-badge-tmux-fg); }
 .badge-external { background: var(--color-badge-external-bg); color: var(--color-badge-external-fg); }
 
