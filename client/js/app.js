@@ -119,10 +119,36 @@ window.setPageTitle = setPageTitle;
  * App Controller - Manages application state and screen transitions
  */
 class AppController {
+    /**
+     * Inline SVG markup for the two states of the header audio toggle.
+     * Single source of truth so `_wireAudioToggle()`'s paint() never has
+     * more than one place that decides what the icon looks like. 16x16,
+     * stroke="currentColor", stroke-width 1.5 — same conventions as the
+     * detach/logout/delete icons so the header reads as one icon family.
+     * Speaker shape is shared; unmuted adds two sound-wave arcs, muted
+     * adds an X across the same spot — same silhouette, different
+     * "sound coming out" mark, so the two states are unmistakable at
+     * 16x16 without relying on color alone.
+     * @type {{muted: string, unmuted: string}}
+     */
+    static get AUDIO_ICON_SVG() {
+        return {
+            muted:
+                '<path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+                '<path d="M9.5 6.25L13 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+                '<path d="M13 6.25L9.5 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+            unmuted:
+                '<path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+                '<path d="M9 6.6C9.5 7 9.8 7.45 9.8 8C9.8 8.55 9.5 9 9 9.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+                '<path d="M10.8 5.2C11.7 6 12.2 6.9 12.2 8C12.2 9.1 11.7 10 10.8 10.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+        };
+    }
+
     constructor() {
         this.currentScreen = null;
         this.logoutBtn = null;
-        this.destroyBtn = null;
+        // No destroyBtn: delete is no longer reachable from the session
+        // header (see the conversation sidebar + launcher rows instead).
         this.detachBtn = null;
         // Health poller state. Poll every 15s against /health so the
         // top-right status dot reflects server reachability on the
@@ -139,7 +165,6 @@ class AppController {
         console.log('App: Initializing');
 
         this.logoutBtn = document.getElementById('logoutBtn');
-        this.destroyBtn = document.getElementById('destroySessionBtn');
         this.detachBtn = document.getElementById('detachSessionBtn');
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
@@ -213,18 +238,36 @@ class AppController {
 
     /**
      * v0.7.0+ — bind the header audio toggle button to ThemeAudio.toggleMute().
-     * The icon (🔊 / 🔇), `aria-pressed`, and tooltip all reflect the current
-     * mute state. Idempotent — only wires once.
+     * The icon (speaker+waves / speaker+X), `aria-pressed`, and tooltip all
+     * reflect the current mute state. Idempotent — only wires once.
+     *
+     * The icon is inline SVG, not an emoji: emoji render in full system
+     * color from the platform font and ignore `stroke="currentColor"`,
+     * which broke the otherwise-monotone header icon family (detach,
+     * logout, delete all inherit their color from the theme). Swapping
+     * the toggled `<svg>` child to one of AppController.AUDIO_ICON_SVG keeps this
+     * button in the same 16x16 / stroke-1.5 / currentColor family as its
+     * neighbors — there is no code path left that writes an emoji here.
      */
     _wireAudioToggle() {
         const btn = document.getElementById('audioToggleBtn');
         if (!btn || btn._audioToggleWired) return;
         btn._audioToggleWired = true;
+        // The <svg> wrapper itself lives in index.html (viewBox, size,
+        // fill="none") — only its <path> children are swapped here, so
+        // we never touch the button's own attributes (title/aria-label
+        // are set separately below) or risk emitting a bare <path> as a
+        // direct button child (invalid outside an <svg> namespace).
+        const svg = btn.querySelector('svg');
 
         const paint = () => {
             const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
             const label = muted ? 'Enable theme music' : 'Mute theme music';
-            btn.textContent = muted ? '🔇' : '🔊';
+            if (svg) {
+                svg.innerHTML = muted
+                    ? AppController.AUDIO_ICON_SVG.muted
+                    : AppController.AUDIO_ICON_SVG.unmuted;
+            }
             btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
             btn.setAttribute('data-tooltip', label);
             btn.setAttribute('aria-label', label);
@@ -347,7 +390,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
         this.logoutBtn.classList.add('hidden');
-        this.destroyBtn.classList.add('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
@@ -371,6 +413,10 @@ class AppController {
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 — auth screen has no session context; reset tab title.
         setPageTitle(null);
+        // Outbound URL sync: no session context on the auth screen either.
+        if (window.Router && typeof window.Router.resetToLauncher === 'function') {
+            window.Router.resetToLauncher();
+        }
     }
 
     /**
@@ -381,7 +427,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        this.destroyBtn.classList.add('hidden');
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
@@ -406,6 +451,14 @@ class AppController {
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 — back on the launchpad, no active session; reset tab title.
         setPageTitle(null);
+        // Outbound URL sync: leaving a session (detach/delete) or just
+        // navigating here resets the address bar to `/` so a refresh
+        // lands on the launcher, not a stale/gone session URL. No-ops if
+        // a deep-link target is still pending delivery — see
+        // Router.resetToLauncher()'s doc comment.
+        if (window.Router && typeof window.Router.resetToLauncher === 'function') {
+            window.Router.resetToLauncher();
+        }
 
         // Hide D-pad on launchpad
         if (window.DPad) {
@@ -438,10 +491,18 @@ class AppController {
      */
     async showTerminal(session, opts = {}) {
         console.log('App: Showing terminal screen');
+        // Outbound URL sync: capture whether we were ALREADY viewing a
+        // session before this call flips currentScreen below. Deciding
+        // push-vs-replace off the PREVIOUS screen is what tells "entering
+        // a session from the launcher" (push — Back should return to the
+        // launcher) apart from "switching to a different session while
+        // already in one" (replace — the sidebar's adopt-not-yet-
+        // attached flow calls showTerminal() too; we don't want Back to
+        // have to click through every session the user visited).
+        var cameFromTerminal = this.currentScreen === 'terminal';
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        this.destroyBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
@@ -455,6 +516,12 @@ class AppController {
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
         }
+        // Outbound URL sync: reuses Router's SAME slug/encoding scheme
+        // build_deep_link() (server) and parseCurrentPath() (inbound
+        // router) already use — see Router.enterSession()'s doc comment
+        // and _deepLinkSlug()'s below for why the name gets stripped
+        // first.
+        this._syncSessionUrl(sessionName, cameFromTerminal);
         // Session sidebar: reveal the hamburger and tell it which session
         // is now attached (so its row list can mark this one active).
         if (window.SessionSidebar) {
@@ -540,10 +607,16 @@ class AppController {
      */
     async returnToExistingTerminal(session) {
         console.log('App: Returning to existing terminal', session && session.id);
+        // Outbound URL sync: see showTerminal()'s identical comment —
+        // same push-vs-replace rule, off the screen we were on BEFORE
+        // this call. Callers: the launchpad's active-session banner
+        // (currentScreen 'launchpad' → push) and the conversation
+        // sidebar's row click (currentScreen already 'terminal' →
+        // replace, since the sidebar only shows while in a session).
+        var cameFromTerminal = this.currentScreen === 'terminal';
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        this.destroyBtn.classList.remove('hidden');
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
@@ -561,6 +634,9 @@ class AppController {
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
         }
+        // Outbound URL sync: same encoding Router.enterSession() shares
+        // with build_deep_link() (server) and the inbound router parser.
+        this._syncSessionUrl(sessionName, cameFromTerminal);
         // Session sidebar: same wiring as showTerminal().
         if (window.SessionSidebar) {
             var activeSid = (inner && inner.id) || (session && session.id) || null;
@@ -649,29 +725,58 @@ class AppController {
     }
 
     /**
-     * Show confirmation modal
-     * @param {string} title - Modal title
-     * @param {string} message - Main message
-     * @param {string} details - Additional details (optional)
-     * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+     * Show confirmation modal.
+     *
+     * This is the SINGLE confirmation-modal implementation for the whole
+     * app — every destructive action (logout, delete session, delete
+     * project, kill running session, reset server) routes through this
+     * one function so there is exactly one modal to read, style, and
+     * test. `LaunchpadController.showConfirmModal()` is a thin delegate
+     * to this method, kept only so existing launchpad call sites don't
+     * need to reach across modules.
+     *
+     * Description: builds a modal overlay with title/message/optional
+     *   details and two buttons, and resolves once the user picks one
+     *   or dismisses it. Escape, the cancel button, and a click on the
+     *   overlay backdrop are all treated as cancel — every dismissal
+     *   path resolves false, never true, so a destructive action can
+     *   only fire from an explicit confirm click.
+     * Inputs:
+     *   title (string) - modal title, shown as "» <title>".
+     *   message (string) - main message body.
+     *   details (string|null) - optional secondary line (e.g. "this
+     *     cannot be undone").
+     *   primaryLabel (string) - label for the confirming button.
+     *   secondaryLabel (string) - label for the cancelling button.
+     * Output: Promise<boolean> - true only on an explicit confirm click.
+     *
+     * Security: title/message/details are attacker-reachable in some
+     * callers (e.g. an interpolated session or project name that
+     * ultimately traces back to hand-edited config or a tmux name) —
+     * escaped here, once, at the shared sink, rather than trusting every
+     * caller to pre-escape its own interpolated values.
      */
-    showConfirmModal(title, message, details = null) {
+    showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
         return new Promise((resolve) => {
             // Create modal overlay
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
 
+            const safeTitle = this._escapeHtml(title);
+            const safeMessage = this._escapeHtml(message);
+            const safeDetails = details ? this._escapeHtml(details) : null;
+
             // Create modal content
             overlay.innerHTML = `
                 <div class="modal-content">
-                    <div class="modal-header">» ${title}</div>
+                    <div class="modal-header">» ${safeTitle}</div>
                     <div class="modal-body">
-                        <div class="modal-message">${message}</div>
-                        ${details ? `<div class="modal-description">${details}</div>` : ''}
+                        <div class="modal-message">${safeMessage}</div>
+                        ${safeDetails ? `<div class="modal-description">${safeDetails}</div>` : ''}
                     </div>
                     <div class="modal-footer">
-                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">${this._escapeHtml(secondaryLabel)}</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${this._escapeHtml(primaryLabel)}</button>
                     </div>
                 </div>
             `;
@@ -712,6 +817,57 @@ class AppController {
             // Focus confirm button
             setTimeout(() => confirmBtn.focus(), 100);
         });
+    }
+
+    /**
+     * Update the address bar to reflect the session now on screen (the
+     * outbound half of the deep-link feature — see router.js's
+     * `enterSession()`/`buildSessionPath()` for the inbound half this
+     * reuses).
+     *
+     * Description: `sessionName` is the canonical `tmux_session` value,
+     *   which for a Cloude-owned session carries the `cloude_` prefix
+     *   (`src/core/tmux_backend.py`'s `SESSION_PREFIX`) — but the
+     *   deep-link resolver (`Launchpad.openProjectByName`) matches
+     *   against the launcher's PROJECT name, which is always stored
+     *   WITHOUT that prefix (see `Launchpad._handleAttachRunningSession`'s
+     *   `cleanName` stripping when it auto-adds an adopted session to
+     *   Recent Projects). Stripping here — via the launchpad's own
+     *   `_deriveRunningSessionDisplayName()`, reused rather than
+     *   re-implemented — is what makes a hard refresh on the resulting
+     *   URL actually resolve back to the same project; skipping it would
+     *   put `cloude_<name>` in the address bar, which
+     *   `openProjectByName()` would never match against any project's
+     *   bare `name` and the refresh would silently land on the launcher
+     *   instead.
+     * Inputs:
+     *   sessionName (string|null) - tmux_session (or bare name) for the
+     *     session now on screen. No-op if falsy.
+     *   replace (boolean) - forwarded to Router.enterSession() as
+     *     `{replace}` — see showTerminal()/returnToExistingTerminal()'s
+     *     `cameFromTerminal` comment for the push-vs-replace reasoning.
+     * Output: void.
+     */
+    _syncSessionUrl(sessionName, replace) {
+        if (!sessionName || !window.Router || typeof window.Router.enterSession !== 'function') {
+            return;
+        }
+        var slug = (window.Launchpad && typeof window.Launchpad._deriveRunningSessionDisplayName === 'function')
+            ? window.Launchpad._deriveRunningSessionDisplayName(sessionName)
+            : sessionName;
+        window.Router.enterSession(slug, { replace: !!replace });
+    }
+
+    /**
+     * Escape HTML special characters for safe interpolation into modal
+     * markup built via innerHTML.
+     * Inputs: str (any) - value to escape; stringified first.
+     * Output: string - HTML-escaped text.
+     */
+    _escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str == null ? '' : String(str);
+        return div.innerHTML;
     }
 }
 

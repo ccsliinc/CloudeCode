@@ -185,11 +185,38 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Shared trash-can glyph for every delete control in the app (launcher
+     * project rows, in-terminal conversation sidebar rows, the running-
+     * sessions kill button). Single source of truth so the three call
+     * sites can never draw three slightly different trash cans - one SVG,
+     * one definition. No `stroke` color is set on the paths themselves;
+     * callers wrap this in a button whose CSS `color` (default + :hover)
+     * drives the stroke via `currentColor`, matching every other icon
+     * button in the app.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   trashIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function trashIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M5.5 4.5V3.25C5.5 2.83579 5.83579 2.5 6.25 2.5H9.75C10.1642 2.5 10.5 2.83579 10.5 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M4.5 4.5L5 12.75C5 13.1642 5.33579 13.5 5.75 13.5H10.25C10.6642 13.5 11 13.1642 11 12.75L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M6.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M9.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         normalizeStatus,
         dotHtml,
         labelFor,
         markUnreadHtml,
+        trashIconSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

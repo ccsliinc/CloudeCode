@@ -74,8 +74,11 @@ class Terminal {
         // tied to the Terminal object; cleaned up in destroy paths.
         this._resizeObserver = null;
 
-        // UI elements
-        this.destroySessionBtn = null;
+        // UI elements. Delete is no longer reachable from the session
+        // header (moved to the conversation sidebar + launcher — see
+        // session-sidebar.js) so there is no destroySessionBtn to track
+        // here. detachSessionBtn stays: Detach is the safe exit and
+        // remains the only session-exit control in the header.
         this.detachSessionBtn = null;
         this.statusEl = null;
         this.sessionInfoEl = null;
@@ -94,13 +97,9 @@ class Terminal {
     async init() {
         console.log('Terminal: Initializing xterm.js');
 
-        this.destroySessionBtn = document.getElementById('destroySessionBtn');
         this.detachSessionBtn = document.getElementById('detachSessionBtn');
         this.statusEl = document.getElementById('statusText');
         this.sessionInfoEl = document.getElementById('sessionInfo');
-
-        // Add destroy session handler
-        this.destroySessionBtn.addEventListener('click', () => this.destroySession());
 
         // Add detach session handler — the non-destructive exit. Wired
         // purely via addEventListener (no inline onclick) so this button
@@ -769,7 +768,7 @@ class Terminal {
      */
     async connectToSession(session, opts = {}) {
         const { initialScrollbackB64 = '', fifoStartOffset = null } = opts;
-        console.log('Terminal: Connecting to session:', session.id, {
+        console.log('Terminal: Connecting to session:', this._unwrapSession(session).id, {
             adopted: !!initialScrollbackB64,
             fifoStartOffset,
         });
@@ -810,11 +809,15 @@ class Terminal {
         this._currentSession = session;
 
         this.sessionActive = true;
+        // Unwrap: `session` here is a bare Session for the normal
+        // create/adopt callers, but treat it as possibly-wrapped anyway
+        // (cheap, and future callers of this same method might not be).
+        const inner = this._unwrapSession(session);
         this.sessionInfoEl.textContent =
-            `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
+            `Session: ${inner.id || 'unknown'} | PID: ${inner.pty_pid || '?'}`;
 
-        // Enable destroy + detach buttons
-        this.destroySessionBtn.disabled = false;
+        // Enable detach button (delete lives in the sidebar/launcher now,
+        // not the header — nothing to enable here for it).
         if (this.detachSessionBtn) this.detachSessionBtn.disabled = false;
 
         // Adopt path: paint server-captured scrollback into xterm BEFORE
@@ -905,7 +908,7 @@ class Terminal {
      *   GET /sessions returns under the ``session`` key).
      */
     async reconnectToExistingSession(session) {
-        console.log('Terminal: Reconnecting to existing session:', session && session.id);
+        console.log('Terminal: Reconnecting to existing session:', this._unwrapSession(session).id);
 
         // If a prior session was active, tear it down cleanly before painting the new one.
         // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
@@ -943,11 +946,17 @@ class Terminal {
         this.sessionActive = true;
 
         if (this.sessionInfoEl) {
+            // `session` here is the SessionInfo WRAPPER in the two real
+            // callers (App.returnToExistingTerminal, fed from
+            // window.API.getSession() by the launchpad's "return to
+            // running session" flow and the conversation sidebar's row
+            // click) — `.id`/`.pty_pid` live on `.session`, not on this
+            // object directly. Reading them unwrapped is exactly the bug
+            // that produced "Session: undefined | PID: ?" in the status
+            // bar; _unwrapSession() is the fix.
+            const inner = this._unwrapSession(session);
             this.sessionInfoEl.textContent =
-                `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
-        }
-        if (this.destroySessionBtn) {
-            this.destroySessionBtn.disabled = false;
+                `Session: ${inner.id || 'unknown'} | PID: ${inner.pty_pid || '?'}`;
         }
         if (this.detachSessionBtn) {
             this.detachSessionBtn.disabled = false;
@@ -1080,28 +1089,71 @@ class Terminal {
     }
 
     /**
+     * Normalize a session-shaped API payload down to the INNER Session
+     * object ({id, pty_pid, working_dir, status, tmux_session, model,
+     * ...}). Single normalization point for this file — every reader of
+     * `.id` / `.pty_pid` / `.working_dir` etc. on a session-shaped value
+     * goes through here instead of re-deriving its own `s.session || s`
+     * fallback, which is how `connectToSession`'s status-bar line and
+     * `reconnectToExistingSession`'s status-bar line ended up reading
+     * `undefined` / `?` — they read those fields straight off whatever
+     * was passed in without checking which shape it was.
+     *
+     * The two shapes in play, both real:
+     *   - Bare `Session` — what `POST /sessions` (create) and
+     *     `POST /sessions/adopt` resolve to on their own top level
+     *     (callers like `App.showTerminal` already unwrap
+     *     `response.session || response` before handing off, so a bare
+     *     Session is what usually reaches `connectToSession`).
+     *   - `SessionInfo` wrapper (`{session, tmux_session, activity_status,
+     *     unread, pinned_theme, ...}`) — what `GET /sessions` and
+     *     `GET /sessions/list` return. `App.returnToExistingTerminal` /
+     *     `reconnectToExistingSession` are fed this wrapper directly by
+     *     the launchpad's "return to running session" flow and the
+     *     conversation sidebar's row-click (both call
+     *     `window.API.getSession(...)` and pass the result straight
+     *     through).
+     *
+     * IMPORTANT: fields that live on the WRAPPER itself — `tmux_session`,
+     * `activity_status`, `unread`, `pinned_theme`,
+     * `initial_scrollback_b64` — are NOT part of the inner Session and
+     * are NOT what this helper returns. A caller that needs one of those
+     * reads it from the original (possibly-wrapper) value, not from this
+     * unwrapped result — see `_currentTmuxName()` below, which checks
+     * the wrapper's own `tmux_session` first for exactly that reason.
+     *
+     * Inputs: s (object|null|undefined) - bare Session or SessionInfo.
+     * Output: object - the inner Session, or `{}` if `s` is falsy, so
+     *   callers can read `.id` / `.pty_pid` without a null-guard at every
+     *   call site.
+     */
+    _unwrapSession(s) {
+        if (!s) return {};
+        return (s.session && typeof s.session === 'object') ? s.session : s;
+    }
+
+    /**
      * Resolve THIS tab's session id from ``_currentSession``, which may be
      * a bare Session ({id}) or a SessionInfo ({session:{id}}). Returns null
      * when not yet known (server falls back to "the" current session).
      */
     _sessionId() {
-        const s = this._currentSession;
-        if (!s) return null;
-        if (s.id) return s.id;
-        if (s.session && s.session.id) return s.session.id;
-        return null;
+        return this._unwrapSession(this._currentSession).id || null;
     }
 
     /**
      * Resolve the current tmux session name from ``_currentSession``
-     * (bare Session or SessionInfo shape).
+     * (bare Session or SessionInfo shape). `tmux_session` lives on BOTH
+     * shapes (the SessionInfo wrapper carries its own top-level copy, the
+     * inner Session carries the canonical one) — check the raw value
+     * first since it's cheaper and identical either way, then fall back
+     * to the unwrapped inner Session's copy.
      */
     _currentTmuxName() {
         const s = this._currentSession;
         if (!s) return null;
         if (s.tmux_session) return s.tmux_session;
-        if (s.session && s.session.tmux_session) return s.session.tmux_session;
-        return null;
+        return this._unwrapSession(s).tmux_session || null;
     }
 
     /**
@@ -1826,10 +1878,15 @@ class Terminal {
      * Description: kills the tmux session and terminates the Claude
      * process for THIS tab's session. Irreversible for the running
      * process (the transcript JSONL under ~/.claude/projects is not
-     * touched and survives independently). Confirms first using the
-     * same modal pattern as App.logout() so the app stays consistent;
-     * Detach (detachSession(), below) is intentionally NOT gated by a
-     * confirmation because it is safe and reversible.
+     * touched and survives independently). Confirms first via
+     * App.showConfirmModal() — the same modal App.logout() uses —
+     * so the app stays consistent; Detach (detachSession(), below) is
+     * intentionally NOT gated by a confirmation because it is safe and
+     * reversible. NOT wired to the session header (deleting is no longer
+     * reachable while inside a session) — callers are App.logout() and
+     * the conversation sidebar's delete-this-session row
+     * (session-sidebar.js), plus the launcher's own kill path for other
+     * sessions.
      * Inputs: none (reads this._currentSession / this._sessionId()).
      * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
@@ -1868,7 +1925,6 @@ class Terminal {
                 this.ws = null;
             }
 
-            this.destroySessionBtn.disabled = true;
             if (this.detachSessionBtn) this.detachSessionBtn.disabled = true;
             this.sessionInfoEl.textContent = 'No active session';
 
@@ -1924,7 +1980,6 @@ class Terminal {
                 this.ws = null;
             }
 
-            this.destroySessionBtn.disabled = true;
             if (this.detachSessionBtn) this.detachSessionBtn.disabled = true;
             this.sessionInfoEl.textContent = 'No active session';
 

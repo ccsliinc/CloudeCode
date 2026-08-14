@@ -46,6 +46,92 @@
     // them to us anyway, but be explicit client-side as well).
     var DEEPLINK_RX = /^\/session\/([^\/]+)\/?$/;
 
+    // Single source of truth for the `/session/<name>` path prefix, used
+    // by both the inbound parser (DEEPLINK_RX above) and the outbound
+    // builder (buildSessionPath below) so the two halves can never drift.
+    var DEEPLINK_PREFIX = '/session/';
+
+    /**
+     * Build the URL path for a session, using the SAME encoding the
+     * server's `build_deep_link()` (src/core/notifications/events.py)
+     * uses to compose push-notification links: `encodeURIComponent` on
+     * the browser side is the direct equivalent of Python's
+     * `quote(safe="")` there — both percent-encode every non-alphanumeric
+     * character, so a link built here and a link built server-side for
+     * the same session name land on the identical path. `parseCurrentPath()`
+     * above is this function's inverse (`decodeURIComponent` + `SLUG_RX`).
+     * Inputs: name (string) - session/project name (NOT yet encoded).
+     * Output: string - e.g. `"/session/my-project"`.
+     */
+    function buildSessionPath(name) {
+        return DEEPLINK_PREFIX + encodeURIComponent(String(name));
+    }
+
+    /**
+     * Update the address bar to reflect the currently-open session, so a
+     * hard refresh (or a copy-pasted/bookmarked URL) lands back in the
+     * same place instead of the launcher. This is the OUTBOUND half of
+     * the deep-link feature — the inbound half (parsing `/session/<name>`
+     * on load and routing to it) already existed; this is what was
+     * missing.
+     *
+     * Description: no-ops if the address bar already shows this exact
+     *   path (switching to the session you're already viewing shouldn't
+     *   add a redundant history entry). Otherwise pushes or replaces
+     *   depending on `opts.replace` - see the call sites in app.js
+     *   (`showTerminal` / `returnToExistingTerminal`) for the push-vs-
+     *   replace decision. Swallows History API exceptions (sandboxed
+     *   iframe etc.), matching the existing pattern in this file.
+     * Inputs:
+     *   name (string) - session/project name to encode into the path.
+     *   opts (object|undefined) - `{replace: boolean}`; default push.
+     * Output: void.
+     */
+    function enterSession(name, opts) {
+        if (!name) return;
+        var path = buildSessionPath(name);
+        if (window.location.pathname === path) return;
+        var replace = !!(opts && opts.replace);
+        try {
+            if (replace) {
+                window.history.replaceState({}, '', path);
+            } else {
+                window.history.pushState({}, '', path);
+            }
+        } catch (e) {
+            // History API blocked (sandboxed iframe etc.) — silent, same
+            // tolerance as the invalid-deep-link path below.
+        }
+    }
+
+    /**
+     * Update the address bar back to `/` on leaving a session (detach,
+     * delete, logout, or navigating to the launcher). Defaults to
+     * `replaceState` — a session URL that no longer has a live session
+     * behind it (detached/destroyed) should NOT remain a Back-button
+     * target; replacing it means pressing Back goes past it instead of
+     * bouncing straight back into a session that just went away.
+     *
+     * Skips the reset entirely while a deep-link target is still pending
+     * delivery (`window.DeepLinkTarget` set by `applyCurrentPath` below)
+     * — that means the app is mid-way through auto-opening a session from
+     * the URL the page loaded with, and clobbering the address bar here
+     * would race that in-flight navigation for no benefit (the session
+     * entry, once it opens, calls `enterSession` itself and repaints the
+     * URL correctly anyway).
+     * Inputs: none.
+     * Output: void.
+     */
+    function resetToLauncher() {
+        if (window.DeepLinkTarget) return;
+        if (window.location.pathname === '/') return;
+        try {
+            window.history.replaceState({}, '', '/');
+        } catch (e) {
+            // History API blocked — silent.
+        }
+    }
+
     /**
      * Show the top-of-page error banner with the given message. No-op
      * if the target div is missing (shouldn't happen — index.html owns it).
@@ -130,8 +216,15 @@
 
     /**
      * Apply the current URL:
-     * - not a deep link → clear any stale error and exit.
-     * - valid deep link → stash target; if already authed, deliver now.
+     * - not a deep link → clear any stale error; if this is a `popstate`
+     *   arriving back at `/` while a session is showing, sync the VIEW
+     *   back to the launcher (pure navigation — never calls detach or
+     *   destroy; the session, if any, keeps running server-side exactly
+     *   like the header title-click already does).
+     * - valid deep link → stash target; if already authed, deliver now
+     *   (also covers `popstate` landing on a DIFFERENT `/session/<name>`
+     *   than the one currently showing — same delivery path, whether it's
+     *   the initial page load or Back/Forward).
      * - invalid deep link → show banner and rewrite URL to `/`.
      */
     function applyCurrentPath() {
@@ -139,6 +232,15 @@
 
         if (!parsed.match) {
             clearError();
+            // Outbound URL sync (Item: session URL reflects current
+            // session) — Back/Forward navigated to `/` while a session
+            // was on screen. Only a VIEW change, no API call: the
+            // session is left running, same as clicking the header title.
+            if (window.location.pathname === '/' &&
+                window.App && window.App.currentScreen === 'terminal' &&
+                typeof window.App.showLaunchpad === 'function') {
+                window.App.showLaunchpad();
+            }
             return;
         }
 
@@ -196,6 +298,11 @@
     // Expose on window so index.html can call it explicitly.
     window.Router = {
         init: initRouter,
+        // Outbound URL sync — called from app.js (showTerminal /
+        // returnToExistingTerminal / showLaunchpad / showAuth).
+        enterSession: enterSession,
+        resetToLauncher: resetToLauncher,
+        buildSessionPath: buildSessionPath,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
         _SLUG_RX: SLUG_RX,

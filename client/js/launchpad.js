@@ -1192,7 +1192,7 @@ class Launchpad {
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
                     <button class="project-edit-btn" data-name="${project.name}" title="Edit project" aria-label="Edit project">✎</button>
-                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project" aria-label="Delete project">×</button>
+                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project" aria-label="Delete project">${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
                     <div class="project-description">${description}</div>
@@ -1477,7 +1477,15 @@ class Launchpad {
     }
 
     /**
-     * Show confirmation modal
+     * Show confirmation modal.
+     *
+     * Thin delegate to `App.showConfirmModal()` — that is the ONE
+     * confirmation-modal implementation in the app (title/message
+     * escaping, Escape/cancel/click-outside handling, focus management
+     * all live there). Kept as a same-named method here purely so the
+     * launchpad's existing call sites (delete project, kill running
+     * session, reset server) don't need to change; do not re-implement
+     * the modal here.
      * @param {string} title - Modal title
      * @param {string} message - Main message
      * @param {string} [details] - Additional details (optional)
@@ -1486,71 +1494,7 @@ class Launchpad {
      * @returns {Promise<boolean>} - True if confirmed, false if cancelled. Cancel is ALWAYS a no-op — callers must never map cancel to a destructive action.
      */
     showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
-        return new Promise((resolve) => {
-            // Create modal overlay
-            const overlay = document.createElement('div');
-            overlay.className = 'modal-overlay';
-
-            // title/message/details are attacker-reachable in some callers
-            // (e.g. providers.js interpolates a stored model id, which may
-            // originate from a hand-edited config.json). Escape here, once,
-            // at the shared sink, rather than trusting every caller to have
-            // pre-escaped its own interpolated values.
-            const safeTitle = this._escapeHtml(title);
-            const safeMessage = this._escapeHtml(message);
-            const safeDetails = details ? this._escapeHtml(details) : null;
-
-            // Create modal content
-            overlay.innerHTML = `
-                <div class="modal-content">
-                    <div class="modal-header">» ${safeTitle}</div>
-                    <div class="modal-body">
-                        <div class="modal-message">${safeMessage}</div>
-                        ${safeDetails ? `<div class="modal-description">${safeDetails}</div>` : ''}
-                    </div>
-                    <div class="modal-footer">
-                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">${this._escapeHtml(secondaryLabel)}</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${this._escapeHtml(primaryLabel)}</button>
-                    </div>
-                </div>
-            `;
-
-            document.body.appendChild(overlay);
-
-            const confirmBtn = overlay.querySelector('#modal-confirm');
-            const cancelBtn = overlay.querySelector('#modal-cancel');
-
-            // Handle Escape key
-            overlay.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    document.body.removeChild(overlay);
-                    resolve(false);
-                }
-            });
-
-            // Handle confirm button
-            confirmBtn.addEventListener('click', () => {
-                document.body.removeChild(overlay);
-                resolve(true);
-            });
-
-            // Handle cancel button
-            cancelBtn.addEventListener('click', () => {
-                document.body.removeChild(overlay);
-                resolve(false);
-            });
-
-            // Handle click outside modal
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) {
-                    document.body.removeChild(overlay);
-                    resolve(false);
-                }
-            });
-
-            // Focus confirm button
-            setTimeout(() => confirmBtn.focus(), 100);
-        });
+        return window.App.showConfirmModal(title, message, details, primaryLabel, secondaryLabel);
     }
 
     /**

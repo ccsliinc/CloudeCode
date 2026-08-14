@@ -302,12 +302,22 @@ class SessionSidebarController {
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
                 : '';
+            // Change 1 (safe-session-lifecycle follow-up): delete moved
+            // here from the session header - this is one of the two
+            // remaining delete entry points (the other is the launcher's
+            // project-delete-btn). Same trash glyph as everywhere else in
+            // the app (SessionStatusUI.trashIconSvg() - single source of
+            // truth, see client/js/session-status-ui.js).
+            const deleteBtn = window.SessionStatusUI
+                ? `<button type="button" class="session-sidebar-row-delete" data-delete="${name}" title="Delete session" aria-label="Delete session">${window.SessionStatusUI.trashIconSvg()}</button>`
+                : '';
             return `
                 <div class="session-sidebar-row" data-name="${name}" data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}>
                     ${dot}
                     <span class="session-sidebar-row-name">${name}</span>
                     <span class="session-sidebar-row-badge">${badge}</span>
                     ${markUnread}
+                    ${deleteBtn}
                 </div>
             `;
         }).join('');
@@ -324,6 +334,16 @@ class SessionSidebarController {
      * Output: Promise<void>.
      */
     async _onRowClick(e) {
+        // Delete takes priority over everything else below — it's a
+        // nested control inside the row, and clicking it must never ALSO
+        // trigger a conversation switch or mark-unread toggle.
+        const deleteEl = e.target.closest('[data-delete]');
+        if (deleteEl) {
+            e.stopPropagation();
+            await this._onDeleteClick(deleteEl);
+            return;
+        }
+
         // Mark-unread toggle takes priority over the row-switch handler
         // below — it's a nested control inside the row, and clicking it
         // must never ALSO trigger a conversation switch.
@@ -404,6 +424,57 @@ class SessionSidebarController {
             await this._fetchAndRender();
         } catch (err) {
             console.error('SessionSidebar: mark-unread failed:', err);
+        }
+    }
+
+    /**
+     * Delete a conversation from its sidebar row - one of the two
+     * remaining delete entry points now the session header has none.
+     * THIS tab's own active session delegates straight to
+     * `TerminalController.destroySession()` (already confirms, destroys,
+     * closes the WS, navigates to the launchpad) - avoids a double
+     * confirm dialog and a stale-WS state only that method knows how to
+     * avoid. Any OTHER row confirms here via `App.showConfirmModal()`
+     * then destroys via the API directly, mirroring
+     * `LaunchpadController._handleKillRunningSession()`'s resolve-sid-or-
+     * external logic so both surfaces behave identically; this tab's own
+     * terminal is untouched, only the sidebar list re-renders.
+     * Inputs: btnEl (Element) - the clicked `[data-delete]` button.
+     * Output: Promise<void>.
+     */
+    async _onDeleteClick(btnEl) {
+        const name = btnEl.dataset.delete;
+        if (!name) return;
+        const rowEl = btnEl.closest('.session-sidebar-row');
+        const isThisTab = !!rowEl && rowEl.dataset.active === '1';
+
+        if (isThisTab) {
+            this.close();
+            await window.TerminalController.destroySession();
+            return;
+        }
+
+        const confirmed = await window.App.showConfirmModal(
+            'delete session',
+            `are you sure you want to delete "${name}"?`,
+            'the running session is terminated. this cannot be undone. use detach instead to leave it running.',
+            'delete',
+            'cancel'
+        );
+        if (!confirmed) return;
+
+        try {
+            const sessionId = rowEl ? (rowEl.dataset.sessionId || null) : null;
+            if (sessionId) {
+                await window.API.destroySession(sessionId);
+            } else {
+                await window.API.destroyExternalSession(name);
+            }
+            this._lastSig = null; // force a repaint even if the poll sig matches
+            await this._fetchAndRender();
+        } catch (err) {
+            console.error('SessionSidebar: delete failed:', err);
+            alert(`Error: failed to delete conversation: ${err.message || err}`);
         }
     }
 

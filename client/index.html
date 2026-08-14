@@ -51,33 +51,44 @@
             <!-- v0.7.0+ — per-theme background music toggle. Muted by default.
                  Click is the required user-gesture that grants the AudioContext
                  autoplay permission for the rest of the page lifetime. -->
-            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable theme music" title="Enable theme music" data-tooltip="Enable theme music">🔇</button>
+            <!-- Icon is swapped between the muted/unmuted SVG markup by
+                 App._wireAudioToggle()/AUDIO_ICON_SVG (app.js) — never an
+                 emoji. Emoji render in full system color and ignore
+                 currentColor, which broke the monotone header icon family;
+                 this stays inline SVG so it themes and recolors identically
+                 to detach/logout/delete. Starts muted (speaker+X) to match
+                 the real default state. -->
+            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable theme music" title="Enable theme music" data-tooltip="Enable theme music">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M9.5 6.25L13 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M13 6.25L9.5 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
             <!-- Detach: soft exit. Leaves tmux alive for later re-adoption
                  (see API.detachSession() / TerminalController.detachSession()).
-                 Icon is the eject glyph (triangle + bar) freed up by the
-                 delete-icon fix below - "eject" reads correctly here because
-                 detach genuinely IS a safe, non-destructive exit. -->
+                 This is now the ONLY session-exit control in the header —
+                 delete is deliberately not reachable from inside a session
+                 (see #session-sidebar-panel and the launcher's project-delete
+                 row for the two remaining delete entry points). Icon is the
+                 conventional "external link" glyph: a box with its top-right
+                 corner left open and a diagonal arrow shooting out through
+                 that gap. Chosen specifically because it is structurally
+                 nothing like the logout glyph below (diagonal arrow escaping
+                 a corner gap vs. a horizontal arrow passing through a door) —
+                 the two "leaving" actions read as different shapes, not just
+                 different rotations of the same shape. -->
             <button type="button" id="detachSessionBtn" class="hidden" aria-label="Detach session" title="detach session" data-tooltip="Detach session">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M8 3L12 9H4L8 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M4 12H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M6.5 3.5H4.25C3.69772 3.5 3.25 3.94772 3.25 4.5V11.5C3.25 12.0523 3.69772 12.5 4.25 12.5H11.25C11.8023 12.5 12.25 12.0523 12.25 11.5V9.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M9.25 3.5H12.5V6.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M7 9L12.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
-            <!-- Delete: destructive exit. Kills tmux via
-                 TerminalController.destroySession(). Icon is now an
-                 unambiguous trash can - the old eject-shaped glyph read as
-                 "safely detach" while actually terminating the session. -->
-            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" aria-label="Delete session" title="delete session" data-tooltip="Delete session">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M5.5 4.5V3.25C5.5 2.83579 5.83579 2.5 6.25 2.5H9.75C10.1642 2.5 10.5 2.83579 10.5 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M4.5 4.5L5 12.75C5 13.1642 5.33579 13.5 5.75 13.5H10.25C10.6642 13.5 11 13.1642 11 12.75L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M6.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M9.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <!-- Logout: standard door + arrow-out glyph, same style/size
-                 as the other header icons. -->
+            <!-- Logout: door frame (three-sided bracket, open on the right)
+                 with an arrow passing all the way THROUGH and past it — the
+                 near-universal "log out" glyph. Deliberately different from
+                 detach above (see its comment). -->
             <button onclick="App.logout()" id="logoutBtn" class="hidden" aria-label="Logout" title="logout" data-tooltip="Logout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M7 2.5H3.75C3.05964 2.5 2.5 3.05964 2.5 3.75V12.25C2.5 12.9404 3.05964 13.5 3.75 13.5H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
