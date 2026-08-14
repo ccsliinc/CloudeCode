@@ -24,6 +24,7 @@ from src.core.refresh_store import RefreshStore
 from src.core.upload_sweeper import UploadSweeper
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
+from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.api.routes import router as api_router
@@ -98,6 +99,12 @@ async def lifespan(app: FastAPI):
     # v0.7.0 Part 4 — Slack incoming-webhook channel. Empty URL = silently
     # disabled (slack.init logs once and returns without building a client).
     await slack_backend.init(getattr(notif_cfg, "slack_webhook_url", ""))
+    # Pushover channel. Either field empty = silently disabled
+    # (pushover.init logs once and returns without building a client).
+    await pushover_backend.init(
+        getattr(notif_cfg, "pushover_token", ""),
+        getattr(notif_cfg, "pushover_user_key", ""),
+    )
     notification_router = NotificationRouter(
         notif_cfg, asyncio.get_running_loop()
     )
@@ -215,6 +222,7 @@ async def lifespan(app: FastAPI):
         await notification_router.stop()
     await ntfy_backend.shutdown()
     await slack_backend.shutdown()
+    await pushover_backend.shutdown()
 
     logger.info("application_shutdown_complete")
 
