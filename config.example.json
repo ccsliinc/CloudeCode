@@ -20,7 +20,9 @@
     "rate_limit_global_cap": 10,
     "rate_limit_window_seconds": 60.0,
     "rate_limit_per_kind_cooldown_seconds": 10.0,
-    "slack_webhook_url": ""
+    "slack_webhook_url": "",
+    "pushover_token": "",
+    "pushover_user_key": ""
   },
   "agents": {
     "claude_command": "claude",
