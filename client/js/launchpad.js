@@ -878,7 +878,10 @@ class Launchpad {
 
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
                     <div class="launchpad-section-title launchpad-section-title--row">
-                        <span class="launchpad-section-title__text">► running sessions</span>
+                        <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            <span class="launchpad-section-title__text">running sessions</span>
+                        </button>
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
@@ -965,21 +968,33 @@ class Launchpad {
                      to the right of the "running sessions" heading. Wired in setupNewFab(). -->
 
                 <div class="launchpad-section" id="projects-section">
-                    <div class="launchpad-section-title">► recent projects</div>
+                    <div class="launchpad-section-title">
+                        <button type="button" class="launchpad-section-toggle" id="projects-section-toggle" aria-expanded="true" aria-controls="project-list">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            recent projects
+                        </button>
+                    </div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
                 </div>
 
                 <div class="launchpad-section">
-                    <div class="launchpad-section-title">► server management</div>
-                    <button class="reset-server-btn" id="reset-server-btn">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                            <path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>reset server</span>
-                    </button>
+                    <div class="launchpad-section-title">
+                        <button type="button" class="launchpad-section-toggle" id="server-management-toggle" aria-expanded="true" aria-controls="server-management-content">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            server management
+                        </button>
+                    </div>
+                    <div id="server-management-content">
+                        <button class="reset-server-btn" id="reset-server-btn">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <span>reset server</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="launchpad-footer">
@@ -1001,9 +1016,90 @@ class Launchpad {
             this.resetServer();
         });
 
+        this.initSectionDisclosures();
+
         // Note: loadProjects() will be called by App.showLaunchpad().
         // Running-sessions row/X click handlers land in Task 10 via event
         // delegation on #running-sessions-list.
+    }
+
+    /**
+     * Wire up the three launchpad section headings ("running sessions",
+     * "recent projects", "server management") as real collapsible
+     * disclosures. Collapsed state persists per-section in localStorage
+     * under `cloude.launchpad.collapsed`, following the same convention
+     * as `cloude.theme` / `cloude.audio.muted`.
+     */
+    initSectionDisclosures() {
+        const collapsedState = this.getLaunchpadCollapsedState();
+        const sections = [
+            { id: 'running-sessions', toggleId: 'running-sessions-toggle', contentId: 'running-sessions-list' },
+            { id: 'recent-projects', toggleId: 'projects-section-toggle', contentId: 'project-list' },
+            { id: 'server-management', toggleId: 'server-management-toggle', contentId: 'server-management-content' },
+        ];
+
+        sections.forEach(({ id, toggleId, contentId }) => {
+            const toggle = document.getElementById(toggleId);
+            const content = document.getElementById(contentId);
+            if (!toggle || !content) return;
+
+            this.setSectionExpanded(toggle, content, !collapsedState[id]);
+
+            toggle.addEventListener('click', () => {
+                const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+                this.setSectionExpanded(toggle, content, nowExpanded);
+                this.setLaunchpadSectionCollapsed(id, !nowExpanded);
+            });
+        });
+    }
+
+    /**
+     * Apply expanded/collapsed visual + a11y state to one disclosure toggle
+     * and its content region.
+     *
+     * Uses `style.display` rather than the `hidden` attribute: `.project-list`
+     * sets `display: flex` in the stylesheet, which (author origin) would
+     * win the cascade over the UA `[hidden] { display: none }` rule and
+     * silently no-op the collapse for that section.
+     *
+     * @param {HTMLElement} toggle - the <button> heading control
+     * @param {HTMLElement} content - the region it shows/hides
+     * @param {boolean} expanded - true to show content, false to collapse
+     */
+    setSectionExpanded(toggle, content, expanded) {
+        toggle.setAttribute('aria-expanded', String(expanded));
+        content.style.display = expanded ? '' : 'none';
+    }
+
+    /**
+     * Read the persisted collapsed-state map for launchpad sections.
+     *
+     * @returns {Object<string, boolean>} section id -> collapsed
+     */
+    getLaunchpadCollapsedState() {
+        try {
+            const raw = localStorage.getItem('cloude.launchpad.collapsed');
+            return raw ? JSON.parse(raw) : {};
+        } catch (err) {
+            console.warn('Launchpad: failed to read collapsed-section state:', err);
+            return {};
+        }
+    }
+
+    /**
+     * Persist one section's collapsed flag into the shared state map.
+     *
+     * @param {string} sectionId - e.g. "running-sessions"
+     * @param {boolean} collapsed
+     */
+    setLaunchpadSectionCollapsed(sectionId, collapsed) {
+        const state = this.getLaunchpadCollapsedState();
+        state[sectionId] = collapsed;
+        try {
+            localStorage.setItem('cloude.launchpad.collapsed', JSON.stringify(state));
+        } catch (err) {
+            console.warn('Launchpad: failed to persist collapsed-section state:', err);
+        }
     }
 
     /**
@@ -2446,6 +2542,9 @@ class Launchpad {
         const statusEl = document.getElementById('statusText');
         if (statusEl) {
             statusEl.setAttribute('data-status', message);
+            // aria-label mirrors the ::after tooltip text so screen readers
+            // get the same live state a sighted hover shows.
+            statusEl.setAttribute('aria-label', message);
         }
         console.log('Launchpad:', message);
     }
