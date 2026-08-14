@@ -620,7 +620,7 @@ class AppController {
             await window.SlashCommandsModal.init((command) => {
                 // Insert command into terminal without Enter
                 window.TerminalController.insertText(command);
-            });
+            }, session && session.working_dir);
         }
 
         // Show slash command button on terminal screen
@@ -726,7 +726,7 @@ class AppController {
         if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
             await window.SlashCommandsModal.init((command) => {
                 window.TerminalController.insertText(command);
-            });
+            }, session && session.working_dir);
         }
         if (window.SlashCommandsModal) {
             window.SlashCommandsModal.show();

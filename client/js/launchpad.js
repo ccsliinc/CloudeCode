@@ -520,6 +520,92 @@ class Launchpad {
     }
 
     /**
+     * Jump straight into an already-active running session's terminal.
+     *
+     * Description: extracted from the running-sessions row click handler
+     *   (Task 5 / deep-link fix) so the SAME pre-fit + scrollback-capture
+     *   dance is reachable from both a mouse click and a resolved
+     *   `/session/<name>` deep link — the two paths must not drift apart.
+     *   Pre-shows the terminal screen, measures THIS client's true
+     *   cols/rows via a fit BEFORE the capture (a mismatch garbles
+     *   older scrollback on a differently-sized client), then fetches
+     *   the session with scrollback and hands off to
+     *   `App.returnToExistingTerminal()`.
+     * Inputs:
+     *   rowSessionId (string|null) - server-side session id of the
+     *     already-active backend to jump to.
+     * Output: Promise<void>. Shows a launchpad error on failure.
+     */
+    async _returnToActiveRunningSession(rowSessionId) {
+        try {
+            // 1. Pre-show terminal screen so xterm can measure layout.
+            //    hideAllScreens lives on window.App; the optional
+            //    chain guards against an early-boot race where App
+            //    isn't fully constructed yet (shouldn't happen on a
+            //    user-triggered click, but it's free defense).
+            window.App && window.App.hideAllScreens
+                ? window.App.hideAllScreens()
+                : document.querySelectorAll('.screen').forEach((s) =>
+                      s.classList.remove('active')
+                  );
+            const termScreen = document.getElementById('terminal-screen');
+            if (termScreen) termScreen.classList.add('active');
+            // 2. First-time init of xterm if the user never visited
+            //    the terminal this page load (e.g. refresh on launchpad).
+            if (window.TerminalController && !window.TerminalController.term) {
+                await window.TerminalController.init();
+            }
+            // 3. Yield two animation frames so the layout actually
+            //    flushes before fitAddon measures the container.
+            await new Promise((r) =>
+                requestAnimationFrame(() => requestAnimationFrame(r))
+            );
+            // 4. Fit + read measured geometry. Wrap in try/catch —
+            //    fit can throw if the container isn't laid out yet;
+            //    we tolerate and fall back to 0 (server treats 0 as
+            //    "skip pre-resize").
+            let cols = 0;
+            let rows = 0;
+            try {
+                if (
+                    window.TerminalController &&
+                    window.TerminalController.fitAddon &&
+                    typeof window.TerminalController.fitAddon.fit === 'function'
+                ) {
+                    window.TerminalController.fitAddon.fit();
+                }
+                cols =
+                    (window.TerminalController &&
+                        window.TerminalController.term &&
+                        window.TerminalController.term.cols) ||
+                    0;
+                rows =
+                    (window.TerminalController &&
+                        window.TerminalController.term &&
+                        window.TerminalController.term.rows) ||
+                    0;
+            } catch (fitErr) {
+                // Tolerated — fall through with 0/0; server skips
+                // the pre-resize and behavior is identical to the
+                // pre-fix path for THIS request (same-width clients
+                // are unaffected anyway).
+                console.warn('rejoin pre-fit failed', fitErr);
+            }
+
+            const info = await window.API.getSession(rowSessionId, {
+                includeScrollback: true,
+                cols,
+                rows,
+            });
+            if (info) {
+                window.App.returnToExistingTerminal(info);
+            }
+        } catch (err) {
+            this.showError('failed to return to terminal: ' + (err.message || err));
+        }
+    }
+
+    /**
      * Bind a single delegated click listener on #running-sessions-list.
      *
      * Event delegation over per-row listeners: avoids re-binding on every
@@ -584,92 +670,7 @@ class Launchpad {
             const isActive = rowEl.dataset.active === '1';
             const rowSessionId = rowEl.dataset.sessionId || null;
             if (isActive) {
-                // Already a live backend → jump straight to ITS terminal
-                // (multi-session: this row may not be the "current" one).
-                // includeScrollback:true asks the server to ship the captured
-                // tmux scrollback on the SessionInfo so the terminal controller
-                // can paint pre-existing history into xterm BEFORE the WS opens,
-                // matching the adopt-path UX. Other getSession callers stay
-                // wire-identical (default-off).
-                //
-                // Width-mismatch fix: BEFORE the GET we must pre-show the
-                // terminal screen, ensure xterm is initialized, and run a fit
-                // so we can measure THIS client's true cols/rows. Those dims
-                // are forwarded to the server which pre-resizes the tmux pane
-                // to match before capture-pane snapshots scrollback. Without
-                // this, a mobile client rejoining a desktop-width session
-                // gets desktop-width scrollback bytes and xterm renders them
-                // at mobile width → upper/older scrollback reflows into garbled
-                // rows. returnToExistingTerminal repeats hideAllScreens →
-                // add .active (idempotent toggle), so pre-showing here is
-                // safe — the second toggle is synchronous, no layout flush in
-                // between, no flicker.
-                try {
-                    // 1. Pre-show terminal screen so xterm can measure layout.
-                    //    hideAllScreens lives on window.App; the optional
-                    //    chain guards against an early-boot race where App
-                    //    isn't fully constructed yet (shouldn't happen on a
-                    //    user-triggered click, but it's free defense).
-                    window.App && window.App.hideAllScreens
-                        ? window.App.hideAllScreens()
-                        : document.querySelectorAll('.screen').forEach((s) =>
-                              s.classList.remove('active')
-                          );
-                    const termScreen = document.getElementById('terminal-screen');
-                    if (termScreen) termScreen.classList.add('active');
-                    // 2. First-time init of xterm if the user never visited
-                    //    the terminal this page load (e.g. refresh on launchpad).
-                    if (window.TerminalController && !window.TerminalController.term) {
-                        await window.TerminalController.init();
-                    }
-                    // 3. Yield two animation frames so the layout actually
-                    //    flushes before fitAddon measures the container.
-                    await new Promise((r) =>
-                        requestAnimationFrame(() => requestAnimationFrame(r))
-                    );
-                    // 4. Fit + read measured geometry. Wrap in try/catch —
-                    //    fit can throw if the container isn't laid out yet;
-                    //    we tolerate and fall back to 0 (server treats 0 as
-                    //    "skip pre-resize").
-                    let cols = 0;
-                    let rows = 0;
-                    try {
-                        if (
-                            window.TerminalController &&
-                            window.TerminalController.fitAddon &&
-                            typeof window.TerminalController.fitAddon.fit === 'function'
-                        ) {
-                            window.TerminalController.fitAddon.fit();
-                        }
-                        cols =
-                            (window.TerminalController &&
-                                window.TerminalController.term &&
-                                window.TerminalController.term.cols) ||
-                            0;
-                        rows =
-                            (window.TerminalController &&
-                                window.TerminalController.term &&
-                                window.TerminalController.term.rows) ||
-                            0;
-                    } catch (fitErr) {
-                        // Tolerated — fall through with 0/0; server skips
-                        // the pre-resize and behavior is identical to the
-                        // pre-fix path for THIS request (same-width clients
-                        // are unaffected anyway).
-                        console.warn('rejoin pre-fit failed', fitErr);
-                    }
-
-                    const info = await window.API.getSession(rowSessionId, {
-                        includeScrollback: true,
-                        cols,
-                        rows,
-                    });
-                    if (info) {
-                        window.App.returnToExistingTerminal(info);
-                    }
-                } catch (err) {
-                    this.showError('failed to return to terminal: ' + (err.message || err));
-                }
+                await this._returnToActiveRunningSession(rowSessionId);
                 return;
             }
             // Not yet attached → adopt it as a (new, concurrent) session
@@ -2094,17 +2095,30 @@ class Launchpad {
     }
 
     /**
-     * Open a project by name (used by the deep-link router, Item 9).
+     * Open a project OR an adopted session by name (used by the deep-link
+     * router, Item 9; extended for adopted sessions as part of the deep-link
+     * fix — see router.js's module docstring for the full flow).
      *
-     * The router already validated the name against a strict regex, but
-     * we re-verify membership in `this.projects` before calling into
-     * `selectProject` — if the user clicks a deep link for a project
-     * that was deleted / renamed, we surface a clear error instead of
-     * calling the backend with an unknown path.
+     * The router already validated the name against a strict regex. Three
+     * sources are consulted, in order, before giving up:
+     *   1. `this.projects` (launcher project entries) — the original
+     *      behavior, unchanged.
+     *   2. `GET /sessions/list` / `GET /sessions/attachable` (via
+     *      `loadRunningSessions()`) for a LIVE session whose display name
+     *      (`_deriveRunningSessionDisplayName`, i.e. tmux name with the
+     *      `cloude_` prefix stripped) matches — this is what makes an
+     *      ADOPTED session (one with no launcher project entry) resolve.
+     *      Active sessions jump straight to their terminal; inactive ones
+     *      are adopted via the same path as a running-sessions row click.
+     *   3. Nothing matches anywhere → the router's error banner (NOT a
+     *      browser `alert()`, which is easy to miss/dismiss unnoticed) via
+     *      `Router.rejectTarget()`, which also cleans the URL back to `/`.
      *
      * This method is idempotent and safe to call before `loadProjects()`
      * completes — it waits up to ~2s for the project list to populate,
      * which is normally ready within one tick of `App.showLaunchpad()`.
+     * Inputs: name (string) - decoded, regex-validated slug from the URL.
+     * Output: Promise<void>.
      */
     async openProjectByName(name) {
         console.log('Launchpad: openProjectByName:', name);
@@ -2125,13 +2139,45 @@ class Launchpad {
             );
         }
 
-        if (!project) {
-            console.warn('Launchpad: deep-link project not found:', name);
-            this.showError(`project not found: ${name}`);
+        if (project) {
+            await this.selectProject(project);
             return;
         }
 
-        await this.selectProject(project);
+        // No launcher project by that name — it may be a live/adopted
+        // tmux session instead. Refresh the running-sessions list so we
+        // aren't racing the 5s poller (a deep link can arrive well before
+        // the first poll tick).
+        try {
+            await this.loadRunningSessions();
+        } catch (err) {
+            console.warn('Launchpad: loadRunningSessions during deep-link resolve failed:', err);
+        }
+
+        const session = (this.runningSessions || []).find(
+            s => this._deriveRunningSessionDisplayName(s.name) === name
+        ) || (this.runningSessions || []).find(
+            s => (this._deriveRunningSessionDisplayName(s.name) || '').toLowerCase() === name.toLowerCase()
+        );
+
+        if (session) {
+            console.log('Launchpad: deep-link resolved to running session:', session.name);
+            if (session.is_active) {
+                await this._returnToActiveRunningSession(session.session_id || null);
+            } else {
+                await this._handleAttachRunningSession(session.name);
+            }
+            return;
+        }
+
+        // Genuinely unresolvable — show the actual banner, not a silent
+        // bounce to `/` and not a browser alert() (Task 5 / deep-link fix).
+        console.warn('Launchpad: deep-link target not found anywhere:', name);
+        if (window.Router && typeof window.Router.rejectTarget === 'function') {
+            window.Router.rejectTarget(name);
+        } else {
+            this.showError(`session not found: ${name}`);
+        }
     }
 
     /**

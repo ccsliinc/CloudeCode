@@ -147,6 +147,32 @@
     }
 
     /**
+     * Reject a deep-link target that validated as a legal slug but could
+     * not be resolved to anything live (no launcher project, no running
+     * or adoptable tmux session) — the failure path documented in this
+     * file's header comment ("show banner, replaceState back to /").
+     *
+     * Description: called by `Launchpad.openProjectByName()` when its
+     *   full resolution chain (launcher projects, then live/adopted
+     *   sessions) comes up empty. Centralized here — rather than each
+     *   caller rolling its own alert()/console.warn — so the failure
+     *   path is the SAME UI (the `#deep-link-error` banner) whichever
+     *   component determines the target is unresolvable, and so the
+     *   `/` reset can never diverge into a "silent bounce" again.
+     * Inputs: name (string) - the (already slug-validated) target that
+     *   could not be resolved; interpolated into the banner text.
+     * Output: void.
+     */
+    function rejectTarget(name) {
+        showError(`session not found: "${name}" — returned to home.`);
+        try {
+            window.history.replaceState({}, '', '/');
+        } catch (e) {
+            // History API blocked (sandboxed iframe etc.) — silent.
+        }
+    }
+
+    /**
      * Hide the error banner (used when navigating to a valid URL via
      * popstate back to `/`).
      */
@@ -303,6 +329,11 @@
         enterSession: enterSession,
         resetToLauncher: resetToLauncher,
         buildSessionPath: buildSessionPath,
+        // Deep-link failure path (Task 5 fix) — the ONE place that shows
+        // the error banner and resets the URL when a valid-looking target
+        // (project OR session) turns out not to exist.
+        rejectTarget: rejectTarget,
+        showError: showError,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
         _SLUG_RX: SLUG_RX,

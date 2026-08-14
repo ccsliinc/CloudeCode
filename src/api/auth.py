@@ -23,6 +23,7 @@ from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
 from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, UpdateProjectRequest, CloneProjectRequest, SuccessResponse
+from src.core.slash_command_discovery import build_command_groups, command_groups_to_dict
 
 
 def _totp_paired_sentinel_path() -> Path:
@@ -1124,4 +1125,55 @@ async def get_common_commands():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve common commands: {str(e)}"
+        )
+
+
+@router.get("/config/slash-commands", dependencies=[Depends(require_auth)])
+async def get_slash_commands(project_path: Optional[str] = None):
+    """
+    Get the full slash-command palette: built-in/skill/workflow commands
+    scraped from the official docs at release time, merged with commands
+    and skills discovered on THIS machine at request time (user scope,
+    installed plugins, and — when `project_path` is given — that
+    project's own `.claude/commands` and `.claude/skills`).
+
+    A separate endpoint from `/config/common-commands` (Task 2's decision,
+    see project docs): common-commands is a small hand-curated "favorites"
+    row shown at the top of the palette and its response shape (a bare
+    list of command strings) stays exactly as-is for existing consumers.
+    This endpoint serves the full palette body underneath it, grouped for
+    direct rendering — a different shape for a different purpose, not a
+    breaking change to the old one.
+
+    Args:
+        project_path: absolute path to the currently active project's
+            working directory, used for project-scope discovery. Omit to
+            skip project-scope entirely (e.g. before any session is open).
+
+    Returns:
+        {"groups": [{"id", "label", "commands": [{"command", "args",
+        "description", "type", "alias_of"}, ...]}, ...]} in a fixed
+        group order — see `build_command_groups()`.
+
+    Raises:
+        HTTPException: on unexpected discovery failure. Missing/partial
+            data sources (no plugins installed, no project scope, a
+            stale/absent scraped JSON) are NOT errors — they just yield
+            fewer groups.
+    """
+    try:
+        groups = build_command_groups(project_path=project_path)
+        payload = command_groups_to_dict(groups)
+        logger.debug(
+            "slash_commands_retrieved",
+            group_count=len(payload),
+            command_count=sum(len(g["commands"]) for g in payload),
+            project_scoped=bool(project_path),
+        )
+        return {"groups": payload}
+    except Exception as e:
+        logger.error("slash_commands_retrieval_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve slash commands: {str(e)}"
         )

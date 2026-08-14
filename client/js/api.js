@@ -277,6 +277,25 @@ class API {
     }
 
     /**
+     * Config: Get the full slash-command palette - built-in/skill/workflow
+     * commands (scraped at release time) merged with commands and skills
+     * discovered on the server at request time (user scope, installed
+     * plugins, and project scope when `projectPath` is given). See
+     * GET /config/slash-commands (src/api/auth.py) for the full contract.
+     *
+     * @param {string|null} [projectPath] - absolute path to the active
+     *   project's working directory, for project-scope discovery. Omit to
+     *   skip project-scope entirely.
+     * @returns {Promise<{groups: Array<{id: string, label: string,
+     *   commands: Array<{command: string, args: string, description: string,
+     *   type: string, alias_of: string|null}>}>}>}
+     */
+    async getSlashCommands(projectPath = null) {
+        const q = projectPath ? `?project_path=${encodeURIComponent(projectPath)}` : '';
+        return await this.call(`/config/slash-commands${q}`);
+    }
+
+    /**
      * Projects: Get project list
      * @returns {Promise<Array>}
      */
