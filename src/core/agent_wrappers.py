@@ -244,14 +244,8 @@ def render_wrapper_invocation(
 # Offered example wrappers — NOT auto-installed anywhere. Served only via
 # GET /api/v1/agents/wrappers/examples for a user to explicitly import into
 # their own config.json (see the settings-panel "import example" action).
-# EXAMPLE_WRAPPER_CLD is the author's REAL, VERBATIM ``cld`` function body,
-# as supplied for this feature. EXAMPLE_WRAPPER_CLDOR is a reconstruction
-# from its DESCRIBED behavior (model as $1 then shift, CLAUDE_CONFIG_DIR
-# isolation, OpenRouter env vars, deliberately blank ANTHROPIC_API_KEY,
-# absolute-path claude invocation) — the literal body was never supplied,
-# so treat cldor's exact lines as illustrative, not a byte-for-byte capture
-# of the real function. A user importing it should review/adjust before
-# relying on it; cld's body needs no such caveat.
+# EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL,
+# VERBATIM function bodies, as supplied for this feature.
 # ---------------------------------------------------------------------------
 
 EXAMPLE_WRAPPER_CLD = """cld() (
@@ -279,26 +273,68 @@ EXAMPLE_WRAPPER_CLD = """cld() (
 )"""
 
 EXAMPLE_WRAPPER_CLDOR = """cldor() (
-    local model="$1"
-    if [[ -n "$model" ]]; then
-        shift
-    fi
-    local claude_token
-    claude_token="$(security find-generic-password -a "$USER" -s "claude-cldor-openrouter" -w 2>/dev/null)" || {
-        echo "OpenRouter token not found in macOS Keychain."
-        echo "Run: security add-generic-password -a \\"$USER\\" -s claude-cldor-openrouter -w"
-        return 1
-    }
-    export CLAUDE_CONFIG_DIR="$HOME/.claude-cldor"
-    unset CLAUDE_CODE_OAUTH_TOKEN
-    export OPENROUTER_API_KEY="$claude_token"
-    export ANTHROPIC_BASE_URL="https://openrouter.ai/api"
-    export ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY"
-    export ANTHROPIC_API_KEY=""
-    if [[ -n "$model" ]]; then
-        export ANTHROPIC_MODEL="$model"
-    fi
-    "$HOME/.local/bin/claude" --dangerously-skip-permissions "$@"
+  local openrouter_key
+  local selected_model=""
+
+  openrouter_key="$(
+    security find-generic-password \\
+      -a "$USER" \\
+      -s "claude-cldor-openrouter" \\
+      -w 2>/dev/null
+  )" || {
+    echo "OpenRouter API key not found in macOS Keychain."
+    return 1
+  }
+
+  # Treat the first non-option argument as the model name
+  if [[ $# -gt 0 && "$1" != -* ]]; then
+    selected_model="$1"
+    shift
+  fi
+
+  # Separate OpenRouter settings, sessions, plugins and history
+  export CLAUDE_CONFIG_DIR="$HOME/.claude-cldor"
+
+  # Prevent normal Claude subscription authentication from leaking in
+  unset CLAUDE_CODE_OAUTH_TOKEN
+
+  # Prevent cloud-provider routing
+  unset CLAUDE_CODE_USE_BEDROCK
+  unset CLAUDE_CODE_USE_VERTEX
+  unset CLAUDE_CODE_USE_FOUNDRY
+
+  # OpenRouter connection
+  export OPENROUTER_API_KEY="$openrouter_key"
+  export ANTHROPIC_BASE_URL="https://openrouter.ai/api"
+  export ANTHROPIC_AUTH_TOKEN="$openrouter_key"
+
+  # OpenRouter requires this to be explicitly blank
+  export ANTHROPIC_API_KEY=""
+
+  if [[ -n "$selected_model" ]]; then
+    # Use the command-line model for all Claude Code model roles
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="$selected_model"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="$selected_model"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$selected_model"
+    export CLAUDE_CODE_SUBAGENT_MODEL="$selected_model"
+
+    echo "OpenRouter model: $selected_model"
+
+    "$HOME/.local/bin/claude" \\
+      --dangerously-skip-permissions \\
+      --model "$selected_model" \\
+      "$@"
+  else
+    # Defaults when no model is supplied
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="~anthropic/claude-opus-latest"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="~anthropic/claude-sonnet-latest"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="~anthropic/claude-haiku-latest"
+    export CLAUDE_CODE_SUBAGENT_MODEL="~anthropic/claude-opus-latest"
+
+    "$HOME/.local/bin/claude" \\
+      --dangerously-skip-permissions \\
+      "$@"
+  fi
 )"""
 
 EXAMPLE_WRAPPERS: List[dict] = [
