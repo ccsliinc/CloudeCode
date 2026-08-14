@@ -2656,3 +2656,92 @@ button[data-tooltip]:hover::after {
     font-size: 0.8rem;
     margin-right: auto;
 }
+
+/* feat/launch-wrappers — wrapper list/editor (client/js/agent-wrappers-panel.js) */
+
+.settings-wrapper-security-note {
+    margin-bottom: 14px;
+}
+
+.settings-wrapper-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.settings-wrapper-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.settings-wrapper-row-main code {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+}
+
+.settings-wrapper-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.settings-wrapper-badge {
+    display: inline-block;
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    margin-left: 6px;
+    text-transform: lowercase;
+}
+
+.settings-wrapper-actions-row {
+    display: flex;
+    gap: 8px;
+}
+
+.settings-wrapper-editor {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin-bottom: 12px;
+    background: var(--color-bg-elevated);
+}
+
+.settings-wrapper-script-input {
+    font-family: var(--font-mono, monospace);
+    white-space: pre;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+.settings-wrapper-editor-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.modal-btn-danger {
+    background: transparent;
+    border: 1px solid var(--color-danger, #c0392b);
+    color: var(--color-danger, #c0392b);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.modal-btn-danger:hover {
+    background: var(--color-danger, #c0392b);
+    color: var(--color-bg, #fff);
+}

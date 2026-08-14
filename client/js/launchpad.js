@@ -1638,8 +1638,16 @@ class Launchpad {
             // Only include agent_type when explicitly set, so the server's
             // existing fallback chain (ProjectConfig.agent_type → "claude")
             // continues to work for the default "new-project" button.
+            // feat/launch-wrappers — a wrapper choice from the provider
+            // modal (providerChoice.wrapperId) ONLY applies when no
+            // explicit agentType was already forced by the caller (e.g.
+            // the openclaw/hermes/codex quick-connect buttons) — those
+            // win outright, matching the pre-wrappers precedence for
+            // agent_type.
             if (agentType) {
                 payload.agent_type = agentType;
+            } else if (providerChoice.wrapperId) {
+                payload.agent_type = providerChoice.wrapperId;
             }
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
@@ -2613,6 +2621,11 @@ class Launchpad {
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
                 payload.model = providerChoice.model;
+            }
+            // feat/launch-wrappers — see _createNewSessionInner's identical
+            // comment; this path has no explicit agentType to defer to.
+            if (providerChoice.wrapperId) {
+                payload.agent_type = providerChoice.wrapperId;
             }
             const session = await window.API.createSession(payload);
 

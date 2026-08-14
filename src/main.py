@@ -84,6 +84,16 @@ async def lifespan(app: FastAPI):
 
     logger.info("application_starting", version="1.0.0")
 
+    # feat/launch-wrappers — one-shot, idempotent config.json migration
+    # (hardcoded cld/cldor -> user-editable wrappers). MUST run before the
+    # first load_auth_config() call below so a freshly-seeded wrapper list
+    # is visible immediately. Best-effort / fail-soft, same posture as
+    # claude_hooks.ensure_hook_settings() further down: any failure is
+    # logged, never raised, and NEVER blocks server boot or touches
+    # config.json beyond the migration's own backup + atomic write.
+    from src.core.config_migration import ensure_config_migrated
+    ensure_config_migrated(Path(settings.auth_config_file).expanduser())
+
     # Initialize core components
     session_manager = SessionManager()
     # Re-adopt a surviving tmux session (if any) from previous server run.

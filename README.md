@@ -438,6 +438,8 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | | `hermes_command` | `hermes` | Command for `agent_type=hermes` |
 | | `openclaw_command` | `openclaw tui` | Command for `agent_type=openclaw` |
 | | `shell_command` | `$SHELL -i` | The bare-console agent type |
+| | `wrappers[]` | `[]` | User-defined launch wrappers for the claude family — see "Launch wrappers" below. Empty means "not configured": resolution falls through to `claude_command`, then the `cld`/`cldor` fallback, unchanged |
+| top level | `config_version` | `0` | Migration bookkeeping (see "Launch wrappers" / rollback below). Absent = pre-wrappers config, treated as `0` |
 | `uploads` | `enabled` | `true` | Image paste and attach on or off |
 | | `ttl_seconds` | `86400` | How long uploaded images survive before sweeping |
 | | `max_size_mb` | `10` | Per-upload size cap |
@@ -446,6 +448,51 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | top level | `projects[]` | — | Registered projects: name, path, description, agent type |
 
 Every block is optional and fails soft to defaults with a warning log if malformed.
+
+### Launch wrappers
+
+`agents.wrappers` replaces a single hardcoded `claude_command` with as many
+named, user-editable launch commands as you want — pick one per session (the
+settings panel's "launch wrappers" section), or set a default. A wrapper's
+`script` can be a single command or a full multi-line shell function
+definition pasted verbatim (paste the whole thing, indentation and all — the
+settings-panel editor preserves it exactly). If `script` *defines* a
+function rather than being directly runnable, set `entry` to the function
+name to call it after sourcing.
+
+Never paste a secret into a wrapper's `script` or `description`. Read
+credentials from the macOS Keychain at run time inside the script instead —
+the pattern the built-in `cld`/`cldor` examples both use
+(`security find-generic-password ...`). This app never sees the value
+either way.
+
+**Upgrading an existing install**: on first boot after upgrading, a one-shot,
+idempotent migration (`src/core/config_migration.py`) runs automatically. It
+NEVER touches `claude_command`/`codex_command`/`hermes_command`/
+`openclaw_command` — those keep working forever, migrated or not. If you
+already had a non-empty `claude_command` set, migration stamps
+`config_version` and leaves everything else alone (no wrappers get seeded on
+top of your existing choice). Otherwise it probes whether `cld` / `cldor`
+actually resolve in your shell (`zsh -ic 'type cld'`) and, only if so, seeds
+thin wrapper entries that forward to them — your existing `~/.zshrc`
+functions become selectable wrappers instead of a hidden fallback. Nothing
+is guessed: a function that doesn't resolve is never seeded.
+
+**Rolling back**: the migration backs up `config.json` to `config.json.bak`
+(the pre-write bytes, one generation) before it writes anything. To undo:
+
+```bash
+cp config.json.bak config.json   # restores the exact pre-migration file
+```
+
+That's a config-level rollback — the legacy fallback keys were never
+modified, so resolution behavior returns to exactly what it was before you
+upgraded. If you need a code-level rollback too, `baseline/adoom-2026-08-14`
+(commit `6392124`) tags the last commit before the wrappers feature existed:
+
+```bash
+git checkout baseline/adoom-2026-08-14 -- src/
+```
 
 ### CLI
 

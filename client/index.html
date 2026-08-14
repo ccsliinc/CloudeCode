@@ -246,6 +246,10 @@
          appearance section on open, not into `.header .controls` any
          more), and BEFORE app.js so App.init() can wire #settingsBtn's
          click handler to window.SettingsPanel.open(). -->
+    <!-- Launch-wrapper list/editor mounted inside the settings panel's
+         "agent" section. Must load AFTER api.js (window.API) and BEFORE
+         settings-panel.js calls window.AgentWrappersPanel.mount(). -->
+    <script src="/static/js/agent-wrappers-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->

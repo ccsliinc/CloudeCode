@@ -50,9 +50,14 @@
 
     /**
      * Show the provider selector modal.
-     * @returns {Promise<{model: string|null}|null>} null = cancelled
-     *   (abort the launch). {model: null} = claude. {model: "..."} =
-     *   OpenRouter model id.
+     * @returns {Promise<{model: string|null, wrapperId?: string}|null>}
+     *   null = cancelled (abort the launch). {model: null} = claude via
+     *   the default launch wrapper (or the legacy cld/claude_command
+     *   fallback if no wrappers are configured — see
+     *   Settings.get_agent_command). {model: "..."} = OpenRouter model
+     *   id. {model: null, wrapperId: "..."} = a specific non-default
+     *   launch wrapper (feat/launch-wrappers) — its id is forwarded as
+     *   agent_type by the launchpad caller.
      */
     function showProviderModal() {
         return new Promise((resolve) => {
@@ -80,7 +85,8 @@
             const statusEl = overlay.querySelector('#provider-status');
 
             let models = [];       // OpenRouter model ids (claude is NOT in this array)
-            let items = [];        // flat nav list: claude row, model rows, add row
+            let wrappers = [];     // feat/launch-wrappers — non-default wrappers only (id 'claude' excluded; the plain claude row already resolves through the default wrapper)
+            let items = [];        // flat nav list: claude row, wrapper rows, model rows, add row
             let activeIndex = -1;
             let currentModel = readLastChoice(); // '' = claude, else a model id
             let typeBuffer = '';
@@ -106,6 +112,7 @@
 
             const buildItems = () => {
                 items = [{ type: 'claude' }]
+                    .concat(wrappers.map((w) => ({ type: 'wrapper', wrapperId: w.id, label: w.label })))
                     .concat(models.map((m) => ({ type: 'model', model: m })))
                     .concat([{ type: 'add' }]);
             };
@@ -123,7 +130,7 @@
                 els.forEach((el, i) => el.classList.toggle('folder-picker-item-active', i === idx));
                 activeIndex = idx;
                 const item = items[idx];
-                if (item && item.type !== 'add') {
+                if (item && (item.type === 'claude' || item.type === 'model')) {
                     currentModel = item.type === 'claude' ? '' : item.model;
                 }
                 if (scroll) els[idx].scrollIntoView({ block: 'nearest' });
@@ -134,6 +141,13 @@
                 if (!item) return;
                 if (item.type === 'add') {
                     openAddInput();
+                    return;
+                }
+                if (item.type === 'wrapper') {
+                    // Not remembered in localStorage (that store is
+                    // model-only, feat/launch-wrappers doesn't extend it)
+                    // — a wrapper choice is per-launch, not sticky.
+                    close({ model: null, wrapperId: item.wrapperId });
                     return;
                 }
                 const model = item.type === 'claude' ? null : item.model;
@@ -148,6 +162,13 @@
                         return `<div class="folder-picker-item" data-index="${i}">
                             <span class="folder-picker-icon">◆</span>
                             <span class="folder-picker-name provider-item-name">claude</span>
+                        </div>`;
+                    }
+                    if (item.type === 'wrapper') {
+                        const safeLabel = escapeHtml(item.label);
+                        return `<div class="folder-picker-item" data-index="${i}">
+                            <span class="folder-picker-icon">»</span>
+                            <span class="folder-picker-name provider-item-name">${safeLabel}</span>
                         </div>`;
                     }
                     if (item.type === 'model') {
@@ -309,7 +330,10 @@
                     if (typeTimer) clearTimeout(typeTimer);
                     typeTimer = setTimeout(() => { typeBuffer = ''; }, 800);
                     const matchIdx = items.findIndex((it) => {
-                        const label = it.type === 'claude' ? 'claude' : (it.type === 'model' ? it.model : '');
+                        const label = it.type === 'claude' ? 'claude'
+                            : it.type === 'wrapper' ? it.label
+                            : it.type === 'model' ? it.model
+                            : '';
                         return label && label.toLowerCase().startsWith(typeBuffer);
                     });
                     if (matchIdx >= 0) setActive(matchIdx);
@@ -332,6 +356,17 @@
                     console.error('Launchpad: Failed to load providers:', error);
                     models = [];
                     showStatus('could not load saved models — showing claude only', 'error');
+                }
+                // feat/launch-wrappers — best-effort: a failure here just
+                // means no wrapper rows show up (claude + models still
+                // work), never blocks the launch gate.
+                try {
+                    const wrapperData = await window.API.listWrappers();
+                    const all = Array.isArray(wrapperData.wrappers) ? wrapperData.wrappers : [];
+                    wrappers = all.filter((w) => w.id !== 'claude');
+                } catch (error) {
+                    console.error('Launchpad: Failed to load wrappers:', error);
+                    wrappers = [];
                 }
                 render();
                 setTimeout(() => listEl.focus(), 100);

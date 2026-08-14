@@ -18,6 +18,13 @@ import shlex
 import socket
 
 from src.models import is_valid_model_id, MODEL_ID_PATTERN
+from src.core.agent_wrappers import (
+    AgentWrapper,
+    default_wrapper as _default_wrapper,
+    find_wrapper as _find_wrapper,
+    render_wrapper_invocation,
+    wrapper_scripts_dir,
+)
 
 
 class ProjectConfig(BaseModel):
@@ -69,6 +76,14 @@ class AgentsConfig(BaseModel):
     # FAB action so users can spawn a bare tmux session in ~/ for quick
     # shell work. ``$SHELL -i`` ensures rc files (.zshrc/.bashrc) load.
     shell_command: str = "$SHELL -i"
+    # feat/launch-wrappers — user-defined named launch wrappers for the
+    # "claude" agent family (see src/core/agent_wrappers.py). Empty list
+    # (the default) means "not configured" — get_agent_command falls
+    # through to claude_command, then the hardcoded cld/cldor fallback,
+    # EXACTLY as before this feature existed. A wrapper's own ``id`` can
+    # also be passed as ``agent_type`` on session create to launch through
+    # that specific wrapper (see get_agent_command's docstring).
+    wrappers: List[AgentWrapper] = Field(default_factory=list)
 
 
 # Provider-selector modal (v3.1) default catalog — shown alongside the
@@ -260,6 +275,11 @@ class AuthRateLimits(BaseModel):
 
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
+    # feat/launch-wrappers — schema/migration marker. Absent from every
+    # config.json written before this feature; treated as 0 (see
+    # src/core/config_migration.py). Not itself consulted by
+    # get_agent_command — purely a migration bookkeeping field.
+    config_version: int = 0
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
     jwt_secret: Optional[str] = None   # Populated from Settings (.env)
     jwt_expiry_minutes: int = 30       # Legacy — used only if access TTL unset.
@@ -281,6 +301,15 @@ class AuthConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+
+
+# Agent-type values with a fixed, single-command resolution — never
+# eligible for wrapper lookup even if a wrapper happened to share the id.
+# Module-level (not a class attribute) because Settings is a pydantic
+# BaseSettings and an underscore-prefixed class attribute there becomes a
+# ModelPrivateAttr descriptor, not a plain frozenset — see
+# Settings.get_agent_command / Settings.add_wrapper for the two call sites.
+RESERVED_AGENT_TYPES = frozenset({"codex", "hermes", "openclaw", "shell"})
 
 
 class Settings(BaseSettings):
@@ -495,59 +524,58 @@ class Settings(BaseSettings):
 
         Phase 6 — agent-type labeling. Returns the shell-string command
         registered under ``AuthConfig.agents`` for the requested agent.
-        Unknown / None / empty agent_type falls back to claude. Falls
-        back to the AgentsConfig defaults if the auth config can't be
-        loaded (e.g. unit-test paths that bypass setup_auth.py).
+        Falls back to the AgentsConfig defaults if the auth config can't
+        be loaded (e.g. unit-test paths that bypass setup_auth.py).
 
-        For ``"claude"`` specifically, resolution order is:
-          1. ``agents.claude_command`` — if explicitly set to a non-empty
-             string in the loaded auth config, USE IT VERBATIM (still run
-             through the ``~/.zshrc``-sourcing wrapper below, so both a
-             plain binary invocation and a shell function work). This is
-             the escape hatch for machines that don't have the author's
-             ``cld`` / ``cldor`` zsh functions defined — set it to e.g.
-             ``"claude --dangerously-skip-permissions"`` and everything
-             downstream (tmux launch, model param) is unaffected. Empty
-             string (the default) means "not configured".
-          2. Otherwise, the ``cld`` / ``cldor`` zsh FUNCTIONS defined in the
-             user's ``~/.zshrc`` (unchanged from before — this is the
-             author's own setup and the default for everyone who hasn't
-             opted into step 1). ``model`` falsy → ``cld`` (Claude via the
-             user's subscription OAuth token, from macOS Keychain entry
-             ``claude-cld-oauth``). ``model`` set → ``cldor <model>``
-             (OpenRouter-routed, Keychain entry ``claude-cldor-openrouter``).
-             Neither secret ever passes through this app — the Keychain
-             lookup happens inside the zsh function, in the spawned tmux
-             pane, not here.
+        ``codex`` / ``hermes`` / ``openclaw`` / ``shell`` are RESERVED —
+        always their fixed single command, unaffected by anything below.
+
+        Everything else (``"claude"``, ``None``/empty, or a custom string)
+        is the "claude family" and resolves in this order:
+          1. ``agent_type`` matches the ``id`` of a configured wrapper
+             (``agents.wrappers``) — launch through THAT wrapper
+             specifically (see ``src/core/agent_wrappers.py``). This is
+             how a caller picks a non-default wrapper explicitly — the
+             wrapper's own id doubles as its agent_type value. The
+             resolved ``Session.agent_type`` ends up being that wrapper
+             id, so which wrapper launched a session is recorded the same
+             way agent_type always has been — no second field.
+          2. ``agent_type`` is exactly ``"claude"``, ``None``/empty, or
+             any string that ISN'T a configured wrapper id (unknown type
+             → safe fallback to the claude family, unchanged from
+             pre-wrappers behavior) — AND at least one wrapper is
+             configured: use the DEFAULT wrapper
+             (``agent_wrappers.default_wrapper``).
+          3. No wrappers configured at all (the common case for every
+             config.json written before this feature — wrappers defaults
+             to ``[]``): ``agents.claude_command`` if explicitly set to a
+             non-empty string, run verbatim through the same
+             ``~/.zshrc``-sourcing wrapper.
+          4. Neither wrappers nor claude_command configured: the
+             ORIGINAL hardcoded ``cld`` / ``cldor <model>`` zsh-function
+             fallback, byte-for-byte unchanged from every prior release.
+        Steps 3-4 are UNREACHABLE the moment any wrapper exists in config
+        (step 2 always finds at least the default wrapper first) — this is
+        intentional: a wrapper list is a strictly additive, opt-in
+        superset of the old two-step fallback, never a partial mix of the
+        two for the same launch.
         ``CLAUDE_CLI_PATH`` remains LEGACY / a no-op for this type — see its
         field comment on ``Settings.claude_cli_path``.
 
-        Why the wrapper: tmux's spawned pane shell does NOT source
-        ``~/.zshrc`` (non-interactive, non-login — see TmuxBackend.start /
-        tmux's own ``$SHELL -c <command>`` invocation), so a bare ``cld``
-        would be "command not found". Empirically verified (real detached
-        tmux session on a scratch ``-L`` socket, ``tmux capture-pane``)
-        against two candidate wrappers:
-          - ``zsh -ic '<cmd>'`` — worked cleanly in this environment
-            (oh-my-zsh/robbyrussell, no powerlevel10k instant-prompt
-            configured), but pulls in the full interactive-shell startup
-            path (job control, completions, update checks) — a bigger,
-            less predictable surface for future rc-file noise to leak
-            into the TUI's alt-screen.
-          - ``zsh -c 'source ~/.zshrc >/dev/null 2>&1; <cmd>'`` (CHOSEN) —
-            also verified clean end-to-end: Claude Code's TUI rendered
-            with zero leading garbage for both ``cld`` and ``cldor
-            <model>``, and the Keychain lookup succeeded headlessly with
-            NO ACL prompt for either secret. More surgical than ``-ic``:
-            sources exactly the one rc file needed, explicitly silences
-            any stray stdout/stderr from the source step, and skips
-            interactive-shell machinery entirely.
-        The model, when present, is shlex-quoted TWICE — once for its own
-        token boundary (inner ``cldor <model>`` command), once for the
-        outer ``zsh -c`` argument boundary — so it can never break out of
-        either quoting layer or be reinterpreted (verified against
-        ``; rm -rf /``, backticks, ``$(...)``, and a leading ``~`` which
-        would otherwise undergo tilde-expansion inside the inner shell).
+        Why the ``~/.zshrc``-sourcing wrapper (steps 3-4, and internally
+        inside wrapper resolution too): tmux's spawned pane shell does NOT
+        source ``~/.zshrc`` (non-interactive, non-login — see
+        TmuxBackend.start / tmux's own ``$SHELL -c <command>``
+        invocation), so a bare ``cld`` would be "command not found".
+        Empirically verified (real detached tmux session on a scratch
+        ``-L`` socket, ``tmux capture-pane``) against two candidate
+        wrappers; ``zsh -c 'source ~/.zshrc >/dev/null 2>&1; <cmd>'`` was
+        chosen over ``zsh -ic`` — see git history for the full comparison
+        this docstring used to carry.
+        The model, when present, is shlex-quoted at every quoting
+        boundary it crosses so it can never break out of or be
+        reinterpreted by any layer (verified against ``; rm -rf /``,
+        backticks, ``$(...)``, and a leading ``~``).
         ``CreateSessionRequest.model`` / the provider-add endpoint already
         restrict model ids to ``^[A-Za-z0-9._~/-]{1,120}$`` before this is
         ever called — this quoting is defense-in-depth, not the only guard.
@@ -555,13 +583,11 @@ class Settings(BaseSettings):
         Returned shape: a single shell string, which the tmux backend
         hands directly to ``new-session ... <cmd>`` (tmux itself execs it
         via the pane's default shell, ``-c <string>`` — one level of shell
-        parsing on our returned string, hence the two-level quoting above).
+        parsing on our returned string, hence the quoting above).
         """
         # Resolve AgentsConfig — tolerate auth-config load failure so the
         # caller (create_session) doesn't blow up if config.json is missing
-        # in a degraded environment. Needed for every branch below,
-        # including claude (step 1 of its resolution order reads
-        # agents.claude_command).
+        # in a degraded environment.
         try:
             agents = self.load_auth_config().agents
         except Exception:
@@ -569,23 +595,29 @@ class Settings(BaseSettings):
 
         normalized = (agent_type or "claude").lower()
 
-        if normalized == "codex":
-            return agents.codex_command
-        if normalized == "hermes":
-            return agents.hermes_command
-        if normalized == "openclaw":
-            return agents.openclaw_command
-        if normalized == "shell":
-            return agents.shell_command
+        if normalized in RESERVED_AGENT_TYPES:
+            return {
+                "codex": agents.codex_command,
+                "hermes": agents.hermes_command,
+                "openclaw": agents.openclaw_command,
+                "shell": agents.shell_command,
+            }[normalized]
 
-        # claude (or unknown → fall back to claude).
-        # Step 1: an explicit, non-empty agents.claude_command wins outright,
+        # claude family: explicit wrapper id, then default wrapper, then
+        # legacy claude_command, then the original hardcoded fallback.
+        explicit = _find_wrapper(agents.wrappers, normalized)
+        chosen = explicit if explicit is not None else _default_wrapper(agents.wrappers)
+        if chosen is not None:
+            scripts_dir = wrapper_scripts_dir(self.log_directory)
+            return render_wrapper_invocation(chosen, scripts_dir, model=model)
+
+        # Step 3: an explicit, non-empty agents.claude_command wins outright,
         # regardless of ``model`` — a user who opted into a custom command
         # is opting out of the cld/cldor provider-selector path entirely.
         if agents.claude_command and agents.claude_command.strip():
             inner = f"source ~/.zshrc >/dev/null 2>&1; {agents.claude_command}"
             return f"zsh -c {shlex.quote(inner)}"
-        # Step 2: unchanged cld/cldor fallback.
+        # Step 4: unchanged cld/cldor fallback.
         if model:
             inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
             return f"zsh -c {shlex.quote(inner)}"
@@ -711,7 +743,12 @@ class Settings(BaseSettings):
 
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
+            config_version = data.get("config_version", 0)
+            if not isinstance(config_version, int):
+                config_version = 0
+
             auth_config = AuthConfig(
+                config_version=config_version,
                 totp_secret=self.totp_secret,  # From .env via Settings
                 jwt_secret=self.jwt_secret,    # From .env via Settings
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
@@ -1192,6 +1229,11 @@ class Settings(BaseSettings):
                 "hermes_command": agents.hermes_command,
                 "openclaw_command": agents.openclaw_command,
                 "effective_claude_command": self.get_agent_command("claude"),
+                # feat/launch-wrappers — full wrapper objects (script
+                # included; never a secret, see AgentWrapper's docstring)
+                # so the settings-panel editor can list/edit/reload them
+                # in one round trip.
+                "wrappers": [w.model_dump() for w in agents.wrappers],
             },
             "notifications": {
                 "enabled": notif.enabled,
@@ -1300,6 +1342,186 @@ class Settings(BaseSettings):
 
         self._auth_config_cache = None
         return self.get_settings_summary()
+
+    # ---- launch wrappers (feat/launch-wrappers) ---------------------------
+
+    def _read_config_dict(self, config_path: Path) -> dict:
+        """Read+parse config.json. Shared by every wrapper CRUD method.
+
+        Inputs: config_path (Path).
+        Output: dict - parsed JSON.
+        Raises: FileNotFoundError; ValueError on invalid JSON.
+        """
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+        try:
+            with open(config_path) as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in auth config file: {e}\nCheck {config_path}")
+
+    def _write_wrappers(self, config_path: Path, agents_data: dict) -> None:
+        """Persist an updated ``agents`` block back to config.json.
+
+        Description: backs up the pre-write bytes to ``config.json.bak``
+          (same one-generation convention as ``update_settings_config``),
+          then writes atomically via tmp-file + fsync + os.replace.
+        Inputs: config_path (Path); agents_data (dict) - the full new
+          ``agents`` block (caller has already re-validated it via
+          ``AgentsConfig(**agents_data)``).
+        Output: None.
+        """
+        with open(config_path) as f:
+            raw = f.read()
+        data = json.loads(raw)
+        data["agents"] = agents_data
+
+        try:
+            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+            backup_path.write_text(raw)
+        except OSError as e:
+            import structlog
+            structlog.get_logger().warning("wrapper_write_backup_failed", error=str(e))
+
+        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, config_path)
+
+        self._auth_config_cache = None
+
+    def add_wrapper(self, wrapper: AgentWrapper) -> List[dict]:
+        """Add a new launch wrapper to config.json's ``agents.wrappers``.
+
+        Description: rejects a duplicate id, and rejects an id that
+          collides with a RESERVED agent_type (``codex``/``hermes``/
+          ``openclaw``/``shell``) — those would never be reachable via
+          ``get_agent_command``'s resolution order (reserved types are
+          checked first), so accepting one here would silently create a
+          wrapper that can never launch.
+        Inputs: wrapper (AgentWrapper) - already field-validated by
+          pydantic (id charset, non-blank script) before this is called.
+        Output: list[dict] - the updated wrapper list.
+        Raises: FileNotFoundError; ValueError (duplicate id, reserved id,
+          or invalid JSON in config.json).
+        """
+        if wrapper.id in RESERVED_AGENT_TYPES:
+            raise ValueError(f"'{wrapper.id}' is a reserved agent type, not usable as a wrapper id")
+
+        config_path = Path(self.auth_config_file).expanduser()
+        data = self._read_config_dict(config_path)
+        agents_data = dict(data.get("agents") or {})
+        wrappers = list(agents_data.get("wrappers") or [])
+
+        if any(w.get("id") == wrapper.id for w in wrappers):
+            raise ValueError(f"Wrapper '{wrapper.id}' already exists")
+
+        new_wrapper = wrapper.model_dump()
+        if new_wrapper["default"]:
+            for w in wrappers:
+                w["default"] = False
+        wrappers.append(new_wrapper)
+        agents_data["wrappers"] = wrappers
+
+        AgentsConfig(**agents_data)  # re-validate merged block before disk
+        self._write_wrappers(config_path, agents_data)
+        return wrappers
+
+    def update_wrapper(self, wrapper_id: str, wrapper: AgentWrapper) -> List[dict]:
+        """Replace an existing wrapper's fields (id is immutable via this call).
+
+        Inputs:
+          wrapper_id (str) - id of the wrapper to replace.
+          wrapper (AgentWrapper) - new field values. ``wrapper.id`` MUST
+            equal ``wrapper_id`` — renaming a wrapper id is delete+add
+            (its id is also its script filename and the value callers use
+            as agent_type; silently changing it out from under a caller
+            already in flight is worse than requiring an explicit rename).
+        Output: list[dict] - the updated wrapper list.
+        Raises: FileNotFoundError; ValueError (not found, id mismatch, or
+          invalid JSON).
+        """
+        if wrapper.id != wrapper_id:
+            raise ValueError("wrapper id cannot be changed via update; delete and re-add instead")
+
+        config_path = Path(self.auth_config_file).expanduser()
+        data = self._read_config_dict(config_path)
+        agents_data = dict(data.get("agents") or {})
+        wrappers = list(agents_data.get("wrappers") or [])
+
+        idx = next((i for i, w in enumerate(wrappers) if w.get("id") == wrapper_id), None)
+        if idx is None:
+            raise ValueError(f"Wrapper '{wrapper_id}' not found")
+
+        new_wrapper = wrapper.model_dump()
+        if new_wrapper["default"]:
+            for i, w in enumerate(wrappers):
+                if i != idx:
+                    w["default"] = False
+        wrappers[idx] = new_wrapper
+        agents_data["wrappers"] = wrappers
+
+        AgentsConfig(**agents_data)
+        self._write_wrappers(config_path, agents_data)
+        return wrappers
+
+    def delete_wrapper(self, wrapper_id: str) -> List[dict]:
+        """Remove a wrapper from config.json's ``agents.wrappers``.
+
+        Description: if the removed wrapper was the default and other
+          wrappers remain, the first remaining wrapper becomes default
+          (mirrors ``agent_wrappers.default_wrapper``'s own "first in
+          list" fallback, applied eagerly so the persisted state always
+          has an explicit default when the list is non-empty).
+        Inputs: wrapper_id (str).
+        Output: list[dict] - the updated wrapper list (may be empty).
+        Raises: FileNotFoundError; ValueError (not found, or invalid JSON).
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+        data = self._read_config_dict(config_path)
+        agents_data = dict(data.get("agents") or {})
+        wrappers = list(agents_data.get("wrappers") or [])
+
+        idx = next((i for i, w in enumerate(wrappers) if w.get("id") == wrapper_id), None)
+        if idx is None:
+            raise ValueError(f"Wrapper '{wrapper_id}' not found")
+
+        removed = wrappers.pop(idx)
+        if removed.get("default") and wrappers:
+            wrappers[0]["default"] = True
+        agents_data["wrappers"] = wrappers
+
+        AgentsConfig(**agents_data)
+        self._write_wrappers(config_path, agents_data)
+        return wrappers
+
+    def set_default_wrapper(self, wrapper_id: str) -> List[dict]:
+        """Mark exactly one wrapper as default, clearing the flag on all others.
+
+        Inputs: wrapper_id (str).
+        Output: list[dict] - the updated wrapper list.
+        Raises: FileNotFoundError; ValueError (not found, or invalid JSON).
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+        data = self._read_config_dict(config_path)
+        agents_data = dict(data.get("agents") or {})
+        wrappers = list(agents_data.get("wrappers") or [])
+
+        if not any(w.get("id") == wrapper_id for w in wrappers):
+            raise ValueError(f"Wrapper '{wrapper_id}' not found")
+
+        for w in wrappers:
+            w["default"] = (w.get("id") == wrapper_id)
+        agents_data["wrappers"] = wrappers
+
+        AgentsConfig(**agents_data)
+        self._write_wrappers(config_path, agents_data)
+        return wrappers
 
 
 # Global settings instance

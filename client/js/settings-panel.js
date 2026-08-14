@@ -39,9 +39,9 @@
 
     var AGENT_FIELDS = [
         {
-            key: 'claude_command', type: 'text', label: 'claude command',
+            key: 'claude_command', type: 'text', label: 'claude command (legacy fallback)',
             placeholder: 'e.g. claude --dangerously-skip-permissions',
-            hint: 'empty runs your ~/.zshrc cld / cldor function instead — see "what runs now" below',
+            hint: 'only used when no launch wrappers are configured below. empty falls through to your ~/.zshrc cld / cldor function — see "what runs now" below',
             showEffective: true,
         },
         { key: 'codex_command', type: 'text', label: 'codex command', placeholder: 'codex' },
@@ -255,6 +255,15 @@
         var parts = [renderAppearanceSection()];
         SECTIONS.forEach(function (section) {
             parts.push(renderGenericSection(section));
+            // feat/launch-wrappers — the wrapper list/editor is bespoke
+            // (immediate-write CRUD, not part of this panel's batched
+            // Save flow — see agent-wrappers-panel.js's module doc) and
+            // is mounted into this slot right after the generic "agent"
+            // section, by mountWrappersSlot() (called alongside
+            // mountThemeSlot in open()/save()).
+            if (section.id === 'agent') {
+                parts.push('<div id="settings-wrappers-slot"></div>');
+            }
         });
         parts.push(renderServerSection());
         return parts.join('');
@@ -345,6 +354,7 @@
             if (bodyEl) {
                 bodyEl.innerHTML = renderBody();
                 mountThemeSlot();
+                mountWrappersSlot();
             }
         } catch (err) {
             console.error('SettingsPanel: save failed', err);
@@ -365,6 +375,19 @@
         if (!window.ThemeSelector) return;
         var slot = overlayEl.querySelector('#settings-theme-slot');
         if (slot) window.ThemeSelector.mount(slot);
+    }
+
+    /**
+     * Mount the launch-wrappers list/editor into this panel's slot (see
+     * renderBody's `#settings-wrappers-slot` placement, right after the
+     * generic "agent" section). Called on open and after every save, same
+     * as mountThemeSlot.
+     * Output: void.
+     */
+    function mountWrappersSlot() {
+        if (!window.AgentWrappersPanel) return;
+        var slot = overlayEl.querySelector('#settings-wrappers-slot');
+        if (slot) window.AgentWrappersPanel.mount(slot);
     }
 
     /**
@@ -423,6 +446,7 @@
 
         document.body.appendChild(overlayEl);
         mountThemeSlot();
+        mountWrappersSlot();
 
         overlayEl.querySelector('#settings-close-btn').addEventListener('click', close);
         overlayEl.querySelector('#settings-cancel-btn').addEventListener('click', close);

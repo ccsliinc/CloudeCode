@@ -455,6 +455,66 @@ class API {
     }
 
     /**
+     * Launch wrappers (feat/launch-wrappers): list every configured
+     * wrapper, script included.
+     * @returns {Promise<{wrappers: Array<object>}>}
+     */
+    async listWrappers() {
+        return await this.call('/agents/wrappers');
+    }
+
+    /**
+     * Launch wrappers: offered example wrappers (the author's real
+     * cld/cldor functions) — never auto-installed, only shown for a user
+     * to explicitly import.
+     * @returns {Promise<{wrappers: Array<object>}>}
+     */
+    async listWrapperExamples() {
+        return await this.call('/agents/wrappers/examples');
+    }
+
+    /**
+     * Launch wrappers: create a new wrapper.
+     * @param {{id: string, label: string, script: string, entry?: string, description?: string, default?: boolean}} wrapper
+     * @returns {Promise<{wrappers: Array<object>}>} - throws (err.status 409) on duplicate/reserved id
+     */
+    async addWrapper(wrapper) {
+        return await this.call('/agents/wrappers', { method: 'POST', body: wrapper });
+    }
+
+    /**
+     * Launch wrappers: replace an existing wrapper's fields. wrapper.id
+     * must equal id (renaming is delete + add).
+     * @param {string} id
+     * @param {object} wrapper
+     * @returns {Promise<{wrappers: Array<object>}>}
+     */
+    async updateWrapper(id, wrapper) {
+        return await this.call(`/agents/wrappers/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            body: wrapper
+        });
+    }
+
+    /**
+     * Launch wrappers: delete a wrapper.
+     * @param {string} id
+     * @returns {Promise<{wrappers: Array<object>}>}
+     */
+    async deleteWrapper(id) {
+        return await this.call(`/agents/wrappers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    }
+
+    /**
+     * Launch wrappers: mark a wrapper as the default.
+     * @param {string} id
+     * @returns {Promise<{wrappers: Array<object>}>}
+     */
+    async setDefaultWrapper(id) {
+        return await this.call(`/agents/wrappers/${encodeURIComponent(id)}/default`, { method: 'POST' });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
      * @returns {Promise<object>} - Session data

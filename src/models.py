@@ -258,9 +258,17 @@ class CreateSessionRequest(BaseModel):
     # session inherits the project's configured ``agent_type`` (from
     # ProjectConfig); when supplied, it wins outright. None / missing
     # is the common case for pre-Phase-6 clients.
+    # feat/launch-wrappers — also accepts the ``id`` of a configured
+    # launch wrapper (e.g. "cld", "cldor", or any custom wrapper id) to
+    # launch through that specific wrapper. See
+    # ``Settings.get_agent_command``'s resolution order. No format
+    # restriction here beyond str: an unrecognized value safely falls
+    # back to the claude family (never a validation error), and a
+    # wrapper id is validated at wrapper-create time
+    # (``agent_wrappers.WRAPPER_ID_PATTERN``), not here.
     agent_type: Optional[str] = Field(
         None,
-        description="Agent CLI to launch ('claude' | 'codex' | 'hermes' | 'openclaw'); overrides project default",
+        description="Agent CLI to launch ('claude' | 'codex' | 'hermes' | 'openclaw' | a configured wrapper id); overrides project default",
     )
     # Provider-selector modal (v3.1). Only meaningful when the resolved
     # agent_type is "claude" (see Settings.get_agent_command). None =>
@@ -305,6 +313,26 @@ class ProviderModelsResponse(BaseModel):
     authoritative list rather than optimistically patching its own state.
     """
     models: List[str] = Field(default_factory=list)
+
+
+class WrapperListResponse(BaseModel):
+    """Response for every launch-wrapper endpoint (feat/launch-wrappers).
+
+    Full wrapper objects (script included — never a secret, see
+    ``AgentWrapper``'s docstring). The client always re-renders from this
+    authoritative list rather than optimistically patching its own state,
+    matching the ``ProviderModelsResponse`` convention.
+    """
+    wrappers: List[dict] = Field(default_factory=list)
+
+
+class WrapperExamplesResponse(BaseModel):
+    """Response for ``GET /api/v1/agents/wrappers/examples``.
+
+    Offered, never auto-installed — see
+    ``src.core.agent_wrappers.EXAMPLE_WRAPPERS``.
+    """
+    wrappers: List[dict] = Field(default_factory=list)
 
 
 class AddProviderModelRequest(BaseModel):
