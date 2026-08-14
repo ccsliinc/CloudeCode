@@ -123,6 +123,7 @@ class AppController {
         this.currentScreen = null;
         this.logoutBtn = null;
         this.destroyBtn = null;
+        this.detachBtn = null;
         // Health poller state. Poll every 15s against /health so the
         // top-right status dot reflects server reachability on the
         // auth + launchpad screens. The terminal screen manages the
@@ -139,6 +140,7 @@ class AppController {
 
         this.logoutBtn = document.getElementById('logoutBtn');
         this.destroyBtn = document.getElementById('destroySessionBtn');
+        this.detachBtn = document.getElementById('detachSessionBtn');
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
         // any async work — kills FOUC for repeat visitors. The full manifest
@@ -346,6 +348,7 @@ class AppController {
         document.getElementById('auth-screen').classList.add('active');
         this.logoutBtn.classList.add('hidden');
         this.destroyBtn.classList.add('hidden');
+        if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         // Leaving the terminal: drop any session-scoped theme so xterm
@@ -379,6 +382,7 @@ class AppController {
         document.getElementById('launchpad-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.add('hidden');
+        if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
@@ -438,6 +442,7 @@ class AppController {
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.remove('hidden');
+        if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
@@ -539,6 +544,7 @@ class AppController {
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.remove('hidden');
+        if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session

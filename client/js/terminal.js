@@ -76,8 +76,16 @@ class Terminal {
 
         // UI elements
         this.destroySessionBtn = null;
+        this.detachSessionBtn = null;
         this.statusEl = null;
         this.sessionInfoEl = null;
+
+        // Reconnect-by-name guard (feat/safe-session-lifecycle). Set once
+        // per disconnect episode so a WS close carrying app code 4404
+        // ("server doesn't know this session_id") triggers exactly ONE
+        // name-based re-adopt attempt instead of looping. Reset back to
+        // false whenever a WS successfully opens.
+        this._reconnectByNameAttempted = false;
     }
 
     /**
@@ -87,11 +95,20 @@ class Terminal {
         console.log('Terminal: Initializing xterm.js');
 
         this.destroySessionBtn = document.getElementById('destroySessionBtn');
+        this.detachSessionBtn = document.getElementById('detachSessionBtn');
         this.statusEl = document.getElementById('statusText');
         this.sessionInfoEl = document.getElementById('sessionInfo');
 
         // Add destroy session handler
         this.destroySessionBtn.addEventListener('click', () => this.destroySession());
+
+        // Add detach session handler — the non-destructive exit. Wired
+        // purely via addEventListener (no inline onclick) so this button
+        // never risks the double-invoke class of bug an onclick + a
+        // listener on the same element can produce.
+        if (this.detachSessionBtn) {
+            this.detachSessionBtn.addEventListener('click', () => this.detachSession());
+        }
 
         // Wait for xterm.js to load from CDN
         await this.waitForXterm();
@@ -796,8 +813,9 @@ class Terminal {
         this.sessionInfoEl.textContent =
             `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
 
-        // Enable destroy button
+        // Enable destroy + detach buttons
         this.destroySessionBtn.disabled = false;
+        if (this.detachSessionBtn) this.detachSessionBtn.disabled = false;
 
         // Adopt path: paint server-captured scrollback into xterm BEFORE
         // the WS opens. Must be synchronous relative to the WS connect so
@@ -930,6 +948,9 @@ class Terminal {
         }
         if (this.destroySessionBtn) {
             this.destroySessionBtn.disabled = false;
+        }
+        if (this.detachSessionBtn) {
+            this.detachSessionBtn.disabled = false;
         }
 
         // Launchpad-rejoin scrollback replay — same treatment as the adopt
@@ -1254,6 +1275,10 @@ class Terminal {
             // Clear intentional-close flag now that a fresh WS is open —
             // any FUTURE close is a natural disconnect and should reconnect.
             this._intentionalClose = false;
+            // A fresh open means whatever session_id this WS is bound to
+            // (possibly a NEW one from a 4404 re-adopt) is known-good —
+            // re-arm the by-name fallback for the next disconnect episode.
+            this._reconnectByNameAttempted = false;
             if (this.reconnectTimeout) {
                 clearTimeout(this.reconnectTimeout);
                 this.reconnectTimeout = null;
@@ -1375,6 +1400,24 @@ class Terminal {
             // token via getToken().
             if (closeCode === 4401 && this.sessionActive && !this.isReconnecting) {
                 this._handleAuthFailedClose();
+                return;
+            }
+
+            // Server-forgot-session close (src/api/websocket.py — code 4404
+            // is emitted when ``?session_id=`` doesn't resolve against the
+            // server's in-memory session map, e.g. right after a server
+            // restart: the tmux session survives on its socket, but the
+            // fresh server process never heard of the ephemeral id our WS
+            // was scoped to). Retrying with the SAME id via the normal
+            // attemptReconnect() below would just hit 4404 again on every
+            // attempt until maxReconnectAttempts. Try re-resolving by the
+            // stable tmux NAME once instead — see _attemptReconnectByName().
+            // Guarded so this fires at most once per disconnect episode
+            // (flag clears on the next successful ws.onopen).
+            if (closeCode === 4404 && this.sessionActive && !this.isReconnecting
+                && !this._reconnectByNameAttempted) {
+                this._reconnectByNameAttempted = true;
+                this._attemptReconnectByName();
                 return;
             }
 
@@ -1531,6 +1574,117 @@ class Terminal {
     }
 
     /**
+     * Recover from a WS close carrying app code 4404 ("unknown session") by
+     * resolving the session's stable TMUX SESSION NAME instead of its
+     * ephemeral session_id. The name survives a server restart; the id
+     * does not, because the fresh server process has no memory of it.
+     *
+     * Strategy: ask the server (via ``GET /sessions/attachable``, and as a
+     * belt-and-suspenders check ``GET /sessions/list``) whether a tmux
+     * session with our name still exists.
+     *   - Found -> genuinely "server forgot, tmux remembers": re-adopt it
+     *     (``POST /sessions/adopt``, which never 409s in the multi-session
+     *     model) and resume via reconnectToExistingSession() — same
+     *     scrollback-repaint + WS-reopen path the launchpad's manual
+     *     rejoin uses.
+     *   - Not found -> genuinely gone (destroyed by another client, tmux
+     *     process died, etc). Do NOT retry and do NOT synthesize a new
+     *     session — mark the session ended and let the user start fresh
+     *     from the launchpad, exactly like a normal destroy.
+     *
+     * Runs at most once per disconnect episode (call site in
+     * setupWebSocketHandlers() gates on ``_reconnectByNameAttempted``,
+     * which resets on the next successful ws.onopen) so a persistently
+     * unreachable server can't spin this in a loop; a failure inside this
+     * method (network/API error, not "session missing") falls back to the
+     * normal bounded id-based attemptReconnect() so we don't just give up
+     * on a transient blip.
+     *
+     * Inputs: none (reads this._currentSession via _currentTmuxName()).
+     * Output: Promise<void>. Side effects: either re-opens a bound WS via
+     *   reconnectToExistingSession(), marks sessionActive=false and fires
+     *   'session-destroyed' when the tmux session is gone, or defers to
+     *   attemptReconnect() on lookup failure / no resolvable name.
+     * Example: invoked from ws.onclose when event.code === 4404.
+     */
+    async _attemptReconnectByName() {
+        const tmuxName = this._currentTmuxName();
+        if (!tmuxName || !window.API || typeof window.API.listAttachableSessions !== 'function') {
+            // Can't resolve by name — degrade to the pre-existing bounded
+            // id-based retry loop rather than doing nothing.
+            this.attemptReconnect();
+            return;
+        }
+
+        this.isReconnecting = true;
+        this.updateStatus('Reconnecting...');
+        if (this.term) {
+            this.term.writeln('\n\x1b[1;33m[Server restarted — looking up session by name...]\x1b[0m');
+        }
+
+        let stillAlive = false;
+        try {
+            const attachable = await window.API.listAttachableSessions();
+            stillAlive = Array.isArray(attachable) && attachable.some(s => s && s.name === tmuxName);
+        } catch (err) {
+            console.warn('Terminal: attachable lookup failed during 4404 recovery:', err);
+            // Transient failure (network, auth) — not proof the session is
+            // gone. Fall back to the bounded id-based loop.
+            this.isReconnecting = false;
+            this.attemptReconnect();
+            return;
+        }
+
+        if (!stillAlive) {
+            // Second look: maybe another tab already re-adopted it (races
+            // are possible with multiple browser tabs on the same
+            // session) so it now shows up as a LIVE backend rather than
+            // an attachable one. Only then do we conclude "truly gone".
+            try {
+                if (window.API && typeof window.API.listSessions === 'function') {
+                    const live = await window.API.listSessions();
+                    stillAlive = Array.isArray(live) && live.some((info) => {
+                        const name = info && (info.tmux_session
+                            || (info.session && info.session.tmux_session));
+                        return name === tmuxName;
+                    });
+                }
+            } catch (err) {
+                console.warn('Terminal: list-sessions lookup failed during 4404 recovery:', err);
+            }
+        }
+
+        this.isReconnecting = false;
+
+        if (!stillAlive) {
+            console.log('Terminal: 4404 recovery found no live tmux session named', tmuxName);
+            this.sessionActive = false;
+            this.stopReconnecting();
+            this.updateStatus('Session ended', 'error');
+            if (this.term) {
+                this.term.writeln('\x1b[1;31m[Session no longer exists — start a new one from the launchpad]\x1b[0m');
+            }
+            window.dispatchEvent(new CustomEvent('session-destroyed'));
+            return;
+        }
+
+        try {
+            console.log('Terminal: re-adopting', tmuxName, 'after server restart');
+            const result = await window.API.adoptSession(tmuxName, true);
+            const sessionWithScrollback = Object.assign(
+                {}, result.session, { initial_scrollback_b64: result.initial_scrollback_b64 }
+            );
+            await this.reconnectToExistingSession(sessionWithScrollback);
+        } catch (err) {
+            console.error('Terminal: re-adopt after 4404 failed:', err);
+            // Adopt failed for a reason other than "doesn't exist" (tmux
+            // busy, transient 500, etc) — fall back to the bounded
+            // id-based loop rather than silently giving up.
+            this.attemptReconnect();
+        }
+    }
+
+    /**
      * Handle a WS close caused by server-side auth failure (code 4401).
      * Refresh the access token BEFORE the next reconnect attempt so the
      * fresh WS handshake carries a valid JWT — otherwise reconnects would
@@ -1668,8 +1822,28 @@ class Terminal {
 
     /**
      * Destroy session
+     *
+     * Description: kills the tmux session and terminates the Claude
+     * process for THIS tab's session. Irreversible for the running
+     * process (the transcript JSONL under ~/.claude/projects is not
+     * touched and survives independently). Confirms first using the
+     * same modal pattern as App.logout() so the app stays consistent;
+     * Detach (detachSession(), below) is intentionally NOT gated by a
+     * confirmation because it is safe and reversible.
+     * Inputs: none (reads this._currentSession / this._sessionId()).
+     * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
     async destroySession() {
+        const name = this._currentTmuxName() || (this._currentSession && this._currentSession.id) || 'this session';
+        const confirmed = await window.App.showConfirmModal(
+            'delete session',
+            `are you sure you want to delete "${name}"?`,
+            'the running session is terminated. this cannot be undone. use detach instead to leave it running.'
+        );
+        if (!confirmed) {
+            return;
+        }
+
         try {
             this.updateStatus('Destroying session...');
 
@@ -1695,6 +1869,7 @@ class Terminal {
             }
 
             this.destroySessionBtn.disabled = true;
+            if (this.detachSessionBtn) this.detachSessionBtn.disabled = true;
             this.sessionInfoEl.textContent = 'No active session';
 
             if (this.term) {
@@ -1707,6 +1882,64 @@ class Terminal {
 
         } catch (error) {
             console.error('Terminal: Error destroying session:', error);
+            this.updateStatus('Error: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Detach from the current session WITHOUT killing tmux.
+     *
+     * Description: the non-destructive counterpart to destroySession() —
+     * calls API.detachSession() so the server tears down its Python-side
+     * handles (reader task, idle watcher, pipe-pane) for THIS tab's
+     * session while leaving the tmux session running. The user can later
+     * re-adopt it from the launchpad's "attachable" list, unlike
+     * destroySession() which is permanent.
+     * Inputs: none (reads this._sessionId() for the active session).
+     * Output: Promise<void>. Side effects: closes the local WS
+     *   (marked intentional so onclose does not reconnect), clears the
+     *   xterm view, sets sessionActive=false, and navigates back to the
+     *   launchpad via the same 'session-destroyed' event destroySession()
+     *   uses (the launchpad treats both as "no longer my active tab").
+     * Example: wired to #detachSessionBtn's click handler in init().
+     */
+    async detachSession() {
+        try {
+            this.updateStatus('Detaching session...');
+
+            const sessionId = this._sessionId();
+            await window.API.detachSession(sessionId);
+
+            // Mark false BEFORE closing the socket so onclose's reconnect
+            // (and the 4404 name-based fallback) both see sessionActive
+            // === false and do nothing — an intentionally detached
+            // session must never be silently re-adopted.
+            this.sessionActive = false;
+            this.stopReconnecting();
+            this._reconnectByNameAttempted = false;
+
+            if (this.ws) {
+                this._intentionalClose = true;
+                this.ws.close();
+                this.ws = null;
+            }
+
+            this.destroySessionBtn.disabled = true;
+            if (this.detachSessionBtn) this.detachSessionBtn.disabled = true;
+            this.sessionInfoEl.textContent = 'No active session';
+
+            if (this.term) {
+                this.term.clear();
+                this.term.writeln('\x1b[1;33mSession detached — still running, re-adopt it from the launchpad\x1b[0m\n');
+            }
+
+            // Reuse the same event destroySession() fires — both mean
+            // "this tab no longer owns an active session"; the launchpad
+            // doesn't need to distinguish detach from delete to react.
+            window.dispatchEvent(new CustomEvent('session-destroyed'));
+
+        } catch (error) {
+            console.error('Terminal: Error detaching session:', error);
             this.updateStatus('Error: ' + error.message, 'error');
         }
     }
