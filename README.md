@@ -1,1604 +1,563 @@
-# Cloude Code
+<div align="center">
 
-Remote-control UI for Claude Code CLI sessions on your Mac. Terminal lives in tmux,
-reachable from the browser on your phone, laptop, or any LAN-connected device.
+<img src="docs/assets/logo-wordmark.png" alt="Cloude Code logo — a white 3D cloud icon with a coral pixel-art face next to the wordmark 'Cloude Code' in coral text on a black background." width="520">
 
-[![Cloude Code Demo](https://img.youtube.com/vi/tGcRtH_RLiE/0.jpg)](https://www.youtube.com/shorts/tGcRtH_RLiE)
+### Your Mac keeps coding. You keep the remote.
 
-> **Quick Demo:** Watch Cloude Code in action — launchpad, adopt-external, real-time
-> terminal streaming to a phone browser.
+**Drive your Mac's live Claude Code sessions from your phone. Real terminal, real keystrokes, real control — while the session runs in tmux whether you're watching or not.**
 
----
+![Version](https://img.shields.io/badge/version-0.8.1-d77757)
+![License](https://img.shields.io/badge/license-MIT-4ade80)
+![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20(Apple%20Silicon)-lightgrey)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
+![Electron](https://img.shields.io/badge/electron-28-47848F)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)
+![tmux](https://img.shields.io/badge/tmux-3.2%2B-1BB91F)
+![Themes](https://img.shields.io/badge/themes-23-8b5cf6)
+![Docker](https://img.shields.io/badge/docker-supported-2496ED)
 
-## Download
+<img src="docs/assets/hero-banner.png" alt="A hand holding a phone with a glowing coral terminal screen in the foreground, with a Mac laptop showing the same glowing session blurred in the background, on a dark desk at night." width="100%">
 
-**macOS (Apple Silicon):** [Cloude.Code-0.8.1-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.8.1/Cloude.Code-0.8.1-arm64.dmg) (93 MB)
-
-Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
-
-**Verify the download** (optional):
-
-```bash
-shasum -a 256 "Cloude.Code-0.8.1-arm64.dmg"
-# expected: 00f1beb6af6176ce904d3df472d5d6e37b4400736b2e04255cf72dcbcc89cfa5
-```
-
-**Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
+</div>
 
 ---
 
-## Overview
+## The thing you couldn't do before
 
-Cloude Code is a hybrid Electron + FastAPI + tmux control plane for Claude Code CLI
-sessions. An Electron menu-bar app on your Mac spawns a Python FastAPI server.
-The server talks to a dedicated tmux socket (`tmux -L cloude`) where every Claude
-session lives as a detached pane. A web UI connects over WebSocket, streams the
-pane bytes, and gives you a launchpad to start, adopt, detach, or kill sessions.
+You start a Claude Code session on your Mac and walk away. Claude keeps working — and when it hits a permission prompt, your phone buzzes. You open a browser, tap in a 6-digit code, and you're staring at the exact same live terminal, cursor and all, from the subway. Type a follow-up. Approve the tool call. Watch the diff scroll by. Lock your phone.
 
-The whole thing is built for one scenario: **you're on the couch, the server's
-at the desk, and you want to keep working on the project you left running.**
-Authentication is TOTP (any RFC 6238 app — Google Authenticator, Authy, 1Password)
-plus a 15-minute JWT access token + 7-day refresh token with reuse detection.
-WebSocket auth rides on the `Sec-WebSocket-Protocol` subprotocol header so the
-JWT never lands in a query string or a proxy access log.
+The session never restarted, never lost context, and never needed an SSH client. When you get home and open your laptop, it's right where you left it — because it was never in the browser to begin with. It was in tmux the whole time.
 
-**Threat model is LAN-only.** The intended exposure path is UniFi Teleport,
-Tailscale, or a similar identity-aware overlay network. Cloude Code ships with
-hardened defaults (strict CSP, rate-limited auth, JWT typ enforcement, owned-set
-ACL for adopt), but this is **not** designed to stand naked on the public
-internet. The optional Cloudflare-tunnel backend exists for convenience, not
-because the app has been hardened for hostile traffic.
+---
+
+## Contents
+
+- [Screenshots](#screenshots)
+- [Why this exists](#why-this-exists)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Install](#install)
+- [Configuration](#configuration)
+- [Security model](#security-model)
+- [Honest limits](#honest-limits)
+- [Changelog](#changelog)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Screenshots
+
+<div align="center">
+
+<img src="docs/assets/screenshots/phone/phone-terminal-snes.png" width="320" alt="SNES-themed terminal session showing a nerd-joke conversation exchange">
+<br><b>Live terminal, mid-session</b><br><sub>Real iPhone screenshot, not a headless-browser render — an actual reply streaming in over the WebSocket.</sub>
+
+<br><br>
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-speed-dial.png" width="200" alt="Speed dial menu open over the session list with six quick-action buttons"><br><b>Six-way speed dial</b><br><sub>New project, folder, GitHub clone, OpenClaw, Hermes, or a bare console.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-provider-select.png" width="200" alt="Provider picker modal listing Claude as the pinned default alongside three other models"><br><b>Provider selector</b><br><sub>Pinned Claude, plus qwen, kimi, and gpt models saved from OpenRouter.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-slash-palette.png" width="200" alt="Slash commands modal showing a nine-command quick grid and the full command reference below"><br><b>Slash palette</b><br><sub>74 Claude Code commands, grouped and tappable.</sub></td>
+</tr>
+<tr>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-paperclip-menu.png" width="200" alt="Paperclip attachment menu open above the message input, with paste-from-clipboard and attach-image options"><br><b>📎 clipboard menu</b><br><sub>Paste from clipboard or attach an image — no reliable paste event on iOS Safari.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-dpad.png" width="200" alt="Expanded D-pad control overlay with directional buttons over the terminal session"><br><b>Virtual D-pad</b><br><sub>Arrows, Esc, Tab, Shift+Tab, jump-to-bottom — the keys phones don't have.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-new-project.png" width="200" alt="Name-this-project modal with a placeholder project name and optional description field"><br><b>New project</b><br><sub>Name it, describe it (optional), and it's in the launcher for good.</sub></td>
+</tr>
+<tr>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-session-list.png" width="200" alt="Cloude Code launcher showing five running terminal sessions with status badges"><br><b>Running sessions</b><br><sub>Every RUNNING / TMUX session at a glance, refreshed every 5s.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/phone/phone-recent-projects.png" width="200" alt="Recent projects list showing six project cards with generic names and home-directory paths"><br><b>Recent projects</b><br><sub>Name, path, and description for every registered project.</sub></td>
+<td align="center" width="33%"><img src="docs/assets/screenshots/mobile-auth-screen.png" width="200" alt="Cloude Code login screen showing a 6-digit TOTP code entry field with a coral login button on a near-black background"><br><b>TOTP login</b><br><sub>No password. Six digits from your authenticator app.</sub></td>
+</tr>
+</table>
+
+<sub><b>23 themes, one live session</b></sub>
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/assets/screenshots/phone/phone-theme-picker.png" width="260" alt="iOS native theme picker dropdown listing available terminal themes with Claude checked"><br><b>Native theme picker</b><br><sub>The real iOS dropdown — headless Chromium can't render this control. ~15 of 23 themes visible in one scroll.</sub></td>
+<td align="center" width="50%"><img src="docs/assets/screenshots/phone/phone-terminal-idle.png" width="260" alt="Idle terminal session showing the welcome banner, active model, and effort indicator"><br><b>Claude theme, live</b><br><sub>The theme the picker has checked, running in the same session.</sub></td>
+</tr>
+</table>
+
+<br>
+
+<img src="docs/assets/screenshots/desktop-terminal-live.png" width="100%" alt="Wide desktop terminal window running a live Claude Code session with the theme selector and session controls visible in the header">
+<br><sub><b>Desktop terminal</b> — same live session, full header chrome: theme picker, connection dot, destroy/logout.</sub>
+
+<br><br>
+
+<img src="docs/assets/screenshots/desktop-launchpad.png" width="100%" alt="Desktop view of the Cloude Code launcher with a list of running sessions and their status badges">
+<br><sub><b>Desktop launcher</b> — running sessions at a glance, wide layout.</sub>
+
+<br><br>
+
+<img src="docs/assets/screenshots/desktop-session-list.png" width="100%" alt="Desktop session list showing eight running Claude Code sessions with RUNNING, TMUX, and EXTERNAL status badges and relative timestamps">
+<br><sub><b>Running sessions</b> — Cloude-owned and adopted external sessions in one list, refreshed every 5 seconds.</sub>
+
+</div>
+
+---
+
+## Why this exists
+
+**You're chained to the desk.** A Claude Code run takes twenty minutes or two hours. The moment you walk away you're blind — and often the only thing it needs from you is a one-word answer. That was the entire premise of the first commit, and it still is.
+
+**Terminals on phones are unusable.** No Tab key. Enter submits instead of inserting a newline. Backspace, Esc, and arrows get swallowed. You can't select text to copy an error message. Cloude Code fixes each of these individually instead of pretending a raw SSH client is fine on a 6-inch screen.
+
+**Leaving a session shouldn't kill it.** Early versions destroyed the tmux session when you clicked a different project. That became the project's hardest rule:
+
+> *"Leaving a session should keep tmux alive on the server so you can re-adopt it later."*
+
+Switching projects, closing the tab, losing WiFi, restarting the server — none of them touch your session. Only an explicit kill does.
+
+**You don't know when Claude needs you.** Claude Code's TUI gives no external signal. Cloude Code reads the pane's own output, classifies it as thinking / running a tool / waiting on permission / idle, and pushes a notification the moment a human is the bottleneck — with the project name deliberately stripped out of the payload.
+
+<div align="center">
+<img src="docs/assets/concept-anywhere.png" alt="Isometric illustration of a phone streaming an encrypted coral-colored connection, marked by a padlock icon, to a Mac laptop on a desk." width="85%">
+</div>
 
 ---
 
 ## Features
 
-- **TOTP + JWT auth** — 6-digit TOTP unlocks a 15m access token + 7d refresh
-  token; refresh rotates with reuse-detection that revokes the entire chain on
-  a replayed refresh.
-- **WebSocket subprotocol auth** — JWT flows through `Sec-WebSocket-Protocol`,
-  not a query string. Close codes 4401 (auth) / 4400 (malformed) per RFC 6455.
-- **Tmux persistence** — sessions live on a dedicated socket. Restart the server,
-  reboot, nuke the Electron app — tmux keeps your pane alive and the launchpad
-  re-adopts it on next boot.
-- **Verbatim session naming** — project "Cloude Code Dev" becomes tmux session
-  `cloude_Cloude Code Dev`. The only transforms: `.`→`_`, `:`→`_`, collapse
-  whitespace runs, strip edges. Legacy `cloude_ses_<hex>` sessions stay
-  supported.
-- **Adopt-external sessions** — start a tmux session by hand
-  (`tmux -L cloude new -s mywork`) and the launchpad lists it for one-click
-  adoption. Cloude-owned vs user-owned is cross-referenced against a persisted
-  owned-set, not a spoofable prefix. Adopting an external session also
-  auto-adds it to **Recent Projects**, so the entry survives an external
-  `tmux kill-session` and you can relaunch with one click.
-- **Detach-not-destroy invariant** — switching sessions never kills. The X
-  button is the *only* kill path in the UI. `tmux kill-session` is the only
-  kill path in the shell. Everything else detaches.
-- **Dynamic resize** — a WS resize handshake on every connect: server requests
-  dims, client measures and replies, backend resizes the tmux window, Ctrl+L
-  forces a clean redraw. No scrollback replay at the wrong geometry.
-- **Deep-link routing** — `/session/<project>` serves the SPA shell; the
-  client-side router auto-selects the project post-auth.
-- **ntfy push notifications** — opt-in. IdleWatcher FSM detects permission
-  prompts and task completion from the byte stream. Rate-limited, privacy-
-  preserving (no project names in ntfy payloads).
-- **Slack incoming-webhook fanout** *(v0.7.0)* — opt-in additional notification
-  channel. Set `notifications.slack_webhook_url` to a Slack incoming-webhook
-  URL and the same events that fire ntfy POSTs ALSO drop into your Slack
-  channel with a per-event emoji + title + 200-char snippet. Fire-and-forget
-  — network errors are logged at WARN and never propagate. Empty URL = channel
-  silently disabled.
-- **Project themes** *(v0.7.0)* — 23 bundled themes
-  (`acid_trip`, `alien`, `black_market`, `blade_runner`, `calming`,
-  `cannabis`, `claude`, `claw`, `codex`, `corporate_v2`, `dracula`,
-  `gameboy`, `green_crt`, `hermes`, `jagermeister`, `legacy_apple`,
-  `legacy_windows`, `lovecraft`, `matrix`, `metal`, `pokemon`, `snes`,
-  `terminal`) plus a pluggable `~/Library/Application Support/cloude-code-menubar/themes/`
-  directory for user-authored themes. A theme is a `theme.json` manifest of
-  CSS custom properties + xterm.js palette, optionally backed by `theme.css`
-  overrides and an `effects.js` script (effects scripts are gated through a
-  3-state allowlist in `localStorage`). Themes apply at three scopes:
-  **global** (`<html data-theme>` + `:root` vars + xterm palette, persisted
-  to `localStorage`), **per-session pinned** (PATCH on the server, survives
-  reloads), and **per-agent default** (e.g. Codex sessions auto-pin
-  `codex`). The Matrix and Blade Runner themes ship with optional ambient
-  audio effects (see `client/js/themeAudio.js`).
-- **Toast notifications (in-app)** *(v0.7.0)* — server-side toast records
-  flow over WebSocket (`toast.new` / `toast.ack` frames) AND backfill via
-  REST on session attach. Each toast carries the active project theme's
-  accent color, applied as `--toast-accent` for a colored left border.
-  Cross-tab dismiss is server-driven (no `localStorage` sync), so acking a
-  toast in one browser dismisses it in lockstep everywhere the same
-  session is open.
-- **Claude Code lifecycle hooks** *(v0.7.0)* — at FastAPI startup,
-  `claude_hooks.ensure_hook_settings()` idempotently merges three managed
-  entries (`Stop`, `Notification`, `PermissionRequest`) into
-  `~/.claude/settings.json`. Each hook is a backgrounded `curl` that POSTs
-  the JSON payload (read from stdin) to the loopback-only
-  `POST /api/v1/hooks/claude-event` route. Auth: HMAC bearer token
-  (`CLOUDECODE_HOOK_TOKEN`) injected at tmux spawn time into the `claude`
-  process's env. Idempotency: each managed hook embeds the literal
-  `# cloudecode-managed` marker so re-merges replace cloudecode's entries
-  in place and never touch the user's own hooks. Opt-out:
-  `notifications.disable_claude_hooks: true`. Parse errors / write errors
-  log and bail — server boot is never blocked.
-- **Inline session rename** *(v0.7.0)* — the launchpad's running-session
-  rows show a pencil (✎) icon next to the session name. Clicking it
-  swaps the row into an inline edit input; submit hits
-  `PATCH /api/v1/sessions/{session_id}/rename`, which broadcasts a
-  `session.renamed` WS frame to every attached browser so the new name
-  paints in lockstep across tabs. Only sessions with a known
-  `session_id` get the pencil — pre-adoption external sessions don't
-  (adopt first, then rename from the in-session header).
-- **Pluggable tunnel backend** — `local_only` (default), `quick_cloudflare`,
-  `named_cloudflare`. Double-flag guard: you have to pick a Cloudflare backend
-  *and* flip `enable_cloudflare=true` to actually go public.
-- **Electron menu bar (macOS)** — tray icon, server start/stop, health polling
-  (against the configured bind host), launch-at-login via LaunchAgent.
-  Tray menu surfaces a **Bind IP submenu** (loopback / LAN / `0.0.0.0`),
-  a **Copy OTP** item that shows the live 6-digit code with roll hint,
-  and a **Copy Published URL** item.
-- **Docker (alternative)** — pure-container deployment for Linux / headless
-  hosts. Python server + Claude CLI both run in the container.
-- **Strict CSP** — no inline `<script>`, SVG allowlisted from `cdn.jsdelivr.net`,
-  `frame-ancestors 'none'`, clickjack defense, no-referrer policy.
-- **First-run auto-bootstrap (macOS)** — Electron menu-bar app self-provisions
-  a Python venv under `~/Library/Application Support/cloude-code-menubar/`,
-  installs requirements, mints `.env` + TOTP secret, and pops the QR. Zero
-  terminal interaction required. Subsequent launches fast-path in <50ms by
-  verifying a venv + `.env` + deps-hash sentinel trio. Bundled `src/` and
-  `client/` are re-synced on every launch so upgrades land cleanly.
-- **Mobile cache-busting** — iOS Safari aggressively caches `.html` and `.js`
-  served over LAN HTTP. `NoCacheStaticFiles` stamps
-  `Cache-Control: no-cache, must-revalidate` on every HTML/JS response so
-  the phone sees the latest UI after every app upgrade.
-- **Shift+Enter newline** — survives session swap; tmux-side `extended-keys on`
-  + `terminal-features ":extkeys"` + `escape-time 0` interpret CSI-u
-  encodings; client emits ESC+CR (`\x1b\r`) and suppresses xterm's hidden-
-  textarea duplicate `\r` via `ev.preventDefault()`. Forensic logging via
-  `ws_input_short` traces the exact bytes hitting tmux.
-- **Image paste** — Cmd/Ctrl+V drops a clipboard image into a per-session
-  `.cloude_uploads/` and types its absolute path into the Claude Code
-  prompt with a trailing space (Claude Code auto-attaches paths with
-  `.png/.jpg/.gif/.webp` extensions). iOS gets a 📎 button that tries
-  `navigator.clipboard.read()` then falls back to a file picker. Server
-  validates with magic-byte verification (Pillow), 10 MB cap. Background
-  sweeper prunes uploads older than `uploads.ttl_seconds` (24h default)
-  every `uploads.sweep_interval_seconds` (1h default).
+75 features across 8 groups. ⭐ marks the ones that define the tool.
+
+### Remote terminal — the live pipe
+
+| Feature | What it does for you |
+|---|---|
+| ⭐ **Sessions that outlive everything** | Your terminal lives in a dedicated `tmux -L cloude` socket, not inside the web server. Close the tab, lose WiFi, restart the server — the session is still there when you come back, mid-thought. |
+| **Byte-for-byte streaming** | Real xterm.js rendering of the actual pane bytes over one WebSocket. Colors, spinners, box drawing, the whole Claude Code TUI. |
+| **Binary-safe keystroke routing** | Backspace deletes, Esc dismisses, Ctrl+C interrupts, and a 3KB paste arrives as a paste. Three separate tmux write paths pick the right one per input. |
+| **Resize handshake, not stale replay** | Rotate your phone or pop the keyboard and the remote terminal re-wraps correctly instead of showing you last-screen-width garbage. |
+| **Scrollback replay on rejoin** | Reconnect and you get history back, snapped to the bottom — not an empty screen. |
+| **Auto-reconnect with backoff** | A dropped connection retries 1s → 2s → 4s → 8s → 16s. An auth-close triggers a token refresh instead of a doomed retry loop. |
+| **GPU rendering with a safety net** | WebGL-accelerated terminal that survives iOS Safari yanking the GL context under memory pressure — it falls back to the DOM renderer instead of dying. |
+| **50,000-line scrollback, Unicode 11** | Long runs stay scrollable. Emoji and wide glyphs occupy the right number of cells. |
+| **Wheel-scroll that actually scrolls** | The mouse wheel moves the scrollback buffer instead of being translated into arrow keys that make Claude cycle through your prompt history. |
+| **Dead-on-arrival detection** | If the agent binary is missing or auth fails, you get a real error with the pane's last output — not a terminal that hangs forever. |
+
+### Session and project control
+
+| Feature | What it does for you |
+|---|---|
+| ⭐ **Adopt a session you started by hand** | Run `tmux -L cloude new -s work` in Terminal.app, iTerm, or Warp and it shows up in the launchpad, adoptable, with no duplicated or lost output. The web UI is not the only door in. |
+| ⭐ **Two Claudes, one directory** | Clicking a project always spawns a *new* session instead of reattaching, so you can run parallel agents against the same checkout. |
+| **"Detach, never destroy"** | Switching projects, closing a tab, or navigating away leaves tmux running. Only an explicit kill destroys a session. |
+| **Running-sessions dashboard** | One list merging Cloude-owned and adoptable external sessions with relative ages, refreshed every 5s. Tap to attach, pencil to rename, X to kill. |
+| **Live session rename** | Rename a running session from the header or the list. The change hits tmux for real and broadcasts to every other open tab instantly. |
+| **Six-way speed dial** | One "+" button: new project, open from folder, clone from GitHub, connect OpenClaw, connect Hermes, or a bare console. |
+| **Clone straight from GitHub** | Paste `owner/repo`, pick a parent directory, and it runs `gh repo clone` server-side with typed errors for auth failure, not-found, name conflict, and missing `gh`. |
+| **Server-side folder picker** | Browse the Mac's filesystem from your phone to pick a project directory — with up/home shortcuts, type-ahead, and auto-`mkdir -p` for a path that doesn't exist yet. |
+| **Project registry CRUD** | Add, rename, edit, and delete saved projects inline without leaving the list. |
+| **Deep links to a session** | `/session/<project>` opens straight into that project after auth. That's what makes a push notification tappable. |
+| **Kill dead external sessions** | Even a tmux session with a dead pane — which adoption can't touch — can be killed directly by name. |
+| **Ownership ACL on adopt** | Cloude tracks which tmux sessions it created, so a session merely *named* `cloude_*` can't spoof its way into the trusted set. |
+
+### Mobile-first input — why this works on a phone at all
+
+| Feature | What it does for you |
+|---|---|
+| ⭐ **Long-press to select, tap to copy** | xterm.js has zero touch selection. This adds the full gesture: long-press, drag to highlight, floating copy button at your fingertip — with the on-screen keyboard suppressed the whole time. |
+| **Virtual D-pad** | Floating overlay with arrows, Enter, Esc, Tab, Shift+Tab and jump-to-bottom, sent as real ANSI sequences. |
+| **Currency-key shortcuts** | The ¥ / € / £ keys on every stock mobile keyboard are remapped to Newline / Tab / Shift-Tab, so you never leave the main keyboard layer. |
+| **📎 clipboard menu** | One button, two options — paste from clipboard or attach an image — because iOS Safari won't reliably fire a `paste` event into a terminal. |
+| **Copy chord that respects SIGINT** | Cmd+C (or Ctrl+Shift+C) copies your selection. Bare Ctrl+C is never intercepted and always reaches the process as an interrupt. |
+| **Shift+Enter inserts a newline** | Multi-line prompts work. Shift+Enter sends the escape sequence Claude Code's input parser understands instead of submitting. |
+| **Paste an image into a prompt** | Screenshot, paste, and the file lands on the Mac's disk with its path typed into your prompt and a trailing space so you keep writing. Claude Code attaches it on submit. |
+| **74-command slash palette** | Every Claude Code slash command, grouped into 10 categories plus a server-configurable quick grid. Tapping inserts the text — it never fires anything on its own. |
+| **Viewport-aware floating UI** | Menus and buttons are clamped to the visual viewport, so a collapsing iOS URL bar or an opening keyboard never parks a menu off-screen. |
+| **Focus scroll-into-view** | Tapping the terminal on a narrow screen scrolls the active line above the keyboard. |
+| **Smart auto-scroll** | Follows output until you scroll up, then gets out of your way until you return to the bottom. |
+
+### Awareness — knowing what Claude is doing without watching
+
+| Feature | What it does for you |
+|---|---|
+| ⭐ **"Claude is waiting on you" push** | A state machine reads the pane's own box-drawing output to detect a permission prompt or a finished task, then pushes to your phone. It rejects false positives from things like `grep Allow` output and markdown quote blocks. |
+| **Privacy-scrubbed notifications** | Push payloads carry canned generic text only — never a project name, never session content. The identifying detail lives solely in the tap-through deep link. |
+| **Slack webhook channel** | The same events fanned to a Slack incoming webhook if you'd rather get them there. |
+| **Native Claude Code hook wiring** | On boot it idempotently merges a managed block into `~/.claude/settings.json` so Claude's own Stop / Notification / PermissionRequest hooks feed the pipeline. Best effort — it never blocks startup. |
+| **In-app toasts with cross-tab ack** | Toasts arrive over the session WebSocket. Dismissing one on your laptop dismisses it on your phone. Missed toasts are backfilled on reconnect. |
+| **Dev-server auto-detection** | When Claude starts `npm run dev`, the detected port is TCP-probed and surfaced as a clickable link — and disappears when the server stops. |
+| **Bounded, rate-limited dispatch** | A 100-deep drop-oldest queue with a global cap and per-kind cooldown means a chatty session can't notification-bomb your phone. |
+| **Connection status dot** | A header indicator polling `/health` every 15s outside a session, yielding to the live WebSocket state once one is open. |
+
+### Multi-agent and provider routing
+
+| Feature | What it does for you |
+|---|---|
+| ⭐ **Pick your model at launch** | Every launch path pops a selector: pinned "Claude" on your own subscription, or any saved OpenRouter model. Add and remove models in-app, no config file editing. |
+| **Five agent types** | `claude`, `codex`, `hermes`, `openclaw`, and a plain `shell` — a real console with no AI in it at all. |
+| **Agent fingerprinting on adopt** | When you adopt an outside tmux session, a regex bank identifies which CLI is actually running in it. |
+| **Color-coded agent badges** | Sessions are visually tagged by agent so a screen full of them stays readable. |
+
+### Security and auth
+
+| Feature | What it does for you |
+|---|---|
+| **TOTP-only login** | No password to leak. Any RFC 6238 app — Authy, 1Password, Google Authenticator — with ±30s drift tolerance. |
+| **Refresh-token theft detection** | Tokens rotate on every refresh. Replaying an old one burns the whole chain and forces a fresh TOTP, logging out the attacker *and* you. |
+| **Your Claude token never touches this app** | Sessions launch through *your own* `cld` / `cldor` zsh function, so the Keychain lookup happens inside the spawned tmux pane. Cloude Code never sees an OAuth token or API key. |
+| **JWT kept out of your proxy logs** | WebSocket auth rides the `Sec-WebSocket-Protocol` handshake instead of a `?token=` query string. |
+| **TOTP replay defense** | A 90-second TTL cache plus an async lock means a sniffed 6-digit code can't be reused inside its own validity window. |
+| **Rate-limited auth** | 5/minute and 20/hour on TOTP verify by default. Proxy headers are distrusted unless you explicitly opt in. |
+| **JWT hardening** | The algorithm is pinned to HS256, which kills the `alg:none` bypass, and a `typ` claim stops a refresh token being used as an access token. |
+| **Pairing locks after first login** | Once you've logged in successfully, `/auth/qr` refuses to hand out the TOTP secret again — no LAN neighbor can pair their own authenticator. |
+| **Shell-injection hardening on model IDs** | OpenRouter model strings are regex-validated *and* double-`shlex.quote`d across both shell layers. |
+| **Hook endpoint double-gated** | Claude Code's own lifecycle hooks post to a loopback-only endpoint that also requires a per-session random HMAC bearer token, compared in constant time. |
+| **CORS that can't go wildcard** | Origins are computed from your host and port. `"*"` is structurally impossible because the middleware runs with credentials. |
+| **CSP and hardening headers** | `default-src 'self'`, `frame-ancestors 'none'`, nosniff, and no-referrer on every response. |
+| **Upload validation in depth** | Extension allowlist, PIL structural verify, magic-byte cross-check, and a size cap. Files land `0600` in a `0700` directory and are TTL-swept. |
+| **tmux target-injection guard** | Session names containing tmux's own `:` and `.` target separators are refused before they can reach a `-t` argument. |
+
+### Theming and personality
+
+| Feature | What it does for you |
+|---|---|
+| **23 hand-built themes** | acid_trip · alien · black_market · blade_runner · calming · cannabis · claude · claw · codex · corporate_v2 · dracula · gameboy · green_crt · hermes · jagermeister · legacy_apple · legacy_windows · lovecraft · matrix · metal · pokemon · snes · terminal |
+| **Per-project theme pinning** | The theme is stored in a `.cc.theme` dotfile inside the project directory, so every device that opens that project gets the same look — and it survives session renames. |
+| **Drop-in custom themes** | Author a `theme.json` in the user themes directory and it's discovered live on the next `GET /themes`. No rebuild. |
+| **Live theme swap** | Changing themes re-palettes the running terminal instantly. No reconnect, no re-render of the session. |
+| **Ambient theme audio (capability)** | The theme format supports an `audio` block with Web Audio crossfade, muted by default and only initialized on a real user click. It ships **dormant** — no bundled theme uses it. |
+| **Reduced-motion respected** | `prefers-reduced-motion: reduce` is honored. |
+
+### Native macOS app and ops
+
+| Feature | What it does for you |
+|---|---|
+| **Zero-terminal first run** | Drag the DMG to Applications and launch. It finds Python 3.12+, builds a venv, pip-installs, generates your TOTP and JWT secrets at `chmod 0600`, and pops the pairing QR. You never open a terminal. |
+| **Menu-bar control surface** | Start, stop, and restart the server, see session and detected-server counts, and open logs — all from the tray. |
+| **Copy OTP from the tray** | The tray computes the live 6-digit code itself with a zero-dependency RFC 6238 implementation and copies it, so you don't reach for your phone to log in from the same Mac. |
+| **Bind-IP picker** | Choose loopback, one specific LAN interface, or all interfaces from a menu. The server restarts bound to your choice. No config file, no restart script. |
+| **Launch at login** | Installs a LaunchAgent so the server is up before you are. |
+| **Safe upgrades** | Every packaged launch rsyncs the bundled `src/` and `client/` over your user-data copy using an allowlist that preserves your secrets, config, and themes. |
+| **Dependency-hash fast path** | A sha256 of `requirements.txt` gates re-installs, so subsequent launches skip pip entirely. |
+| **"Nuke it from Orbit"** | One menu item for a complete teardown: venv, secrets, config, LaunchAgent, and application support directory. |
+| **Docker deployment mode** | A full container path for Linux hosts, with a documented limitation — see [Honest limits](#honest-limits). |
+| **Remote reset and shutdown** | Reset and graceful-shutdown endpoints, so you can recover the server from the browser you're already in. |
 
 ---
 
-## Architecture
+## How it works
 
-```
-  ┌──────────────────────── REMOTE CLIENT (browser) ────────────────────────┐
-  │   xterm.js  ·  TOTP login  ·  Launchpad (running + projects)  ·  D-pad  │
-  └─────────────────────────────────┬───────────────────────────────────────┘
-                                    │  HTTPS + WSS
-                                    │  Authorization: Bearer <JWT>          (REST)
-                                    │  Sec-WebSocket-Protocol: cloude.jwt.v1, <JWT>
-                                    ▼
-  ┌────────────────────────────── MAC HOST ─────────────────────────────────┐
-  │                                                                         │
-  │  ┌── Electron (menu bar) ──┐         ┌── FastAPI (uvicorn :8000) ──┐    │
-  │  │ · tray icon             │ spawn   │ · /api/v1/auth/*            │    │
-  │  │ · ServerManager         │────────▶│ · /api/v1/sessions/*        │    │
-  │  │ · health poll /health   │◀────────│ · /ws/terminal              │    │
-  │  │ · LaunchAgent installer │         │ · /health  (unauth)         │    │
-  │  └─────────────────────────┘         │ · strict CSP middleware     │    │
-  │                                      └──────────────┬──────────────┘    │
-  │                                                     │                   │
-  │       ┌────────────── SessionManager ───────────────┤                   │
-  │       │ · single-active invariant                   │                   │
-  │       │ · owned_tmux_sessions (persisted)           │                   │
-  │       │ · adopt / detach / destroy flows            │                   │
-  │       │ · _sanitize_tmux_name(project_name)         │                   │
-  │       └────────────────────┬────────────────────────┘                   │
-  │                            │                                            │
-  │                            ▼                                            │
-  │  ┌────────────────── SessionBackend (ABC) ────────────────────────┐     │
-  │  │                                                                 │     │
-  │  │   TmuxBackend  ───── tmux -L cloude  ──── pipe-pane ──► FIFO   │     │
-  │  │       │                  │                                │    │     │
-  │  │       │                  └── capture-pane (scrollback)    │    │     │
-  │  │       │                                                   ▼    │     │
-  │  │       │                                           tail loop ──►│ WS  │
-  │  │       │                                                   ▲    │     │
-  │  │       │ binary-safe write paths:                          │    │     │
-  │  │       │   send-keys -l  (short, control-free UTF-8)       │    │     │
-  │  │       │   send-keys -H  (short, control bytes / keys)     │    │     │
-  │  │       │   load-buffer + paste-buffer -d -p  (large)       │    │     │
-  │  │       │                                                        │     │
-  │  │   PTYBackend   ────── fallback (no tmux on PATH) ───────        │     │
-  │  └─────────────────────────────────────────────────────────────────┘     │
-  │                                                                         │
-  │  ┌── NotificationRouter ──┐    ┌── TunnelBackend (ABC) ──┐              │
-  │  │ · IdleWatcher FSM      │    │ · local_only (default)  │              │
-  │  │ · RateLimiter          │    │ · quick_cloudflare      │              │
-  │  │ · ntfy.sh backend      │    │ · named_cloudflare      │              │
-  │  └────────────────────────┘    └─────────────────────────┘              │
-  └─────────────────────────────────────────────────────────────────────────┘
-```
+1. **You open the web UI** on a phone or laptop on the same network as the Mac (or over Tailscale, Teleport, or your own VPN). FastAPI serves a plain static SPA — no framework, no bundler, no build step.
+2. **You enter a 6-digit TOTP code.** The server mints a 4-hour access JWT and a 7-day refresh JWT. The refresh token is tracked in SQLite with rotation and reuse detection.
+3. **You pick a project and a model.** The server resolves a shell command. For Claude that is always `zsh -c 'source ~/.zshrc; cld'` (or `cldor <model>` for OpenRouter), so *your* Keychain lookup happens inside the spawned pane and no credential ever passes through Cloude Code.
+4. **tmux does the real work.** `SessionManager` runs `new-session -d` on a dedicated `tmux -L cloude` socket. The pane is never attached — instead `pipe-pane` streams raw bytes to a FIFO that the server tails asynchronously.
+5. **Bytes go out over one WebSocket.** `/ws/terminal` carries pane output as binary frames and control events — toasts, renames, detected dev servers — as JSON on the same socket. Auth is in the `Sec-WebSocket-Protocol` header, never the URL.
+6. **Your keystrokes go back the same way.** The server picks one of three tmux write paths per input: `send-keys -l` for plain text, `send-keys -H` for control bytes, and `load-buffer` + `paste-buffer` bracketed paste for anything over 256 bytes.
+7. **In parallel, an IdleWatcher reads every output chunk**, classifies the pane state, and fires push notifications and in-app toasts when Claude is waiting on a human.
+8. **The Electron menu-bar app owns the lifecycle.** It provisions the venv, spawns `python3 -m src.main`, health-polls it, and lets you re-bind which network interface it listens on.
 
-**Why a dedicated tmux socket.** `tmux -L cloude` spawns a tmux server distinct
-from the user's default one. We never touch, list, or kill sessions on the
-user's personal tmux. Everything Cloude Code does is scoped to our socket.
+Because state lives in tmux and on disk rather than in the web process, killing the browser, the WebSocket, or the whole FastAPI server does not touch your session.
 
-**Why the SessionBackend ABC.** Two backends ship: `TmuxBackend` (default when
-`tmux` is on PATH; survives server restart) and `PTYBackend` (fallback; dies
-with the parent). `build_backend()` reads `AuthConfig.session.backend`
-(`auto` | `tmux` | `pty`) and degrades gracefully when tmux is missing.
+```mermaid
+flowchart LR
+    P["📱 Browser<br/>xterm.js SPA"]
+    E["🖥️ Electron menu bar<br/>(spawns + supervises)"]
+    A["🔐 TOTP → JWT<br/>+ refresh rotation"]
+    S["⚡ FastAPI server<br/>:8000"]
+    W(["🔌 WebSocket /ws/terminal<br/>binary out · keys in"])
+    M["🧠 SessionManager"]
+    T[("🪟 tmux -L cloude<br/>detached panes")]
+    C["🤖 claude / codex / hermes<br/>via your cld · cldor"]
+    F["📄 pipe-pane FIFO"]
+    I["👁️ IdleWatcher<br/>state machine"]
+    N["🔔 ntfy · Slack · toasts"]
 
-**Why the NotificationRouter has a queue.** `emit()` is synchronous and
-non-blocking — it's called from the PTY chunk handler, which is load-bearing
-for terminal streaming. The async worker drains the queue, rate-limits, and
-fires ntfy POSTs. Send failures never propagate.
+    P -->|"6-digit code"| A
+    A --> S
+    P <-->|"JWT in subprotocol"| W
+    W <--> S
+    S --> M
+    M -->|"new-session -d"| T
+    T --> C
+    C --> F
+    F -->|"tail"| M
+    M --> W
+    M --> I
+    I --> N
+    N -.->|"deep link /session/name"| P
+    E -->|"python3 -m src.main"| S
 
----
-
-## File structure
-
-```
-cloudecode/
-├── macOS/                               # Electron menu-bar app
-│   ├── main.js                          # Tray icon, app lifecycle, About dialog
-│   ├── server-manager.js                # Python subprocess lifecycle + health poll
-│   ├── launchagent-installer.js         # LaunchAgent plist install/uninstall
-│   ├── preload.js                       # Secure IPC bridge
-│   ├── package.json                     # Electron + electron-builder config
-│   └── assets/                          # Tray icon, app icon
-│
-├── src/                                 # Python backend
-│   ├── main.py                          # FastAPI app, lifespan, CSP middleware
-│   ├── config.py                        # pydantic-settings + AuthConfig/SessionConfig/TunnelConfig
-│   ├── models.py                        # pydantic request/response models
-│   ├── api/
-│   │   ├── routes.py                    # REST endpoints (sessions, tunnels, projects)
-│   │   ├── auth.py                      # TOTP verify + JWT refresh + slowapi
-│   │   ├── deps.py                      # WS subprotocol auth helper
-│   │   └── websocket.py                 # /ws/terminal + resize handshake
-│   ├── core/
-│   │   ├── session_backend.py           # SessionBackend ABC + build_backend()
-│   │   ├── session_manager.py           # single-active invariant + adopt/detach/destroy
-│   │   ├── tmux_backend.py              # tmux -L cloude impl + binary-safe writes
-│   │   ├── refresh_store.py             # aiosqlite JWT refresh-token store
-│   │   ├── log_monitor.py               # pattern detection on pane output
-│   │   ├── auto_tunnel.py               # auto-tunnel orchestrator
-│   │   ├── notifications/
-│   │   │   ├── router.py                # bounded-queue dispatcher + rate limiter
-│   │   │   ├── idle_watcher.py          # FSM: prompt / permission / task-complete
-│   │   │   ├── rate_limit.py            # global cap + per-kind cooldown
-│   │   │   ├── ntfy.py                  # ntfy.sh backend (privacy-preserving)
-│   │   │   └── events.py                # EventType + NotificationEvent
-│   │   └── tunnel/
-│   │       ├── manager.py               # TunnelManager router
-│   │       └── backends/
-│   │           ├── base.py              # TunnelBackend ABC
-│   │           ├── local_only.py        # LAN-only (default)
-│   │           ├── quick_cloudflare.py  # *.trycloudflare.com
-│   │           └── named_cloudflare.py  # persistent Cloudflare named tunnel
-│   └── utils/                           # pty_session, templates, patterns
-│
-├── client/                              # Web frontend (vanilla JS)
-│   ├── index.html                       # SPA shell (strict CSP)
-│   ├── js/
-│   │   ├── api.js                       # REST + WS client
-│   │   ├── auth.js                      # TOTP login, JWT storage, refresh
-│   │   ├── launchpad.js                 # Running sessions + existing projects
-│   │   ├── terminal.js                  # xterm.js integration
-│   │   ├── dpad.js                      # Mobile D-pad controls
-│   │   ├── slash-commands.js            # Slash command palette
-│   │   ├── router.js                    # /session/<project> deep-link router
-│   │   └── app.js                       # App controller
-│   └── css/styles.css                   # Dark theme, responsive
-│
-├── tests/                               # pytest suite
-│   ├── test_session_backend.py
-│   ├── test_ws_subprotocol_auth.py
-│   ├── test_refresh_tokens.py
-│   ├── test_totp_rate_limit.py
-│   ├── test_notifications.py
-│   ├── test_rate_limiter.py
-│   ├── test_idle_watcher.py
-│   ├── test_tunnel_manager.py
-│   └── test_deep_link_routing.py
-│
-├── docs/
-│   ├── deployment-docker.md             # Mode 2 operator guide
-│   └── superpowers/                     # Design specs + plans
-│
-├── scripts/preflight-bind-ip.sh         # Docker LAN-IP sanity check
-├── Dockerfile                           # python:3.12-slim + tmux + Node + claude CLI
-├── docker-compose.yml                   # Volume layout, UID/GID mapping
-├── requirements.txt                     # Python deps
-├── config.example.json                  # Reference config
-├── .env.example                         # Reference env vars
-├── setup.sh                             # venv + pip + cloudflared installer
-├── setup_auth.py                        # Interactive TOTP/JWT/Cloudflare/ntfy wizard
-├── start.sh / stop.sh / reset.sh / nuke.sh   # Shell helpers
-└── README.md
+    linkStyle default stroke-width:1.5px
 ```
 
 ---
 
-## Prerequisites
+## Install
 
-| Requirement     | Version      | Notes                                                           |
-| --------------- | ------------ | --------------------------------------------------------------- |
-| macOS           | 13+          | Electron app targets recent macOS                               |
-| Python          | 3.12         | pydantic-settings + slowapi + aiosqlite                         |
-| tmux            | 3.2+         | `brew install tmux` — required for the tmux backend             |
-| Node.js         | 20+          | Only required to build/run the Electron app                     |
-| Claude CLI      | Latest       | `claude` on `PATH` or `CLAUDE_CLI_PATH` in `.env`               |
-| cloudflared     | Any recent   | Only if you enable a Cloudflare tunnel backend                  |
+### Before you start — three things that will bite you
 
-Quick sanity check:
+**1. You must define a `cld` function in your `~/.zshrc`.** This is not optional and it is the single most common install failure.
+
+For `agent_type == "claude"`, the launch command is hardcoded to `zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'`. The environment variable `CLAUDE_CLI_PATH` and the `agents.claude_command` config key are **legacy and bypassed** for Claude sessions. Without a `cld` function, every Claude session dies on arrival with `command not found`.
+
+```zsh
+# ~/.zshrc — minimum viable definition
+cld() { claude "$@"; }
+
+# Only needed if you use the OpenRouter option in the provider selector.
+# It receives the model id as its first argument.
+cldor() { local m="$1"; shift; claude --model "$m" "$@"; }
+```
+
+Three rules for these:
+
+- **Make it a function, not an alias.** Aliases are resolved at parse time and will not be available to the command string the server runs.
+- **It must exec the agent in the foreground.** The tmux pane *is* the session; if your function backgrounds or daemonizes, there's nothing to stream.
+- **Put credential lookups inside the function.** That is the entire reason this indirection exists — your API key or OAuth token resolves inside the spawned pane, and Cloude Code never sees it. The author's own functions pull from macOS Keychain entries (`claude-cld-oauth`, `claude-cldor-openrouter`); yours can do whatever you want, as long as it happens in here.
+
+**2. Do not run `./setup.sh`.** It is stale and broken. It hard-exits if `cloudflared` is not installed and then demands a Cloudflare API token, zone ID, and domain — all leftovers from a tunnel subsystem that no longer exists in this codebase. Use the DMG or the manual from-source path below. `setup_auth.py` is current and correct.
+
+**3. macOS only** for the packaged app, Apple Silicon only, macOS 13+. There is no Intel build, no Windows build, and no Linux desktop build. Linux servers are covered by the Docker path.
+
+### Prerequisites
+
+| Requirement | Version | Why |
+|---|---|---|
+| macOS on Apple Silicon | 13+ | The only DMG built is `arm64` |
+| Python | **3.12+** | Hard-enforced by the bootstrapper. No fallback to 3.11 |
+| tmux | 3.2+ | `brew install tmux`. Without it you silently drop to the PTY backend and **lose session persistence** |
+| Claude Code CLI | current | Installed and logged in on the Mac |
+| A `cld` function in `~/.zshrc` | — | Mandatory. See above |
+| Node.js | 20+ | Only if building the Electron app from source |
+| `gh` CLI | — | Only if you use clone-from-GitHub |
+
+### Path A — DMG (recommended)
 
 ```bash
-python3 --version          # >= 3.12
-which tmux                 # expect /opt/homebrew/bin/tmux or /usr/local/bin/tmux
-which claude               # expect a path; else export CLAUDE_CLI_PATH in .env
+# 1. Download
+curl -LO https://github.com/Adoom666/CloudeCode/releases/download/v0.8.1/Cloude.Code-0.8.1-arm64.dmg
+
+# 2. Verify
+shasum -a 256 Cloude.Code-0.8.1-arm64.dmg
+# expected: 00f1beb6af6176ce904d3df472d5d6e37b4400736b2e04255cf72dcbcc89cfa5
 ```
 
-If tmux is missing the app falls back to `PTYBackend` — functional, but sessions
-die with the server. Install tmux to get persistence.
+3. Open the DMG, drag **Cloude Code** to `/Applications`, and launch it. The first run provisions the venv, installs dependencies, generates your secrets, and pops a QR window — scan it with your authenticator app.
+4. From the tray: **Bind IP → your LAN address**, then **Copy URL**. Open that URL on your phone and enter the 6-digit code.
 
----
+The DMG is code-signed but **not notarized**, so Gatekeeper will warn on first open.
 
-## Installation
-
-### Mode 1 — macOS native (Electron menu bar app) — PRIMARY
-
-The default for macOS users. Electron owns the lifecycle, spawns the Python
-server, talks to the local tmux socket. Claude Code runs natively on your Mac
-with full access to:
-
-- macOS Keychain (Claude Pro / Max OAuth tokens land here)
-- macOS-native MCPs (Shortcuts, AppleScript, Calendar, Reminders, Messages)
-- Your existing `~/.claude` directory, MCP server config, and shell environment
-
-**End-user install (DMG):**
-
-1. Grab `Cloude.Code-0.8.1-arm64.dmg` from releases (or build from source — see below).
-2. Open the DMG, drag to `/Applications`, launch.
-3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
-   - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
-     If none found → modal dialog instructs `brew install python@3.12`.
-   - Creates `~/Library/Application Support/cloude-code-menubar/server/venv/`.
-   - Runs `pip install -r requirements.txt` against the venv.
-   - Generates `.env` with TOTP secret + JWT secret (`chmod 0600`).
-   - Pops the QR window — scan with your authenticator app.
-   - First successful TOTP verify writes a `.totp_paired` sentinel.
-4. Tray tooltip narrates the state machine
-   (`creating-venv` → `installing-deps` → `ready`).
-5. Subsequent launches fast-path in <50ms by verifying a venv + `.env`
-   + deps-hash sentinel trio. Bundled `src/` and `client/` are re-synced
-   on every launch so DMG upgrades land cleanly.
-6. Open `http://localhost:8000` or `http://<mac-lan-ip>:8000` from any device
-   on the same LAN. Or use the **Copy Published URL** menu item.
-
-**Developer (clone + setup):**
+### Path B — From source
 
 ```bash
-git clone <repo-url> cloudecode
+git clone https://github.com/Adoom666/CloudeCode.git cloudecode
 cd cloudecode
 
-./setup.sh                    # creates venv, installs requirements, cloudflared (if needed)
-python3 setup_auth.py         # interactive secrets + Cloudflare/ntfy wizard
-./start.sh                    # starts uvicorn on 0.0.0.0:8000
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-# Optional — run the Electron menu bar app in dev mode:
-cd macOS
-npm install
-npm start
+python3 setup_auth.py     # generates TOTP + JWT secrets, prints a QR, optional push setup
+./start.sh                # python3 -m src.main, binds 0.0.0.0:8000
 ```
 
-### Mode 2 — Docker (pure container) — ALTERNATIVE
+Then open `http://<your-mac-lan-ip>:8000`. To run the Electron menu-bar app in dev mode:
 
-For Linux hosts, headless servers, or users who want full isolation. Both the
-Python server AND the Claude Code CLI run inside the container.
+```bash
+cd macOS && npm install && npm start
+```
+
+To build the DMG yourself: `cd macOS && npm run package`.
+
+### Path C — Docker (Linux / headless)
 
 ```bash
 cp .env.example .env
-# Edit .env — at minimum set CLOUDE_BIND_IP (use scripts/preflight-bind-ip.sh
-# to list live interfaces). Secrets (TOTP_SECRET, JWT_SECRET) can be minted by
-# running setup_auth.py inside the container after first build.
-bash scripts/preflight-bind-ip.sh
+bash scripts/preflight-bind-ip.sh          # lists live interfaces
+# set CLOUDE_BIND_IP in .env (default 127.0.0.1 = loopback only)
 UID=$(id -u) GID=$(id -g) docker compose build
 docker compose up -d
-
-# Mint secrets interactively inside the running container:
 docker exec -it cloude-cloude-1 python3 setup_auth.py
 ```
 
-**Mode 2 caveats:**
+Docker mode cannot use a Claude Pro/Max subscription — the macOS Keychain isn't reachable from a Linux container, so you need a direct `ANTHROPIC_API_KEY`. macOS-native MCP servers (Shortcuts, AppleScript, Calendar, Messages) don't work there either. See [`docs/deployment-docker.md`](docs/deployment-docker.md).
 
-- **Claude Pro / Max OAuth is NOT supported in Mode 2** — macOS Keychain isn't
-  reachable from a Linux container. Use Mode 1 or set `ANTHROPIC_API_KEY` if
-  you have direct API billing.
-- **macOS-native MCPs do not work** — anything that calls Shortcuts,
-  AppleScript, Calendar, Reminders, Messages, Finder, or any Keychain-backed
-  service fails inside the container. Network-based MCPs (Gmail, GDrive, n8n,
-  Postgres, HTTP) work fine.
-- Default bind is `127.0.0.1` — the container is loopback-only unless you opt
-  in to LAN exposure via `CLOUDE_BIND_IP`.
+### Getting to it from outside your LAN
 
-See `docs/deployment-docker.md` for the full walkthrough (volume layout,
-UID/GID mapping, preflight script, per-container secrets).
-
-### Hybrid "server-in-container, Claude-on-host" — NOT SHIPPED
-
-A third mode — FastAPI in Docker, Claude CLI on the host via a UDS-to-tmux
-bridge — was evaluated and cut. Docker Desktop's LinuxKit VM boundary doesn't
-pass live Unix sockets reliably, and the UID-match + LaunchDaemon complexity
-didn't justify the reward when Mode 1 already covers the "Claude on host"
-case natively. Mode 1 on macOS, Mode 2 on Linux. That's it.
+Cloude Code binds to the interface you pick and stops there. It ships no tunnel. For off-LAN access, put it behind Tailscale, UniFi Teleport, a VPN, or your own reverse proxy.
 
 ---
 
 ## Configuration
 
-### `.env` — runtime environment
+### Environment variables (`.env`)
 
-Copy `.env.example` → `.env`. `setup_auth.py` populates secrets and prompts for
-optional Cloudflare/ntfy values.
+| Name | Default | What it does |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Interface uvicorn binds to |
+| `PORT` | `8000` | Server port. HTTP and WebSocket share it |
+| `DEFAULT_WORKING_DIR` | *required* | Root directory new project sessions are created under |
+| `LOG_DIRECTORY` | *required* | State directory: session metadata, refresh-token DB, tmux pipe files, logs |
+| `TOTP_SECRET` | *required* | Your TOTP shared secret. Generated by `setup_auth.py` or the Electron bootstrap |
+| `JWT_SECRET` | *required* | JWT signing key. Same generators |
+| `AUTH_CONFIG_FILE` | `./config.json` | Path to the non-secret runtime config |
+| `ALLOWED_ORIGINS` | computed | CORS override. Left alone it derives from host/port and can never be `*` |
+| `LOG_BUFFER_SIZE` | `1000` | In-memory log-line cap per session |
+| `LOG_FILE_RETENTION` | `7` | Days of log retention |
+| `CLOUDE_APP_VERSION` | unset | Injected by Electron so the UI shows the real app version |
+| `CLOUDE_USER_THEMES_DIR` | `~/Library/Application Support/cloude-code-menubar/themes` | Where custom themes are discovered |
+| `CLOUDE_ALLOW_QR_REPAIR` | unset | Set to `1` and restart to re-open `/auth/qr` after pairing |
+| `CLOUDE_BIND_IP` | `127.0.0.1` | Docker only — which host IP the container publishes on |
+| `CLOUDE_PROJECT_PATH` | `./projects` | Docker only — host path mounted at `/workspace` |
+| `CLOUDE_LOG_DIR` | `./logs` | Docker only — host path for logs and state |
 
-| Variable                 | Required           | Default          | Purpose                                                       |
-| ------------------------ | ------------------ | ---------------- | ------------------------------------------------------------- |
-| `HOST`                   | No                 | `0.0.0.0`        | uvicorn bind address (use `127.0.0.1` for loopback-only)      |
-| `PORT`                   | No                 | `8000`           | uvicorn port                                                  |
-| `DEFAULT_WORKING_DIR`    | **Yes**            | —                | Directory where new project sessions are created              |
-| `LOG_DIRECTORY`          | **Yes**            | —                | `session_metadata.json`, `refresh_tokens.db`, pipe FIFOs      |
-| `SESSION_TIMEOUT`        | No                 | `3600`           | Session inactivity timeout (seconds)                          |
-| `LOG_BUFFER_SIZE`        | No                 | `1000`           | In-memory log line buffer                                     |
-| `LOG_FILE_RETENTION`     | No                 | `7`              | Days to retain rotated pipe files                             |
-| `CLAUDE_CLI_PATH`        | No                 | auto-detect      | Absolute path to `claude` binary                              |
-| `TOTP_SECRET`            | **Yes**            | generated        | Generated by `setup_auth.py` — do not edit manually           |
-| `JWT_SECRET`             | **Yes**            | generated        | Generated by `setup_auth.py` — do not edit manually           |
-| `ALLOWED_ORIGINS`        | No                 | `["*"]`          | CORS allowlist — JSON array or comma-separated                |
-| `AUTH_CONFIG_FILE`       | No                 | `./config.json`  | Path to projects + slash commands + feature config            |
-| `CLOUDFLARE_API_TOKEN`   | If `named_cloudflare` | —             | Needs `Zone.DNS:Edit` + `Cloudflare Tunnel:Edit`              |
-| `CLOUDFLARE_ZONE_ID`     | If `named_cloudflare` | —             | Zone ID for your domain                                       |
-| `CLOUDFLARE_DOMAIN`      | If `named_cloudflare` | —             | e.g. `cloude.example.com`                                     |
-| `CLOUDFLARE_TUNNEL_NAME` | No                 | `claude-tunnel`  | Name used for the named tunnel                                |
-| `CLOUDE_BIND_IP`         | Docker only        | `127.0.0.1`      | Host IP to publish port 8000 on (Mode 2)                      |
-| `CLOUDE_PROJECT_PATH`    | Docker only        | `./projects`     | Host path mounted as `/workspace` in the container            |
-| `CLOUDE_LOG_DIR`         | Docker only        | `./logs`         | Host path for state (`refresh_tokens.db`, FIFOs)              |
-| `CLOUDE_ALLOW_QR_REPAIR` | No                 | unset            | Set to `1` to re-enable `/auth/qr` after the `.totp_paired` sentinel exists (re-pair on lost device) |
+`CLAUDE_CLI_PATH` and `API_KEY` are legacy and ignored by the current auth and launch paths. `SESSION_TIMEOUT` appears in `.env.example` but no enforcement of it was found in the code — treat it as inert.
 
-### `config.json` — feature configuration
+### `config.json` (non-secret runtime config)
 
-Everything that's not a secret lives here. `AuthConfig` composes five sub-blocks
-loaded by `src/config.py::Settings.load_auth_config()`:
+| Block | Key | Default | What it does |
+|---|---|---|---|
+| `session` | `backend` | `auto` | `auto` \| `tmux` \| `pty`. Auto degrades to PTY if tmux is missing |
+| | `tmux_socket_name` | `cloude` | The dedicated `tmux -L` socket name |
+| | `scrollback_lines` | `3000` | How much history is replayed on rejoin |
+| auth | `access_token_ttl_seconds` | `14400` (4h) | Access-token lifetime |
+| | `refresh_token_ttl_seconds` | `604800` (7d) | Refresh-token lifetime |
+| `auth_rate_limits` | `totp_verify_per_minute` | `5` | Login attempts per minute per IP |
+| | `totp_verify_per_hour` | `20` | Login attempts per hour per IP |
+| | `trust_proxy_headers` | `false` | Only enable behind a reverse proxy you control |
+| `notifications` | `enabled` | `false` | Master switch for the push pipeline |
+| | `ntfy_base_url` | `https://ntfy.sh` | Or your self-hosted ntfy |
+| | `ntfy_topic` | `""` | Generated by `setup_auth.py`. Rotate with `--rotate-topic` |
+| | `public_base_url` | `""` | Base URL used to build tap-through deep links |
+| | `idle_threshold_seconds` | `30.0` | Silence before a session counts as "task complete" |
+| | `rate_limit_global_cap` | `10` | Max notifications per window |
+| | `rate_limit_window_seconds` | `60.0` | The window |
+| | `rate_limit_per_kind_cooldown_seconds` | `10.0` | Per-event-type cooldown |
+| | `slack_webhook_url` | `""` | Optional Slack incoming webhook |
+| | `disable_claude_hooks` | unset | Skip the `~/.claude/settings.json` hook merge |
+| `agents` | `codex_command` | `codex` | Command for `agent_type=codex` |
+| | `hermes_command` | `hermes` | Command for `agent_type=hermes` |
+| | `openclaw_command` | `openclaw tui` | Command for `agent_type=openclaw` |
+| | `shell_command` | `$SHELL -i` | The bare-console agent type |
+| `uploads` | `enabled` | `true` | Image paste and attach on or off |
+| | `ttl_seconds` | `86400` | How long uploaded images survive before sweeping |
+| | `max_size_mb` | `10` | Per-upload size cap |
+| `providers` | `models[]` | `[]` | Saved OpenRouter model ids for the provider selector |
+| top level | `common_slash_commands[]` | — | The quick grid shown above the full slash palette |
+| top level | `projects[]` | — | Registered projects: name, path, description, agent type |
 
-**`session` (`SessionConfig`)**
+Every block is optional and fails soft to defaults with a warning log if malformed.
 
-| Key                 | Type    | Default    | Purpose                                                        |
-| ------------------- | ------- | ---------- | -------------------------------------------------------------- |
-| `backend`           | str     | `"auto"`   | `"auto"` (tmux if present else pty) / `"tmux"` / `"pty"`       |
-| `tmux_socket_name`  | str     | `"cloude"` | Passed to `tmux -L <name>` — dedicated socket                  |
-| `scrollback_lines`  | int     | `3000`     | Lines captured on re-attach                                    |
-
-**`tunnel` (`TunnelConfig`)**
-
-| Key                  | Type  | Default        | Purpose                                                                    |
-| -------------------- | ----- | -------------- | -------------------------------------------------------------------------- |
-| `backend`            | str   | `"local_only"` | `"local_only"` / `"quick_cloudflare"` / `"named_cloudflare"`               |
-| `enable_cloudflare`  | bool  | `false`        | Master switch — must be `true` for Cloudflare backends (double-flag guard) |
-| `lan_hostname`       | str   | `"auto"`       | Override LAN host for `local_only` (`"auto"` = detect)                     |
-
-**`auth_rate_limits` (`AuthRateLimits`)**
-
-| Key                      | Type | Default | Purpose                                                            |
-| ------------------------ | ---- | ------- | ------------------------------------------------------------------ |
-| `totp_verify_per_minute` | int  | `5`     | slowapi limit on `POST /api/v1/auth/verify`                        |
-| `totp_verify_per_hour`   | int  | `20`    | Second-window cap (both must hold)                                 |
-| `trust_proxy_headers`    | bool | `false` | Honor `X-Forwarded-For` (only behind a trusted reverse proxy)      |
-
-**`notifications` (`NotificationsConfig`)**
-
-| Key                                      | Type  | Default             | Purpose                                                                                 |
-| ---------------------------------------- | ----- | ------------------- | --------------------------------------------------------------------------------------- |
-| `enabled`                                | bool  | `false`             | Master switch — when false, emit is a no-op                                             |
-| `ntfy_base_url`                          | str   | `"https://ntfy.sh"` | ntfy server (override for self-hosted)                                                  |
-| `ntfy_topic`                             | str   | `""`                | Treat as a credential — 32 hex bytes from `setup_auth.py`                               |
-| `slack_webhook_url`                      | str   | `""`                | *(v0.7.0)* Slack incoming-webhook URL. Empty = channel silently disabled                |
-| `disable_claude_hooks`                   | bool  | `false`             | *(v0.7.0)* Opt out of injecting cloudecode's managed entries into `~/.claude/settings.json` |
-| `public_base_url`                        | str   | `""`                | Used in the ntfy `Click` header for deep-link                                           |
-| `idle_threshold_seconds`                 | float | `30.0`              | Silence before IdleWatcher fires `TASK_COMPLETE`                                        |
-| `rate_limit_global_cap`                  | int   | `10`                | Notifications per `rate_limit_window_seconds`                                           |
-| `rate_limit_window_seconds`              | float | `60.0`              | Rolling-window duration                                                                 |
-| `rate_limit_per_kind_cooldown_seconds`   | float | `10.0`              | Minimum seconds between two emits of the same EventType                                 |
-
-**Top-level (`AuthConfig`)**
-
-| Key                         | Type | Default   | Purpose                                                         |
-| --------------------------- | ---- | --------- | --------------------------------------------------------------- |
-| `access_token_ttl_seconds`  | int  | `900`     | JWT access token lifetime (15 min)                              |
-| `refresh_token_ttl_seconds` | int  | `604800`  | JWT refresh token lifetime (7 days)                             |
-| `refresh_grace_seconds`     | int  | `10`      | Window a just-rotated refresh can still be used                 |
-| `jwt_expiry_minutes`        | int  | `30`      | Legacy — only honored if access TTL unset                       |
-| `template_path`             | str  | `null`    | Path to template files copied on new session (if opted in)      |
-| `projects`                  | list | `[]`      | Launchpad projects (name, path, description)                    |
-| `common_slash_commands`     | list | `[]`      | Slash-command palette entries                                   |
-
-See `config.example.json` for a complete reference instance.
-
----
-
-## Running
-
-### Dev (Python only)
+### CLI
 
 ```bash
-source venv/bin/activate
-python3 -m src.main          # or ./start.sh
-```
-
-uvicorn listens on `0.0.0.0:8000`. From a phone on the same LAN, hit
-`http://<mac-lan-ip>:8000`.
-
-### Dev (Electron + server)
-
-```bash
-cd macOS
-npm start
-```
-
-Electron spawns the Python server. If a server is already running on 8000,
-`ServerManager` adopts it instead of spawning a duplicate. The tray icon
-polls `/health` every 5 seconds (2 seconds during startup).
-
-### Production (packaged DMG)
-
-Launch **Cloude Code.app** from `/Applications`. First-run copies default
-config to `~/Library/Application Support/cloude-code-menubar/`.
-
-### Shell helpers
-
-| Script        | Purpose                                                                                |
-| ------------- | -------------------------------------------------------------------------------------- |
-| `start.sh`    | Activates venv and starts the Python server                                            |
-| `stop.sh`     | Graceful server shutdown                                                               |
-| `reset.sh`    | Light reset — stops server, clears session metadata, preserves `.env` + `config.json`  |
-| `nuke.sh`     | Destructive: deletes `.env`, `config.json`, `venv/`, Cloudflare tunnels, DNS records   |
-
-`nuke.sh` deletes remote Cloudflare resources. Review before running on a shared
-account.
-
-### Local development against the packaged menu-bar venv
-
-If you've installed the DMG and want to run the server from the working tree
-without setting up a separate venv, use the venv that the menu-bar app
-provisioned in Application Support:
-
-```bash
-nohup "/Users/Adam/Library/Application Support/cloude-code-menubar/server/venv/bin/python" \
-      -m src.main > /tmp/cloude.log 2>&1 &
-
-# Tail it:
-tail -f /tmp/cloude.log
-```
-
-Same Python interpreter, same dependency set, same `.env` path resolution as
-the packaged app — but iterates against the source tree you're editing.
-Useful for live-debugging WS handshake / Shift+Enter / tmux-options changes
-without rebuilding the DMG. Stop the menu-bar Electron app first
-(or it'll race for port 8000 and confuse the tray icon).
-
-To run the test suite against the same venv:
-
-```bash
-"/Users/Adam/Library/Application Support/cloude-code-menubar/server/venv/bin/python" \
-    -m pytest tests/ -v
-```
-
-177 tests should pass on a Mac with tmux installed.
-
----
-
-## Launching Claude with a custom alias
-
-If you use a custom shell alias or function to launch Claude (e.g. `cld` for
-`claude --dangerously-skip-permissions`), you can't just pass the alias name
-as the tmux session's inline command — tmux spawns a *non-interactive*
-shell for inline commands, which does NOT source your `~/.zshrc` or
-`~/.bashrc`. Aliases defined there are invisible. The `exec $SHELL` tail
-drops you into an interactive shell *after* the command fails, which is
-what makes the failure mode extra misleading — you land at a prompt where
-`cld` works fine, but the launcher already bailed with `command not found`.
-
-The fix: force tmux to spawn an *interactive* shell via `$SHELL -ic '...'`.
-The `-i` flag tells the shell to source your rc file before running the
-command.
-
-### Quick form
-
-Run this directly from any terminal on the Mac hosting Cloude Code:
-
-```bash
-tmux -L cloude new -s mywork "$SHELL -ic 'cld; exec $SHELL'"
-```
-
-Breakdown:
-- `-L cloude` — tmux's dedicated socket for Cloude Code (required for the
-  web UI to discover the session)
-- `-s mywork` — the session name (will appear in the launchpad's
-  "Adopt an external session" list)
-- `$SHELL -ic '...'` — interactive shell, sources `~/.zshrc` or `~/.bashrc`
-- `cld; exec $SHELL` — run your custom launcher, then when it exits
-  replace the shell process with a fresh interactive shell so the pane
-  stays alive and you land at a prompt
-
-### Reusable shell function
-
-Add this to your `~/.zshrc` or `~/.bashrc` so you can launch with one short
-command:
-
-```bash
-cloude() {
-    local name="${1:-mywork}"
-    local dir="${2:-$PWD}"
-    tmux -L cloude new -s "$name" -c "$dir" "$SHELL -ic 'cld; exec $SHELL'"
-}
-```
-
-Usage:
-
-```bash
-cloude                                    # session "mywork" in current dir
-cloude api                                # session "api" in current dir
-cloude api ~/projects/some-repo           # session "api" in that repo
-```
-
-Detach the CLI with `Ctrl+B d` and the Cloude Code launchpad will list the
-session under "Adopt an external session".
-
-### If your launcher is a function, not an alias
-
-Shell functions defined in your rc file work the same way — `$SHELL -ic`
-sources the rc and makes the function available:
-
-```bash
-# in ~/.zshrc
-claude-fast() {
-    claude --dangerously-skip-permissions --model opus-4-7 "$@"
-}
-
-# then:
-tmux -L cloude new -s mywork "$SHELL -ic 'claude-fast; exec $SHELL'"
-```
-
-### Why not source ~/.zshrc directly?
-
-You can — `"source ~/.zshrc && cld; exec $SHELL"` also works. But `-ic` is
-shorter, matches the mental model of "open an interactive shell and run
-this," and handles both zsh and bash uniformly without caring which rc
-file lives where.
-
-### Why not put the alias in ~/.zshenv?
-
-`~/.zshenv` IS sourced by non-interactive shells, so the original
-`tmux -L cloude new -s mywork "cld; exec $SHELL"` form would work if `cld`
-lives there. But `.zshenv` runs for every zsh invocation including scripts,
-so putting slow stuff there is painful. Aliases are cheap — your call.
-
----
-
-## API reference
-
-Base URL: `http://<host>:8000` · REST prefix: `/api/v1`
-
-### Unauthenticated
-
-| Method | Path                       | Body                 | Returns                                    |
-| ------ | -------------------------- | -------------------- | ------------------------------------------ |
-| `GET`  | `/health`                  | —                    | `{ status, session_active, monitoring }`   |
-| `GET`  | `/api/v1/health`           | —                    | `HealthResponse` (menu-bar uses this)      |
-| `GET`  | `/api/v1/auth/qr`          | —                    | `{ qr_image, secret, uri }` (data URL PNG); **403** once `.totp_paired` exists |
-| `POST` | `/api/v1/auth/verify`      | `VerifyTOTPRequest`  | `AuthTokenResponse` (access + refresh) — **5/min, 20/hour**            |
-| `POST` | `/api/v1/auth/refresh`     | `{ refresh_token }`  | `AuthTokenResponse` — **10/min**                                        |
-| `POST` | `/api/v1/auth/logout`      | `{ refresh_token }`  | `SuccessResponse`                          |
-
-### Authenticated — `Authorization: Bearer <access_jwt>`
-
-| Method   | Path                                 | Body                     | Returns                    |
-| -------- | ------------------------------------ | ------------------------ | -------------------------- |
-| `POST`   | `/api/v1/sessions`                   | `CreateSessionRequest`   | `Session`                  |
-| `GET`    | `/api/v1/sessions`                   | —                        | `SessionInfo`              |
-| `DELETE` | `/api/v1/sessions`                   | —                        | `SuccessResponse` (destroys) |
-| `POST`   | `/api/v1/sessions/detach`            | —                        | `SuccessResponse`           |
-| `GET`    | `/api/v1/sessions/attachable`        | —                        | `List[AttachableSession]`  |
-| `POST`   | `/api/v1/sessions/adopt`             | `AdoptSessionRequest`    | `AdoptSessionResponse`     |
-| `POST`   | `/api/v1/sessions/upload-image`      | `multipart/form-data`    | `UploadImageResponse`      |
-| `POST`   | `/api/v1/sessions/command`           | `CommandRequest`         | `SuccessResponse`          |
-| `GET`    | `/api/v1/sessions/logs?limit=N`      | —                        | `List[LogEntry]`           |
-| `GET`    | `/api/v1/tunnels`                    | —                        | `List[Tunnel]`             |
-| `POST`   | `/api/v1/tunnels`                    | `CreateTunnelRequest`    | `Tunnel`                   |
-| `DELETE` | `/api/v1/tunnels/{id}`               | —                        | `SuccessResponse`          |
-| `GET`    | `/api/v1/projects`                   | —                        | `List[ProjectResponse]`    |
-| `POST`   | `/api/v1/projects`                   | `CreateProjectRequest`   | `ProjectResponse`          |
-| `PATCH`  | `/api/v1/projects/{name}`            | `UpdateProjectRequest`   | `ProjectResponse`          |
-| `PATCH`  | `/api/v1/projects/{name}/theme`      | `{ theme_id }`           | `SuccessResponse` *(v0.7.0)* |
-| `DELETE` | `/api/v1/projects/{name}`            | —                        | `SuccessResponse`          |
-| `PATCH`  | `/api/v1/sessions/{session_id}`      | `{ pinned_theme }`       | `Session` *(v0.7.0)* — per-session theme pin |
-| `PATCH`  | `/api/v1/sessions/{session_id}/rename` | `{ name }`             | `Session` *(v0.7.0)* — fires `session.renamed` WS broadcast |
-| `GET`    | `/api/v1/sessions/{session_id}/toasts?unacked=true` | —         | `List[Toast]` *(v0.7.0)* — backfill on attach |
-| `POST`   | `/api/v1/sessions/{session_id}/toasts` | `CreateToastRequest`   | `Toast` *(v0.7.0)* — record + WS fanout |
-| `POST`   | `/api/v1/toasts/{toast_id}/ack?session_id=...` | —              | `SuccessResponse` *(v0.7.0)* — ack + WS fanout |
-| `GET`    | `/api/v1/themes`                     | —                        | `List[ThemeManifest]` *(v0.7.0)* — built-ins + user themes |
-| `POST`   | `/api/v1/hooks/claude-event`         | Claude hook JSON (stdin) | *(v0.7.0)* loopback-only; HMAC-bearer via env vars |
-| `GET`    | `/api/v1/filesystem/browse?path=...` | —                        | `BrowseResponse`           |
-| `GET`    | `/api/v1/auth/status`                | —                        | `SuccessResponse`          |
-| `GET`    | `/api/v1/config/common-commands`     | —                        | `{ commands: [...] }`      |
-| `POST`   | `/api/v1/server/reset`               | —                        | `SuccessResponse`          |
-| `POST`   | `/api/v1/shutdown`                   | —                        | `SuccessResponse`          |
-
-### WebSocket — `/ws/terminal`
-
-```
-ws://<host>:8000/ws/terminal
-Sec-WebSocket-Protocol: cloude.jwt.v1, <access_jwt>
-```
-
-Server validates the JWT BEFORE accepting, then echoes the `cloude.jwt.v1`
-marker as the negotiated subprotocol (RFC 6455 §4.1). Close codes on failure:
-
-- **4401** — missing marker / missing token / invalid token
-- **4400** — `Sec-WebSocket-Protocol` header present but malformed (empty /
-  whitespace-only)
-
-On success the server sends `{ "type": "request_dims" }`; the client fits
-xterm.js and replies `{ "type": "pty_resize", cols, rows }` bypassing its
-normal 100ms debounce. The server resizes the tmux window, waits ~150ms for
-SIGWINCH to propagate, and writes Ctrl+L (0x0c) to force a clean redraw.
-
-**Message types (server → client)**
-
-- `{"type": "request_dims"}` — resize handshake open
-- Binary frames — raw pane bytes (post-handshake live stream)
-- `{"type": "log", ...}` — system messages
-- `{"type": "tunnel_created", "tunnel": Tunnel}` — auto-tunnel event
-- `{"type": "session_status", ...}` — session state change
-- `{"type": "session.renamed", "session_id": "...", "name": "..."}` — *(v0.7.0)* session rename broadcast
-- `{"type": "toast.new", "toast": Toast}` — *(v0.7.0)* new toast
-- `{"type": "toast.ack", "toast_id": "..."}` — *(v0.7.0)* cross-tab dismiss
-- `{"type": "pong"}` — keepalive reply
-
-**Message types (client → server)**
-
-- Binary frames — raw input bytes (keystrokes, paste)
-- `{"type": "pty_resize", "cols": N, "rows": N}` — resize
-- `{"type": "ping"}` — keepalive
-
----
-
-## Authentication flow
-
-```
-      Client                              Server
-        │                                   │
-        │  GET /api/v1/auth/qr              │   (unauth)
-        │──────────────────────────────────▶│
-        │  { qr_image, secret, uri }        │
-        │◀──────────────────────────────────│
-        │                                   │
-        │  [scan QR with TOTP app]          │
-        │                                   │
-        │  POST /api/v1/auth/verify         │
-        │  { code: "123456" }               │
-        │──────────────────────────────────▶│
-        │                                   │   slowapi: 5/min, 20/hour
-        │                                   │   TTLCache replay dedup (90s)
-        │                                   │   pyotp.verify(valid_window=1)
-        │  { access_token, refresh_token,   │   mint access + refresh pair
-        │    expires_in }                   │   persist refresh jti in SQLite
-        │◀──────────────────────────────────│
-        │                                   │
-        │  Authorization: Bearer <access>   │
-        │  GET /api/v1/sessions             │
-        │──────────────────────────────────▶│   jwt.decode + typ=="access"
-        │                                   │
-        │  on 401 expired:                  │
-        │  POST /api/v1/auth/refresh        │
-        │  { refresh_token }                │
-        │──────────────────────────────────▶│   rotate in SQLite
-        │  { access_token, refresh_token }  │   detect reuse → revoke chain
-        │◀──────────────────────────────────│
-        │                                   │
-        │  WS /ws/terminal                  │
-        │  Sec-WebSocket-Protocol:          │
-        │    cloude.jwt.v1, <access>        │
-        │═══════════════════════════════════│
-        │  (token NEVER in URL)             │
-```
-
-**Access token** — 15 min default. HS256. Payload: `exp, iat, sub, typ="access"`.
-Explicit `algorithms=["HS256"]` on decode (RFC 8725 §3.2 guard against
-`"alg": "none"`). Wrong `typ` → 401 (no refresh-token smuggling into
-`Authorization` headers).
-
-**Refresh token** — 7 days default. Has a random `jti` (32 url-safe bytes)
-persisted in SQLite (`RefreshStore`). On `/auth/refresh`, the server rotates:
-issues new access + refresh, marks old as superseded, returns the pair.
-Detection: if a superseded refresh shows up past the grace window (10s
-default), the whole chain from that jti forward is revoked and the user
-must re-TOTP. Benign race (two refreshes in-flight inside the grace window)
-returns 401 with "already rotated; retry" — client just uses its freshest
-token.
-
-**Replay defense** — a 90s TTLCache (covers pyotp's ±1 step window plus
-buffer) dedups submitted TOTP codes. Serialized under an asyncio lock to
-prevent TOCTOU where two concurrent submissions of the same code both
-slip through.
-
-**`.totp_paired` qr-gate** — first successful `/auth/verify` writes a
-`.totp_paired` sentinel next to the auth config. From that point forward,
-`GET /api/v1/auth/qr` returns **403** so a stolen LAN-reachable URL
-can't drain the QR (and therefore the TOTP secret) post-pairing. To
-re-pair after losing your device:
-
-```bash
-export CLOUDE_ALLOW_QR_REPAIR=1
-# restart the server (menu-bar app: Stop → Start, or relaunch)
-```
-
-The web UI hides its "Setup Required" banner on a 403 from `/auth/qr`,
-so the gate is invisible during normal operation.
-
-**Refresh rate limit** — `POST /auth/refresh` is capped at 10/min per
-client IP (separate from the 5/min cap on `/auth/verify`). Both windows
-use slowapi's leaky-bucket key function and emit `Retry-After`.
-
-**File permissions** — `.env`, `config.json`, and `refresh_tokens.db`
-are chmod'd to `0600` on create by `setup_auth.py` and the lifespan
-init paths. JWT secrets, TOTP seeds, and refresh-token jtis are not
-world-readable.
-
----
-
-## Tmux integration
-
-### Socket
-
-All tmux operations use `tmux -L cloude`. This spawns a tmux server that's
-completely separate from the user's default server. Cloude Code never sees,
-lists, or touches the user's personal tmux sessions.
-
-### Naming
-
-Sessions are named verbatim after the project:
-
-```
-project.name = "Cloude Code Dev"
-    │
-    ▼  _sanitize_tmux_name()
-       - replace  .  →  _   (tmux pane separator)
-       - replace  :  →  _   (tmux window separator)
-       - collapse whitespace runs to a single space
-       - strip leading/trailing whitespace
-    ▼
-sanitized  = "Cloude Code Dev"
-    │
-    ▼
-tmux session = "cloude_Cloude Code Dev"
-```
-
-Case, spaces, emoji, punctuation — all preserved. tmux tolerates them.
-
-Legacy sessions named `cloude_ses_<hex>` (pre–v0.5) are still supported and
-co-exist with verbatim-named sessions. No migration is performed.
-
-### Adopt-on-collision
-
-When the user clicks a project whose verbatim tmux name already exists on the
-socket, `create_session` redirects to `adopt_external_session` with
-`confirm_detach=True`. "Open project X" means "resume my X session, alive or
-not." The probe is read-only (`list-sessions`), so checking for collision
-has no side effects.
-
-### Discover / rehydrate
-
-On server startup, `SessionManager.lifespan_startup()` runs a probe backend to
-list `cloude_*` sessions on the socket. If a session from `session_metadata.json`
-is present AND its name is in `owned_tmux_sessions`, the backend attaches to the
-live session. Stale entries get pruned. Legacy (pre-v3) metadata without
-`owned_tmux_sessions` triggers a one-shot backfill.
-
-### Binary-safe writes
-
-`TmuxBackend.write(data)` routes through three paths based on payload shape:
-
-| Condition                                   | tmux command                                        | Why                                                                       |
-| ------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------- |
-| Short (≤ 256 B), no control chars           | `send-keys -l <text>`                               | Literal UTF-8, fast path for typing                                       |
-| Short, has control chars (0x03, 0x1b, etc.) | `send-keys -H <hex pairs>`                          | Each hex pair = one byte delivered as a key event (arrows, Ctrl-X, Esc)   |
-| > 256 B                                     | `load-buffer` + `paste-buffer -d -p`                | Bracketed-paste markers so Claude distinguishes paste from typed input    |
-
-`send-keys -H` is the only correct path for keystrokes like Backspace (0x7f),
-Escape (0x1b), arrows (`\x1b[A..D`), Ctrl chords, and F-keys. `send-keys -l`
-would treat them as literal characters; `paste-buffer` would wrap them in
-paste markers. Three paths exist because there is no single tmux command that
-handles all three cases correctly.
-
-Every short-payload (`send-keys -l` / `send-keys -H`) write also emits a
-`ws_input_short hex=<bytes> length=<n>` structlog line. That's the forensic
-trail used to debug Shift+Enter, arrows, escape sequences — you can see
-exactly what hit tmux.
-
-### Tmux options the app sets
-
-On every `start()`, `TmuxBackend` applies three server-scoped options:
-
-| Option                               | Value          | Why                                                                              |
-| ------------------------------------ | -------------- | -------------------------------------------------------------------------------- |
-| `extended-keys`                      | `on`           | Enable CSI-u / modified-key encodings so Shift+Enter, Ctrl+Shift+key etc. survive |
-| `terminal-features ":extkeys"` (-as) | append-and-set | Tells tmux the outer terminal accepts extended-key sequences (without it tmux still processes them but won't *forward* them) |
-| `escape-time`                        | `0`            | Zero-ms ESC timeout — multi-byte escape sequences (`\x1b\r` for Shift+Enter, arrow keys, function keys) deliver as a single chord instead of getting split |
-
-These are set with `check=False` so a tmux build that doesn't recognize one
-of them doesn't take down the whole start path.
-
-### Output streaming
-
-`tmux pipe-pane -o 'cat >> <fifo>'` streams every pane byte to a file under
-`LOG_DIRECTORY` (e.g. `tmux_cloude_myproject.pipe`). `TmuxBackend._tail_loop`
-opens the file with `O_NONBLOCK`, seeks to EOF (or to the recorded adopt
-offset), and fans bytes out via `on_output`. Rotation: 10 MiB cap or 24 hour
-age, rename to `.1`, truncate.
-
-**Pipe-pane is CloudeCode-owned.** On adopt, `TmuxBackend` *replaces* any
-existing `pipe-pane` on the target pane instead of bailing silently. An
-external observer (e.g. another tool that ran `tmux pipe-pane` on the same
-pane before adoption) used to leave its pipe in place, which short-circuited
-our streaming chain and surfaced as a frozen-terminal-after-banner symptom.
-The replace-on-adopt invariant fixes that root cause.
-
-**WS handshake fallback.** If the resize handshake times out or the client
-never reports dims, `websocket.py` writes a Ctrl+L (0x0c) at the recorded
-birth geometry rather than leaving the pane dark. Degraded mode beats
-dead-screen — you get a redrawn pane at 80×24 and can resize manually
-instead of staring at nothing.
-
-### Window size (the 80x24 bug that's not a bug)
-
-We never attach a tmux client — output is streamed via `pipe-pane`. Without a
-client, tmux has no dims to derive window size from, so it pins the window at
-its 80x24 birth size forever. Two settings fix this:
-
-- `-x / -y` on `new-session` sets the birth geometry.
-- `set-option window-size manual` locks it so `resize-window` is the *only*
-  thing that changes size (no auto-sizing surprises).
-
-Resize on WS connect uses `resize-window -x -y` (server-side, emits SIGWINCH
-to the foreground process). `refresh-client -C` is a no-op for us because
-we have no client.
-
----
-
-## Invariants
-
-These hold across the whole design. Violating any of them is a bug.
-
-- **Never kill on switch.** Switching sessions calls
-  `detach_current_session` (tears down Python-side handles, stops our
-  pipe-pane, leaves tmux alive). The *only* kill paths are the X button in
-  the UI (calls `DELETE /api/v1/sessions`), the destroy button on the
-  terminal view, and manual `tmux -L cloude kill-session` in a shell.
-- **Single active session.** `SessionManager` holds at most one
-  `SessionBackend` at a time. `create_session` raises if there's already a
-  live session. Swapping requires explicit `confirm_detach=True` on
-  `POST /sessions/adopt`.
-- **`owned_tmux_sessions` persists across restart.** The set of cloude-
-  created session names is part of `session_metadata.json`. On startup,
-  `lifespan_startup` reconciles it against the live tmux listing,
-  pruning stale entries. Adopt UI uses this set to flag owned-vs-external,
-  not a spoofable `cloude_` prefix match.
-- **Replay flag around scrollback.** `backend.replay_in_progress = True`
-  while streaming historical bytes so IdleWatcher and pattern detection
-  don't see them as new output.
-- **No token in URL.** WebSocket JWT rides on `Sec-WebSocket-Protocol`,
-  never `?token=`. Query strings get logged; subprotocol headers don't.
-
----
-
-## Notifications
-
-Opt-in. Off by default (`notifications.enabled = false`). Three channels
-all fan out from the same `NotificationRouter`: **ntfy.sh** (mobile push),
-**Slack incoming webhook** *(v0.7.0)*, and **in-app toasts** *(v0.7.0)*.
-
-The router additionally subscribes to **Claude Code lifecycle hooks** *(v0.7.0)*:
-`Stop`, `Notification`, and `PermissionRequest` events are POSTed from the
-spawned `claude` process back to the loopback-only
-`POST /api/v1/hooks/claude-event` route and become first-class events in
-the same pipeline (rate limit, fanout, toast).
-
-### Event kinds
-
-| EventType           | When it fires                                                       | Priority |
-| ------------------- | ------------------------------------------------------------------- | -------- |
-| `PERMISSION_PROMPT` | Claude asks for approval — detected synchronously on stream         | 5        |
-| `INPUT_REQUIRED`    | Session is blocked on user input                                    | 4        |
-| `TASK_COMPLETE`     | Pane went quiet for `idle_threshold_seconds` on a prompt frame      | 3        |
-| `ERROR`             | Error pattern detected                                              | 3        |
-| `BUILD_COMPLETE`    | Build-success pattern detected                                      | 3        |
-| `TEST_RESULT`       | Test runner finished                                                | 3        |
-| `TUNNEL_CREATED`    | Auto-tunnel brought a port online                                   | 3        |
-
-### IdleWatcher FSM
-
-`TASK_COMPLETE` is the hard one. `IdleWatcher` maintains a 16KB ring buffer
-of recent pane output, strips ANSI, and classifies the tail. It fires
-`TASK_COMPLETE` only when BOTH `╭─╮` (top) and `╰─╯` (bottom) corners of
-a Claude Code prompt frame are visible AND the session has been silent for
-`idle_threshold_seconds`.
-
-False-positive guards:
-- `╭─╮` alone matches rendered markdown boxes → require both corners
-- `Allow` unanchored matches grep output → anchor to line-start + menu item
-- `^C` echo during Ctrl-C → suspend idle detection (INTERRUPTED state)
-
-### Rate limiting
-
-Two limits gate every emit:
-- **Global cap** — `rate_limit_global_cap` notifications per
-  `rate_limit_window_seconds` (default 10/60s).
-- **Per-kind cooldown** — minimum seconds between two emits of the same
-  `EventType` (default 10s). Dedups bursts like repeated error matches.
-
-The limiter seeds its per-kind timestamps at cold start so a notification
-storm racing startup (e.g., scrollback slipping past the replay guard) gets
-swallowed by the cooldown.
-
-### Privacy contract
-
-Project names and session slugs NEVER appear in ntfy `Title` / `Body` / `Tags`.
-Generic titles ("Cloude: permission requested"), generic bodies ("Tap to open
-session."). The slug DOES appear in the `Click` header URL
-(`{public_base_url}/session/<slug>`) — accepted trade-off under the LAN-only
-threat model.
-
-### Setup
-
-```bash
-python3 setup_auth.py          # prompts for ntfy config, mints a 32-hex topic
-```
-
-The topic IS the credential. Anyone who knows the topic name can read your
-notifications. Treat it like a secret. Self-host ntfy if you don't trust
-sh.ntfy.sh.
-
-### Slack channel *(v0.7.0)*
-
-Create an incoming webhook in your Slack workspace
-(https://api.slack.com/messaging/webhooks) — Slack binds it to a single
-channel at creation. Set:
-
-```jsonc
-// config.json
-"notifications": {
-  "enabled": true,
-  "slack_webhook_url": "https://hooks.slack.com/services/XXX/YYY/ZZZ"
-}
-```
-
-The webhook URL IS the credential. Treat it like an API key — anyone with
-it can post into the bound channel. Empty string disables the channel
-silently. Slack messages render an emoji + title + 200-char snippet; no
-project names or session slugs leak (same privacy contract as ntfy).
-
-### Claude Code hooks *(v0.7.0)*
-
-`claude_hooks.ensure_hook_settings()` runs at FastAPI startup and merges
-this block into `~/.claude/settings.json`:
-
-```jsonc
-"hooks": {
-  "Stop": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "...# cloudecode-managed" }] }],
-  "Notification": [...],
-  "PermissionRequest": [...]
-}
-```
-
-Each managed command embeds the literal `# cloudecode-managed` marker so
-re-runs replace cloudecode's entries in place without touching user-added
-hooks. The hooks `curl`-POST the JSON payload (read from stdin) to the
-loopback-only `/api/v1/hooks/claude-event` route, authenticated by an
-HMAC bearer token (`CLOUDECODE_HOOK_TOKEN`) that cloudecode injects into
-the spawned `claude` process's env at tmux session birth. Disable with
-`notifications.disable_claude_hooks: true`.
-
-### Toasts *(v0.7.0)*
-
-Toasts are server-recorded notifications surfaced in the web UI. The
-NotificationRouter records every event as a toast on the relevant session,
-then broadcasts `toast.new` over WebSocket. On `(re)attach`, the client
-backfills via `GET /sessions/{id}/toasts?unacked=true`. Dismiss flow is
-cross-tab via server `toast.ack` broadcast (no `localStorage` sync, no
-`POST → POST` echo). Per-toast accent color comes from the active project
-theme.
-
----
-
-## Deployment modes
-
-**Mode 1 — macOS native (Electron menu bar).** Primary, best-supported. Full
-macOS integration — Keychain, native MCPs, shell env, `~/.claude`. Install
-via DMG or `npm run build` in `macOS/`. Use this unless you have a reason
-not to.
-
-**Mode 2 — Docker (pure container).** Alternative. Linux hosts, headless
-servers, or isolated environments. Both the Python server and the Claude CLI
-run in the container. No macOS Keychain means no Claude Pro / Max OAuth;
-`ANTHROPIC_API_KEY` works. No macOS-native MCPs. Network MCPs (Gmail,
-GDrive, Postgres, HTTP) all work. See `docs/deployment-docker.md`.
-
-**Hybrid (server-in-container, Claude-on-host) — CUT.** Docker Desktop's
-LinuxKit VM doesn't pass live Unix sockets from the host to the container
-reliably. The UID-match + LaunchDaemon complexity didn't clear the
-complexity bar. Mode 1 already runs Claude natively; the hybrid never had
-a unique value prop.
-
----
-
-## Development
-
-```bash
-./setup.sh                         # venv + pip + cloudflared
-source venv/bin/activate
-python3 setup_auth.py              # generate .env + config.json
-python3 -m src.main                # dev server (reload=True)
-
-# in another terminal
-pytest tests/ -v
-```
-
-Test suite covers:
-- `test_session_backend.py` — ABC + factory + tmux vs pty selection
-- `test_ws_subprotocol_auth.py` — WS JWT handshake + close codes
-- `test_refresh_tokens.py` — rotation + reuse detection + chain revocation
-- `test_totp_rate_limit.py` — slowapi + TTLCache replay dedup
-- `test_notifications.py` / `test_rate_limiter.py` / `test_idle_watcher.py` —
-  notification pipeline
-- `test_tunnel_manager.py` — backend selection + double-flag guard
-- `test_deep_link_routing.py` — `/session/<project>` deep link
-
-Tmux-adjacent tests skip cleanly when tmux isn't on PATH. Install tmux for
-full coverage. **177 tests** total — should all pass on a Mac with tmux
-installed.
-
-### Electron dev
-
-```bash
-cd macOS
-npm install
-npm start                          # dev mode — spawns Python server
-npm run build                      # produces dist/Cloude Code.dmg
+python3 setup_auth.py --rotate-topic   # regenerate the push topic without a full re-setup
+./nuke.sh --skip-confirm               # non-interactive full teardown
 ```
 
 ---
 
-## Recent changes
+## Security model
 
-### v0.7.3 (current — `weekend-mvp-v3.1`)
+The remote surface is a web server on your LAN that can start processes on your Mac. Here's exactly what protects it.
 
-- **fix(auth): stop OTP re-prompt after short laptop sleeps.** Access token
-  TTL bumped from 15 minutes to 4 hours (refresh token unchanged at 7 days)
-  so typical sleep durations no longer expire the access token mid-session.
-  The refresh path is hardened against transient post-wake Wi-Fi glitches
-  that previously nuked the refresh token and forced a fresh OTP:
-  `Auth.refresh()` now distinguishes network errors from auth errors and
-  preserves the refresh token on network-only failures. WebSocket `onclose`
-  with code `4401` now refresh-first via the existing single-flight mutex
-  before reconnecting, avoiding stale-token reconnect storms on wake.
-  Refresh token TTL, signing, storage, and validation strictness are all
-  unchanged — same security posture, fewer false-positive OTP prompts.
+**Getting in.** There is no password, because there's nothing to leak. Login is a 6-digit TOTP code from any RFC 6238 authenticator, with ±30s drift tolerance, rate-limited to 5 attempts per minute and 20 per hour. A code you just used is cached for 90 seconds behind an async lock, so someone who sniffs it can't replay it inside its own validity window. Pairing is one-shot: after your first successful login, `/auth/qr` refuses to hand out the TOTP secret again, so a LAN neighbor can't pair their own authenticator.
 
-This is a single-fix patch on top of v0.7.2. No behavior changes to
-terminal, themes, toasts, Claude hooks, Slack fanout, or session rename.
-Drag the new DMG into Applications.
+**Staying in.** A successful login mints two tokens: a **4-hour access JWT** and a **7-day refresh JWT**. The access lifetime is long on purpose — closing your laptop shouldn't cost you an OTP. The refresh token is where the real defense lives. It's tracked in SQLite and rotated on every use, so if an old one is ever replayed, the server treats it as theft: it burns the entire token chain and forces a fresh TOTP. The attacker gets logged out, and so do you — which is how you find out.
 
-### v0.7.2 (`weekend-mvp-v3.1`)
+**Token handling.** The signing algorithm is pinned to HS256, closing the `alg:none` bypass, and a `typ` claim stops a refresh token from being presented as an access token. WebSocket auth travels in the `Sec-WebSocket-Protocol` handshake header rather than a `?token=` query string, so your JWT never lands in a proxy access log.
 
-- **Terminal viewport snap-to-bottom on session rejoin.** Reattaching to an
-  active session now reliably scrolls the xterm.js viewport to the latest
-  output instead of stranding the user mid-history. Frontend fix in
-  `client/js/terminal.js` lands as a binary in this release.
-- **Theme audio plumbing.** New `client/js/themeAudio.js` formalizes the
-  optional ambient-audio hook used by Matrix / Blade Runner themes — same
-  3-state allowlist gate as `effects.js`, no autoplay surprises.
-- **Backend scrollback capture endpoint.** New tmux-backend route lets the
-  client request a pane scrollback snapshot on rejoin so the terminal can
-  paint history before live bytes start streaming.
-- **Scrollback rejoin regression tests.** `tests/test_session_rejoin_scrollback.py`
-  pins the rejoin-snap behavior. Manual QA notes for the theme-audio path
-  live in `tests/manual_audio_check.md`.
-- **README regenerated** against the new DMG SHA-256.
+**Your Claude credentials.** They never enter this application. Sessions launch through *your own* `cld` / `cldor` zsh function, which means the credential lookup happens inside the spawned tmux pane. Cloude Code has no code path that reads, stores, or forwards an OAuth token or API key.
 
-This is a polish patch on top of v0.7.1 — no behavior changes to themes,
-toasts, Claude hooks, Slack fanout, or session rename. Same upgrade story:
-drag the new DMG into Applications.
+**The rest of the surface.** CORS origins are computed from your host and port, and because the middleware runs with credentials, `"*"` is structurally impossible. Every response carries `default-src 'self'`, `frame-ancestors 'none'`, nosniff, and no-referrer. Claude Code's own lifecycle hooks post to a loopback-only endpoint that additionally requires a per-session random HMAC bearer token compared in constant time. Uploads pass an extension allowlist, a PIL structural verify, a magic-byte cross-check, and a size cap, then land `0600` inside a `0700` directory and get TTL-swept. Session names containing tmux's `:` or `.` target separators are refused before they can reach a `-t` argument. OpenRouter model ids are regex-validated and double-`shlex.quote`d across both shell layers.
 
-### v0.7.1 (`weekend-mvp-v3.1`)
-
-- **Native tmux scroll actually works now** — v0.6.1 added `set-option -s mouse on` on the cloude socket, but tmux's `mouse` option is session-scope, not server-scope. The `-s` call silently no-op'd (the `check=False` flag swallowed the error). Bindings were correctly installed but never reached because mouse mode itself stayed off. Fix is a one-character change: `-s` → `-g`. Verified live: `tmux -L cloude show-options -gv mouse` now returns `on`.
-
-### v0.7.0 (`weekend-mvp-v3.1`)
-
-- **Project-scoped themes.** Theme is now keyed by PROJECT (the session's
-  `working_dir`), not by tmux session. Canonical store: `<working_dir>/.cc.theme`
-  — a one-line file containing the theme id. Server reads on attach, writes on
-  theme change, atomic. Same project on two laptops → same theme. Old
-  `pinned_themes.json` is kept as fallback for one release with auto-migration
-  on first attach; will be removed in v0.8.x. New endpoint `PATCH
-  /sessions/{name}/theme`; the old `/pinned-theme` route still works as a
-  deprecated alias.
-- **Toast notifications in-browser.** Claude Code lifecycle events (`Stop`,
-  `PermissionRequest`, `Notification`) now surface as toast popups in every
-  browser attached to that session. Toasts stay open until acknowledged. Acking
-  on one tab dismisses on every other tab attached to the same session (WS
-  broadcast). Toast color comes from the project's theme accent so you can tell
-  at a glance which session needs you.
-- **Claude Code hook integration.** Cloude Code now writes a managed hook block
-  into `~/.claude/settings.json` on startup (marker-tagged so it won't clobber
-  your own hooks). Each spawned session gets a per-session HMAC token
-  (`CLOUDECODE_HOOK_TOKEN`) and id (`CLOUDECODE_SESSION_ID`) injected as env
-  vars; hooks `curl` back to a new loopback-only `/hooks/claude-event` endpoint
-  that validates the token and creates a toast. Opt-out:
-  `notifications.disable_claude_hooks: true` in config.
-- **Slack incoming-webhook fanout.** Every Claude Code lifecycle event also
-  POSTs to a Slack incoming webhook URL configured at
-  `notifications.slack_webhook_url`. Single channel, no OAuth, fire-and-forget.
-  Disabled silently when the URL is empty. Rides the existing notification
-  router rate-limiter.
-
-### v0.6.1 (`weekend-mvp-v3.1`)
-
-- **Browser scrollback replay no longer jumbled.** When resuming a session
-  in the browser, the replayed history would paint as a misaligned mess —
-  lines duplicated at multiple rows, leading columns truncated — because
-  the captured bytes carried alt-screen escape sequences that xterm had no
-  prior state for. Three coordinated fixes: tmux `capture-pane` no longer
-  joins wrapped lines (drop `-J`), a screen-reset preamble
-  (`\x1b[?1049l\x1b[2J\x1b[H`) is written before the replay so the xterm
-  parser starts clean, and a Ctrl+L follow-up fires 50ms after the WS
-  opens so the live app (Claude's TUI) repaints fresh on top of the
-  replayed history. `scrollback_lines` default also bumped 3000 → 10000.
-- **Mid-stream scroll-up works now.** While Claude was streaming output,
-  scrolling up would snap the viewport back to the bottom on every chunk.
-  The wheel handler was racing the scroll-listener's 100ms debounce that
-  flips `autoScrollEnabled` off; the PTY flush cycle was faster. Fixed by
-  flipping `autoScrollEnabled = false` synchronously inside the wheel
-  handler. Scroll-to-bottom still re-engages auto-follow.
-- **Server-side desktop tmux scroll.** When sitting at the Mac in a
-  native terminal attached to a `-L cloude` session, mouse wheel was
-  being forwarded to whatever TUI was in the pane (Claude → cycle prompt
-  history). Now `set -s mouse on` is set on the cloude socket, and
-  `WheelUpPane` / `WheelDownPane` are bound to enter copy-mode when the
-  pane is in alt-screen. The browser path is unaffected (no client is
-  attached to the pipe-pane FIFO so no mouse escapes flow to xterm.js).
-
-### v0.6.0 (`weekend-mvp-v3.1`)
-
-- **Concurrent sessions.** You can now run multiple terminal sessions at
-  once. Open two browser tabs, attach a different session in each, and
-  neither disconnects the other — opening a 2nd session no longer kicks
-  the 1st. Internally `SessionManager` became a session-id-keyed registry
-  (sessions / backends / output-queues / log-buffers all per-session); the
-  websocket endpoint is now `/ws/terminal?session_id=<id>` and only
-  subscribes to that session's output. `POST /sessions` and
-  `/sessions/adopt` no longer reject when a session is already live; new
-  `GET /sessions/list` returns all live sessions; the launchpad's Running
-  Sessions list shows every one.
-- **Mouse-wheel scrolling fixed.** Scrolling the wheel in the browser
-  terminal now scrolls xterm's scrollback instead of being translated into
-  up/down-arrow keystrokes — which Claude Code's TUI was interpreting as
-  "cycle prompt history." Scrollback buffer also bumped 10k → 50k lines.
-- **Adopt-external clarity.** The adopt help text now spells out that any
-  tmux session on the `cloude` socket with `claude` running inside it is
-  adoptable — not just sessions CloudeCode created — and calls out the
-  `tmux -L cloude` socket requirement so a default-socket session doesn't
-  silently fail to appear.
-
-### v0.5.7 (`weekend-mvp-v3.1`)
-
-- **Image paste from browser → Claude Code session — restored.** The v0.5.5
-  feature was wiped from DEV during the v0.5.6 PROD promotion (rsync
-  exclusion miss); replayed PROD commit `5b22cd2` onto DEV to bring the
-  backend back. The full `POST /sessions/{id}/upload-image` endpoint is
-  live again: Pillow magic-byte validation (PNG/JPEG/GIF/WebP, 10 MB cap,
-  4096×4096 dim cap), per-session tmp dir under `~/.cloudecode/uploads/`,
-  three-layer cleanup (rmtree on session destroy, startup orphan sweep,
-  periodic `UploadSweeper` with 1h soft / 24h hard TTL). Covered by 16
-  pytest cases (all green). The image-paste docs that have been sitting in
-  this README since v0.5.5 are now actually backed by code.
-- **Adopted-session project-name dedup.** Adopting an external tmux session
-  used to write the *raw* `cloude_<name>` session name into Recent Projects;
-  clicking that entry then re-prepended `cloude_` at launch time, producing
-  `cloude_cloude_<name>` sessions and orphaned-looking project rows.
-  Frontend now strips one leading `cloude_` before saving, and the server
-  normalizes idempotently before re-prepending as a backstop. Clean names
-  end-to-end — existing duplicates can be renamed via `PATCH
-  /api/v1/projects/{name}` or just deleted and re-adopted.
-
-### v0.5.6 (`weekend-mvp-v3.1`)
-
-- **Frozen-terminal-on-adopt fix.** `tmux_backend.py` now replaces any
-  existing `pipe-pane` on the target pane during adopt instead of bailing
-  silently when one is already wired. Stale external pipes were short-
-  circuiting our streaming chain and surfacing as a dead pane after the
-  Claude banner. CloudeCode now owns the pipe outright.
-- **WS handshake fallback.** `websocket.py` writes a Ctrl+L at the recorded
-  birth dims if the resize handshake times out or the client never reports
-  dims. Degraded redraw beats dead-screen.
-- **Adopt → auto-add to Recent Projects.** Clicking an externally-running
-  tmux session in the launchpad now auto-creates a project entry, mirroring
-  the create flow. The session survives an external `tmux kill-session` —
-  you can relaunch from Recent Projects without re-typing the path.
-- **6th FAB action — New console.** The "+ new" speed-dial FAB on the
-  Running Sessions heading now offers six actions:
-  `new-project` / `open-folder` / `clone-github` / `connect-openclaw` /
-  `connect-hermes` / `new-console`. New-console opens a plain `$SHELL -i`
-  tmux session in `~/` — bare shell, no agent CLI. Backend gained
-  `AgentsConfig.shell_command` (default `"$SHELL -i"`); `routes.py` now
-  expands `~` in `working_dir` so the FAB's home-dir hint actually lands.
-- **Agent type system.** Sessions carry an `agent_type` field
-  (`claude` / `codex` / `hermes` / `openclaw` / `shell`) that selects which
-  command tmux launches:
-
-  | `agent_type` | Command source                | Notes                                  |
-  | ------------ | ----------------------------- | -------------------------------------- |
-  | `claude`     | `AgentsConfig.claude_command` | Default; `claude --dangerously-skip-permissions` |
-  | `codex`      | `AgentsConfig.codex_command`  | OpenAI Codex CLI                       |
-  | `hermes`     | `AgentsConfig.hermes_command` | `hermes` (NOT `hermes-agent`)          |
-  | `openclaw`   | `AgentsConfig.openclaw_command` | `openclaw tui` (NOT bare `openclaw`) |
-  | `shell`      | `AgentsConfig.shell_command`  | `$SHELL -i` — no agent, just a shell   |
-
-- **Tunnels nuked.** The Cloudflare tunnel UI/wiring was removed from the
-  shipping app surface; the LAN-only threat model is now the only mode the
-  UI exposes. `local_only` remains the backend default. (Cloudflare backend
-  classes still exist in source for legacy configs.)
-- **Local Servers detector.** Launchpad surfaces locally-listening dev
-  servers detected on the host so you can tell at a glance whether a Vite /
-  Flask / node process is up.
-- **Per-session pinned theme.** Pluggable theme system; each session
-  remembers its pinned theme across reconnect.
-- **Header identity polish.** Session header swaps in the active
-  project's name + agent-type label instead of a generic "Cloude Code"
-  banner.
-- **FAB on Running Sessions heading** (was on Recent Projects). Mirrors
-  the typical create-flow mental model: "I want to start something" lives
-  next to the running list.
-- **Clone-from-GitHub.** New-project flow can clone a repo via the local
-  `gh` CLI; first-class FAB action.
-- **Project rename + description edit** via `PATCH /api/v1/projects/{name}`.
-- **Image paste from browser → Claude Code session** (carried forward from
-  v0.5.5). See v0.5.5 below.
-
-### v0.5.5
-
-- **Image paste from browser → Claude Code session.** Browser captures
-  clipboard image (paste event on desktop, file picker / clipboard.read()
-  on iOS), POSTs to new `/api/v1/sessions/upload-image` endpoint, server
-  validates via Pillow magic-byte check and saves to
-  `<session.working_dir>/.cloude_uploads/<uuid>.<ext>`, then injects the
-  absolute path + trailing space into the tmux pane via the existing
-  `TerminalController.insertText()` path. Claude Code auto-attaches it.
-  Three-layer cleanup: rmtree on `destroy_session()`, sweep on lifespan
-  startup (catches force-killed orphans), periodic background sweeper
-  (`UploadSweeper` task, 1h cadence, 24h TTL, both configurable under
-  `uploads.*` in `config.json`).
-- **New config block** — `uploads.{enabled, ttl_seconds, sweep_interval_seconds, max_size_mb}` 
-  on `AuthConfig` (defaults: true / 86400 / 3600 / 10).
-- **iOS Safari support** — 📎 button visible only via
-  `@media (pointer: coarse)`, tries `navigator.clipboard.read()` for
-  `image/png` first, falls back to a hidden `<input type="file" accept="image/*,image/heic,image/heif">`.
-- **Dependency** — `python-multipart>=0.0.9` added to `requirements.txt`
-  (FastAPI's `UploadFile` dep refuses to register the route without it).
-
-### v0.5.4
-
-- **Setup-required banner fix.** The web UI's "Setup Required" banner now
-  hides when `GET /api/v1/auth/qr` returns `403` — meaning the server is
-  already paired (`.totp_paired` sentinel exists). Prior behavior left the
-  banner visible on every page load even after successful pairing.
-
-### v0.5.3
-
-- **Shift+Enter newline.** Inserts `\n` instead of submitting. Implemented
-  via tmux `extended-keys on` + `terminal-features ":extkeys"` (CSI-u
-  encoding) + `escape-time 0` (server-side), and on the client an
-  `attachCustomKeyEventHandler` that:
-  - emits ESC+CR (`\x1b\r`) so Claude's TTY interprets it as
-    Alt+Enter / newline-insert;
-  - calls `ev.preventDefault()` to suppress xterm's hidden-textarea
-    duplicate `\r`;
-  - **re-attaches on every `term.reset()` / session swap** — xterm
-    clears its single custom-key handler slot on reset, so without the
-    re-attach Shift+Enter goes dead the moment you swap sessions.
-  - emits a `ws_input_short` structlog line on every short-payload write
-    (`hex=<bytes> length=<n>`) for forensic trace of exactly what tmux
-    received.
-- **Phone sessions** — running-sessions panel auto-refreshes every 5s
-  on mobile so a session started from another device shows up without
-  a manual reload.
-- **Auth hardening:**
-  - CORS allowlist tightened: no `*`, explicit origins required.
-  - `.totp_paired` sentinel + `CLOUDE_ALLOW_QR_REPAIR=1` escape hatch
-    (see Auth Flow below).
-  - TOTP rate limit affirmed: 5/min, 20/hour with `Retry-After` header.
-  - Refresh rotation with chain revocation on replay (10s grace window).
-  - `.env`, `config.json`, and `refresh_tokens.db` chmod'd to `0600` on
-    create.
-- **Cache-Control no-cache** on HTML/JS — fixes mobile staleness after
-  app upgrade.
-
-### v0.5.2
-
-- **Menu-bar polish.** Bind-IP submenu (loopback / LAN / `0.0.0.0`),
-  Copy OTP menu item that surfaces the live 6-digit code, Copy
-  Published URL menu item.
-- **First-run auto-bootstrap** — install the DMG, double-click, the
-  app provisions Python venv + secrets + TOTP QR with zero terminal
-  interaction.
-- **Classic drag-to-Applications DMG** layout for end-user installs.
-- **QR endpoint** returns JSON (`{ qr_image: <data url> }`) instead of
-  raw PNG bytes — menu-bar app fetches from server endpoint instead of
-  reading a local file.
+**What this is not.** There is no TLS in-process — it speaks plain HTTP and WS. If you want encryption, terminate it at a proxy in front. The threat model is a trusted LAN with hardened defaults, not a service designed to sit naked on the public internet. One practical consequence of plain HTTP: on a non-localhost origin, browsers disable the Clipboard API, so the 📎 menu degrades to a "use Cmd+V" hint.
 
 ---
 
-## Known issues and residual risks
+## Honest limits
 
-| Issue                                      | Mitigation                                                               | Status         |
-| ------------------------------------------ | ------------------------------------------------------------------------ | -------------- |
-| Tunnel URL is public                       | TOTP + JWT on every API route; Cloudflare Access in front is recommended | Documented     |
-| `ALLOWED_ORIGINS = ["*"]` out of the box   | Restrict to your LAN origin in `.env`                                    | Documented     |
-| ntfy topic is a shared credential          | Treat like a password; self-host ntfy if you don't trust sh.ntfy.sh      | Documented     |
-| PTY runs unsandboxed                       | Single-user LAN model; don't share access with untrusted parties         | Accepted       |
-| Legacy `cloude_ses_<hex>` sessions         | Continue to work; no migration                                           | By design      |
-| Menu bar "Stopped" while server is running | Health poll adopts existing process on port 8000                         | Partial fix    |
-| `CLOUDFLARE_DOMAIN` placeholder after setup| UI surfaces "Setup Required" state on placeholder detection              | Workaround     |
-| Docker Desktop Unix-socket passthrough     | Hybrid mode was cut — use Mode 1 or Mode 2                               | Won't fix      |
+**Reachability**
 
----
+- **No tunnel.** Cloude Code has no Cloudflare, ngrok, or Tailscale integration. It binds to the interface you choose. Off-LAN access is your own VPN, Tailscale, Teleport, or reverse proxy.
+- **No TLS in-process.** Plain HTTP and WS. Terminate encryption at a proxy if you need it.
+- **LAN-only threat model.** Hardened defaults, but not built to face the open internet.
 
-## Troubleshooting
+**Platform**
 
-### Server won't start
+- **macOS 13+ on Apple Silicon** for the packaged app. One DMG target, arm64. No Intel, Windows, or Linux desktop build.
+- **Code-signed but not notarized.** Gatekeeper warns on first open.
+- **No auto-update, no Homebrew cask, no npm package.** Upgrades mean downloading a new DMG.
+- **Python 3.12+ is hard-required.** No fallback to 3.11.
 
-- `lsof -i :8000` — Electron should adopt an existing process. If not, kill
-  the orphan or `./stop.sh`.
-- `.env` missing or incomplete → re-run `setup_auth.py`. Packaged app reads
-  `~/Library/Application Support/cloude-code-menubar/.env`.
-- `which python3` → must exist; install via `brew install python@3.12`.
+**Client**
 
-### TOTP rejected
+- **Not a PWA.** No manifest, no service worker, not installable, no offline mode.
+- **No voice input.** The `/voice` entry in the slash palette is reference text describing a Claude Code CLI command. This client implements no dictation or speech recognition.
+- **No file browser, no diff viewer, no image preview.** The folder picker is a directory chooser for launching a project, nothing more. Pasted images are written to disk as a path and never rendered in the browser.
+- **No QR pairing in the browser.** Pairing happens in the Electron app or via `setup_auth.py` on the server.
+- **No automatic dark mode.** No `prefers-color-scheme` support — theming is 23 named themes, chosen manually.
+- **No iOS safe-area handling.** No notch/home-indicator insets in the CSS.
+- **HEIC/HEIF uploads are rejected** with a "convert to PNG/JPEG" message.
+- **No client-side framework, bundler, or tests.** Vanilla JS by design. The test suite (21 pytest files) covers the Python server only.
 
-- Clock drift: `sudo sntp -sS time.apple.com` to resync.
-- Wrong secret: re-run `setup_auth.py` and re-scan the QR.
-- Rate-limited: 5/min, 20/hour by default. Wait for the `Retry-After` header,
-  then retry.
+**Behavior**
 
-### WS connection drops immediately
-
-- Check the browser console for close code:
-  - **4401** — bad JWT (expired, wrong `typ`, or missing). Re-log-in.
-  - **4400** — malformed `Sec-WebSocket-Protocol`. Client bug.
-- Verify `cloude.jwt.v1` marker is the first subprotocol in the client's
-  array (most browsers tolerate either order; some proxies don't).
-
-### Session lost after server restart
-
-- `ls $LOG_DIRECTORY/session_metadata.json` — exists? If yes, tmux is
-  probably dead; check `tmux -L cloude list-sessions`.
-- `tmux -L cloude list-sessions` — if empty, metadata points to a dead
-  session and will be pruned on next startup.
-- If tmux is alive but not re-attaching: check server logs for
-  `session_metadata_slug_not_owned` — the session isn't in
-  `owned_tmux_sessions` and the launchpad will offer it as adoptable instead.
-
-### Terminal renders at 80x24
-
-- WS resize handshake failed or timed out (2s budget). Refresh the browser
-  — a fresh WS connect triggers a new handshake.
-- If persistent, check `window-size` via `tmux -L cloude show-options -sv
-  window-size` — must be `manual`. `start()` sets this; an external session
-  started without it will log a warning at adopt time.
-
-### Adopt-external session doesn't appear
-
-- Must be on the cloude socket: `tmux -L cloude new -s mywork` (NOT `tmux new`).
-- Launchpad queries `GET /api/v1/sessions/attachable`; check browser devtools
-  for the response.
-- Session name contains `.` or `:` → tmux target parsing rejects it. Rename.
-
-### Claude CLI doesn't start in a session
-
-- `which claude` — must return a path; else set `CLAUDE_CLI_PATH` in `.env`.
-- `claude --help` — should work without OAuth prompts.
-- Sessions call `claude --dangerously-skip-permissions` — that's deliberate
-  for the headless-terminal workflow.
-
-### Can't connect from phone
-
-- Same LAN required for direct access (`http://<mac-lan-ip>:8000`).
-- macOS firewall: **System Settings → Network → Firewall** must allow port 8000.
-- `ifconfig | grep 'inet '` to find the Mac's LAN IP.
-- Tailscale / UniFi Teleport: hit the overlay hostname instead.
+- **Without tmux, sessions die with the server.** The PTY fallback works but has no persistence and no scrollback.
+- **Docker mode can't use a Claude Pro/Max subscription.** You need a direct API key.
+- **`./setup.sh` is broken.** It hard-fails without `cloudflared` and prompts for Cloudflare credentials it no longer needs. Use the DMG or the manual from-source path.
+- **Vestigial tunnel UI in the tray.** The menu still shows a `Tunnels: N` line that permanently reads 0, and the teardown dialog still mentions Cloudflare DNS records. Cosmetic dead wiring from the removed subsystem.
+- **`cloudflare` and `pyyaml` are still in `requirements.txt`** and wired to nothing. Stale dependencies.
+- **No CI.** `.github/workflows/` contains Claude review bots, not a build or test pipeline. Releases are uploaded by hand.
 
 ---
 
-## Architecture evolution
+## Changelog
 
-Short version of how we got here. Commit messages tell the full story.
+**v0.8.1** — 2026-08-04
 
-- **PTY → tmux.** The v0.1 MVP used a raw `pty` fork. Sessions died with the
-  server, which turned every Electron restart into a lost session. Switched
-  to a dedicated tmux socket (`tmux -L cloude`) so sessions survive restarts
-  and can be re-adopted from the launchpad on next boot.
-- **Banner → unified running sessions.** Launchpad originally had three
-  sections: "active session banner", "adopt external", "existing projects".
-  Conceptually overlapping. Collapsed into two: **Running sessions** (owned
-  + external in one list, pulsing status dots, inline X destroy) and
-  **Existing projects**. The banner is gone.
-- **Destroy-on-swap → detach-on-swap.** Early design killed the prior session
-  when switching. Terrifying UX: accidentally click a different project,
-  lose work. Now switching *detaches* — tmux stays alive, the prior session
-  re-appears in the running list, re-adoptable. Only explicit X button kills.
-- **Slug → verbatim naming.** Sessions used to be named `cloude_ses_<8-hex>`
-  from a UUID. Meaningless in the launchpad. Now `cloude_<project name>`
-  verbatim — tmux allows spaces, emoji, punctuation; only `.` and `:` get
-  sanitized (they're tmux target separators). Legacy hex names still
-  supported.
-- **Scrollback replay → resize handshake.** Replaying stored bytes on WS
-  reconnect meant painting at the previous geometry — visible corruption
-  whenever the new client had different dims. Replaced with a resize
-  handshake on connect: server requests dims, client replies, backend
-  resizes, Ctrl+L forces a clean redraw. User loses historical scrollback
-  on reconnect; xterm.js retains client-side history within a page load
-  anyway.
-- **Query-string JWT → WS subprotocol.** Tokens used to ride in `?token=`.
-  That leaks into proxy access logs. Now JWT is a `Sec-WebSocket-Protocol`
-  value; server validates pre-accept and echoes the marker back.
-- **Single access token → access + refresh pair.** Short-lived access (15m)
-  limits blast radius of a leak; long-lived refresh (7d) with SQLite
-  persistence, rotation, reuse detection, and chain revocation.
-- **HybridTunnelManager → pluggable TunnelBackend ABC.** One class grew to
-  handle local + quick + named + DNS. Refactored to a `TunnelBackend` ABC
-  with `local_only`, `quick_cloudflare`, `named_cloudflare` implementations
-  selected by `tunnel.backend` config. Double-flag guard requires
-  `enable_cloudflare=true` in addition to picking a Cloudflare backend.
-- **v0.2 → v0.5.** Version bump reflects the weekend-MVP → hardened-LAN-app
-  transition. Menu-bar status dot now polls `/health` directly.
+- Clicking a project always spawns a new session, enabling multiple concurrent Claude sessions in one directory.
+- 📎 clipboard menu: paste text or an image from the OS clipboard into the terminal.
+- Real terminal text selection and copy — Cmd+C / Ctrl+Shift+C on desktop, long-press-drag with a floating copy button on iOS.
+- iOS viewport anchoring so floating menus stop getting clipped off-screen.
+
+**v0.8.0** — 2026-08-04
+
+- Provider-selector modal on every launch path: pinned "Claude" or any saved OpenRouter model, with in-app add and remove.
+- Model IDs hardened against shell injection through the full two-shell chain.
+
+**v0.7.5** — 2026-06-26
+
+- Folder picker gains type-ahead, an editable path bar, and auto-`mkdir -p` for paths that don't exist yet.
+
+**v0.7.4** — 2026-06-23
+
+- Fixed the `/clear`-on-rejoin context-wipe bug. Two Ctrl+L bytes arriving within two seconds used to trigger Claude Code's own clear chord and silently wipe the conversation — in an app whose entire purpose is preserving your session.
+
+**v0.7.3** — 2026-05-25
+
+- Access-token TTL raised from 15 minutes to 4 hours. No more re-entering an OTP every time the laptop wakes.
+
+Full history: [releases](https://github.com/Adoom666/CloudeCode/releases) · 14 tags, 235 commits since 2025-10-27.
 
 ---
 
 ## Contributing
 
-Pull requests welcome. For substantial changes, open an issue first.
+Issues and pull requests are welcome at [Adoom666/CloudeCode](https://github.com/Adoom666/CloudeCode).
 
-```bash
-git checkout -b feature/your-feature
-# ...make changes, run tests...
-pytest tests/ -v
-git commit -am "feat: description"
-git push origin feature/your-feature
-# open PR
-```
+Before opening a PR:
 
-Keep diffs focused. Don't break the invariants. If you're touching the tmux
-backend, run the full `test_session_backend.py` + `test_ws_subprotocol_auth.py`
-suite on a machine with tmux installed.
+- Run the Python test suite: `source venv/bin/activate && python3 -m pytest`
+- Keep the client dependency-free. It's vanilla JS with no bundler on purpose.
+- If you touch session lifecycle, respect the invariant: **detach, never destroy.** Only an explicit kill may end a tmux session.
+
+Good first targets, all documented above: repairing `./setup.sh`, removing the vestigial tunnel UI from the tray, and dropping the stale `cloudflare` and `pyyaml` dependencies.
 
 ---
 
 ## License
 
-MIT — see `LICENSE` file.
+MIT © 2025 Adoom666. See [LICENSE](LICENSE).
 
----
-
-Built for developers who want to code from anywhere. No more being chained to
-your desk.
+<div align="center">
+<br>
+<b>Your Mac keeps coding. You keep the remote.</b>
+</div>

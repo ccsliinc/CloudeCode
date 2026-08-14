@@ -2329,3 +2329,82 @@ button[data-tooltip]:hover::after {
     border-color: var(--color-accent-border);
 }
 
+
+/* =====================================================================
+ * CLIPBOARD — 📎 attach menu
+ * ---------------------------------------------------------------------
+ * Small fixed-position popup anchored above the 📎 button (bottom-right
+ * slot) by clipboard.js#positionMenu. Token-only styling, mirroring the
+ * modal/pill surface treatment. Shown on coarse-pointer devices (the
+ * button itself is pointer:coarse-gated) but harmless on desktop.
+ * ===================================================================== */
+.cloude-attach-menu {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    padding: 6px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-modal);
+    z-index: 71;   /* over the 📎 button (60) + status pill (70), under modals (9999) */
+    animation: fadeIn 0.15s ease;
+}
+
+.cloude-attach-menu__item {
+    display: block;
+    width: 100%;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-lg);
+    color: var(--color-fg);
+    font-family: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.cloude-attach-menu__item:hover,
+.cloude-attach-menu__item:focus-visible {
+    background: var(--color-bg-hover);
+    color: var(--color-accent-strong);
+    outline: none;
+}
+
+/* =====================================================================
+ * TOUCH-SELECT — floating copy button (touch-select.js)
+ * ---------------------------------------------------------------------
+ * Small fixed-position action shown at the finger lift point after a
+ * long-press drag selection. Token-only styling, mirroring the attach
+ * menu surface treatment. Only ever created on coarse-pointer devices.
+ * ===================================================================== */
+.cloude-touch-copy {
+    position: fixed;
+    padding: 10px 18px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-modal);
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    z-index: 72;   /* over the 📎 button (60) + attach menu (71), under modals (9999) */
+    animation: fadeIn 0.15s ease;
+}
+
+.cloude-touch-copy:hover,
+.cloude-touch-copy:focus-visible {
+    background: var(--color-bg-hover);
+    color: var(--color-accent-strong);
+    outline: none;
+}
+
+/* Long-press on the terminal must never raise the iOS text callout. */
+@media (pointer: coarse) {
+    #terminal .xterm {
+        -webkit-touch-callout: none;
+    }
+}

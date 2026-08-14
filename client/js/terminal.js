@@ -264,6 +264,13 @@ class Terminal {
         this._applyPasteHandler();
         this._applyImageAttachButton();
 
+        // TOUCH-SELECT — long-press drag selection + floating copy button
+        // on coarse-pointer devices. Implementation lives in touch-select.js
+        // (loaded after clipboard.js); it no-ops on fine pointers so
+        // desktop is untouched. Listeners ride on #terminal / document,
+        // so term.reset() during session swap does not wipe them.
+        this._applyTouchSelection();
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -381,6 +388,14 @@ class Terminal {
     _applyKeyHandlers() {
         if (!this.term) return;
         this.term.attachCustomKeyEventHandler((ev) => {
+            // CLIPBOARD — copy chord (Cmd+C / Ctrl+Shift+C with an active
+            // selection → system clipboard). Logic lives in clipboard.js
+            // (loaded after this file; guard covers a failed static fetch).
+            // Returns true only when it consumed the event — bare Ctrl+C
+            // (SIGINT) always falls through untouched.
+            if (window.ClipboardTools && window.ClipboardTools.handleCopyChord(ev, this)) {
+                return false;
+            }
             if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
                 !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
                 ev.preventDefault();
@@ -460,15 +475,17 @@ class Terminal {
     }
 
     /**
-     * IMG-PASTE — mobile / iOS attach-button wire-up.
+     * IMG-PASTE — mobile / iOS attach-button hook point.
      *
      * iOS Safari does NOT reliably fire ``paste`` events for image data
      * outside focused contenteditable elements, so we surface an explicit
-     * 📎 button (gated to ``pointer: coarse`` via CSS). On tap we try
-     * ``navigator.clipboard.read()`` first as a bonus path — it can
-     * succeed on platforms where the implicit paste event would not —
-     * and fall through to the hidden file input on any failure (denied
-     * permission, no clipboard image, API absent, etc.).
+     * 📎 button (gated to ``pointer: coarse`` via CSS). All wiring lives
+     * in clipboard.js (``ClipboardTools.wireAttachButton``): the button
+     * opens a menu with "paste from clipboard" (clipboard image → the
+     * existing ``_uploadAndInjectImage`` flow, clipboard text → injected
+     * as terminal input) and "attach image" (the original hidden
+     * file-input picker). This method only locates the DOM nodes and
+     * hands them over.
      *
      * The file input has ``accept="image/*,image/heic,image/heif"`` so
      * the OS picker offers both Photos library + Files; the server
@@ -480,30 +497,29 @@ class Terminal {
         const input = document.getElementById('cloude-image-attach-input');
         if (!btn || !input) return;
 
-        btn.addEventListener('click', async () => {
-            try {
-                if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
-                    const items = await navigator.clipboard.read();
-                    for (const item of items) {
-                        if (item.types && item.types.includes('image/png')) {
-                            const blob = await item.getType('image/png');
-                            await this._uploadAndInjectImage(blob, 'image/png');
-                            return;
-                        }
-                    }
-                }
-            } catch (err) {
-                console.log('[IMG-PASTE] clipboard.read unavailable, falling back to file picker:', err && err.message);
-            }
-            input.click();
-        });
+        // clipboard.js is loaded right after this file and initTerminal()
+        // only runs after the async xterm CDN wait, so ClipboardTools is
+        // always defined here in practice; the guard covers a failed
+        // static fetch (button simply goes inert rather than throwing).
+        if (window.ClipboardTools && typeof window.ClipboardTools.wireAttachButton === 'function') {
+            window.ClipboardTools.wireAttachButton(this, btn, input);
+        }
+    }
 
-        input.addEventListener('change', async () => {
-            const file = input.files && input.files[0];
-            if (!file) return;
-            await this._uploadAndInjectImage(file, file.type || 'image/jpeg');
-            input.value = '';
-        });
+    /**
+     * TOUCH-SELECT — long-press selection hook point.
+     *
+     * Hands the Terminal wrapper to touch-select.js, which wires the
+     * long-press → drag → floating-copy flow on coarse-pointer devices.
+     * Same load-order guarantee as _applyImageAttachButton(): touch-select.js
+     * is loaded right after this file and initTerminal() only runs after
+     * the async xterm CDN wait; the guard covers a failed static fetch
+     * (touch selection simply goes inert rather than throwing).
+     */
+    _applyTouchSelection() {
+        if (window.TouchSelect && typeof window.TouchSelect.init === 'function') {
+            window.TouchSelect.init(this);
+        }
     }
 
     /**
