@@ -373,9 +373,25 @@ CLOUDFLARE_TUNNEL_ID=xxx
 
 # Security Improvements from Happy Project Analysis
 
+**Last verified against code: 2026-06-25.**
+
 ## Executive Summary
 
 Analyzed three repos from slopus/happy ecosystem. They've built a zero-knowledge E2E encrypted architecture with some solid security patterns we should adopt. Also found gaps we should avoid.
+
+This doc was written against an earlier snapshot of the codebase and had drifted:
+two of the items it originally flagged as open (rate limiting, CORS) are now
+implemented. The verification pass below re-checked every item against the
+current code, not just the two that changed. Status tags per item:
+
+| Item | Status | Where it lives |
+| --- | --- | --- |
+| Rate limiting & brute-force protection | **RESOLVED** (rate limiting + replay dedup) — brute-force lockout beyond that is still open | `src/api/auth.py`, `src/main.py` |
+| CORS hardening | **RESOLVED** | `src/config.py` |
+| Scoped connection types | **STILL OPEN** | n/a |
+| Token expiry handling (client refresh) | **RESOLVED** | `client/js/auth.js` |
+| Brute-force lockout (temp ban after N failures) | **STILL OPEN** | n/a |
+| Everything else below (E2E encryption, key derivation, RPC encryption, secure token storage, secret-key backup format, encrypted errors, cert pinning) | **STILL OPEN / not attempted**, unchanged from original analysis | n/a |
 
 ---
 
@@ -462,7 +478,7 @@ Our Cloudflare tunnel provides TLS encryption. Additional layer-7 encryption is 
 
 ---
 
-### 4. Scoped Connection Types (HIGH PRIORITY) ⭐
+### 4. Scoped Connection Types (HIGH PRIORITY) ⭐ — STILL OPEN (verified 2026-06-25)
 
 **What Happy Does:**
 ```typescript
@@ -476,6 +492,9 @@ WebSocket validates scope and restricts data access accordingly.
 **Current Cloude Code:**
 - Single connection type - full access once authenticated
 - No granular scoping
+- **Verified 2026-06-25**: `src/api/websocket.py` and `src/models.py` still have
+  no `ConnectionScope` enum or `clientType` param. Still genuinely open, not a
+  doc-drift case.
 
 **Recommendation:**
 ```
@@ -490,16 +509,34 @@ Could be useful if we add multi-session support later.
 
 ---
 
-### 5. Rate Limiting & Brute Force Protection (HIGH PRIORITY) ⭐
+### 5. Rate Limiting & Brute Force Protection (HIGH PRIORITY) ⭐ — RATE LIMITING RESOLVED, LOCKOUT STILL OPEN (verified 2026-06-25)
 
 **What Happy DOESN'T Do (and neither do we):**
 - No rate limiting on auth endpoints
 - No exponential backoff on failed auth
 - Infinite polling without limits
 
-**Current Cloude Code:**
-- Same gaps - no rate limiting
-- TOTP allows unlimited attempts
+**Current Cloude Code (as of this verification pass):**
+- Rate limiting is implemented: `src/api/auth.py` wires a slowapi `Limiter`
+  onto `POST /api/v1/auth/verify` at a configurable
+  `"{totp_verify_per_minute}/minute;{totp_verify_per_hour}/hour"` limit,
+  defaulting to `5/minute;20/hour` (`AuthRateLimits` in `src/config.py`).
+  Client key is per-IP, with an opt-in `trust_proxy_headers` mode that reads
+  the leftmost `X-Forwarded-For` entry when the app sits behind a reverse
+  proxy. `/api/v1/auth/refresh` is separately capped at `10/minute`. The
+  limiter is mounted in `src/main.py` and `slowapi>=0.1.9` is in
+  `requirements.txt`.
+- A second layer we didn't originally scope for: `src/api/auth.py` also keeps
+  a 90-second `TTLCache` keyed on the submitted TOTP code, so a captured
+  valid code can't be replayed within pyotp's own `valid_window=1` (±30s)
+  acceptance window. Concurrent submissions are serialized under an
+  `asyncio.Lock` to close the check-then-insert race.
+- What is **still missing**: exponential backoff or a temporary lockout
+  after N consecutive failed attempts. The slowapi limit is a flat window,
+  not a growing penalty, and there's no ban state — once the window rolls
+  over, a client gets a fresh budget of attempts. This is the same gap
+  called out separately below under "Brute force lockout" in the roadmap;
+  we're not double-counting it as resolved.
 
 **Recommendation:**
 ```
@@ -510,21 +547,26 @@ Files to modify:
 - /src/main.py (add slowapi or similar middleware)
 ```
 
-**Implementation:**
+**Implementation — DONE, differs slightly from the original sketch below:**
 ```python
-# Add to requirements.txt
-slowapi==0.1.9
+# requirements.txt
+slowapi>=0.1.9
 
-# In auth.py
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+# src/api/auth.py — key func supports optional trust-proxy mode, and the
+# limit string is built from AuthConfig instead of hardcoded:
+limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
 
-limiter = Limiter(key_func=get_remote_address)
-
-@router.post("/verify")
-@limiter.limit("5/minute")  # 5 attempts per minute per IP
-async def verify_totp(request: Request, ...):
+@router.post("/auth/verify", response_model=AuthTokenResponse)
+@limiter.limit(_totp_rate_limit)  # "5/minute;20/hour" by default, configurable
+async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequest):
 ```
+`headers_enabled=True` also gets us `X-RateLimit-*` and `Retry-After` on 429s
+for free, which the original sketch didn't call for but is worth keeping.
+
+**What's left for the "brute force lockout" half of this item** (still open,
+also tracked under Phase 2 below): a lockout/backoff state that persists
+past a single rate-limit window. Today, once a window rolls over, the
+attempt budget simply resets.
 
 ---
 
@@ -600,7 +642,7 @@ Our errors are generic enough. Main thing is ensuring no stack traces leak to cl
 
 ---
 
-### 9. CORS Hardening (HIGH PRIORITY) ⭐
+### 9. CORS Hardening (HIGH PRIORITY) ⭐ — RESOLVED (verified 2026-06-25)
 
 **What Happy Does WRONG:**
 ```typescript
@@ -611,13 +653,30 @@ cors: {
 }
 ```
 
-**Current Cloude Code:**
-```python
-# In main.py
-allow_origins=settings.allowed_origins  # Defaults to ["*"]
-```
+**Current Cloude Code (as of this verification pass):**
+`settings.allowed_origins` in `src/config.py` is a computed property, not a
+static default, and it never returns `"*"`. Precedence:
+1. If the `ALLOWED_ORIGINS` env var is set, it's split on `,` and used
+   verbatim (operator override).
+2. Otherwise the property builds a safe allowlist from `HOST` + `PORT` plus
+   loopback and mDNS hostname variants (`http://localhost:<port>`,
+   `http://127.0.0.1:<port>`, `http://<hostname>:<port>`,
+   `http://<hostname>.local:<port>`, and the literal bind address when
+   `HOST` isn't `0.0.0.0`).
 
-**Recommendation:**
+The code comment is explicit about why: CORS middleware in `src/main.py` is
+wired with `allow_credentials=True`, and wildcard-origin plus credentials is
+the exact footgun this section originally warned about — so the default
+deliberately can never produce `"*"`.
+
+**What we did NOT end up doing** (differs from the original sketch below):
+we didn't hardcode a literal placeholder list like
+`["http://localhost:8000", "https://yourdomain.com"]`. The computed
+HOST/PORT/hostname approach means a fresh install works out of the box on
+whatever LAN hostname the machine actually has, without the user needing to
+edit `.env` first.
+
+**Original recommendation (superseded by the implementation above, kept for context):**
 ```
 Priority: HIGH
 Complexity: LOW
@@ -627,21 +686,11 @@ Files to modify:
 - /.env.example (document ALLOWED_ORIGINS)
 ```
 
-**Implementation:**
 ```python
-# config.py
+# Original sketch — NOT what shipped, see "Current Cloude Code" above
 allowed_origins: list[str] = Field(
     default=["http://localhost:8000", "https://yourdomain.com"],
     description="Explicitly allowed CORS origins"
-)
-
-# main.py
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.allowed_origins,  # NOT ["*"]
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
 )
 ```
 
@@ -669,50 +718,72 @@ Overkill for our use case. Cloudflare handles TLS termination.
 
 | Issue | Happy Status | Our Status | Action |
 |-------|--------------|------------|--------|
-| Token cache memory leak | ❌ Unbounded Map | ✅ JWT expires | Keep our approach |
-| CORS wide open | ❌ origin: "*" | ⚠️ Same | FIX THIS |
-| No rate limiting | ❌ Missing | ❌ Missing | ADD THIS |
-| 100MB body limit | ❌ Too high | ✅ Default (1MB) | Keep default |
-| Debug logging default | ❌ Level: debug | ⚠️ Verbose | Review |
+| Token cache memory leak | ❌ Unbounded Map | ✅ JWT expires + server-side refresh store with rotation/revocation | Keep our approach |
+| CORS wide open | ❌ origin: "*" | ✅ Computed safe allowlist, never `"*"`, `src/config.py` | **RESOLVED, verified 2026-06-25** |
+| No rate limiting | ❌ Missing | ✅ slowapi 5/min;20/hour + TOTP replay dedup, `src/api/auth.py` | **RESOLVED, verified 2026-06-25** — brute-force *lockout* beyond the rate window is still open, see Phase 2 |
+| 100MB body limit | ❌ Too high | ✅ Default (no explicit oversized limit set) | Keep default |
+| Debug logging default | ❌ Level: debug | ✅ `log_level="info"` in `src/main.py`; spot-checked `logger.*` calls in `src/api/auth.py` — codes/jti are truncated before logging, no raw secrets found | **Reviewed, no gap found** |
 | Infinite WebSocket reconnect | ❌ Infinity | ✅ Max 5 attempts | Keep our approach |
 
 ---
 
 ## Recommended Security Roadmap
 
-### Phase 1: Quick Wins (Do Now)
-1. **Add rate limiting to auth endpoints** - 5 attempts/min per IP
-2. **Harden CORS** - Explicit origin whitelist, not `*`
-3. **Review logging** - Ensure no tokens/secrets in logs
+### Phase 1: Quick Wins (Do Now) — DONE, verified 2026-06-25
+1. ~~**Add rate limiting to auth endpoints**~~ — done, `5/minute;20/hour` per IP,
+   configurable via `AuthRateLimits` (`src/config.py`), plus a TOTP replay-dedup
+   cache that wasn't in the original plan.
+2. ~~**Harden CORS**~~ — done, computed allowlist, never `"*"`
+   (`src/config.py: Settings.allowed_origins`).
+3. ~~**Review logging**~~ — done, no tokens/secrets found in log calls.
 
 ### Phase 2: Improvements (V1.1)
-4. **Add connection scoping** - session-scoped vs user-scoped
-5. **Token expiry handling** - Client-side token refresh
-6. **Brute force lockout** - Temporary ban after N failures
+4. **Add connection scoping** - session-scoped vs user-scoped — **still open**,
+   verified 2026-06-25 (`src/api/websocket.py`, `src/models.py`).
+5. ~~**Token expiry handling** - Client-side token refresh~~ — **done**.
+   `client/js/auth.js` implements `refresh()` against `POST /auth/refresh`,
+   backed server-side by `src/core/refresh_store.py` with rotation and
+   reuse-detection (revokes the whole chain on a replayed refresh token).
+6. **Brute force lockout** - Temporary ban after N failures — **still open**.
+   The rate limiter (item 1 above) caps *rate*, not cumulative failures; there
+   is no lockout state that survives a window rollover.
 
-### Phase 3: Advanced (V2)
+### Phase 3: Advanced (V2) — unchanged, still open
 7. **End-to-end encryption** - Client-side encryption of terminal data
 8. **Per-session encryption keys** - Key derivation from master secret
 9. **Encrypted error responses** - Prevent info leakage
 
 ---
 
-## Files to Modify for Phase 1
+## Files Modified for Phase 1 (as actually implemented)
 
 | File | Change |
 |------|--------|
-| `/src/main.py` | Add slowapi rate limiter middleware |
-| `/src/api/auth.py` | Add rate limit decorator to verify endpoint |
-| `/src/config.py` | Add explicit ALLOWED_ORIGINS list |
-| `/.env.example` | Document ALLOWED_ORIGINS |
-| `/requirements.txt` | Add `slowapi==0.1.9` |
+| `/src/main.py` | Wires `app.state.limiter`, `SlowAPIMiddleware`, and the CORS middleware reading `settings.allowed_origins` |
+| `/src/api/auth.py` | `Limiter` instance, `_rate_limit_key` (proxy-aware), `_totp_rate_limit` (config-driven), TOTP replay-dedup `TTLCache` |
+| `/src/config.py` | `AuthRateLimits` model + `Settings.allowed_origins` computed property (never `"*"`) |
+| `/requirements.txt` | `slowapi>=0.1.9` |
+
+`/.env.example` does not need an `ALLOWED_ORIGINS` line to work correctly —
+the computed default is safe without it — though setting it is how an
+operator opts into a custom origin list.
 
 ---
 
 ## Summary
 
-Happy has solid crypto (NaCl, AES-256-GCM, HMAC-SHA512 key derivation) but weak operational security (no rate limiting, CORS wide open). We should:
+Happy has solid crypto (NaCl, AES-256-GCM, HMAC-SHA512 key derivation) but weak operational security (no rate limiting, CORS wide open). Original plan, with outcomes:
 
-1. **Steal:** Rate limiting pattern (once they add it), connection scoping
-2. **Skip:** Full E2E encryption (overkill for single-user), cert pinning
-3. **Fix:** CORS (we have the same gap), add rate limiting
+1. **Steal:** Rate limiting pattern (once they add it), connection scoping —
+   rate limiting done; connection scoping still not started.
+2. **Skip:** Full E2E encryption (overkill for single-user), cert pinning —
+   still skipped, no change.
+3. **Fix:** CORS (we have the same gap), add rate limiting — both done, see
+   items 5 and 9 above.
+
+Remaining genuinely open items as of 2026-06-25: scoped connection types,
+brute-force lockout beyond the rate-limit window, and everything in the
+Phase 3 / "not adopted" bucket (E2E encryption, hierarchical key derivation,
+WebSocket RPC encryption, OS-level secure token storage, secret-key backup
+formatting, encrypted error responses, certificate pinning) — all unchanged
+from the original analysis.
