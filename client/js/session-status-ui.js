@@ -272,27 +272,6 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     /**
-     * Disclosure chevron, shared by every collapsible-tree/section control
-     * in the app (launchpad's disclosures use plain CSS rotation on a
-     * text glyph; this is the one used by DOM-built trees like the
-     * config editor - client/js/config-editor-panel.js). Points right when
-     * collapsed; the caller rotates it 90deg via the
-     * `.config-editor-toggle[aria-expanded="true"]` CSS rule rather than
-     * this module tracking state, so one glyph serves both orientations.
-     * Inputs: none.
-     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
-     * Example:
-     *   chevronIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
-     */
-    function chevronIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" class="config-editor-chevron">' +
-            '<path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '</svg>'
-        );
-    }
-
-    /**
      * Folder glyph for directory rows in the config editor tree. Same
      * family as trashIconSvg/pencilIconSvg (16x16, stroke=currentColor,
      * fill=none, stroke-width 1.5) so it recolors with the row via CSS.
@@ -329,6 +308,25 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Padlock glyph marking a sensitive (credentials/secret/key-shaped)
+     * file in the config editor tree and modal - see config_files.py's
+     * SENSITIVE_* constants. Same family as fileIconSvg/folderIconSvg
+     * (16x16, stroke=currentColor, fill=none, stroke-width 1.5).
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   lockIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function lockIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="3.5" y="7.25" width="9" height="6.25" rx="1" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M5.5 7.25V5A2.5 2.5 0 0 1 10.5 5V7.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         normalizeStatus,
         dotHtml,
@@ -338,9 +336,9 @@ console.log('[SessionStatusUI Module] Loading...');
         pencilIconSvg,
         envelopeOutlineSvg,
         envelopeFilledSvg,
-        chevronIconSvg,
         folderIconSvg,
         fileIconSvg,
+        lockIconSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

@@ -78,3 +78,9 @@ troubleshooting/
 
 # Runtime lock files (session-scoped, PID-stamped — never meant to be tracked)
 .claude/scheduled_tasks.lock
+
+# Build-only workspace for the vendored CodeMirror bundle (see
+# client/vendor/codemirror/VERSION.md) — node_modules/lockfile are build
+# inputs, not runtime code; only the built bundle under client/vendor/ ships.
+scripts/codemirror-vendor/node_modules/
+scripts/codemirror-vendor/package-lock.json
