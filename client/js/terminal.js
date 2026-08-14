@@ -1733,6 +1733,9 @@ class Terminal {
     updateStatus(text, className) {
         if (this.statusEl) {
             this.statusEl.setAttribute('data-status', text);
+            // aria-label mirrors the ::after tooltip text so screen readers
+            // get the same live state a sighted hover shows.
+            this.statusEl.setAttribute('aria-label', text);
             this.statusEl.className = 'status ' + className;
         }
     }

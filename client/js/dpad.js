@@ -52,6 +52,9 @@ class DPad {
         this.floatingButton = document.createElement('button');
         this.floatingButton.id = 'dpad-float-btn';
         this.floatingButton.className = 'dpad-float-button';
+        this.floatingButton.type = 'button';
+        this.floatingButton.setAttribute('aria-label', 'Open d-pad');
+        this.floatingButton.setAttribute('title', 'Open d-pad');
         this.floatingButton.innerHTML = `
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <path d="M8 4H12V8H16V12H12V16H8V12H4V8H8V4Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
@@ -82,6 +85,8 @@ class DPad {
 
         // Change floating button to X
         if (this.floatingButton) {
+            this.floatingButton.setAttribute('aria-label', 'Close d-pad');
+            this.floatingButton.setAttribute('title', 'Close d-pad');
             this.floatingButton.innerHTML = `
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
                     <path d="M6 6L18 18M18 6L6 18" stroke="#d77757" stroke-width="2" stroke-linecap="round"/>
@@ -105,6 +110,8 @@ class DPad {
 
         // Change floating button back to D-pad icon
         if (this.floatingButton) {
+            this.floatingButton.setAttribute('aria-label', 'Open d-pad');
+            this.floatingButton.setAttribute('title', 'Open d-pad');
             this.floatingButton.innerHTML = `
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                     <path d="M8 4H12V8H16V12H12V16H8V12H4V8H8V4Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
@@ -127,13 +134,13 @@ class DPad {
                     <span style="font-size: 14px; font-weight: bold; color: #d77757;">ESC</span>
                 </button>
 
-                <button class="dpad-shift-tab dpad-key" data-key="SHIFT_TAB">
+                <button class="dpad-shift-tab dpad-key" data-key="SHIFT_TAB" aria-label="Shift+Tab" title="Shift+Tab">
                     <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
                         <path d="M15 5L13 12L8 10L12 15L5 17L12 19L10 24L15 20L20 24L18 19L25 17L18 15L22 10L17 12L15 5Z" fill="#d77757" stroke="#d77757" stroke-width="1" stroke-linejoin="round"/>
                     </svg>
                 </button>
 
-                <button class="dpad-tab dpad-key" data-key="TAB">
+                <button class="dpad-tab dpad-key" data-key="TAB" aria-label="Tab" title="Tab">
                     <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
                         <path d="M15 8C12 8 10 10 10 12C10 13 10.5 14 11 14.5C10 15 9 16 9 17.5C9 19.5 11 21 13 21C13 21 13 22 15 22C17 22 17 21 17 21C19 21 21 19.5 21 17.5C21 16 20 15 19 14.5C19.5 14 20 13 20 12C20 10 18 8 15 8Z" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                         <circle cx="13" cy="11.5" r="0.8" fill="#d77757"/>
@@ -145,7 +152,7 @@ class DPad {
                 <div class="dpad-grid">
                     <div class="dpad-row">
                         <div class="dpad-spacer"></div>
-                        <button class="dpad-key" data-key="UP">
+                        <button class="dpad-key" data-key="UP" aria-label="Up arrow" title="Up arrow">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M16 10L16 22M10 16L16 10L22 16" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
@@ -154,17 +161,17 @@ class DPad {
                     </div>
 
                     <div class="dpad-row">
-                        <button class="dpad-key" data-key="LEFT">
+                        <button class="dpad-key" data-key="LEFT" aria-label="Left arrow" title="Left arrow">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M22 16L10 16M16 10L10 16L16 22" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
-                        <button class="dpad-key dpad-enter" data-key="ENTER">
+                        <button class="dpad-key dpad-enter" data-key="ENTER" aria-label="Enter" title="Enter">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M10 16h12M22 16l-4 4M22 16l-4-4" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
-                        <button class="dpad-key" data-key="RIGHT">
+                        <button class="dpad-key" data-key="RIGHT" aria-label="Right arrow" title="Right arrow">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M10 16L22 16M16 10L22 16L16 22" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
@@ -173,7 +180,7 @@ class DPad {
 
                     <div class="dpad-row">
                         <div class="dpad-spacer"></div>
-                        <button class="dpad-key" data-key="DOWN">
+                        <button class="dpad-key" data-key="DOWN" aria-label="Down arrow" title="Down arrow">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M16 22L16 10M10 16L16 22L22 16" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
@@ -183,7 +190,7 @@ class DPad {
 
                     <div class="dpad-row">
                         <div class="dpad-spacer"></div>
-                        <button class="dpad-key dpad-scroll-bottom" data-key="SCROLL_BOTTOM">
+                        <button class="dpad-key dpad-scroll-bottom" data-key="SCROLL_BOTTOM" aria-label="Scroll to bottom" title="Scroll to bottom">
                             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
                                 <path d="M10 10L16 16L22 10" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                                 <path d="M10 14L16 20L22 14" stroke="#d77757" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
