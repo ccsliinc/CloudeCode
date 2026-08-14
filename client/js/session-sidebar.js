@@ -84,6 +84,17 @@ class SessionSidebarController {
             if (e.key === 'Escape' && this.isOpen) this.close();
         });
         this.listEl.addEventListener('click', (e) => this._onRowClick(e));
+        // Keyboard activation (Enter/Space) for the mark-unread toggle -
+        // it's a `role="button"` span, not a real <button>, so it needs
+        // explicit key handling to be operable without a mouse.
+        this.listEl.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const toggleEl = e.target.closest('[data-mark-unread]');
+            if (!toggleEl) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._onMarkUnreadClick(toggleEl);
+        });
 
         this._wired = true;
         console.log('SessionSidebar: wired');
@@ -217,11 +228,13 @@ class SessionSidebarController {
                 if (!tmuxName) continue;
                 const sessionId = (info.session && info.session.id) || null;
                 const status = info.activity_status || 'unknown';
+                const unread = !!info.unread;
                 const existing = rows.find((r) => r.name === tmuxName);
                 if (existing) {
                     existing.is_active = true;
                     existing.session_id = sessionId;
                     existing.status = status;
+                    existing.unread = unread;
                 } else {
                     rows.unshift({
                         name: tmuxName,
@@ -230,6 +243,7 @@ class SessionSidebarController {
                         is_active: true,
                         session_id: sessionId,
                         status,
+                        unread,
                     });
                 }
             }
@@ -270,6 +284,7 @@ class SessionSidebarController {
             status: r.status || 'unknown',
             active: !!r.is_active,
             thisTab: !!r.is_this_tab,
+            unread: !!r.unread,
         })));
         if (sig === this._lastSig) return;
         this._lastSig = sig;
@@ -284,11 +299,15 @@ class SessionSidebarController {
             const name = this._escapeHtml(r.name);
             const badge = r.created_by_cloude ? 'tmux' : 'external';
             const sidAttr = r.session_id ? ` data-session-id="${this._escapeHtml(r.session_id)}"` : '';
+            const markUnread = window.SessionStatusUI
+                ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
+                : '';
             return `
                 <div class="session-sidebar-row" data-name="${name}" data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}>
                     ${dot}
                     <span class="session-sidebar-row-name">${name}</span>
                     <span class="session-sidebar-row-badge">${badge}</span>
+                    ${markUnread}
                 </div>
             `;
         }).join('');
@@ -305,6 +324,16 @@ class SessionSidebarController {
      * Output: Promise<void>.
      */
     async _onRowClick(e) {
+        // Mark-unread toggle takes priority over the row-switch handler
+        // below — it's a nested control inside the row, and clicking it
+        // must never ALSO trigger a conversation switch.
+        const toggleEl = e.target.closest('[data-mark-unread]');
+        if (toggleEl) {
+            e.stopPropagation();
+            await this._onMarkUnreadClick(toggleEl);
+            return;
+        }
+
         const rowEl = e.target.closest('.session-sidebar-row');
         if (!rowEl) return;
         const name = rowEl.dataset.name;
@@ -351,6 +380,30 @@ class SessionSidebarController {
         } catch (err) {
             console.error('SessionSidebar: switch failed:', err);
             alert(`Error: failed to switch conversation: ${err.message || err}`);
+        }
+    }
+
+    /**
+     * Toggle the manual unread flag for one row and re-render immediately
+     * (optimistic — the next poll tick reconciles with the server either
+     * way, but waiting a full POLL_MS for visual feedback on a click
+     * would feel broken).
+     *
+     * Inputs:
+     *   toggleEl (Element) - the `[data-mark-unread]` span that was
+     *     clicked, carrying the tmux name and current state as data-*.
+     * Output: Promise<void>.
+     */
+    async _onMarkUnreadClick(toggleEl) {
+        const tmuxName = toggleEl.dataset.markUnread;
+        if (!tmuxName) return;
+        const next = toggleEl.dataset.unreadCurrent !== 'true';
+        try {
+            await window.API.setSessionUnread(tmuxName, next);
+            this._lastSig = null; // force a repaint even if the poll sig matches
+            await this._fetchAndRender();
+        } catch (err) {
+            console.error('SessionSidebar: mark-unread failed:', err);
         }
     }
 

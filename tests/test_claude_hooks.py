@@ -71,6 +71,9 @@ class _StubSettings:
     def get_pinned_themes_path(self) -> Path:
         return self._pin_path
 
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
     @property
     def log_directory(self) -> str:
         return str(self._log_dir)
@@ -462,6 +465,10 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
 
     user_block = {
         "hooks": {
+            # PreToolUse is now ALSO a cloudecode-managed event
+            # (feat/hook-driven-status) — the user's existing matcher on it
+            # must be preserved AND our own canonical entry appended, same
+            # merge rule as Stop below.
             "PreToolUse": [
                 {
                     "matcher": "Bash",
@@ -478,6 +485,16 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
                     ],
                 }
             ],
+            # SessionStart is NOT a cloudecode-managed event at all — must
+            # pass through completely untouched.
+            "SessionStart": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": "echo user-session-start"}
+                    ],
+                }
+            ],
         },
         "someOtherUserKey": "value",
     }
@@ -487,16 +504,20 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
     assert ok is True
 
     data = json.loads(target.read_text())
-    # User's PreToolUse hook still intact.
+    # User's PreToolUse hook still intact, PLUS our managed one appended.
     pre = data["hooks"]["PreToolUse"]
-    assert len(pre) == 1
+    assert len(pre) == 2
     assert pre[0]["hooks"][0]["command"] == "echo user-pre-tool"
+    assert CLOUDECODE_HOOKS_MARKER in pre[1]["hooks"][0]["command"]
 
     # User's Stop hook still there, PLUS our managed Stop appended.
     stop_entries = data["hooks"]["Stop"]
     assert len(stop_entries) == 2
     assert stop_entries[0]["hooks"][0]["command"] == "echo user-stop"
     assert CLOUDECODE_HOOKS_MARKER in stop_entries[1]["hooks"][0]["command"]
+
+    # An event we don't manage at all is untouched.
+    assert data["hooks"]["SessionStart"] == user_block["hooks"]["SessionStart"]
 
     # Non-hooks user keys preserved.
     assert data["someOtherUserKey"] == "value"
@@ -551,9 +572,19 @@ def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
 # =========================================================================== #
 
 
-def test_build_hook_block_has_all_three_events():
+def test_build_hook_block_has_all_managed_events():
+    """feat/hook-driven-status — 3 toast events + 5 activity-only events."""
     block = _build_hook_block()
-    assert set(block.keys()) == {"Stop", "Notification", "PermissionRequest"}
+    assert set(block.keys()) == {
+        "Stop",
+        "Notification",
+        "PermissionRequest",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+    }
 
 
 def test_build_managed_command_carries_marker():

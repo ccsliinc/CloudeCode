@@ -637,6 +637,29 @@ class API {
     }
 
     /**
+     * Sessions: Manually mark (or clear) a session unread for followup.
+     *
+     * feat/hook-driven-status — PATCH /api/v1/sessions/{name}/unread.
+     * ``tmuxName`` (NOT session_id — same convention as the deprecated
+     * pinned-theme route) so this works whether the session is currently
+     * attached to or only attachable. Persisted server-side, so the flag
+     * follows the user across browsers/devices (never localStorage).
+     *
+     * @param {string} tmuxName - literal tmux session name.
+     * @param {boolean} unread - true to mark, false to clear.
+     * @returns {Promise<{success: boolean, message: string}>}
+     */
+    async setSessionUnread(tmuxName, unread) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(tmuxName)}/unread`,
+            {
+                method: 'PATCH',
+                body: { unread: !!unread },
+            }
+        );
+    }
+
+    /**
      * Sessions: Detach from the current session WITHOUT killing tmux.
      *
      * Soft counterpart to ``destroySession`` — the server tears down its

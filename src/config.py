@@ -432,6 +432,23 @@ class Settings(BaseSettings):
         """
         return Path(self.log_directory).expanduser() / "pinned_themes.json"
 
+    def get_unread_state_path(self) -> Path:
+        """Path for the per-tmux-session read/unread map.
+
+        Hook-driven status (feat/hook-driven-status) — mirrors
+        ``get_pinned_themes_path()``'s pattern exactly: name-keyed (not
+        session-id-keyed) so the flag survives detach -> swap -> re-adopt,
+        and follows the user across browsers/devices since it lives on the
+        server rather than in localStorage. Each entry is
+        ``{"auto": bool, "manual": bool}`` - "auto" is set by a ``Stop``
+        hook and cleared when a WS terminal binds to the session (the user
+        looked at it); "manual" is set/cleared only by the user's explicit
+        mark-unread control and is NOT cleared by viewing. Pruned the same
+        way as pinned themes: on explicit destroy, or when the tmux session
+        is gone at startup-reconciliation time.
+        """
+        return Path(self.log_directory).expanduser() / "unread_state.json"
+
     def get_claude_cli_path(self) -> str:
         """
         LEGACY (v3.1) — no longer called by ``get_agent_command()`` for

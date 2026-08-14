@@ -1,4 +1,5 @@
-"""v0.7.0 Part 3 — Claude Code lifecycle hook settings management.
+"""v0.7.0 Part 3 / feat/hook-driven-status — Claude Code lifecycle hook
+settings management.
 
 This module owns the idempotent merge of cloudecode's hook block into
 ``~/.claude/settings.json``. Called once at FastAPI startup. The hooks
@@ -45,8 +46,31 @@ logger = structlog.get_logger()
 # touching anything the user added by hand or via another tool.
 CLOUDECODE_HOOKS_MARKER = "# cloudecode-managed"
 
-# Events we wire up. Ordered for deterministic JSON output diff-stability.
-_MANAGED_EVENTS = ("Stop", "Notification", "PermissionRequest")
+# feat/hook-driven-status — events that are worth interrupting the user
+# for (a toast). Unchanged from the original three; kept as its own tuple
+# (rather than folded into ACTIVITY_ONLY_EVENTS below) because the hook
+# endpoint (src/api/routes.py) branches on this exact set to decide
+# whether to call ``SessionManager.record_toast`` + broadcast, in addition
+# to always updating the activity tracker.
+TOAST_EVENTS = ("Stop", "Notification", "PermissionRequest")
+
+# feat/hook-driven-status — events that feed ONLY the activity-status state
+# machine (src/core/session_activity.py), never a toast. PreToolUse and
+# PostToolUse in particular fire on every single tool call — turning those
+# into toasts would spam the user; they exist purely as the "working"
+# heartbeat and the SubagentStart/SubagentStop pair.
+ACTIVITY_ONLY_EVENTS = (
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "SubagentStart",
+    "SubagentStop",
+)
+
+# Every event we install a managed hook for. Ordered for deterministic
+# JSON output diff-stability (toast-worthy first, matching the original
+# three's historical order, then the new activity-only events).
+_MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS
 
 
 def _build_managed_command(event_kind: str) -> str:

@@ -311,11 +311,13 @@ class Launchpad {
                 // query (src/core/session_status.py) — 'running' | 'idle' |
                 // 'dead' | 'unknown'. Never fabricated client-side.
                 const liveStatus = (live && live.activity_status) || 'unknown';
+                const liveUnread = !!(live && live.unread);
                 const existing = this.runningSessions.find(s => s.name === tmuxName);
                 if (existing) {
                     existing.is_active = true;
                     existing.session_id = (live.session && live.session.id) || live.id || existing.session_id;
                     existing.status = liveStatus;
+                    existing.unread = liveUnread;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -325,6 +327,7 @@ class Launchpad {
                         is_active: true,
                         session_id: (live.session && live.session.id) || live.id || null,
                         status: liveStatus,
+                        unread: liveUnread,
                     });
                 }
             }
@@ -377,6 +380,7 @@ class Launchpad {
             active: !!s.is_active,
             sid: s.session_id || null,
             status: s.status || 'unknown',
+            unread: !!s.unread,
         })));
         if (sig === this._lastRunningSig) {
             this._updateRunningSessionAges();
@@ -407,12 +411,16 @@ class Launchpad {
             const statusDot = window.SessionStatusUI
                 ? window.SessionStatusUI.dotHtml(s.status)
                 : '';
+            const markUnread = window.SessionStatusUI
+                ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
                   <div class="running-session-top">
                     ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>
                     ${renamePencil}
+                    ${markUnread}
                     <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="6" y1="6" x2="18" y2="18"/>
@@ -533,8 +541,18 @@ class Launchpad {
         container.addEventListener('click', async (e) => {
             const killEl = e.target.closest('.running-session-kill');
             const renameEl = e.target.closest('.running-session-rename');
+            const markUnreadEl = e.target.closest('[data-mark-unread]');
             const rowEl = e.target.closest('.running-session-row');
             if (!rowEl) return;
+
+            // Envelope icon path: manual mark/clear unread. Stop
+            // propagation so the row click handler (return/adopt) never
+            // also fires — this is a status toggle, not a navigation.
+            if (markUnreadEl) {
+                e.stopPropagation();
+                await this._handleMarkUnread(markUnreadEl);
+                return;
+            }
 
             // X icon path — explicit destroy
             if (killEl) {
@@ -657,7 +675,44 @@ class Launchpad {
             // Not yet attached → adopt it as a (new, concurrent) session
             await this._handleAttachRunningSession(name);
         });
+        // Keyboard activation (Enter/Space) for the mark-unread toggle -
+        // it's a `role="button"` span, not a real <button>, so it needs
+        // explicit key handling to be operable without a mouse.
+        container.addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const markUnreadEl = e.target.closest('[data-mark-unread]');
+            if (!markUnreadEl) return;
+            e.preventDefault();
+            e.stopPropagation();
+            await this._handleMarkUnread(markUnreadEl);
+        });
         container.__boundRunningClicks = true;
+    }
+
+    /**
+     * Toggle the manual unread flag for one running-session row.
+     *
+     * Description: Optimistic-ish — awaits the PATCH, then forces a
+     *   re-render by invalidating the signature cache and re-fetching, so
+     *   the toggle's visual state (and the finished_unread dot it may
+     *   flip on/off) updates immediately rather than waiting for the next
+     *   5s poll tick.
+     * Inputs:
+     *   toggleEl (Element) - the `[data-mark-unread]` span clicked,
+     *     carrying the tmux name + current state as data-* attributes.
+     * Output: Promise<void>.
+     */
+    async _handleMarkUnread(toggleEl) {
+        const tmuxName = toggleEl.dataset.markUnread;
+        if (!tmuxName) return;
+        const next = toggleEl.dataset.unreadCurrent !== 'true';
+        try {
+            await window.API.setSessionUnread(tmuxName, next);
+            this._lastRunningSig = null; // force a repaint past the sig-diff guard
+            await this.loadRunningSessions();
+        } catch (err) {
+            console.error('[launchpad] mark-unread failed:', err);
+        }
     }
 
     /**

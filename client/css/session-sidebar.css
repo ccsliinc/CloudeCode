@@ -175,7 +175,10 @@
  * Shared between the launchpad's running-sessions list and this sidebar
  * (see client/js/session-status-ui.js). Color communicates state, but
  * title/aria-label (set in JS) carry the same meaning in words - the
- * dot is never the ONLY way to know the state. */
+ * dot is never the ONLY way to know the state.
+ *
+ * feat/hook-driven-status - seven states now, listed here in the same
+ * display-priority order as session_status.ACTIVITY_STATUS_PRIORITY. */
 
 .status-dot {
     width: 9px;
@@ -183,17 +186,6 @@
     border-radius: var(--radius-full);
     display: inline-block;
     flex-shrink: 0;
-}
-
-.status-dot--running {
-    background: var(--color-success);
-    box-shadow: 0 0 8px var(--color-success);
-    animation: status-dot-pulse 1.6s ease-in-out infinite;
-}
-
-.status-dot--idle {
-    background: var(--color-warning);
-    box-shadow: 0 0 6px var(--color-warning);
 }
 
 .status-dot--dead {
@@ -206,6 +198,45 @@
     box-shadow: 0 0 0 2px var(--color-danger-strong-bg, rgba(255, 68, 68, 0.35));
 }
 
+.status-dot--question {
+    /* "Your turn" - second-loudest treatment after dead. Fast pulse +
+     * the theme accent so it reads as "act now", distinct from the
+     * slower finished-unread pulse below. */
+    background: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-glow, var(--color-accent));
+    animation: status-dot-pulse 0.9s ease-in-out infinite;
+}
+
+.status-dot--working-subagent {
+    /* Same motion as plain "working" but a different hue (info/blue) so
+     * the two are distinguishable by color as well as by the title/
+     * aria-label text - never rely on the ring alone. */
+    background: var(--color-info);
+    box-shadow: 0 0 8px var(--color-info);
+    animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot--working {
+    background: var(--color-success);
+    box-shadow: 0 0 8px var(--color-success);
+    animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot--finished-unread {
+    /* The state this whole feature exists to surface: "there is
+     * something here for you". Warm color, slower pulse than question -
+     * noticeable but not as urgent as an open question. */
+    background: var(--color-warning);
+    box-shadow: 0 0 8px var(--color-warning);
+    animation: status-dot-pulse 2.4s ease-in-out infinite;
+}
+
+.status-dot--idle {
+    /* Nothing pending, already read - deliberately the lowest visual
+     * weight of any non-unknown state. */
+    background: var(--color-fg-faint);
+}
+
 .status-dot--unknown {
     background: var(--color-fg-subtle);
 }
@@ -213,4 +244,43 @@
 @keyframes status-dot-pulse {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.55; }
+}
+
+/* ---- Manual mark-unread toggle --------------------------------------
+ * feat/hook-driven-status - lets the user pin a session unread for
+ * followup regardless of its live activity state. Distinct control from
+ * the status dot (which is read-only); this one is interactive, so it
+ * gets its own hit target and focus ring rather than piggybacking on the
+ * dot's small hitbox. */
+
+.mark-unread-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    font-size: 0.8em;
+    line-height: 1;
+    color: var(--color-fg-faint);
+    cursor: pointer;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.mark-unread-toggle:hover,
+.mark-unread-toggle:focus-visible {
+    color: var(--color-fg-strong);
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+.mark-unread-toggle:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-accent-border);
+}
+
+.mark-unread-toggle--active {
+    /* Pinned unread - same warm color as the finished-unread dot so the
+     * two visually agree on what "unread" means. */
+    color: var(--color-warning);
 }

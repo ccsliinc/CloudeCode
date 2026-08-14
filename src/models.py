@@ -199,9 +199,25 @@ class SessionInfo(BaseModel):
     # single bulk tmux pane query (src.core.session_status). Surfaced at
     # the top level (mirrors the .session-nested Session.status) so the
     # client never has to dig into ``.session`` to paint the dot.
+    # feat/hook-driven-status — activity_status now carries the UNIFIED
+    # hook + tmux vocabulary (src.core.session_status.ALL_ACTIVITY_STATUSES):
+    # 'dead' | 'question' | 'working' | 'working_subagent' |
+    # 'finished_unread' | 'idle' | 'unknown'. Resolved by
+    # SessionManager._session_info_for() via SessionActivityTracker.resolve().
     activity_status: str = Field(
         default="unknown",
-        description="Activity status: 'running' | 'idle' | 'dead' | 'unknown'",
+        description=(
+            "Unified activity status: 'dead' | 'question' | 'working' | "
+            "'working_subagent' | 'finished_unread' | 'idle' | 'unknown'"
+        ),
+    )
+    # feat/hook-driven-status — raw unread flag (auto-from-Stop OR manual
+    # pin), surfaced alongside activity_status so the client can render an
+    # unread badge even in a state that isn't literally 'finished_unread'
+    # (e.g. a manually-pinned session that is currently 'working' again).
+    unread: bool = Field(
+        default=False,
+        description="True if this session has an unread Stop or a manual unread pin",
     )
 
 
@@ -342,6 +358,19 @@ class UpdateThemeRequest(BaseModel):
     )
 
 
+class SetUnreadRequest(BaseModel):
+    """Request body for ``PATCH /sessions/{session_name}/unread``.
+
+    feat/hook-driven-status — the manual "mark unread for followup"
+    control. ``session_name`` in the URL is the literal tmux session name
+    (same convention as ``/sessions/{session_name}/theme``), not a
+    session_id, so it works for attachable-but-not-live sessions too.
+    """
+    unread: bool = Field(
+        ..., description="True to mark unread for followup, False to clear"
+    )
+
+
 class CreateProjectRequest(BaseModel):
     """Request model for creating a new project."""
     name: str = Field(..., description="Project display name")
@@ -447,9 +476,24 @@ class AttachableSession(BaseModel):
     # ``tmux list-panes -a`` query. One of "running" | "idle" | "dead" |
     # "unknown". Defaults to "unknown" for any legacy caller that doesn't
     # thread a status map through (never fabricated).
+    # feat/hook-driven-status — attachable rows have no live session_id, so
+    # no hook signal is ever possible for them (see
+    # SessionManager.list_attachable_sessions); this is the tmux-fallback
+    # subset of the unified vocabulary: 'dead' | 'working' |
+    # 'finished_unread' | 'idle' | 'unknown' (never 'question' or
+    # 'working_subagent' — those require a live hook stream).
     status: str = Field(
         default="unknown",
-        description="Activity status: 'running' | 'idle' | 'dead' | 'unknown'",
+        description=(
+            "Activity status (tmux-fallback subset): 'dead' | 'working' | "
+            "'finished_unread' | 'idle' | 'unknown'"
+        ),
+    )
+    # feat/hook-driven-status — persisted unread flag (name-keyed, survives
+    # detach/re-adopt). See SessionInfo.unread for the live-session twin.
+    unread: bool = Field(
+        default=False,
+        description="True if this tmux session has an unread Stop or a manual unread pin",
     )
 
 

@@ -55,6 +55,8 @@ logs/
 
 # Session Data
 session_metadata.json
+pinned_themes.json
+unread_state.json
 /claude-projects/
 
 # Image Uploads (per-session bucket — must never be committed)

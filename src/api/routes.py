@@ -32,6 +32,7 @@ from src.models import (
     ThemeManifest,
     UpdatePinnedThemeRequest,
     UpdateThemeRequest,
+    SetUnreadRequest,
     UploadImageResponse,
     Toast,
     ToastNewMessage,
@@ -48,6 +49,7 @@ from src.api.auth import require_auth
 from src.api.websocket import connection_manager
 from src.api.uploads import validate_image, save_to_session_dir
 from src.config import settings
+from src.core import claude_hooks
 
 logger = structlog.get_logger()
 
@@ -611,6 +613,34 @@ async def set_session_theme(
 
 
 @router.patch(
+    "/sessions/{session_name}/unread",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def set_session_unread(
+    request: Request, session_name: str, body: SetUnreadRequest
+):
+    """Manually mark (or clear) a session unread for followup.
+
+    feat/hook-driven-status — ``session_name`` is the literal tmux session
+    name (same convention as ``/sessions/{session_name}/theme``), so this
+    works whether the session is currently attached to or only attachable.
+    Persisted server-side (not localStorage) so the flag follows the user
+    across browsers/devices — see ``SessionManager.set_manual_unread``.
+
+    Unlike the auto flag a ``Stop`` hook sets, this one is NOT cleared by
+    merely viewing the session — only a subsequent call to this same
+    endpoint (typically the user clicking the control again) clears it.
+    """
+    session_manager = request.app.state.session_manager
+    session_manager.set_manual_unread(session_name, body.unread)
+    return SuccessResponse(
+        success=True,
+        message=f"Session {'marked' if body.unread else 'cleared'} unread",
+    )
+
+
+@router.patch(
     "/sessions/{session_name}/pinned-theme",
     response_model=SessionInfo,
     dependencies=[Depends(require_auth)],
@@ -1008,7 +1038,16 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
 # somehow learn a token (e.g. via a /proc dump on a multi-user box).
 
 
-_VALID_HOOK_EVENTS = ("Stop", "PermissionRequest", "Notification")
+# feat/hook-driven-status — the endpoint now accepts every managed event,
+# not just the three toast-worthy ones. TOAST_EVENTS still get a toast +
+# WS broadcast (unchanged behavior); ACTIVITY_ONLY_EVENTS update ONLY the
+# activity-status state machine (src/core/session_activity.py) — no toast,
+# no broadcast, since PreToolUse/PostToolUse fire on every tool call and
+# would spam the toast UI. Single source of truth for both sets lives in
+# claude_hooks.py (also consulted by ``ensure_hook_settings`` to decide
+# which hooks to install), so the whitelist here can never drift from what
+# actually gets installed.
+_VALID_HOOK_EVENTS = claude_hooks.TOAST_EVENTS + claude_hooks.ACTIVITY_ONLY_EVENTS
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 
 
@@ -1069,7 +1108,7 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             body = message.strip()[:200]
-    else:  # pragma: no cover — guarded upstream
+    else:  # pragma: no cover — only called for TOAST_EVENTS kinds
         title = "Claude event"
 
     return title, body
@@ -1085,15 +1124,25 @@ async def claude_event_hook(request: Request):
     Required headers:
         X-Cloudecode-Session: cloudecode session id
         X-Cloudecode-Token:   the HMAC bearer minted at session create
-        X-Cloudecode-Event:   one of "Stop" / "PermissionRequest" / "Notification"
+        X-Cloudecode-Event:   one of ``_VALID_HOOK_EVENTS`` (TOAST_EVENTS
+                               ``Stop``/``PermissionRequest``/``Notification``,
+                               or ACTIVITY_ONLY_EVENTS
+                               ``UserPromptSubmit``/``PreToolUse``/
+                               ``PostToolUse``/``SubagentStart``/
+                               ``SubagentStop`` — feat/hook-driven-status)
 
     Body: the raw JSON Claude Code's hook would normally pipe to a
     shell command's stdin (we just forward stdin → curl --data-binary @-).
     Schema is per-event and tolerated defensively — see
     ``_hook_event_presentation``.
 
-    On success: records a toast (via the existing Part 2 storage) and
-    broadcasts ``toast.new`` to the session's WS subscribers.
+    On success: EVERY event kind updates the activity-status state machine
+    (``SessionManager.record_hook_event`` — see
+    ``src/core/session_activity.py``). TOAST_EVENTS additionally record a
+    toast (existing Part 2 storage) and broadcast ``toast.new`` to the
+    session's WS subscribers; ACTIVITY_ONLY_EVENTS do neither (PreToolUse/
+    PostToolUse fire on every tool call — a toast per call would spam the
+    UI) and return ``{"ok": true}`` with no ``toast_id``.
     """
     # Layer 1 — loopback only. Even a token leak shouldn't let a LAN
     # attacker fire toasts at someone else's cloudecode.
@@ -1134,6 +1183,27 @@ async def claude_event_hook(request: Request):
             payload = {}
     except Exception:
         payload = {}
+
+    # feat/hook-driven-status — EVERY valid event kind updates the
+    # activity-status state machine, not just the toast-worthy ones.
+    # Best-effort: record_hook_event never raises (see its docstring), so
+    # this can't turn an activity-only event into a 410/500 for a session
+    # that's mid-teardown — only the toast path below (which DOES need to
+    # know the session still exists to attach a color/router emit) raises.
+    try:
+        session_manager.record_hook_event(session_id, event_kind, payload)
+    except Exception as exc:  # pragma: no cover — defensive, see docstring
+        logger.warning(
+            "hook_activity_record_failed",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+
+    if event_kind not in claude_hooks.TOAST_EVENTS:
+        # ACTIVITY_ONLY_EVENTS — state machine already updated above, no
+        # toast to create or broadcast.
+        return {"ok": True}
 
     title, body = _hook_event_presentation(event_kind, payload)
 

@@ -21,10 +21,25 @@ introspection can actually tell us.
 - ``unknown`` - the underlying tmux query failed or returned nothing we can
   parse. We do NOT guess in this case.
 
-We do not attempt to detect "waiting for user input" - tmux's pane-level
-introspection cannot distinguish an agent that is thinking from one that is
-blocked on a prompt, so claiming that state would be fabricated, not
-detected.
+We do not attempt to detect "waiting for user input" from tmux alone -
+tmux's pane-level introspection cannot distinguish an agent that is
+thinking from one that is blocked on a prompt, so claiming that state from
+a bare pane query would be fabricated, not detected. (feat/hook-driven-status
+adds an HONEST way to detect it — Claude Code's own lifecycle hooks — see
+``src.core.session_activity``. This module's ``resolve_pane_status()``
+remains the tmux-only, hook-independent classification and is now used two
+ways: as the liveness/death check every unified status still defers to
+(tmux is the ONLY thing that can see a pane die), and as the graceful
+fallback when a session has no hook signal at all.)
+
+Unified activity vocabulary (feat/hook-driven-status): the four states
+below are the pure tmux-introspection ones. ``src.core.session_activity``
+defines three MORE states (``question``, ``working`` / ``working_subagent``,
+``finished_unread``) that are driven by Claude Code's lifecycle hooks
+instead of tmux, and combines all seven into one vocabulary surfaced to the
+client. Both modules import their string constants from here so there is
+exactly one place a display-state string is spelled - this file is the
+single source of truth for every status string this app ever shows a user.
 """
 
 from __future__ import annotations
@@ -42,6 +57,74 @@ STATUS_UNKNOWN: str = "unknown"
 #: All valid values, for validation / tests.
 ALL_STATUSES: frozenset[str] = frozenset(
     {STATUS_RUNNING, STATUS_IDLE, STATUS_DEAD, STATUS_UNKNOWN}
+)
+
+# ---------------------------------------------------------------------------
+# Hook-driven states (feat/hook-driven-status) - added here, not in
+# session_activity.py, so EVERY status string this app can show is defined
+# in exactly one file. ``session_activity.py`` imports these; it owns no
+# string literals of its own.
+# ---------------------------------------------------------------------------
+
+#: Claude is waiting on the user - a ``Notification``/``PermissionRequest``
+#: hook fired and nothing has resolved it yet (a ``UserPromptSubmit``, or
+#: tool activity resuming, clears it). Honest because it is driven by an
+#: event Claude Code itself emits for exactly this condition - unlike the
+#: old tmux-only model, this is never guessed.
+STATUS_QUESTION: str = "question"
+
+#: The agent is actively doing tool work at the top level (PreToolUse /
+#: PostToolUse activity within the heartbeat window). Also the graceful-
+#: degradation stand-in for the old ``running`` when a session has hooks
+#: but none have fired a MORE specific signal yet, and the fallback value
+#: for ``STATUS_RUNNING`` when a session has NO hook signal at all.
+STATUS_WORKING: str = "working"
+
+#: Same as STATUS_WORKING, but the activity is inside a subagent
+#: (SubagentStart fired and no matching SubagentStop has landed within the
+#: heartbeat window). Kept as its own state because the user explicitly
+#: asked to distinguish "the agent is working" from "a subagent it spawned
+#: is working" - collapsing them would lose real information hooks give us.
+STATUS_WORKING_SUBAGENT: str = "working_subagent"
+
+#: A ``Stop`` hook landed (the agent finished its turn) and the user has
+#: not looked at this session since - either because no WS terminal has
+#: bound to it, or because the user explicitly pinned it unread for
+#: followup. This is the state the whole feature exists to surface: it is
+#: the difference between "the light is green" and "there is something
+#: here for you".
+STATUS_FINISHED_UNREAD: str = "finished_unread"
+
+#: All values the unified (tmux + hook) status can take. Superset of
+#: ALL_STATUSES with STATUS_RUNNING dropped (it never appears in the
+#: unified vocabulary - see ``session_activity.map_tmux_fallback``, which
+#: maps a raw tmux "running" onto STATUS_WORKING) and the three hook-driven
+#: states added.
+ALL_ACTIVITY_STATUSES: frozenset[str] = frozenset(
+    {
+        STATUS_DEAD,
+        STATUS_QUESTION,
+        STATUS_WORKING,
+        STATUS_WORKING_SUBAGENT,
+        STATUS_FINISHED_UNREAD,
+        STATUS_IDLE,
+        STATUS_UNKNOWN,
+    }
+)
+
+#: Display priority, most urgent first. Not consulted by any single-state
+#: resolver in this codebase (each session has exactly one computed status
+#: at a time, never several to arbitrate between) - it exists as the
+#: canonical documentation of the ordering the user specified, and
+#: frontend code / tests may import it to sort a session list by urgency.
+ACTIVITY_STATUS_PRIORITY: tuple[str, ...] = (
+    STATUS_DEAD,
+    STATUS_QUESTION,
+    STATUS_WORKING_SUBAGENT,
+    STATUS_WORKING,
+    STATUS_FINISHED_UNREAD,
+    STATUS_IDLE,
+    STATUS_UNKNOWN,
 )
 
 #: Foreground command names tmux reports for a bare interactive/login shell

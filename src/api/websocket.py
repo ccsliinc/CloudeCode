@@ -231,6 +231,19 @@ async def websocket_terminal(websocket: WebSocket):
     # the validated session id has been resolved so the map never holds
     # entries for sessions that don't exist.
     connection_manager.bind_session(websocket, target_sid)
+    # feat/hook-driven-status — a WS terminal actually binding to a
+    # session is the strongest "the user is looking at this" signal the
+    # server has (stronger than merely appearing in a /sessions/list poll
+    # response), so this is where the auto-unread flag (set by a Stop
+    # hook) clears. Best-effort: an unknown session_manager shim without
+    # the method, or any internal error, must never break the WS connect.
+    if target_sid and hasattr(session_manager, "mark_session_viewed"):
+        try:
+            session_manager.mark_session_viewed(target_sid)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "mark_session_viewed_failed", session_id=target_sid, error=str(exc)
+            )
 
     # Subscribe to THIS session's PTY output only.
     pty_output_queue = session_manager.subscribe_output(target_sid)

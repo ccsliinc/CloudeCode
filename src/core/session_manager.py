@@ -41,6 +41,12 @@ from src.models import (
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.session_status import STATUS_UNKNOWN
+from src.core.session_activity import (
+    EVENT_STOP,
+    SessionActivityTracker,
+    map_tmux_fallback,
+)
+from src.core.unread_store import UnreadStore
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import UPLOAD_DIR_NAME, UploadSweeper
 from src.utils.pty_session import PTYSessionError
@@ -195,6 +201,20 @@ class SessionManager:
         # the launchpad can paint the pin without entering the session).
         self.pinned_themes: dict[str, str] = {}
 
+        # feat/hook-driven-status — ephemeral, in-memory hook-signal state
+        # machine (question/working/subagent-depth/heartbeat). One instance
+        # for the whole manager, keyed internally by session_id. NOT
+        # persisted — see src/core/session_activity.py's module docstring
+        # for why a restart legitimately forgets this.
+        self._activity_tracker = SessionActivityTracker()
+
+        # feat/hook-driven-status — durable per-tmux-name read/unread
+        # store. Own module (src/core/unread_store.py) rather than more
+        # inline dict+I/O here — mirrors pinned_themes' persistence shape
+        # (own file, name-keyed, survives detach/swap/re-adopt) without
+        # growing this already-large file further.
+        self._unread_store = UnreadStore(settings.get_unread_state_path())
+
         # Load persisted session if it exists
         self._load_session_metadata()
         self._load_pinned_themes()
@@ -314,6 +334,10 @@ class SessionManager:
         # incoming hook POST for this session_id rejects with 403 (unknown
         # session → ``validate_hook_token`` returns False).
         self._hook_tokens.pop(session_id, None)
+        # feat/hook-driven-status — drop the ephemeral hook-signal state.
+        # The persisted unread flag (keyed by tmux NAME, not session_id) is
+        # deliberately untouched here — it must survive detach/re-adopt.
+        self._activity_tracker.forget(session_id)
         if self._last_session_id == session_id:
             self._last_session_id = (
                 next(reversed(self.sessions)) if self.sessions else None
@@ -540,6 +564,14 @@ class SessionManager:
                 for name in dead_pins:
                     self.pinned_themes.pop(name, None)
                 self._save_pinned_themes()
+
+        # feat/hook-driven-status — same reconciliation for the persisted
+        # unread store: a tmux session the user killed outside our UI
+        # (``tmux -L cloude kill-session``) shouldn't leave a permanent
+        # unread badge nothing can ever clear (mark_session_viewed needs a
+        # live backend to resolve tmux_name -> flag, which no longer
+        # exists once tmux itself forgot the name).
+        self._unread_store.prune(tmux_alive)
 
         if persisted is None:
             # No metadata on disk → nothing to re-adopt.
@@ -871,6 +903,59 @@ class SessionManager:
             os.replace(str(tmp), str(path))
         except Exception as exc:
             logger.error("failed_to_save_pinned_themes", error=str(exc))
+
+    # ---- read/unread persistence (feat/hook-driven-status) ---------------
+    #
+    # Storage itself lives in ``src/core/unread_store.py`` (own file, own
+    # atomic-write protocol, zero knowledge of sessions/tmux). Everything
+    # below is the thin session_id/tmux-name resolution glue that only
+    # SessionManager has the context to do.
+
+    def _is_unread(self, tmux_name: Optional[str]) -> bool:
+        """True iff ``tmux_name`` carries an auto or manual unread flag."""
+        return self._unread_store.is_unread(tmux_name)
+
+    def mark_session_viewed(self, session_id: str) -> None:
+        """Clear the AUTO unread flag for the session bound to ``session_id``.
+
+        Called when a WS terminal actually binds to a session (see
+        ``src/api/websocket.py``'s ``connection_manager.bind_session``
+        call site) — the strongest "the user is looking at this" signal
+        the server has, deliberately stronger than merely appearing in a
+        list/poll response. Does NOT touch the manual flag: a session the
+        user explicitly pinned unread for followup stays flagged even
+        after they open it, until they explicitly clear it (see
+        ``set_manual_unread``) — this is the "survives being viewed"
+        requirement.
+        """
+        backend = self.backends.get(session_id)
+        tmux_name = getattr(backend, "tmux_session", None) if backend else None
+        if not tmux_name:
+            return
+        self._unread_store.set_flag(tmux_name, "auto", False)
+
+    def set_manual_unread(self, tmux_name: str, unread: bool) -> None:
+        """Set or clear the MANUAL unread flag for a tmux session name.
+
+        Description: The user-facing "mark unread for followup" control.
+            Keyed by tmux name (not session_id) so it works for BOTH a
+            live session and an attachable-but-not-live one — you can pin
+            a conversation unread whether or not anything is currently
+            attached to it. Unlike the auto flag, nothing but this method
+            (a repeat call, presumably from the user clicking again)
+            clears it.
+        Inputs:
+            tmux_name: literal tmux session name (never a session_id).
+            unread: True to set, False to clear.
+        Output: None (persisted immediately).
+        Example:
+            >>> mgr.set_manual_unread("cloude_myproj", True)
+            >>> mgr._is_unread("cloude_myproj")
+            True
+        """
+        if not tmux_name:
+            raise ValueError("tmux_name is required")
+        self._unread_store.set_flag(tmux_name, "manual", unread)
 
     def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
         """Return the persisted pin for a tmux session name, or None."""
@@ -1349,6 +1434,40 @@ class SessionManager:
             )
 
         return toast
+
+    def record_hook_event(
+        self, session_id: str, kind: str, payload: Optional[dict] = None
+    ) -> None:
+        """Feed one Claude Code lifecycle hook event into the activity model.
+
+        Description: Called by the hook endpoint (``POST
+            /hooks/claude-event``) for EVERY event kind — including the
+            ones that never produce a toast (PreToolUse/PostToolUse/
+            SubagentStart/SubagentStop/UserPromptSubmit). Best-effort by
+            design: an unknown ``session_id`` is a documented no-op here
+            (the toast path, ``record_toast``, is the one that legitimately
+            raises/404s on an unknown session — activity tracking is a
+            secondary signal and must never block hook delivery or make
+            the endpoint fail for a session that's mid-teardown).
+        Inputs:
+            session_id: cloudecode session id from the validated hook POST.
+            kind: hook event kind (one of
+                ``claude_hooks.TOAST_EVENTS + claude_hooks.ACTIVITY_ONLY_EVENTS``).
+            payload: the hook's raw JSON body. Unused today (the state
+                machine only needs the event kind + arrival time) but
+                threaded through for forward-compat and so a future signal
+                (e.g. a specific tool name) doesn't require an endpoint
+                signature change.
+        Output: None.
+        Example:
+            >>> mgr.record_hook_event("ses_1", "PreToolUse")
+        """
+        self._activity_tracker.record_event(session_id, kind)
+        if kind == EVENT_STOP:
+            backend = self.backends.get(session_id)
+            tmux_name = getattr(backend, "tmux_session", None) if backend else None
+            if tmux_name:
+                self._unread_store.set_flag(tmux_name, "auto", True)
 
     def ack_toast(self, session_id: str, toast_id: str) -> bool:
         """Mark a toast acknowledged. Idempotent.
@@ -2280,7 +2399,15 @@ class SessionManager:
         if status_map is None:
             status_map = self._build_tmux_status_map()
         row = status_map.get(tmux_session_name) if tmux_session_name else None
-        activity_status = row["status"] if row else STATUS_UNKNOWN
+        raw_tmux_status = row["status"] if row else STATUS_UNKNOWN
+        # feat/hook-driven-status — the raw tmux classification (dead check
+        # + graceful-fallback source) is combined with this session's live
+        # hook signal (if any) and its persisted unread flag into ONE
+        # unified status. See src/core/session_activity.py.
+        unread = self._is_unread(tmux_session_name)
+        activity_status = self._activity_tracker.resolve(
+            session_id, raw_tmux_status, unread=unread
+        )
 
         return SessionInfo(
             session=sess,
@@ -2292,6 +2419,7 @@ class SessionManager:
             agent_type=sess.agent_type,
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
+            unread=unread,
         )
 
     async def get_session_info(
@@ -2390,7 +2518,17 @@ class SessionManager:
             if name:
                 row["pinned_theme"] = self.pinned_themes.get(name)
                 status_row = status_map.get(name)
-                row["status"] = status_row["status"] if status_row else STATUS_UNKNOWN
+                raw_tmux_status = status_row["status"] if status_row else STATUS_UNKNOWN
+                # feat/hook-driven-status — attachable rows have no live
+                # session_id (nothing is currently attached to them), so
+                # there is no hook signal to consult by construction: no
+                # hook can ever fire for a session with no running process
+                # bound to it. Map straight from tmux + the persisted
+                # unread flag, never claiming a hook-driven state we have
+                # no evidence for.
+                unread = self._is_unread(name)
+                row["status"] = map_tmux_fallback(raw_tmux_status, unread=unread)
+                row["unread"] = unread
         return rows
 
     async def adopt_external_session(

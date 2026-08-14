@@ -7,16 +7,33 @@
  * color-only - a user who can't distinguish the dot colors still needs
  * to know what state a session is in).
  *
- * States mirror the backend's src/core/session_status.py exactly:
- *   running - the pane's foreground process is something other than a
- *             bare shell (in practice, the agent CLI).
- *   idle    - pane alive, foreground is a bare shell. Agent not running.
- *   dead    - the pane's process exited; tmux is only holding the
- *             corpse open. Rendered with the loudest treatment on
- *             purpose - this is the state the user most needs to see
- *             (see CLAUDE.md hazard: a dead pane that "looked" fine).
- *   unknown - status could not be determined (non-tmux backend, or the
- *             tmux query failed). Never guessed.
+ * feat/hook-driven-status: states mirror the backend's UNIFIED vocabulary
+ * (src/core/session_status.py's ALL_ACTIVITY_STATUSES), driven by Claude
+ * Code's own lifecycle hooks where available and gracefully falling back
+ * to tmux-only classification otherwise. Listed in the exact display
+ * priority the states are meant to be noticed in:
+ *   dead             - the pane's process exited; tmux is only holding
+ *                       the corpse open. Loudest treatment on purpose
+ *                       (see CLAUDE.md hazard: a dead pane that "looked"
+ *                       fine).
+ *   question         - Claude is waiting on YOU (a Notification or
+ *                       PermissionRequest hook fired and nothing has
+ *                       resolved it yet). The state this whole feature
+ *                       exists to surface alongside finished_unread.
+ *   working_subagent - the agent is actively working INSIDE a spawned
+ *                       subagent (SubagentStart/Stop heartbeat).
+ *   working          - the agent is actively doing tool work at the top
+ *                       level (PreToolUse/PostToolUse heartbeat), or (no
+ *                       hook signal at all) tmux reports a non-shell
+ *                       foreground process - the old "running".
+ *   finished_unread  - a Stop hook landed and nobody has looked since, OR
+ *                       the user manually pinned this session unread for
+ *                       followup.
+ *   idle             - alive, nothing pending, already seen.
+ *   unknown          - status could not be determined (non-tmux backend,
+ *                       tmux query failed, or hooks not installed AND
+ *                       tmux itself can't classify the pane). Never
+ *                       guessed.
  *
  * Must load AFTER no other module (no dependencies) and BEFORE
  * launchpad.js / session-sidebar.js, both of which call into it.
@@ -33,14 +50,40 @@ console.log('[SessionStatusUI Module] Loading...');
      * @type {Object<string, string>}
      */
     const STATUS_LABELS = {
-        running: 'running - agent active',
-        idle: 'idle - waiting at the shell',
         dead: 'dead - process exited',
+        question: 'your turn - claude is waiting on you',
+        working_subagent: 'working - a subagent is active',
+        working: 'working - agent active',
+        finished_unread: 'finished - unread',
+        idle: 'idle - waiting at the shell',
         unknown: 'status unknown',
+        // Back-compat: a stale cached response (pre feat/hook-driven-status
+        // server, or a browser tab that hasn't reloaded yet) may still send
+        // the old tmux-only 'running' string. Map it onto 'working' rather
+        // than falling through to 'unknown' so a half-upgraded deployment
+        // still renders something meaningful.
+        running: 'working - agent active',
     };
 
     /**
-     * Normalize any input into one of the four known status keys.
+     * CSS modifier class per status - kept separate from STATUS_LABELS so
+     * the 'running' back-compat alias can share the 'working' dot style
+     * without duplicating a color rule.
+     * @type {Object<string, string>}
+     */
+    const STATUS_DOT_CLASS = {
+        dead: 'dead',
+        question: 'question',
+        working_subagent: 'working-subagent',
+        working: 'working',
+        finished_unread: 'finished-unread',
+        idle: 'idle',
+        unknown: 'unknown',
+        running: 'working',
+    };
+
+    /**
+     * Normalize any input into one of the known status keys.
      *
      * Description: Defensive normalizer so a missing/unexpected value from
      *   the API (older cached response, non-tmux backend) never produces
@@ -48,9 +91,9 @@ console.log('[SessionStatusUI Module] Loading...');
      * Inputs:
      *   status (string|null|undefined) - raw value from the API payload.
      * Output:
-     *   string - one of 'running' | 'idle' | 'dead' | 'unknown'.
+     *   string - one of the STATUS_LABELS keys.
      * Example:
-     *   normalizeStatus('running') -> 'running'
+     *   normalizeStatus('working') -> 'working'
      *   normalizeStatus(undefined) -> 'unknown'
      */
     function normalizeStatus(status) {
@@ -82,8 +125,9 @@ console.log('[SessionStatusUI Module] Loading...');
     function dotHtml(status) {
         const key = normalizeStatus(status);
         const label = STATUS_LABELS[key];
+        const cssClass = STATUS_DOT_CLASS[key];
         return (
-            `<span class="status-dot status-dot--${key}" role="img" ` +
+            `<span class="status-dot status-dot--${cssClass}" role="img" ` +
             `title="${label}" aria-label="${label}"></span>`
         );
     }
@@ -103,10 +147,49 @@ console.log('[SessionStatusUI Module] Loading...');
         return STATUS_LABELS[normalizeStatus(status)];
     }
 
+    /**
+     * Build the markup for the manual "mark unread for followup" toggle.
+     *
+     * Description: A small button, distinct from the status dot, so the
+     *   user can flag a session for later attention regardless of its
+     *   current live activity state. Carries `aria-pressed` (not just a
+     *   CSS class) so the toggled state is exposed to assistive tech, and
+     *   `title`/`aria-label` name the action in words. The caller wires
+     *   the click handler (this module only builds markup); `data-*`
+     *   attributes carry what the handler needs to know which row was
+     *   clicked and its CURRENT state, so the handler can send the
+     *   opposite value without re-querying the DOM.
+     * Inputs:
+     *   tmuxName (string) - literal tmux session name (unread is keyed by
+     *     name server-side, not session_id - see PATCH
+     *     /sessions/{name}/unread).
+     *   unread (boolean) - current unread state for this row.
+     * Output:
+     *   string - HTML for a single inline `<span role="button">`.
+     * Example:
+     *   markUnreadHtml('cloude_myproj', false) ->
+     *     '<span class="mark-unread-toggle" role="button" ...>...</span>'
+     */
+    function markUnreadHtml(tmuxName, unread) {
+        const label = unread
+            ? 'clear unread flag'
+            : 'mark unread for followup';
+        const pressed = unread ? 'true' : 'false';
+        const safeName = String(tmuxName || '').replace(/"/g, '&quot;');
+        return (
+            `<span class="mark-unread-toggle${unread ? ' mark-unread-toggle--active' : ''}" ` +
+            `role="button" tabindex="0" aria-pressed="${pressed}" ` +
+            `title="${label}" aria-label="${label}" ` +
+            `data-mark-unread="${safeName}" data-unread-current="${pressed}">` +
+            `✉</span>`
+        );
+    }
+
     window.SessionStatusUI = {
         normalizeStatus,
         dotHtml,
         labelFor,
+        markUnreadHtml,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();
