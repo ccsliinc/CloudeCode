@@ -322,6 +322,15 @@ h1:hover {
     color: var(--color-accent);
 }
 
+/* The delete button's icon must read as destructive, not merely its
+ * border/background — a red-bordered button drawing its glyph in the
+ * default accent color muddies the "this is dangerous" signal the
+ * trash-can icon is there to give. Overrides the accent rule above for
+ * any button.danger specifically. */
+.header .controls button.danger > svg {
+    color: var(--color-danger);
+}
+
 /* Buttons */
 button {
     background: var(--color-accent-bg);
