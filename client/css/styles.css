@@ -282,10 +282,16 @@ h1:hover {
     overflow: visible;
 }
 
-/* v0.7.0+ — header background-music toggle. Muted by default; click is the
- * required user-gesture that grants AudioContext autoplay for the page
- * lifetime. Styled to match `.header-rename-pencil` so the header chrome
- * reads as one visual family. */
+/* v0.7.0+ — header background-music toggle. Click is the required
+ * user-gesture that grants AudioContext autoplay for the page lifetime.
+ * This button sits in `.header .controls` alongside homeBtn/
+ * detachSessionBtn/logoutBtn/settingsBtn, so it must NOT set its own
+ * `color`/`font-size` — those buttons take their icon color (accent,
+ * 16px via the svg's own width/height) from the shared
+ * `.header .controls button > svg` rule below. An earlier version of
+ * this rule copied `.header-rename-pencil`'s muted-until-hover pattern,
+ * which put the audio icon at 14px/grey while its neighbors rendered at
+ * 16px/accent — this only sizes the hit area and hover feedback now. */
 .header-audio-toggle {
     display: inline-flex;
     align-items: center;
@@ -296,22 +302,15 @@ h1:hover {
     background: transparent;
     border: none;
     cursor: pointer;
-    color: var(--color-fg-muted);
     border-radius: var(--radius-md);
-    font-size: 14px;
     line-height: 1;
     flex-shrink: 0;
     transition: color 120ms ease, transform 120ms ease, background 120ms ease;
 }
 
 .header-audio-toggle:hover {
-    color: var(--color-accent);
     transform: scale(1.15);
     background: var(--color-accent-bg-soft);
-}
-
-.header-audio-toggle[aria-pressed="true"] {
-    color: var(--color-accent);
 }
 
 /* Header control icons. Inline SVG paths use stroke="currentColor" so a
@@ -891,6 +890,11 @@ button[data-tooltip]:hover::after {
     line-height: 1.4;
 }
 
+/* Edit + delete are ALWAYS rendered and ALWAYS visible (no `:hover`-only
+ * reveal anywhere in this file) so they are reachable on touch devices
+ * with no hover state at all — the user drives this from a phone. See
+ * the `@media (pointer: coarse)` block below for the touch-specific
+ * hit-area bump. */
 .project-delete-btn {
     position: absolute;
     top: 8px;
@@ -948,6 +952,31 @@ button[data-tooltip]:hover::after {
     border-color: var(--color-warning);
     box-shadow: 0 0 8px var(--color-warning-border);
     transform: scale(1.1);
+}
+
+/* Touch hit-area bump. `pointer: coarse` covers phones/tablets — no
+ * `:hover` involved, since a coarse pointer generally can't hover at
+ * all. 44px is the standard minimum touch target (Apple HIG / WCAG
+ * 2.5.5); `.project-item` gets matching right padding so the wider
+ * buttons never overlap the description text. */
+@media (pointer: coarse) {
+    .project-item {
+        padding-right: 96px;
+    }
+
+    .project-delete-btn,
+    .project-edit-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .project-delete-btn {
+        right: 4px;
+    }
+
+    .project-edit-btn {
+        right: 48px;
+    }
 }
 
 .launchpad-empty {
@@ -1047,7 +1076,12 @@ button[data-tooltip]:hover::after {
     }
 
     .project-item {
-        padding: 12px 14px;
+        /* Left/top/bottom only — right stays whatever the base rule (or
+         * the pointer:coarse touch bump above) set, so edit/delete never
+         * get clipped under the description text on a narrow phone. */
+        padding-top: 12px;
+        padding-bottom: 12px;
+        padding-left: 14px;
     }
 }
 

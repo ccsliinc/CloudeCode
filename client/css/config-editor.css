@@ -1,0 +1,261 @@
+/* =====================================================================
+ * Claude-config file tree + editor panel
+ * ---------------------------------------------------------------------
+ * New CSS file (not appended to the already-oversized styles.css), same
+ * convention as session-sidebar.css. Uses the design tokens defined in
+ * styles.css's :root block - no new tokens introduced. Slides in from
+ * the RIGHT (session sidebar slides from the left) so the two panels
+ * read as distinct surfaces if ever opened back to back.
+ * ===================================================================== */
+
+.config-editor-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--color-bg-overlay-soft);
+    z-index: 1090;
+}
+
+.config-editor-backdrop[hidden] {
+    display: none;
+}
+
+.config-editor-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(520px, 92vw);
+    background: var(--color-bg-elevated);
+    border-left: 1px solid var(--color-border);
+    box-shadow: -4px 0 24px var(--color-bg-overlay-soft);
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 160ms ease;
+}
+
+.config-editor-panel--open {
+    transform: translateX(0);
+}
+
+.config-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
+}
+
+.config-editor-title {
+    font-weight: bold;
+    color: var(--color-accent);
+    letter-spacing: 0.3px;
+}
+
+#config-editor-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+#config-editor-close:hover {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+.config-editor-body {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.config-editor-tree {
+    padding: 10px 12px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    max-height: 45%;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.config-editor-loading,
+.config-editor-error {
+    padding: 10px 4px;
+    color: var(--color-fg-muted);
+    font-size: 0.85rem;
+}
+
+.config-editor-error {
+    color: var(--color-danger);
+}
+
+.config-editor-error.config-editor-success {
+    color: var(--color-accent);
+}
+
+.config-editor-root-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-fg-subtle);
+    margin: 10px 4px 4px;
+}
+
+.config-editor-list {
+    list-style: none;
+    margin: 0;
+    padding-left: 0;
+}
+
+.config-editor-node--dir summary {
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    font-size: 0.85rem;
+    list-style: none;
+}
+
+.config-editor-node--dir summary::-webkit-details-marker {
+    display: none;
+}
+
+.config-editor-node--dir summary:hover {
+    background: var(--color-bg-hover);
+}
+
+.config-editor-node--file {
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.config-editor-node--file:hover,
+.config-editor-node--file:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.config-editor-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-overlay-faint);
+    color: var(--color-fg-subtle);
+}
+
+.config-editor-badge--exec {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
+.config-editor-editor {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 10px 12px;
+}
+
+.config-editor-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.config-editor-editor-path {
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    word-break: break-all;
+}
+
+.config-editor-editor-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.config-editor-editor-actions button {
+    padding: 5px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-fg);
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+#config-editor-save {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+#config-editor-save:hover:not(:disabled) {
+    background: var(--color-accent-bg-soft);
+}
+
+#config-editor-save:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.config-editor-exec-warning,
+.config-editor-ro-warning {
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-md);
+    font-size: 0.78rem;
+}
+
+.config-editor-exec-warning {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border: 1px solid var(--color-warning-border);
+}
+
+.config-editor-ro-warning {
+    background: var(--color-bg-overlay-faint);
+    color: var(--color-fg-muted);
+    border: 1px solid var(--color-border);
+}
+
+.config-editor-textarea {
+    flex: 1;
+    min-height: 240px;
+    width: 100%;
+    resize: vertical;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+@media (max-width: 480px) {
+    .config-editor-panel {
+        width: 100vw;
+    }
+}

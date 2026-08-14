@@ -411,7 +411,7 @@ class Launchpad {
             // until adopted) get no pencil — the user can adopt first,
             // then rename from the in-session header.
             const renamePencil = s.session_id
-                ? `<span class="running-session-rename" role="button" aria-label="Rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename">✎</span>`
+                ? `<span class="running-session-rename" role="button" aria-label="Rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</span>`
                 : '';
             // Status dot: real activity status (running/idle/dead/unknown)
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
@@ -1201,7 +1201,7 @@ class Launchpad {
             const description = project.description || 'no description';
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
-                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project" aria-label="Edit project">✎</button>
+                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project" aria-label="Edit project">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
                     <button class="project-delete-btn" data-name="${project.name}" title="Delete project" aria-label="Delete project">${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>

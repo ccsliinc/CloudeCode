@@ -17,6 +17,7 @@
     <!-- Session sidebar + status lights. Loaded after styles.css for the
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <link rel="stylesheet" href="/static/css/config-editor.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
@@ -140,6 +141,17 @@
                     <path d="M4.36 5.9L2.98 5.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
+            <!-- Config editor: browse/edit ~/.claude (+ the active project's
+                 .claude/) — see client/js/config-editor-panel.js. Same
+                 always-visible treatment as settingsBtn: config applies
+                 whether or not a session is open. Icon is an open folder,
+                 distinct from settings' gear-circle and every other glyph
+                 in this row. -->
+            <button type="button" id="configEditorBtn" class="hidden" aria-label="Claude config" title="claude config" data-tooltip="Claude config" aria-expanded="false" aria-controls="config-editor-panel">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                </svg>
+            </button>
             <span class="status" id="statusText" data-status="Ready" role="status" aria-live="polite" aria-label="Ready"></span>
         </div>
     </div>
@@ -160,6 +172,23 @@
             <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
         </div>
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
+    </aside>
+
+    <!-- Claude-config file tree + editor — peer to the session sidebar
+         above (same body-level/backdrop/slide-over pattern), toggled by
+         #configEditorBtn. Scope is Claude config ONLY (~/.claude plus the
+         active project's .claude/), never a general filesystem browser.
+         See client/js/config-editor-panel.js. -->
+    <div class="config-editor-backdrop" id="config-editor-backdrop" hidden></div>
+    <aside id="config-editor-panel" class="config-editor-panel" aria-hidden="true" aria-label="Claude config">
+        <div class="config-editor-header">
+            <span class="config-editor-title">claude config</span>
+            <button type="button" id="config-editor-close" aria-label="Close claude config" title="close">&times;</button>
+        </div>
+        <div class="config-editor-body">
+            <div id="config-editor-tree" class="config-editor-tree"></div>
+            <div id="config-editor-editor" class="config-editor-editor" hidden></div>
+        </div>
     </aside>
 
     <!-- Auth Screen -->
@@ -251,6 +280,11 @@
          settings-panel.js calls window.AgentWrappersPanel.mount(). -->
     <script src="/static/js/agent-wrappers-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
+
+    <!-- Claude-config file tree + editor. Must load AFTER api.js
+         (window.API) and BEFORE app.js so App.init() can wire
+         #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
+    <script src="/static/js/config-editor-panel.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

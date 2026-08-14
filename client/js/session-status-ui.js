@@ -181,7 +181,47 @@ console.log('[SessionStatusUI Module] Loading...');
             `role="button" tabindex="0" aria-pressed="${pressed}" ` +
             `title="${label}" aria-label="${label}" ` +
             `data-mark-unread="${safeName}" data-unread-current="${pressed}">` +
-            `✉</span>`
+            `${unread ? envelopeFilledSvg() : envelopeOutlineSvg()}</span>`
+        );
+    }
+
+    /**
+     * Envelope glyph, "not flagged unread" state — a plain outline, same
+     * family as trashIconSvg (16x16 viewBox, stroke="currentColor",
+     * fill="none", stroke-width 1.5). No `stroke` color set on the paths
+     * themselves; the caller's CSS `color` drives the stroke via
+     * currentColor so the icon recolors with the row/theme like every
+     * other control in the app.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   envelopeOutlineSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function envelopeOutlineSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
+     * Envelope glyph, "flagged unread" state — the same envelope outline
+     * plus a solid notification dot in the top-right corner, so the two
+     * states are distinguishable by shape (not color alone).
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   envelopeFilledSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function envelopeFilledSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<circle cx="12.5" cy="3.5" r="2.5" fill="currentColor" stroke="var(--color-bg, #000)" stroke-width="0.75"/>' +
+            '</svg>'
         );
     }
 
@@ -211,12 +251,35 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Shared pencil (edit) glyph for every inline-rename/edit control in
+     * the app (launcher project rows, running-session rename). Same
+     * family as trashIconSvg: 16x16 viewBox, stroke="currentColor",
+     * fill="none", stroke-width 1.5, no color set on the paths — the
+     * caller's CSS `color` drives it via currentColor.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   pencilIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function pencilIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M9 4L12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         normalizeStatus,
         dotHtml,
         labelFor,
         markUnreadHtml,
         trashIconSvg,
+        pencilIconSvg,
+        envelopeOutlineSvg,
+        envelopeFilledSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

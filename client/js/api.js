@@ -961,6 +961,43 @@ class API {
             method: 'POST'
         });
     }
+
+    /**
+     * Claude-config editor: list the file tree for one root.
+     * @param {string} root - "user" or "project".
+     * @param {string|null} [projectPath] - required for root === "project".
+     * @returns {Promise<{root: string, tree: object[]}>}
+     */
+    async getConfigFileTree(root, projectPath = null) {
+        const params = new URLSearchParams({ root });
+        if (projectPath) params.set('project_path', projectPath);
+        return await this.call(`/config-files/tree?${params.toString()}`);
+    }
+
+    /**
+     * Claude-config editor: read one file's contents.
+     * @param {string} root - "user" or "project".
+     * @param {string} path - rel_path from a tree listing.
+     * @param {string|null} [projectPath] - required for root === "project".
+     * @returns {Promise<{content: string, is_executable: boolean, read_only: boolean, size: number}>}
+     */
+    async readConfigFile(root, path, projectPath = null) {
+        const params = new URLSearchParams({ root, path });
+        if (projectPath) params.set('project_path', projectPath);
+        return await this.call(`/config-files/read?${params.toString()}`);
+    }
+
+    /**
+     * Claude-config editor: write one file's contents.
+     * @param {object} body - { root, path, content, project_path, acknowledge_executable }.
+     * @returns {Promise<{ok: boolean, backed_up: boolean, is_executable: boolean}>}
+     */
+    async writeConfigFile(body) {
+        return await this.call('/config-files/write', {
+            method: 'POST',
+            body,
+        });
+    }
 }
 
 // Export singleton instance

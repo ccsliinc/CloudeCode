@@ -157,6 +157,10 @@ class AppController {
         // terminal), hidden pre-auth. Same visibility wiring as
         // logoutBtn, not gated to a single screen like homeBtn/detachBtn.
         this.settingsBtn = null;
+        // Claude-config editor button — same always-visible-when-authenticated
+        // wiring as settingsBtn (config applies whether or not a session
+        // is open).
+        this.configEditorBtn = null;
         // Health poller state. Poll every 15s against /health so the
         // top-right status dot reflects server reachability on the
         // auth + launchpad screens. The terminal screen manages the
@@ -175,6 +179,7 @@ class AppController {
         this.detachBtn = document.getElementById('detachSessionBtn');
         this.homeBtn = document.getElementById('homeBtn');
         this.settingsBtn = document.getElementById('settingsBtn');
+        this.configEditorBtn = document.getElementById('configEditorBtn');
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
         // any async work — kills FOUC for repeat visitors. The full manifest
@@ -404,6 +409,15 @@ class AppController {
                 if (window.SettingsPanel) window.SettingsPanel.open(this.settingsBtn);
             });
         }
+
+        // Claude-config editor gear-neighbor — click wiring only;
+        // visibility toggled alongside settingsBtn in showAuth/
+        // showLaunchpad/showTerminal.
+        if (this.configEditorBtn) {
+            this.configEditorBtn.addEventListener('click', () => {
+                if (window.ConfigEditorPanel) window.ConfigEditorPanel.open(this.configEditorBtn);
+            });
+        }
     }
 
     /**
@@ -447,6 +461,7 @@ class AppController {
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.add('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         // Leaving the terminal: drop any session-scoped theme so xterm
@@ -486,6 +501,7 @@ class AppController {
         if (this.detachBtn) this.detachBtn.classList.add('hidden');
         if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
@@ -564,6 +580,7 @@ class AppController {
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
@@ -680,6 +697,7 @@ class AppController {
         if (this.detachBtn) this.detachBtn.classList.remove('hidden');
         if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
 
         // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session

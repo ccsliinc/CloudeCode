@@ -257,10 +257,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
+    width: 24px;
+    height: 24px;
     border-radius: var(--radius-sm);
-    font-size: 0.8em;
     line-height: 1;
     color: var(--color-fg-faint);
     cursor: pointer;
