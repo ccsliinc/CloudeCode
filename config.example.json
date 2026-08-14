@@ -23,7 +23,7 @@
     "slack_webhook_url": ""
   },
   "agents": {
-    "claude_command": "claude --dangerously-skip-permissions",
+    "claude_command": "claude",
     "codex_command": "codex",
     "hermes_command": "hermes",
     "openclaw_command": "openclaw tui"

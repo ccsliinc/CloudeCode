@@ -295,7 +295,7 @@ flowchart LR
 
 **1. You must define a `cld` function in your `~/.zshrc`.** This is not optional and it is the single most common install failure.
 
-For `agent_type == "claude"`, the launch command is hardcoded to `zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'`. The environment variable `CLAUDE_CLI_PATH` and the `agents.claude_command` config key are **legacy and bypassed** for Claude sessions. Without a `cld` function, every Claude session dies on arrival with `command not found`.
+For `agent_type == "claude"`, the launch command defaults to `zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'`. Set `agents.claude_command` in `config.json` to override it with a plain invocation on machines that don't define `cld`/`cldor` (see Configuration below). The environment variable `CLAUDE_CLI_PATH` remains unused for Claude sessions either way. Without a `cld` function or an `agents.claude_command` override, every Claude session dies on arrival with `command not found`.
 
 ```zsh
 # ~/.zshrc — minimum viable definition
@@ -408,7 +408,7 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | `CLOUDE_PROJECT_PATH` | `./projects` | Docker only — host path mounted at `/workspace` |
 | `CLOUDE_LOG_DIR` | `./logs` | Docker only — host path for logs and state |
 
-`CLAUDE_CLI_PATH` and `API_KEY` are legacy and ignored by the current auth and launch paths. `SESSION_TIMEOUT` appears in `.env.example` but no enforcement of it was found in the code — treat it as inert.
+`CLAUDE_CLI_PATH` is unused by session launch; to point the `claude` agent type at a plain binary, set `agents.claude_command` in `config.json` instead (see below). `API_KEY` is legacy and ignored by the current auth and launch paths. `SESSION_TIMEOUT` appears in `.env.example` but no enforcement of it was found in the code — treat it as inert.
 
 ### `config.json` (non-secret runtime config)
 
@@ -432,7 +432,8 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | | `rate_limit_per_kind_cooldown_seconds` | `10.0` | Per-event-type cooldown |
 | | `slack_webhook_url` | `""` | Optional Slack incoming webhook |
 | | `disable_claude_hooks` | unset | Skip the `~/.claude/settings.json` hook merge |
-| `agents` | `codex_command` | `codex` | Command for `agent_type=codex` |
+| `agents` | `claude_command` | `""` | Shell command for `agent_type=claude`. Empty falls back to the `cld`/`cldor` zsh functions (see "Before you start" above) |
+| | `codex_command` | `codex` | Command for `agent_type=codex` |
 | | `hermes_command` | `hermes` | Command for `agent_type=hermes` |
 | | `openclaw_command` | `openclaw tui` | Command for `agent_type=openclaw` |
 | | `shell_command` | `$SHELL -i` | The bare-console agent type |
