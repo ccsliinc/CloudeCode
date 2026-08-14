@@ -1822,8 +1822,28 @@ class Terminal {
 
     /**
      * Destroy session
+     *
+     * Description: kills the tmux session and terminates the Claude
+     * process for THIS tab's session. Irreversible for the running
+     * process (the transcript JSONL under ~/.claude/projects is not
+     * touched and survives independently). Confirms first using the
+     * same modal pattern as App.logout() so the app stays consistent;
+     * Detach (detachSession(), below) is intentionally NOT gated by a
+     * confirmation because it is safe and reversible.
+     * Inputs: none (reads this._currentSession / this._sessionId()).
+     * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
     async destroySession() {
+        const name = this._currentTmuxName() || (this._currentSession && this._currentSession.id) || 'this session';
+        const confirmed = await window.App.showConfirmModal(
+            'delete session',
+            `are you sure you want to delete "${name}"?`,
+            'the running session is terminated. this cannot be undone. use detach instead to leave it running.'
+        );
+        if (!confirmed) {
+            return;
+        }
+
         try {
             this.updateStatus('Destroying session...');
 
