@@ -15,6 +15,15 @@ class Launchpad {
         // Each row carries an is_active flag so the render pass can style
         // the live one differently without a second DOM query.
         this.runningSessions = [];
+        // GUARD (deep-link duplicate-session regression fix): set true
+        // for the duration of openProjectByName()'s resolution. selectProject()
+        // checks this flag and refuses to create a session while it's set —
+        // see openProjectByName()'s docstring and selectProject()'s guard
+        // clause. This makes "deep-link resolution never creates" an
+        // enforced invariant rather than an implicit property of call
+        // order, so a future edit that re-wires openProjectByName() into
+        // selectProject() fails loudly instead of silently regressing.
+        this._resolvingDeepLink = false;
     }
 
     /**
@@ -2095,88 +2104,126 @@ class Launchpad {
     }
 
     /**
+     * Canonical tmux-name <-> URL-slug matcher — the ONE place that decides
+     * whether a decoded deep-link slug refers to a given running session.
+     *
+     * Description: used by BOTH directions of the deep-link feature so
+     *   they can never drift apart:
+     *     - OUTBOUND (build): `App._syncSessionUrl()` in app.js calls
+     *       `_deriveRunningSessionDisplayName()` directly to turn a live
+     *       `tmux_session` (e.g. `cloude_claude-config-sync-2`) into the
+     *       URL slug (`claude-config-sync-2`).
+     *     - INBOUND (resolve): this method calls the SAME
+     *       `_deriveRunningSessionDisplayName()` on every candidate row
+     *       and compares against the decoded slug — exact match first,
+     *       then case-insensitive fallback.
+     *   Previously these two directions used the same helper already, so
+     *   a prefix-stripping mismatch was ruled out as the root cause of
+     *   the duplicate-session regression (see openProjectByName()'s
+     *   docstring) — but keeping the comparison here, in one function,
+     *   means that stays true by construction instead of by coincidence.
+     * Inputs:
+     *   slug (string) - decoded, regex-validated name from the URL.
+     * Output: the matching row from `this.runningSessions`, or
+     *   `undefined` if none matches.
+     */
+    _findRunningSessionBySlug(slug) {
+        const rows = this.runningSessions || [];
+        return rows.find(s => this._deriveRunningSessionDisplayName(s.name) === slug)
+            || rows.find(s => (this._deriveRunningSessionDisplayName(s.name) || '').toLowerCase() === String(slug).toLowerCase());
+    }
+
+    /**
      * Open a project OR an adopted session by name (used by the deep-link
      * router, Item 9; extended for adopted sessions as part of the deep-link
-     * fix — see router.js's module docstring for the full flow).
+     * fix; REORDERED as part of the duplicate-session regression fix below).
      *
-     * The router already validated the name against a strict regex. Three
-     * sources are consulted, in order, before giving up:
-     *   1. `this.projects` (launcher project entries) — the original
-     *      behavior, unchanged.
-     *   2. `GET /sessions/list` / `GET /sessions/attachable` (via
-     *      `loadRunningSessions()`) for a LIVE session whose display name
-     *      (`_deriveRunningSessionDisplayName`, i.e. tmux name with the
-     *      `cloude_` prefix stripped) matches — this is what makes an
-     *      ADOPTED session (one with no launcher project entry) resolve.
-     *      Active sessions jump straight to their terminal; inactive ones
-     *      are adopted via the same path as a running-sessions row click.
-     *   3. Nothing matches anywhere → the router's error banner (NOT a
+     * ROOT CAUSE of the duplicate-session regression: this method used to
+     * check `this.projects` (launcher entries) FIRST and, on a match, call
+     * `selectProject()` — which unconditionally calls
+     * `window.API.createSession()`. `create_session()` server-side
+     * (src/core/session_manager.py) deliberately NEVER attaches to an
+     * existing tmux session for a project click — "a project click must
+     * ALWAYS spawn a NEW session... the user runs multiple concurrent
+     * sessions per directory" — so on a name collision it silently mints
+     * `<name>-2`, `<name>-3`, etc. and returns THAT. A deep link to a
+     * project that already had a live tmux session therefore always
+     * created a fresh duplicate rather than reattaching, and the browser
+     * ended up on the newly-created session's URL. The name<->slug
+     * mapping itself (`_deriveRunningSessionDisplayName`, see
+     * `_findRunningSessionBySlug()` above) was already shared correctly
+     * between build and resolve — it was never reached, because the
+     * launcher-project branch returned first.
+     *
+     * FIX: live sessions are now resolved FIRST, and a launcher-project
+     * match is no longer used to justify creating a session for a deep
+     * link at all — see the GUARD note below.
+     *
+     * Resolution order:
+     *   1. `GET /sessions/list` / `GET /sessions/attachable` (via
+     *      `loadRunningSessions()`) for a LIVE session whose slug
+     *      matches (`_findRunningSessionBySlug()`) — this covers both an
+     *      already-adopted session (jump straight to its terminal) and
+     *      an un-adopted but running tmux session (adopt it via the same
+     *      path as a running-sessions row click). NEITHER branch creates
+     *      anything.
+     *   2. Nothing matches anywhere → the router's error banner (NOT a
      *      browser `alert()`, which is easy to miss/dismiss unnoticed) via
      *      `Router.rejectTarget()`, which also cleans the URL back to `/`.
      *
-     * This method is idempotent and safe to call before `loadProjects()`
-     * completes — it waits up to ~2s for the project list to populate,
-     * which is normally ready within one tick of `App.showLaunchpad()`.
+     * GUARD: this method deliberately does NOT fall back to
+     * `this.projects` / `selectProject()` on a miss, even though a
+     * launcher project with that name may exist — doing so would call
+     * `createSession()`, which is exactly the regression above. Deep-link
+     * resolution must never create a session; a launcher-project name
+     * match with no corresponding live tmux session is indistinguishable
+     * from "nothing to reattach to" and is reported the same way. As a
+     * second line of defense, `selectProject()` itself refuses to run
+     * while `this._resolvingDeepLink` is set (see its guard clause), so
+     * even a future refactor that re-wires this method into
+     * `selectProject()` fails loudly instead of silently regressing.
      * Inputs: name (string) - decoded, regex-validated slug from the URL.
      * Output: Promise<void>.
      */
     async openProjectByName(name) {
         console.log('Launchpad: openProjectByName:', name);
 
-        // Wait for the project list if it hasn't loaded yet. App.showLaunchpad
-        // calls loadProjects() inline; this handles the race where the
-        // router fires right after auth but before loadProjects resolves.
-        const deadline = Date.now() + 2000;
-        while ((!this.projects || this.projects.length === 0) && Date.now() < deadline) {
-            await new Promise(r => setTimeout(r, 50));
-        }
-
-        // Match by exact name first, then case-insensitive fallback.
-        let project = (this.projects || []).find(p => p.name === name);
-        if (!project) {
-            project = (this.projects || []).find(
-                p => p.name && p.name.toLowerCase() === name.toLowerCase()
-            );
-        }
-
-        if (project) {
-            await this.selectProject(project);
-            return;
-        }
-
-        // No launcher project by that name — it may be a live/adopted
-        // tmux session instead. Refresh the running-sessions list so we
-        // aren't racing the 5s poller (a deep link can arrive well before
-        // the first poll tick).
+        this._resolvingDeepLink = true;
         try {
-            await this.loadRunningSessions();
-        } catch (err) {
-            console.warn('Launchpad: loadRunningSessions during deep-link resolve failed:', err);
-        }
-
-        const session = (this.runningSessions || []).find(
-            s => this._deriveRunningSessionDisplayName(s.name) === name
-        ) || (this.runningSessions || []).find(
-            s => (this._deriveRunningSessionDisplayName(s.name) || '').toLowerCase() === name.toLowerCase()
-        );
-
-        if (session) {
-            console.log('Launchpad: deep-link resolved to running session:', session.name);
-            if (session.is_active) {
-                await this._returnToActiveRunningSession(session.session_id || null);
-            } else {
-                await this._handleAttachRunningSession(session.name);
+            // Refresh the running-sessions list so we aren't racing the 5s
+            // poller — a deep link can arrive well before the first poll
+            // tick, and can also be a session with no launcher project
+            // entry at all (external/adopted).
+            try {
+                await this.loadRunningSessions();
+            } catch (err) {
+                console.warn('Launchpad: loadRunningSessions during deep-link resolve failed:', err);
             }
-            return;
-        }
 
-        // Genuinely unresolvable — show the actual banner, not a silent
-        // bounce to `/` and not a browser alert() (Task 5 / deep-link fix).
-        console.warn('Launchpad: deep-link target not found anywhere:', name);
-        if (window.Router && typeof window.Router.rejectTarget === 'function') {
-            window.Router.rejectTarget(name);
-        } else {
-            this.showError(`session not found: ${name}`);
+            const session = this._findRunningSessionBySlug(name);
+
+            if (session) {
+                console.log('Launchpad: deep-link resolved to running session:', session.name);
+                if (session.is_active) {
+                    await this._returnToActiveRunningSession(session.session_id || null);
+                } else {
+                    await this._handleAttachRunningSession(session.name);
+                }
+                return;
+            }
+
+            // No live session anywhere — GUARD (see docstring above): do
+            // NOT consult this.projects to create one. Show the actual
+            // banner, not a silent bounce to `/` and not a browser
+            // alert() (Task 5 / deep-link fix).
+            console.warn('Launchpad: deep-link target not found among live sessions:', name);
+            if (window.Router && typeof window.Router.rejectTarget === 'function') {
+                window.Router.rejectTarget(name);
+            } else {
+                this.showError(`session not found: ${name}`);
+            }
+        } finally {
+            this._resolvingDeepLink = false;
         }
     }
 
@@ -2516,6 +2563,26 @@ class Launchpad {
      */
     async selectProject(project, providerChoice = undefined) {
         console.log('Launchpad: Selecting project:', project.name);
+
+        // GUARD: never create a session while resolving a deep link (see
+        // the `_resolvingDeepLink` docstring in the constructor and
+        // `openProjectByName()`'s docstring). This is what makes the
+        // "deep-link resolution must never create" invariant explicit in
+        // code rather than an accident of call order — openProjectByName()
+        // no longer calls this method at all, but this clause exists so a
+        // future refactor that re-wires them together fails loudly (a
+        // thrown error surfaced to the deep-link error banner) instead of
+        // silently spawning a duplicate tmux session again.
+        if (this._resolvingDeepLink) {
+            const err = new Error(
+                `refusing to create a session for ${project.name} while resolving a deep link`
+            );
+            console.error('Launchpad: BLOCKED create-session during deep-link resolution:', err);
+            if (window.Router && typeof window.Router.rejectTarget === 'function') {
+                window.Router.rejectTarget(project.name);
+            }
+            throw err;
+        }
 
         try {
             // Gate: pick claude vs an OpenRouter model BEFORE opening the
