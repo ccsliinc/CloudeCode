@@ -2379,6 +2379,11 @@ class SessionManager:
         call. When omitted, a fresh single-use map is built here so
         single-session callers (``get_session_info``) still get a real
         status without the caller having to know about the map.
+
+        The returned ``SessionInfo.session.pty_pid`` is resolved LIVE off
+        that same status map (see the ``live_pid`` block below) rather than
+        trusting whatever was captured on ``Session`` at creation/adopt
+        time — see fix/adopted-session-pid.
         """
         sess = self.sessions.get(session_id)
         backend = self.backends.get(session_id)
@@ -2409,8 +2414,30 @@ class SessionManager:
             session_id, raw_tmux_status, unread=unread
         )
 
+        # fix/adopted-session-pid — pid is resolved LIVE off the same bulk
+        # ``list_pane_status_all()`` row already fetched for status above,
+        # instead of trusting ``sess.pty_pid`` (which for an ADOPTED
+        # session is hardcoded None at registration time, and for ANY
+        # session goes stale the moment the pane's foreground process
+        # changes — e.g. claude exits and a bare shell remains). The bulk
+        # call already runs once per status fetch, so this is free. Falls
+        # back to ``backend.pid`` (a single extra query) only when the row
+        # is missing or its pid could not be parsed; falls back to the
+        # captured ``sess.pty_pid`` last, for non-tmux backends that
+        # never appear in the tmux status map at all (PTYBackend — whose
+        # pid is stable for the process lifetime, so the captured value
+        # is still correct).
+        live_pid = row.get("pid") if row else None
+        if live_pid is None:
+            live_pid = getattr(backend, "pid", None)
+        if live_pid is None:
+            live_pid = sess.pty_pid
+        sess_out = sess if live_pid == sess.pty_pid else sess.model_copy(
+            update={"pty_pid": live_pid}
+        )
+
         return SessionInfo(
-            session=sess,
+            session=sess_out,
             recent_logs=self.get_recent_logs(session_id=session_id),
             local_servers=[],
             stats=stats,
@@ -2663,6 +2690,12 @@ class SessionManager:
         # back-compat fallback only when no dotfile exists; the
         # migration helper below ferries old entries into the new format.
         prior_pin = self.resolve_project_theme(working_dir, name)
+        # fix/adopted-session-pid — None here is intentional and harmless:
+        # ``_session_info_for`` resolves ``pty_pid`` LIVE off the bulk
+        # ``list_pane_status_all()`` status map on every read (a tmux
+        # pane's foreground pid changes over the session's life, so a
+        # value captured once at adopt time would go stale anyway). This
+        # is just the initial in-memory value before the first read.
         adopted_session = Session(
             id=adopted_id,
             pty_pid=None,
