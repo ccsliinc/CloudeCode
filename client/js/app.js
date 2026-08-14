@@ -221,9 +221,12 @@ class AppController {
 
         const paint = () => {
             const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
+            const label = muted ? 'Enable theme music' : 'Mute theme music';
             btn.textContent = muted ? '🔇' : '🔊';
             btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
-            btn.setAttribute('data-tooltip', muted ? 'Enable theme music' : 'Mute theme music');
+            btn.setAttribute('data-tooltip', label);
+            btn.setAttribute('aria-label', label);
+            btn.setAttribute('title', label);
         };
         paint();
 
@@ -264,16 +267,23 @@ class AppController {
         if (!statusEl) return;
         try {
             const r = await fetch('/health', { method: 'GET', cache: 'no-store' });
+            let text;
             if (r.ok) {
                 statusEl.className = 'status connected';
-                statusEl.setAttribute('data-status', 'server OK');
+                text = 'server OK';
             } else {
                 statusEl.className = 'status error';
-                statusEl.setAttribute('data-status', `server error · HTTP ${r.status}`);
+                text = `server error · HTTP ${r.status}`;
             }
+            statusEl.setAttribute('data-status', text);
+            // aria-label mirrors the ::after tooltip text so screen readers
+            // get the same live state a sighted hover shows.
+            statusEl.setAttribute('aria-label', text);
         } catch (err) {
             statusEl.className = 'status error';
-            statusEl.setAttribute('data-status', `server unreachable · ${err && err.message ? err.message : err}`);
+            const text = `server unreachable · ${err && err.message ? err.message : err}`;
+            statusEl.setAttribute('data-status', text);
+            statusEl.setAttribute('aria-label', text);
         }
     }
 

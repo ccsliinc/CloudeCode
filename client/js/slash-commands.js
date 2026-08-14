@@ -151,6 +151,7 @@ class SlashCommandsModal {
         this.button.id = 'slash-commands-btn';
         this.button.className = 'slash-commands-btn';
         this.button.setAttribute('aria-label', 'Open Slash Commands');
+        this.button.setAttribute('title', 'Open Slash Commands');
         this.button.style.display = 'none'; // Hidden by default
 
         // Set initial icon (slash)
@@ -222,7 +223,7 @@ class SlashCommandsModal {
                     <div class="modal-content slash-commands-modal-content">
                         <div class="modal-header">
                             <h2>/ Slash Commands</h2>
-                            <button class="modal-close" aria-label="Close modal">&times;</button>
+                            <button class="modal-close" aria-label="Close modal" title="Close modal">&times;</button>
                         </div>
                         <div class="modal-body">
                             <div class="common-commands-section">

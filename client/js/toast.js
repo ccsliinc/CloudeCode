@@ -75,6 +75,7 @@ class ToastManager {
     dismissBtn.type = 'button';
     dismissBtn.className = 'toast__dismiss';
     dismissBtn.setAttribute('aria-label', 'Dismiss notification');
+    dismissBtn.setAttribute('title', 'Dismiss notification');
     dismissBtn.textContent = '×';
     dismissBtn.addEventListener('click', () => {
       this.dismiss(toast.id, { syncToServer: true });

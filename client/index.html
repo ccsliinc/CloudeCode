@@ -34,20 +34,20 @@
             <!-- v0.7.0+ — per-theme background music toggle. Muted by default.
                  Click is the required user-gesture that grants the AudioContext
                  autoplay permission for the rest of the page lifetime. -->
-            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" data-tooltip="Enable theme music">🔇</button>
-            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
+            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable theme music" title="Enable theme music" data-tooltip="Enable theme music">🔇</button>
+            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" aria-label="Destroy session" title="Destroy session" data-tooltip="Destroy Session">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M8 3L12 9H4L8 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                     <path d="M4 11H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
-            <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">
+            <button onclick="App.logout()" id="logoutBtn" class="hidden" aria-label="Logout" title="Logout" data-tooltip="Logout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                     <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <span class="status" id="statusText" data-status="Ready"></span>
+            <span class="status" id="statusText" data-status="Ready" role="status" aria-live="polite" aria-label="Ready"></span>
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
@@ -136,6 +136,6 @@
          to coarse-pointer (touch) devices via CSS so desktop users get
          the paste-only flow. -->
     <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
-    <button type="button" id="cloude-image-attach-button" class="cloude-image-attach-button" aria-label="Attach image">📎</button>
+    <button type="button" id="cloude-image-attach-button" class="cloude-image-attach-button" aria-label="Attach image" title="Attach image">📎</button>
 </body>
 </html>
