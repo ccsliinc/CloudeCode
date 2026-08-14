@@ -1,3 +1,41 @@
+## 🚀 README OVERHAUL — 2026-08-13
+
+**Goal:** Replace the 1604-line README.md with a world-class public-launch README for the GitHub repo, with real screenshots and generated hero art.
+
+**Decisions (locked by user):**
+- Audience: public GitHub launch (conversion-focused)
+- Screenshots: automated headless capture + user supplies real iPhone shots later
+- Art style: match app's own palette — coral `#d77757` on near-black `#0a0a0a`/`#1e1e1e`, text `#d4d4d4`
+- Assets live in `docs/assets/` and get committed
+
+**Tasks:**
+- [x] Recon: backend architecture + feature enumeration
+- [x] Recon: frontend/client UI feature enumeration
+- [x] Recon: mine session prompt history for feature intent
+- [x] Recon: existing docs, assets, branding, palette
+- [x] Synthesize master feature spec from all recon
+- [x] Generate hero banner + brand art in app palette
+- [x] Boot app locally, capture 12 headless screenshots
+- [x] Author new README.md
+- [x] Validate: all image paths resolve, no overclaimed features
+- [ ] Commit
+
+**Follow-up work surfaced during the README build (NOT fixed — these are real bugs):**
+- [ ] `./setup.sh` is broken — hard-exits without `cloudflared`, still prompts for Cloudflare API token/zone/domain. Leftover from the removed tunnel subsystem.
+- [ ] `AuthConfig.session.tmux_socket_name` is a dead config knob — `build_backend()` never threads it into the `TmuxBackend` constructor, so every backend uses the hardcoded `DEFAULT_SOCKET_NAME` regardless of config.json.
+- [ ] Vestigial tunnel UI in the menu-bar tray: `Tunnels: N` line permanently reads 0; teardown dialog still mentions Cloudflare DNS records.
+- [ ] `cloudflare` and `pyyaml` remain in requirements.txt, wired to nothing.
+- [ ] `docs/assets/social-card.png` was generated (1280x640) but is intentionally unreferenced by README — set it as the repo's social preview in GitHub repo Settings → General → Social preview.
+- [ ] Old v0.2 screenshots still sit in `docs/images/` and are no longer referenced. Delete if unwanted.
+
+**Accuracy guardrails (MUST NOT violate):**
+- Cloudflare tunnel subsystem was DEMOLISHED in branch weekend-mvp-v3.1 — do NOT describe as a live feature
+- No PWA / manifest / service worker exists — do not claim
+- No voice input, no file browser, no diff viewer, no QR rendering — do not claim
+- Latest release is v0.8.1 (README changelog is stale at v0.7.3 — fix it)
+
+---
+
 # ACTIVE: clipboard paste (paperclip menu) + terminal copy in browser — ship as DMG, deploy locally
 
 ## Goal
@@ -27,11 +65,13 @@
 - 📎 button is display:none except on coarse-pointer (touch) devices — intended mobile UX; flip the media query in styles.css if desktop should see it too.
 - Pre-existing (NOT from this change): session.tmux_socket_name in config.json is dead config for new sessions — build_backend() (src/core/session_backend.py:264) never passes socket_name, hardcoded `cloude` wins; only adopt-external honors it. Flagged for a future fix.
 
-## ROUND 2 — touch-device bugs (reported by user on phone, 2026-08-06)
-- [ ] FIX menu anchoring: 📎 menu renders bottom-left corner / partially offscreen on touch device. Likely transformed ancestor breaking position:fixed (viewport coords resolve against container). Diagnose clipboard.js openMenu + button DOM ancestry; anchor correctly.
-- [ ] FEATURE touch copy: xterm.js has NO touch selection — tap/double-tap does nothing on phone. Add: long-press (~500ms) on terminal → select mode → touch drag synthesizes selection → floating "copy" button near selection → navigator.clipboard.writeText(term.getSelection()). Plain touch-drag must still scroll (only long-press enters select mode).
-- [ ] VALIDATE on emulated iPhone (playwright, coarse pointer + touch) — reuse harness in /Users/Adam/Dropbox/llmScratch/clipboard-validate/
-- [ ] BUILD DMG → DEPLOY locally → COMMIT
+## ROUND 2 — touch-device bugs (reported by user on phone, 2026-08-06) — ALL COMPLETE ✅
+- [x] FIX menu anchoring: root cause = positionMenu() used right/bottom math off window.innerWidth/innerHeight, which diverges from iOS visualViewport (URL bar collapse / keyboard shift) → menu parked bottom-left, cut off. Fixed: left/top from button rect + visualViewport clamp (clipboard.js:195-220).
+- [x] FEATURE touch copy: NEW client/js/touch-select.js — long-press (500ms/10px) → select mode → synthetic MouseEvents (detail:1) drive xterm's own SelectionService → floating clamped "copy" button → clipboard.writeText(term.getSelection()). Plain drag still scrolls; coarse-pointer gated; desktop unchanged. Validated iPhone 13 emulation (menu in-viewport above button, select+copy round-trip, scroll regression clean, outside-tap dismiss, desktop zero-change).
+- [x] BUILD — Cloude Code-0.8.1-arm64.dmg rebuilt (97,780,470 B, sha256 f7ac2ae3…5367), touch-select.js verified in bundle
+- [x] DEPLOY — graceful quit → rsync into /Applications → relaunch (PID 70286), :8000 200, touch-select.js served, 6/6 tmux sessions untouched
+- [x] COMMIT — 38018c3 on weekend-mvp-v3.1 (6 files +443/-9, scan clean, not pushed)
+- Note: bottom-left ~45px of terminal is owned by the slash-commands FAB — long-press can't start there (correct behavior).
 
 ## Findings log
 <!-- [AGENT-NAME] [TIMESTAMP]: finding -->
