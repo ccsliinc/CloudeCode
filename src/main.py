@@ -341,9 +341,12 @@ class NoCacheStaticFiles(StaticFiles):
     JSON responses. ``no-cache`` still allows caching but forces a
     conditional GET (If-None-Match / If-Modified-Since) on every load, so
     the browser gets an instant 304 when the file is unchanged and the new
-    bytes when it isn't. CSS / images / fonts keep the default (browser
-    heuristic) since they version far less often and a stale stylesheet is
-    cosmetic.
+    bytes when it isn't. ``.css`` was added after a stale stylesheet proved NOT to be merely
+    cosmetic: a deployed fix removed an ``overflow: hidden`` that was
+    clipping hover tooltips, and returning browsers kept the cached sheet,
+    so the affected controls stayed unreadable until a manual hard reload.
+    Images and fonts keep the browser default; they version rarely and
+    are not load-bearing for interaction.
 
     ``.json`` is on the list as of Phase 9 (theme system): ``theme.json``
     files served from ``/static/css/themes/<id>/`` and ``/themes/<id>/``
@@ -357,7 +360,7 @@ class NoCacheStaticFiles(StaticFiles):
     with the existing CSP middleware.
     """
 
-    _NO_CACHE_SUFFIXES = (".js", ".html", ".json")
+    _NO_CACHE_SUFFIXES = (".js", ".html", ".json", ".css")
 
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
