@@ -794,7 +794,7 @@ class Terminal {
 
         this.sessionActive = true;
         this.sessionInfoEl.textContent =
-            `Session: ${session.id} | PID: ${session.pty_pid}`;
+            `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
 
         // Enable destroy button
         this.destroySessionBtn.disabled = false;

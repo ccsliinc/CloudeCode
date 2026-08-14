@@ -336,6 +336,7 @@ class AppController {
         document.getElementById('auth-screen').classList.add('active');
         this.logoutBtn.classList.add('hidden');
         this.destroyBtn.classList.add('hidden');
+        if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         // Leaving the terminal: drop any session-scoped theme so xterm
         // and the terminal screen revert to the global theme on next entry.
@@ -368,6 +369,7 @@ class AppController {
         document.getElementById('launchpad-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.add('hidden');
+        if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
         // chrome renders under pure global-theme rules and so the next
@@ -437,6 +439,12 @@ class AppController {
         var sessionName = (session && (session.tmux_session || session.name)) || null;
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
+        }
+        // Session sidebar: reveal the hamburger and tell it which session
+        // is now attached (so its row list can mark this one active).
+        if (window.SessionSidebar) {
+            window.SessionSidebar.show();
+            window.SessionSidebar.setActiveSession(session && session.id, sessionName);
         }
         // If a pinned theme came back on the session payload, paint it WITHOUT
         // persisting (server is already authoritative on the pin). forXterm:true
@@ -536,6 +544,12 @@ class AppController {
             || null;
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
+        }
+        // Session sidebar: same wiring as showTerminal().
+        if (window.SessionSidebar) {
+            var activeSid = (inner && inner.id) || (session && session.id) || null;
+            window.SessionSidebar.show();
+            window.SessionSidebar.setActiveSession(activeSid, sessionName);
         }
         if (pinnedTheme && window.Themes && typeof window.Themes.applyTheme === 'function') {
             // forXterm:true — see showTerminal() for rationale. Re-entry to an

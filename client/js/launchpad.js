@@ -307,10 +307,15 @@ class Launchpad {
             for (const live of liveSessions) {
                 const tmuxName = live && live.tmux_session;
                 if (!tmuxName) continue;
+                // activity_status comes from the server's bulk tmux pane
+                // query (src/core/session_status.py) — 'running' | 'idle' |
+                // 'dead' | 'unknown'. Never fabricated client-side.
+                const liveStatus = (live && live.activity_status) || 'unknown';
                 const existing = this.runningSessions.find(s => s.name === tmuxName);
                 if (existing) {
                     existing.is_active = true;
                     existing.session_id = (live.session && live.session.id) || live.id || existing.session_id;
+                    existing.status = liveStatus;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -319,6 +324,7 @@ class Launchpad {
                         window_count: 1,
                         is_active: true,
                         session_id: (live.session && live.session.id) || live.id || null,
+                        status: liveStatus,
                     });
                 }
             }
@@ -370,6 +376,7 @@ class Launchpad {
             owned: !!s.created_by_cloude,
             active: !!s.is_active,
             sid: s.session_id || null,
+            status: s.status || 'unknown',
         })));
         if (sig === this._lastRunningSig) {
             this._updateRunningSessionAges();
@@ -393,10 +400,17 @@ class Launchpad {
             const renamePencil = s.session_id
                 ? `<span class="running-session-rename" role="button" aria-label="Rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename">✎</span>`
                 : '';
+            // Status dot: real activity status (running/idle/dead/unknown)
+            // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
+            // NOT the old ownership-colored placeholder. title + aria-label
+            // on the dot itself so the state is never color-only.
+            const statusDot = window.SessionStatusUI
+                ? window.SessionStatusUI.dotHtml(s.status)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
                   <div class="running-session-top">
-                    <span class="running-session-dot" aria-hidden="true"></span>
+                    ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>
                     ${renamePencil}
                     <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
@@ -407,7 +421,6 @@ class Launchpad {
                     </span>
                   </div>
                   <div class="running-session-badges">
-                    <span class="badge badge-running">RUNNING</span>
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                     ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
                   </div>

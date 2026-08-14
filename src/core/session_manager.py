@@ -40,6 +40,7 @@ from src.models import (
 )
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
+from src.core.session_status import STATUS_UNKNOWN
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import UPLOAD_DIR_NAME, UploadSweeper
 from src.utils.pty_session import PTYSessionError
@@ -1639,8 +1640,12 @@ class SessionManager:
                     initial_rows=initial_rows,
                 )
 
-            # Best-effort PID for metadata: TmuxBackend doesn't track a single
-            # pid, PTYBackend exposes one via `.pid`.
+            # PID for metadata: both backends expose `.pid` now.
+            # PTYBackend tracks a single forked pid for the process
+            # lifetime; TmuxBackend.pid queries the pane's CURRENT
+            # foreground pid via `tmux display-message -p '#{pane_pid}'`
+            # (see src/core/tmux_backend.py). getattr's default stays as
+            # defense-in-depth for any future backend that omits `.pid`.
             pid = getattr(backend, "pid", None)
 
             # v0.7.0 — seed pinned_theme from ``<work_path>/.cc.theme`` (or
@@ -2200,8 +2205,62 @@ class SessionManager:
         if len(buf) > settings.log_buffer_size:
             del buf[: len(buf) - settings.log_buffer_size]
 
-    def _session_info_for(self, session_id: str) -> Optional[SessionInfo]:
-        """Build SessionInfo for a specific live session, or None."""
+    def _build_tmux_status_map(self) -> dict:
+        """One bulk tmux query, resolved into ``{tmux_session_name: row}``.
+
+        Description: Single source of truth for activity-status lookups.
+            Instantiates a throwaway probe TmuxBackend (same pattern as
+            ``list_attachable_sessions``) and calls
+            ``list_pane_status_all()``, which is ONE ``tmux list-panes -a``
+            subprocess call covering every session on the socket. Callers
+            key into the result by tmux session name (NOT our internal
+            ``session_id``) since that's what both owned backends
+            (``backend.tmux_session``) and attachable rows (``row["name"]``)
+            carry in common.
+
+            Non-tmux deployments (PTYBackend / no tmux on PATH) get an empty
+            map - every lookup then falls back to ``STATUS_UNKNOWN``, which
+            is honest: we have no pane-level introspection for a PTY child.
+
+        Inputs: none (reads live tmux state via the probe backend).
+
+        Output:
+            dict[str, dict]: tmux session name -> row from
+                ``TmuxBackend.list_pane_status_all()`` (has "status", "pid",
+                "pane_dead", "pane_current_command"). Empty dict on any
+                failure or when tmux isn't the active backend type.
+
+        Example:
+            >>> mgr._build_tmux_status_map()
+            {'cloude_myproj': {'status': 'running', 'pid': 4821, ...}}
+        """
+        try:
+            probe = build_backend(
+                settings,
+                session_id="__status_probe__",
+                working_dir=Path.home(),
+                on_output=None,
+            )
+            if not hasattr(probe, "list_pane_status_all"):
+                return {}
+            rows = probe.list_pane_status_all()
+            return {row["name"]: row for row in rows if row.get("name")}
+        except Exception as exc:
+            logger.debug("tmux_status_map_build_failed", error=str(exc))
+            return {}
+
+    def _session_info_for(
+        self, session_id: str, status_map: Optional[dict] = None
+    ) -> Optional[SessionInfo]:
+        """Build SessionInfo for a specific live session, or None.
+
+        ``status_map`` (optional) lets a caller iterating many sessions
+        (``list_session_infos``) build the bulk tmux status query ONCE and
+        pass it in, instead of every session triggering its own subprocess
+        call. When omitted, a fresh single-use map is built here so
+        single-session callers (``get_session_info``) still get a real
+        status without the caller having to know about the map.
+        """
         sess = self.sessions.get(session_id)
         backend = self.backends.get(session_id)
         if sess is None or backend is None or not backend.is_alive():
@@ -2217,6 +2276,12 @@ class SessionManager:
         )
         tmux_session_name = getattr(backend, "tmux_session", None)
         backend_name = backend.__class__.__name__.replace("Backend", "").lower()
+
+        if status_map is None:
+            status_map = self._build_tmux_status_map()
+        row = status_map.get(tmux_session_name) if tmux_session_name else None
+        activity_status = row["status"] if row else STATUS_UNKNOWN
+
         return SessionInfo(
             session=sess,
             recent_logs=self.get_recent_logs(session_id=session_id),
@@ -2226,6 +2291,7 @@ class SessionManager:
             tmux_session=tmux_session_name,
             agent_type=sess.agent_type,
             pinned_theme=sess.pinned_theme,
+            activity_status=activity_status,
         )
 
     async def get_session_info(
@@ -2239,9 +2305,10 @@ class SessionManager:
 
     async def list_session_infos(self) -> list[SessionInfo]:
         """SessionInfo for every live session, oldest first."""
+        status_map = self._build_tmux_status_map()
         out: list[SessionInfo] = []
         for sid in list(self.sessions.keys()):
-            info = self._session_info_for(sid)
+            info = self._session_info_for(sid, status_map=status_map)
             if info is not None:
                 out.append(info)
         return out
@@ -2302,6 +2369,16 @@ class SessionManager:
         rows = probe.list_attachable_sessions(
             owned_names=set(self.owned_tmux_sessions)
         )
+        # Status lights: one extra bulk tmux call (list-panes -a), reused
+        # via the same probe backend / socket. This is the ONLY place a
+        # dead-but-still-in-tmux session (remain-on-exit) gets its state
+        # surfaced - these rows are exactly the ones NOT bound to a live
+        # backend, so `_session_info_for`'s status never sees them.
+        status_map = (
+            {row2["name"]: row2 for row2 in probe.list_pane_status_all() if row2.get("name")}
+            if hasattr(probe, "list_pane_status_all")
+            else {}
+        )
         # SESSION-IDENTITY-V2 — decorate each row with its persisted
         # pinned theme (if any). The launchpad's active-session banner
         # uses this so re-entering a session paints the right theme on
@@ -2312,6 +2389,8 @@ class SessionManager:
             name = row.get("name")
             if name:
                 row["pinned_theme"] = self.pinned_themes.get(name)
+                status_row = status_map.get(name)
+                row["status"] = status_row["status"] if status_row else STATUS_UNKNOWN
         return rows
 
     async def adopt_external_session(

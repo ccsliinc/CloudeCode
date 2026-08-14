@@ -14,6 +14,9 @@
          theme CSS custom properties (--color-accent, etc.) are available
          as fallbacks for the per-toast accent border. -->
     <link rel="stylesheet" href="/static/css/toast.css" />
+    <!-- Session sidebar + status lights. Loaded after styles.css for the
+         same token-availability reason as toast.css. -->
+    <link rel="stylesheet" href="/static/css/session-sidebar.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
@@ -25,6 +28,20 @@
     <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
 
     <div class="header">
+        <!-- Session sidebar hamburger - top-left of the terminal screen
+             header. Hidden on auth/launchpad (toggled by app.js exactly
+             like logoutBtn/destroyBtn). A real <button> with
+             aria-expanded/aria-controls per the accessibility pattern
+             already established for header controls in this file. -->
+        <button type="button" id="session-sidebar-toggle" class="session-sidebar-toggle hidden"
+                aria-expanded="false" aria-controls="session-sidebar-panel"
+                aria-label="Conversations" title="conversations">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <line x1="3" y1="12" x2="21" y2="12"/>
+                <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+        </button>
         <h1 id="appTitle">
             <span id="header-icon" class="header-icon" aria-hidden="true">☁️</span>
             <span id="header-title-text">Cloude Code</span>
@@ -55,6 +72,19 @@
          (renderLaunchpadUI). The full-screen click-outside backdrop stays
          here at top-level so it can blanket the viewport when open. -->
     <div class="new-fab__backdrop" id="new-fab-backdrop" hidden></div>
+
+    <!-- Session sidebar - conversation switcher for the terminal view.
+         Markup lives at body level (not inside #terminal-screen) so it can
+         slide over the full viewport; visibility is CSS-driven by the
+         .session-sidebar-panel--open class (client/js/session-sidebar.js). -->
+    <div class="session-sidebar-backdrop" id="session-sidebar-backdrop" hidden></div>
+    <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true" aria-label="Conversations">
+        <div class="session-sidebar-header">
+            <span class="session-sidebar-title">conversations</span>
+            <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
+        </div>
+        <div id="session-sidebar-list" class="session-sidebar-list"></div>
+    </aside>
 
     <!-- Auth Screen -->
     <div id="auth-screen" class="screen"></div>
@@ -91,6 +121,9 @@
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->
     <script src="/static/js/toast.js"></script>
+    <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
+         session-sidebar.js, both of which call window.SessionStatusUI. -->
+    <script src="/static/js/session-status-ui.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
@@ -120,6 +153,13 @@
          app.js so window.ThemeAudio is defined when the app wires the
          header toggle button + calls ThemeAudio.init(). -->
     <script src="/static/js/themeAudio.js"></script>
+
+    <!-- Session sidebar - conversation switcher. Must load AFTER api.js
+         (window.API) and BEFORE app.js is invoked (app.js's showTerminal /
+         returnToExistingTerminal / showLaunchpad / showAuth call into
+         window.SessionSidebar; script order below only needs it defined
+         before those methods RUN, not before app.js parses). -->
+    <script src="/static/js/session-sidebar.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

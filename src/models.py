@@ -195,6 +195,14 @@ class SessionInfo(BaseModel):
             "launchpad rejoin path painting history before the WS opens."
         ),
     )
+    # Session sidebar + status lights. Resolved by SessionManager from a
+    # single bulk tmux pane query (src.core.session_status). Surfaced at
+    # the top level (mirrors the .session-nested Session.status) so the
+    # client never has to dig into ``.session`` to paint the dot.
+    activity_status: str = Field(
+        default="unknown",
+        description="Activity status: 'running' | 'idle' | 'dead' | 'unknown'",
+    )
 
 
 # API Request Models
@@ -433,6 +441,15 @@ class AttachableSession(BaseModel):
     pinned_theme: Optional[str] = Field(
         default=None,
         description="Theme id pinned to this session (None = no pin)",
+    )
+    # Session sidebar + status lights - resolved via
+    # ``src.core.session_status.resolve_pane_status()`` from a single bulk
+    # ``tmux list-panes -a`` query. One of "running" | "idle" | "dead" |
+    # "unknown". Defaults to "unknown" for any legacy caller that doesn't
+    # thread a status map through (never fabricated).
+    status: str = Field(
+        default="unknown",
+        description="Activity status: 'running' | 'idle' | 'dead' | 'unknown'",
     )
 
 
