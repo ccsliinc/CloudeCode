@@ -254,7 +254,15 @@
     font-weight: bold;
 }
 
+/* min-width: 0 is load-bearing, not decoration. A flex item defaults to
+ * min-width: auto, which is its min-content width, so a long name plus a
+ * flex-shrink: 0 badge (read-only / sensitive) makes the row's content
+ * wider than the row. A <button> overflows its own box symmetrically in
+ * that case, so the whole row drifted ~10px LEFT of its siblings at the
+ * same depth and broke the guide-line alignment. min-width: 0 lets the
+ * name shrink and the ellipsis above actually take effect. */
 .config-editor-node-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
