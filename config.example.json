@@ -36,6 +36,7 @@
     "sweep_interval_seconds": 3600,
     "max_size_mb": 10
   },
+  "_comment_common_slash_commands": "Bare strings still work exactly as before; their short descriptions come from the built-in table in src/core/slash_command_labels.py. Use the object form only to override the wording or to describe a command the table does not know. Keep descriptions under 28 characters - they render on the chip on a phone.",
   "common_slash_commands": [
     "/clear",
     "/compact",
@@ -46,7 +47,7 @@
     "/effort",
     "/plan",
     "/tasks",
-    "/diff"
+    { "command": "/diff", "description": "review changes" }
   ],
   "projects": [
     {

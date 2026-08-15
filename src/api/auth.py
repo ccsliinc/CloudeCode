@@ -33,6 +33,7 @@ from src.models import (
     ConfigSettingsUpdateRequest,
 )
 from src.core.slash_command_discovery import build_command_groups, command_groups_to_dict
+from src.core import slash_command_labels
 
 
 def _totp_paired_sentinel_path() -> Path:
@@ -1095,10 +1096,19 @@ async def check_auth_status():
 @router.get("/config/common-commands", dependencies=[Depends(require_auth)])
 async def get_common_commands():
     """
-    Get list of common slash commands from config.
+    Get the common slash commands from config, with short descriptions.
 
-    Returns:
-        List of common slash commands
+    Response shape:
+        ``commands``         - flat list of command strings. UNCHANGED
+                               from the original response, so any client
+                               written against the old shape keeps working.
+        ``command_details``  - parallel list of
+                               ``{"command", "description"}`` objects,
+                               added for the mobile chip labels.
+
+    Config entries may be bare strings (historical form) or objects with
+    a user-authored ``description``; see
+    ``src/core/slash_command_labels.py``.
 
     Raises:
         HTTPException: If config loading fails
@@ -1106,22 +1116,16 @@ async def get_common_commands():
     try:
         auth_config = settings.load_auth_config()
 
-        # Return common commands if defined, otherwise return default set
-        commands = getattr(auth_config, 'common_slash_commands', [
-            "/agents",
-            "/clear",
-            "/compact",
-            "/context",
-            "/hooks",
-            "/mcp",
-            "/resume",
-            "/rewind",
-            "/usage"
-        ])
+        raw = getattr(auth_config, 'common_slash_commands', None)
+        if not raw:
+            raw = slash_command_labels.DEFAULT_COMMON_COMMANDS
+
+        details = slash_command_labels.normalize(raw)
+        commands = slash_command_labels.commands_only(details)
 
         logger.debug("common_commands_retrieved", count=len(commands))
 
-        return {"commands": commands}
+        return {"commands": commands, "command_details": details}
 
     except FileNotFoundError as e:
         logger.error("auth_config_missing", error=str(e))

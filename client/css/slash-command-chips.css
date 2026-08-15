@@ -1,0 +1,79 @@
+/* Common slash-command chips
+ *
+ * The favourites row at the top of the slash-commands modal. Each chip is
+ * now two lines - command name, then a short description - instead of a
+ * bare name whose meaning lived in a `title` tooltip that a phone can
+ * never show.
+ *
+ * The descriptions are kept short server-side (see
+ * src/core/slash_command_labels.py, MAX_DESCRIPTION_LENGTH) precisely so
+ * this row does not grow: two lines per chip, three chips per row on
+ * desktop, two on a phone. Anything longer would push the "all commands"
+ * list below the fold, which is the failure this change exists to avoid.
+ *
+ * Loaded after styles.css, which owns the base .command-button rule.
+ */
+
+.command-button {
+    /* styles.css centres a single line with `align-items: center` on a
+     * row flex. Two stacked lines need a column. */
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.25;
+    /* The base rule's 45px min-height plus 12px vertical padding leaves a
+     * 21px content box, which is shorter than two lines (about 30px), so
+     * the description spilled outside the chip and read as missing.
+     * Height grows with the content instead. */
+    min-height: 54px;
+    height: auto;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.command-button-name {
+    color: var(--color-accent);
+    font-weight: 600;
+}
+
+.command-button-desc {
+    /* Muted and a size down so the command name stays the thing you scan
+     * for; the description is support text, not a competing label. */
+    color: var(--color-fg-faint);
+    font-size: 0.68rem;
+    font-family: var(--font-sans, inherit);
+    /* One line, ellipsized. A wrapping description is exactly the "takes
+     * up too much room" symptom; truncation keeps the grid rectangular
+     * and the full text is still on the chip's title tooltip. */
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.common-commands-empty {
+    color: var(--color-fg-faint);
+    padding: 12px;
+    text-align: center;
+}
+
+/* Phone: two chips per row. Three 31% columns plus a description turns
+ * into three ellipsized stubs, which carries less information than the
+ * tooltip it replaced. */
+/* Phone: two chips per row, and give the description the horizontal room
+ * it needs. Measured at 375px CSS width, which is the narrowest phone
+ * this is expected to run on: at the base 0.68rem with the desktop 10px
+ * side padding, a 20-character description ellipsized at about 14 and
+ * "undo to a checkpoint" rendered as "undo to a chec...", which carries
+ * less than the tooltip it replaced. */
+@media (max-width: 600px) {
+    .command-button {
+        width: 47%;
+        padding-left: 6px;
+        padding-right: 6px;
+    }
+
+    .command-button-desc {
+        font-size: 0.6rem;
+        letter-spacing: -0.01em;
+    }
+}

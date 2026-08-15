@@ -1,0 +1,93 @@
+/* iOS standalone chrome
+ *
+ * Everything here is inert in a normal desktop browser: `env(safe-area-
+ * inset-*)` resolves to 0px anywhere there is no notch or home indicator,
+ * and the standalone-only rules are gated behind
+ * `@media (display-mode: standalone)`. So this file cannot move a single
+ * pixel on the web-first desktop layout.
+ *
+ * It matters only when index.html declares `viewport-fit=cover`, which
+ * lets the page paint edge to edge and hands the developer responsibility
+ * for keeping content out from under the notch and the home indicator.
+ * Without these rules, cover mode puts the header title under the notch
+ * and the terminal's bottom line under the home-indicator bar.
+ *
+ * Loaded after styles.css so it wins on equal specificity and so the
+ * theme custom properties it references already exist.
+ */
+
+/* Paint the page background out into the inset areas, so the notch and
+ * the home-indicator strip match the app instead of showing white. */
+html {
+    background: var(--color-bg-page, #0a0a0a);
+}
+
+/* The header is `position: sticky; top: 0` - in cover mode that puts it
+ * flush under the status bar. Pad the top inset in and widen the side
+ * padding by the landscape insets, which are non-zero when the phone is
+ * rotated and the notch is on the left or right edge. */
+.header {
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-left: calc(20px + env(safe-area-inset-left));
+    padding-right: calc(20px + env(safe-area-inset-right));
+}
+
+@media (max-width: 768px) {
+    .header {
+        padding-top: calc(10px + env(safe-area-inset-top));
+        padding-left: calc(15px + env(safe-area-inset-left));
+        padding-right: calc(15px + env(safe-area-inset-right));
+    }
+}
+
+@media (max-width: 480px) {
+    .header {
+        padding-top: calc(8px + env(safe-area-inset-top));
+        padding-left: calc(12px + env(safe-area-inset-left));
+        padding-right: calc(12px + env(safe-area-inset-right));
+    }
+}
+
+/* Body-level bottom inset so the last line of any screen clears the home
+ * indicator. Applied to the screens rather than <body> because <body> is
+ * the scroll container and padding there would fight the sticky header. */
+.screen {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Floating controls are positioned against the viewport edge, so each one
+ * needs the bottom inset added to its own offset or it sits under the
+ * home indicator. Values mirror the base offsets in styles.css. */
+.dpad-float-button,
+.slash-commands-btn {
+    bottom: calc(20px + env(safe-area-inset-bottom));
+}
+
+.cloude-image-attach-button {
+    bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+/* Slide-over panels run the full height of the viewport, so they own both
+ * the top and bottom insets themselves. */
+.session-sidebar-panel,
+.config-editor-panel {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Toasts stack from the top-right corner; keep them below the status bar
+ * and clear of a landscape notch. */
+.toast-container {
+    top: calc(60px + env(safe-area-inset-top));
+    right: calc(16px + env(safe-area-inset-right));
+}
+
+/* Standalone-only. In a normal Safari tab the browser chrome already
+ * absorbs overscroll and provides the URL bar as an escape hatch; in a
+ * home-screen app there is no chrome, so a rubber-band bounce on the body
+ * exposes bare background and reads as a rendering fault. */
+@media (display-mode: standalone) {
+    body {
+        overscroll-behavior-y: none;
+    }
+}

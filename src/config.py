@@ -8,7 +8,7 @@ The ``uploads`` block governs the browser-paste image upload feature
 (endpoint, sweeper cadence, TTL, per-upload size cap).
 """
 
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Union
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
@@ -301,7 +301,13 @@ class AuthConfig(BaseModel):
     refresh_grace_seconds: int = 10
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
-    common_slash_commands: List[str] = []
+    # Entries are EITHER a bare command string ("/clear", the historical
+    # form, still fully supported) OR an object carrying a user-authored
+    # short description ({"command": "/clear", "description": "wipe it"}).
+    # Both forms may be mixed in one list. Normalization and the built-in
+    # description table live in src/core/slash_command_labels.py; nothing
+    # here interprets the entries, so an old config.json loads unchanged.
+    common_slash_commands: List[Union[str, Dict[str, Any]]] = []
     session: SessionConfig = Field(default_factory=SessionConfig)
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
