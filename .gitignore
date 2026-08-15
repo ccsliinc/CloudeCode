@@ -78,3 +78,9 @@ troubleshooting/
 
 # Runtime lock files (session-scoped, PID-stamped — never meant to be tracked)
 .claude/scheduled_tasks.lock
+
+# CLAUDE.md is TRACKED here on purpose. It is the repo's agent orientation
+# doc, not a personal scratch file. A global excludesFile that ignores
+# CLAUDE.md would otherwise keep it out of every commit silently; this
+# negation wins because repo .gitignore is read after core.excludesFile.
+!CLAUDE.md
