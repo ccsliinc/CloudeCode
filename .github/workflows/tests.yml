@@ -1,0 +1,93 @@
+
+# Tests and syntax checks.
+#
+# Triggers: every push to any branch, and every pull_request (including from
+# forks). Needs no secrets at all, so it runs identically for outside
+# contributors.
+#
+# See docs/ci.md for why each environment step exists.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# Only the newest run per ref matters; cancel superseded ones.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. This workflow never needs to write anything.
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the interpreter the project is developed against. The suite
+          # also passes on 3.14; 3.13 is chosen because every pinned wheel in
+          # requirements.txt has a prebuilt 3.13 artifact.
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install tmux
+        # tests/test_session_backend.py drives a REAL tmux server. Without the
+        # binary those tests fail rather than skip, so the runner must have it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends tmux
+
+      - name: Assert tmux indexes from zero
+        # tmux_backend.py addresses panes as "<session>:0.0". A tmux config
+        # setting base-index 1 makes every tmux test fail with "can't find
+        # window: 0", which looks like a code bug. Diagnose it up front.
+        run: scripts/ci/assert-tmux-defaults.sh
+
+      - name: Install python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --requirement requirements.txt
+
+      - name: Create runtime config
+        # src/config.py refuses to load without config.json, and config.json is
+        # gitignored because a real one holds a project list and tunnel
+        # settings. The shipped example is a complete, valid config; the
+        # secrets that are NOT in it (TOTP_SECRET, JWT_SECRET) are supplied by
+        # the tests themselves via environment defaults.
+        run: cp config.example.json config.json
+
+      - name: Run pytest
+        run: python3 -m pytest -q
+
+  javascript:
+    name: javascript syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Parse every client javascript file
+        # The client is served as static files with no bundler, so a syntax
+        # error would otherwise reach the browser unnoticed.
+        run: scripts/ci/check-js-syntax.sh
+
+      - name: Run the deep-link resolver smoke test
+        # The only JS behavioural test in the repo. It is a standalone node
+        # script with no test-runner dependency.
+        run: node tests/test_deeplink_resolver.node.mjs
