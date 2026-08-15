@@ -10,7 +10,17 @@ Vendored, not CDN-loaded, because this app's CSP is `script-src 'self'`
 (see `src/main.py`) and vendoring is the only way to load a real editor
 without weakening that policy.
 
-## pinned versions (built 2026-08-14)
+The build script must NOT pass esbuild's `--global-name`. That flag wraps
+the output as `var CodeMirrorBundle = (() => { ... })()`, and because
+`entry.js` sets `window.CodeMirrorBundle` itself instead of exporting, the
+IIFE returns undefined and the `var` overwrites the object that was just
+set - the global is then present but undefined, with no error anywhere.
+That shipped in the 2026-08-14 build and made every file click in the
+config editor fail with "Cannot read properties of undefined (reading
+'createEditor')". Rebuilt 2026-08-15 without the flag; the two builds are
+byte-identical apart from that 21-byte wrapper prefix.
+
+## pinned versions (built 2026-08-15)
 
 | package | version |
 |---|---|

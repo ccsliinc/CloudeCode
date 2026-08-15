@@ -280,10 +280,11 @@ class ConfigEditorPanelController {
      * +/- disclosure) or a file (single tappable row that opens the
      * editor modal). Directories/roots get a real <button> toggle with a
      * literal `+`/`-` glyph (presentational; the control's actual state
-     * is `aria-expanded`) and an EMPTY children <ul> that is only
-     * populated the first time it is expanded - the lazy-render
-     * mechanism that keeps a 1000+ entry directory from costing 1000+ DOM
-     * nodes until the user actually asks to see them. Every row is
+     * is `aria-expanded`) and a children <ul> that is populated the first
+     * time the node is expanded - at render time if it STARTS expanded,
+     * otherwise on the click that expands it. That is the lazy-render
+     * mechanism that keeps a 1000+ entry collapsed directory from costing
+     * 1000+ DOM nodes until the user asks to see them. Every row is
      * left-aligned with per-depth indentation GUIDE lines (vertical
      * rules) rather than raw padding, so the tree reads as a real
      * filesystem tree rather than a flat, centered list.
@@ -322,12 +323,24 @@ class ConfigEditorPanelController {
             childList.hidden = collapsed;
             let built = false;
 
+            // Populate `childList` exactly once. Lazy-render is about
+            // deferring the cost until a node is EXPANDED, not until it is
+            // CLICKED - a node that starts expanded (the `~/.claude` and
+            // project `.claude` roots do) has to be built here at render
+            // time, or it shows an open disclosure over an empty list and
+            // needs two clicks to reveal anything.
+            const buildChildren = () => {
+                if (built) return;
+                built = true;
+                (node.children || []).forEach(
+                    (child) => childList.appendChild(this._buildNodeEl(rootId, child, depth + 1)),
+                );
+            };
+            if (!collapsed) buildChildren();
+
             toggle.addEventListener('click', () => {
                 const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
-                if (nowExpanded && !built) {
-                    node.children.forEach((child) => childList.appendChild(this._buildNodeEl(rootId, child, depth + 1)));
-                    built = true;
-                }
+                if (nowExpanded) buildChildren();
                 toggle.setAttribute('aria-expanded', String(nowExpanded));
                 toggle.querySelector('.config-editor-toggle-glyph').textContent = nowExpanded ? '-' : '+';
                 childList.hidden = !nowExpanded;

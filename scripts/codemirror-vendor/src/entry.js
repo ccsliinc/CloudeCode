@@ -146,4 +146,13 @@ function createEditor(container, content, path, readOnly, onChange) {
     };
 }
 
+// The bundle's ONLY public surface. This assignment - not esbuild's
+// --global-name flag - is what defines the global, deliberately: the two
+// are mutually exclusive. --global-name wraps the whole bundle as
+// `var CodeMirrorBundle = (() => { ... })()`, and since this entry has no
+// `export`, that IIFE returns undefined and the `var` immediately
+// overwrites the object set here. Keeping the name in one place, in
+// source, also means `window.X` is set explicitly rather than relying on
+// a top-level `var` happening to become a window property (which is only
+// true for a classic, non-module script).
 window.CodeMirrorBundle = { createEditor, languageForPath };

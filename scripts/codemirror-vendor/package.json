@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Build-only workspace to produce the vendored CodeMirror 6 bundle shipped under client/vendor/codemirror/. Not part of the runtime app; not published.",
   "scripts": {
-    "build": "esbuild src/entry.js --bundle --minify --format=iife --global-name=CodeMirrorBundle --outfile=../../client/vendor/codemirror/codemirror-bundle.js"
+    "build": "esbuild src/entry.js --bundle --minify --format=iife --outfile=../../client/vendor/codemirror/codemirror-bundle.js"
   },
   "allowScripts": {
     "esbuild@0.24.0": true
