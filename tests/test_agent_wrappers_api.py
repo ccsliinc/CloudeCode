@@ -58,7 +58,16 @@ def client():
 def test_list_wrappers_empty(client, config_path):
     resp = client.get("/api/v1/agents/wrappers")
     assert resp.status_code == 200
-    assert resp.json() == {"wrappers": []}
+    body = resp.json()
+    assert body["wrappers"] == []
+    # feat/universal-wrappers — every wrapper response also carries the
+    # family registry so the settings screen can render one group per
+    # family without hardcoding the list client-side.
+    assert [f["name"] for f in body["families"]] == [
+        "claude", "codex", "hermes", "openclaw", "shell",
+    ]
+    # With no wrappers at all, every family's static command is what runs.
+    assert all(f["in_use"] is True for f in body["families"])
 
 
 def test_add_wrapper_then_list(client, config_path):

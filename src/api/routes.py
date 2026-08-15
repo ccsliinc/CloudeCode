@@ -1572,6 +1572,28 @@ async def remove_provider_model(model: str):
 # separate field, see CreateSessionRequest.agent_type's docstring.
 
 
+def _wrapper_response(wrappers) -> WrapperListResponse:
+    """Build the shared wrapper-endpoint response.
+
+    Description: every wrapper endpoint returns the full list PLUS the
+      family registry, so one round trip is enough to re-render the
+      settings screen's per-family groups after any mutation. Family
+      state (``wrapper_count`` / ``in_use``) is derived server-side by
+      ``Settings._family_summaries`` so the client never re-implements the
+      wrapper-beats-static-command precedence rule.
+    Inputs: wrappers (list) - AgentWrapper objects or already-dumped dicts.
+    Output: WrapperListResponse.
+    """
+    dumped = [w if isinstance(w, dict) else w.model_dump() for w in wrappers]
+    try:
+        families = settings._family_summaries(settings.load_auth_config().agents)
+    except Exception:
+        # A degraded config must not fail a wrapper read; the UI falls
+        # back to rendering groups from the wrappers themselves.
+        families = []
+    return WrapperListResponse(wrappers=dumped, families=families)
+
+
 @router.get(
     "/agents/wrappers",
     response_model=WrapperListResponse,
@@ -1583,7 +1605,7 @@ async def list_wrappers():
         agents = settings.load_auth_config().agents
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load config: {e}")
-    return WrapperListResponse(wrappers=[w.model_dump() for w in agents.wrappers])
+    return _wrapper_response(agents.wrappers)
 
 
 @router.get(
@@ -1616,7 +1638,7 @@ async def add_wrapper(body: AgentWrapper):
         raise HTTPException(status_code=500, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return WrapperListResponse(wrappers=wrappers)
+    return _wrapper_response(wrappers)
 
 
 @router.patch(
@@ -1639,7 +1661,7 @@ async def update_wrapper(wrapper_id: str, body: AgentWrapper):
         detail = str(e)
         status = 400 if "cannot be changed" in detail else 404
         raise HTTPException(status_code=status, detail=detail)
-    return WrapperListResponse(wrappers=wrappers)
+    return _wrapper_response(wrappers)
 
 
 @router.delete(
@@ -1659,7 +1681,7 @@ async def delete_wrapper(wrapper_id: str):
         raise HTTPException(status_code=500, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return WrapperListResponse(wrappers=wrappers)
+    return _wrapper_response(wrappers)
 
 
 @router.post(
@@ -1679,7 +1701,7 @@ async def set_default_wrapper(wrapper_id: str):
         raise HTTPException(status_code=500, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return WrapperListResponse(wrappers=wrappers)
+    return _wrapper_response(wrappers)
 
 
 @router.get("/health", response_model=HealthResponse)

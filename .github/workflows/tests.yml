@@ -88,6 +88,11 @@ jobs:
         run: scripts/ci/check-js-syntax.sh
 
       - name: Run the deep-link resolver smoke test
-        # The only JS behavioural test in the repo. It is a standalone node
-        # script with no test-runner dependency.
+        # A standalone node script with no test-runner dependency.
         run: node tests/test_deeplink_resolver.node.mjs
+
+      - name: Run the launch-picker grouping test
+        # Pins the rules the picker has regressed on before: exactly one
+        # row per wrapper, no duplicates, the default badged, and a model
+        # step offered only for an accepts_model wrapper.
+        run: node tests/test_provider_groups.node.mjs

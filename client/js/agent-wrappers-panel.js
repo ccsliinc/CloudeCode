@@ -1,143 +1,74 @@
 /**
- * AgentWrappersPanel — wrapper list/editor mounted inside the settings
- * panel's "agent" section (client/js/settings-panel.js), replacing the
- * old fixed claude_command text field with full CRUD over
- * ``agents.wrappers`` (feat/launch-wrappers).
+ * AgentWrappersPanel — state and behavior for the wrappers settings
+ * screen, mounted by client/js/settings-panel.js into the "wrappers" tab.
  *
- * Unlike the rest of settings-panel.js's generic fields (which batch into
- * one Save button), every wrapper action here writes immediately via its
- * own API call and re-renders — same "applies immediately" contract the
- * appearance/theme section already uses, because add/edit/delete/set-
- * default are each already a complete, independent server-side mutation
- * (see Settings.add_wrapper et al in src/config.py) with no partial state
- * a batched Save could usefully defer.
+ * feat/universal-wrappers: this screen used to administer claude wrappers
+ * only, alongside four static per-CLI command fields elsewhere in
+ * settings. It now administers wrappers for EVERY command family
+ * (claude, codex, hermes, openclaw, shell), grouped by family, with each
+ * family's static command shown inside its own group as the collapsed
+ * fallback it actually is.
  *
- * Split into its own file (not folded into settings-panel.js) to keep
- * that file under the repo's 500-line budget. Must load AFTER api.js
- * (window.API) and BEFORE settings-panel.js calls
- * ``window.AgentWrappersPanel.mount()``.
+ * Markup lives in agent-wrappers-view.js (pure render functions); this
+ * file owns fetching, editing state, and event wiring. Split for the
+ * repo's 500-line file budget.
+ *
+ * Unlike settings-panel.js's generic fields (which batch into one Save
+ * button), every wrapper action here writes immediately via its own API
+ * call and re-renders — the same "applies immediately" contract the
+ * appearance section uses, because add/edit/delete/set-default are each a
+ * complete server-side mutation (see Settings.add_wrapper et al) with no
+ * partial state a batched Save could usefully defer.
+ *
+ * Must load AFTER api.js (window.API) and agent-wrappers-view.js, and
+ * BEFORE settings-panel.js calls window.AgentWrappersPanel.mount().
  */
 (function () {
     'use strict';
 
+    var View = window.AgentWrappersView;
+
     var wrappers = [];
-    var examples = null; // lazy-loaded, null = not fetched yet
+    var families = [];
+    var examples = null;   // lazy-loaded, null = not fetched yet
     var rootEl = null;
-    var editingId = null; // wrapper id currently open in the inline editor, or '__new__'
+    var editingId = null;  // wrapper id open in the editor, or '__new__'
+    var editingFamily = 'claude'; // family the '__new__' editor is scoped to
+    var editorSeed = null; // pre-filled fields for an imported example
 
     /**
-     * Escape a string for safe interpolation into innerHTML-built markup.
-     * Inputs: str (any). Output: string.
+     * Build the wrapper object the editor should render.
+     * Inputs: none (reads module state).
+     * Output: object - AgentWrapper-shaped dict, blank for a new wrapper.
      */
-    function escapeHtml(str) {
-        var div = document.createElement('div');
-        div.textContent = str == null ? '' : String(str);
-        return div.innerHTML;
+    function editorSubject() {
+        if (editingId !== '__new__') {
+            return wrappers.filter(function (x) { return x.id === editingId; })[0] || {};
+        }
+        if (editorSeed) return editorSeed;
+        var familyHasNone = wrappers.filter(function (w) {
+            return View.familyOf(w) === editingFamily;
+        }).length === 0;
+        return {
+            id: '', family: editingFamily, label: '', script: '', entry: '',
+            description: '',
+            // The first wrapper in a family becomes that family's default,
+            // otherwise adding one would leave the family still resolving
+            // to its legacy command with no visible reason.
+            default: familyHasNone,
+            accepts_model: false,
+        };
     }
 
     /**
-     * Render the whole wrappers section (list + inline editor when open).
-     * Output: string - HTML for the `.settings-section`.
+     * Render the section markup for the current state.
+     * Output: string - HTML.
      */
-    function renderSection() {
-        var rows = wrappers.map(renderRow).join('');
-        var editorHtml = editingId ? renderEditor() : '';
-        var addBtn = editingId
-            ? ''
-            : (
-                '<div class="settings-wrapper-actions-row">' +
-                '  <button type="button" class="modal-btn modal-btn-secondary" id="wrapper-add-btn">+ add wrapper</button>' +
-                '  <button type="button" class="modal-btn modal-btn-secondary" id="wrapper-import-btn">import example</button>' +
-                '</div>'
-            );
-        return (
-            '<section class="settings-section" data-settings-section="wrappers">' +
-            '  <h3 class="settings-section-title">launch wrappers</h3>' +
-            '  <div class="settings-section-description">' +
-            '    named shell commands used to launch claude — pick one at launch time, ' +
-            '    or set a default. replaces a single hardcoded command with as many as you want.' +
-            '  </div>' +
-            '  <div class="settings-warning settings-wrapper-security-note">' +
-            '    a wrapper is a shell command. never paste a token or password into it — read secrets ' +
-            '    from the macOS Keychain at run time instead (the example \'cld\' wrapper below shows the pattern).' +
-            '  </div>' +
-            '  <div class="settings-wrapper-list" id="wrapper-list">' + (rows || '<div class="settings-field-hint">no wrappers configured — using the claude_command / cld fallback below.</div>') + '</div>' +
-            editorHtml +
-            addBtn +
-            '</section>'
-        );
-    }
-
-    /**
-     * Render one wrapper's summary row.
-     * Inputs: w (object) - AgentWrapper-shaped dict.
-     * Output: string.
-     */
-    function renderRow(w) {
-        var badge = w.default ? '<span class="settings-wrapper-badge">default</span>' : '';
-        var entryNote = w.entry ? (' &middot; entry: <code>' + escapeHtml(w.entry) + '</code>') : '';
-        return (
-            '<div class="settings-wrapper-row" data-wrapper-id="' + escapeHtml(w.id) + '">' +
-            '  <div class="settings-wrapper-row-main">' +
-            '    <strong>' + escapeHtml(w.label) + '</strong> <code>' + escapeHtml(w.id) + '</code> ' + badge +
-            '    <div class="settings-field-hint">' + escapeHtml(w.description || '') + entryNote + '</div>' +
-            '  </div>' +
-            '  <div class="settings-wrapper-row-actions">' +
-            '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="edit" data-wrapper-id="' + escapeHtml(w.id) + '">edit</button>' +
-            (w.default ? '' : '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="default" data-wrapper-id="' + escapeHtml(w.id) + '">set default</button>') +
-            '    <button type="button" class="modal-btn modal-btn-danger" data-wrapper-action="delete" data-wrapper-id="' + escapeHtml(w.id) + '">delete</button>' +
-            '  </div>' +
-            '</div>'
-        );
-    }
-
-    /**
-     * Render the inline add/edit editor form. ``editingId`` selects which
-     * wrapper is being edited, or the sentinel '__new__' for a blank form.
-     * Output: string.
-     */
-    function renderEditor() {
-        var isNew = editingId === '__new__';
-        var w = isNew
-            ? { id: '', label: '', script: '', entry: '', description: '', default: wrappers.length === 0 }
-            : (wrappers.find(function (x) { return x.id === editingId; }) || {});
-        return (
-            '<div class="settings-wrapper-editor">' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="wrapper-field-id">id</label>' +
-            '    <input type="text" id="wrapper-field-id" class="modal-input" placeholder="e.g. cld" value="' + escapeHtml(w.id) + '" ' + (isNew ? '' : 'readonly disabled') + '>' +
-            '    <div class="settings-field-hint">lowercase letters/digits/-/_ only. also usable directly as the launch agent type.</div>' +
-            '  </div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="wrapper-field-label">label</label>' +
-            '    <input type="text" id="wrapper-field-label" class="modal-input" placeholder="e.g. cld (subscription)" value="' + escapeHtml(w.label) + '">' +
-            '  </div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="wrapper-field-script">script</label>' +
-            '    <textarea id="wrapper-field-script" class="modal-input settings-wrapper-script-input" rows="20" spellcheck="false" placeholder="claude --dangerously-skip-permissions">' + escapeHtml(w.script) + '</textarea>' +
-            '    <div class="settings-field-hint">a single command, or a full function definition (paste it exactly as it appears in your shell rc file).</div>' +
-            '  </div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="wrapper-field-entry">entry (optional)</label>' +
-            '    <input type="text" id="wrapper-field-entry" class="modal-input" placeholder="e.g. cld" value="' + escapeHtml(w.entry || '') + '">' +
-            '    <div class="settings-field-hint">only needed if script DEFINES a function — the function name to call after sourcing. leave blank if script is already a directly-runnable command.</div>' +
-            '  </div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="wrapper-field-description">description (optional)</label>' +
-            '    <input type="text" id="wrapper-field-description" class="modal-input" value="' + escapeHtml(w.description || '') + '">' +
-            '  </div>' +
-            '  <div class="settings-field settings-field-checkbox">' +
-            '    <label class="settings-field-label" for="wrapper-field-default">' +
-            '      <input type="checkbox" id="wrapper-field-default" ' + (w.default ? 'checked' : '') + '> make this the default' +
-            '    </label>' +
-            '  </div>' +
-            '  <div class="settings-wrapper-editor-actions">' +
-            '    <span id="wrapper-editor-status" class="settings-save-status"></span>' +
-            '    <button type="button" class="modal-btn modal-btn-secondary" id="wrapper-editor-cancel">cancel</button>' +
-            '    <button type="button" class="modal-btn modal-btn-primary" id="wrapper-editor-save">' + (isNew ? 'add' : 'save') + '</button>' +
-            '  </div>' +
-            '</div>'
-        );
+    function sectionHtml() {
+        var editorHtml = editingId
+            ? View.renderEditor(editorSubject(), editingId === '__new__', families)
+            : '';
+        return View.renderSection(wrappers, families, editorHtml);
     }
 
     /**
@@ -146,33 +77,52 @@
      */
     function rerender() {
         if (!rootEl) return;
-        rootEl.outerHTML = renderSection();
+        rootEl.outerHTML = sectionHtml();
         rootEl = document.querySelector('[data-settings-section="wrappers"]');
         wire();
     }
 
     /**
-     * Read the editor form's current values into an AgentWrapper-shaped
-     * request body.
+     * Apply an API response that carries both lists.
+     * Inputs: result (object) - {wrappers, families}.
+     * Output: void.
+     */
+    function applyResult(result) {
+        wrappers = (result && result.wrappers) || [];
+        if (result && result.families && result.families.length) families = result.families;
+    }
+
+    /**
+     * Read the editor form into an AgentWrapper-shaped request body.
      * Output: object.
      */
     function readEditorForm() {
         var q = function (id) { return document.getElementById(id); };
         var entry = q('wrapper-field-entry').value.trim();
         var description = q('wrapper-field-description').value.trim();
+        var familyEl = q('wrapper-field-family');
         return {
             id: q('wrapper-field-id').value.trim(),
+            // The select is disabled when editing, so read the stored
+            // family in that case: a disabled select still has a value,
+            // but relying on it would silently depend on render order.
+            family: (editingId === '__new__')
+                ? familyEl.value
+                : View.familyOf(editorSubject()),
             label: q('wrapper-field-label').value.trim(),
             script: q('wrapper-field-script').value,
             entry: entry || null,
             description: description || null,
             default: q('wrapper-field-default').checked,
+            // Was previously omitted from this form entirely, which reset
+            // accepts_model to false on every edit of a model-taking
+            // wrapper. It is a real field now.
+            accepts_model: q('wrapper-field-accepts-model').checked,
         };
     }
 
     /**
-     * Save the open editor (add or update depending on ``editingId``),
-     * then reload the wrapper list from the server and close the editor.
+     * Save the open editor (add or update), reload, and close it.
      * Output: Promise<void>.
      */
     async function saveEditor() {
@@ -189,8 +139,10 @@
             var result = (editingId === '__new__')
                 ? await window.API.addWrapper(body)
                 : await window.API.updateWrapper(editingId, body);
-            wrappers = result.wrappers || [];
+            applyResult(result);
             editingId = null;
+            editorSeed = null;
+            await refreshFamilies();
             rerender();
         } catch (err) {
             console.error('AgentWrappersPanel: save failed', err);
@@ -200,15 +152,30 @@
     }
 
     /**
-     * Delete a wrapper after a native confirm, then reload the list.
-     * Inputs: id (string).
+     * Re-fetch the list so family counts / in-use flags reflect the write.
+     * Description: mutation responses already carry `families`, but a
+     *   server that predates that field would leave the groups stale;
+     *   this is a cheap, best-effort reconcile.
+     * Output: Promise<void>.
+     */
+    async function refreshFamilies() {
+        try {
+            applyResult(await window.API.listWrappers());
+        } catch (err) {
+            console.error('AgentWrappersPanel: refresh failed', err);
+        }
+    }
+
+    /**
+     * Delete a wrapper after a confirm, then reload the list.
+     * Inputs: id (string) - wrapper id.
      * Output: Promise<void>.
      */
     async function deleteWrapper(id) {
         if (!window.confirm('delete wrapper "' + id + '"? this cannot be undone.')) return;
         try {
-            var result = await window.API.deleteWrapper(id);
-            wrappers = result.wrappers || [];
+            applyResult(await window.API.deleteWrapper(id));
+            await refreshFamilies();
             rerender();
         } catch (err) {
             console.error('AgentWrappersPanel: delete failed', err);
@@ -217,14 +184,14 @@
     }
 
     /**
-     * Mark a wrapper as default, then reload the list.
-     * Inputs: id (string).
+     * Mark a wrapper as its family's default, then reload the list.
+     * Inputs: id (string) - wrapper id.
      * Output: Promise<void>.
      */
     async function makeDefault(id) {
         try {
-            var result = await window.API.setDefaultWrapper(id);
-            wrappers = result.wrappers || [];
+            applyResult(await window.API.setDefaultWrapper(id));
+            await refreshFamilies();
             rerender();
         } catch (err) {
             console.error('AgentWrappersPanel: set-default failed', err);
@@ -233,9 +200,8 @@
     }
 
     /**
-     * Fetch + apply an example wrapper into the editor as a new (unsaved)
-     * wrapper the user can review/edit before saving. Never writes to the
-     * server on its own — the user still has to click "add".
+     * Fetch + load an example into the editor as a new, UNSAVED wrapper
+     * the user reviews before saving. Never writes on its own.
      * Output: Promise<void>.
      */
     async function importExample() {
@@ -256,13 +222,31 @@
         if (isNaN(idx) || idx < 0 || idx >= examples.length) return;
         var chosen = examples[idx];
         editingId = '__new__';
+        editingFamily = View.familyOf(chosen);
+        // Seed through the render path rather than poking the DOM after
+        // the fact, so the family select and both checkboxes come up
+        // already correct instead of being patched field by field.
+        editorSeed = {
+            id: chosen.id,
+            family: editingFamily,
+            label: chosen.label,
+            script: chosen.script,
+            entry: chosen.entry || '',
+            description: chosen.description || '',
+            default: false,
+            accepts_model: !!chosen.accepts_model,
+        };
         rerender();
-        // Seed the just-opened editor with the chosen example's fields.
-        document.getElementById('wrapper-field-id').value = chosen.id;
-        document.getElementById('wrapper-field-label').value = chosen.label;
-        document.getElementById('wrapper-field-script').value = chosen.script;
-        document.getElementById('wrapper-field-entry').value = chosen.entry || '';
-        document.getElementById('wrapper-field-description').value = chosen.description || '';
+    }
+
+    /**
+     * Close the editor and return to the list.
+     * Output: void.
+     */
+    function closeEditor() {
+        editingId = null;
+        editorSeed = null;
+        rerender();
     }
 
     /**
@@ -273,14 +257,20 @@
     function wire() {
         if (!rootEl) return;
 
-        var addBtn = rootEl.querySelector('#wrapper-add-btn');
-        if (addBtn) addBtn.addEventListener('click', function () { editingId = '__new__'; rerender(); });
+        rootEl.querySelectorAll('[data-wrapper-add-family]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                editingId = '__new__';
+                editingFamily = btn.getAttribute('data-wrapper-add-family');
+                editorSeed = null;
+                rerender();
+            });
+        });
 
         var importBtn = rootEl.querySelector('#wrapper-import-btn');
         if (importBtn) importBtn.addEventListener('click', importExample);
 
         var cancelBtn = rootEl.querySelector('#wrapper-editor-cancel');
-        if (cancelBtn) cancelBtn.addEventListener('click', function () { editingId = null; rerender(); });
+        if (cancelBtn) cancelBtn.addEventListener('click', closeEditor);
 
         var saveBtn = rootEl.querySelector('#wrapper-editor-save');
         if (saveBtn) saveBtn.addEventListener('click', saveEditor);
@@ -289,7 +279,11 @@
             var action = btn.getAttribute('data-wrapper-action');
             var id = btn.getAttribute('data-wrapper-id');
             if (action === 'edit') {
-                btn.addEventListener('click', function () { editingId = id; rerender(); });
+                btn.addEventListener('click', function () {
+                    editingId = id;
+                    editorSeed = null;
+                    rerender();
+                });
             } else if (action === 'delete') {
                 btn.addEventListener('click', function () { deleteWrapper(id); });
             } else if (action === 'default') {
@@ -299,24 +293,23 @@
     }
 
     /**
-     * Mount the wrappers section into a parent element (inserted as the
-     * LAST child — settings-panel.js places this right after the generic
-     * "agent" section in the panel body).
+     * Mount the wrappers section into a parent element.
      * Inputs: parentEl (Element) - container to append into.
      * Output: Promise<void>.
      */
     async function mount(parentEl) {
         editingId = null;
+        editorSeed = null;
         try {
-            var resp = await window.API.listWrappers();
-            wrappers = resp.wrappers || [];
+            applyResult(await window.API.listWrappers());
         } catch (err) {
             console.error('AgentWrappersPanel: failed to load wrappers', err);
             wrappers = [];
+            families = [];
         }
-        var wrapperDiv = document.createElement('div');
-        wrapperDiv.innerHTML = renderSection();
-        rootEl = wrapperDiv.firstElementChild;
+        var holder = document.createElement('div');
+        holder.innerHTML = sectionHtml();
+        rootEl = holder.firstElementChild;
         parentEl.appendChild(rootEl);
         wire();
     }

@@ -18,10 +18,17 @@ import shlex
 import socket
 
 from src.models import is_valid_model_id, MODEL_ID_PATTERN
+from src.core.agent_families import (
+    build_family_summaries,
+    RESERVED_FAMILY_NAMES,
+    render_static_command,
+    resolve_agent_type,
+    wrappers_for_family,
+)
+from src.core import wrapper_store
 from src.core.agent_wrappers import (
     AgentWrapper,
     default_wrapper as _default_wrapper,
-    find_wrapper as _find_wrapper,
     render_wrapper_invocation,
     wrapper_scripts_dir,
 )
@@ -327,13 +334,18 @@ class AuthConfig(BaseModel):
     )
 
 
-# Agent-type values with a fixed, single-command resolution — never
-# eligible for wrapper lookup even if a wrapper happened to share the id.
+# Agent-type values resolved as a bare FAMILY name and never looked up as
+# a wrapper id, so a wrapper can never shadow one. Derived from the family
+# registry (src/core/agent_families.py) rather than restated here, so the
+# two can no longer drift; membership is unchanged from when this was a
+# literal frozenset (codex, hermes, openclaw, shell — deliberately NOT
+# claude, see resolve_agent_type's docstring). Re-exported under the old
+# name because it is the established import for this concept.
 # Module-level (not a class attribute) because Settings is a pydantic
 # BaseSettings and an underscore-prefixed class attribute there becomes a
 # ModelPrivateAttr descriptor, not a plain frozenset — see
 # Settings.get_agent_command / Settings.add_wrapper for the two call sites.
-RESERVED_AGENT_TYPES = frozenset({"codex", "hermes", "openclaw", "shell"})
+RESERVED_AGENT_TYPES = RESERVED_FAMILY_NAMES
 
 
 class Settings(BaseSettings):
@@ -617,24 +629,22 @@ class Settings(BaseSettings):
         except Exception:
             agents = AgentsConfig()
 
-        normalized = (agent_type or "claude").lower()
+        # Disambiguate agent_type into (family, explicitly-named wrapper).
+        # ALL of the ordering subtlety lives in resolve_agent_type — read
+        # its docstring before changing anything here, especially the
+        # reason 'shell' resolves as a family while 'claude' does not.
+        family, explicit = resolve_agent_type(agent_type, agents.wrappers)
 
-        if normalized in RESERVED_AGENT_TYPES:
-            return {
-                "codex": agents.codex_command,
-                "hermes": agents.hermes_command,
-                "openclaw": agents.openclaw_command,
-                "shell": agents.shell_command,
-            }[normalized]
-
-        # claude family: explicit wrapper id, then default wrapper, then
-        # legacy claude_command, then the original hardcoded fallback.
-        explicit = _find_wrapper(agents.wrappers, normalized)
-        chosen = explicit if explicit is not None else _default_wrapper(agents.wrappers)
+        # A family's own wrappers, in list order; the default one wins when
+        # the caller did not name a specific wrapper. Filtering by family
+        # is what makes a codex wrapper unreachable from a claude launch.
+        chosen = explicit if explicit is not None else _default_wrapper(
+            wrappers_for_family(agents.wrappers, family.name)
+        )
         if chosen is not None:
             scripts_dir = wrapper_scripts_dir(self.log_directory)
             # A wrapper that does not consume a model id must NEVER be
-            # handed one: it forwards "$@" to claude, so the model would
+            # handed one: it forwards "$@" to the CLI, so the model would
             # arrive as a prompt argument and Claude would answer the
             # string "anthropic/claude-opus-4" instead of launching
             # routed. The picker already declines to offer models for
@@ -644,17 +654,14 @@ class Settings(BaseSettings):
             effective_model = model if chosen.accepts_model else None
             return render_wrapper_invocation(chosen, scripts_dir, model=effective_model)
 
-        # Step 3: an explicit, non-empty agents.claude_command wins outright,
-        # regardless of ``model`` — a user who opted into a custom command
-        # is opting out of the cld/cldor provider-selector path entirely.
-        if agents.claude_command and agents.claude_command.strip():
-            inner = f"source ~/.zshrc >/dev/null 2>&1; {agents.claude_command}"
-            return f"zsh -c {shlex.quote(inner)}"
-        # Step 4: unchanged cld/cldor fallback.
-        if model:
-            inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
-            return f"zsh -c {shlex.quote(inner)}"
-        return "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+        # No wrapper for this family: fall back to its static
+        # ``agents.<family>_command`` string, rendered per the family's own
+        # rules (claude sources ~/.zshrc and has a cld/cldor last resort;
+        # every other family returns its command raw). See
+        # src/core/agent_families.render_static_command.
+        return render_static_command(
+            family, getattr(agents, family.command_field, "") or "", model=model
+        )
 
     def load_auth_config(self) -> AuthConfig:
         """
@@ -1251,6 +1258,19 @@ class Settings(BaseSettings):
         """
         return {"configured": bool(value)}
 
+    def _family_summaries(self, agents: AgentsConfig) -> List[dict]:
+        """Serialize the family registry with each family's live state.
+
+        Description: thin delegation to
+          ``agent_families.build_family_summaries``; the shape and the
+          precedence reasoning live there, next to the registry itself.
+          ``get_agent_command`` is passed in rather than imported there,
+          keeping the registry free of any dependency on Settings.
+        Inputs: agents (AgentsConfig) - the loaded agents block.
+        Output: list[dict] - one entry per family; see the helper.
+        """
+        return build_family_summaries(agents, self.get_agent_command)
+
     def get_settings_summary(self) -> dict:
         """Build the payload for ``GET /api/v1/config/settings``.
 
@@ -1287,6 +1307,12 @@ class Settings(BaseSettings):
                 # so the settings-panel editor can list/edit/reload them
                 # in one round trip.
                 "wrappers": [w.model_dump() for w in agents.wrappers],
+                # feat/universal-wrappers — the family registry, serialized
+                # so the settings screen can render one group per family
+                # (and its collapsed legacy-command row) WITHOUT hardcoding
+                # a family list client-side. Adding a family to
+                # AGENT_FAMILIES therefore reaches the UI with no JS edit.
+                "families": self._family_summaries(agents),
             },
             "notifications": {
                 "enabled": notif.enabled,
@@ -1451,133 +1477,90 @@ class Settings(BaseSettings):
 
         self._auth_config_cache = None
 
+    def _mutate_wrappers(self, mutation) -> List[dict]:
+        """Read config.json, apply a pure wrapper-list mutation, write back.
+
+        Description: the one read-validate-write path shared by all four
+          wrapper mutators. The list rules themselves (family-scoped
+          defaults, reserved ids, sibling promotion) live in
+          ``src.core.wrapper_store`` as pure functions; this method only
+          supplies the persistence around them.
+        Inputs: mutation (Callable[[list[dict]], list[dict]]) - takes the
+          current wrapper list, returns the new one.
+        Output: list[dict] - the updated wrapper list.
+        Raises: FileNotFoundError; ValueError (from the mutation, or
+          invalid JSON in config.json).
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+        data = self._read_config_dict(config_path)
+        agents_data = dict(data.get("agents") or {})
+        agents_data["wrappers"] = mutation(list(agents_data.get("wrappers") or []))
+
+        AgentsConfig(**agents_data)  # re-validate merged block before disk
+        self._write_wrappers(config_path, agents_data)
+        return agents_data["wrappers"]
+
     def add_wrapper(self, wrapper: AgentWrapper) -> List[dict]:
         """Add a new launch wrapper to config.json's ``agents.wrappers``.
 
-        Description: rejects a duplicate id, and rejects an id that
-          collides with a RESERVED agent_type (``codex``/``hermes``/
-          ``openclaw``/``shell``) — those would never be reachable via
-          ``get_agent_command``'s resolution order (reserved types are
-          checked first), so accepting one here would silently create a
-          wrapper that can never launch.
+        Description: rejects a duplicate id, and an id colliding with a
+          RESERVED agent type (``codex``/``hermes``/``openclaw``/``shell``)
+          — those resolve as bare FAMILY names before any wrapper lookup,
+          so such a wrapper could never launch. If the wrapper is marked
+          default, the flag is cleared only across ITS OWN family.
         Inputs: wrapper (AgentWrapper) - already field-validated by
-          pydantic (id charset, non-blank script) before this is called.
+          pydantic (id charset, known family, non-blank script).
         Output: list[dict] - the updated wrapper list.
         Raises: FileNotFoundError; ValueError (duplicate id, reserved id,
           or invalid JSON in config.json).
         """
-        if wrapper.id in RESERVED_AGENT_TYPES:
-            raise ValueError(f"'{wrapper.id}' is a reserved agent type, not usable as a wrapper id")
-
-        config_path = Path(self.auth_config_file).expanduser()
-        data = self._read_config_dict(config_path)
-        agents_data = dict(data.get("agents") or {})
-        wrappers = list(agents_data.get("wrappers") or [])
-
-        if any(w.get("id") == wrapper.id for w in wrappers):
-            raise ValueError(f"Wrapper '{wrapper.id}' already exists")
-
-        new_wrapper = wrapper.model_dump()
-        if new_wrapper["default"]:
-            for w in wrappers:
-                w["default"] = False
-        wrappers.append(new_wrapper)
-        agents_data["wrappers"] = wrappers
-
-        AgentsConfig(**agents_data)  # re-validate merged block before disk
-        self._write_wrappers(config_path, agents_data)
-        return wrappers
+        return self._mutate_wrappers(
+            lambda ws: wrapper_store.add(ws, wrapper.model_dump(), RESERVED_AGENT_TYPES)
+        )
 
     def update_wrapper(self, wrapper_id: str, wrapper: AgentWrapper) -> List[dict]:
-        """Replace an existing wrapper's fields (id is immutable via this call).
+        """Replace an existing wrapper's fields (id is immutable here).
 
         Inputs:
           wrapper_id (str) - id of the wrapper to replace.
           wrapper (AgentWrapper) - new field values. ``wrapper.id`` MUST
             equal ``wrapper_id`` — renaming a wrapper id is delete+add
-            (its id is also its script filename and the value callers use
-            as agent_type; silently changing it out from under a caller
+            (its id is also its script filename and the value stored in
+            ``Session.agent_type``; changing it out from under a caller
             already in flight is worse than requiring an explicit rename).
         Output: list[dict] - the updated wrapper list.
         Raises: FileNotFoundError; ValueError (not found, id mismatch, or
           invalid JSON).
         """
-        if wrapper.id != wrapper_id:
-            raise ValueError("wrapper id cannot be changed via update; delete and re-add instead")
-
-        config_path = Path(self.auth_config_file).expanduser()
-        data = self._read_config_dict(config_path)
-        agents_data = dict(data.get("agents") or {})
-        wrappers = list(agents_data.get("wrappers") or [])
-
-        idx = next((i for i, w in enumerate(wrappers) if w.get("id") == wrapper_id), None)
-        if idx is None:
-            raise ValueError(f"Wrapper '{wrapper_id}' not found")
-
-        new_wrapper = wrapper.model_dump()
-        if new_wrapper["default"]:
-            for i, w in enumerate(wrappers):
-                if i != idx:
-                    w["default"] = False
-        wrappers[idx] = new_wrapper
-        agents_data["wrappers"] = wrappers
-
-        AgentsConfig(**agents_data)
-        self._write_wrappers(config_path, agents_data)
-        return wrappers
+        return self._mutate_wrappers(
+            lambda ws: wrapper_store.update(ws, wrapper_id, wrapper.model_dump())
+        )
 
     def delete_wrapper(self, wrapper_id: str) -> List[dict]:
         """Remove a wrapper from config.json's ``agents.wrappers``.
 
-        Description: if the removed wrapper was the default and other
-          wrappers remain, the first remaining wrapper becomes default
-          (mirrors ``agent_wrappers.default_wrapper``'s own "first in
-          list" fallback, applied eagerly so the persisted state always
-          has an explicit default when the list is non-empty).
+        Description: if the removed wrapper was its family's default and
+          same-family wrappers remain, the first of those becomes default
+          (see ``wrapper_store.delete`` for why promotion never crosses a
+          family boundary).
         Inputs: wrapper_id (str).
         Output: list[dict] - the updated wrapper list (may be empty).
         Raises: FileNotFoundError; ValueError (not found, or invalid JSON).
         """
-        config_path = Path(self.auth_config_file).expanduser()
-        data = self._read_config_dict(config_path)
-        agents_data = dict(data.get("agents") or {})
-        wrappers = list(agents_data.get("wrappers") or [])
-
-        idx = next((i for i, w in enumerate(wrappers) if w.get("id") == wrapper_id), None)
-        if idx is None:
-            raise ValueError(f"Wrapper '{wrapper_id}' not found")
-
-        removed = wrappers.pop(idx)
-        if removed.get("default") and wrappers:
-            wrappers[0]["default"] = True
-        agents_data["wrappers"] = wrappers
-
-        AgentsConfig(**agents_data)
-        self._write_wrappers(config_path, agents_data)
-        return wrappers
+        return self._mutate_wrappers(lambda ws: wrapper_store.delete(ws, wrapper_id))
 
     def set_default_wrapper(self, wrapper_id: str) -> List[dict]:
-        """Mark exactly one wrapper as default, clearing the flag on all others.
+        """Make one wrapper its FAMILY's default, clearing that family only.
 
+        Description: default is a per-family flag — clearing it list-wide
+          would strip claude's default the moment a codex wrapper was made
+          default, dropping claude back to its legacy claude_command.
         Inputs: wrapper_id (str).
         Output: list[dict] - the updated wrapper list.
         Raises: FileNotFoundError; ValueError (not found, or invalid JSON).
         """
-        config_path = Path(self.auth_config_file).expanduser()
-        data = self._read_config_dict(config_path)
-        agents_data = dict(data.get("agents") or {})
-        wrappers = list(agents_data.get("wrappers") or [])
+        return self._mutate_wrappers(lambda ws: wrapper_store.set_default(ws, wrapper_id))
 
-        if not any(w.get("id") == wrapper_id for w in wrappers):
-            raise ValueError(f"Wrapper '{wrapper_id}' not found")
-
-        for w in wrappers:
-            w["default"] = (w.get("id") == wrapper_id)
-        agents_data["wrappers"] = wrappers
-
-        AgentsConfig(**agents_data)
-        self._write_wrappers(config_path, agents_data)
-        return wrappers
 
     # ---- terminal commands (feat/settings-tabs-and-commands) --------------
     #

@@ -49,10 +49,13 @@
 
     // NOTE: ``claude_command`` is deliberately NOT a field here. It is
     // legacy storage that wrappers supersede, so it is rendered as a
-    // collapsed, DISABLED advanced row in the claude tab
-    // (renderLegacyClaudeCommand) — visible, explained, and impossible to
-    // submit. Keeping it out of this array is what guarantees
-    // collectSectionPatch can never include it in a PATCH.
+    // collapsed, DISABLED advanced row inside the claude family's group on
+    // the wrappers tab (agent-wrappers-view.renderLegacyCommand) —
+    // visible, explained, and impossible to submit. Keeping it out of this
+    // array is what guarantees collectSectionPatch can never include it in
+    // a PATCH. The three fields below stay editable here: they are the
+    // edit surface for a family's fallback, which the wrappers tab only
+    // DISPLAYS.
     var AGENT_FIELDS = [
         { key: 'codex_command', type: 'text', label: 'codex command', placeholder: 'codex' },
         { key: 'hermes_command', type: 'text', label: 'hermes command', placeholder: 'hermes' },
@@ -100,7 +103,11 @@
     // rendered once at open and only shown/hidden afterwards, so unsaved
     // edits survive tab switches — see settings-tabs.js.
     var TABS = [
-        { id: 'claude', label: 'claude', sectionIds: [], slots: ['wrappers', 'legacy-claude'] },
+        // feat/universal-wrappers — one screen for every family's
+        // wrappers. Each family's legacy static command renders INSIDE its
+        // own group (agent-wrappers-view.renderLegacyCommand), so there is
+        // no separate claude-only legacy slot any more.
+        { id: 'wrappers', label: 'wrappers', sectionIds: [], slots: ['wrappers'] },
         { id: 'agents', label: 'agents', sectionIds: ['agent'], slots: [] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
         { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
@@ -135,8 +142,6 @@
                 parts.push(Sections.renderAppearanceSection());
             } else if (slot === 'server') {
                 parts.push(Sections.renderServerSection(lastSummary));
-            } else if (slot === 'legacy-claude') {
-                parts.push(Sections.renderLegacyClaudeCommand(lastSummary));
             } else {
                 // Bespoke panels own their own DOM and mount into an empty
                 // slot after insertion (see mountSlots): wrappers,
