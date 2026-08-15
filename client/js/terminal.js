@@ -2122,24 +2122,42 @@ class Terminal {
      * process for THIS tab's session. Irreversible for the running
      * process (the transcript JSONL under ~/.claude/projects is not
      * touched and survives independently). Confirms first via
-     * App.showConfirmModal() — the same modal App.logout() uses —
-     * so the app stays consistent; Detach (detachSession(), below) is
+     * SessionRowActions.confirm(), which routes to the one
+     * App.showConfirmModal() the whole app uses and supplies the shared
+     * close-session copy; Detach (detachSession(), below) is
      * intentionally NOT gated by a confirmation because it is safe and
      * reversible. NOT wired to the session header (deleting is no longer
      * reachable while inside a session) — callers are App.logout() and
      * the conversation sidebar's delete-this-session row
      * (session-sidebar.js), plus the launcher's own kill path for other
      * sessions.
-     * Inputs: none (reads this._currentSession / this._sessionId()).
+     *
+     * Inputs:
+     *   action (string|null) - SessionRowActions.ACTION_CLOSE or
+     *     ACTION_REMOVE, picking which confirm copy the user sees.
+     *     Defaults to ACTION_CLOSE for callers that are unambiguously a
+     *     close (App.logout()). The sidebar passes the action its row
+     *     actually painted, so a stopped own-tab row confirms as a remove
+     *     rather than claiming to terminate a process that already
+     *     exited. The server teardown below is identical either way:
+     *     which one it is, is a statement about the session's state, not
+     *     about a different operation.
      * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
-    async destroySession() {
+    async destroySession(action = null) {
         const name = this._currentTmuxName() || (this._currentSession && this._currentSession.id) || 'this session';
-        const confirmed = await window.App.showConfirmModal(
-            'delete session',
-            `are you sure you want to delete "${name}"?`,
-            'the running session is terminated. this cannot be undone. use detach instead to leave it running.'
-        );
+        // Same confirm copy as every other close control in the app -
+        // client/js/session-row-actions.js owns the wording so the
+        // sidebar row, the launcher row, and this path cannot describe
+        // the same operation three different ways.
+        if (!window.SessionRowActions) {
+            // Load-order bug. Refuse rather than destroy a session with no
+            // confirmation, or invent a second confirmation path.
+            console.error('Terminal: SessionRowActions missing, refusing to destroy');
+            return;
+        }
+        const confirmed = await window.SessionRowActions.confirm(
+            action || window.SessionRowActions.ACTION_CLOSE, name);
         if (!confirmed) {
             return;
         }
