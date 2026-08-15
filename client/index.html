@@ -236,6 +236,11 @@
          existing-project launch gate). Must load AFTER launchpad.js — it
          attaches showProviderModal() onto the window.Launchpad instance. -->
     <script src="/static/js/providers.js"></script>
+    <!-- Server-restart detector (health polling + backoff). Must load
+         BEFORE terminal.js - terminal.js's ws.onclose handler reads
+         window.ServerRestartWatch to tell a restart apart from an
+         ordinary disconnect. -->
+    <script src="/static/js/server-restart-watch.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
          Must load AFTER terminal.js — terminal.js calls into
