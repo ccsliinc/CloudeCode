@@ -31,6 +31,48 @@
     margin-bottom: 0;
 }
 
+/* "back to files" - the way out of the SECOND modal on a phone, where the
+ * picker underneath is off screen entirely (see modal-stack.css) and the
+ * × alone would leave the user unsure whether it closes the editor or the
+ * whole thing. Rendered only when the picker is actually open beneath
+ * (config-editor-modal.js checks ModalStack.depth()); shown only on
+ * narrow viewports, because on desktop the picker is visible behind and
+ * needs no signpost. */
+.config-editor-modal-back {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    cursor: pointer;
+    min-height: 32px;
+}
+
+.config-editor-modal-back:hover,
+.config-editor-modal-back:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+@media (max-width: 700px) {
+    /* `flex`, not `inline-flex`: the title sits in the same header block,
+     * and inline-flex let the two share a line and overlap on a 375px
+     * screen (observed). Block-level with a fit-content width puts back
+     * on its own line above the filename, sized to its own label. */
+    .config-editor-modal-back {
+        display: flex;
+        width: fit-content;
+    }
+}
+
 .config-editor-modal-title {
     color: var(--color-accent);
     font-weight: bold;

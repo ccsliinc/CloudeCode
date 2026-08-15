@@ -17,6 +17,10 @@
     <!-- Session sidebar + status lights. Loaded after styles.css for the
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <!-- Stacked-modal chrome (scroll lock + what a COVERED modal looks
+         like). Must load before the two config-editor stylesheets, which
+         style the modals that stack. -->
+    <link rel="stylesheet" href="/static/css/modal-stack.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
     <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
 
@@ -170,29 +174,43 @@
     <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true" aria-label="Conversations">
         <div class="session-sidebar-header">
             <span class="session-sidebar-title">conversations</span>
+            <!-- Pin the BAR open (docked, no backdrop, survives a
+                 conversation switch). aria-pressed carries the real state;
+                 the pushpin glyph is presentational. Hidden below 700px by
+                 client/js/session-sidebar-pin.js — a docked 320px bar on a
+                 phone leaves nothing for the terminal. -->
+            <button type="button" id="session-sidebar-pin" class="session-sidebar-pin"
+                    aria-pressed="false" aria-label="Pin sidebar open" title="pin sidebar open">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="17" x2="12" y2="22"/>
+                    <path d="M5 17h14l-2-4V4H7v9l-2 4z"/>
+                </svg>
+            </button>
             <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
         </div>
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
     </aside>
 
-    <!-- Claude-config file tree — peer to the session sidebar above (same
-         body-level/backdrop/slide-over pattern), toggled by
-         #configEditorBtn. Scope is Claude config ONLY (~/.claude plus the
-         active project's .claude/), never a general filesystem browser.
-         Full-height tree, no inline editor — opening a file launches a
-         modal instead (built dynamically by client/js/config-editor-
-         modal.js, same convention as SettingsPanel's overlay). See
-         client/js/config-editor-panel.js. -->
-    <div class="config-editor-backdrop" id="config-editor-backdrop" hidden></div>
-    <aside id="config-editor-panel" class="config-editor-panel" aria-hidden="true" aria-label="Claude config">
-        <div class="config-editor-header">
-            <span class="config-editor-title">claude config</span>
-            <button type="button" id="config-editor-close" aria-label="Close claude config" title="close">&times;</button>
+    <!-- Claude-config FILE PICKER — a real modal now (it used to be a
+         right-hand slide-over panel), so it and the editor that opens
+         over it are the same kind of surface. Both register with
+         client/js/modal-stack.js, which is what makes Escape close only
+         the top one and what takes this one off screen entirely on a
+         phone while the editor sits above it. Scope is Claude config plus
+         the active project's working directory, never a general
+         filesystem browser. See client/js/config-editor-panel.js. -->
+    <div class="modal-overlay config-editor-picker-overlay" id="config-editor-overlay" hidden data-modal="config-picker">
+        <div class="config-editor-picker-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-title">
+            <div class="modal-header config-editor-header">
+                <span class="config-editor-title" id="config-editor-title">claude config</span>
+                <button type="button" id="config-editor-close" aria-label="Close claude config" title="close">&times;</button>
+            </div>
+            <div class="modal-body config-editor-body">
+                <div id="config-editor-tree" class="config-editor-tree"></div>
+            </div>
         </div>
-        <div class="config-editor-body">
-            <div id="config-editor-tree" class="config-editor-tree"></div>
-        </div>
-    </aside>
+    </div>
 
     <!-- Auth Screen -->
     <div id="auth-screen" class="screen"></div>
@@ -279,7 +297,13 @@
          returnToExistingTerminal / showLaunchpad / showAuth call into
          window.SessionSidebar; script order below only needs it defined
          before those methods RUN, not before app.js parses). -->
+    <!-- Row markup for the sidebar list; must load BEFORE session-sidebar.js
+         paints. -->
+    <script src="/static/js/session-sidebar-rows.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
+    <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
+         (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
+    <script src="/static/js/session-sidebar-pin.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the
@@ -315,6 +339,9 @@
          (window.API) and BEFORE app.js so App.init() can wire
          #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
     <script src="/static/js/markdown-lite.js"></script>
+    <!-- Escape routing / scroll lock / focus restore for the picker+editor
+         pair. Must load BEFORE both of them. -->
+    <script src="/static/js/modal-stack.js"></script>
     <script src="/static/js/config-editor-modal.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
 

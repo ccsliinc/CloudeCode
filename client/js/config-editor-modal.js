@@ -5,12 +5,17 @@
  * 500-line file-size rule; the two files together are one feature and
  * load back to back.
  *
- * Follows SettingsPanel's exact dismissal contract (client/js/settings-
+ * Follows SettingsPanel's dismissal contract (client/js/settings-
  * panel.js): a `.modal-overlay` appended to document.body on open,
  * removed on close, close-button/backdrop-click/Escape all dismiss - with
- * one addition: dismissal is gated behind an unsaved-changes check
- * (confirmDiscardIfDirty) via App.showConfirmModal, so a stray Escape or
- * backdrop click can never silently drop an edit.
+ * two additions. First, dismissal is gated behind an unsaved-changes
+ * check (confirmDiscardIfDirty) via App.showConfirmModal, so a stray
+ * Escape, backdrop click or BACK tap can never silently drop an edit.
+ * Second, it registers with client/js/modal-stack.js, so when it opens
+ * over the file picker it becomes the SECOND modal: Escape reaches only
+ * this one, the picker is dimmed (desktop) or taken off screen (phone),
+ * a "back to files" control appears, and focus returns to the picker row
+ * that opened it on close.
  *
  * Editing surface: vendored CodeMirror 6 (window.CodeMirrorBundle, see
  * client/vendor/codemirror/VERSION.md), never a CDN load - this app's CSP
@@ -101,7 +106,15 @@ console.log('[ConfigEditorModal Module] Loading...');
         if (activeFile && activeFile.cmEditor) {
             try { activeFile.cmEditor.destroy(); } catch (_) { /* no-op */ }
         }
-        if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+        if (overlayEl) {
+            // Pop BEFORE detaching: ModalStack restores focus to whatever
+            // had it when this modal opened (the picker row the user
+            // clicked), and it can only do that while that element is
+            // still the sensible target - i.e. before the picker beneath
+            // is un-covered and re-rendered by anything else.
+            window.ModalStack.pop(overlayEl);
+            if (overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+        }
         overlayEl = null;
         activeFile = null;
     }
@@ -164,13 +177,24 @@ console.log('[ConfigEditorModal Module] Loading...');
      * Output: void.
      */
     function buildShell(rootId, relPath, projectPath) {
+        // Whether this editor is the SECOND modal in the stack, i.e. the
+        // picker is open beneath it. That is what earns the "back"
+        // control - with no picker behind, back would have nowhere to go
+        // and would just be a second, differently-worded close button.
+        const stacked = window.ModalStack.depth() > 0;
+        const backBtn = stacked
+            ? '<button type="button" class="config-editor-modal-back" id="config-editor-modal-back" ' +
+              'aria-label="Back to files" title="back to files">' +
+              '<span aria-hidden="true">&larr;</span> files</button>'
+            : '';
+
         overlayEl = document.createElement('div');
         overlayEl.className = 'modal-overlay';
         overlayEl.setAttribute('data-modal', 'config-editor');
         overlayEl.innerHTML = (
             '<div class="config-editor-modal-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-modal-title">' +
             '  <div class="modal-header config-editor-modal-header">' +
-            `    <div><span id="config-editor-modal-title" class="config-editor-modal-title">${esc(relPath)}</span>` +
+            `    <div>${backBtn}<span id="config-editor-modal-title" class="config-editor-modal-title">${esc(relPath)}</span>` +
             `    <div class="config-editor-modal-subtitle">${esc(rootId)} root${projectPath ? ` · ${esc(projectPath)}` : ''}</div></div>` +
             '    <button type="button" class="modal-close" id="config-editor-modal-close" aria-label="Close editor" title="close">&times;</button>' +
             '  </div>' +
@@ -179,15 +203,22 @@ console.log('[ConfigEditorModal Module] Loading...');
             '</div>'
         );
         document.body.appendChild(overlayEl);
+        // Registering makes this the TOP of the stack: Escape now routes
+        // here and nowhere else, and the picker underneath is marked
+        // covered (dimmed on desktop, off screen on a phone).
+        window.ModalStack.push(overlayEl, { onEscape: () => closeGuarded() });
 
         overlayEl.querySelector('#config-editor-modal-close').addEventListener('click', () => closeGuarded());
+        // Back and close are the SAME operation - both dismiss the editor
+        // and reveal the picker underneath, and both go through
+        // closeGuarded() so backing out of an unsaved edit warns rather
+        // than discards. They differ only in what they say they do, which
+        // is what a phone user needs to see.
+        if (stacked) {
+            overlayEl.querySelector('#config-editor-modal-back')
+                .addEventListener('click', () => closeGuarded());
+        }
         overlayEl.addEventListener('click', (e) => { if (e.target === overlayEl) closeGuarded(); });
-        overlayEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                closeGuarded();
-            }
-        });
 
         setTimeout(() => {
             const closeBtn = overlayEl.querySelector('#config-editor-modal-close');

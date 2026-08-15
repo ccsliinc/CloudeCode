@@ -356,6 +356,11 @@ function makeRenderSandbox(moduleFile, containerId) {
     vm.createContext(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
+    // The sidebar's row markup moved into its own module when
+    // session-sidebar.js hit the 500-line ceiling; SessionSidebar.render()
+    // now delegates to it, so it has to be in the sandbox too. Harmless
+    // for the launchpad case, which does not use it.
+    vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
     vm.runInContext(readClientJs(moduleFile), context, { filename: moduleFile });
     return { win, container };
 }

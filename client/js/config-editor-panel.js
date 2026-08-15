@@ -1,9 +1,15 @@
 /**
  * Config/project file tree panel.
  *
- * Peer to the session sidebar (client/js/session-sidebar.js) - same
- * body-level backdrop + slide-over panel pattern, opened from
- * #configEditorBtn in the header. Browses THREE roots: `~/.claude`
+ * A MODAL, opened from #configEditorBtn in the header. It used to be a
+ * right-hand slide-over panel like the session sidebar; it is now the
+ * FIRST of two stacked modals, with the editor
+ * (client/js/config-editor-modal.js) opening over it. Both register with
+ * client/js/modal-stack.js, which owns Escape routing (top modal only),
+ * background scroll lock, and focus restore. On a phone the stack takes
+ * this one off screen while the editor is up, so exactly one surface is
+ * visible at a time and the editor's "back" control brings this one
+ * back. Browses THREE roots: `~/.claude`
  * ("user"), the active project's `.claude/` ("project"), and (added
  * 2026-08) the active session's WORKING DIRECTORY itself ("workdir") -
  * general project file browsing, read AND write. All list/read/write
@@ -14,8 +20,7 @@
  * two files purely for the project's 500-line file-size rule; the two
  * together are one feature.
  *
- * The panel is tree-only now: full height, no inline editor sliver (the
- * editor lives in a real modal - see config-editor-modal.js).
+ * The picker is tree-only: full height, no inline editor sliver.
  *
  * Tree presentation: a classic filesystem-tree look - literal +/-
  * disclosure buttons (real <button>, aria-expanded, the glyph is
@@ -64,8 +69,8 @@ const CONFIG_EDITOR_ROOTS = [
 
 class ConfigEditorPanelController {
     constructor() {
+        this.overlay = null;
         this.panel = null;
-        this.backdrop = null;
         this.closeBtn = null;
         this.treeEl = null;
 
@@ -104,55 +109,61 @@ class ConfigEditorPanelController {
      */
     _wire() {
         if (this._wired) return;
-        this.panel = document.getElementById('config-editor-panel');
-        this.backdrop = document.getElementById('config-editor-backdrop');
+        this.overlay = document.getElementById('config-editor-overlay');
+        this.panel = this.overlay ? this.overlay.querySelector('.config-editor-picker-content') : null;
         this.closeBtn = document.getElementById('config-editor-close');
         this.treeEl = document.getElementById('config-editor-tree');
-        if (!this.panel || !this.backdrop) return;
+        if (!this.overlay || !this.panel) return;
 
         this.closeBtn.addEventListener('click', () => this.close());
-        this.backdrop.addEventListener('click', () => this.close());
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.isOpen) this.close();
+        // The overlay IS the backdrop now - a click that lands on it
+        // rather than on the dialog inside it is a dismissal, same
+        // contract as every other .modal-overlay in the app.
+        this.overlay.addEventListener('click', (e) => {
+            if (e.target === this.overlay) this.close();
         });
+        // No document-level Escape listener: ModalStack owns Escape for
+        // this modal and the editor above it, which is the whole reason
+        // one keypress no longer collapses both.
         this._wired = true;
     }
 
     /**
-     * Open the panel and (re)load all roots' trees.
+     * Open the picker modal and (re)load all roots' trees.
      * Inputs: triggerEl (Element|null) - the button that opened this,
      *   for focus-return on close (matches the settings panel's pattern).
      * Output: Promise<void>.
      */
     async open(triggerEl = null) {
         this._wire();
-        if (!this.panel) return;
+        if (!this.overlay) return;
         this._triggerEl = triggerEl || null;
         this.isOpen = true;
-        this.panel.classList.add('config-editor-panel--open');
-        this.panel.setAttribute('aria-hidden', 'false');
-        this.backdrop.hidden = false;
+        this.overlay.hidden = false;
+        window.ModalStack.push(this.overlay, { onEscape: () => this.close() });
         if (this._triggerEl) this._triggerEl.setAttribute('aria-expanded', 'true');
+        if (this.closeBtn) {
+            try { this.closeBtn.focus(); } catch (_) { /* no-op */ }
+        }
         await this._loadTree();
     }
 
     /**
-     * Close the panel. Refuses to close over an unsaved editor without
-     * asking first - the modal may be layered on top of this panel, and
-     * an Escape/backdrop-click here must not silently drop an edit any
-     * more than the modal's own dismissal handlers would.
+     * Close the picker. Refuses to close over an unsaved editor without
+     * asking first - the editor modal may be stacked on top of this one,
+     * and an Escape/backdrop-click here must not silently drop an edit
+     * any more than the editor's own dismissal handlers would.
      * Inputs: none. Output: Promise<void>.
      */
     async close() {
-        if (!this.panel) return;
+        if (!this.overlay) return;
         if (window.ConfigEditorModal && window.ConfigEditorModal.isDirty()) {
             if (!(await window.ConfigEditorModal.confirmDiscardIfDirty())) return;
         }
         if (window.ConfigEditorModal) window.ConfigEditorModal.close();
         this.isOpen = false;
-        this.panel.classList.remove('config-editor-panel--open');
-        this.panel.setAttribute('aria-hidden', 'true');
-        this.backdrop.hidden = true;
+        window.ModalStack.pop(this.overlay);
+        this.overlay.hidden = true;
         if (this._triggerEl) {
             this._triggerEl.setAttribute('aria-expanded', 'false');
             this._triggerEl.focus();

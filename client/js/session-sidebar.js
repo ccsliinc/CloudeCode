@@ -10,12 +10,15 @@
  *
  * Deliberately smaller in scope than the launchpad's Running Sessions
  * list: switching, the unread flag, and the one destructive row control.
- * No inline rename - that still lives on the launchpad only, and
- * duplicating it here would be the exact "no duplicate code" violation
- * the project standards call out. The destructive control is NOT
- * duplicated either: its glyph, tooltip, and confirm copy all come from
- * the shared client/js/session-row-actions.js, so this row and the
- * launcher's row are literally the same control.
+ * No inline rename - that still lives on the launchpad only. The
+ * destructive control is not duplicated either: its glyph, tooltip, and
+ * confirm copy all come from the shared
+ * client/js/session-row-actions.js.
+ *
+ * PINNING the bar open lives in the sibling module
+ * client/js/session-sidebar-pin.js (split out for the 500-line rule);
+ * this file calls into it at exactly four points - init, open, close,
+ * and _closeAfterSwitch.
  */
 
 console.log('[SessionSidebar Module] Loading...');
@@ -83,7 +86,11 @@ class SessionSidebarController {
         }
         this.backdrop.addEventListener('click', () => this.close());
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.isOpen) this.close();
+            // A PINNED bar is part of the layout, not something overlaid
+            // that Escape should sweep away - see session-sidebar-pin.js.
+            if (e.key !== 'Escape' || !this.isOpen) return;
+            if (window.SessionSidebarPin && window.SessionSidebarPin.isEffectivelyPinned()) return;
+            this.close();
         });
         this.listEl.addEventListener('click', (e) => this._onRowClick(e));
         // Keyboard activation (Enter/Space) for the mark-unread toggle -
@@ -99,6 +106,7 @@ class SessionSidebarController {
         });
 
         this._wired = true;
+        if (window.SessionSidebarPin) window.SessionSidebarPin.init();
         console.log('SessionSidebar: wired');
     }
 
@@ -168,6 +176,7 @@ class SessionSidebarController {
         this.backdrop.hidden = false;
         this.toggleBtn.setAttribute('aria-expanded', 'true');
         try { localStorage.setItem(SessionSidebarController.STORAGE_KEY, '1'); } catch (_) { /* ignore */ }
+        if (window.SessionSidebarPin) window.SessionSidebarPin.apply();
         this._fetchAndRender();
         this._startPoll();
     }
@@ -181,7 +190,20 @@ class SessionSidebarController {
         this.backdrop.hidden = true;
         if (this.toggleBtn) this.toggleBtn.setAttribute('aria-expanded', 'false');
         try { localStorage.setItem(SessionSidebarController.STORAGE_KEY, '0'); } catch (_) { /* ignore */ }
+        if (window.SessionSidebarPin) window.SessionSidebarPin.apply();
         this._stopPoll();
+    }
+
+    /**
+     * Close the bar after a conversation switch, unless it is pinned open
+     * (see client/js/session-sidebar-pin.js). Every switch path routes
+     * through this rather than calling close() directly, so "pinned means
+     * it stays put" is decided in exactly one place.
+     * Inputs: none. Output: void.
+     */
+    _closeAfterSwitch() {
+        if (window.SessionSidebarPin) window.SessionSidebarPin.closeAfterSwitch();
+        else this.close();
     }
 
     _startPoll() {
@@ -269,10 +291,11 @@ class SessionSidebarController {
     }
 
     /**
-     * Paint the row list. Skips the DOM rewrite when the signature
-     * (name/status/active) hasn't changed since the last render, so the
-     * 5s poll tick doesn't thrash focus/scroll position while the panel
-     * is open and idle.
+     * Paint the row list. Markup comes from
+     * client/js/session-sidebar-rows.js; this method owns only the
+     * repaint DECISION - it skips the DOM rewrite when the row signature
+     * has not changed since the last paint, so the 5s poll tick does not
+     * thrash focus or scroll position while the panel sits open and idle.
      *
      * Inputs:
      *   rows (Array<object>) - merged + sorted session rows.
@@ -280,48 +303,10 @@ class SessionSidebarController {
      */
     render(rows) {
         if (!this.listEl) return;
-
-        const sig = JSON.stringify(rows.map((r) => ({
-            name: r.name,
-            status: r.status || 'unknown',
-            active: !!r.is_active,
-            thisTab: !!r.is_this_tab,
-            unread: !!r.unread,
-        })));
+        const sig = window.SessionSidebarRows.signature(rows);
         if (sig === this._lastSig) return;
         this._lastSig = sig;
-
-        if (rows.length === 0) {
-            this.listEl.innerHTML = '<div class="session-sidebar-empty">no other conversations</div>';
-            return;
-        }
-
-        this.listEl.innerHTML = rows.map((r) => {
-            const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
-            const name = this._escapeHtml(r.name);
-            const badge = r.created_by_cloude ? 'tmux' : 'external';
-            const sidAttr = r.session_id ? ` data-session-id="${this._escapeHtml(r.session_id)}"` : '';
-            const markUnread = window.SessionStatusUI
-                ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
-                : '';
-            // X (close) on a running row, trash (remove) on a stopped
-            // one, never both. Built by the shared SessionRowActions
-            // module so this row and the launcher's running-session row
-            // are the same control with the same tooltip and the same
-            // confirm copy - see client/js/session-row-actions.js.
-            const rowAction = window.SessionRowActions
-                ? window.SessionRowActions.html(r.status, r.name, 'session-sidebar-row-delete')
-                : '';
-            return `
-                <div class="session-sidebar-row" data-name="${name}" data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}>
-                    ${dot}
-                    <span class="session-sidebar-row-name">${name}</span>
-                    <span class="session-sidebar-row-badge">${badge}</span>
-                    ${markUnread}
-                    ${rowAction}
-                </div>
-            `;
-        }).join('');
+        this.listEl.innerHTML = window.SessionSidebarRows.listHtml(rows);
     }
 
     /**
@@ -363,7 +348,7 @@ class SessionSidebarController {
         const name = rowEl.dataset.name;
         if (!name || name === this._activeTmuxName) {
             // Clicking the already-attached session - nothing to do.
-            this.close();
+            this._closeAfterSwitch();
             return;
         }
         const sessionId = rowEl.dataset.sessionId || null;
@@ -378,7 +363,7 @@ class SessionSidebarController {
             if (sessionId) {
                 const info = await window.API.getSession(sessionId, { includeScrollback: true });
                 if (info) {
-                    this.close();
+                    this._closeAfterSwitch();
                     window.App.returnToExistingTerminal(info);
                 }
                 return;
@@ -390,7 +375,7 @@ class SessionSidebarController {
             // "switch conversations".
             const response = await window.API.adoptSession(name, true);
             const session = response.session || response;
-            this.close();
+            this._closeAfterSwitch();
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: {
                     session,
@@ -440,17 +425,14 @@ class SessionSidebarController {
      * THIS tab's own active session delegates straight to
      * `TerminalController.destroySession(action)` - avoids a double
      * confirm dialog and a stale-WS state only that method knows how to
-     * avoid (it confirms with the same shared copy, destroys, closes the
-     * WS, and navigates to the launchpad). The row's action is PASSED
-     * THROUGH rather than dropped: this branch used to call it with no
-     * argument, so an own-tab row painted with a trash still confirmed
-     * with the close copy and told the user a process was about to be
-     * terminated when it had already exited. Any OTHER row confirms here
-     * via the shared `SessionRowActions.confirm()` then destroys via the
-     * API directly, mirroring
-     * `LaunchpadController._handleSessionRowAction()`'s resolve-sid-or-
-     * external logic so both surfaces behave identically; this tab's own
-     * terminal is untouched, only the sidebar list re-renders.
+     * avoid. The row's action is PASSED THROUGH rather than dropped: this
+     * branch used to call it with no argument, so an own-tab row painted
+     * with a trash still confirmed with the close copy and claimed a
+     * process was about to be terminated when it had already exited. Any
+     * OTHER row confirms here via `SessionRowActions.confirm()` then
+     * destroys via the API, mirroring
+     * `LaunchpadController._handleSessionRowAction()` so both surfaces
+     * behave identically; only the sidebar list re-renders.
      *
      * Inputs:
      *   btnEl (Element) - the clicked `[data-session-action]` button.
@@ -488,11 +470,6 @@ class SessionSidebarController {
         }
     }
 
-    _escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str == null ? '' : String(str);
-        return div.innerHTML;
-    }
 }
 
 window.SessionSidebar = new SessionSidebarController();
