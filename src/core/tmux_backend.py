@@ -715,20 +715,30 @@ class TmuxBackend(SessionBackend):
         )
 
     async def ensure_pipe_pane(self) -> None:
-        """Start ``pipe-pane`` on pane 0 iff no pipe is currently active.
+        """Start ``pipe-pane`` on pane 0, replacing any pipe already active.
 
         Why query-then-act instead of just calling ``pipe-pane``:
-        ``pipe-pane -o`` is explicitly a TOGGLE in tmux (since 1.8) — running
-        it on a pane that already has an active pipe STOPS piping. That's
-        catastrophic when the user has their own ``pipe-pane`` running
-        (e.g. personal session logging). We query ``#{pane_pipe}`` first
-        (``"0"`` = no pipe, ``"1"`` = pipe active) and only start our pipe
-        when none is active. If a pipe is already running we log and return
-        — the disclosure tooltip tells the user to stop theirs first.
+        ``pipe-pane -o`` is explicitly a TOGGLE in tmux (since 1.8): running
+        it on a pane that already has an active pipe STOPS piping. So we query
+        ``#{pane_pipe}`` first (``"0"`` = no pipe, ``"1"`` = pipe active) and
+        branch on the answer rather than toggling blind.
 
-        We also use ``pipe-pane`` WITHOUT ``-o`` when we DO start it — ``-o``
-        is the toggle form and we've already proven no pipe is active, so
+        When a pipe IS already active (typically the user's own session
+        logging) we close it with a bare ``pipe-pane`` and start ours. This
+        overrides the user's pipe on purpose. The original behaviour was to
+        log and return, leaving theirs alone, but an adopted session then had
+        no pipe CloudeCode could read: the websocket streaming loop tailed an
+        empty file forever and the browser showed a frozen terminal. Streaming
+        the session is the whole point of adoption, so ours has to win.
+
+        We use ``pipe-pane`` WITHOUT ``-o`` when we start ours, because ``-o``
+        is the toggle form and by this point no pipe is active either way, so
         we want the explicit non-toggle start semantics.
+
+        Inputs: none. Reads ``self.tmux_session`` and ``self._is_external``.
+        Outputs: None. Raises RuntimeError if the backend is not running and
+        not external, if the ``#{pane_pipe}`` probe fails, or if starting the
+        pipe fails.
         """
         if not self._running and not self._is_external:
             raise RuntimeError("backend not running")

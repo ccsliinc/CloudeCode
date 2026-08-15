@@ -26,9 +26,22 @@ Two independent jobs.
 2. Runs `scripts/ci/assert-tmux-defaults.sh`. `src/core/tmux_backend.py`
    addresses panes as the literal `<session>:0.0`, which requires tmux's
    default `base-index 0` and `pane-base-index 0`. A developer whose dotfiles
-   set `base-index 1` sees all twelve tmux tests fail with `can't find window:
-   0`, which reads like a backend bug and is not one. The script says so in one
-   line. Runners have no tmux config, so it passes there.
+   set `base-index 1` sees 8 `test_session_backend.py` failures (measured
+   2026-08-14 with `config.json` present): 5 fail directly with `can't find
+   window: 0`, and 3 more (`..._start_ignores_one_sided_initial_dims`,
+   `..._attach_existing_flips_running`,
+   `test_list_attachable_sessions_flags_ownership_correctly`) cascade from
+   those with `tmux new-session failed: server exited unexpectedly`, because
+   the tests share one tmux server. It reads like a backend bug and is not
+   one. The script says so in one line. Runners have no tmux config, so it
+   passes there.
+
+   The 4 `test_session_rejoin_scrollback.py` failures in the raw baseline are
+   a separate cause and are not affected by `base-index`: they fail with
+   `Auth config file not found: config.json` and are fixed by step 4. An
+   earlier version of this document merged both sets into a single claim of
+   "all twelve tmux tests", which was wrong about the count and about the
+   cause.
 3. Installs `requirements.txt`.
 4. Copies `config.example.json` to `config.json`. `src/config.py` raises
    `FileNotFoundError` without it, and `config.json` is gitignored. This single
@@ -46,6 +59,38 @@ every pinned wheel in `requirements.txt` has a prebuilt 3.13 artifact.
    before this job a syntax error reached the browser unnoticed.
 2. Runs `tests/test_deeplink_resolver.node.mjs`, the repository's only
    behavioural JS test. It is a standalone script and needs no test runner.
+
+### How "green on the first run" was verified
+
+A pipeline that is red on day one teaches everyone to ignore it, so the claim
+that this one starts green is checked rather than assumed. The check does not
+need a GitHub runner: the only relevant difference is that a runner's tmux
+reads no user config. Putting a shim earlier on `PATH` that runs
+`tmux -f /dev/null "$@"` reproduces exactly that, and both `base-index` and
+`pane-base-index` then read `0` as on a runner.
+
+```
+printf '#!/bin/sh\nexec "$(command -v tmux)" -f /dev/null "$@"\n' > /tmp/shim/tmux
+chmod +x /tmp/shim/tmux
+PATH=/tmp/shim:$PATH python3 -m pytest -q
+```
+
+Run that way on 2026-08-14, with `config.json` in place, the suite reports
+**632 passed, 4 skipped, 0 failed**. Run without the shim on a machine whose
+dotfiles set `base-index 1`, the same tree reports 8 failures in
+`test_session_backend.py` and the `assert-tmux-defaults.sh` step names why.
+
+This is also what proved that
+`test_ensure_pipe_pane_does_not_clobber_existing_pipe` was NOT a `base-index`
+casualty. That test mocks `_run_tmux` outright and never contacts a tmux
+server, so it failed identically under the shim and would have been red on the
+first GitHub run. Its real cause was a superseded contract: commit `6dfe52d`,
+the terminal-freeze fix, deliberately changed `ensure_pipe_pane` to close a
+user's existing pipe and start its own, because the previous
+defer-and-return behaviour left an adopted session with no readable pipe and
+the browser showing a frozen terminal. The test and the method's own docstring
+were left asserting the old contract. Both now describe the current one, and
+the test is renamed `test_ensure_pipe_pane_replaces_existing_pipe`.
 
 ### The four tests that skip
 

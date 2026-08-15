@@ -850,20 +850,32 @@ def test_list_attachable_sessions_flags_ownership_correctly(tmux_socket_cleanup)
             pass
 
 
-# ---- Test 2: ensure_pipe_pane does NOT clobber existing pipe-pane -------
+# ---- Test 2: ensure_pipe_pane REPLACES an existing pipe-pane ------------
 
 
-def test_ensure_pipe_pane_does_not_clobber_existing_pipe():
-    """When ``#{pane_pipe}`` returns "1" (pipe already active), ensure_pipe_pane
-    must NOT issue a ``pipe-pane`` command — doing so would stop the user's
-    existing pipe (``pipe-pane -o`` is a toggle, and the non-toggle form
-    would still STOP a mismatched command or overwrite the user's target).
+def test_ensure_pipe_pane_replaces_existing_pipe():
+    """When ``#{pane_pipe}`` returns "1", ensure_pipe_pane must close the
+    existing pipe and then start its own.
+
+    This asserts the adoption contract established by the terminal-freeze fix
+    in commit 6dfe52d. The original contract was the opposite: if any pipe was
+    already active, ensure_pipe_pane logged ``pipe_pane_already_active`` and
+    returned without piping. That deferred to the user's own logging
+    ``pipe-pane``, but it meant an adopted session never got a pipe CloudeCode
+    could read, so the websocket streaming loop tailed an empty file forever
+    and the browser showed a permanently frozen terminal banner. Delivering
+    output is what adoption is for, so the replacement is deliberate.
 
     Mocks ``_run_tmux`` to return "1" for the display-message probe, then
-    asserts no subsequent call has "pipe-pane" as its first arg.
+    asserts the exact three-call sequence: probe, bare ``pipe-pane`` (which in
+    tmux closes any currently-piped command on the pane), then ``pipe-pane``
+    with our own ``cat >>`` target.
+
+    Inputs: none.
+    Outputs: none. Raises AssertionError if the call sequence differs.
     """
     backend = TmuxBackend(
-        session_id=f"pipe-clobber-{uuid.uuid4().hex[:6]}",
+        session_id=f"pipe-replace-{uuid.uuid4().hex[:6]}",
         working_dir=Path.home(),
         on_output=None,
     )
@@ -885,19 +897,30 @@ def test_ensure_pipe_pane_does_not_clobber_existing_pipe():
 
     asyncio.run(backend.ensure_pipe_pane())
 
-    # Exactly ONE call expected — the display-message probe. No pipe-pane.
-    assert len(calls) == 1, (
-        f"expected only the display-message probe, got {len(calls)} calls: {calls}"
+    # Probe, close-existing, start-ours.
+    assert len(calls) == 3, (
+        f"expected probe + close + start, got {len(calls)} calls: {calls}"
     )
     assert calls[0][0] == "display-message", (
         f"first call must be display-message probe, got {calls[0][0]}"
     )
 
-    # Defensive: no pipe-pane command anywhere.
-    pipe_pane_calls = [c for c in calls if c and c[0] == "pipe-pane"]
-    assert pipe_pane_calls == [], (
-        f"ensure_pipe_pane must NOT issue pipe-pane when pane_pipe=1, "
-        f"got {pipe_pane_calls}"
+    # The close call is a bare `pipe-pane -t <target>` with NO command, which
+    # is how tmux stops an active pipe. A trailing command here would mean we
+    # never actually closed the user's pipe.
+    assert calls[1][0] == "pipe-pane", (
+        f"second call must close the existing pipe, got {calls[1]}"
+    )
+    assert len(calls[1]) == 3, (
+        f"close call must carry no pipe command, got {calls[1]}"
+    )
+
+    # The start call must target our own capture file.
+    assert calls[2][0] == "pipe-pane", (
+        f"third call must start our pipe, got {calls[2]}"
+    )
+    assert calls[2][-1].startswith("cat >> "), (
+        f"third call must pipe into our capture file, got {calls[2]}"
     )
 
 

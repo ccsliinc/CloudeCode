@@ -7,10 +7,12 @@
 #   src/core/tmux_backend.py addresses panes by the literal target
 #   "<session>:0.0", so it requires tmux's default `base-index 0` and
 #   `pane-base-index 0`. A user config that sets `base-index 1` (a very
-#   common dotfiles choice) makes every tmux test fail with the opaque
-#   message "can't find window: 0", which reads like a broken backend
-#   rather than a broken environment. This script turns that into a clear
-#   up-front diagnostic.
+#   common dotfiles choice) makes 8 tests in tests/test_session_backend.py
+#   fail (measured 2026-08-14): 5 directly, with the opaque message
+#   "can't find window: 0", and 3 more that cascade from those with
+#   "server exited unexpectedly" because the tests share one tmux server.
+#   It reads like a broken backend rather than a broken environment. This
+#   script turns that into a clear up-front diagnostic.
 #
 # Inputs:
 #   None. Reads the ambient tmux configuration for the current user.
