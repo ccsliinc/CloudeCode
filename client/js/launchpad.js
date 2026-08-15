@@ -411,7 +411,7 @@ class Launchpad {
             // until adopted) get no pencil — the user can adopt first,
             // then rename from the in-session header.
             const renamePencil = s.session_id
-                ? `<span class="running-session-rename" role="button" aria-label="Rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</span>`
+                ? `<span class="running-session-rename" role="button" aria-label="rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename session">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</span>`
                 : '';
             // Status dot: real activity status (running/idle/dead/unknown)
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
@@ -423,6 +423,14 @@ class Launchpad {
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
                 : '';
+            // X (close) on a running row, trash (remove) on a stopped one,
+            // never both - built by the shared SessionRowActions module so
+            // the launcher, the conversation sidebar, and any future
+            // session surface draw the same glyph with the same tooltip
+            // for the same meaning. See client/js/session-row-actions.js.
+            const rowAction = window.SessionRowActions
+                ? window.SessionRowActions.html(s.status, s.name, 'running-session-kill')
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
                   <div class="running-session-top">
@@ -430,12 +438,7 @@ class Launchpad {
                     <span class="running-session-name">${escapedDisplay}</span>
                     ${renamePencil}
                     ${markUnread}
-                    <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                        <line x1="6" y1="18" x2="18" y2="6"/>
-                      </svg>
-                    </span>
+                    ${rowAction}
                   </div>
                   <div class="running-session-badges">
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
@@ -623,18 +626,21 @@ class Launchpad {
      * is a no-op after the first paint.
      *
      * Click target disambiguation:
-     *   - `.running-session-kill` (or its SVG child) → kill flow
-     *   - anywhere else on `.running-session-row`   → return/swap flow
+     *   - `[data-session-action]` (or its SVG child) → close/remove flow
+     *   - anywhere else on `.running-session-row`    → return/swap flow
      *
-     * stopPropagation on the kill branch is the important bit — without it
-     * the row handler would also fire and we'd race a swap against a
+     * stopPropagation on the action branch is the important bit: without
+     * it the row handler would also fire and we'd race a swap against a
      * destroy.
      */
     _bindRunningSessionClicks() {
         const container = document.getElementById('running-sessions-list');
         if (!container || container.__boundRunningClicks) return;
+        const actionSelector = window.SessionRowActions
+            ? `[${window.SessionRowActions.ATTR_ACTION}]`
+            : '[data-session-action]';
         container.addEventListener('click', async (e) => {
-            const killEl = e.target.closest('.running-session-kill');
+            const rowActionEl = e.target.closest(actionSelector);
             const renameEl = e.target.closest('.running-session-rename');
             const markUnreadEl = e.target.closest('[data-mark-unread]');
             const rowEl = e.target.closest('.running-session-row');
@@ -649,12 +655,20 @@ class Launchpad {
                 return;
             }
 
-            // X icon path — explicit destroy
-            if (killEl) {
+            // X (close) / trash (remove) path: explicit destroy. Which
+            // one this row painted is read back off the button rather
+            // than re-derived, so the confirm copy always matches the
+            // control the user actually clicked.
+            if (rowActionEl) {
                 e.stopPropagation();
-                const name = killEl.dataset.kill;
+                const name = rowActionEl.getAttribute(
+                    window.SessionRowActions ? window.SessionRowActions.ATTR_NAME : 'data-session-name'
+                );
+                const action = rowActionEl.getAttribute(
+                    window.SessionRowActions ? window.SessionRowActions.ATTR_ACTION : 'data-session-action'
+                );
                 const sid = rowEl.dataset.sessionId || null;
-                await this._handleKillRunningSession(name, sid);
+                await this._handleSessionRowAction(name, sid, action);
                 return;
             }
 
@@ -726,9 +740,21 @@ class Launchpad {
     }
 
     /**
-     * Kill flow for a running tmux session.
+     * Run the destructive row action (close a running session, or remove
+     * a stopped one from the list). Both end at the same server call: a
+     * stopped row has no process left to terminate, so clearing its
+     * leftover tmux husk is exactly what "remove" means. The confirm copy
+     * differs and is honest about that difference - see
+     * client/js/session-row-actions.js.
      *
-     * Two paths:
+     * Inputs:
+     *   tmuxName (string) - literal tmux session name.
+     *   sessionId (string|null) - server session id when already known.
+     *   action (string|null) - SessionRowActions.ACTION_CLOSE or
+     *     ACTION_REMOVE; defaults to close.
+     * Output: Promise<void>. No-op if the user cancels.
+     *
+     * Two server paths:
      *   1. Target IS the currently-active backend → DELETE /sessions
      *      (full destroy: tears down backend, idle watcher, tunnels,
      *      metadata; then kills tmux).
@@ -857,17 +883,23 @@ class Launchpad {
         setTimeout(() => { input.focus(); input.select(); }, 0);
     }
 
-    async _handleKillRunningSession(tmuxName, sessionId = null) {
+    async _handleSessionRowAction(tmuxName, sessionId = null, action = null) {
+        if (!tmuxName) return;
+        if (!window.SessionRowActions) {
+            // Load-order bug, not a user-facing state: index.html loads
+            // session-row-actions.js before this file. Refuse to run a
+            // destructive action without its confirm rather than fall
+            // back to a second, unreviewed confirmation path.
+            console.error('[launchpad] SessionRowActions missing, refusing to act');
+            return;
+        }
         const display = this._deriveRunningSessionDisplayName(tmuxName);
-        const confirmed = await this.showConfirmModal(
-            'end session?',
-            // showConfirmModal escapes the whole message itself now — don't
-            // pre-escape `display` here or it would be double-escaped.
-            `destroy "${display}"? this kills the tmux session permanently.`,
-            'the running session is terminated. this cannot be undone. the transcript is not deleted and stays under ~/.claude/projects.',
-            'destroy',
-            'cancel'
-        );
+        const resolved = action || window.SessionRowActions.ACTION_CLOSE;
+        // Confirm copy comes from the shared SessionRowActions module so
+        // the launcher and the conversation sidebar say the same true
+        // thing about the same operation. showConfirmModal escapes its
+        // own arguments, so don't pre-escape `display` or it double-escapes.
+        const confirmed = await window.SessionRowActions.confirm(resolved, display);
         if (!confirmed) return;
         try {
             // Resolve the session id for this tmux name if not supplied:
@@ -887,7 +919,7 @@ class Launchpad {
                 await window.API.destroyExternalSession(tmuxName);
             }
         } catch (err) {
-            this.showError(`destroy failed: ${err.message || err}`);
+            this.showError(`${resolved} failed: ${err.message || err}`);
         }
         await this.loadRunningSessions();
     }
@@ -1201,8 +1233,8 @@ class Launchpad {
             const description = project.description || 'no description';
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
-                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project" aria-label="Edit project">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                    <button class="project-delete-btn" data-name="${project.name}" title="Delete project" aria-label="Delete project">${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
+                    <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
+                    <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher">${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
                     <div class="project-description">${description}</div>
@@ -1254,10 +1286,16 @@ class Launchpad {
     async deleteProject(projectName) {
         try {
             // Show confirmation modal
+            // Trash means the same thing on a project row as on a session
+            // row: forget the entry, touch nothing on disk. The copy says
+            // so plainly rather than borrowing a "cannot be undone"
+            // warning this action does not earn.
             const confirmed = await this.showConfirmModal(
-                'delete project',
-                `are you sure you want to delete "${projectName}"?`,
-                'this will only remove it from the launcher. the actual files will not be deleted.'
+                'remove project',
+                `remove "${projectName}" from the launcher?`,
+                'this only removes it from the launcher. the folder and its files on disk are not touched.',
+                'remove',
+                'cancel'
             );
 
             if (!confirmed) {

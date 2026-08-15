@@ -9,11 +9,13 @@
  * switches to that conversation in place.
  *
  * Deliberately smaller in scope than the launchpad's Running Sessions
- * list: switching only, no inline rename/kill. Those actions already
- * live on the launchpad - duplicating them here would be the exact
- * "no duplicate code" violation the project standards call out. A user
- * who wants to manage (not just switch) sessions goes back to the
- * launchpad via the header title click, same as today.
+ * list: switching, the unread flag, and the one destructive row control.
+ * No inline rename - that still lives on the launchpad only, and
+ * duplicating it here would be the exact "no duplicate code" violation
+ * the project standards call out. The destructive control is NOT
+ * duplicated either: its glyph, tooltip, and confirm copy all come from
+ * the shared client/js/session-row-actions.js, so this row and the
+ * launcher's row are literally the same control.
  */
 
 console.log('[SessionSidebar Module] Loading...');
@@ -302,14 +304,13 @@ class SessionSidebarController {
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
                 : '';
-            // Change 1 (safe-session-lifecycle follow-up): delete moved
-            // here from the session header - this is one of the two
-            // remaining delete entry points (the other is the launcher's
-            // project-delete-btn). Same trash glyph as everywhere else in
-            // the app (SessionStatusUI.trashIconSvg() - single source of
-            // truth, see client/js/session-status-ui.js).
-            const deleteBtn = window.SessionStatusUI
-                ? `<button type="button" class="session-sidebar-row-delete" data-delete="${name}" title="Delete session" aria-label="Delete session">${window.SessionStatusUI.trashIconSvg()}</button>`
+            // X (close) on a running row, trash (remove) on a stopped
+            // one, never both. Built by the shared SessionRowActions
+            // module so this row and the launcher's running-session row
+            // are the same control with the same tooltip and the same
+            // confirm copy - see client/js/session-row-actions.js.
+            const rowAction = window.SessionRowActions
+                ? window.SessionRowActions.html(r.status, r.name, 'session-sidebar-row-delete')
                 : '';
             return `
                 <div class="session-sidebar-row" data-name="${name}" data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}>
@@ -317,7 +318,7 @@ class SessionSidebarController {
                     <span class="session-sidebar-row-name">${name}</span>
                     <span class="session-sidebar-row-badge">${badge}</span>
                     ${markUnread}
-                    ${deleteBtn}
+                    ${rowAction}
                 </div>
             `;
         }).join('');
@@ -334,13 +335,16 @@ class SessionSidebarController {
      * Output: Promise<void>.
      */
     async _onRowClick(e) {
-        // Delete takes priority over everything else below — it's a
-        // nested control inside the row, and clicking it must never ALSO
-        // trigger a conversation switch or mark-unread toggle.
-        const deleteEl = e.target.closest('[data-delete]');
-        if (deleteEl) {
+        // The close/remove control takes priority over everything else
+        // below: it's a nested control inside the row, and clicking it
+        // must never ALSO trigger a conversation switch or mark-unread
+        // toggle.
+        const actionEl = window.SessionRowActions
+            ? e.target.closest(`[${window.SessionRowActions.ATTR_ACTION}]`)
+            : null;
+        if (actionEl) {
             e.stopPropagation();
-            await this._onDeleteClick(deleteEl);
+            await this._onRowActionClick(actionEl);
             return;
         }
 
@@ -428,23 +432,31 @@ class SessionSidebarController {
     }
 
     /**
-     * Delete a conversation from its sidebar row - one of the two
-     * remaining delete entry points now the session header has none.
+     * Run a sidebar row's destructive action - close a running session
+     * (X) or remove a stopped one from the list (trash). Which action the
+     * row painted is read back off the button, so the confirm always
+     * matches the control the user clicked.
+     *
      * THIS tab's own active session delegates straight to
-     * `TerminalController.destroySession()` (already confirms, destroys,
-     * closes the WS, navigates to the launchpad) - avoids a double
-     * confirm dialog and a stale-WS state only that method knows how to
-     * avoid. Any OTHER row confirms here via `App.showConfirmModal()`
-     * then destroys via the API directly, mirroring
-     * `LaunchpadController._handleKillRunningSession()`'s resolve-sid-or-
+     * `TerminalController.destroySession()` (already confirms with the
+     * same shared copy, destroys, closes the WS, navigates to the
+     * launchpad) - avoids a double confirm dialog and a stale-WS state
+     * only that method knows how to avoid. Any OTHER row confirms here
+     * via the shared `SessionRowActions.confirm()` then destroys via the
+     * API directly, mirroring
+     * `LaunchpadController._handleSessionRowAction()`'s resolve-sid-or-
      * external logic so both surfaces behave identically; this tab's own
      * terminal is untouched, only the sidebar list re-renders.
-     * Inputs: btnEl (Element) - the clicked `[data-delete]` button.
-     * Output: Promise<void>.
+     *
+     * Inputs:
+     *   btnEl (Element) - the clicked `[data-session-action]` button.
+     * Output: Promise<void>. No-op if the user cancels.
      */
-    async _onDeleteClick(btnEl) {
-        const name = btnEl.dataset.delete;
+    async _onRowActionClick(btnEl) {
+        const actions = window.SessionRowActions;
+        const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
+        const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
         const rowEl = btnEl.closest('.session-sidebar-row');
         const isThisTab = !!rowEl && rowEl.dataset.active === '1';
 
@@ -454,13 +466,7 @@ class SessionSidebarController {
             return;
         }
 
-        const confirmed = await window.App.showConfirmModal(
-            'delete session',
-            `are you sure you want to delete "${name}"?`,
-            'the running session is terminated. this cannot be undone. use detach instead to leave it running.',
-            'delete',
-            'cancel'
-        );
+        const confirmed = await actions.confirm(action, name);
         if (!confirmed) return;
 
         try {
@@ -473,8 +479,8 @@ class SessionSidebarController {
             this._lastSig = null; // force a repaint even if the poll sig matches
             await this._fetchAndRender();
         } catch (err) {
-            console.error('SessionSidebar: delete failed:', err);
-            alert(`Error: failed to delete conversation: ${err.message || err}`);
+            console.error(`SessionSidebar: ${action} failed:`, err);
+            alert(`Error: failed to ${action} conversation: ${err.message || err}`);
         }
     }
 

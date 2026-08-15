@@ -252,6 +252,30 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     /**
+     * Shared X (close) glyph for every "close this running session"
+     * control in the app (launcher running-session rows, the conversation
+     * sidebar). Deliberately NOT the trash can: in this app an X means
+     * "stop the running process, keep the record", a trash can means
+     * "forget the record, stop nothing" - see client/js/session-row-actions.js
+     * for the semantics both glyphs are bound to. Same family as
+     * trashIconSvg/pencilIconSvg: 16x16 viewBox, stroke="currentColor",
+     * fill="none", stroke-width 1.5, no color set on the paths so the
+     * caller's CSS `color` drives it via currentColor.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   closeIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function closeIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
      * Shared pencil (edit) glyph for every inline-rename/edit control in
      * the app (launcher project rows, running-session rename). Same
      * family as trashIconSvg: 16x16 viewBox, stroke="currentColor",
@@ -335,6 +359,7 @@ console.log('[SessionStatusUI Module] Loading...');
         labelFor,
         markUnreadHtml,
         trashIconSvg,
+        closeIconSvg,
         pencilIconSvg,
         envelopeOutlineSvg,
         envelopeFilledSvg,

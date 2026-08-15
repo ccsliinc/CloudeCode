@@ -231,6 +231,12 @@
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>
+    <!-- Shared X (close) / trash (remove) row control: which one a session
+         row gets, its tooltip, and its confirm copy. Must load AFTER
+         session-status-ui.js (uses its glyphs) and BEFORE launchpad.js,
+         terminal.js and session-sidebar.js, all of which call
+         window.SessionRowActions. -->
+    <script src="/static/js/session-row-actions.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
