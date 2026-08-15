@@ -198,26 +198,92 @@ test('the control is a real button, so it is keyboard operable', () => {
     assert.ok(!markup.includes('role="button"'), 'a span pretending to be a button needs key handlers');
 });
 
-test('close copy is accurate: terminates the process, keeps the transcript', async () => {
+/**
+ * Drive the shared confirm for one action and hand back what the modal
+ * was asked to render.
+ *
+ * Description: both paths can route to ``DELETE /sessions`` ->
+ *   ``destroy_session()``, which rmtree's ``<working_dir>/.cloude_uploads``.
+ *   The copy therefore has truth obligations, and these tests assert
+ *   those obligations rather than the exact sentences that carry them,
+ *   so a wording edit only fails when it makes the copy FALSE.
+ * @param {string} action ACTION_CLOSE or ACTION_REMOVE.
+ * @param {string} sessionName Name to interpolate into the message.
+ * @returns {Promise<{title: string, message: string, details: string, ok: boolean}>}
+ */
+async function confirmCopyFor(action, sessionName) {
     confirmCalls.length = 0;
-    const ok = await SessionRowActions.confirm(SessionRowActions.ACTION_CLOSE, 'api-work');
-    assert.equal(ok, true);
+    const ok = await SessionRowActions.confirm(action, sessionName);
     assert.equal(confirmCalls.length, 1, 'must route through the ONE shared confirm modal');
     const [title, message, details] = confirmCalls[0];
-    assert.ok(message.includes('api-work'), 'the confirm must name the specific session');
-    assert.ok(/close/.test(title));
-    assert.ok(/terminated/.test(details), 'closing does stop the process, say so');
-    assert.ok(/~\/\.claude\/projects/.test(details), 'and say the transcript survives');
-    assert.ok(!/cannot be undone/.test(details), 'overstated warnings train people to ignore warnings');
+    return { title, message, details, ok };
+}
+
+test('neither copy may claim disk is left untouched', async () => {
+    for (const action of [SessionRowActions.ACTION_CLOSE, SessionRowActions.ACTION_REMOVE]) {
+        const { details } = await confirmCopyFor(action, 'api-work');
+        // The old copy said exactly this, and it was a lie: destroy_session
+        // rmtree's the uploads directory on both paths.
+        assert.ok(
+            !/nothing (?:on disk is touched|is deleted)|no files are deleted|disk is untouched|leaves? (?:disk|files) (?:alone|untouched)/i.test(details),
+            `${action}: copy must not claim disk is untouched`,
+        );
+        // Stating the deletion is the positive half of the same guarantee.
+        assert.ok(/deleted/.test(details), `${action}: must say files are deleted`);
+        assert.ok(/\.cloude_uploads/.test(details), `${action}: must name the directory that is removed`);
+    }
 });
 
-test('remove copy is accurate: nothing on disk is touched', async () => {
-    confirmCalls.length = 0;
-    await SessionRowActions.confirm(SessionRowActions.ACTION_REMOVE, 'old-thing');
-    const [, message, details] = confirmCalls[0];
-    assert.ok(message.includes('old-thing'), 'the confirm must name the specific session');
-    assert.ok(/nothing on disk is touched/.test(details));
-    assert.ok(/nothing is terminated/.test(details), 'a stopped session has no process to kill');
+test('both copies state that the transcript survives', async () => {
+    for (const action of [SessionRowActions.ACTION_CLOSE, SessionRowActions.ACTION_REMOVE]) {
+        const { details } = await confirmCopyFor(action, 'api-work');
+        assert.ok(
+            /transcript is not\s+deleted/.test(details),
+            `${action}: must say the transcript is not deleted`,
+        );
+        assert.ok(/~\/\.claude\/projects/.test(details), `${action}: must say where it stays`);
+    }
+});
+
+test('close and remove differ on whether a process is stopped', async () => {
+    const close = await confirmCopyFor(SessionRowActions.ACTION_CLOSE, 'api-work');
+    const remove = await confirmCopyFor(SessionRowActions.ACTION_REMOVE, 'old-thing');
+    assert.equal(close.ok, true);
+    // A running session gets killed...
+    assert.ok(/terminated/.test(close.details), 'closing does stop the process, say so');
+    assert.ok(!/no running process is stopped/.test(close.details));
+    // ...a dead one has nothing left to kill, and the copy must say so
+    // rather than implying a second kill happens.
+    assert.ok(
+        /no running process is stopped|already exited/.test(remove.details),
+        'a stopped session has no process to kill',
+    );
+    assert.ok(!/terminated/.test(remove.details));
+    assert.notEqual(close.details, remove.details, 'the two paths are not interchangeable');
+});
+
+test('the confirm names the specific session and the action', async () => {
+    const close = await confirmCopyFor(SessionRowActions.ACTION_CLOSE, 'api-work');
+    assert.ok(close.message.includes('api-work'), 'the confirm must name the specific session');
+    assert.ok(/close/.test(close.title));
+    const remove = await confirmCopyFor(SessionRowActions.ACTION_REMOVE, 'old-thing');
+    assert.ok(remove.message.includes('old-thing'), 'the confirm must name the specific session');
+    assert.ok(/remove/.test(remove.title));
+});
+
+test('remove copy still reads exactly as written', async () => {
+    // One deliberate full-string anchor: the guarantees above are
+    // wording-agnostic on purpose, so a total rewrite could satisfy every
+    // one of them and still ship copy nobody reviewed. This trips first.
+    const { details } = await confirmCopyFor(SessionRowActions.ACTION_REMOVE, 'old-thing');
+    assert.equal(
+        details,
+        'this cannot be undone. this session already exited, so no running ' +
+            "process is stopped, but files uploaded to it are deleted from the " +
+            "project's .cloude_uploads folder. the leftover tmux shell is " +
+            'cleared and cloudecode forgets the entry. the transcript is not ' +
+            'deleted and stays under ~/.claude/projects.',
+    );
 });
 
 test('the close glyph matches the shared icon family', () => {
