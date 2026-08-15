@@ -90,18 +90,17 @@ class Terminal {
         // false whenever a WS successfully opens.
         this._reconnectByNameAttempted = false;
 
-        // Server-restart recovery (fix/restart-reconnect). A real server
-        // restart does NOT emit close code 4404 - the socket dies with an
-        // ordinary abnormal-close code while the old process exits and
-        // the new one is not listening yet. `_restartWatch` is the lazily
-        // built ServerRestartWatch that polls /health for that case;
+        // Outage recovery (fix/restart-reconnect). A server restart does
+        // NOT emit close code 4404 - the socket dies with an ordinary
+        // abnormal-close code while the old process exits and the new one
+        // is not listening yet. `_restartWatch` is the lazily built
+        // ServerRestartWatch that polls /health for that case;
         // `_restartWatchActive` makes the wait single-flight so a burst
-        // of closes cannot stack loops; `_restartRecoveryActive` marks
-        // the window in which the by-name re-adopt runs on behalf of a
-        // restart, and is what the no-create invariant checks.
+        // of closes cannot stack loops. Those two are the ONLY pieces of
+        // state this path owns - nothing here records "a restart
+        // recovery is in progress", because nothing reads it.
         this._restartWatch = null;
         this._restartWatchActive = false;
-        this._restartRecoveryActive = false;
     }
 
     /**
@@ -1482,26 +1481,30 @@ class Terminal {
             if (closeCode === 4404 && this.sessionActive && !this.isReconnecting
                 && !this._reconnectByNameAttempted) {
                 this._reconnectByNameAttempted = true;
-                this._attemptReconnectByName();
+                // Capture the name this tab is bound to RIGHT NOW, before
+                // any await can rebind it, and hand it down so the adopt
+                // guard has a fixed reference point to compare against.
+                this._attemptReconnectByName(this._currentTmuxName());
                 return;
             }
 
-            // Server-RESTART close. This is the case neither branch above
-            // covers: on a restart the socket dies with an ordinary
-            // abnormal-close code (1006 refused/aborted, 1001 going away,
-            // 1012 service restart, ...) BEFORE the fresh process is
-            // listening, so nothing ever sends 4404 and the bounded
-            // id-based loop below spends all five attempts against a port
-            // that is not answering yet. Handle it as its own case: probe
-            // /health, and only if the server is genuinely not answering
-            // wait it out and then re-resolve by tmux name.
+            // OUTAGE close. This is the case neither branch above covers:
+            // the socket dies with an ordinary abnormal-close code (1006
+            // refused/aborted, 1001 going away, 1012 service restart, ...)
+            // and nothing ever sends 4404, so the bounded id-based loop
+            // below spends all five attempts against something that is
+            // not answering. The close code alone does NOT tell us WHY -
+            // a restarting server, a dead proxy and the user's wifi
+            // dropping all look identical here - so this branch only
+            // claims "possible outage" and _handlePossibleOutage() does
+            // the narrowing with a health probe and navigator.onLine.
             // Gated on ServerRestartWatch being loaded so a missing
             // script degrades to the pre-existing behavior rather than
             // throwing inside onclose.
             if (this.sessionActive && !this.isReconnecting && !this._restartWatchActive
                 && window.ServerRestartWatch
-                && window.ServerRestartWatch.isRestartCloseCode(closeCode)) {
-                this._handlePossibleServerRestart();
+                && window.ServerRestartWatch.isOutageCloseCode(closeCode)) {
+                this._handlePossibleOutage();
                 return;
             }
 
@@ -1684,15 +1687,21 @@ class Terminal {
      * normal bounded id-based attemptReconnect() so we don't just give up
      * on a transient blip.
      *
-     * Inputs: none (reads this._currentSession via _currentTmuxName()).
+     * Inputs: boundTmuxName (string|null, optional) - the tmux name this
+     *   tab was bound to at the MOMENT the disconnect episode began,
+     *   captured by the caller before any await. It is what gives
+     *   _assertAdoptTargetUnchanged() its teeth: without it the guard can
+     *   only compare a value read here against itself a few awaits later,
+     *   which misses a rebind that happened during a long outage wait.
+     *   Omitted (deep-link/legacy callers) it falls back to "now".
      * Output: Promise<void>. Side effects: either re-opens a bound WS via
      *   reconnectToExistingSession(), marks sessionActive=false and fires
      *   'session-destroyed' when the tmux session is gone, or defers to
      *   attemptReconnect() on lookup failure / no resolvable name.
      * Example: invoked from ws.onclose when event.code === 4404.
      */
-    async _attemptReconnectByName() {
-        const tmuxName = this._currentTmuxName();
+    async _attemptReconnectByName(boundTmuxName = null) {
+        const tmuxName = boundTmuxName || this._currentTmuxName();
         if (!tmuxName || !window.API || typeof window.API.listAttachableSessions !== 'function') {
             // Can't resolve by name — degrade to the pre-existing bounded
             // id-based retry loop rather than doing nothing.
@@ -1703,7 +1712,7 @@ class Terminal {
         this.isReconnecting = true;
         this.updateStatus('Reconnecting...');
         if (this.term) {
-            this.term.writeln('\n\x1b[1;33m[Server restarted — looking up session by name...]\x1b[0m');
+            this.term.writeln('\n\x1b[1;33m[Connection restored, looking up session by name...]\x1b[0m');
         }
 
         let stillAlive = false;
@@ -1785,7 +1794,19 @@ class Terminal {
      * of proceeding, so the caller's catch turns it into a bounded retry
      * rather than a silent spawn.
      *
-     * Inputs: tmuxName (string) - the name about to be adopted.
+     * WHAT MAKES IT REAL: `tmuxName` is the name captured at the START of
+     * the disconnect episode (ws.onclose, or before the health wait in
+     * _handlePossibleOutage) and threaded through as
+     * _attemptReconnectByName's `boundTmuxName`. This method compares it
+     * against `_currentTmuxName()` read NOW, after the lookups and after
+     * a wait that can run for minutes. If the tab was rebound to another
+     * session in that window - the launchpad opened a different one, a
+     * deep link resolved elsewhere - the two disagree and the adopt is
+     * refused. Compare a freshly-read name against itself and the guard
+     * is decorative; the capture point is the entire mechanism.
+     *
+     * Inputs: tmuxName (string) - the name about to be adopted, captured
+     *   before the episode's awaits.
      * Output: void. Throws Error when the name is empty or no longer
      *   matches this tab's session.
      * Example: this._assertAdoptTargetUnchanged('cloude_my-project');
@@ -1819,19 +1840,32 @@ class Terminal {
     }
 
     /**
-     * Recover from a WS close that carries the SERVER RESTART signature:
-     * a code that is neither 4401 (auth, handled by
-     * _handleAuthFailedClose) nor 4404 (unknown session, handled by
-     * _attemptReconnectByName), while the server is not answering at all.
+     * Recover from a WS close that carries the OUTAGE signature: a code
+     * that is none of 4400/4401 (auth, handled by _handleAuthFailedClose)
+     * or 4404 (unknown session, handled by _attemptReconnectByName),
+     * while the server is not reachable.
+     *
+     * HONESTY ABOUT THE CAUSE. A browser cannot see why a socket died.
+     * A restarting server, a dead reverse proxy and the user's wifi
+     * dropping all produce the same close code and the same failed
+     * fetch, so this method never asserts "the server restarted". It
+     * splits out the ONE case it can actually decide, and is explicit
+     * about the rest:
+     *   - navigator.onLine === false: the failure is provably LOCAL. We
+     *     send no probe (it cannot succeed, and its failure would tell us
+     *     nothing about the server), say "no network connection", and the
+     *     watch does not spend its ceiling on time we were offline.
+     *   - otherwise: we say only "no answer from server", which is the
+     *     whole of what we know.
      *
      * Sequence:
-     *   1. Probe /health once. If it answers, this was an ordinary blip
-     *      and not a restart - hand straight back to the bounded
-     *      id-based attemptReconnect() loop, unchanged behavior.
-     *   2. Otherwise paint the "waiting for server" state (deliberately
-     *      distinct from "reconnecting" so the user can tell which is
-     *      happening) and poll /health with backoff up to the watch's
-     *      overall ceiling.
+     *   1. If the client is online, probe /health once. If it answers,
+     *      this was an ordinary blip - hand straight back to the bounded
+     *      id-based attemptReconnect() loop, unchanged behavior. (While
+     *      offline we skip this and go straight to waiting.)
+     *   2. Otherwise paint the waiting state (deliberately distinct from
+     *      the ordinary "reconnecting", and distinct again for offline)
+     *      and poll /health with backoff up to the watch's ceiling.
      *   3. When the server answers, re-resolve the session BY TMUX NAME
      *      through the existing _attemptReconnectByName() machinery. That
      *      method already handles found / not-found / transient-failure,
@@ -1845,19 +1879,24 @@ class Terminal {
      * Inputs: none.
      * Output: Promise<void>. Side effects: status/banner updates, and on
      *   success the same WS re-open _attemptReconnectByName() performs.
-     * Example: invoked from ws.onclose when the close code is not 4401/4404.
+     * Example: invoked from ws.onclose when the close code is not
+     *   4400/4401/4404.
      */
-    async _handlePossibleServerRestart() {
+    async _handlePossibleOutage() {
         const watch = this._serverRestartWatch();
         const status = window.ServerRestartWatch.STATUS;
         const result = window.ServerRestartWatch.RESULT;
+        // The identity to restore, captured BEFORE the wait (which can
+        // run for minutes). This is what makes the adopt guard real.
+        const boundTmuxName = this._currentTmuxName();
+        const offlineAtClose = watch.isClientOffline();
         let outcome = null;
 
         this._restartWatchActive = true;
         try {
-            if (await watch.probe()) {
-                // Server is up: this close was not a restart. Fall back
-                // to the pre-existing bounded retry.
+            if (!offlineAtClose && await watch.probe()) {
+                // Server is answering: this close was not an outage. Fall
+                // back to the pre-existing bounded retry.
                 console.log('Terminal: server is answering, treating close as a transient blip');
                 if (this.sessionActive && !this.isReconnecting) {
                     this._restartWatchActive = false;
@@ -1866,18 +1905,36 @@ class Terminal {
                 return;
             }
 
-            console.log('Terminal: server not answering, waiting for restart');
-            this.updateStatus(status.WAITING);
-            if (this.term) {
-                this.term.writeln('\n\x1b[1;33m[server is not responding, waiting for it to come back...]\x1b[0m');
+            if (offlineAtClose) {
+                console.log('Terminal: this client is offline, waiting for the network');
+                this.updateStatus(status.OFFLINE);
+                if (this.term) {
+                    this.term.writeln('\n\x1b[1;33m[no network connection on this device, waiting for it to come back...]\x1b[0m');
+                }
+            } else {
+                console.log('Terminal: no answer from the server, waiting for it to become reachable');
+                this.updateStatus(status.WAITING);
+                if (this.term) {
+                    this.term.writeln('\n\x1b[1;33m[no answer from the server, it may be restarting or unreachable. waiting...]\x1b[0m');
+                }
             }
 
+            // Track which banner is showing so a transition (wifi comes
+            // back but the server is still silent, or the reverse) is
+            // repainted instead of leaving stale copy on screen.
+            let showingOffline = offlineAtClose;
             outcome = await watch.waitForServer({
                 shouldAbort: () => !this.sessionActive,
-                onAttempt: ({ attempt, elapsedMs }) => {
+                onAttempt: ({ attempt, elapsedMs, clientOffline }) => {
+                    if (clientOffline !== showingOffline) {
+                        showingOffline = clientOffline;
+                        this.updateStatus(clientOffline ? status.OFFLINE : status.WAITING);
+                    }
                     if (attempt > 1 && attempt % 5 === 0 && this.term) {
                         const secs = Math.round(elapsedMs / 1000);
-                        this.term.writeln(`\x1b[1;33m[still waiting for the server, ${secs}s]\x1b[0m`);
+                        this.term.writeln(clientOffline
+                            ? '\x1b[1;33m[still no network connection on this device]\x1b[0m'
+                            : `\x1b[1;33m[still no answer from the server, ${secs}s]\x1b[0m`);
                     }
                 },
             });
@@ -1888,35 +1945,38 @@ class Terminal {
         if (outcome === result.ABORTED || !this.sessionActive) {
             // The user detached or deleted while we were waiting. Leave
             // the session alone: no probe loop, no re-adopt, no revival.
-            console.log('Terminal: restart wait aborted, session is no longer active');
+            console.log('Terminal: outage wait aborted, session is no longer active');
             this.stopReconnecting();
             return;
         }
 
         if (outcome === result.TIMEOUT) {
-            console.warn('Terminal: server did not come back within the restart-watch ceiling');
+            // Note this is a reachability statement, not a diagnosis: the
+            // ceiling only counts time we were online and got no answer.
+            console.warn('Terminal: server stayed unreachable through the watch ceiling');
             this.stopReconnecting();
             this.updateStatus(status.UNREACHABLE, 'error');
             if (this.term) {
-                this.term.writeln('\n\x1b[1;31m[server did not come back, reload once it is up]\x1b[0m');
+                this.term.writeln('\n\x1b[1;31m[still cannot reach the server, reload once it is back]\x1b[0m');
             }
             return;
         }
 
         // Server answered. Re-resolve by the stable tmux NAME - the id we
-        // held is meaningless to the fresh process. Mark the by-name
-        // attempt as spent so a follow-up 4404 close (which the re-opened
-        // WS can still produce if the session vanished between the probe
-        // and the adopt) does not run the same lookup twice.
-        console.log('Terminal: server is back, re-resolving session by name');
+        // held is meaningless if the process restarted.
+        console.log('Terminal: server is reachable again, re-resolving session by name');
         this.updateStatus(status.BACK);
+        // Set BEFORE the await, deliberately. _attemptReconnectByName()
+        // re-opens the WS on success, and that ws.onopen resets this flag
+        // to false - which is exactly what we want, since the next
+        // disconnect episode deserves its own by-name attempt. Setting it
+        // after the await would clobber that reset and permanently
+        // disable 4404 recovery for this tab. Its job here is only to
+        // stop the 4404 close that the re-opened socket can itself
+        // produce (session vanished between probe and adopt) from running
+        // a second, identical lookup while this one is still in flight.
         this._reconnectByNameAttempted = true;
-        this._restartRecoveryActive = true;
-        try {
-            await this._attemptReconnectByName();
-        } finally {
-            this._restartRecoveryActive = false;
-        }
+        await this._attemptReconnectByName(boundTmuxName);
     }
 
     /**

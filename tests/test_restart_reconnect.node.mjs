@@ -1,6 +1,6 @@
-// Node-based test for the server-RESTART reconnect fix
-// (client/js/server-restart-watch.js + terminal.js's ws.onclose restart
-// branch, _handlePossibleServerRestart and _assertAdoptTargetUnchanged).
+// Node-based test for the OUTAGE reconnect fix
+// (client/js/server-restart-watch.js + terminal.js's ws.onclose outage
+// branch, _handlePossibleOutage and _assertAdoptTargetUnchanged).
 //
 // WHY THIS FILE EXISTS: the repo has no package.json / jest / mocha, and
 // the logic under test is entirely client-side, so a pytest cannot reach
@@ -39,6 +39,7 @@ const FAST_WATCH_OPTIONS = Object.freeze({
     backoffFactor: 1,
     ceilingMs: 500,
     probeTimeoutMs: 50,
+    offlineRecheckMs: 1,
 });
 
 const TMUX_NAME = 'cloude_my-project';
@@ -112,10 +113,21 @@ function makeHealthFetch({ failCount = 0, onCall = null } = {}) {
  *   failCount / onCall - forwarded to makeHealthFetch.
  *   attachable (array) - what GET /sessions/attachable returns.
  *   live (array) - what GET /sessions/list returns.
+ *   online (object, optional) - { value: boolean }, read live by the
+ *     watch's onlineImpl seam so a test can drop and restore the
+ *     client's own link mid-wait.
+ *   lazyWatch (boolean) - when true the test does NOT pre-assign
+ *     terminal._restartWatch, so _serverRestartWatch() runs its real
+ *     production construction (window.ServerRestartWatch with defaults,
+ *     origin off window.location, fetch off the global). The health
+ *     fetch is installed as the sandbox's global fetch instead.
  * Output: object with { terminal, calls, fetchCalls, statuses, lines,
  *   closeSocket, assertNoCreate }.
  */
-function makeSandbox({ failCount = 0, onCall = null, attachable = null, live = [] } = {}) {
+function makeSandbox({
+    failCount = 0, onCall = null, attachable = null, live = [],
+    online = null, lazyWatch = false,
+} = {}) {
     const calls = [];
     const statuses = [];
     const lines = [];
@@ -200,9 +212,20 @@ function makeSandbox({ failCount = 0, onCall = null, attachable = null, live = [
     terminal.attemptReconnect = () => { calls.push(['attemptReconnect']); };
 
     const health = makeHealthFetch({ failCount, onCall });
-    terminal._restartWatch = new context.window.ServerRestartWatch(
-        Object.assign({}, FAST_WATCH_OPTIONS, { fetchImpl: health.fetchImpl })
-    );
+    if (lazyWatch) {
+        // Production path: nothing is pre-assigned, so the first close
+        // makes _serverRestartWatch() build the real instance itself.
+        // Only the ambient globals it reads are faked.
+        context.fetch = health.fetchImpl;
+        context.navigator = { get onLine() { return online ? online.value : true; } };
+    } else {
+        terminal._restartWatch = new context.window.ServerRestartWatch(
+            Object.assign({}, FAST_WATCH_OPTIONS, {
+                fetchImpl: health.fetchImpl,
+                onlineImpl: online ? (() => online.value) : undefined,
+            })
+        );
+    }
 
     const fakeWs = { readyState: 1, close() {}, send() {} };
     terminal.ws = fakeWs;
@@ -226,20 +249,39 @@ function makeSandbox({ failCount = 0, onCall = null, attachable = null, live = [
 }
 
 // ---------------------------------------------------------------------
-// Test 1: close code classification. The restart signature is "not 4401
-// and not 4404" - the two codes that already own a recovery path.
+// Test 1: close code classification. The outage signature is "none of
+// the codes the server itself sent as a rejection" - 4400/4401/4404 all
+// prove the server answered and all own a recovery path already.
 // ---------------------------------------------------------------------
-await test('restart signature excludes 4401 and 4404, includes ordinary close codes', async () => {
+await test('outage signature excludes 4400/4401/4404, includes ordinary close codes', async () => {
     const sb = makeSandbox();
     const Watch = sb.context.window.ServerRestartWatch;
-    assert.equal(Watch.isRestartCloseCode(4401), false);
-    assert.equal(Watch.isRestartCloseCode(4404), false);
+    assert.equal(Watch.isOutageCloseCode(4400), false,
+        '4400 (auth header present but empty) is an answered rejection, not an outage');
+    assert.equal(Watch.isOutageCloseCode(4401), false);
+    assert.equal(Watch.isOutageCloseCode(4404), false);
+    assert.deepEqual([...Watch.EXCLUDED_CLOSE_CODES].sort(), [4400, 4401, 4404]);
     for (const code of [1000, 1001, 1006, 1011, 1012, 1013]) {
-        assert.equal(Watch.isRestartCloseCode(code), true, `code ${code} should be a restart candidate`);
+        assert.equal(Watch.isOutageCloseCode(code), true, `code ${code} should be an outage candidate`);
     }
     // No code at all is no signal.
-    assert.equal(Watch.isRestartCloseCode(null), false);
-    assert.equal(Watch.isRestartCloseCode(undefined), false);
+    assert.equal(Watch.isOutageCloseCode(null), false);
+    assert.equal(Watch.isOutageCloseCode(undefined), false);
+});
+
+// ---------------------------------------------------------------------
+// Test 1b: a 4400 close must not enter the health loop at all - it takes
+// the pre-existing bounded retry, same as before this fix existed.
+// ---------------------------------------------------------------------
+await test('4400 close never triggers the health loop', async () => {
+    const sb = makeSandbox({ failCount: Infinity });
+
+    sb.closeSocket(4400);
+    await waitFor(() => sb.countOf('attemptReconnect') > 0);
+
+    assert.equal(sb.fetchCalls.length, 0, '4400 must not probe /health');
+    assert.equal(sb.countOf('adoptSession'), 0);
+    sb.assertNoCreate();
 });
 
 // ---------------------------------------------------------------------
@@ -399,6 +441,126 @@ await test('server back but tmux session gone: ends the session, creates nothing
 
     assert.equal(sb.countOf('adoptSession'), 0);
     assert.equal(sb.terminal.sessionActive, false, 'session must be marked ended');
+    sb.assertNoCreate();
+});
+
+// ---------------------------------------------------------------------
+// Test 10: the client's OWN network dropping is not a server restart.
+// No probe may be sent from a machine with no network, the banner must
+// say so, and when the link returns the normal recovery runs.
+// ---------------------------------------------------------------------
+await test('client offline: sends no probe, says so honestly, recovers when the link returns', async () => {
+    const online = { value: false };
+    const sb = makeSandbox({ failCount: 0, online });
+    const Watch = sb.context.window.ServerRestartWatch;
+
+    sb.closeSocket(1006);
+    await waitFor(() => sb.statuses.includes(Watch.STATUS.OFFLINE));
+    assert.equal(sb.fetchCalls.length, 0,
+        'must not probe /health from a machine that has no network');
+    assert.ok(!sb.statuses.includes(Watch.STATUS.WAITING),
+        'must not claim the SERVER is silent while we are the ones offline');
+
+    // Wifi comes back. Now the probe is meaningful and recovery proceeds.
+    online.value = true;
+    await waitFor(() => sb.countOf('reconnectToExistingSession') > 0);
+    assert.ok(sb.fetchCalls.length >= 1, 'probes resume once the link is back');
+    const adopted = sb.calls.filter((c) => c[0] === 'adoptSession');
+    assert.equal(adopted.length, 1);
+    assert.equal(adopted[0][1], TMUX_NAME);
+    sb.assertNoCreate();
+});
+
+// ---------------------------------------------------------------------
+// Test 11: time spent offline is not charged to the ceiling. A wifi drop
+// longer than the budget must not end in "cannot reach server", which
+// would be a conclusion about the server drawn from our own outage.
+// ---------------------------------------------------------------------
+await test('offline time does not consume the server-unreachable ceiling', async () => {
+    const sb = makeSandbox();
+    const online = { value: false };
+    const health = makeHealthFetch({ failCount: 0 });
+    const watch = new sb.context.window.ServerRestartWatch(Object.assign({}, FAST_WATCH_OPTIONS, {
+        ceilingMs: 20,
+        offlineRecheckMs: 5,
+        fetchImpl: health.fetchImpl,
+        onlineImpl: () => online.value,
+    }));
+
+    // Stay offline well past the 20ms ceiling, then come back.
+    setTimeout(() => { online.value = true; }, 120);
+    const outcome = await watch.waitForServer({});
+
+    assert.equal(outcome, sb.context.window.ServerRestartWatch.RESULT.UP,
+        'an offline stretch longer than the ceiling must not report a timeout');
+    assert.equal(health.calls.length, 1, 'exactly one probe, sent after the link returned');
+});
+
+// ---------------------------------------------------------------------
+// Test 12: the adopt guard has teeth. The name is captured when the
+// socket dies, so a tab rebound to a DIFFERENT session during the long
+// wait must not have the old session adopted under it.
+// ---------------------------------------------------------------------
+await test('adopt guard blocks a re-adopt when the tab rebound during the wait', async () => {
+    let sb = null;
+    sb = makeSandbox({
+        failCount: 3,
+        onCall(index) {
+            // Mid-wait, this tab moves to another session (launchpad,
+            // deep link, whatever) - exactly the race the guard claims.
+            if (index === 2 && sb) {
+                sb.terminal._currentSession = { id: 'sid-other', tmux_session: 'cloude_other-project' };
+            }
+        },
+    });
+
+    sb.closeSocket(1006);
+    await waitFor(() => sb.countOf('attemptReconnect') > 0);
+
+    assert.equal(sb.countOf('adoptSession'), 0,
+        'must refuse to adopt once this tab is bound to a different session');
+    assert.equal(sb.countOf('reconnectToExistingSession'), 0);
+    sb.assertNoCreate();
+});
+
+// ---------------------------------------------------------------------
+// Test 13: the PRODUCTION instantiation path. Every test above hands the
+// terminal a pre-built watch, so _serverRestartWatch()'s lazy
+// construction (real defaults, origin off window.location, fetch off the
+// global) would otherwise never run.
+// ---------------------------------------------------------------------
+await test('lazy _serverRestartWatch() builds a real watch from ambient globals and memoizes it', async () => {
+    const sb = makeSandbox({ failCount: 0, lazyWatch: true });
+    const Watch = sb.context.window.ServerRestartWatch;
+
+    assert.equal(sb.terminal._restartWatch, null, 'nothing pre-assigned');
+
+    const built = sb.terminal._serverRestartWatch();
+    assert.ok(built instanceof Watch, 'must build a real ServerRestartWatch');
+    assert.equal(sb.terminal._serverRestartWatch(), built, 'must memoize one per Terminal');
+    assert.equal(built.healthUrl(), `${FAST_WATCH_OPTIONS.origin}/health`,
+        'origin must come from window.location');
+    assert.equal(built.ceilingMs, Watch.DEFAULTS.ceilingMs, 'production defaults, not test tunables');
+    assert.equal(built.firstDelayMs, Watch.DEFAULTS.firstDelayMs);
+    assert.equal(built.isClientOffline(), false, 'reads the ambient navigator');
+    assert.equal(await built.probe(), true, 'probes through the ambient global fetch');
+});
+
+// ---------------------------------------------------------------------
+// Test 14: the same lazily built watch drives a real close end to end.
+// The server is answering, so this exercises construction + probe +
+// fallback without waiting on production backoff timings.
+// ---------------------------------------------------------------------
+await test('a close with no pre-built watch constructs one and takes the live-server fallback', async () => {
+    const sb = makeSandbox({ failCount: 0, lazyWatch: true });
+
+    sb.closeSocket(1006);
+    await waitFor(() => sb.countOf('attemptReconnect') > 0);
+
+    assert.ok(sb.terminal._restartWatch, 'the close must have built the watch');
+    assert.equal(sb.fetchCalls.length, 1, 'one detection probe through the real construction path');
+    assert.equal(sb.fetchCalls[0], `${FAST_WATCH_OPTIONS.origin}/health`);
+    assert.equal(sb.countOf('adoptSession'), 0);
     sb.assertNoCreate();
 });
 
