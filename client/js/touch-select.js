@@ -291,17 +291,21 @@
         // Exit FIRST (clears selection, removes the button, hides the
         // select-mode pill) so the result pill below is never clobbered.
         exitSelectMode(true);
-        if (text && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            navigator.clipboard.writeText(text).then(() => {
-                termWrapper._showStatusPill('copied', 'success');
-            }).catch(() => {
-                termWrapper._showStatusPill('copy blocked by browser', 'error');
-            });
-        } else if (!text) {
+        if (!text) {
             termWrapper._showStatusPill('nothing selected', 'info');
-        } else {
-            termWrapper._showStatusPill('clipboard unavailable on this connection', 'error');
+            return;
         }
+        // CopyCompat, not navigator.clipboard directly: this app is served
+        // over plain http on a Tailscale hostname, where the async
+        // clipboard API does not exist at all and this path used to be a
+        // guaranteed dead end on the exact devices that need it most.
+        window.CopyCompat.copyText(text).then((result) => {
+            if (result.ok) {
+                termWrapper._showStatusPill('copied', 'success');
+            } else {
+                termWrapper._showStatusPill('copy blocked — use the copy button for a selectable view', 'error');
+            }
+        });
     }
 
     function removeCopyButton() {

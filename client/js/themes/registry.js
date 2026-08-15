@@ -452,6 +452,18 @@
     }
 
     /**
+     * The tmux session name currently in theme scope, or null on the
+     * launchpad / auth screens. Read by the per-session theme picker so
+     * it can key its own state (audio opt-in) off the same STABLE
+     * identifier the server pins themes against.
+     *
+     * @returns {string|null}
+     */
+    function getActiveSession() {
+        return activeSessionName;
+    }
+
+    /**
      * SESSION-IDENTITY-V2 — pure DOM/effects apply. No persistence side-effects.
      * Returns true on success, false if id is unknown. The shared paint
      * pipeline used by both the user-driven applyGlobal() (which then
@@ -789,6 +801,7 @@
         applyGlobal: applyGlobal,
         applyTheme: applyTheme,
         setActiveSession: setActiveSession,
+        getActiveSession: getActiveSession,
         applySession: applySession,
         clearSession: clearSession,
         setReplayInProgress: setReplayInProgress,

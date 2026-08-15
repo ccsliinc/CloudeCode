@@ -17,6 +17,9 @@
     <!-- Session sidebar + status lights. Loaded after styles.css for the
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <!-- Terminal-screen tool strip, copy-output sheet and per-session
+         theme picker. After styles.css so it inherits the theme vars. -->
+    <link rel="stylesheet" href="/static/css/terminal-tools.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
     <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
 
@@ -202,6 +205,38 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
+        <!-- Terminal-screen tool strip. Session-scoped controls only:
+             the theme picker here themes THIS tmux session (the default
+             and home themes live in settings), the speaker is this
+             session's music opt-in, and copy opens the selectable
+             copy-output sheet. Sized for a thumb, shown at every width. -->
+        <div class="terminal-tools" id="terminalTools">
+            <button type="button" id="terminalCopyBtn" class="terminal-tool"
+                    aria-label="Copy output" title="copy output" data-tooltip="Copy output">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <button type="button" id="sessionThemeBtn" class="terminal-tool"
+                    aria-label="Session theme" title="session theme" data-tooltip="Session theme">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M8 1.75a6.25 6.25 0 1 0 0 12.5c.69 0 1.25-.56 1.25-1.25 0-.32-.13-.62-.34-.84a1.19 1.19 0 0 1 .84-2.03h1.44A3.06 3.06 0 0 0 14.25 7 6.25 6.25 0 0 0 8 1.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="5.25" cy="6" r="0.9" fill="currentColor"/>
+                    <circle cx="8" cy="4.5" r="0.9" fill="currentColor"/>
+                    <circle cx="10.75" cy="6" r="0.9" fill="currentColor"/>
+                </svg>
+            </button>
+            <button type="button" id="sessionAudioBtn" class="terminal-tool"
+                    aria-pressed="false" aria-label="Play music for this session"
+                    title="play music for this session" data-tooltip="Play music for this session">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M6.5 5.5 9.5 3v10L6.5 10.5H4a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5h2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M11.75 6.25a2.5 2.5 0 0 1 0 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+
         <div class="terminal-container">
             <div id="terminal"></div>
         </div>
@@ -248,6 +283,16 @@
          window.ServerRestartWatch to tell a restart apart from an
          ordinary disconnect. -->
     <script src="/static/js/server-restart-watch.js"></script>
+    <!-- Scroll anchoring. Must load BEFORE terminal.js runs (terminal.js
+         calls window.TerminalScroll from flush() and setupScrollListener()),
+         and it owns the decision that used to be the racing
+         autoScrollEnabled flag. -->
+    <script src="/static/js/terminal-scroll.js"></script>
+    <!-- Clipboard tier ladder. Must load BEFORE clipboard.js,
+         touch-select.js and copy-output.js, all of which copy through
+         window.CopyCompat rather than navigator.clipboard (absent over
+         plain http). -->
+    <script src="/static/js/clipboard-compat.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
          Must load AFTER terminal.js — terminal.js calls into
@@ -257,6 +302,11 @@
          coarse-pointer devices. Must load AFTER terminal.js — terminal.js
          calls window.TouchSelect.init() from initTerminal(). -->
     <script src="/static/js/touch-select.js"></script>
+    <!-- Copy-output sheet: url/code chips + selectable raw text. Must
+         load AFTER terminal.js (terminal.js wires the button from
+         initTerminal) and AFTER output-scan.js, whose scan() it calls. -->
+    <script src="/static/js/output-scan.js"></script>
+    <script src="/static/js/copy-output.js"></script>
     <script src="/static/js/dpad.js"></script>
     <script src="/static/js/slash-command-filter.js"></script>
     <script src="/static/js/slash-commands.js"></script>
@@ -273,6 +323,12 @@
          app.js so window.ThemeAudio is defined when the app wires the
          header toggle button + calls ThemeAudio.init(). -->
     <script src="/static/js/themeAudio.js"></script>
+
+    <!-- Per-session theme picker + per-session music opt-in, mounted on
+         the terminal screen. Must load AFTER themes/registry.js
+         (window.Themes.getActiveSession / applyGlobal / listAll) and
+         AFTER themeAudio.js (window.ThemeAudio). -->
+    <script src="/static/js/session-theme-menu.js"></script>
 
     <!-- Session sidebar - conversation switcher. Must load AFTER api.js
          (window.API) and BEFORE app.js is invoked (app.js's showTerminal /
