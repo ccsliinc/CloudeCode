@@ -626,8 +626,15 @@ class Launchpad {
      * is a no-op after the first paint.
      *
      * Click target disambiguation:
-     *   - `[data-session-action]` (or its SVG child) → close/remove flow
+     *   - the row's action button (or its SVG child) → close/remove flow
      *   - anywhere else on `.running-session-row`    → return/swap flow
+     *
+     * The action selector is built from SessionRowActions.ATTR_ACTION,
+     * never from a literal: the same module builds the markup, so reading
+     * the name from it is what makes the two sides unable to drift. There
+     * is deliberately no literal fallback for a missing module, because
+     * SessionRowActions.html() emits nothing in that case and there would
+     * be no such element to match.
      *
      * stopPropagation on the action branch is the important bit: without
      * it the row handler would also fire and we'd race a swap against a
@@ -636,11 +643,11 @@ class Launchpad {
     _bindRunningSessionClicks() {
         const container = document.getElementById('running-sessions-list');
         if (!container || container.__boundRunningClicks) return;
-        const actionSelector = window.SessionRowActions
-            ? `[${window.SessionRowActions.ATTR_ACTION}]`
-            : '[data-session-action]';
         container.addEventListener('click', async (e) => {
-            const rowActionEl = e.target.closest(actionSelector);
+            const actions = window.SessionRowActions;
+            const rowActionEl = actions
+                ? e.target.closest(`[${actions.ATTR_ACTION}]`)
+                : null;
             const renameEl = e.target.closest('.running-session-rename');
             const markUnreadEl = e.target.closest('[data-mark-unread]');
             const rowEl = e.target.closest('.running-session-row');
@@ -661,12 +668,11 @@ class Launchpad {
             // control the user actually clicked.
             if (rowActionEl) {
                 e.stopPropagation();
-                const name = rowActionEl.getAttribute(
-                    window.SessionRowActions ? window.SessionRowActions.ATTR_NAME : 'data-session-name'
-                );
-                const action = rowActionEl.getAttribute(
-                    window.SessionRowActions ? window.SessionRowActions.ATTR_ACTION : 'data-session-action'
-                );
+                // `actions` is non-null here by construction: rowActionEl
+                // can only be non-null when the selector above was built,
+                // which requires the module.
+                const name = rowActionEl.getAttribute(actions.ATTR_NAME);
+                const action = rowActionEl.getAttribute(actions.ATTR_ACTION);
                 const sid = rowEl.dataset.sessionId || null;
                 await this._handleSessionRowAction(name, sid, action);
                 return;

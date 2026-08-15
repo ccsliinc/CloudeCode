@@ -438,10 +438,14 @@ class SessionSidebarController {
      * matches the control the user clicked.
      *
      * THIS tab's own active session delegates straight to
-     * `TerminalController.destroySession()` (already confirms with the
-     * same shared copy, destroys, closes the WS, navigates to the
-     * launchpad) - avoids a double confirm dialog and a stale-WS state
-     * only that method knows how to avoid. Any OTHER row confirms here
+     * `TerminalController.destroySession(action)` - avoids a double
+     * confirm dialog and a stale-WS state only that method knows how to
+     * avoid (it confirms with the same shared copy, destroys, closes the
+     * WS, and navigates to the launchpad). The row's action is PASSED
+     * THROUGH rather than dropped: this branch used to call it with no
+     * argument, so an own-tab row painted with a trash still confirmed
+     * with the close copy and told the user a process was about to be
+     * terminated when it had already exited. Any OTHER row confirms here
      * via the shared `SessionRowActions.confirm()` then destroys via the
      * API directly, mirroring
      * `LaunchpadController._handleSessionRowAction()`'s resolve-sid-or-
@@ -462,7 +466,7 @@ class SessionSidebarController {
 
         if (isThisTab) {
             this.close();
-            await window.TerminalController.destroySession();
+            await window.TerminalController.destroySession(action);
             return;
         }
 

@@ -1992,6 +1992,37 @@ button[data-tooltip]:hover::after {
     transition: color 120ms ease, transform 120ms ease, background 120ms ease;
 }
 
+/* Restore the pre-refactor glyph weight on THIS surface.
+ *
+ * The old launcher X was inlined at width/height 18 on a `0 0 24 24`
+ * viewBox at stroke-width 2.5, i.e. a 9x9 rendered glyph drawn with a
+ * 1.875px stroke (24 -> 18 scales by 0.75). The shared helper in
+ * session-status-ui.js draws a 16x16 viewBox at 16px and stroke-width
+ * 1.5, which lands at an 8x8 glyph with a 1.5px stroke: visibly lighter
+ * and smaller than the pencil and envelope it sits beside.
+ *
+ * Sizing is the host surface's job by design (SessionRowActions.html()
+ * takes a surfaceClass for exactly this), so correct it here rather than
+ * in the shared glyph, which the sidebar draws at its own smaller scale.
+ * 18px render on a 16 viewBox scales by 1.125, and both glyph paths span
+ * half their viewBox in either family, so the arms land back at 9x9;
+ * stroke-width 1.67 then renders as 1.88px.
+ *
+ * The stroke rule has to target the paths, NOT the svg: every path in
+ * the shared glyphs carries its own `stroke-width="1.5"` presentation
+ * attribute, and an inherited value loses to an element's own
+ * presentation attribute. A CSS declaration matching the path itself
+ * does beat it. Applies to the trash too, deliberately: the two are one
+ * control in two states and must carry the same weight. */
+.running-session-kill svg {
+    width: 18px;
+    height: 18px;
+}
+
+.running-session-kill svg path {
+    stroke-width: 1.67;
+}
+
 .running-session-kill:hover,
 .running-session-kill:focus-visible {
     color: var(--color-danger-strong);

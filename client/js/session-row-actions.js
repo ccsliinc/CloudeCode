@@ -6,15 +6,21 @@
  *
  * The two actions, and the promise each one makes to the user:
  *
- *   X (close)      kills the tmux session. The Claude process stops. The
- *                  transcript JSONL on disk is NOT touched and stays
- *                  under ~/.claude/projects, so the conversation can be
- *                  resumed later by Claude Code itself.
- *   trash (remove) forgets the entry in CloudeCode. Nothing on disk is
- *                  touched at all. Only offered for a row whose process
- *                  has ALREADY exited, so there is nothing running left
- *                  to terminate; clearing the leftover tmux husk is what
- *                  makes the entry actually go away.
+ *   X (close)      kills the tmux session. The Claude process stops, and
+ *                  that part is irreversible. The transcript JSONL is NOT
+ *                  touched and stays under ~/.claude/projects, so the
+ *                  conversation can be resumed later by Claude Code
+ *                  itself.
+ *   trash (remove) forgets the entry in CloudeCode. Only offered for a
+ *                  row whose process has ALREADY exited, so there is
+ *                  nothing running left to terminate; clearing the
+ *                  leftover tmux husk is what makes the entry go away.
+ *
+ * NEITHER action is disk-free. Both can route to DELETE /sessions, which
+ * removes the session's `.cloude_uploads` bucket from the project folder.
+ * See the CONFIRM_COPY docblock below for the full per-path breakdown -
+ * that is the authoritative account, and the dialog copy is written from
+ * it. Do not describe either action as leaving disk untouched.
  *
  * SEGREGATION IS THE POINT: a row offers exactly one of the two, never
  * both, chosen from its activity status. A running row gets the X; a
@@ -71,9 +77,16 @@ console.log('[SessionRowActions Module] Loading...');
     };
 
     /**
-     * DOM contract shared by every call site. Constants, not literals at
-     * the call sites, so the markup builder and the click handlers can
-     * never disagree about the attribute name.
+     * DOM contract shared by every call site. Exported, and every call
+     * site reads them from here rather than writing the attribute name
+     * out again, so the markup builder and the click handlers cannot
+     * disagree about it.
+     *
+     * That includes the module-missing case: a call site must NOT fall
+     * back to a hardcoded selector, because `html()` returns '' when this
+     * module has not loaded, so no element carrying these attributes can
+     * exist for the fallback to match. Such a fallback is dead code that
+     * also re-introduces the literal this constant exists to remove.
      * @type {string}
      */
     const ATTR_ACTION = 'data-session-action';
@@ -81,10 +94,41 @@ console.log('[SessionRowActions Module] Loading...');
     const BASE_CLASS = 'session-row-action';
 
     /**
-     * Confirm-modal copy per action. Accuracy is a feature here: an
-     * overstated warning ("this cannot be undone", on an action that
-     * deletes nothing) trains people to click through warnings without
-     * reading them.
+     * Confirm-modal copy per action.
+     *
+     * Accuracy is the whole point of this table. A dialog that misstates
+     * consequences is worse than no dialog, because it teaches the user
+     * that dialogs in this app can be clicked through. That cuts both
+     * ways: do not overstate ("everything is deleted"), and do not
+     * understate ("nothing on disk is touched").
+     *
+     * WHAT EACH ACTION ACTUALLY DOES, on every path it can take. Both
+     * actions reach the server through the same two calls; which one runs
+     * is decided by whether a session id resolves for the row, NOT by
+     * which glyph was clicked:
+     *
+     *   path A - a session id resolves (row carries data-session-id, or
+     *     GET /sessions/list matches the tmux name) -> DELETE /sessions ->
+     *     SessionManager.destroy_session(). Stops the idle watcher, stops
+     *     the backend (kills tmux), **`shutil.rmtree`s
+     *     `<working_dir>/.cloude_uploads`**, and may unlink
+     *     session_metadata.json. THIS PATH TOUCHES DISK.
+     *   path B - no session id resolves -> DELETE /sessions/external/{name}
+     *     -> a bare `tmux kill-session` plus dropping the ownership
+     *     record. Touches no user files.
+     *
+     * The sidebar's own-tab row additionally routes through
+     * TerminalController.destroySession(), which is always path A.
+     *
+     * So REMOVE can and does delete files from the project folder: the
+     * uploads bucket is real user content, not app scratch. Both dialogs
+     * therefore name it. On path B there is no tracked session and so no
+     * bucket for CloudeCode to remove, which makes the sentence vacuous
+     * rather than false; stating it unconditionally keeps the copy short
+     * and errs toward warning instead of toward surprise.
+     *
+     * The transcript JSONL is never touched on ANY path, which is why
+     * both dialogs can promise that unconditionally.
      * @type {Object<string, {title: string, primaryLabel: string, details: string}>}
      */
     const CONFIRM_COPY = {
@@ -92,16 +136,21 @@ console.log('[SessionRowActions Module] Loading...');
             title: 'close session',
             primaryLabel: 'close',
             details:
-                'the running process is terminated. the transcript is not ' +
+                'this cannot be undone. the running process is terminated, ' +
+                'and files uploaded to this session are deleted from the ' +
+                "project's .cloude_uploads folder. the transcript is not " +
                 'deleted and stays under ~/.claude/projects.',
         },
         [ACTION_REMOVE]: {
             title: 'remove session',
             primaryLabel: 'remove',
             details:
-                'this session already exited, so nothing is terminated. the ' +
+                'this cannot be undone. this session already exited, so no ' +
+                'running process is stopped, but files uploaded to it are ' +
+                "deleted from the project's .cloude_uploads folder. the " +
                 'leftover tmux shell is cleared and cloudecode forgets the ' +
-                'entry. nothing on disk is touched.',
+                'entry. the transcript is not deleted and stays under ' +
+                '~/.claude/projects.',
         },
     };
 
@@ -226,8 +275,7 @@ console.log('[SessionRowActions Module] Loading...');
      *   src/core knows whether a transcript has been archived, and there
      *   is no endpoint that could answer it. Asserting "not archived" in
      *   this modal would be an invented fact, so the copy stays silent on
-     *   it and states only what is verifiable - that closing leaves the
-     *   transcript on disk.
+     *   it and states only what is verifiable against the server code.
      * Inputs:
      *   action (string) - ACTION_CLOSE or ACTION_REMOVE.
      *   displayName (string) - session name as shown in the row.
