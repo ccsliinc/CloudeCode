@@ -66,6 +66,12 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.core.agent_families import (
+    AGENT_FAMILY_NAMES,
+    DEFAULT_FAMILY,
+    is_valid_family,
+)
+
 # Filesystem-safe, stable identifier: used both as the wrapper's dict key
 # and as the on-disk script filename (``<id>.zsh``). Lowercase start avoids
 # any ambiguity with shell option-like leading characters.
@@ -124,6 +130,15 @@ class AgentWrapper(BaseModel):
     - ``id``: stable identifier. Doubles as the ``agent_type`` value a
       caller passes to launch through this specific wrapper (see
       ``Settings.get_agent_command``) and as the on-disk script filename.
+      NEVER rename one: ``Session.agent_type`` stores it, so a rename
+      orphans every running and historical session launched through it.
+    - ``family``: which command family this wrapper wraps — one of
+      ``src/core/agent_families.AGENT_FAMILY_NAMES`` (claude, codex,
+      hermes, openclaw, shell). Defaults to ``"claude"`` because every
+      wrapper that existed before this field was, by construction, a
+      claude wrapper; the v2->v3 migration writes that value explicitly.
+      The family selects which static ``agents.<family>_command`` string
+      is the fallback when the family has no wrappers at all.
     - ``label``: human-readable name shown in the UI.
     - ``script``: the full shell source — a plain command, or a complete
       function definition. Never validated for shell syntax (arbitrary
@@ -164,6 +179,10 @@ class AgentWrapper(BaseModel):
     """
 
     id: str = Field(..., description="Stable id; also the on-disk script filename and the agent_type value")
+    family: str = Field(
+        DEFAULT_FAMILY,
+        description="Which command family this wrapper wraps (see src/core/agent_families.py)",
+    )
     label: str = Field(..., description="Human-readable name shown in the UI")
     script: str = Field(..., description="Full shell source: a command or a function definition")
     entry: Optional[str] = Field(
@@ -183,6 +202,32 @@ class AgentWrapper(BaseModel):
         if not is_valid_wrapper_id(v):
             raise ValueError(f"wrapper id must match {WRAPPER_ID_PATTERN}")
         return v
+
+    @field_validator("family", mode="before")
+    @classmethod
+    def _validate_family(cls, v: Optional[str]) -> str:
+        """Coerce a missing/blank family to the default, reject an unknown one.
+
+        Description: ``None`` and ``""`` become ``DEFAULT_FAMILY``
+          ("claude"), so a wrapper dict written before this field existed
+          validates unchanged even if it reaches the model without going
+          through the v2->v3 migration first (a hand-edited config.json, a
+          direct API POST from an older client). An unknown NON-blank name
+          is a real error and is refused rather than silently coerced,
+          because silently relocating a wrapper into the wrong family
+          would launch the wrong binary.
+        Inputs: v (str | None) - raw family value from config or request.
+        Output: str - a valid family name.
+        Raises: ValueError - v is a non-blank unknown family name.
+        """
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return DEFAULT_FAMILY
+        name = str(v).strip().lower()
+        if not is_valid_family(name):
+            raise ValueError(
+                f"unknown agent family '{v}'; expected one of {', '.join(AGENT_FAMILY_NAMES)}"
+            )
+        return name
 
     @field_validator("script")
     @classmethod
@@ -393,6 +438,7 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
 EXAMPLE_WRAPPERS: List[dict] = [
     {
         "id": "cld",
+        "family": "claude",
         "label": "cld (subscription, keychain-backed)",
         "script": EXAMPLE_WRAPPER_CLD,
         "entry": "cld",
@@ -407,6 +453,7 @@ EXAMPLE_WRAPPERS: List[dict] = [
     },
     {
         "id": "cldor",
+        "family": "claude",
         "label": "cldor (openrouter, keychain-backed)",
         "script": EXAMPLE_WRAPPER_CLDOR,
         "entry": "cldor",

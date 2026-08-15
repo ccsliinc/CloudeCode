@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 from src.core.config_migration import (
     CURRENT_CONFIG_VERSION,
     _step_v1_to_v2,
+    _step_v2_to_v3,
     build_seed_wrappers,
     ensure_config_migrated,
     migrate_config_dict,
@@ -192,14 +193,22 @@ def test_explicit_claude_command_present_stamps_version_but_seeds_no_wrappers():
 
 def test_existing_wrappers_block_not_overwritten():
     """The list itself is never re-seeded or reordered. The v1->v2 step
-    does ADD the new ``accepts_model`` key to each entry (additive by
-    design, see CURRENT_CONFIG_VERSION's history) — every other field is
-    byte-identical and no wrapper id changes."""
+    does ADD the new ``accepts_model`` key to each entry, and the v2->v3
+    step adds ``family`` (both additive by design, see
+    CURRENT_CONFIG_VERSION's history) — every other field is byte-identical
+    and no wrapper id changes."""
     data = {"agents": {"wrappers": [{"id": "custom", "label": "x", "script": "y", "default": True}]}}
     new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
     assert changed is True
     assert new_data["agents"]["wrappers"] == [
-        {"id": "custom", "label": "x", "script": "y", "default": True, "accepts_model": False}
+        {
+            "id": "custom",
+            "label": "x",
+            "script": "y",
+            "default": True,
+            "accepts_model": False,
+            "family": "claude",
+        }
     ]
     assert new_data["config_version"] == CURRENT_CONFIG_VERSION
 
@@ -317,7 +326,7 @@ def test_v1_with_wrappers_gains_accepts_model_and_terminal_commands():
     data = _v1_config_with_wrappers()
     new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
     assert changed is True
-    assert new_data["config_version"] == 2
+    assert new_data["config_version"] == CURRENT_CONFIG_VERSION
 
     by_id = {w["id"]: w for w in new_data["agents"]["wrappers"]}
     # Ids and order are untouched — Session.agent_type stores these.
@@ -347,7 +356,7 @@ def test_v1_without_wrappers_still_works():
     data = {"config_version": 1, "agents": {"claude_command": "claude --foo"}}
     new_data, changed = migrate_config_dict(data, has_cld=False, has_cldor=False)
     assert changed is True
-    assert new_data["config_version"] == 2
+    assert new_data["config_version"] == CURRENT_CONFIG_VERSION
     assert "wrappers" not in new_data["agents"]
     assert new_data["agents"]["claude_command"] == "claude --foo"
     assert len(new_data["terminal_commands"]) == 3
@@ -357,16 +366,16 @@ def test_v1_with_no_agents_block_at_all():
     data = {"config_version": 1, "projects": []}
     new_data, changed = migrate_config_dict(data, has_cld=False, has_cldor=False)
     assert changed is True
-    assert new_data["config_version"] == 2
+    assert new_data["config_version"] == CURRENT_CONFIG_VERSION
     assert len(new_data["terminal_commands"]) == 3
 
 
 def test_v0_runs_both_steps():
-    """A pre-wrappers config chains 0->1 then 1->2 in one pass."""
+    """A pre-wrappers config chains 0->1, 1->2 then 2->3 in one pass."""
     data = {"agents": {"codex_command": "codex"}}
     new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
     assert changed is True
-    assert new_data["config_version"] == 2
+    assert new_data["config_version"] == CURRENT_CONFIG_VERSION
     by_id = {w["id"]: w for w in new_data["agents"]["wrappers"]}
     assert set(by_id) == {"claude", "cld", "cldor"}
     assert by_id["cldor"]["accepts_model"] is True
@@ -374,9 +383,9 @@ def test_v0_runs_both_steps():
     assert len(new_data["terminal_commands"]) == 3
 
 
-def test_already_v2_is_a_complete_noop():
+def test_already_current_is_a_complete_noop():
     data = {
-        "config_version": 2,
+        "config_version": CURRENT_CONFIG_VERSION,
         "agents": {"wrappers": [{"id": "cld", "label": "cld", "script": "x", "accepts_model": True}]},
         "terminal_commands": [{"id": "mine", "label": "mine", "command": "ls"}],
     }

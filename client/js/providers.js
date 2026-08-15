@@ -10,14 +10,12 @@
  * into one list produced two real bugs:
  *
  *   (a) A hardcoded "claude" row sat above the wrapper rows and launched
- *       whatever wrapper was marked default. On a machine whose default
- *       is `cld`, that meant two rows with identical behaviour and no
- *       label saying so. There is now NO bare "claude" row: every
- *       configured wrapper appears exactly once, and the default one is
- *       labelled "<label> (default)". The single "claude" row returns
- *       only when NO wrappers are configured at all, where it means the
- *       legacy claude_command / cld fallback (see
- *       Settings.get_agent_command).
+ *       whatever wrapper was marked default, so a machine whose default
+ *       is `cld` showed two rows with identical behaviour. There is now
+ *       NO bare "claude" row: every configured wrapper appears exactly
+ *       once, the default one labelled "<label> (default)". That single
+ *       "claude" row returns only when NO wrappers are configured, where
+ *       it means the legacy fallback (Settings.get_agent_command).
  *   (b) Picking a model next to a wrapper that ignores models routed the
  *       model to the DEFAULT wrapper, which forwards "$@" to claude — so
  *       the model id arrived as a PROMPT argument and Claude answered
@@ -25,6 +23,8 @@
  *       wrapper whose `accepts_model` is true (src/core/agent_wrappers.py),
  *       and the resulting launch carries that wrapper's id. The server
  *       enforces the same rule independently.
+ *
+ * Family grouping (feat/universal-wrappers) lives in provider-groups.js.
  *
  * Split out of launchpad.js to keep that file under its line budget.
  * Attaches showProviderModal() onto the existing window.Launchpad instance
@@ -36,8 +36,7 @@
  * Reuses the folder-picker's list markup/CSS (.folder-picker-list,
  * .folder-picker-item, .folder-picker-item-active, .folder-picker-status)
  * and its keyboard-nav + capture-phase Escape pattern
- * (client/js/launchpad.js showFolderPickerModal) rather than inventing a
- * new visual language or a new nav implementation.
+ * (client/js/launchpad.js showFolderPickerModal).
  */
 (function () {
     // Single localStorage key: '' (or absent) = claude, else the model id.
@@ -108,6 +107,7 @@
 
             let models = [];       // OpenRouter model ids
             let wrappers = [];     // EVERY configured wrapper, unfiltered — each appears exactly once
+            let families = [];     // family registry from the server, for group headings and their order
             let items = [];        // nav list for the CURRENT step
             let activeIndex = -1;
             let currentModel = readLastChoice(); // '' = none, else a model id
@@ -155,12 +155,10 @@
                     items = [{ type: 'claude' }];
                     return;
                 }
-                items = wrappers.map((w) => ({
-                    type: 'wrapper',
-                    wrapperId: w.id,
-                    label: w.default ? `${w.label} (default)` : w.label,
-                    acceptsModel: !!w.accepts_model,
-                }));
+                // Grouped by family. The rules (one row per wrapper, no
+                // duplicates, heading carried on a group's first row) live
+                // in provider-groups.js, unit tested without a DOM.
+                items = window.ProviderGroups.buildWrapperItems(wrappers, families);
             };
 
             const findIndexForModel = (model) => {
@@ -271,7 +269,13 @@
                         const more = item.acceptsModel
                             ? '<span class="provider-item-more">models ›</span>'
                             : '';
-                        return `<div class="folder-picker-item" data-index="${i}">
+                        // The family heading rides ahead of the group's
+                        // first row and is NOT a .folder-picker-item, so it
+                        // never enters the nav index.
+                        const heading = item.groupLabel
+                            ? `<div class="provider-family-heading">${escapeHtml(item.groupLabel)}</div>`
+                            : '';
+                        return `${heading}<div class="folder-picker-item" data-index="${i}">
                             <span class="folder-picker-icon">»</span>
                             <span class="folder-picker-name provider-item-name">${safeLabel}</span>
                             ${more}
@@ -478,9 +482,11 @@
                 try {
                     const wrapperData = await window.API.listWrappers();
                     wrappers = Array.isArray(wrapperData.wrappers) ? wrapperData.wrappers : [];
+                    families = Array.isArray(wrapperData.families) ? wrapperData.families : [];
                 } catch (error) {
                     console.error('Launchpad: Failed to load wrappers:', error);
                     wrappers = [];
+                    families = [];
                 }
                 render();
                 setTimeout(() => listEl.focus(), 100);

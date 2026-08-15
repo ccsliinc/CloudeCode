@@ -2758,6 +2758,15 @@ button[data-tooltip]:hover::after {
     border-radius: var(--radius-md);
 }
 
+/* A flex item defaults to min-width:auto, so a long id/label/description
+ * sets a floor wider than the container and the whole row overflows
+ * sideways instead of wrapping. This is what pushed the delete button off
+ * the right edge on a phone. */
+.settings-wrapper-row-main {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
 .settings-wrapper-row-main code {
     color: var(--color-fg-muted);
     font-size: 0.8rem;
@@ -2970,6 +2979,61 @@ button[data-tooltip]:hover::after {
     margin-top: 10px;
 }
 
+/* feat/universal-wrappers — one group per command family on the wrappers
+ * settings screen. The group is a visual container only; every wrapper row
+ * inside it keeps the markup it already had. */
+.settings-wrapper-family {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    margin-bottom: 14px;
+}
+
+.settings-wrapper-family-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 0.85rem;
+    text-transform: lowercase;
+    color: var(--color-accent);
+}
+
+.settings-wrapper-family-count {
+    color: var(--color-fg-muted);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.7rem;
+    padding: 0 6px;
+    font-weight: normal;
+}
+
+/* Distinguishes the model-capable badge from the default badge, which
+ * already owns the accent colour. */
+.settings-wrapper-badge-model {
+    color: var(--color-fg-muted);
+    border-color: var(--color-border);
+}
+
+/* Provider picker: a non-selectable family heading between wrapper
+ * groups. Deliberately NOT a .folder-picker-item so it stays out of the
+ * keyboard nav index. */
+.provider-family-heading {
+    color: var(--color-fg-muted);
+    font-size: 0.7rem;
+    text-transform: lowercase;
+    letter-spacing: 0.06em;
+    padding: 10px 12px 4px;
+    border-top: 1px solid var(--color-border);
+    margin-top: 4px;
+}
+
+.provider-family-heading:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 4px;
+}
+
 /* Provider picker: marks a wrapper row that leads to a model step. */
 .provider-item-more {
     color: var(--color-fg-muted);
@@ -2995,5 +3059,26 @@ button[data-tooltip]:hover::after {
     .settings-command-row-actions .modal-btn,
     .settings-wrapper-row-actions .modal-btn {
         flex: 1 1 auto;
+    }
+
+    /* Widening the action group alone was not enough: the ROW is still a
+     * horizontal flex container, so the buttons kept being pushed off the
+     * right edge and the modal body scrolled sideways. Stack the row on a
+     * phone so the actions sit under the text they act on. */
+    .settings-wrapper-row,
+    .settings-command-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    /* A family group's own padding is a meaningful slice of a 375px
+     * viewport; trim it so the rows inside keep their readable width. */
+    .settings-wrapper-family {
+        padding: 8px;
+    }
+
+    /* Both add buttons on one line leaves each too narrow to read. */
+    .settings-wrapper-actions-row {
+        flex-wrap: wrap;
     }
 }

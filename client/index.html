@@ -242,6 +242,9 @@
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
          attaches showProviderModal() onto the window.Launchpad instance. -->
+    <!-- provider-groups.js holds the launch picker's family-grouping
+         rules and MUST load before providers.js calls them. -->
+    <script src="/static/js/provider-groups.js"></script>
     <script src="/static/js/providers.js"></script>
     <!-- Server-restart detector (health polling + backoff). Must load
          BEFORE terminal.js - terminal.js's ws.onclose handler reads
@@ -292,6 +295,9 @@
     <!-- Launch-wrapper list/editor mounted inside the settings panel's
          "agent" section. Must load AFTER api.js (window.API) and BEFORE
          settings-panel.js calls window.AgentWrappersPanel.mount(). -->
+    <!-- agent-wrappers-view.js holds the wrappers screen's pure render
+         functions and MUST load before the panel that calls them. -->
+    <script src="/static/js/agent-wrappers-view.js"></script>
     <script src="/static/js/agent-wrappers-panel.js"></script>
     <!-- Terminal-command list/editor for the settings panel's "terminal"
          tab. Same contract as agent-wrappers-panel.js: AFTER api.js,

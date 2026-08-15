@@ -172,53 +172,11 @@
         );
     }
 
-    /**
-     * Render the legacy ``agents.claude_command`` as a read-only advanced
-     * row inside the claude tab.
-     *
-     * Presentation only — this is NOT a form field (no data-settings-key),
-     * so it can never be collected into a PATCH and its stored value is
-     * never touched by this panel. It is shown because a value silently
-     * sitting in config.json that does nothing is worse than one shown
-     * and labelled as inert; the copy states plainly which of the two
-     * states it is in.
-     * Output: string - HTML for a collapsed `<details>` block.
-     */
-    function renderLegacyClaudeCommand(lastSummary) {
-        var agents = (lastSummary && lastSummary.agents) || {};
-        var hasWrappers = !!(agents.wrappers && agents.wrappers.length);
-        var copy = hasWrappers
-            ? 'not in use. wrappers above take precedence; this only runs if you delete every wrapper.'
-            : 'in use now. the single command every claude session runs.';
-        return (
-            '<section class="settings-section" data-settings-section="legacy-claude">' +
-            '  <details class="settings-advanced">' +
-            '    <summary class="settings-advanced-summary">advanced: legacy claude command</summary>' +
-            '    <div class="settings-field">' +
-            '      <label class="settings-field-label" for="settings-legacy-claude-command">claude command</label>' +
-            '      <input type="text" id="settings-legacy-claude-command" class="modal-input"' +
-            '        value="' + escapeHtml(agents.claude_command || '') + '" readonly disabled>' +
-            '      <div class="settings-field-hint">' + escapeHtml(copy) + '</div>' +
-            // Only meaningful in the no-wrappers case, where this field IS
-            // what runs. With wrappers present the resolver answers from
-            // the wrapper list, so printing it here would attach a wrapper's
-            // command line to an inert legacy field and read as if that
-            // field produced it.
-            (!hasWrappers && agents.effective_claude_command
-                ? '      <div class="settings-field-effective">what runs now: <code>' + escapeHtml(agents.effective_claude_command) + '</code></div>'
-                : '') +
-            '    </div>' +
-            '  </details>' +
-            '</section>'
-        );
-    }
-
     window.SettingsSections = {
         escapeHtml: escapeHtml,
         renderField: renderField,
         renderGenericSection: renderGenericSection,
         renderAppearanceSection: renderAppearanceSection,
         renderServerSection: renderServerSection,
-        renderLegacyClaudeCommand: renderLegacyClaudeCommand,
     };
 })();

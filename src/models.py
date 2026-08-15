@@ -337,8 +337,17 @@ class WrapperListResponse(BaseModel):
     ``AgentWrapper``'s docstring). The client always re-renders from this
     authoritative list rather than optimistically patching its own state,
     matching the ``ProviderModelsResponse`` convention.
+
+    feat/universal-wrappers — ``families`` carries the serialized family
+    registry (see ``src.core.agent_families``) alongside the list, so the
+    settings screen can render one group per family, and the launch picker
+    can label its groups, WITHOUT hardcoding a family list client-side.
+    Shipped on every wrapper response rather than fetched separately
+    because the two are always rendered together and a wrapper mutation
+    changes a family's ``wrapper_count`` / ``in_use`` state.
     """
     wrappers: List[dict] = Field(default_factory=list)
+    families: List[dict] = Field(default_factory=list)
 
 
 class WrapperExamplesResponse(BaseModel):
