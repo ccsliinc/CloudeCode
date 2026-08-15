@@ -22,6 +22,9 @@ console.log('[SlashCommands Module] Loading...');
 class SlashCommandsModal {
     constructor() {
         this.commonCommands = [];
+        // Parallel to commonCommands: [{command, description}] with the
+        // SHORT chip description. See _loadCommonCommands().
+        this.commonCommandDetails = [];
         this.groups = [];
         // Flat command -> record lookup built from `this.groups`, used
         // for the common-commands button tooltips and for resolving a
@@ -77,6 +80,13 @@ class SlashCommandsModal {
         try {
             const response = await window.API.getCommonCommands();
             this.commonCommands = response.commands || [];
+            // `command_details` is the newer parallel array carrying the
+            // short description for each chip. Servers predating it send
+            // only `commands`, so fall back to bare entries rather than
+            // rendering nothing.
+            this.commonCommandDetails = Array.isArray(response.command_details)
+                ? response.command_details
+                : this.commonCommands.map(c => ({ command: c, description: '' }));
             console.log('[SlashCommands] Fetched', this.commonCommands.length, 'common commands');
         } catch (error) {
             console.error('[SlashCommands] Failed to fetch common commands:', error);
@@ -84,6 +94,9 @@ class SlashCommandsModal {
                 '/agents', '/clear', '/compact', '/context',
                 '/hooks', '/mcp', '/resume', '/rewind', '/usage'
             ];
+            this.commonCommandDetails = this.commonCommands.map(
+                c => ({ command: c, description: '' })
+            );
         }
     }
 
@@ -239,22 +252,42 @@ class SlashCommandsModal {
     }
 
     /**
-     * Render common commands as buttons
+     * Description: render the common-commands "favorites" row as chips.
+     *   Each chip shows the command name plus a SHORT description on a
+     *   second line. The description is the whole point of the change:
+     *   the row used to carry the full scraped description in a `title`
+     *   attribute only, which is invisible on a phone (no hover) and far
+     *   too long to render inline. The short text comes from the server's
+     *   `command_details` (see src/core/slash_command_labels.py), which
+     *   caps length so the chip stays one line and the row stays above
+     *   the fold. The long description is still available on hover via
+     *   `title` for desktop users.
+     * Inputs: none (reads this.commonCommandDetails).
+     * Output: string - HTML for the chip grid.
      */
     renderCommonCommands() {
-        console.log('[SlashCommands] renderCommonCommands() called with', this.commonCommands.length, 'commands:', this.commonCommands);
+        const details = this.commonCommandDetails || [];
+        console.log('[SlashCommands] renderCommonCommands() called with', details.length, 'commands');
 
-        if (!this.commonCommands || this.commonCommands.length === 0) {
+        if (details.length === 0) {
             console.warn('[SlashCommands] No common commands to render!');
-            return '<div style="color: #858585; padding: 12px; text-align: center;">No common commands configured</div>';
+            return '<div class="common-commands-empty">no common commands configured</div>';
         }
 
-        return this.commonCommands.map(cmd => {
+        return details.map(entry => {
+            const cmd = entry.command;
+            const short = entry.description || '';
+            // Full description (scraped docs / user command frontmatter)
+            // stays as the hover tooltip; short text is what renders.
             const cmdInfo = this.commandIndex.get(cmd);
-            const description = cmdInfo ? cmdInfo.description : '';
+            const longDescription = (cmdInfo && cmdInfo.description) || short;
+            const shortHtml = short
+                ? `<span class="command-button-desc">${this._escapeHtml(short)}</span>`
+                : '';
             return `
-                <button class="command-button" data-command="${cmd}" title="${this._escapeHtml(description)}">
-                    ${this._escapeHtml(cmd)}
+                <button class="command-button" data-command="${this._escapeHtml(cmd)}" title="${this._escapeHtml(longDescription)}">
+                    <span class="command-button-name">${this._escapeHtml(cmd)}</span>
+                    ${shortHtml}
                 </button>
             `;
         }).join('');
@@ -317,10 +350,16 @@ class SlashCommandsModal {
             closeBtn.addEventListener('click', () => this.close());
         }
 
-        // Overlay click to close
+        // Overlay click to close.
+        //
+        // Routed through DismissGuard.onOverlayDismiss instead of a bare
+        // `click -> close()`. The bare form fired for ANY click that
+        // bubbled up, including clicks on the filter input three levels
+        // down, so clicking the search box closed the whole menu and it
+        // could never be typed into. See client/js/dismiss-guard.js.
         const overlay = this.modal.querySelector('.modal-overlay');
         if (overlay) {
-            overlay.addEventListener('click', () => this.close());
+            window.DismissGuard.onOverlayDismiss(overlay, () => this.close());
         }
 
         // Common command buttons

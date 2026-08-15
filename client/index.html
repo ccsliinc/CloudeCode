@@ -2,8 +2,35 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- viewport-fit=cover lets the page paint edge to edge on a notched
+         iPhone instead of letterboxing between two grey bars. It hands us
+         responsibility for the insets in exchange; client/css/ios-chrome.css
+         pays that with env(safe-area-inset-*). Both values are inert on a
+         desktop browser, so this does not change the web-first layout. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>☁️ Cloude Code</title>
+
+    <!-- iOS home-screen app chrome.
+         WHAT THIS ACTUALLY BUYS OVER PLAIN HTTP: iOS "Add to Home Screen"
+         reads these tags with no secure-context requirement, so the icon,
+         the standalone (chrome-less) window and the status bar style all
+         work on a Tailscale http:// origin. What does NOT work over plain
+         http is anything gated on window.isSecureContext - service
+         workers, Cache API, and therefore any offline/background story.
+         There is deliberately NO service worker registered here: it would
+         fail to register on this origin, and a registration that silently
+         never takes is worse than none. See docs/ios-standalone.md. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <!-- black-translucent puts our own background under the status bar,
+         which is why ios-chrome.css must pad the header by the top inset. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Cloude">
+    <meta name="theme-color" content="#0a0a0a">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <!-- iOS ignores manifest icons and reads this instead. PNG only. -->
+    <link rel="apple-touch-icon" href="/static/assets/icons/icon-180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/assets/icons/icon-192.png">
 
     <!-- xterm.js CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
@@ -19,6 +46,15 @@
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
     <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
+    <!-- Mobile header dropdown (client/js/header-menu.js) and iOS
+         safe-area chrome. Both load after styles.css: the first needs the
+         theme custom properties, the second must win on equal specificity
+         where it re-pads the header. -->
+    <link rel="stylesheet" href="/static/css/header-menu.css" />
+    <link rel="stylesheet" href="/static/css/ios-chrome.css" />
+    <!-- Two-line common-command chips. After styles.css, which owns the
+         base .command-button rule this narrows. -->
+    <link rel="stylesheet" href="/static/css/slash-command-chips.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
@@ -223,6 +259,12 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
 
     <!-- Application modules -->
+    <!-- Shared click-dismissal guard. Loaded FIRST because it is a
+         dependency of anything that closes on click - slash-commands.js,
+         header-menu.js and app.js all call window.DismissGuard while
+         wiring their listeners. See that file for the two shipped bugs it
+         exists to retire. -->
+    <script src="/static/js/dismiss-guard.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
@@ -317,6 +359,13 @@
     <script src="/static/js/markdown-lite.js"></script>
     <script src="/static/js/config-editor-modal.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
+
+    <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
+         (window.DismissGuard). It re-parents the existing header control
+         nodes rather than cloning them, so it is order-independent with
+         respect to app.js wiring their click handlers - the listeners
+         travel with the nodes. -->
+    <script src="/static/js/header-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

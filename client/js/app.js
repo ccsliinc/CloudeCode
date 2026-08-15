@@ -385,9 +385,17 @@ class AppController {
             this.showLaunchpad();
         });
 
-        // Title click - navigate back to launchpad (only from terminal)
+        // Title click - navigate back to launchpad (only from terminal).
+        //
+        // Routed through DismissGuard.onContainerActivate, not a bare click
+        // listener. #appTitle is also the mount point for the rename pencil
+        // and the inline rename input (see TerminalController
+        // ._enterHeaderRename): with a bare listener, clicking into the
+        // rename field navigated away from the session mid-edit. Only a
+        // click on the title chrome itself counts as "go back" now.
+        // See client/js/dismiss-guard.js.
         const appTitle = document.getElementById('appTitle');
-        appTitle.addEventListener('click', () => {
+        window.DismissGuard.onContainerActivate(appTitle, () => {
             if (this.currentScreen === 'terminal') {
                 console.log('App: Title clicked, navigating to launchpad');
                 this.showLaunchpad();

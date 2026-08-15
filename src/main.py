@@ -530,6 +530,43 @@ async def session_deep_link(project: str):
     )
 
 
+# Web app manifest + apple-touch-icon, served from the ORIGIN ROOT.
+#
+# Both files physically live under client/ and are therefore already
+# reachable at /static/..., but they get root routes anyway:
+#
+# - The manifest's ``scope``/``start_url`` are resolved relative to the
+#   manifest URL. Serving it from /static/ would scope the app to /static/,
+#   and a standalone launch would then treat "/" as off-scope and open it
+#   in a browser tab instead of the app window.
+# - iOS probes /apple-touch-icon.png at the origin root when a page's
+#   <link rel="apple-touch-icon"> is missing or fails; answering that probe
+#   costs one route and removes a whole class of "why is my home screen
+#   icon a screenshot of the page" failure.
+#
+# Media type is stamped explicitly: the manifest MUST be served as
+# application/manifest+json or Chrome ignores it, and the extension is not
+# in Python's mimetypes table.
+_WEB_MANIFEST_PATH = client_dir / "manifest.webmanifest"
+_APPLE_TOUCH_ICON_PATH = client_dir / "assets" / "icons" / "icon-180.png"
+
+
+@app.get("/manifest.webmanifest")
+async def web_manifest():
+    """Serve the web app manifest from the origin root."""
+    return FileResponse(
+        _WEB_MANIFEST_PATH,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@app.get("/apple-touch-icon.png")
+async def apple_touch_icon():
+    """Serve the 180px home-screen icon for iOS's root-path probe."""
+    return FileResponse(_APPLE_TOUCH_ICON_PATH, media_type="image/png")
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
