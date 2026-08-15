@@ -30,6 +30,13 @@ ENV/
 .env
 .env.local
 config.json
+# The app rewrites config.json in place and drops the previous copy beside it
+# as config.json.bak (and dated config.json.bak.<stamp> variants). Those are
+# copies of a real runtime config, so they carry exactly the same secrets
+# config.json does and must never be committed. Ignoring config.json alone
+# does not cover them: the pattern is literal, not a prefix.
+config.json.bak
+config.json.bak.*
 
 # Authentication
 totp-qr.png
