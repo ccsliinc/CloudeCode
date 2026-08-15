@@ -25,22 +25,24 @@ you touch.
 
 ## Architecture, the parts that shape everything else
 
-**tmux is the live backend. `PTYBackend` is legacy.** `SessionBackend` has two
-implementations (`src/core/session_backend.py`); `TmuxBackend` is the one that
-runs. `PTYBackend` is a thin fallback adapter around the older
-`src/utils/pty_session.py`. Write against tmux; do not build new behavior on the
-PTY path.
+**tmux is the live backend. `PTYBackend` is legacy.** The `SessionBackend` ABC is
+at `src/core/session_backend.py:32` and has two implementations, each in its own
+file: `TmuxBackend` (`src/core/tmux_backend.py:163`) is the one that runs, and
+`PTYBackend` (`src/utils/pty_session.py:293`) is the legacy path. Only the ABC
+lives in `session_backend.py`; do not go looking for the subclasses there. Write
+against tmux; do not build new behavior on the PTY path.
 
 **Sessions live on a dedicated tmux socket, `tmux -L cloude`.** That socket is
 separate from the user's own tmux server, which is why our sessions survive a
 server restart and why we can never accidentally kill a user session. Sessions we
-create are named `cloude_*`. Socket name constant: `DEFAULT_SOCKET_NAME` in
-`tmux_backend.py`. Address sessions by socket + name, never by prefix guessing.
+create are named `cloude_*`. Constants: `DEFAULT_SOCKET_NAME` (`src/core/tmux_backend.py:84`) and
+`SESSION_PREFIX` (`:87`). Address sessions by socket + name, never by prefix
+guessing.
 
 **Created vs adopted is a real distinction, not a detail.** Cloude Code can
 attach to a tmux session it did not create. Those get an id of
-`adopted:<tmux-name>` and are absent from `owned_tmux_sessions`. See
-`session_manager.py` (the adopt path around `adopted_id = f"adopted:{name}"`).
+`adopted:<tmux-name>` and are absent from `owned_tmux_sessions`. See the adopt path at
+`src/core/session_manager.py:2596` (`adopted_id = f"adopted:{name}"`).
 Anything that parses, matches, displays or routes on a session id has to handle
 both shapes. Strip the prefix to recover the tmux name; do not assume the id is a
 clean display string.
@@ -61,13 +63,23 @@ half. Never increment without a floor, never assume a `Stop` follows the
 `UserPromptSubmit` you saw.
 
 **Security posture.** CSP is stamped on every response by the middleware in
-`src/main.py`: `default-src 'self'`, `script-src 'self'` plus one legacy
-exception for `cdn.jsdelivr.net`, which xterm.js 5.3.0 is still loaded from in
-`client/index.html`. That exception is a debt being paid down, not a pattern.
-New third-party libraries get **vendored** under `client/vendor/` (CodeMirror 6 is
-the worked example, with a `VERSION.md` next to it) and loaded from `/static`.
+`src/main.py` (header built at `src/main.py:309-317`). The baseline is
+`default-src 'self'` with `frame-ancestors 'none'`, but the CDN exception is
+wider than one directive: `https://cdn.jsdelivr.net` is allowed in **three** of
+them, `script-src` (`:311`), `style-src` (`:312`) and `font-src` (`:315`). That
+is where xterm.js 5.3.0 and its fit / webgl / unicode11 addons are still loaded
+from in `client/index.html`. `style-src` also carries `'unsafe-inline'`: xterm
+addons set inline style attributes on nodes they manage, and without it the
+terminal renders blank. Inline **styles** are therefore already permitted; inline
+**script** and `eval` are not. All of this is debt, not a pattern to copy.
+
+New third-party libraries get **vendored** under `client/vendor/<lib>/` and
+served from `/static`, with a `VERSION.md` beside the files recording version and
+upstream source. CodeMirror 6 is the worked example; it lands with the
+config-editor work, so `client/vendor/` may not exist yet in the tree you have.
 Do not add a host to the CSP, do not weaken `frame-ancestors 'none'`, do not
-introduce inline script or `eval`.
+introduce inline script or `eval`, and do not read `style-src 'unsafe-inline'`
+as license to widen anything further.
 
 **Config writes are atomic and backed up.** Copy the pattern in
 `Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
