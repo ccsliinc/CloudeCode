@@ -614,6 +614,12 @@ class AppController {
             && typeof window.Themes.applyTheme === 'function') {
             window.Themes.applyTheme(session.pinned_theme, { persist: false, forXterm: true });
         }
+        // Per-session music: apply THIS session's opt-in (default off) so
+        // music never carries over from the session we just left. Must run
+        // after setActiveSession above — it keys off the tmux session name.
+        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
+            window.SessionThemeMenu.syncForSession();
+        }
         // Header identity: brand icon + session name as title.
         setHeaderIdentity({
             icon: 'cloude',

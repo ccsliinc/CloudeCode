@@ -85,13 +85,15 @@
      */
     function writeSystemClipboard(term, text) {
         if (!text) return;
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            navigator.clipboard.writeText(text).catch(() => {
+        // Routed through CopyCompat: over plain http (Tailscale / LAN)
+        // navigator.clipboard is entirely undefined, and the old code
+        // dead-ended there with "clipboard unavailable". CopyCompat falls
+        // back to execCommand, which is not secure-context gated.
+        window.CopyCompat.copyText(text).then((result) => {
+            if (!result.ok) {
                 term._showStatusPill('copy blocked by browser — use the system copy shortcut', 'error');
-            });
-        } else {
-            term._showStatusPill('clipboard unavailable on this connection', 'error');
-        }
+            }
+        });
     }
 
     /* =================================================================

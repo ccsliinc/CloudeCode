@@ -1,0 +1,307 @@
+/* =====================================================================
+ * Terminal-screen tools: the tool strip, the copy-output sheet and the
+ * per-session theme picker.
+ *
+ * Everything here is theme-aware through the same semantic tokens the
+ * rest of the chrome uses, so a per-session theme restyles these
+ * controls along with the terminal itself.
+ *
+ * Web-first and mobile-first at once: the strip is a normal flow row on
+ * a wide screen and the sheet is a centred dialog; below 768px the sheet
+ * becomes a bottom sheet and every hit area grows to a thumb-sized 44px.
+ * ===================================================================== */
+
+/* ---------------------------------------------------------------------
+ * Tool strip
+ * ------------------------------------------------------------------- */
+.terminal-tools {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 6px 10px 0;
+}
+
+.terminal-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: var(--radius-full, 999px);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.terminal-tool:hover,
+.terminal-tool:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+.terminal-tool.is-on {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, transparent);
+}
+
+/* Touch targets. `pointer: coarse` covers phones and tablets, where the
+ * 32px desktop button is below the 44px minimum comfortable tap size. */
+@media (pointer: coarse) {
+    .terminal-tool {
+        width: 44px;
+        height: 44px;
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Copy-output sheet
+ * ------------------------------------------------------------------- */
+.cloude-copy-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-overlay);
+    padding: 16px;
+}
+
+.cloude-copy-sheet__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 640px;
+    max-height: 80vh;
+    padding: 16px;
+    border-radius: 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 10px 40px var(--color-bg-overlay-soft);
+}
+
+.cloude-copy-sheet__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.cloude-copy-sheet__title {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--color-accent);
+}
+
+.cloude-copy-sheet__close {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.cloude-copy-sheet__close:hover {
+    color: var(--color-accent);
+}
+
+.cloude-copy-sheet__chips {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.cloude-copy-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 10px;
+    text-align: left;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.cloude-copy-chip:hover,
+.cloude-copy-chip:focus-visible {
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+.cloude-copy-chip__kind {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--color-bg-elevated);
+    color: var(--color-accent);
+    font-size: 10px;
+    text-transform: lowercase;
+}
+
+/* The value is the long part (a sign-in url can be 200 chars). Ellipsis
+ * rather than wrap so the chip list stays scannable; the full value is
+ * in the title attribute and in the textarea below. */
+.cloude-copy-chip__value {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cloude-copy-sheet__empty {
+    margin: 0;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+/* The always-there fallback: real selectable text, so even when both
+ * programmatic clipboard tiers are refused the user can long-press and
+ * use the OS copy menu. user-select must be explicit because the
+ * terminal chrome around it disables selection. */
+.cloude-copy-sheet__text {
+    flex: 1 1 auto;
+    min-height: 120px;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    /* 16px keeps iOS Safari from auto-zooming when the field is focused. */
+    font-size: 16px;
+    line-height: 1.4;
+    resize: none;
+    white-space: pre;
+    overflow: auto;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.cloude-copy-sheet__foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.cloude-copy-sheet__action {
+    min-height: 44px;
+    padding: 0 18px;
+    border-radius: var(--radius-full, 999px);
+    background: var(--color-accent-bg, transparent);
+    border: 1px solid var(--color-accent);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.cloude-copy-sheet__action:hover {
+    background: var(--color-accent-bg-active, transparent);
+}
+
+.cloude-copy-sheet__hint {
+    flex: 1 1 160px;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+/* Bottom sheet on phones: anchored to the bottom edge, within thumb
+ * reach, and tall enough to show a wrapped url without scrolling. */
+@media (max-width: 768px) {
+    .cloude-copy-sheet {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .cloude-copy-sheet__panel {
+        max-width: none;
+        max-height: 88vh;
+        border-radius: 12px 12px 0 0;
+        border-bottom: none;
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Per-session theme picker
+ * ------------------------------------------------------------------- */
+.cloude-session-theme {
+    position: fixed;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    max-width: min(280px, calc(100vw - 16px));
+    border-radius: 8px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 8px 28px var(--color-bg-overlay-soft);
+    overflow: hidden;
+}
+
+.cloude-session-theme__head {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    /* A tmux session name can be long; keep the header one line. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 60vh so a large theme library scrolls inside the menu rather than
+ * running off the viewport. */
+.cloude-session-theme__list {
+    display: flex;
+    flex-direction: column;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.cloude-session-theme__item {
+    min-height: 44px;
+    padding: 0 12px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.cloude-session-theme__item:hover,
+.cloude-session-theme__item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+.cloude-session-theme__item.is-active {
+    color: var(--color-accent);
+}
+
+.cloude-session-theme__item.is-active::after {
+    content: ' *';
+}

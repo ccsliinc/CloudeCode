@@ -299,6 +299,12 @@ class Terminal {
         // so term.reset() during session swap does not wipe them.
         this._applyTouchSelection();
 
+        // Terminal-screen tool strip: copy-output sheet, per-session theme
+        // picker, per-session music opt-in. Same load-order guarantee as
+        // the hooks above — the modules are loaded before initTerminal()
+        // runs, and the guards inside cover a failed static fetch.
+        this._applyTerminalTools();
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -452,7 +458,11 @@ class Terminal {
         if (!this.term || !this.term.element || this._wheelHandlerAttached) return;
         this.term.element.addEventListener('wheel', (e) => {
             if (e.deltaY === 0) return;
-            this.autoScrollEnabled = false;  // bypass the 100ms scroll-listener debounce race
+            // Marks a user gesture so a write landing mid-scroll cannot
+            // chase the viewport back down (terminal-scroll.js). The old
+            // `autoScrollEnabled = false` here was a point fix for the
+            // same race that only ever covered the wheel, never touch.
+            if (window.TerminalScroll) window.TerminalScroll.noteUserScroll();
             const lines = Math.ceil(Math.abs(e.deltaY) / 40) * (e.deltaY > 0 ? 1 : -1);
             this.term.scrollLines(lines || (e.deltaY > 0 ? 1 : -1));
             e.preventDefault();
@@ -551,6 +561,31 @@ class Terminal {
     }
 
     /**
+     * Wire the terminal-screen tool strip.
+     *
+     * Three session-scoped controls, all mounted in index.html and wired
+     * here once: the copy-output sheet (copy-output.js), the per-session
+     * theme picker and the per-session music opt-in (both in
+     * session-theme-menu.js). Buttons live outside #terminal so
+     * term.reset() on a session swap cannot wipe the handlers; each
+     * module guards its own re-entry.
+     *
+     * @returns {void}
+     */
+    _applyTerminalTools() {
+        const copyBtn = document.getElementById('terminalCopyBtn');
+        if (copyBtn && window.CopyOutput) {
+            window.CopyOutput.wireButton(this, copyBtn);
+        }
+
+        const themeBtn = document.getElementById('sessionThemeBtn');
+        const audioBtn = document.getElementById('sessionAudioBtn');
+        if (window.SessionThemeMenu) {
+            window.SessionThemeMenu.wire(this, themeBtn, audioBtn);
+        }
+    }
+
+    /**
      * IMG-PASTE — shared upload + path-injection routine.
      *
      * Trailing SPACE (not Enter) is intentional: Claude Code's CLI
@@ -625,11 +660,19 @@ class Terminal {
             merged.set(c, o);
             o += c.length;
         }
+        // SCROLLBACK — sample the viewport position BEFORE the write. See
+        // terminal-scroll.js for why this cannot be a flag mutated by a
+        // debounced scroll listener: the write always won that race, so
+        // the view snapped back to the bottom while output was streaming
+        // and the user could never stay scrolled up.
+        const follow = window.TerminalScroll
+            ? window.TerminalScroll.shouldFollowOutput(this.term)
+            : this.autoScrollEnabled;
+
         this.term.write(merged, () => {
             this.flushing = false;
 
-            // Auto-scroll to bottom if enabled
-            if (this.autoScrollEnabled && this.term) {
+            if (follow && this.term) {
                 this.term.scrollToBottom();
             }
 
@@ -638,43 +681,32 @@ class Terminal {
     }
 
     /**
-     * Setup scroll event listener to detect manual scrolling
+     * SCROLLBACK — hand the #terminal container to terminal-scroll.js,
+     * which observes touch/wheel gestures so a write cannot yank the
+     * viewport out from under a drag.
+     *
+     * This replaces a debounced `.xterm-viewport` scroll listener that
+     * tried to infer intent AFTER the fact. Whether to chase output is
+     * now measured from the xterm buffer immediately before each write
+     * (see flush()), so there is no longer any state to keep in sync and
+     * no timer that a write can beat.
+     *
+     * @returns {void}
      */
     setupScrollListener() {
-        // Wait for terminal to be fully initialized
-        setTimeout(() => {
-            const viewport = document.querySelector('.xterm-viewport');
-            if (viewport) {
-                let scrollTimeout = null;
-                viewport.addEventListener('scroll', () => {
-                    // Debounce scroll events
-                    if (scrollTimeout) clearTimeout(scrollTimeout);
-
-                    scrollTimeout = setTimeout(() => {
-                        if (!this.term) return;
-
-                        if (this._programmaticScrollLock > 0) return;
-
-                        // Check if user scrolled to bottom
-                        const isAtBottom = this.isScrolledToBottom(viewport);
-
-                        if (isAtBottom) {
-                            // User scrolled back to bottom, re-enable auto-scroll
-                            this.autoScrollEnabled = true;
-                        } else {
-                            // User scrolled up, disable auto-scroll
-                            this.autoScrollEnabled = false;
-                        }
-                    }, 100);
-                });
-            }
-        }, 500);
+        const container = document.getElementById('terminal');
+        if (window.TerminalScroll && container) {
+            window.TerminalScroll.init(container);
+        }
     }
 
     _forceScrollToBottom(holdMs = 400) {
         if (!this.term) return;
         this._programmaticScrollLock++;
         this.autoScrollEnabled = true;
+        // Reconnect/replay repaint is an explicit "back to live" intent —
+        // drop any gesture latch so the pins below are not suppressed.
+        if (window.TerminalScroll) window.TerminalScroll.pinToBottom(this.term);
         const pin = () => {
             if (!this.term) return;
             try { this.term.scrollToBottom(); } catch (_) { /* */ }
@@ -707,8 +739,14 @@ class Terminal {
      * Scroll to bottom and re-enable auto-scroll (for D-pad)
      */
     scrollToBottomAndEnableAutoScroll() {
-        if (this.term) {
-            this.autoScrollEnabled = true;
+        if (!this.term) return;
+        this.autoScrollEnabled = true;
+        // Clears the gesture latch too — this is an explicit "back to
+        // live" intent and must beat a latch left by the user's last
+        // drag, which would otherwise suppress the next few writes.
+        if (window.TerminalScroll) {
+            window.TerminalScroll.pinToBottom(this.term);
+        } else {
             this.term.scrollToBottom();
         }
     }
