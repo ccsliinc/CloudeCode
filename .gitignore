@@ -30,6 +30,8 @@ ENV/
 .env
 .env.local
 config.json
+config.json.bak
+config.json.bak.*
 
 # Authentication
 totp-qr.png
