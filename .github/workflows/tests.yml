@@ -87,12 +87,24 @@ jobs:
         # error would otherwise reach the browser unnoticed.
         run: scripts/ci/check-js-syntax.sh
 
-      - name: Run the deep-link resolver smoke test
-        # A standalone node script with no test-runner dependency.
-        run: node tests/test_deeplink_resolver.node.mjs
-
-      - name: Run the launch-picker grouping test
-        # Pins the rules the picker has regressed on before: exactly one
-        # row per wrapper, no duplicates, the default badged, and a model
-        # step offered only for an accepts_model wrapper.
-        run: node tests/test_provider_groups.node.mjs
+      - name: Run every client javascript suite
+        # Each tests/*.node.mjs is a standalone node script with no
+        # test-runner dependency: it exits non-zero on failure and prints
+        # "ALL PASS" otherwise. Globbed rather than listed one step at a
+        # time, which is how the suite count outgrew the list - the
+        # integration that merged five branches arrived with fifteen of
+        # these and a workflow that ran two of them.
+        run: |
+          set -u
+          status=0
+          for suite in tests/*.node.mjs; do
+            echo "::group::$suite"
+            if node "$suite"; then
+              echo "PASS $suite"
+            else
+              echo "FAIL $suite"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"

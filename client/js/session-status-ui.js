@@ -83,6 +83,39 @@ console.log('[SessionStatusUI Module] Loading...');
     };
 
     /**
+     * Escape a value for interpolation into a double-quoted HTML attribute.
+     *
+     * Description: The ONE escaper this module uses. `&` must be replaced
+     *   first or the later replacements would be re-escaped ("<" becoming
+     *   "&amp;lt;"). All five characters are handled so the result is
+     *   correct inside either quoting style and survives a round trip
+     *   through `element.dataset`, which is what the mark-unread handlers
+     *   in launchpad.js and session-sidebar.js read back.
+     *
+     *   Deliberately string-based rather than the
+     *   `div.textContent = s; return div.innerHTML` trick used elsewhere
+     *   in the client: that idiom does NOT escape quote characters, so it
+     *   is wrong for an attribute value and right only for text content.
+     *   It is also why this module keeps its own helper instead of reusing
+     *   App._escapeHtml, on top of this file having no dependencies by
+     *   design (it loads before everything that calls it).
+     * Inputs:
+     *   value (any) - stringified first; null/undefined become ''.
+     * Output:
+     *   string - safe to place between the quotes of an attribute.
+     * Example:
+     *   escapeAttr('a"b\'c<d>') -> 'a&quot;b&#39;c&lt;d&gt;'
+     */
+    function escapeAttr(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    /**
      * Normalize any input into one of the known status keys.
      *
      * Description: Defensive normalizer so a missing/unexpected value from
@@ -126,9 +159,15 @@ console.log('[SessionStatusUI Module] Loading...');
         const key = normalizeStatus(status);
         const label = STATUS_LABELS[key];
         const cssClass = STATUS_DOT_CLASS[key];
+        // label/cssClass come from the frozen tables above via
+        // normalizeStatus, so they cannot currently carry a special
+        // character. Escaped anyway: the audit that added escapeAttr found
+        // exactly this shape (raw interpolation into an attribute) already
+        // shipped once with a user-controlled value, and a future label
+        // edit must not be able to reintroduce it.
         return (
-            `<span class="status-dot status-dot--${cssClass}" role="img" ` +
-            `title="${label}" aria-label="${label}"></span>`
+            `<span class="status-dot status-dot--${escapeAttr(cssClass)}" role="img" ` +
+            `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"></span>`
         );
     }
 
@@ -175,11 +214,18 @@ console.log('[SessionStatusUI Module] Loading...');
             ? 'clear unread flag'
             : 'mark unread for followup';
         const pressed = unread ? 'true' : 'false';
-        const safeName = String(tmuxName || '').replace(/"/g, '&quot;');
+        // tmuxName is the only user-controlled value in this module. A
+        // session name is free text, so it can hold a quote, an angle
+        // bracket, or an ampersand; interpolating it raw put arbitrary
+        // markup into the attribute list. The previous quote-only replace
+        // left `&` alone, which silently corrupted any name containing an
+        // entity-shaped substring on the way back out through
+        // `dataset.markUnread`.
+        const safeName = escapeAttr(tmuxName);
         return (
             `<span class="mark-unread-toggle${unread ? ' mark-unread-toggle--active' : ''}" ` +
             `role="button" tabindex="0" aria-pressed="${pressed}" ` +
-            `title="${label}" aria-label="${label}" ` +
+            `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" ` +
             `data-mark-unread="${safeName}" data-unread-current="${pressed}">` +
             `${unread ? envelopeFilledSvg() : envelopeOutlineSvg()}</span>`
         );
@@ -352,6 +398,7 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     window.SessionStatusUI = {
+        escapeAttr,
         normalizeStatus,
         dotHtml,
         labelFor,
