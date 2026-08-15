@@ -185,6 +185,9 @@ def test_real_cld_body_round_trips_byte_for_byte_and_resolves(tmp_path):
 
 
 def test_real_cld_body_with_model_produces_well_formed_invocation(tmp_path):
+    # accepts_model=True is what makes a model reach the wrapper at all
+    # (see AgentWrapper.accepts_model); this test is about the QUOTING of
+    # a forwarded model through a real multi-line function body.
     config_data = {
         "agents": {
             "wrappers": [
@@ -194,6 +197,7 @@ def test_real_cld_body_with_model_produces_well_formed_invocation(tmp_path):
                     "script": EXAMPLE_WRAPPER_CLD,
                     "entry": "cld",
                     "default": True,
+                    "accepts_model": True,
                 }
             ]
         }
@@ -370,3 +374,56 @@ def test_wrapper_crud_writes_backup(tmp_path):
     backup = Path(s.auth_config_file).with_suffix(".json.bak")
     assert backup.exists()
     assert not Path(str(Path(s.auth_config_file)) + ".tmp").exists()
+
+
+# ---------------------------------------------------------------------- #
+# accepts_model (feat/settings-tabs-and-commands)
+#
+# The regression being fixed: a model chosen alongside a wrapper that
+# ignores models was routed to the DEFAULT wrapper, which forwards "$@" to
+# claude, so the model id arrived as a PROMPT argument. The picker no
+# longer offers models for such a wrapper; these tests pin the server-side
+# half of the rule, which holds even for a stale client or a raw API call.
+# ---------------------------------------------------------------------- #
+
+def _wrapper(wid, **kw):
+    base = {"id": wid, "label": wid, "script": f'{wid} "$@"', "default": False}
+    base.update(kw)
+    return base
+
+
+def test_model_is_dropped_for_a_wrapper_that_does_not_accept_one(tmp_path):
+    config_data = {"agents": {"wrappers": [_wrapper("cld", default=True)]}}
+    s = _settings_with_config(tmp_path, config_data)
+    with_model = s.get_agent_command("cld", model="anthropic/claude-opus-4")
+    without = s.get_agent_command("cld")
+    # Byte-identical: the model never reaches the command line at all.
+    assert with_model == without
+    assert "anthropic/claude-opus-4" not in with_model
+
+
+def test_model_is_forwarded_for_a_wrapper_that_accepts_one(tmp_path):
+    config_data = {
+        "agents": {"wrappers": [_wrapper("cldor", default=True, accepts_model=True)]}
+    }
+    s = _settings_with_config(tmp_path, config_data)
+    resolved = s.get_agent_command("cldor", model="anthropic/claude-opus-4")
+    assert resolved.rstrip().endswith("anthropic/claude-opus-4")
+
+
+def test_accepts_model_defaults_false_so_existing_wrappers_are_unchanged(tmp_path):
+    """A wrapper dict written before the field existed parses fine and
+    behaves as "does not take a model" — the safe direction."""
+    config_data = {"agents": {"wrappers": [_wrapper("legacy", default=True)]}}
+    s = _settings_with_config(tmp_path, config_data)
+    agents = s.load_auth_config().agents
+    assert agents.wrappers[0].accepts_model is False
+
+
+def test_no_wrappers_keeps_the_legacy_cldor_model_path(tmp_path):
+    """With NO wrappers configured, accepts_model is irrelevant and the
+    original hardcoded cldor fallback must still consume the model."""
+    s = _settings_with_config(tmp_path, {"agents": {"claude_command": ""}})
+    resolved = s.get_agent_command("claude", model="some/model")
+    assert "cldor" in resolved
+    assert "some/model" in resolved

@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 # ruff: noqa: E402
 from src.core.config_migration import (
     CURRENT_CONFIG_VERSION,
+    _step_v1_to_v2,
     build_seed_wrappers,
     ensure_config_migrated,
     migrate_config_dict,
@@ -190,10 +191,16 @@ def test_explicit_claude_command_present_stamps_version_but_seeds_no_wrappers():
 
 
 def test_existing_wrappers_block_not_overwritten():
+    """The list itself is never re-seeded or reordered. The v1->v2 step
+    does ADD the new ``accepts_model`` key to each entry (additive by
+    design, see CURRENT_CONFIG_VERSION's history) — every other field is
+    byte-identical and no wrapper id changes."""
     data = {"agents": {"wrappers": [{"id": "custom", "label": "x", "script": "y", "default": True}]}}
     new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
     assert changed is True
-    assert new_data["agents"]["wrappers"] == [{"id": "custom", "label": "x", "script": "y", "default": True}]
+    assert new_data["agents"]["wrappers"] == [
+        {"id": "custom", "label": "x", "script": "y", "default": True, "accepts_model": False}
+    ]
     assert new_data["config_version"] == CURRENT_CONFIG_VERSION
 
 
@@ -267,3 +274,151 @@ def test_ensure_config_migrated_never_raises_on_invalid_json(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{bad")
     ensure_config_migrated(config_path)  # must not raise
+
+
+# ---------------------------------------------------------------------- #
+# v1 -> v2 (feat/settings-tabs-and-commands): ADDITIVE ONLY
+#
+# The deployed config on the author's machine is at version 1 with
+# wrappers already seeded, so these four shapes are the whole
+# compatibility surface: v0, v1-with-wrappers, v1-without-wrappers, and
+# already-v2.
+# ---------------------------------------------------------------------- #
+
+def _v1_config_with_wrappers():
+    """A config in exactly the shape a live v1 install has on disk."""
+    return {
+        "config_version": 1,
+        "agents": {
+            "claude_command": "",
+            "codex_command": "codex",
+            "wrappers": [
+                {"id": "claude", "label": "claude", "script": "claude", "default": False},
+                {
+                    "id": "cld",
+                    "label": "cld (subscription)",
+                    "script": 'cld "$@"',
+                    "description": "subscription OAuth via macOS Keychain",
+                    "default": True,
+                },
+                {
+                    "id": "cldor",
+                    "label": "cldor (openrouter)",
+                    "script": 'cldor "$@"',
+                    "description": "OpenRouter-routed, model as first argument",
+                    "default": False,
+                },
+            ],
+        },
+    }
+
+
+def test_v1_with_wrappers_gains_accepts_model_and_terminal_commands():
+    data = _v1_config_with_wrappers()
+    new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
+    assert changed is True
+    assert new_data["config_version"] == 2
+
+    by_id = {w["id"]: w for w in new_data["agents"]["wrappers"]}
+    # Ids and order are untouched — Session.agent_type stores these.
+    assert [w["id"] for w in new_data["agents"]["wrappers"]] == ["claude", "cld", "cldor"]
+    # Only the OpenRouter wrapper accepts a model; the others keep today's
+    # behavior of never being handed one.
+    assert by_id["cldor"]["accepts_model"] is True
+    assert by_id["cld"]["accepts_model"] is False
+    assert by_id["claude"]["accepts_model"] is False
+    # Nothing removed.
+    assert by_id["cld"]["default"] is True
+    assert by_id["cld"]["script"] == 'cld "$@"'
+    assert new_data["agents"]["codex_command"] == "codex"
+    assert new_data["agents"]["claude_command"] == ""
+    # Terminal commands seeded.
+    ids = [c["id"] for c in new_data["terminal_commands"]]
+    assert ids == ["update-claude", "show-tmux", "top"]
+    # Input untouched.
+    assert "terminal_commands" not in data
+    assert "accepts_model" not in data["agents"]["wrappers"][2]
+
+
+def test_v1_without_wrappers_still_works():
+    """A v1 config that never got wrappers (explicit claude_command path)
+    must migrate cleanly — the wrapper annotation simply has nothing to
+    annotate."""
+    data = {"config_version": 1, "agents": {"claude_command": "claude --foo"}}
+    new_data, changed = migrate_config_dict(data, has_cld=False, has_cldor=False)
+    assert changed is True
+    assert new_data["config_version"] == 2
+    assert "wrappers" not in new_data["agents"]
+    assert new_data["agents"]["claude_command"] == "claude --foo"
+    assert len(new_data["terminal_commands"]) == 3
+
+
+def test_v1_with_no_agents_block_at_all():
+    data = {"config_version": 1, "projects": []}
+    new_data, changed = migrate_config_dict(data, has_cld=False, has_cldor=False)
+    assert changed is True
+    assert new_data["config_version"] == 2
+    assert len(new_data["terminal_commands"]) == 3
+
+
+def test_v0_runs_both_steps():
+    """A pre-wrappers config chains 0->1 then 1->2 in one pass."""
+    data = {"agents": {"codex_command": "codex"}}
+    new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
+    assert changed is True
+    assert new_data["config_version"] == 2
+    by_id = {w["id"]: w for w in new_data["agents"]["wrappers"]}
+    assert set(by_id) == {"claude", "cld", "cldor"}
+    assert by_id["cldor"]["accepts_model"] is True
+    assert by_id["cld"]["accepts_model"] is False
+    assert len(new_data["terminal_commands"]) == 3
+
+
+def test_already_v2_is_a_complete_noop():
+    data = {
+        "config_version": 2,
+        "agents": {"wrappers": [{"id": "cld", "label": "cld", "script": "x", "accepts_model": True}]},
+        "terminal_commands": [{"id": "mine", "label": "mine", "command": "ls"}],
+    }
+    new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
+    assert changed is False
+    assert new_data is data
+
+
+def test_v2_does_not_clobber_user_edited_terminal_commands():
+    """A user who already curated the list keeps it: the step only seeds
+    when the key is absent entirely."""
+    data = dict(_v1_config_with_wrappers())
+    data["terminal_commands"] = [{"id": "mine", "label": "mine", "command": "ls"}]
+    new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
+    assert changed is True
+    assert new_data["terminal_commands"] == [{"id": "mine", "label": "mine", "command": "ls"}]
+
+
+def test_v2_does_not_overwrite_an_explicit_accepts_model():
+    data = {
+        "config_version": 1,
+        "agents": {
+            "wrappers": [
+                # Says "openrouter" (heuristic would guess True) but the
+                # user explicitly set False. The explicit value wins.
+                {"id": "w", "label": "openrouter thing", "script": "x", "accepts_model": False}
+            ]
+        },
+    }
+    new_data, _ = migrate_config_dict(data, has_cld=False, has_cldor=False)
+    assert new_data["agents"]["wrappers"][0]["accepts_model"] is False
+
+
+def test_v1_to_v2_step_is_idempotent_on_its_own():
+    once = _step_v1_to_v2(_v1_config_with_wrappers())
+    twice = _step_v1_to_v2(once)
+    assert twice == once
+
+
+def test_migration_to_v2_is_idempotent_end_to_end():
+    first, changed1 = migrate_config_dict(_v1_config_with_wrappers(), True, True)
+    assert changed1 is True
+    second, changed2 = migrate_config_dict(first, True, True)
+    assert changed2 is False
+    assert second == first

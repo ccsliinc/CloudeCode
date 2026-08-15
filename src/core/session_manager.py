@@ -54,6 +54,16 @@ from src.utils.template_manager import copy_templates as copy_template_files
 
 logger = structlog.get_logger()
 
+# Bounded wait for a just-started pane to become addressable before the
+# initial terminal command is typed into it (see
+# ``SessionManager._type_initial_terminal_command``). tmux creates the
+# session before window 0 exists, so the first write can legitimately fail
+# for a few hundred ms. 20 x 0.1s = 2s ceiling: long enough for every
+# observed start, short enough that a genuinely broken pane does not stall
+# session creation.
+_TERMINAL_COMMAND_WRITE_ATTEMPTS = 20
+_TERMINAL_COMMAND_WRITE_DELAY_SECONDS = 0.1
+
 
 _TMUX_FORBIDDEN_CHARS = re.compile(r"[.:]")
 _WHITESPACE_RUN = re.compile(r"\s+")
@@ -130,6 +140,12 @@ class SessionManager:
         # touches another's — that isolation is the whole point.
         self.sessions: dict[str, Session] = {}
         self.backends: dict[str, SessionBackend] = {}
+        # session_id -> configured terminal-command id awaiting its first
+        # client attach (feat/settings-tabs-and-commands). Holds an ID, never
+        # a command string; the text is read from config.json at flush time.
+        # In-memory only and popped on flush, so a restart or a reconnect
+        # can never replay a command. See flush_pending_terminal_command.
+        self.pending_terminal_commands: dict[str, str] = {}
         # Output fan-out: each backend's ``on_output`` callback is bound to
         # its own session_id (see ``_make_output_handler``), so bytes route
         # to ``self._subscribers[session_id]`` and nowhere else.
@@ -1544,6 +1560,68 @@ class SessionManager:
 
     # ---- session lifecycle ----------------------------------------------
 
+    async def flush_pending_terminal_command(self, session_id: str) -> None:
+        """Type this session's pending terminal command, once, on attach.
+
+        Description: resolves the pending id against config.json (never
+          against anything the client sent) and writes the stored text
+          plus a newline into the pane through the SAME
+          ``SessionBackend.write()`` used for real keystrokes from the
+          browser. Nothing is exec'd here: no subprocess, no shell -c, no
+          eval. The user's own interactive shell, in a pane they are
+          looking at, interprets the line and they can Ctrl-C it.
+
+          WHY ON ATTACH, NOT AT CREATE: a console is born at 80x24 when
+          the launcher has no terminal mounted to measure, and the WS
+          handshake then resizes it and sends Ctrl+L to force a repaint
+          (see src/api/websocket.py). Anything typed before that point
+          runs correctly but is CLEARED off the visible screen by that
+          repaint, so the user clicks "run" and lands on a blank prompt.
+          Verified live: typed at create, the command ran and its output
+          existed only in tmux scrollback. Flushing after the handshake
+          puts the output where the user is actually looking.
+
+          Pops the id first, so a reconnect to the same session never
+          re-runs the command. Best-effort: a write failure must never
+          break an otherwise-good session, so it is logged and swallowed.
+        Inputs: session_id (str) - the session being attached to.
+        Output: None.
+        """
+        command_id = self.pending_terminal_commands.pop(session_id, None)
+        if not command_id:
+            return
+        command = settings.get_terminal_command(command_id)
+        if command is None:
+            return
+        backend = self.backends.get(session_id)
+        if backend is None:
+            return
+
+        payload = (command.command + "\n").encode("utf-8")
+        last_error: Optional[str] = None
+        for attempt in range(_TERMINAL_COMMAND_WRITE_ATTEMPTS):
+            try:
+                await backend.write(payload)
+                logger.info(
+                    "terminal_command_typed",
+                    session_id=session_id,
+                    command_id=command.id,
+                    attempt=attempt,
+                )
+                return
+            except (OSError, RuntimeError, ValueError) as e:
+                # A just-started pane can briefly not be addressable yet.
+                last_error = str(e)
+                await asyncio.sleep(_TERMINAL_COMMAND_WRITE_DELAY_SECONDS)
+
+        logger.warning(
+            "terminal_command_type_failed",
+            session_id=session_id,
+            command_id=command.id,
+            error=last_error,
+            attempts=_TERMINAL_COMMAND_WRITE_ATTEMPTS,
+        )
+
     async def create_session(
         self,
         session_id: str,
@@ -1555,6 +1633,7 @@ class SessionManager:
         project_name: Optional[str] = None,
         agent_type: Optional[str] = None,
         model: Optional[str] = None,
+        terminal_command_id: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -1586,6 +1665,17 @@ class SessionManager:
         resulting ``Session`` alongside ``agent_type`` regardless of
         ``auto_start_claude``, so it survives for the life of the session
         even on a manual/no-autostart create.
+
+        ``terminal_command_id`` (feat/settings-tabs-and-commands) — id of
+        a configured entry in config.json's ``terminal_commands``. When it
+        resolves, the stored command text is TYPED into the new pane after
+        the shell starts, via the existing ``SessionBackend.write()``
+        (tmux ``send-keys``) — the same path a keystroke from the user's
+        browser takes. It is never exec'd by this process and never passed
+        to a shell by us, which is why an id (not a command string) is
+        what crosses the API boundary; see
+        ``src/core/terminal_commands.py``. An unknown id is ignored and
+        the session is just a plain console.
         """
         # Clean up a zombie entry for this exact id (stale metadata / dead
         # backend) — but leave any OTHER live sessions alone.
@@ -1758,6 +1848,12 @@ class SessionManager:
                     initial_cols=initial_cols,
                     initial_rows=initial_rows,
                 )
+
+            # Recorded, not typed yet — it is flushed when the client
+            # attaches, so the handshake's repaint cannot clear the output.
+            # See flush_pending_terminal_command.
+            if terminal_command_id:
+                self.pending_terminal_commands[session_id] = terminal_command_id
 
             # PID for metadata: both backends expose `.pid` now.
             # PTYBackend tracks a single forked pid for the process

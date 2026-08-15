@@ -277,6 +277,21 @@ class CreateSessionRequest(BaseModel):
         None,
         description="OpenRouter model id; None launches Claude directly via 'cld'",
     )
+    # feat/settings-tabs-and-commands — id of a configured terminal
+    # command (config.json ``terminal_commands``) to type into the new
+    # console pane once it is up. Only meaningful with
+    # ``agent_type="shell"``.
+    #
+    # SECURITY: this is an ID, never a command string. The server looks
+    # the id up in the user's own config and writes the stored text into
+    # the visible tmux pane via the existing SessionBackend.write()
+    # (send-keys). A client cannot supply arbitrary text to run — see
+    # src/core/terminal_commands.py's module docstring. An unknown id is
+    # silently ignored (plain console), never an error.
+    terminal_command_id: Optional[str] = Field(
+        None,
+        description="Id of a configured terminal command to run in a new console session",
+    )
 
     @field_validator("model")
     @classmethod
@@ -333,6 +348,29 @@ class WrapperExamplesResponse(BaseModel):
     ``src.core.agent_wrappers.EXAMPLE_WRAPPERS``.
     """
     wrappers: List[dict] = Field(default_factory=list)
+
+
+class TerminalCommandListResponse(BaseModel):
+    """Response for both terminal-command endpoints.
+
+    Full entries in display order. The client re-renders from this
+    authoritative list rather than patching its own state, matching the
+    ``ProviderModelsResponse`` / ``WrapperListResponse`` convention.
+    """
+    commands: List[dict] = Field(default_factory=list)
+
+
+class ReplaceTerminalCommandsRequest(BaseModel):
+    """Request body for ``PUT /api/v1/terminal/commands``.
+
+    Whole-list replace, because add / edit / delete / REORDER are all the
+    same operation on an ordered list — a per-entry endpoint plus a
+    separate reorder endpoint would give two ways for the stored order to
+    disagree with itself. Entries are validated in
+    ``src.core.terminal_commands.validate_command_list`` (schema, id
+    charset, duplicate ids, list-size cap) before anything reaches disk.
+    """
+    commands: List[dict] = Field(default_factory=list)
 
 
 class AddProviderModelRequest(BaseModel):

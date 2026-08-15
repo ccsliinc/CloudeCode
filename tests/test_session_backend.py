@@ -309,7 +309,9 @@ def test_tmux_backend_write_plain_text_uses_send_keys_l():
     assert argv[0] == "send-keys"
     assert argv[1] == "-l"
     assert argv[2] == "-t"
-    assert argv[3] == f"{backend.tmux_session}:0.0"
+    # Bare session name, not "<session>:0.0" — see _safe_target: a
+    # hardcoded window 0 breaks on any tmux.conf with base-index 1.
+    assert argv[3] == backend.tmux_session
     assert argv[4] == "hello"
 
 
@@ -325,7 +327,9 @@ def test_tmux_backend_write_backspace_uses_hex_keys():
     assert argv[0] == "send-keys"
     assert argv[1] == "-H"
     assert argv[2] == "-t"
-    assert argv[3] == f"{backend.tmux_session}:0.0"
+    # Bare session name, not "<session>:0.0" — see _safe_target: a
+    # hardcoded window 0 breaks on any tmux.conf with base-index 1.
+    assert argv[3] == backend.tmux_session
     # Hex pair is the ONLY trailing argv — one byte, one pair.
     assert argv[4:] == ("7f",), f"expected hex pair '7f', got trailing {argv[4:]}"
 
@@ -1426,7 +1430,7 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
     try:
         subprocess.run(
             ["tmux", "-L", "cloude", "send-keys", "-t",
-             f"{name}:0.0", f"echo {marker}", "Enter"],
+             name, f"echo {marker}", "Enter"],
             check=True,
             capture_output=True,
         )

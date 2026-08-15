@@ -1578,9 +1578,18 @@ class Launchpad {
      * a bare shell isn't a "project" in the conventional sense. Still
      * registers a Recent Projects entry so a killed pane can be relaunched
      * the same way every other create path works.
+     *
+     * @param {{terminalCommandId?: string}} [options] - when
+     *   terminalCommandId is set (settings > terminal tab, "run"), the
+     *   server types that configured command into the new pane once the
+     *   shell is up. Only the ID travels: the command text is read from
+     *   config.json server-side and never accepted from the client, and
+     *   nothing is exec'd outside this visible tmux pane. See
+     *   src/core/terminal_commands.py.
      */
-    async createConsoleSession() {
-        console.log('Launchpad: Creating new console session');
+    async createConsoleSession(options = {}) {
+        const terminalCommandId = options.terminalCommandId || null;
+        console.log('Launchpad: Creating new console session', terminalCommandId || '');
 
         const sessionName = `console-${Date.now().toString(36)}`;
 
@@ -1594,6 +1603,7 @@ class Launchpad {
                 project_name: sessionName,
                 working_dir: '~',          // server-side os.path.expanduser
                 agent_type: 'shell',
+                ...(terminalCommandId ? { terminal_command_id: terminalCommandId } : {}),
                 ..._dims
             };
             const session = await window.API.createSession(payload);

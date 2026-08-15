@@ -1,4 +1,11 @@
-"""One-shot, idempotent config.json migration: hardcoded cld/cldor -> wrappers.
+"""Versioned, idempotent config.json migration.
+
+Each ``_step_vN_to_vM`` function advances the config by exactly one
+version; ``migrate_config_dict`` runs whichever steps a given config still
+needs and stamps ``config_version`` once at the end. See
+``CURRENT_CONFIG_VERSION`` for the version history. Every step must be
+ADDITIVE: no key is ever renamed or removed, because live installs are
+migrated in place with no coordination.
 
 feat/launch-wrappers — introduces ``config_version`` (absent from every
 prior config.json; treated as ``0``) and migrates a pre-wrappers config to
@@ -50,11 +57,27 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import structlog
 
+from src.core.agent_wrappers import derive_accepts_model
+from src.core.terminal_commands import (
+    TERMINAL_COMMANDS_KEY,
+    default_terminal_commands,
+)
+
 logger = structlog.get_logger()
 
 # Bump when the migration shape changes. 0 = no config_version key present
-# at all (every config.json that predates this feature).
-CURRENT_CONFIG_VERSION = 1
+# at all (every config.json that predates the wrappers feature).
+#
+# Version history:
+#   0 -> 1  feat/launch-wrappers: seed ``agents.wrappers`` from the shell
+#           functions this machine actually has (see ``_step_v0_to_v1``).
+#   1 -> 2  feat/settings-tabs-and-commands: ADDITIVE ONLY. Adds
+#           ``accepts_model`` to each existing wrapper and seeds the
+#           top-level ``terminal_commands`` list (see ``_step_v1_to_v2``).
+#           Renames nothing: ``agents.wrappers`` keeps its key and every
+#           wrapper keeps its ``id``, because ``Session.agent_type`` stores
+#           that id — renaming one would orphan every existing session.
+CURRENT_CONFIG_VERSION = 2
 
 # Thin, migration-seeded wrapper scripts. Deliberately NOT the real
 # multi-line cld/cldor function bodies (those live only in the user's own
@@ -111,8 +134,12 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
     Inputs: has_cld (bool); has_cldor (bool) - probe results.
     Output: list[dict] - AgentWrapper-shaped dicts, ready for
       ``AgentWrapper(**d)`` or direct JSON serialization.
+      ``accepts_model`` is set explicitly here (not derived) because this
+      function AUTHORS these wrappers and therefore knows the answer —
+      ``derive_accepts_model``'s heuristic exists only for wrappers that
+      predate the field or were hand-written by the user.
     Example: build_seed_wrappers(True, True) -> [claude(default=False),
-      cld(default=True), cldor(default=False)]
+      cld(default=True), cldor(default=False, accepts_model=True)]
     """
     wrappers: List[Dict] = [
         {
@@ -122,6 +149,9 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
             "entry": None,
             "description": "plain Claude Code CLI, no wrapper",
             "default": not has_cld,
+            # Plain claude takes a prompt, not a model id. See
+            # AgentWrapper.accepts_model.
+            "accepts_model": False,
         }
     ]
     if has_cld:
@@ -136,6 +166,9 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
                     "~/.zshrc (subscription OAuth via macOS Keychain)"
                 ),
                 "default": True,
+                # cld forwards "$@" straight to claude, so a model id
+                # would land as a PROMPT argument. Never offer it one.
+                "accepts_model": False,
             }
         )
     if has_cldor:
@@ -150,21 +183,131 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
                     "~/.zshrc (OpenRouter-routed, model as first argument)"
                 ),
                 "default": False,
+                # cldor's whole purpose: it consumes $1 as the model id.
+                "accepts_model": True,
             }
         )
     return wrappers
 
 
+def _step_v0_to_v1(data: Dict, has_cld: bool, has_cldor: bool) -> Optional[Dict]:
+    """Version step 0 -> 1: seed ``agents.wrappers`` from the environment.
+
+    Description: the original feat/launch-wrappers migration, unchanged in
+      behavior — only the version stamping moved out to the caller so
+      steps can be chained. Legacy ``*_command`` keys are NEVER modified
+      or removed, only read (for the opt-out check) and left in place.
+    Inputs:
+      data (dict) - the parsed config.json (never mutated).
+      has_cld (bool) / has_cldor (bool) - environment probe results.
+    Output: dict | None - the new config dict, or None when the input
+      can't be confidently interpreted (caller must then abandon the whole
+      migration and leave config.json completely untouched).
+    """
+    agents_block = data.get("agents")
+    if agents_block is None:
+        agents_block = {}
+    if not isinstance(agents_block, dict):
+        logger.warning(
+            "config_migration_skipped_bad_agents_block",
+            raw_type=type(agents_block).__name__,
+        )
+        return None
+
+    # An explicit non-empty claude_command means the user already opted
+    # out of the cld/cldor fallback — don't second-guess that by also
+    # seeding cld/cldor wrappers (they'd sit unused, and once ANY wrapper
+    # list is present it becomes the FIRST-checked source for
+    # agent_type=="claude", which would silently stop honoring their
+    # custom command). Skip wrapper-seeding entirely in this case.
+    existing_claude_command = agents_block.get("claude_command", "")
+    if existing_claude_command and str(existing_claude_command).strip():
+        new_data = dict(data)
+        new_data["agents"] = dict(agents_block)
+        logger.info(
+            "config_migration_version_stamped_no_wrappers",
+            reason="explicit_claude_command_present",
+        )
+        return new_data
+
+    if agents_block.get("wrappers"):
+        # Already has wrappers (hand-authored or a partial prior
+        # migration) — don't touch the list.
+        new_data = dict(data)
+        new_data["agents"] = dict(agents_block)
+        return new_data
+
+    seed = build_seed_wrappers(has_cld, has_cldor)
+    new_agents_block = dict(agents_block)
+    new_agents_block["wrappers"] = seed
+
+    new_data = dict(data)
+    new_data["agents"] = new_agents_block
+    logger.info(
+        "config_migration_seeded_wrappers",
+        wrapper_ids=[w["id"] for w in seed],
+        has_cld=has_cld,
+        has_cldor=has_cldor,
+    )
+    return new_data
+
+
+def _step_v1_to_v2(data: Dict) -> Dict:
+    """Version step 1 -> 2: ADDITIVE ONLY, never renames or removes.
+
+    Description: two additions, both no-ops when already present.
+      1. ``accepts_model`` on each entry of ``agents.wrappers``, derived
+         once from the wrapper's own text (``derive_accepts_model``) so
+         an existing OpenRouter wrapper keeps being offered models while
+         every other wrapper defaults to not accepting one — which is
+         exactly today's behavior for them, minus the regression where a
+         model was forwarded to a wrapper that ignores it.
+      2. The top-level ``terminal_commands`` seed list.
+      Wrapper ``id`` values and the ``agents.wrappers`` key itself are
+      untouched: ``Session.agent_type`` stores a wrapper id, so renaming
+      one would orphan every session already recorded against it.
+      A config with NO wrappers (or no ``agents`` block at all) is fine —
+      there is simply nothing to annotate.
+    Inputs: data (dict) - config dict at version 1 (never mutated).
+    Output: dict - new config dict; equal in content to the input when
+      both additions were already present.
+    """
+    new_data = dict(data)
+
+    agents_block = new_data.get("agents")
+    if isinstance(agents_block, dict):
+        wrappers = agents_block.get("wrappers")
+        if isinstance(wrappers, list):
+            annotated: List[Dict] = []
+            for wrapper in wrappers:
+                if not isinstance(wrapper, dict):
+                    annotated.append(wrapper)
+                    continue
+                new_wrapper = dict(wrapper)
+                if "accepts_model" not in new_wrapper:
+                    new_wrapper["accepts_model"] = derive_accepts_model(new_wrapper)
+                annotated.append(new_wrapper)
+            new_agents_block = dict(agents_block)
+            new_agents_block["wrappers"] = annotated
+            new_data["agents"] = new_agents_block
+
+    if TERMINAL_COMMANDS_KEY not in new_data:
+        new_data[TERMINAL_COMMANDS_KEY] = default_terminal_commands()
+
+    return new_data
+
+
 def migrate_config_dict(
     data: Dict, has_cld: bool, has_cldor: bool
 ) -> Tuple[Dict, bool]:
-    """Pure migration step: old-shape config dict -> versioned + wrappers.
+    """Pure migration: run every version step the config still needs.
 
-    Description: fail-safe by construction — every branch that can't
-      confidently proceed returns ``(data, False)`` with the input
+    Description: fail-safe by construction — a step that can't confidently
+      proceed makes this return ``(data, False)`` with the input
       completely untouched (no partial mutation, no config_version
-      stamped), never raises. Legacy ``*_command`` keys are NEVER
-      modified or removed, only read (for validation) and left in place.
+      stamped), never raises. Steps run in order and only for versions the
+      config hasn't reached, so a v0 config runs 0->1 then 1->2, a v1
+      config runs only 1->2, and a v2 config does nothing at all.
     Inputs:
       data (dict) - the parsed config.json.
       has_cld (bool) / has_cldor (bool) - environment probe results (see
@@ -177,7 +320,8 @@ def migrate_config_dict(
       state.
     Raises: never — logs a warning and returns (data, False) instead.
     Example: migrate_config_dict({"agents": {}}, True, False) ->
-      ({..., "agents": {..., "wrappers": [claude, cld]}, "config_version": 1}, True)
+      ({..., "agents": {..., "wrappers": [claude, cld]},
+        "terminal_commands": [...], "config_version": 2}, True)
     """
     try:
         existing_version = data.get("config_version", 0)
@@ -191,60 +335,23 @@ def migrate_config_dict(
         if existing_version >= CURRENT_CONFIG_VERSION:
             return data, False  # already migrated — idempotent no-op
 
-        agents_block = data.get("agents")
-        if agents_block is None:
-            agents_block = {}
-        if not isinstance(agents_block, dict):
-            logger.warning(
-                "config_migration_skipped_bad_agents_block",
-                raw_type=type(agents_block).__name__,
-            )
-            return data, False
+        working = data
+        if existing_version < 1:
+            stepped = _step_v0_to_v1(working, has_cld, has_cldor)
+            if stepped is None:
+                # Fail-safe: leave the file entirely alone, unversioned,
+                # so a later run can retry after the user fixes it.
+                return data, False
+            working = stepped
+        if existing_version < 2:
+            working = _step_v1_to_v2(working)
 
-        # An explicit non-empty claude_command means the user already
-        # opted out of the cld/cldor fallback — don't second-guess that
-        # by also seeding cld/cldor wrappers (they'd sit unused, and a
-        # non-empty claude_command already takes precedence in
-        # get_agent_command's resolution order regardless of wrappers
-        # being present or not... but once ANY wrapper list is present
-        # it becomes the FIRST-checked source for agent_type=="claude",
-        # which would silently stop honoring their custom command). Skip
-        # wrapper-seeding entirely in this case — the existing
-        # claude_command fallback keeps working exactly as today.
-        existing_claude_command = agents_block.get("claude_command", "")
-        if existing_claude_command and str(existing_claude_command).strip():
-            new_data = dict(data)
-            new_data["agents"] = dict(agents_block)
-            new_data["config_version"] = CURRENT_CONFIG_VERSION
-            logger.info(
-                "config_migration_version_stamped_no_wrappers",
-                reason="explicit_claude_command_present",
-            )
-            return new_data, True
-
-        existing_wrappers = agents_block.get("wrappers")
-        if existing_wrappers:
-            # Already has wrappers (hand-authored or a partial prior
-            # migration) — just stamp the version, don't touch the list.
-            new_data = dict(data)
-            new_data["agents"] = dict(agents_block)
-            new_data["config_version"] = CURRENT_CONFIG_VERSION
-            return new_data, True
-
-        seed = build_seed_wrappers(has_cld, has_cldor)
-
-        new_agents_block = dict(agents_block)
-        new_agents_block["wrappers"] = seed
-
-        new_data = dict(data)
-        new_data["agents"] = new_agents_block
+        new_data = dict(working)
         new_data["config_version"] = CURRENT_CONFIG_VERSION
-
         logger.info(
-            "config_migration_seeded_wrappers",
-            wrapper_ids=[w["id"] for w in seed],
-            has_cld=has_cld,
-            has_cldor=has_cldor,
+            "config_migration_version_advanced",
+            from_version=existing_version,
+            to_version=CURRENT_CONFIG_VERSION,
         )
         return new_data, True
 

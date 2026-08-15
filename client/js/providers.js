@@ -2,9 +2,29 @@
  * Provider Selector Modal (client/js/providers.js)
  *
  * Shown before every real launch (new project, open-folder, clone-github,
- * existing-project row click). Lets the user pick "claude" (pinned, always
- * first) or an OpenRouter model, and manage the model list inline — no
- * separate settings screen.
+ * existing-project row click). Lets the user pick a launch wrapper and,
+ * for wrappers that take one, an OpenRouter model, managing the model
+ * list inline — no separate settings screen.
+ *
+ * TWO STEPS, because there are two independent axes and flattening them
+ * into one list produced two real bugs:
+ *
+ *   (a) A hardcoded "claude" row sat above the wrapper rows and launched
+ *       whatever wrapper was marked default. On a machine whose default
+ *       is `cld`, that meant two rows with identical behaviour and no
+ *       label saying so. There is now NO bare "claude" row: every
+ *       configured wrapper appears exactly once, and the default one is
+ *       labelled "<label> (default)". The single "claude" row returns
+ *       only when NO wrappers are configured at all, where it means the
+ *       legacy claude_command / cld fallback (see
+ *       Settings.get_agent_command).
+ *   (b) Picking a model next to a wrapper that ignores models routed the
+ *       model to the DEFAULT wrapper, which forwards "$@" to claude — so
+ *       the model id arrived as a PROMPT argument and Claude answered
+ *       the literal string. Models are now offered ONLY after choosing a
+ *       wrapper whose `accepts_model` is true (src/core/agent_wrappers.py),
+ *       and the resulting launch carries that wrapper's id. The server
+ *       enforces the same rule independently.
  *
  * Split out of launchpad.js to keep that file under its line budget.
  * Attaches showProviderModal() onto the existing window.Launchpad instance
@@ -51,13 +71,13 @@
     /**
      * Show the provider selector modal.
      * @returns {Promise<{model: string|null, wrapperId?: string}|null>}
-     *   null = cancelled (abort the launch). {model: null} = claude via
-     *   the default launch wrapper (or the legacy cld/claude_command
-     *   fallback if no wrappers are configured — see
-     *   Settings.get_agent_command). {model: "..."} = OpenRouter model
-     *   id. {model: null, wrapperId: "..."} = a specific non-default
-     *   launch wrapper (feat/launch-wrappers) — its id is forwarded as
-     *   agent_type by the launchpad caller.
+     *   null = cancelled (abort the launch). {model: null} = the legacy
+     *   claude fallback, only reachable when no wrappers are configured.
+     *   {model: null, wrapperId: "..."} = launch through that wrapper
+     *   with no model. {model: "...", wrapperId: "..."} = that wrapper
+     *   with an OpenRouter model, only ever produced for a wrapper whose
+     *   accepts_model is true. wrapperId is forwarded as agent_type by
+     *   the launchpad caller.
      */
     function showProviderModal() {
         return new Promise((resolve) => {
@@ -67,13 +87,13 @@
             overlay.className = 'modal-overlay';
             overlay.innerHTML = `
                 <div class="modal-content">
-                    <div class="modal-header">» select provider</div>
+                    <div class="modal-header" id="provider-header">» select provider</div>
                     <div class="modal-body">
                         <div class="folder-picker-list" id="provider-list" tabindex="-1">
                             <div class="folder-picker-empty">loading...</div>
                         </div>
                         <div class="folder-picker-status" id="provider-status" role="status" aria-live="polite"></div>
-                        <div class="modal-description">
+                        <div class="modal-description" id="provider-hint">
                             ↑/↓ to move · Enter to launch · type to jump · Esc to cancel
                         </div>
                     </div>
@@ -83,16 +103,22 @@
 
             const listEl = overlay.querySelector('#provider-list');
             const statusEl = overlay.querySelector('#provider-status');
+            const headerEl = overlay.querySelector('#provider-header');
+            const hintEl = overlay.querySelector('#provider-hint');
 
-            let models = [];       // OpenRouter model ids (claude is NOT in this array)
-            let wrappers = [];     // feat/launch-wrappers — non-default wrappers only (id 'claude' excluded; the plain claude row already resolves through the default wrapper)
-            let items = [];        // flat nav list: claude row, wrapper rows, model rows, add row
+            let models = [];       // OpenRouter model ids
+            let wrappers = [];     // EVERY configured wrapper, unfiltered — each appears exactly once
+            let items = [];        // nav list for the CURRENT step
             let activeIndex = -1;
-            let currentModel = readLastChoice(); // '' = claude, else a model id
+            let currentModel = readLastChoice(); // '' = none, else a model id
             let typeBuffer = '';
             let typeTimer = null;
             let confirmPending = false; // suspends our keys while showConfirmModal owns them
             let addInputOpen = false;
+            // Two-step nav: pick a wrapper, then (only for a wrapper that
+            // accepts one) pick a model. See the module docstring.
+            let step = 'wrapper';
+            let selectedWrapper = null;
 
             const close = (value) => {
                 document.removeEventListener('keydown', onKeyDown, true);
@@ -110,17 +136,47 @@
                 statusEl.className = `folder-picker-status folder-picker-status--${kind || 'info'}`;
             };
 
+            /**
+             * Build the nav list for the current step.
+             * Step 'wrapper': one row per configured wrapper, never a
+             *   duplicate and never a synthetic "claude" peer. Only when
+             *   NO wrappers exist does a single legacy claude row appear.
+             * Step 'model': a "no model" row, the model catalog, and the
+             *   add row — reached only from a wrapper that accepts models.
+             */
             const buildItems = () => {
-                items = [{ type: 'claude' }]
-                    .concat(wrappers.map((w) => ({ type: 'wrapper', wrapperId: w.id, label: w.label })))
-                    .concat(models.map((m) => ({ type: 'model', model: m })))
-                    .concat([{ type: 'add' }]);
+                if (step === 'model') {
+                    items = [{ type: 'no-model' }]
+                        .concat(models.map((m) => ({ type: 'model', model: m })))
+                        .concat([{ type: 'add' }]);
+                    return;
+                }
+                if (!wrappers.length) {
+                    items = [{ type: 'claude' }];
+                    return;
+                }
+                items = wrappers.map((w) => ({
+                    type: 'wrapper',
+                    wrapperId: w.id,
+                    label: w.default ? `${w.label} (default)` : w.label,
+                    acceptsModel: !!w.accepts_model,
+                }));
             };
 
             const findIndexForModel = (model) => {
-                if (!model) return 0; // claude is always index 0
+                if (step !== 'model') return 0;
+                if (!model) return 0; // the "no model" row is always index 0
                 const idx = items.findIndex((it) => it.type === 'model' && it.model === model);
-                return idx >= 0 ? idx : 0; // fallback to claude if it's gone (e.g. just removed)
+                return idx >= 0 ? idx : 0; // fall back if it's gone (e.g. just removed)
+            };
+
+            /** Label used for type-ahead matching, per item type. */
+            const itemLabel = (it) => {
+                if (it.type === 'claude') return 'claude';
+                if (it.type === 'wrapper') return it.label;
+                if (it.type === 'model') return it.model;
+                if (it.type === 'no-model') return 'no model';
+                return '';
             };
 
             const setActive = (idx, { scroll = true } = {}) => {
@@ -130,10 +186,30 @@
                 els.forEach((el, i) => el.classList.toggle('folder-picker-item-active', i === idx));
                 activeIndex = idx;
                 const item = items[idx];
-                if (item && (item.type === 'claude' || item.type === 'model')) {
-                    currentModel = item.type === 'claude' ? '' : item.model;
+                if (item && (item.type === 'no-model' || item.type === 'model')) {
+                    currentModel = item.type === 'no-model' ? '' : item.model;
                 }
                 if (scroll) els[idx].scrollIntoView({ block: 'nearest' });
+            };
+
+            /** Advance from the wrapper step into the model step. */
+            const enterModelStep = (wrapper) => {
+                selectedWrapper = wrapper;
+                step = 'model';
+                currentModel = readLastChoice();
+                clearStatus();
+                render();
+                listEl.focus();
+            };
+
+            /** Go back from the model step to the wrapper step. */
+            const backToWrapperStep = () => {
+                step = 'wrapper';
+                selectedWrapper = null;
+                addInputOpen = false;
+                clearStatus();
+                render();
+                listEl.focus();
             };
 
             const activateItem = (idx) => {
@@ -144,19 +220,43 @@
                     return;
                 }
                 if (item.type === 'wrapper') {
-                    // Not remembered in localStorage (that store is
-                    // model-only, feat/launch-wrappers doesn't extend it)
-                    // — a wrapper choice is per-launch, not sticky.
+                    const wrapper = wrappers.find((w) => w.id === item.wrapperId);
+                    if (wrapper && wrapper.accepts_model) {
+                        enterModelStep(wrapper);
+                        return;
+                    }
+                    // A wrapper that ignores models is launched straight
+                    // away, with no model — never one carried over from a
+                    // previous launch. Wrapper choice itself is per-launch,
+                    // not remembered (localStorage here is model-only).
                     close({ model: null, wrapperId: item.wrapperId });
                     return;
                 }
-                const model = item.type === 'claude' ? null : item.model;
+                if (item.type === 'claude') {
+                    // No wrappers configured: the legacy fallback path.
+                    close({ model: null });
+                    return;
+                }
+                // Model step. Both branches carry the wrapper that was
+                // chosen at step 1, so the model can only ever reach a
+                // wrapper that declared it accepts one.
+                const model = item.type === 'no-model' ? null : item.model;
                 rememberChoice(model || '');
-                close({ model });
+                close({ model, wrapperId: selectedWrapper ? selectedWrapper.id : undefined });
             };
 
             const render = () => {
                 buildItems();
+                if (headerEl) {
+                    headerEl.textContent = step === 'model'
+                        ? `» ${selectedWrapper ? selectedWrapper.label : 'wrapper'}: select model`
+                        : '» select provider';
+                }
+                if (hintEl) {
+                    hintEl.textContent = step === 'model'
+                        ? '↑/↓ to move · Enter to launch · Esc to go back'
+                        : '↑/↓ to move · Enter to launch · type to jump · Esc to cancel';
+                }
                 listEl.innerHTML = items.map((item, i) => {
                     if (item.type === 'claude') {
                         return `<div class="folder-picker-item" data-index="${i}">
@@ -166,9 +266,21 @@
                     }
                     if (item.type === 'wrapper') {
                         const safeLabel = escapeHtml(item.label);
+                        // Only a model-accepting wrapper advertises a
+                        // second step; every other row launches on Enter.
+                        const more = item.acceptsModel
+                            ? '<span class="provider-item-more">models ›</span>'
+                            : '';
                         return `<div class="folder-picker-item" data-index="${i}">
                             <span class="folder-picker-icon">»</span>
                             <span class="folder-picker-name provider-item-name">${safeLabel}</span>
+                            ${more}
+                        </div>`;
+                    }
+                    if (item.type === 'no-model') {
+                        return `<div class="folder-picker-item" data-index="${i}">
+                            <span class="folder-picker-icon">◆</span>
+                            <span class="folder-picker-name provider-item-name">no model (wrapper default)</span>
                         </div>`;
                     }
                     if (item.type === 'model') {
@@ -297,6 +409,10 @@
                 if (e.key === 'Escape') {
                     e.preventDefault();
                     if (addInputOpen) { closeAddInput(); return; }
+                    // In the model step, Escape backs out one level rather
+                    // than abandoning the launch — the wrapper choice was
+                    // a deliberate step, not a modal the user fell into.
+                    if (step === 'model') { backToWrapperStep(); return; }
                     close(null);
                     return;
                 }
@@ -330,10 +446,7 @@
                     if (typeTimer) clearTimeout(typeTimer);
                     typeTimer = setTimeout(() => { typeBuffer = ''; }, 800);
                     const matchIdx = items.findIndex((it) => {
-                        const label = it.type === 'claude' ? 'claude'
-                            : it.type === 'wrapper' ? it.label
-                            : it.type === 'model' ? it.model
-                            : '';
+                        const label = itemLabel(it);
                         return label && label.toLowerCase().startsWith(typeBuffer);
                     });
                     if (matchIdx >= 0) setActive(matchIdx);
@@ -357,13 +470,14 @@
                     models = [];
                     showStatus('could not load saved models — showing claude only', 'error');
                 }
-                // feat/launch-wrappers — best-effort: a failure here just
-                // means no wrapper rows show up (claude + models still
-                // work), never blocks the launch gate.
+                // Best-effort: a failure here leaves `wrappers` empty,
+                // which renders the single legacy claude row rather than
+                // blocking the launch gate. No id is filtered out — a
+                // wrapper the user configured must appear exactly once,
+                // including one they chose to call "claude".
                 try {
                     const wrapperData = await window.API.listWrappers();
-                    const all = Array.isArray(wrapperData.wrappers) ? wrapperData.wrappers : [];
-                    wrappers = all.filter((w) => w.id !== 'claude');
+                    wrappers = Array.isArray(wrapperData.wrappers) ? wrapperData.wrappers : [];
                 } catch (error) {
                     console.error('Launchpad: Failed to load wrappers:', error);
                     wrappers = [];

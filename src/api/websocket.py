@@ -395,6 +395,20 @@ async def websocket_terminal(websocket: WebSocket):
                     logger.info("ws_handshake_ctrl_l_sent_fallback")
                 except Exception as exc:
                     logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
+
+        # feat/settings-tabs-and-commands — a console launched from the
+        # settings "terminal" tab has a configured command waiting on it.
+        # It is typed HERE, after the resize + Ctrl+L repaint above, because
+        # that repaint clears anything written earlier: typed at create
+        # time the command runs but its output is only in scrollback, and
+        # the user lands on a blank prompt. Popped on flush, so a reconnect
+        # never re-runs it. Only an ID ever crossed the API boundary; the
+        # text comes from config.json (src/core/terminal_commands.py).
+        if target_sid and hasattr(session_manager, "flush_pending_terminal_command"):
+            try:
+                await session_manager.flush_pending_terminal_command(target_sid)
+            except Exception as exc:
+                logger.warning("ws_pending_terminal_command_failed", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.

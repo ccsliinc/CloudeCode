@@ -293,6 +293,16 @@
          "agent" section. Must load AFTER api.js (window.API) and BEFORE
          settings-panel.js calls window.AgentWrappersPanel.mount(). -->
     <script src="/static/js/agent-wrappers-panel.js"></script>
+    <!-- Terminal-command list/editor for the settings panel's "terminal"
+         tab. Same contract as agent-wrappers-panel.js: AFTER api.js,
+         BEFORE settings-panel.js mounts it. -->
+    <script src="/static/js/terminal-commands-panel.js"></script>
+    <!-- Settings modal internals. settings-tabs.js owns the tab strip and
+         settings-sections.js the section markup; both must load BEFORE
+         settings-panel.js, which reads window.SettingsSections at IIFE
+         time. -->
+    <script src="/static/js/settings-tabs.js"></script>
+    <script src="/static/js/settings-sections.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -

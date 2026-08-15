@@ -515,6 +515,29 @@ class API {
     }
 
     /**
+     * Terminal commands: list the configured entries, in display order.
+     * @returns {Promise<{commands: Array<{id: string, label: string, command: string}>}>}
+     */
+    async getTerminalCommands() {
+        return await this.call('/terminal/commands');
+    }
+
+    /**
+     * Terminal commands: replace the whole list. Add, edit, delete and
+     * reorder are all this one call — the list IS the order, so there is
+     * no separate reorder endpoint to disagree with it.
+     * @param {Array<{id: string, label: string, command: string}>} commands
+     * @returns {Promise<{commands: Array<object>}>} - throws (err.status 400)
+     *   on a malformed entry, a bad id, or a duplicate id
+     */
+    async replaceTerminalCommands(commands) {
+        return await this.call('/terminal/commands', {
+            method: 'PUT',
+            body: { commands }
+        });
+    }
+
+    /**
      * Sessions: Create new session
      * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
      * @returns {Promise<object>} - Session data

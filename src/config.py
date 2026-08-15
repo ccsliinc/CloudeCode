@@ -25,6 +25,13 @@ from src.core.agent_wrappers import (
     render_wrapper_invocation,
     wrapper_scripts_dir,
 )
+from src.core.terminal_commands import (
+    TERMINAL_COMMANDS_KEY,
+    TerminalCommand,
+    default_terminal_commands,
+    find_terminal_command as _find_terminal_command,
+    replace_terminal_commands as _replace_terminal_commands,
+)
 
 
 class ProjectConfig(BaseModel):
@@ -301,6 +308,17 @@ class AuthConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    # feat/settings-tabs-and-commands — user-editable common shell
+    # commands, each runnable in a console session (see
+    # src/core/terminal_commands.py, especially its security model: these
+    # are NEVER executed server-side). Top-level, not under ``agents``:
+    # they run in a plain shell and have nothing to do with any agent CLI.
+    # The default_factory means a config.json with no such key (v0/v1, or
+    # hand-trimmed) still presents the seed list rather than an empty tab;
+    # the v1->v2 migration additionally persists it so it is editable.
+    terminal_commands: List[TerminalCommand] = Field(
+        default_factory=lambda: [TerminalCommand(**c) for c in default_terminal_commands()]
+    )
 
 
 # Agent-type values with a fixed, single-command resolution — never
@@ -609,7 +627,16 @@ class Settings(BaseSettings):
         chosen = explicit if explicit is not None else _default_wrapper(agents.wrappers)
         if chosen is not None:
             scripts_dir = wrapper_scripts_dir(self.log_directory)
-            return render_wrapper_invocation(chosen, scripts_dir, model=model)
+            # A wrapper that does not consume a model id must NEVER be
+            # handed one: it forwards "$@" to claude, so the model would
+            # arrive as a prompt argument and Claude would answer the
+            # string "anthropic/claude-opus-4" instead of launching
+            # routed. The picker already declines to offer models for
+            # such a wrapper (client/js/providers.js); this is the
+            # server-side half of the same rule, so a stale client or a
+            # hand-rolled API call cannot reintroduce the bug.
+            effective_model = model if chosen.accepts_model else None
+            return render_wrapper_invocation(chosen, scripts_dir, model=effective_model)
 
         # Step 3: an explicit, non-empty agents.claude_command wins outright,
         # regardless of ``model`` — a user who opted into a custom command
@@ -741,6 +768,25 @@ class Settings(BaseSettings):
                 )
                 providers_config = ProvidersConfig()
 
+            # Build the terminal-command list from the optional top-level
+            # block; same malformed-block tolerance as every sibling above.
+            # A missing block falls back to the seed defaults so the
+            # terminal tab is never empty on a pre-v2 config.
+            terminal_commands_data = data.get(TERMINAL_COMMANDS_KEY) or []
+            try:
+                terminal_commands_config = [
+                    TerminalCommand(**c) for c in terminal_commands_data
+                ] or [TerminalCommand(**c) for c in default_terminal_commands()]
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_terminal_commands_block",
+                    raw=terminal_commands_data,
+                )
+                terminal_commands_config = [
+                    TerminalCommand(**c) for c in default_terminal_commands()
+                ]
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             config_version = data.get("config_version", 0)
@@ -774,6 +820,7 @@ class Settings(BaseSettings):
                 agents=agents_config,
                 uploads=uploads_config,
                 providers=providers_config,
+                terminal_commands=terminal_commands_config,
             )
 
             # Validate secrets are set
@@ -1250,6 +1297,9 @@ class Settings(BaseSettings):
                 "wildcard_bind": wildcard_bind,
                 "editable": False,
             },
+            # feat/settings-tabs-and-commands — the terminal tab's list,
+            # included here so opening settings is one round trip.
+            "terminal_commands": [c.model_dump() for c in cfg.terminal_commands],
         }
 
     def update_settings_config(
@@ -1522,6 +1572,55 @@ class Settings(BaseSettings):
         AgentsConfig(**agents_data)
         self._write_wrappers(config_path, agents_data)
         return wrappers
+
+    # ---- terminal commands (feat/settings-tabs-and-commands) --------------
+    #
+    # Thin delegation: the schema, validation, seed list and atomic write all
+    # live in src/core/terminal_commands.py, which also documents WHY none of
+    # this ever runs a command server-side. Read that module's docstring
+    # before adding anything here.
+
+    def get_terminal_commands(self) -> List[TerminalCommand]:
+        """List the configured terminal commands, in display order.
+
+        Inputs: none.
+        Output: list[TerminalCommand] - the seed defaults when config.json
+          has no ``terminal_commands`` block (see AuthConfig's field).
+        Raises: FileNotFoundError if config.json is missing.
+        """
+        return list(self.load_auth_config().terminal_commands)
+
+    def get_terminal_command(self, command_id: Optional[str]) -> Optional[TerminalCommand]:
+        """Resolve one terminal command by id, for a console launch.
+
+        Description: the ONLY way a stored command string is ever read for
+          execution. The caller supplies an id, never a command string, so
+          nothing a client invents can reach a shell. An unknown id
+          resolves to None, which callers must treat as "launch a plain
+          console and run nothing" — a launch is never failed over a
+          stale id (e.g. the user deleted the entry in another tab).
+        Inputs: command_id (str | None) - id from the launch request.
+        Output: TerminalCommand | None.
+        """
+        if not command_id:
+            return None
+        try:
+            return _find_terminal_command(self.get_terminal_commands(), command_id)
+        except (FileNotFoundError, ValueError):
+            # Degraded config must not break console launches.
+            return None
+
+    def replace_terminal_commands(self, raw: List[dict]) -> List[dict]:
+        """Persist a whole new terminal-command list (add/edit/delete/reorder).
+
+        Inputs: raw (list[dict]) - complete new list in display order.
+        Output: list[dict] - the validated, persisted list.
+        Raises: FileNotFoundError; ValueError on a malformed entry.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+        persisted = _replace_terminal_commands(config_path, raw)
+        self._auth_config_cache = None
+        return persisted
 
 
 # Global settings instance

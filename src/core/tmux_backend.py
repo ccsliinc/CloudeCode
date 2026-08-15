@@ -123,8 +123,8 @@ def _has_control_chars(data: bytes) -> bool:
     return any((b < 0x20 and b not in safe) or b == 0x7f for b in data)
 
 
-def _safe_target(session_name: str, pane: str = "0.0") -> str:
-    """Compose a tmux target string (``<session>:<window>.<pane>``) safely.
+def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
+    """Compose a tmux target string safely.
 
     tmux parses ``:`` as the window/pane separator and ``.`` as the pane
     separator within a target. If either appears inside ``session_name``
@@ -137,23 +137,38 @@ def _safe_target(session_name: str, pane: str = "0.0") -> str:
     target-parsing semantics. We refuse to format a target that would be
     interpreted differently than intended.
 
+    WINDOW INDEX: this used to hardcode ``<session>:0.0``. That is wrong on
+    any machine whose tmux.conf sets ``base-index 1`` / ``pane-base-index 1``
+    (a very common setting): the first window is index 1, so every
+    ``send-keys -t <session>:0.0`` fails with ``can't find window: 0`` and
+    NOTHING typed in the browser ever reaches the pane. Targeting the bare
+    session name instead resolves to that session's CURRENT window and
+    pane, which is both base-index-agnostic and more correct — a session
+    with a second window should receive input where the user is looking,
+    not always in window 0.
+
     Args:
         session_name: tmux session name. MUST NOT contain ``:`` or ``.``.
-        pane: pane specifier within the session. Defaults to ``"0.0"``
-            (window 0, pane 0). Callers SHOULD keep this as a literal —
-            we don't validate it since it's never user-controlled.
+        pane: optional explicit ``<window>.<pane>`` specifier. Omit it (the
+            default) to target the session's current window/pane. Callers
+            SHOULD keep this a literal — it is never user-controlled and is
+            not validated.
 
     Returns:
         Formatted target string suitable for ``-t``.
 
     Raises:
         ValueError: if ``session_name`` contains ``:`` or ``.``.
+
+    Example: _safe_target("cloude_demo") -> "cloude_demo"
     """
     if ":" in session_name or "." in session_name:
         raise ValueError(
             f"unsafe tmux session name {session_name!r}: "
             f"contains ':' or '.' which tmux parses as target separators"
         )
+    if pane is None:
+        return session_name
     return f"{session_name}:{pane}"
 
 

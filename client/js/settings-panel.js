@@ -2,6 +2,16 @@
  * SettingsPanel — gear-icon modal folding in the theme chooser plus the
  * agent/notifications/server config sections.
  *
+ * TABBED (feat/settings-tabs-and-commands). Five tabs, declared in TABS
+ * below: claude (launch wrappers + the legacy command they supersede),
+ * agents (the other agent CLIs), terminal (the runnable command list),
+ * notifications, and general (appearance + the read-only server block).
+ * Every pane is built ONCE at open and switching only shows/hides, so a
+ * half-typed edit survives moving between tabs and Save still collects
+ * from every tab at once. Section MARKUP lives in settings-sections.js
+ * and the tab strip in settings-tabs.js; this file owns the lifecycle,
+ * the schema, and the batched Save.
+ *
  * Data-driven by design (the user's "so we can extrapolate" requirement):
  * SECTIONS below is the single place a future setting gets added — a new
  * field object in an existing section's `fields` array, or a whole new
@@ -37,13 +47,13 @@
     // the input starts empty with a placeholder describing current state,
     // and an empty submit means "leave unchanged" (see collectSectionPatch).
 
+    // NOTE: ``claude_command`` is deliberately NOT a field here. It is
+    // legacy storage that wrappers supersede, so it is rendered as a
+    // collapsed, DISABLED advanced row in the claude tab
+    // (renderLegacyClaudeCommand) — visible, explained, and impossible to
+    // submit. Keeping it out of this array is what guarantees
+    // collectSectionPatch can never include it in a PATCH.
     var AGENT_FIELDS = [
-        {
-            key: 'claude_command', type: 'text', label: 'claude command (legacy fallback)',
-            placeholder: 'e.g. claude --dangerously-skip-permissions',
-            hint: 'only used when no launch wrappers are configured below. empty falls through to your ~/.zshrc cld / cldor function — see "what runs now" below',
-            showEffective: true,
-        },
         { key: 'codex_command', type: 'text', label: 'codex command', placeholder: 'codex' },
         { key: 'hermes_command', type: 'text', label: 'hermes command', placeholder: 'hermes' },
         { key: 'openclaw_command', type: 'text', label: 'openclaw command', placeholder: 'openclaw tui' },
@@ -65,17 +75,36 @@
     // same panel below.
     var SECTIONS = [
         {
-            id: 'agent', title: 'agent', group: 'agents',
+            id: 'agent', title: 'other agent clis', group: 'agents',
             restartRequired: false,
-            description: 'the shell command used to launch each agent CLI in a new session.',
+            description: 'the shell command used to launch each non-claude agent cli in a new session.',
             fields: AGENT_FIELDS,
         },
         {
             id: 'notifications', title: 'notifications', group: 'notifications',
             restartRequired: true,
-            description: 'push notification channels — ntfy, slack, pushover.',
+            description: 'push notification channels: ntfy, slack, pushover.',
             fields: NOTIFICATION_FIELDS,
         },
+    ];
+
+    // Tab layout. `id` is the tab's DOM key, `label` its visible name,
+    // `sectionIds` the SECTIONS entries whose generic markup belongs in
+    // it, and `slots` the ids of bespoke mount points appended after them
+    // (wrappers, terminal commands, theme picker, server info).
+    //
+    // Grouping follows what the code actually is, not a guess: how claude
+    // launches (wrappers + the legacy command they supersede), the other
+    // agent CLIs, the new terminal command list, notifications, and
+    // general (appearance + the read-only server block). Every pane is
+    // rendered once at open and only shown/hidden afterwards, so unsaved
+    // edits survive tab switches — see settings-tabs.js.
+    var TABS = [
+        { id: 'claude', label: 'claude', sectionIds: [], slots: ['wrappers', 'legacy-claude'] },
+        { id: 'agents', label: 'agents', sectionIds: ['agent'], slots: [] },
+        { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
+        { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
+        { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'server'] },
     ];
 
     // Module state — the last GET /config/settings payload, so re-renders
@@ -85,188 +114,48 @@
     var overlayEl = null;
     var triggerEl = null;
 
+    // Section markup lives in settings-sections.js (pure render functions,
+    // split out to keep this file inside the 500-line budget).
+    var Sections = window.SettingsSections;
+    var escapeHtml = Sections.escapeHtml;
+
     /**
-     * Escape a string for safe interpolation into innerHTML-built markup.
-     * Description: mirrors AppController._escapeHtml — duplicated locally
-     *   (single small pure function) rather than reaching into `App`,
-     *   since this module must also work before app.js has finished
-     *   constructing `window.App`.
-     * Inputs: str (any) - value to escape; stringified first.
-     * Output: string - HTML-escaped text.
+     * Build the HTML for one tab's pane: its generic SECTIONS entries
+     * followed by its bespoke slots.
+     * Inputs: tab (object) - one TABS entry.
+     * Output: string.
      */
-    function escapeHtml(str) {
-        var div = document.createElement('div');
-        div.textContent = str == null ? '' : String(str);
-        return div.innerHTML;
+    function renderTabBody(tab) {
+        var parts = tab.sectionIds.map(function (sectionId) {
+            var section = SECTIONS.filter(function (s) { return s.id === sectionId; })[0];
+            return section ? Sections.renderGenericSection(section, lastSummary) : '';
+        });
+        tab.slots.forEach(function (slot) {
+            if (slot === 'appearance') {
+                parts.push(Sections.renderAppearanceSection());
+            } else if (slot === 'server') {
+                parts.push(Sections.renderServerSection(lastSummary));
+            } else if (slot === 'legacy-claude') {
+                parts.push(Sections.renderLegacyClaudeCommand(lastSummary));
+            } else {
+                // Bespoke panels own their own DOM and mount into an empty
+                // slot after insertion (see mountSlots): wrappers,
+                // terminal commands.
+                parts.push('<div id="settings-' + slot + '-slot"></div>');
+            }
+        });
+        return parts.join('');
     }
 
     /**
-     * Render one field's markup for a generic (agent/notifications) section.
-     * Inputs:
-     *   field (object) - one entry from AGENT_FIELDS/NOTIFICATION_FIELDS.
-     *   currentValue (any) - the value from `lastSummary` for this field
-     *     (raw string/bool for plain fields, `{configured: bool}` for
-     *     secret fields).
-     *   effectiveText (string|null) - only used when field.showEffective —
-     *     the "what runs now" preview line.
-     * Output: string - HTML for one `.settings-field` block.
-     */
-    function renderField(field, currentValue, effectiveText) {
-        var inputId = 'settings-field-' + field.key;
-        var labelHtml = '<label class="settings-field-label" for="' + inputId + '">' + escapeHtml(field.label) + '</label>';
-
-        if (field.type === 'checkbox') {
-            var checked = currentValue ? 'checked' : '';
-            return (
-                '<div class="settings-field settings-field-checkbox">' +
-                '  <label class="settings-field-label" for="' + inputId + '">' +
-                '    <input type="checkbox" id="' + inputId + '" data-settings-key="' + field.key + '" data-settings-type="checkbox" ' + checked + '>' +
-                '    ' + escapeHtml(field.label) +
-                '  </label>' +
-                '</div>'
-            );
-        }
-
-        if (field.type === 'secret') {
-            var configured = !!(currentValue && currentValue.configured);
-            var placeholder = configured ? 'configured — leave blank to keep' : 'not set';
-            return (
-                '<div class="settings-field">' +
-                labelHtml +
-                '  <input type="password" autocomplete="new-password" id="' + inputId + '" ' +
-                '    data-settings-key="' + field.key + '" data-settings-type="secret" ' +
-                '    class="modal-input" placeholder="' + escapeHtml(placeholder) + '">' +
-                '  <div class="settings-field-hint">' + (configured ? 'a value is set — typing here replaces it' : 'not configured — this channel is disabled') + '</div>' +
-                '</div>'
-            );
-        }
-
-        // text
-        var val = currentValue == null ? '' : String(currentValue);
-        var effectiveHtml = '';
-        if (field.showEffective && effectiveText) {
-            effectiveHtml = '<div class="settings-field-effective">what runs now: <code>' + escapeHtml(effectiveText) + '</code></div>';
-        }
-        return (
-            '<div class="settings-field">' +
-            labelHtml +
-            '  <input type="text" id="' + inputId + '" data-settings-key="' + field.key + '" data-settings-type="text" ' +
-            '    class="modal-input" placeholder="' + escapeHtml(field.placeholder || '') + '" value="' + escapeHtml(val) + '">' +
-            (field.hint ? '  <div class="settings-field-hint">' + escapeHtml(field.hint) + '</div>' : '') +
-            effectiveHtml +
-            '</div>'
-        );
-    }
-
-    /**
-     * Render a full generic section (heading + description + restart
-     * notice + its fields), reading current values out of `lastSummary`.
-     * Inputs: section (object) - one entry from SECTIONS.
-     * Output: string - HTML for one `.settings-section`.
-     */
-    function renderGenericSection(section) {
-        var groupData = (lastSummary && lastSummary[section.group]) || {};
-        var restartHtml = section.restartRequired
-            ? '<div class="settings-restart-note">changes here need a server restart to take effect</div>'
-            : '';
-        var fieldsHtml = section.fields.map(function (field) {
-            var effectiveText = field.showEffective ? groupData.effective_claude_command : null;
-            return renderField(field, groupData[field.key], effectiveText);
-        }).join('');
-        return (
-            '<section class="settings-section" data-settings-section="' + section.id + '" data-settings-group="' + section.group + '">' +
-            '  <h3 class="settings-section-title">' + escapeHtml(section.title) + '</h3>' +
-            '  <div class="settings-section-description">' + escapeHtml(section.description) + '</div>' +
-            restartHtml +
-            fieldsHtml +
-            '</section>'
-        );
-    }
-
-    /**
-     * Render the appearance section shell. The actual `<select>` is
-     * mounted into `#settings-theme-slot` by `window.ThemeSelector.mount`
-     * right after this HTML is inserted (see `renderPanel`) — it can't be
-     * built as a string because ThemeSelector owns its own DOM node and
-     * change-listener wiring.
-     * Output: string - HTML for the appearance `.settings-section`.
-     */
-    function renderAppearanceSection() {
-        return (
-            '<section class="settings-section" data-settings-section="appearance">' +
-            '  <h3 class="settings-section-title">appearance</h3>' +
-            '  <div class="settings-section-description">theme applies immediately — no save needed.</div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label" for="theme-selector">theme</label>' +
-            '    <div id="settings-theme-slot"></div>' +
-            '  </div>' +
-            '</section>'
-        );
-    }
-
-    /**
-     * Render the server section: read-only HOST bind address plus an
-     * inline safety warning. Deliberately not editable — see the
-     * settings-screen spec's HOST handling: it lives in `.env`, not
-     * config.json, has no atomic-write convention in this codebase, and
-     * the launchd wrapper on the deploy host REFUSES TO BOOT on a
-     * wildcard/empty bind, so a bad edit here would strand the server
-     * with no way to fix it from the now-unreachable UI. Read-only +
-     * loud warning is the safer contract than a "confirm to bypass" edit
-     * path would be.
-     * Output: string - HTML for the server `.settings-section`.
-     */
-    function renderServerSection() {
-        var server = (lastSummary && lastSummary.server) || {};
-        var wildcard = !!server.wildcard_bind;
-        var warningHtml = wildcard
-            ? (
-                '<div class="settings-warning">' +
-                '  <strong>this bind address exposes a remote shell on every network interface.</strong> ' +
-                '  the server\'s startup guard refuses to boot when HOST is 0.0.0.0, empty, or missing — ' +
-                '  if this got here from a hand-edited .env, the app will not come back up after a restart. ' +
-                '  fix .env directly on the host, then restart.' +
-                '</div>'
-            )
-            : (
-                '<div class="settings-field-hint">bound to a specific interface — not exposed on every network.</div>'
-            );
-        return (
-            '<section class="settings-section" data-settings-section="server">' +
-            '  <h3 class="settings-section-title">server</h3>' +
-            '  <div class="settings-section-description">bind address — read only. lives in .env, not config.json; edit it on the host directly.</div>' +
-            '  <div class="settings-field">' +
-            '    <label class="settings-field-label">host</label>' +
-            '    <input type="text" class="modal-input" value="' + escapeHtml(server.host || '') + '" readonly disabled>' +
-            '  </div>' +
-            warningHtml +
-            '</section>'
-        );
-    }
-
-    /**
-     * Build the full panel body HTML from `lastSummary` — appearance,
-     * then every generic SECTIONS entry, then server, in that fixed
-     * order (matches the spec's APPEARANCE / AGENT / NOTIFICATIONS /
-     * SERVER ordering).
+     * Build the full panel body: the tab strip plus every pane, all
+     * rendered at once so switching tabs never destroys unsaved input.
      * Output: string.
      */
     function renderBody() {
-        var parts = [renderAppearanceSection()];
-        SECTIONS.forEach(function (section) {
-            parts.push(renderGenericSection(section));
-            // feat/launch-wrappers — the wrapper list/editor is bespoke
-            // (immediate-write CRUD, not part of this panel's batched
-            // Save flow — see agent-wrappers-panel.js's module doc) and
-            // is mounted into this slot right after the generic "agent"
-            // section, by mountWrappersSlot() (called alongside
-            // mountThemeSlot in open()/save()).
-            if (section.id === 'agent') {
-                parts.push('<div id="settings-wrappers-slot"></div>');
-            }
-        });
-        parts.push(renderServerSection());
-        return parts.join('');
+        return window.SettingsTabs.render(TABS.map(function (tab) {
+            return { id: tab.id, label: tab.label, bodyHtml: renderTabBody(tab) };
+        }));
     }
 
     /**
@@ -352,9 +241,15 @@
             if (statusEl) statusEl.textContent = 'saved';
             var bodyEl = overlayEl.querySelector('#settings-panel-body');
             if (bodyEl) {
+                // Repaint from the authoritative post-write summary, then
+                // put the user back on the tab they saved from — a save
+                // that silently bounced them to the first tab would read
+                // as the panel having lost their place.
+                var priorTab = window.SettingsTabs.activeTab(bodyEl);
                 bodyEl.innerHTML = renderBody();
-                mountThemeSlot();
-                mountWrappersSlot();
+                window.SettingsTabs.wire(bodyEl);
+                if (priorTab) window.SettingsTabs.activate(bodyEl, priorTab);
+                mountSlots();
             }
         } catch (err) {
             console.error('SettingsPanel: save failed', err);
@@ -378,16 +273,29 @@
     }
 
     /**
-     * Mount the launch-wrappers list/editor into this panel's slot (see
-     * renderBody's `#settings-wrappers-slot` placement, right after the
-     * generic "agent" section). Called on open and after every save, same
-     * as mountThemeSlot.
+     * Mount every bespoke panel into its slot. These panels own their own
+     * DOM and write immediately rather than joining this panel's batched
+     * Save (see agent-wrappers-panel.js / terminal-commands-panel.js).
+     * Called on open and after every save, same as mountThemeSlot.
      * Output: void.
      */
-    function mountWrappersSlot() {
-        if (!window.AgentWrappersPanel) return;
-        var slot = overlayEl.querySelector('#settings-wrappers-slot');
-        if (slot) window.AgentWrappersPanel.mount(slot);
+    function mountSlots() {
+        mountThemeSlot();
+        if (window.AgentWrappersPanel) {
+            var wrapperSlot = overlayEl.querySelector('#settings-wrappers-slot');
+            if (wrapperSlot) window.AgentWrappersPanel.mount(wrapperSlot);
+        }
+        if (window.TerminalCommandsPanel) {
+            var commandSlot = overlayEl.querySelector('#settings-terminal-commands-slot');
+            if (commandSlot) {
+                // Seeded from the settings summary we already fetched, so
+                // opening settings stays one round trip.
+                window.TerminalCommandsPanel.mount(
+                    commandSlot,
+                    (lastSummary && lastSummary.terminal_commands) || null
+                );
+            }
+        }
     }
 
     /**
@@ -422,7 +330,7 @@
             lastSummary = await window.API.getSettings();
         } catch (err) {
             console.error('SettingsPanel: failed to load settings', err);
-            lastSummary = { agents: {}, notifications: {}, server: {} };
+            lastSummary = { agents: {}, notifications: {}, server: {}, terminal_commands: null };
         }
 
         overlayEl = document.createElement('div');
@@ -445,8 +353,8 @@
         );
 
         document.body.appendChild(overlayEl);
-        mountThemeSlot();
-        mountWrappersSlot();
+        window.SettingsTabs.wire(overlayEl.querySelector('#settings-panel-body'));
+        mountSlots();
 
         overlayEl.querySelector('#settings-close-btn').addEventListener('click', close);
         overlayEl.querySelector('#settings-cancel-btn').addEventListener('click', close);

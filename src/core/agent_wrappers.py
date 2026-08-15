@@ -82,6 +82,42 @@ def is_valid_wrapper_id(v: str) -> bool:
     return bool(_WRAPPER_ID_RE.fullmatch(v))
 
 
+# The ONE heuristic used to derive ``accepts_model`` for wrappers that
+# predate the field (see ``derive_accepts_model`` and the v1->v2 step in
+# src/core/config_migration.py). Deliberately a single named constant
+# rather than a hardcoded list of any particular user's wrapper ids:
+# library code must not know that one person's OpenRouter wrapper happens
+# to be called "cldor". A wrapper is guessed to take a model id when its
+# own human-authored text says so — the migration-seeded OpenRouter
+# wrapper's label is "cldor (openrouter)" and its description says "model
+# as first argument", while the subscription wrappers ("claude", "cld")
+# mention neither.
+#
+# This runs EXACTLY ONCE, during the v1->v2 migration. After that the
+# stored boolean is authoritative and user-editable, so a wrong guess is
+# a checkbox away from fixed and never re-guessed.
+MODEL_CAPABLE_TEXT_RE = re.compile(r"openrouter|\bmodel\b", re.IGNORECASE)
+
+
+def derive_accepts_model(wrapper: dict) -> bool:
+    """Guess whether a pre-``accepts_model`` wrapper takes a model id.
+
+    Description: applies ``MODEL_CAPABLE_TEXT_RE`` to the wrapper's own
+      human-authored text (label, description, script, entry). Used only
+      to give existing configs a sensible starting value during the
+      v1->v2 migration; never consulted at launch time.
+    Inputs: wrapper (dict) - an AgentWrapper-shaped dict, possibly
+      missing any of the optional keys.
+    Output: bool - True if the wrapper looks model-capable.
+    Example: derive_accepts_model({"label": "cldor (openrouter)"}) -> True
+    """
+    haystack = " ".join(
+        str(wrapper.get(key) or "")
+        for key in ("label", "description", "script", "entry")
+    )
+    return bool(MODEL_CAPABLE_TEXT_RE.search(haystack))
+
+
 class AgentWrapper(BaseModel):
     """One user-defined launch wrapper for the "claude" agent family.
 
@@ -105,6 +141,19 @@ class AgentWrapper(BaseModel):
     - ``default``: at most one wrapper should carry this; the resolver
       falls back to the first wrapper in list order if none (or more than
       one, from a hand-edited config.json) is marked default.
+    - ``accepts_model``: whether this wrapper consumes an OpenRouter model
+      id as its first argument (the ``cldor`` shape). Model choice and
+      wrapper choice are two INDEPENDENT axes; collapsing them into one
+      flat picker list is what caused the regression this field fixes —
+      a model chosen next to a wrapper that ignores models got forwarded
+      to the DEFAULT wrapper, whose ``"$@"`` passed the model id through
+      to ``claude`` as a PROMPT ARGUMENT. Defaults to ``False`` so a
+      wrapper that says nothing about models is never offered one and
+      behaviour for every existing wrapper is unchanged; the v1->v2
+      migration seeds a derived value once (see ``derive_accepts_model``).
+      ``Settings.get_agent_command`` drops the model outright when the
+      resolved wrapper does not accept one, so the picker's rule is
+      enforced server-side too, not just in the UI.
 
     SECURITY: there is deliberately no "secret" field. A wrapper is a
     shell command — secrets must never be pasted into ``script`` or
@@ -123,6 +172,10 @@ class AgentWrapper(BaseModel):
     )
     description: Optional[str] = Field(None, description="Optional free-text note")
     default: bool = Field(False, description="Preferred wrapper when none is explicitly selected")
+    accepts_model: bool = Field(
+        False,
+        description="Whether this wrapper consumes an OpenRouter model id as its first argument",
+    )
 
     @field_validator("id")
     @classmethod
@@ -350,6 +403,7 @@ EXAMPLE_WRAPPERS: List[dict] = [
             "accidentally inherit routing from a prior shell."
         ),
         "default": False,
+        "accepts_model": False,
     },
     {
         "id": "cldor",
@@ -363,5 +417,6 @@ EXAMPLE_WRAPPERS: List[dict] = [
             "session/auth state with a subscription-mode launch."
         ),
         "default": False,
+        "accepts_model": True,
     },
 ]
