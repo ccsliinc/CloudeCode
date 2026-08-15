@@ -72,6 +72,67 @@
     transform: translateX(0);
 }
 
+/* ---- PINNED (docked) -------------------------------------------------
+ * See client/js/session-sidebar-pin.js. `.session-sidebar-pinned` lands on
+ * <body> only while the bar is pinned AND the viewport is wider than
+ * 700px, so the mobile case needs no override here at all - the class is
+ * simply never applied. Docked means the bar stops overlaying the app and
+ * the app makes room for it instead; the terminal refits itself via its
+ * own ResizeObserver (terminal.js), so nothing has to be told about this.
+ */
+
+body.session-sidebar-pinned .header,
+body.session-sidebar-pinned .screen {
+    padding-left: min(320px, 85vw);
+    transition: padding-left 160ms ease;
+}
+
+body.session-sidebar-pinned .session-sidebar-panel {
+    /* No drop shadow when docked - a shadow says "floating above", and
+     * this is now part of the layout. */
+    box-shadow: none;
+}
+
+/* ---- Pin toggle (sidebar header) ----------------------------------- */
+
+.session-sidebar-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: auto;
+    margin-right: 2px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-pin:hover,
+.session-sidebar-pin:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+/* Pressed state is a real border + accent fill, not just a color shift -
+ * "is this pinned?" has to be answerable at a glance, and aria-pressed
+ * alone is invisible. */
+.session-sidebar-pin[aria-pressed="true"] {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent-border);
+}
+
+.session-sidebar-pin[hidden] {
+    display: none;
+}
+
 .session-sidebar-header {
     display: flex;
     align-items: center;

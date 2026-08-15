@@ -5,45 +5,34 @@
  * convention as session-sidebar.css. Uses the design tokens defined in
  * styles.css's :root block - no new tokens introduced.
  *
- * This file is the TREE PANEL only - slides in from the RIGHT (session
- * sidebar slides from the left, so the two panels read as distinct
- * surfaces if ever opened back to back), FULL HEIGHT with no inline
- * editor sliver so a long tree stays navigable. The EDITOR MODAL (reuses
- * the app's .modal-overlay primitive - see styles.css's "Modals" block)
- * lives in the sibling stylesheet config-editor-modal.css, split out
- * purely to keep both files under this project's 500-line rule; load
- * both, in either order, alongside this feature's two JS files.
+ * This file is the FILE PICKER modal only - a centered `.modal-overlay`
+ * dialog (it used to be a right-hand slide-over panel), tree-only and
+ * full height inside its own box so a long tree stays navigable. The
+ * EDITOR MODAL that stacks over it lives in the sibling stylesheet
+ * config-editor-modal.css, split out purely to keep both files under this
+ * project's 500-line rule; load both, in either order, alongside this
+ * feature's JS. Stacking chrome (scroll lock, covered-modal treatment) is
+ * in modal-stack.css.
  * ===================================================================== */
 
-.config-editor-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--color-bg-overlay-soft);
-    z-index: 1090;
-}
-
-.config-editor-backdrop[hidden] {
+/* `.modal-overlay` sets display: flex, which beats the `hidden`
+ * attribute's UA display: none - so the picker needs this to actually
+ * stay hidden between opens. Its markup is static in index.html rather
+ * than built on demand, which is why it needs a hidden state at all. */
+.config-editor-picker-overlay[hidden] {
     display: none;
 }
 
-.config-editor-panel {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(420px, 92vw);
-    background: var(--color-bg-elevated);
-    border-left: 1px solid var(--color-border);
-    box-shadow: -4px 0 24px var(--color-bg-overlay-soft);
-    z-index: 1100;
+.config-editor-picker-content {
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
+    width: 94%;
+    max-width: 520px;
+    height: min(85vh, 780px);
     display: flex;
     flex-direction: column;
-    transform: translateX(100%);
-    transition: transform 160ms ease;
-}
-
-.config-editor-panel--open {
-    transform: translateX(0);
+    animation: slideUp 0.3s ease;
 }
 
 .config-editor-header {
@@ -291,8 +280,12 @@
     color: var(--color-warning);
 }
 
-@media (max-width: 480px) {
-    .config-editor-panel {
-        width: 100vw;
+@media (max-width: 700px) {
+    /* Near-fullscreen on a phone - matches the editor modal's own mobile
+     * rule in config-editor-modal.css so the two stacked surfaces are the
+     * same size and the transition between them does not jump. */
+    .config-editor-picker-content {
+        width: 98%;
+        height: 92vh;
     }
 }
