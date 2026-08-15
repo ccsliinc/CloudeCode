@@ -32,19 +32,24 @@ class ConfigFileWriteRequest(BaseModel):
     """Body for POST /config-files/write.
 
     Inputs (fields):
-      root (str) - "user" or "project".
+      root (str) - "user", "project", or "workdir".
       path (str) - rel_path from a tree listing.
       content (str) - new file contents.
-      project_path (str|None) - required when root == "project".
+      project_path (str|None) - required when root != "user".
       acknowledge_executable (bool) - must be True to write a file
         config_files.py classifies as executable; the client sets this
         only after ``App.showConfirmModal()`` returned true.
+      acknowledge_sensitive (bool) - must be True to write a file
+        config_files.py classifies as sensitive (credentials/secret/key-
+        shaped); the client sets this only after
+        ``App.showConfirmModal()`` returned true.
     """
     root: str
     path: str
     content: str
     project_path: Optional[str] = None
     acknowledge_executable: bool = False
+    acknowledge_sensitive: bool = False
 
 
 class ConfigFileTreeResponse(BaseModel):
@@ -55,6 +60,7 @@ class ConfigFileTreeResponse(BaseModel):
 class ConfigFileReadResponse(BaseModel):
     content: str
     is_executable: bool
+    is_sensitive: bool
     read_only: bool
     size: int
 
@@ -63,18 +69,20 @@ class ConfigFileWriteResponse(BaseModel):
     ok: bool = True
     backed_up: bool
     is_executable: bool
+    is_sensitive: bool
 
 
 @router.get("/tree", response_model=ConfigFileTreeResponse, dependencies=[Depends(require_auth)])
 async def get_config_file_tree(
-    root: str = Query(..., description='"user" or "project"'),
+    root: str = Query(..., description='"user", "project", or "workdir"'),
     project_path: Optional[str] = Query(None),
 ):
     """
-    Description: list the allow-listed, hide-list-filtered claude-config
-      file tree for one root.
-    Inputs: root (str, query) - "user" or "project"; project_path
-      (str|None, query) - required for root == "project".
+    Description: list the hide-list-filtered claude-config/project file
+      tree for one root ("user"/"project" are also allow-listed;
+      "workdir" is not).
+    Inputs: root (str, query) - "user", "project", or "workdir";
+      project_path (str|None, query) - required for root != "user".
     Output: ConfigFileTreeResponse.
     Raises: HTTPException(400) - unknown/unavailable root (translated
       from config_files.ConfigFileError).
@@ -93,7 +101,10 @@ async def read_config_file(
     project_path: Optional[str] = Query(None),
 ):
     """
-    Description: read one allow-listed config file's contents.
+    Description: read one browsable file's contents. Sensitive files
+      (credentials/secret/key-shaped) are returned, not refused - the
+      response's ``is_sensitive`` flag tells the client to mask the
+      content until the user explicitly reveals it.
     Inputs: root (str, query); path (str, query) - rel_path from a tree
       listing; project_path (str|None, query).
     Output: ConfigFileReadResponse.
@@ -113,24 +124,27 @@ async def read_config_file(
 @router.post("/write", response_model=ConfigFileWriteResponse, dependencies=[Depends(require_auth)])
 async def write_config_file(body: ConfigFileWriteRequest):
     """
-    Description: write one allow-listed config file. Always backs up the
-      previous bytes first; validates JSON for .json files before
-      writing; refuses executable files (hooks/, scripts/) without
-      ``acknowledge_executable=True``; refuses anything under a
+    Description: write one browsable file. Always backs up the previous
+      bytes first; validates JSON for .json files before writing;
+      refuses executable files (hooks/, scripts/) without
+      ``acknowledge_executable=True``; refuses sensitive files
+      (credentials/secret/key-shaped) without
+      ``acknowledge_sensitive=True``; refuses anything under a
       read-only root (plugins/) or outside the allowed roots entirely.
       Never logs ``body.content``.
     Inputs: body (ConfigFileWriteRequest).
     Output: ConfigFileWriteResponse.
     Raises: HTTPException(400) - any rejection from
       config_files.write_file (bad path, malformed JSON, read-only,
-      unacknowledged executable write) - translated from
-      config_files.ConfigFileError.
+      unacknowledged executable write, unacknowledged sensitive write) -
+      translated from config_files.ConfigFileError.
     """
     logger.info(
         "config_files_write_request",
         root=body.root,
         path=body.path,
         acknowledge_executable=body.acknowledge_executable,
+        acknowledge_sensitive=body.acknowledge_sensitive,
     )
     try:
         result = config_files.write_file(
@@ -139,6 +153,7 @@ async def write_config_file(body: ConfigFileWriteRequest):
             content=body.content,
             project_path=body.project_path,
             acknowledge_executable=body.acknowledge_executable,
+            acknowledge_sensitive=body.acknowledge_sensitive,
         )
     except config_files.ConfigFileError as exc:
         logger.warning("config_files_write_rejected", root=body.root, path=body.path, error=str(exc))

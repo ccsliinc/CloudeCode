@@ -18,6 +18,7 @@
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
+    <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
@@ -294,7 +295,13 @@
     <script src="/static/js/agent-wrappers-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
-    <!-- Claude-config file tree + editor. Must load AFTER api.js
+    <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -
+         served from this app's own origin so it satisfies the CSP's
+         script-src 'self' with no CDN and no policy change. Exposes
+         window.CodeMirrorBundle. Must load BEFORE config-editor-modal.js. -->
+    <script src="/static/vendor/codemirror/codemirror-bundle.js"></script>
+
+    <!-- Config/project file tree + editor. Must load AFTER api.js
          (window.API) and BEFORE app.js so App.init() can wire
          #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
     <script src="/static/js/markdown-lite.js"></script>

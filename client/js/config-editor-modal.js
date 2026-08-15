@@ -1,5 +1,5 @@
 /**
- * Claude-config editor modal - the file-editing half of the config
+ * Config/project editor modal - the file-editing half of the config
  * editor feature (see client/js/config-editor-panel.js for the tree half
  * that opens it). Split into its own module purely for the project's
  * 500-line file-size rule; the two files together are one feature and
@@ -12,20 +12,33 @@
  * (confirmDiscardIfDirty) via App.showConfirmModal, so a stray Escape or
  * backdrop click can never silently drop an edit.
  *
- * Markdown files get an edit/preview toggle; preview renders through
- * window.MarkdownLite (client/js/markdown-lite.js), never raw innerHTML
- * from file content.
+ * Editing surface: vendored CodeMirror 6 (window.CodeMirrorBundle, see
+ * client/vendor/codemirror/VERSION.md), never a CDN load - this app's CSP
+ * is script-src 'self'. Markdown files get an edit/preview toggle;
+ * preview renders through window.MarkdownLite
+ * (client/js/markdown-lite.js), never raw innerHTML from file content.
+ *
+ * Sensitive files (server-flagged `is_sensitive` - credentials/secret/
+ * key-shaped, see config_files.py's SENSITIVE_*) open MASKED: the editor
+ * is covered by a placeholder until the user explicitly reveals via
+ * App.showConfirmModal, and a WRITE to one additionally requires that
+ * same confirmation (acknowledge_sensitive), mirroring the executable-
+ * write gate. This is a screen/screenshot/screen-share guard, not access
+ * control - the content is already in this module's memory once read;
+ * see config_files.py's module docstring for the full reasoning.
  *
  * Must load AFTER api.js (window.API), markdown-lite.js
- * (window.MarkdownLite) and BEFORE config-editor-panel.js, which calls
- * into window.ConfigEditorModal.open().
+ * (window.MarkdownLite), the vendored CodeMirror bundle
+ * (window.CodeMirrorBundle) and BEFORE config-editor-panel.js, which
+ * calls into window.ConfigEditorModal.open().
  */
 
 console.log('[ConfigEditorModal Module] Loading...');
 
 (function () {
-    // { root, path, projectPath, isExecutable, readOnly, originalContent,
-    //   dirty, mode: 'edit'|'preview' } | null
+    // { root, path, projectPath, isExecutable, isSensitive, readOnly,
+    //   revealed, originalContent, dirty, mode: 'edit'|'preview',
+    //   cmEditor: {getValue,setContent,setReadOnly,focus,destroy}|null } | null
     let activeFile = null;
     let overlayEl = null;
 
@@ -85,6 +98,9 @@ console.log('[ConfigEditorModal Module] Loading...');
      * Inputs: none. Output: void.
      */
     function close() {
+        if (activeFile && activeFile.cmEditor) {
+            try { activeFile.cmEditor.destroy(); } catch (_) { /* no-op */ }
+        }
         if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
         overlayEl = null;
         activeFile = null;
@@ -105,10 +121,13 @@ console.log('[ConfigEditorModal Module] Loading...');
     /**
      * Open the editor for one file: builds the modal shell immediately
      * (loading state), then fetches content and renders the real editor.
-     * Inputs: rootId (string) - "user"|"project"; relPath (string);
-     *   readOnly (bool) - from the tree node's data attribute; combined
-     *   with the server's own read_only flag in the response.
-     *   projectPath (string|null) - required when rootId === "project".
+     * A sensitive file (server-flagged `is_sensitive`) opens MASKED
+     * regardless of what the caller might otherwise assume - `revealed`
+     * starts false and only App.showConfirmModal can flip it.
+     * Inputs: rootId (string) - "user"|"project"|"workdir"; relPath
+     *   (string); readOnly (bool) - from the tree node's data attribute;
+     *   combined with the server's own read_only flag in the response.
+     *   projectPath (string|null) - required when rootId != "user".
      * Output: Promise<void>.
      */
     async function open(rootId, relPath, readOnly, projectPath) {
@@ -122,10 +141,13 @@ console.log('[ConfigEditorModal Module] Loading...');
                 path: relPath,
                 projectPath,
                 isExecutable: result.is_executable,
+                isSensitive: result.is_sensitive,
                 readOnly: readOnly || result.read_only,
+                revealed: !result.is_sensitive,
                 originalContent: result.content,
                 dirty: false,
                 mode: 'edit',
+                cmEditor: null,
             };
             renderBody();
         } catch (err) {
@@ -175,8 +197,9 @@ console.log('[ConfigEditorModal Module] Loading...');
 
     /**
      * Render the modal body + footer for the currently-loaded
-     * `activeFile`: textarea, exec/read-only warnings, edit/preview
-     * toggle for markdown, and save/cancel actions.
+     * `activeFile`: CodeMirror editor (or a masking placeholder for an
+     * unrevealed sensitive file), exec/sensitive/read-only warnings,
+     * edit/preview toggle for markdown, and save/cancel actions.
      * Inputs: none. Output: void.
      */
     function renderBody() {
@@ -188,6 +211,9 @@ console.log('[ConfigEditorModal Module] Loading...');
         const execNote = f.isExecutable
             ? '<div class="config-editor-exec-warning">this file is code claude code runs automatically. saving requires confirmation and is always backed up first.</div>'
             : '';
+        const sensitiveNote = f.isSensitive
+            ? '<div class="config-editor-exec-warning">this file looks like credentials, a secret, or a private key. its contents are masked until you reveal them, and saving requires confirmation.</div>'
+            : '';
         const roNote = f.readOnly ? '<div class="config-editor-ro-warning">read-only - this file is under a read-only root.</div>' : '';
         const isMd = isMarkdown(f.path);
         const toggleHtml = isMd
@@ -198,48 +224,108 @@ console.log('[ConfigEditorModal Module] Loading...');
             : '';
 
         body.innerHTML = (
-            `${execNote}${roNote}${toggleHtml}` +
+            `${execNote}${sensitiveNote}${roNote}${toggleHtml}` +
             '<div id="config-editor-save-error" class="config-editor-error" hidden></div>' +
-            `<textarea id="config-editor-textarea" class="config-editor-textarea" spellcheck="false" ` +
-            `${f.readOnly ? 'readonly' : ''} ${f.mode === 'preview' ? 'hidden' : ''}>${esc(f.originalContent)}</textarea>` +
-            `<div id="config-editor-preview" class="config-editor-preview" ${f.mode === 'preview' ? '' : 'hidden'}></div>`
+            (f.isSensitive && !f.revealed ? maskHtml() : '') +
+            `<div id="config-editor-cm-host" class="config-editor-cm-host" data-readonly="${f.readOnly ? '1' : '0'}" ${f.isSensitive && !f.revealed ? 'hidden' : ''}></div>` +
+            `<div id="config-editor-preview" class="config-editor-preview" hidden></div>`
         );
 
+        const saveDisabled = f.readOnly || (f.isSensitive && !f.revealed);
         footer.hidden = false;
         footer.innerHTML = (
             '<span id="config-editor-dirty-flag" class="config-editor-dirty-flag"></span>' +
             '<button type="button" class="modal-btn modal-btn-secondary" id="config-editor-cancel">cancel</button>' +
-            `<button type="button" class="modal-btn modal-btn-primary" id="config-editor-save" ${f.readOnly ? 'disabled' : ''}>save</button>`
+            `<button type="button" class="modal-btn modal-btn-primary" id="config-editor-save" ${saveDisabled ? 'disabled' : ''}>save</button>`
         );
 
         wireBody(f, isMd);
     }
 
     /**
-     * Wire the event handlers for the just-rendered body/footer (textarea
-     * dirty-tracking + tab handling, cancel, save, mode toggle).
+     * Build the mask placeholder shown in place of the editor for an
+     * unrevealed sensitive file - a padlock, a plain statement of why,
+     * and the one button that starts the reveal flow.
+     * Inputs: none. Output: string - HTML.
+     */
+    function maskHtml() {
+        return (
+            '<div id="config-editor-sensitive-mask" class="config-editor-sensitive-mask">' +
+            window.SessionStatusUI.lockIconSvg() +
+            '<div class="config-editor-sensitive-mask-text">this file looks like credentials, a secret, or a private key. ' +
+            'its contents are hidden by default so they do not end up on screen in a screenshot or screen-share.</div>' +
+            '<button type="button" class="modal-btn modal-btn-secondary" id="config-editor-reveal">reveal contents</button>' +
+            '</div>'
+        );
+    }
+
+    /**
+     * Handle the "reveal contents" button: routes through
+     * App.showConfirmModal with copy that plainly states the file holds
+     * credentials and is about to be displayed on screen - a deliberate,
+     * named step, not a toggle to brush past. On confirm, mounts the
+     * CodeMirror editor with the real content.
+     * Inputs: none. Output: Promise<void>.
+     */
+    async function revealSensitive() {
+        const f = activeFile;
+        if (!f) return;
+        const confirmed = await window.App.showConfirmModal(
+            'show credentials on screen?',
+            `"${f.path}" contains credentials, a secret, or a private key.`,
+            'its contents will be displayed on screen and stay visible until you close this editor. anyone who can see or record your screen will be able to read them.',
+            'reveal',
+            'keep hidden'
+        );
+        if (!confirmed || !activeFile) return;
+        activeFile.revealed = true;
+        const mask = document.getElementById('config-editor-sensitive-mask');
+        if (mask) mask.remove();
+        const host = document.getElementById('config-editor-cm-host');
+        if (host) host.hidden = false;
+        mountEditor(activeFile);
+        const saveBtn = document.getElementById('config-editor-save');
+        if (saveBtn && !activeFile.readOnly) saveBtn.disabled = false;
+    }
+
+    /**
+     * Mount (or re-mount) the CodeMirror editor into #config-editor-cm-
+     * host for the currently-loaded, revealed `activeFile`. No-op for an
+     * unrevealed sensitive file - callers must go through
+     * revealSensitive() first.
+     * Inputs: f (object) - activeFile. Output: void.
+     */
+    function mountEditor(f) {
+        const host = document.getElementById('config-editor-cm-host');
+        if (!host || (f.isSensitive && !f.revealed)) return;
+        if (f.cmEditor) {
+            try { f.cmEditor.destroy(); } catch (_) { /* no-op */ }
+        }
+        f.cmEditor = window.CodeMirrorBundle.createEditor(
+            host,
+            f.originalContent,
+            f.path,
+            f.readOnly,
+            (newValue) => {
+                f.dirty = newValue !== f.originalContent;
+                updateDirtyFlag();
+            }
+        );
+    }
+
+    /**
+     * Wire the event handlers for the just-rendered body/footer (cancel,
+     * save, mode toggle, sensitive-reveal), and mount the editor itself.
      * Inputs: f (object) - activeFile; isMd (bool).
      * Output: void.
      */
     function wireBody(f, isMd) {
-        const textarea = document.getElementById('config-editor-textarea');
-        textarea.addEventListener('input', () => {
-            f.dirty = textarea.value !== f.originalContent;
-            updateDirtyFlag();
-        });
-        textarea.addEventListener('keydown', (e) => {
-            // Preserve indentation on Tab instead of moving focus out of
-            // the textarea - table stakes for hand-editing YAML/JSON/py.
-            if (e.key === 'Tab') {
-                e.preventDefault();
-                const start = textarea.selectionStart;
-                const end = textarea.selectionEnd;
-                textarea.value = textarea.value.slice(0, start) + '    ' + textarea.value.slice(end);
-                textarea.selectionStart = textarea.selectionEnd = start + 4;
-                f.dirty = textarea.value !== f.originalContent;
-                updateDirtyFlag();
-            }
-        });
+        if (!f.isSensitive || f.revealed) {
+            mountEditor(f);
+        } else {
+            const revealBtn = document.getElementById('config-editor-reveal');
+            if (revealBtn) revealBtn.addEventListener('click', () => revealSensitive());
+        }
 
         document.getElementById('config-editor-cancel').addEventListener('click', () => closeGuarded());
         if (!f.readOnly) {
@@ -254,23 +340,27 @@ console.log('[ConfigEditorModal Module] Loading...');
 
     /**
      * Switch between edit/preview mode for a markdown file. Preview
-     * renders the CURRENT (possibly unsaved) textarea content through
-     * MarkdownLite - never innerHTML from the file directly.
+     * renders the CURRENT (possibly unsaved) editor content through
+     * MarkdownLite - never innerHTML from the file directly. A masked
+     * sensitive file has no content to preview yet, so preview is a
+     * no-op until revealed.
      * Inputs: mode ('edit'|'preview'). Output: void.
      */
     function setMode(mode) {
         if (!activeFile) return;
-        const textarea = document.getElementById('config-editor-textarea');
+        if (activeFile.isSensitive && !activeFile.revealed) return;
+        const host = document.getElementById('config-editor-cm-host');
         activeFile.mode = mode;
         const editTab = document.getElementById('config-editor-mode-edit');
         const previewTab = document.getElementById('config-editor-mode-preview');
         const preview = document.getElementById('config-editor-preview');
         if (mode === 'preview') {
-            preview.innerHTML = window.MarkdownLite.render(textarea.value);
-            textarea.hidden = true;
+            const content = activeFile.cmEditor ? activeFile.cmEditor.getValue() : activeFile.originalContent;
+            preview.innerHTML = window.MarkdownLite.render(content);
+            host.hidden = true;
             preview.hidden = false;
         } else {
-            textarea.hidden = false;
+            host.hidden = false;
             preview.hidden = true;
         }
         editTab.setAttribute('aria-selected', String(mode === 'edit'));
@@ -289,19 +379,22 @@ console.log('[ConfigEditorModal Module] Loading...');
 
     /**
      * Save the editor's current content, enforcing the same confirm-
-     * before-executable-write flow as every other destructive action in
-     * the app (App.showConfirmModal). Client-side JSON pre-validation is
-     * a fast-fail UX nicety only - the server re-validates and is the
-     * real enforcement point (config_files.write_file).
+     * before-write flow as every other destructive action in the app
+     * (App.showConfirmModal) - once for an executable write, once for a
+     * sensitive write (a file can be both; both confirms fire). Client-
+     * side JSON pre-validation is a fast-fail UX nicety only - the server
+     * re-validates and is the real enforcement point
+     * (config_files.write_file). Content is read from the CodeMirror
+     * instance directly, preserving exact whitespace/indentation - never
+     * transformed or re-serialized by this module.
      * Inputs: none. Output: Promise<void>.
      */
     async function save() {
         const f = activeFile;
-        if (!f) return;
-        const textarea = document.getElementById('config-editor-textarea');
+        if (!f || !f.cmEditor) return;
         const errorEl = document.getElementById('config-editor-save-error');
         errorEl.hidden = true;
-        const content = textarea.value;
+        const content = f.cmEditor.getValue();
 
         if (f.path.endsWith('.json')) {
             try {
@@ -327,6 +420,19 @@ console.log('[ConfigEditorModal Module] Loading...');
             acknowledgeExecutable = true;
         }
 
+        let acknowledgeSensitive = false;
+        if (f.isSensitive) {
+            const confirmed = await window.App.showConfirmModal(
+                'save credentials file?',
+                `"${f.path}" contains credentials, a secret, or a private key.`,
+                'a backup of the current version is made before saving. this cannot be undone.',
+                'save',
+                'cancel'
+            );
+            if (!confirmed) return;
+            acknowledgeSensitive = true;
+        }
+
         try {
             const result = await window.API.writeConfigFile({
                 root: f.root,
@@ -334,6 +440,7 @@ console.log('[ConfigEditorModal Module] Loading...');
                 content,
                 project_path: f.projectPath,
                 acknowledge_executable: acknowledgeExecutable,
+                acknowledge_sensitive: acknowledgeSensitive,
             });
             f.originalContent = content;
             f.dirty = false;

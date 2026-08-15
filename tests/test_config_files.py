@@ -54,8 +54,12 @@ def test_list_tree_omits_hidden_dirs(fake_home):
     assert names.isdisjoint({"projects", "cache", "todos", "shell-snapshots"})
 
 
-def test_list_tree_omits_credentials_and_history(fake_home):
-    (fake_home / ".credentials.json").write_text("{}")
+def test_list_tree_still_hides_history_and_stats_cache(fake_home):
+    # These are churn/state, not sensitive-but-visible config - they stay
+    # fully hidden. .credentials.json is a top-level entry though, and
+    # top-level entries are allow-listed for "user" independent of the
+    # hide-list - it is covered by resolve_safe_path's rejection below,
+    # not by list_tree (it was never in ALLOWED_TOP_LEVEL_FILES).
     (fake_home / "history.jsonl").write_text("{}\n")
     (fake_home / "stats-cache.json").write_text("{}")
     (fake_home / "CLAUDE.md").write_text("# hi\n")
@@ -65,7 +69,11 @@ def test_list_tree_omits_credentials_and_history(fake_home):
     assert names == {"CLAUDE.md"}
 
 
-def test_list_tree_omits_dotenv_variants(fake_home):
+def test_dotenv_variants_are_not_allow_listed_top_level_but_are_sensitive(fake_home):
+    # .env* is not in ALLOWED_TOP_LEVEL_FILES so it never appears at the
+    # "user" root's top level - unrelated to sensitivity masking, same as
+    # any other non-allow-listed top-level name. Sensitivity is exercised
+    # against a "workdir" root below, where there is no allow-list.
     for name in (".env", ".env.local", ".env.production"):
         (fake_home / name).write_text("SECRET=1\n")
     (fake_home / "CLAUDE.md").write_text("# hi\n")
@@ -141,24 +149,62 @@ def test_project_root_requires_existing_claude_dir(tmp_path, fake_home):
     assert resolved.name == "CLAUDE.md"
 
 
-# ---- .env / .credentials refusal (server-side, not just hidden in UI) ----
+# ---- .env / .credentials / key files: visible + readable, masked on ----
+# ---- screen by the client, write-gated by acknowledge_sensitive --------
 
-def test_read_file_refuses_env_even_with_exact_path(fake_home):
-    (fake_home / ".env").write_text("SECRET=1\n")
-    with pytest.raises(cf.ConfigFileError):
-        cf.read_file("user", ".env", None)
+def test_read_file_returns_env_flagged_sensitive_not_refused(fake_home, tmp_path):
+    # .env is not in ALLOWED_TOP_LEVEL_FILES so it never appears at the
+    # "user"/"project" root's top level (scope, unrelated to sensitivity) -
+    # exercised against "workdir", which has no allow-list and is exactly
+    # where a project's .env actually lives.
+    project_dir = tmp_path / "someproject"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text("SECRET=1\n")
+    result = cf.read_file("workdir", ".env", str(project_dir))
+    assert result["content"] == "SECRET=1\n"
+    assert result["is_sensitive"] is True
 
 
-def test_read_file_refuses_credentials_even_with_exact_path(fake_home):
+def test_read_file_returns_credentials_flagged_sensitive_not_refused(fake_home):
     (fake_home / ".credentials.json").write_text('{"token": "x"}')
-    with pytest.raises(cf.ConfigFileError):
-        cf.read_file("user", ".credentials.json", None)
+    result = cf.read_file("user", ".credentials.json", None)
+    assert result["content"] == '{"token": "x"}'
+    assert result["is_sensitive"] is True
 
 
-def test_write_file_refuses_env_even_with_exact_path(fake_home):
+def test_list_tree_shows_credentials_flagged_sensitive_claude_md_not(fake_home):
+    (fake_home / ".credentials.json").write_text("{}")
+    (fake_home / "CLAUDE.md").write_text("# hi\n")
+    tree = cf.list_tree("user", None)
+    names = {n["name"]: n for n in tree}
+    assert names[".credentials.json"]["is_sensitive"] is True
+    assert names["CLAUDE.md"]["is_sensitive"] is False
+
+
+def test_read_file_flags_key_shaped_files_sensitive(fake_home):
+    (fake_home / "hooks").mkdir()
+    (fake_home / "hooks" / "id_ed25519").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+    result = cf.read_file("user", "hooks/id_ed25519", None)
+    assert result["is_sensitive"] is True
+
+
+def test_write_file_refuses_env_write_without_acknowledgement(fake_home, tmp_path):
+    project_dir = tmp_path / "someproject"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text("SECRET=1\n")
     with pytest.raises(cf.ConfigFileError):
-        cf.write_file("user", ".env", "SECRET=2\n", None)
-    assert not (fake_home / ".env").exists()
+        cf.write_file("workdir", ".env", "SECRET=2\n", str(project_dir), acknowledge_sensitive=False)
+    assert (project_dir / ".env").read_text() == "SECRET=1\n"
+
+
+def test_write_file_allows_env_write_with_acknowledgement(fake_home, tmp_path):
+    project_dir = tmp_path / "someproject"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text("SECRET=1\n")
+    result = cf.write_file("workdir", ".env", "SECRET=2\n", str(project_dir), acknowledge_sensitive=True)
+    assert result["is_sensitive"] is True
+    assert result["backed_up"] is True
+    assert (project_dir / ".env").read_text() == "SECRET=2\n"
 
 
 # ---- JSON validation on save --------------------------------------------
@@ -245,3 +291,117 @@ def test_write_file_refuses_plugins_readonly_root(fake_home):
     (plugins_dir / "somefile.json").write_text("{}")
     with pytest.raises(cf.ConfigFileError):
         cf.write_file("user", "plugins/somefile.json", "{}", None)
+
+
+# ---- "workdir" root: general project file browsing, no allow-list --------
+
+@pytest.fixture()
+def fake_project(tmp_path):
+    """A tmp project directory to use as project_path for "project"/"workdir"."""
+    project_dir = tmp_path / "someproject"
+    project_dir.mkdir()
+    return project_dir
+
+
+def test_workdir_root_lists_arbitrary_files_no_allowlist(fake_home, fake_project):
+    (fake_project / "README.md").write_text("# hi\n")
+    (fake_project / "app.py").write_text("print('hi')\n")
+    (fake_project / "random_junk_dir").mkdir()
+
+    tree = cf.list_tree("workdir", str(fake_project))
+    names = {n["name"] for n in tree}
+    # No allow-list for "workdir" - anything non-hidden shows, unlike
+    # "user"/"project" which only show ALLOWED_TOP_LEVEL_*.
+    assert names == {"README.md", "app.py", "random_junk_dir"}
+
+
+def test_workdir_root_hides_node_modules_and_git_and_venv(fake_home, fake_project):
+    for hidden in ("node_modules", ".git", "venv", ".venv", "dist", "build", "__pycache__"):
+        d = fake_project / hidden
+        d.mkdir()
+        (d / "junk").write_text("x")
+    (fake_project / "README.md").write_text("# hi\n")
+
+    tree = cf.list_tree("workdir", str(fake_project))
+    names = {n["name"] for n in tree}
+    assert names == {"README.md"}
+
+
+def test_workdir_root_rejects_dotdot_traversal(fake_home, fake_project):
+    (fake_project / "src").mkdir()
+    with pytest.raises(cf.ConfigFileError):
+        cf.resolve_safe_path("workdir", "src/../../../etc/passwd", str(fake_project))
+
+
+def test_workdir_root_rejects_absolute_smuggle(fake_home, fake_project):
+    with pytest.raises(cf.ConfigFileError):
+        cf.resolve_safe_path("workdir", "/etc/passwd", str(fake_project))
+
+
+def test_workdir_root_rejects_reach_into_git_internals_by_guessed_path(fake_home, fake_project):
+    git_dir = fake_project / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n")
+    with pytest.raises(cf.ConfigFileError):
+        cf.resolve_safe_path("workdir", ".git/config", str(fake_project))
+
+
+def test_workdir_root_rejects_reach_into_node_modules_by_guessed_path(fake_home, fake_project):
+    nm_dir = fake_project / "node_modules" / "somepkg"
+    nm_dir.mkdir(parents=True)
+    (nm_dir / "index.js").write_text("module.exports = {};\n")
+    with pytest.raises(cf.ConfigFileError):
+        cf.resolve_safe_path("workdir", "node_modules/somepkg/index.js", str(fake_project))
+
+
+def test_workdir_root_unavailable_without_project_path(fake_home):
+    with pytest.raises(cf.ConfigFileError):
+        cf.resolve_safe_path("workdir", "README.md", None)
+
+
+def test_workdir_root_flags_env_and_key_files_sensitive_in_listing(fake_home, fake_project):
+    (fake_project / ".env").write_text("SECRET=1\n")
+    (fake_project / "id_rsa").write_text("-----BEGIN-----\n")
+    (fake_project / "server.pem").write_text("-----BEGIN CERT-----\n")
+    (fake_project / "app.py").write_text("print('hi')\n")
+
+    tree = cf.list_tree("workdir", str(fake_project))
+    by_name = {n["name"]: n for n in tree}
+    assert by_name[".env"]["is_sensitive"] is True
+    assert by_name["id_rsa"]["is_sensitive"] is True
+    assert by_name["server.pem"]["is_sensitive"] is True
+    assert by_name["app.py"]["is_sensitive"] is False
+
+
+def test_workdir_root_write_backs_up_and_writes_atomically(fake_home, fake_project):
+    target = fake_project / "notes.txt"
+    target.write_text("old content\n")
+    result = cf.write_file("workdir", "notes.txt", "new content\n", str(fake_project))
+    assert result["backed_up"] is True
+    assert target.read_text() == "new content\n"
+    assert (fake_project / "notes.txt.bak").read_text() == "old content\n"
+
+
+def test_workdir_root_write_validates_json(fake_home, fake_project):
+    target = fake_project / "config.json"
+    target.write_text('{"a": 1}')
+    with pytest.raises(cf.ConfigFileError):
+        cf.write_file("workdir", "config.json", "{not valid", str(fake_project))
+    assert target.read_text() == '{"a": 1}'
+
+
+def test_workdir_root_write_requires_executable_ack_for_scripts_dir(fake_home, fake_project):
+    scripts_dir = fake_project / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "deploy.sh").write_text("#!/bin/bash\necho hi\n")
+    with pytest.raises(cf.ConfigFileError):
+        cf.write_file("workdir", "scripts/deploy.sh", "#!/bin/bash\necho bye\n", str(fake_project), acknowledge_executable=False)
+    result = cf.write_file("workdir", "scripts/deploy.sh", "#!/bin/bash\necho bye\n", str(fake_project), acknowledge_executable=True)
+    assert result["is_executable"] is True
+
+
+def test_resolve_roots_omits_workdir_when_directory_missing(fake_home, tmp_path):
+    roots = cf.resolve_roots(str(tmp_path / "does-not-exist"))
+    assert "workdir" not in roots
+    assert "project" not in roots
+    assert "user" in roots

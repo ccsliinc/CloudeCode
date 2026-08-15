@@ -91,3 +91,10 @@ troubleshooting/
 # CLAUDE.md would otherwise keep it out of every commit silently; this
 # negation wins because repo .gitignore is read after core.excludesFile.
 !CLAUDE.md
+
+# Build-only workspace for the vendored CodeMirror bundle (see
+# client/vendor/codemirror/VERSION.md). node_modules and the lockfile are
+# build inputs, not runtime code; only the built bundle under client/vendor/
+# ships.
+scripts/codemirror-vendor/node_modules/
+scripts/codemirror-vendor/package-lock.json
