@@ -1,64 +1,73 @@
 /**
- * ThemeAudio — per-theme background music plumbing.
+ * ThemeAudio - per-theme background music.
  *
- * v0.7.0+. Ships dormant: no audio plays until a theme manifest contains
- * an optional `audio` block AND the user has clicked the header 🔊 button
- * to opt in (default state is muted).
+ * Ships dormant: nothing plays until a theme manifest carries an `audio`
+ * block AND the user opts the session in from the session editor FAB
+ * menu ("play music"), which is also the user gesture browsers require.
  *
- * Manifest shape (optional, per theme.json):
+ * Manifest shape (optional, per client/css/themes/<name>/theme.json):
  *   "audio": {
- *     "src":     "/static/assets/audio/<slug>.ogg",
- *     "volume":  0.3,      // 0..1 target gain after fade-in
- *     "fadeMs":  1500      // crossfade duration in ms
+ *     "src":         "/static/assets/audio/<slug>.m4a",
+ *     "srcFallback": "/static/assets/audio/<slug>.ogg",
+ *     "volume":      0.5,   // 0..1 target gain after fade-in
+ *     "fadeMs":      1500   // crossfade duration in ms
  *   }
  *
+ * WHY TWO FORMATS, AND WHY m4a IS FIRST. The clips first shipped as Ogg
+ * Vorbis only, and on iOS that is SILENT. Measured on iPhone 16e,
+ * iOS 26.1 / Safari 26.1, 2026-08-16:
+ *
+ *   canPlayType('audio/ogg; codecs=vorbis') -> "probably"
+ *   <audio src="....ogg">  -> error MEDIA_ERR_SRC_NOT_SUPPORTED (4)
+ *   <audio src="....m4a">  -> loadedmetadata, duration 164.98
+ *
+ * canPlayType LIES here: WebKit recognises the Ogg container, claims
+ * Vorbis, then fails to decode. So a canPlayType-based probe would still
+ * pick the ogg on iOS and still be silent. The order is therefore FIXED
+ * (AAC first, decoded by every current engine) and the fallback is driven
+ * by a real load ERROR, never by asking the browser what it supports.
+ *
+ * GAIN BUDGET (read before lowering any of these numbers). The clips are
+ * loudnorm'd to about -24 LUFS, already quiet. The master and the
+ * per-theme volume MULTIPLY, so two individually sane numbers compound:
+ * the original 0.28 x 0.3 gave a linear gain of 0.084, i.e. -21.5 dB on
+ * top of -24 LUFS, roughly -45 LUFS at the speaker - inaudible on a phone.
+ * The master now defaults to 1.0 and manifests carry 0.45..0.60, landing
+ * near -31..-28 LUFS: present, still background.
+ *
  * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
- * falls back to `default-src 'self'` and any remote URL is blocked outright.
- * Bundled clips live in client/assets/audio/ and are served from /static.
+ * falls back to `default-src 'self'` and any remote URL is blocked.
  *
  * Public surface (singleton on window.ThemeAudio):
- *   init()                       — call once on app load
- *   setTheme(audioConfig|null)   — called by themes registry on every applyTheme()
- *   toggleMute()                 — header button click handler; returns new muted state
- *   isMuted()                    — boolean for UI
- *   getVolume() / setVolume(v)   — 0..1; persisted to localStorage; no UI yet
+ *   init()                       - call once on app load
+ *   setTheme(audioConfig|null)   - called by the themes registry on every
+ *                                  applyTheme(); null fades out to silence
+ *   toggleMute()                 - gesture handler; returns new muted state
+ *   isMuted()                    - boolean for UI
+ *   getLastPlayError()           - name of the last play() rejection, or null
+ *   getVolume() / setVolume(v)   - master 0..1, persisted; no UI yet
  *
  * Persistence:
- *   localStorage['cloude.audio.muted']  → 'true' | 'false'  (default 'true')
- *   localStorage['cloude.audio.volume'] → '0.3' (string of float 0..1)
+ *   localStorage['cloude.audio.muted']  -> 'true' | 'false'  (default 'true')
+ *   localStorage['cloude.audio.volume'] -> '1' (float 0..1 as string)
  *
- * Engine strategy (judgment call documented for future maintainers):
- *   Primary path uses Web Audio via MediaElementAudioSourceNode → GainNode → ctx.destination.
- *   This gives clean linearRampToValueAtTime crossfades between themes.
+ * Engine: MediaElementAudioSourceNode -> GainNode -> destination, which
+ * gives clean linearRampToValueAtTime crossfades. Clips are same-origin so
+ * createMediaElementSource neither taints nor CORS-fails. The
+ * requestAnimationFrame ramp is the fallback for when AudioContext
+ * construction itself fails; behaviour matches, only the curve is coarser.
+ * Looping uses `el.loop`, which still has an audible gap in every engine in
+ * 2026; acceptable for ambience. The upgrade path is AudioBufferSourceNode
+ * (fetch -> decodeAudioData), at the cost of a full in-memory load.
  *
- *   Bundled clips are same-origin (/static/...), so createMediaElementSource()
- *   neither taints nor CORS-fails on them and the GainNode path is the one
- *   that actually runs. The requestAnimationFrame fallback below is retained
- *   for the case where AudioContext construction itself fails (older WebKit,
- *   or an AudioContext exhausted by another tab). User-facing behavior is
- *   identical; only the precision of the fade curve differs.
+ * Page Visibility: pause when document.hidden, resume when visible if not
+ * muted. Explicit, because browsers do not universally pause backgrounded
+ * tabs.
  *
- *   Historical note: an earlier draft of this file pointed `src` at a GitHub
- *   release URL. That would never have worked — see the CSP note above.
- *
- *   GAPLESS LOOP CAVEAT: HTMLAudioElement `loop = true` still has audible gaps
- *   on Chromium/WebKit/Gecko in 2026. For v0.7.0 the gap is acceptable for
- *   ambient bg music. Future upgrade path: switch to AudioBufferSourceNode
- *   (fetch → arrayBuffer → ctx.decodeAudioData) — this also sidesteps the
- *   createMediaElementSource CORS taint because decodeAudioData uses the
- *   CORS-friendly fetch model. Trade-off: full-file memory load + no streaming.
- *
- * Page Visibility:
- *   visibilitychange → pause when document.hidden, resume when visible (iff
- *   not muted and a track is loaded). Explicit pause is NOT redundant —
- *   browsers do not universally auto-pause backgrounded tabs.
- *
- * Autoplay policy:
- *   AudioContext is created lazily on the FIRST user-gesture call to
- *   toggleMute(). Calling setTheme() before unmute only preloads metadata —
- *   never invokes .play() until the user-gesture grant exists.
- */
-(function () {
+ * Autoplay: the AudioContext is built lazily on the first toggleMute(), so
+ * it is always constructed inside a user gesture. setTheme() before that
+ * only preloads; it never calls play().
+ */(function () {
     'use strict';
 
     if (window.ThemeAudio) {
@@ -68,12 +77,19 @@
 
     var LS_MUTED = 'cloude.audio.muted';
     var LS_VOLUME = 'cloude.audio.volume';
-    var DEFAULT_VOLUME = 0.3;
+    // The user's master gain. Defaults to unity: the per-theme volume in
+    // the manifest is the ONLY attenuation in the normal path, so the two
+    // numbers cannot quietly multiply each other into silence.
+    var DEFAULT_MASTER_VOLUME = 1.0;
+
+    // Target gain for a theme whose manifest declares audio but omits a
+    // volume. Deliberately mid-scale, not unity.
+    var DEFAULT_TRACK_VOLUME = 0.5;
 
     // ---- State ----
     var initialized = false;
-    var muted = true;                  // default muted — overridden in init()
-    var globalVolume = DEFAULT_VOLUME; // 0..1; multiplied with per-theme volume
+    var muted = true;                         // default muted — overridden in init()
+    var globalVolume = DEFAULT_MASTER_VOLUME; // 0..1; multiplied with per-theme volume
     var currentConfig = null;          // last audioConfig passed to setTheme()
 
     // Current playback node (one of two engines — see init/_engineKind).
@@ -83,6 +99,7 @@
     //     rafHandle?: number }
     var currentNode = null;
     var outgoingNode = null; // held during crossfade only
+
 
     // Web Audio (lazy-init on first user gesture)
     var audioCtx = null;
@@ -102,11 +119,11 @@
     function _readVolume() {
         try {
             var v = localStorage.getItem(LS_VOLUME);
-            if (v === null) return DEFAULT_VOLUME;
+            if (v === null) return DEFAULT_MASTER_VOLUME;
             var n = parseFloat(v);
             if (isFinite(n) && n >= 0 && n <= 1) return n;
-            return DEFAULT_VOLUME;
-        } catch (_) { return DEFAULT_VOLUME; }
+            return DEFAULT_MASTER_VOLUME;
+        } catch (_) { return DEFAULT_MASTER_VOLUME; }
     }
     function _writeVolume(v) {
         try { localStorage.setItem(LS_VOLUME, String(v)); } catch (_) { /* ignore */ }
@@ -136,13 +153,64 @@
 
     // ---- Node construction ----
     /**
+     * Handle a media load error on a node: advance to the next declared
+     * format if there is one, otherwise tear the node down.
+     *
+     * Retrying reuses the SAME element, so the Web Audio graph hanging off
+     * it (MediaElementAudioSourceNode -> GainNode) survives the swap.
+     * createMediaElementSource can only ever be called once per element,
+     * so building a fresh element here would throw on the second attempt.
+     *
+     * @param {object} node - the node whose element errored.
+     * @returns {void}
+     */
+    function _onNodeError(node) {
+        var el = node.audio;
+        var code = el && el.error ? el.error.code : null;
+        var next = node.sourceIndex + 1;
+
+        if (next < node.sources.length) {
+            console.warn('ThemeAudio: ' + node.sources[node.sourceIndex] +
+                ' failed (code ' + code + '), trying ' + node.sources[next]);
+            node.sourceIndex = next;
+            node.loadedSrc = node.sources[next];
+            try {
+                el.src = node.sources[next];
+                el.load();
+            } catch (e) {
+                console.warn('ThemeAudio: fallback src swap threw', e);
+                return;
+            }
+            // load() resets the element, so re-assert the state the node was
+            // in. Volume is re-ramped rather than set, so a mid-fade swap
+            // does not click.
+            if (node === currentNode && !muted && !document.hidden) {
+                _resumeCtxIfSuspended();
+                _tryPlay(node);
+                window.ThemeAudioNode.ramp(node, _effectiveTarget(node), node.fadeMs, audioCtx);
+            }
+            return;
+        }
+
+        console.warn('ThemeAudio: no playable source for', node.sources.join(', '),
+            '(last error code ' + code + ')');
+        window.ThemeAudioNode.teardown(node);
+        if (currentNode === node) currentNode = null;
+        if (outgoingNode === node) outgoingNode = null;
+    }
+
+    /**
      * Build a playback node for the given audio config. Returns null if the
      * config is missing or src is empty. Does NOT call .play() — caller decides.
      *
      * The node holds an <audio> element (always) plus optional Web Audio graph
      * (GainNode + MediaElementAudioSourceNode) if the engine has been settled
      * on 'webaudio'. If 'element' mode, gain is null and volume is driven by
-     * the element's .volume property directly via _rampVolume().
+     * the element's .volume property directly (ThemeAudioNode.ramp).
+     *
+     * @param {{src: string, srcFallback?: string, volume?: number,
+     *          fadeMs?: number}|null} cfg - a manifest `audio` block.
+     * @returns {object|null} the playback node, or null for an unusable cfg.
      */
     function _makeNode(cfg) {
         if (!cfg || typeof cfg !== 'object' || !cfg.src || typeof cfg.src !== 'string') {
@@ -155,27 +223,36 @@
         el.loop = true;
         el.preload = 'auto';
         el.volume = 0; // start silent; fade-in handles the ramp
-        el.src = cfg.src;
 
         var node = {
             audio: el,
+            // Ordered candidate list, best-supported format first. See the
+            // header: this order is FIXED rather than chosen by canPlayType,
+            // because canPlayType claims Ogg Vorbis works on iOS and it does
+            // not. `src` tracks whichever candidate is currently loaded so
+            // setTheme()'s same-track no-op still compares correctly.
+            sources: window.ThemeAudioNode.candidates(cfg),
+            sourceIndex: 0,
+            // `src` is the track's IDENTITY (always the manifest's primary),
+            // which is what setTheme() compares to decide "same track". It
+            // must NOT follow a fallback swap, or re-applying the same theme
+            // after a fallback would look like a track change and restart it.
             src: cfg.src,
-            targetVolume: typeof cfg.volume === 'number' ? cfg.volume : DEFAULT_VOLUME,
+            // `loadedSrc` is the candidate actually on the element right now.
+            loadedSrc: cfg.src,
+            targetVolume: typeof cfg.volume === 'number' ? cfg.volume : DEFAULT_TRACK_VOLUME,
             fadeMs: typeof cfg.fadeMs === 'number' && cfg.fadeMs >= 0 ? cfg.fadeMs : 1500,
             gain: null,
             sourceNode: null,
             rafHandle: null
         };
 
-        // Silent failure on load errors — no toast, no console spam beyond a
-        // single warn. The whole point of this plumbing is to no-op gracefully
-        // when a theme references audio that isn't there yet.
-        el.addEventListener('error', function () {
-            console.warn('ThemeAudio: audio load error for', cfg.src, el.error && el.error.code);
-            _teardownNode(node);
-            if (currentNode === node) currentNode = null;
-            if (outgoingNode === node) outgoingNode = null;
-        });
+        // A load error is not automatically fatal any more: if another format
+        // is declared, try it before giving up. Only an exhausted candidate
+        // list tears the node down.
+        el.addEventListener('error', function () { _onNodeError(node); });
+
+        el.src = node.sources[0];
 
         // Try to wire Web Audio graph. If createMediaElementSource fails
         // (CORS taint, codec issues, etc.), fall back to 'element' mode for
@@ -205,83 +282,6 @@
         return node;
     }
 
-    /**
-     * Tear down a node — stop playback, disconnect Web Audio graph, null refs
-     * so GC can collect the buffer.
-     */
-    function _teardownNode(node) {
-        if (!node) return;
-        try { node.audio.pause(); } catch (_) { /* ignore */ }
-        if (node.rafHandle != null) {
-            try { cancelAnimationFrame(node.rafHandle); } catch (_) { /* ignore */ }
-            node.rafHandle = null;
-        }
-        if (node.sourceNode) {
-            try { node.sourceNode.disconnect(); } catch (_) { /* ignore */ }
-            node.sourceNode = null;
-        }
-        if (node.gain) {
-            try { node.gain.disconnect(); } catch (_) { /* ignore */ }
-            node.gain = null;
-        }
-        // Detach src so the browser stops decoding/buffering.
-        try {
-            node.audio.removeAttribute('src');
-            node.audio.load();
-        } catch (_) { /* ignore */ }
-    }
-
-    // ---- Volume ramp (engine-agnostic) ----
-    /**
-     * Ramp a node from its current effective volume to `target` over `durationMs`.
-     * In 'webaudio' mode this uses GainNode automation. In 'element' mode this
-     * uses a requestAnimationFrame loop driving audio.volume directly.
-     *
-     * Anchors current value first (setValueAtTime / read .volume) so back-to-back
-     * ramps never click.
-     */
-    function _rampVolume(node, target, durationMs) {
-        if (!node || !node.audio) return;
-        var clamped = Math.max(0, Math.min(1, target));
-        var dur = Math.max(0, durationMs);
-
-        if (node.gain && audioCtx) {
-            var now = audioCtx.currentTime;
-            try {
-                // Anchor current value to avoid step discontinuity, then ramp.
-                node.gain.gain.cancelScheduledValues(now);
-                node.gain.gain.setValueAtTime(node.gain.gain.value, now);
-                node.gain.gain.linearRampToValueAtTime(clamped, now + dur / 1000);
-            } catch (e) {
-                console.warn('ThemeAudio: gain ramp threw', e);
-            }
-            return;
-        }
-
-        // Element mode — RAF-driven linear ramp on audio.volume.
-        if (node.rafHandle != null) {
-            try { cancelAnimationFrame(node.rafHandle); } catch (_) { /* ignore */ }
-            node.rafHandle = null;
-        }
-        var startVol = node.audio.volume;
-        var startT = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
-        function step(t) {
-            if (!node.audio) return; // torn down mid-ramp
-            var elapsed = t - startT;
-            var k = dur === 0 ? 1 : Math.min(1, elapsed / dur);
-            try {
-                node.audio.volume = startVol + (clamped - startVol) * k;
-            } catch (_) { /* ignore */ }
-            if (k < 1) {
-                node.rafHandle = requestAnimationFrame(step);
-            } else {
-                node.rafHandle = null;
-            }
-        }
-        node.rafHandle = requestAnimationFrame(step);
-    }
-
     // ---- Effective volume helpers ----
     function _effectiveTarget(node) {
         if (!node) return 0;
@@ -289,24 +289,14 @@
     }
 
     // ---- Play / pause primitives (respect muted + autoplay grant) ----
+    /**
+     * Start a node. Mechanics and rejection logging live in ThemeAudioNode.
+     *
+     * @param {object} node - the playback node.
+     * @returns {void}
+     */
     function _tryPlay(node) {
-        if (!node || !node.audio) return;
-        var p;
-        try {
-            p = node.audio.play();
-        } catch (e) {
-            console.warn('ThemeAudio: play() threw', e);
-            return;
-        }
-        if (p && typeof p.then === 'function') {
-            p.catch(function (err) {
-                // NotAllowedError when no user-gesture has happened yet — expected.
-                // AbortError fires on rapid pause/play during theme swaps — benign.
-                if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-                    console.warn('ThemeAudio: play() rejected', err.name, err.message);
-                }
-            });
-        }
+        window.ThemeAudioNode.play(node);
     }
 
     // ---- Public API ----
@@ -332,7 +322,7 @@
                 currentNode.fadeMs = typeof audioConfig.fadeMs === 'number' && audioConfig.fadeMs >= 0
                     ? audioConfig.fadeMs : currentNode.fadeMs;
                 if (!muted && !document.hidden) {
-                    _rampVolume(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs);
+                    window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
                 }
             }
             return;
@@ -342,17 +332,17 @@
 
         // Fade out + tear down any outgoing track.
         if (outgoingNode) {
-            _teardownNode(outgoingNode);
+            window.ThemeAudioNode.teardown(outgoingNode);
             outgoingNode = null;
         }
         if (currentNode) {
             outgoingNode = currentNode;
             var outFade = outgoingNode.fadeMs;
-            _rampVolume(outgoingNode, 0, outFade);
+            window.ThemeAudioNode.ramp(outgoingNode, 0, outFade, audioCtx);
             (function (n, ms) {
                 setTimeout(function () {
                     if (n === outgoingNode) {
-                        _teardownNode(n);
+                        window.ThemeAudioNode.teardown(n);
                         outgoingNode = null;
                     }
                 }, ms + 50);
@@ -372,7 +362,7 @@
         if (!muted && !document.hidden) {
             _resumeCtxIfSuspended();
             _tryPlay(node);
-            _rampVolume(node, _effectiveTarget(node), node.fadeMs);
+            window.ThemeAudioNode.ramp(node, _effectiveTarget(node), node.fadeMs, audioCtx);
         }
     }
 
@@ -391,7 +381,7 @@
             // Mute: ramp current track to 0, then pause (don't tear down —
             // user may unmute again and we want the buffer warm).
             if (currentNode) {
-                _rampVolume(currentNode, 0, Math.min(currentNode.fadeMs, 400));
+                window.ThemeAudioNode.ramp(currentNode, 0, Math.min(currentNode.fadeMs, 400), audioCtx);
                 setTimeout(function () {
                     if (currentNode && muted) {
                         try { currentNode.audio.pause(); } catch (_) { /* ignore */ }
@@ -404,20 +394,29 @@
             _resumeCtxIfSuspended();
             if (currentNode && !document.hidden) {
                 _tryPlay(currentNode);
-                _rampVolume(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs);
+                window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
             }
         }
         return muted;
     }
 
     function isMuted() { return muted; }
+
+    /**
+     * The name of the last play() rejection, or null if the last attempt
+     * was clean. A rejected play() produces no error event and no
+     * exception, so without this there is nothing to inspect.
+     *
+     * @returns {string|null}
+     */
+    function getLastPlayError() { return window.ThemeAudioNode.getLastPlayError(); }
     function getVolume() { return globalVolume; }
     function setVolume(v) {
         var clamped = Math.max(0, Math.min(1, v));
         globalVolume = clamped;
         _writeVolume(clamped);
         if (currentNode && !muted && !document.hidden) {
-            _rampVolume(currentNode, _effectiveTarget(currentNode), 200);
+            window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), 200, audioCtx);
         }
     }
 
@@ -425,7 +424,7 @@
     function _onVisibilityChange() {
         if (document.hidden) {
             if (currentNode) {
-                _rampVolume(currentNode, 0, 200);
+                window.ThemeAudioNode.ramp(currentNode, 0, 200, audioCtx);
                 setTimeout(function () {
                     if (currentNode && document.hidden) {
                         try { currentNode.audio.pause(); } catch (_) { /* ignore */ }
@@ -436,7 +435,7 @@
             if (!muted && currentNode) {
                 _resumeCtxIfSuspended();
                 _tryPlay(currentNode);
-                _rampVolume(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs);
+                window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
             }
         }
     }
@@ -457,6 +456,7 @@
         setTheme: setTheme,
         toggleMute: toggleMute,
         isMuted: isMuted,
+        getLastPlayError: getLastPlayError,
         getVolume: getVolume,
         setVolume: setVolume
     };

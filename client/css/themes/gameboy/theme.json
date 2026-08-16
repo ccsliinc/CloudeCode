@@ -98,8 +98,9 @@
     "brightWhite": "#9bbc0f"
   },
   "audio": {
-    "src": "/static/assets/audio/out-there.ogg",
-    "volume": 0.22,
-    "fadeMs": 1500
-  }
+      "src": "/static/assets/audio/out-there.m4a",
+      "srcFallback": "/static/assets/audio/out-there.ogg",
+      "volume": 0.5,
+      "fadeMs": 1500
+    }
 }

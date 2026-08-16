@@ -93,8 +93,9 @@
   },
   "themeCss": "theme.css",
   "audio": {
-    "src": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
-    "volume": 0.22,
-    "fadeMs": 2000
-  }
+      "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
+      "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+      "volume": 0.5,
+      "fadeMs": 2000
+    }
 }

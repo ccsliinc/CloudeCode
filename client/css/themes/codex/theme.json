@@ -93,8 +93,9 @@
   },
   "themeCss": "theme.css",
   "audio": {
-    "src": "/static/assets/audio/observing-the-star.ogg",
-    "volume": 0.22,
-    "fadeMs": 1500
-  }
+      "src": "/static/assets/audio/observing-the-star.m4a",
+      "srcFallback": "/static/assets/audio/observing-the-star.ogg",
+      "volume": 0.5,
+      "fadeMs": 1500
+    }
 }

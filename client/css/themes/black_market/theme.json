@@ -98,8 +98,9 @@
     "brightWhite": "#ffffff"
   },
   "audio": {
-    "src": "/static/assets/audio/cyber-city.ogg",
-    "volume": 0.2,
-    "fadeMs": 2000
-  }
+      "src": "/static/assets/audio/cyber-city.m4a",
+      "srcFallback": "/static/assets/audio/cyber-city.ogg",
+      "volume": 0.45,
+      "fadeMs": 2000
+    }
 }
