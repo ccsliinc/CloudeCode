@@ -356,6 +356,10 @@
          window.CopyCompat rather than navigator.clipboard (absent over
          plain http). -->
     <script src="/static/js/clipboard-compat.js"></script>
+    <!-- Terminal resize pipeline. Must load BEFORE terminal.js, whose
+         initTerminal() calls window.TerminalLayout.install(this). Also
+         the explicit refit hook session-sidebar-pin.js calls. -->
+    <script src="/static/js/terminal-layout.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
          Must load AFTER terminal.js — terminal.js calls into

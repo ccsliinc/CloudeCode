@@ -61,18 +61,14 @@ class Terminal {
         // Auto-scroll behavior
         this.autoScrollEnabled = true;
         this._programmaticScrollLock = 0;
-        this.resizeDebounceTimer = null;
 
         // Track last-sent dims so we only log + ship when they actually
         // change. Multiple event sources (window.resize + visualViewport +
-        // ResizeObserver + orientationchange) can all fire for a single
-        // physical layout change; dedupe at the sendResize gate.
+        // ResizeObserver + orientationchange, all owned by
+        // terminal-layout.js) can all fire for a single physical layout
+        // change; dedupe at the sendResize gate.
         this.lastSentCols = null;
         this.lastSentRows = null;
-
-        // ResizeObserver tracking the xterm container. Listener-lifetime is
-        // tied to the Terminal object; cleaned up in destroy paths.
-        this._resizeObserver = null;
 
         // UI elements. Delete is no longer reachable from the session
         // header (moved to the conversation sidebar + launcher — see
@@ -323,50 +319,16 @@ class Terminal {
 
         // ---- Dynamic resize pipeline ----
         //
-        // All four sources funnel into a single 100ms debounced callback:
-        //   window.resize            - desktop viewport / browser window
-        //   orientationchange        - mobile device rotation
-        //   visualViewport.resize    - mobile keyboard popup / browser chrome
-        //                              show+hide / pinch-zoom. Provides more
-        //                              accurate viewport dims than window
-        //                              on iOS Safari.
-        //   ResizeObserver           - ANY layout change of the xterm
-        //                              container (sidebar collapse, split
-        //                              view, CSS transitions, font load).
-        //
-        // Single debounce gate means redundant fires during one layout
-        // change collapse to a single fit()+sendResize() call, and the
-        // sendResize dedup further suppresses duplicate frames when the
-        // cell grid hasn't actually changed. Graceful degradation: if any
-        // API is unavailable (old browser) the remaining listeners still
-        // catch their share of events.
-        const scheduleResize = (source) => {
-            if (this.resizeDebounceTimer) {
-                clearTimeout(this.resizeDebounceTimer);
-            }
-            this.resizeDebounceTimer = setTimeout(() => {
-                if (this.fitAddon && this.term) {
-                    this.fitAddon.fit();
-                    this.sendResize(source);
-                }
-            }, 100);
-        };
-
-        window.addEventListener('resize', () => scheduleResize('window.resize'));
-        window.addEventListener('orientationchange', () => scheduleResize('orientationchange'));
-
-        if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', () => scheduleResize('visualViewport.resize'));
-        }
-
-        const termContainer = document.getElementById('terminal');
-        if (termContainer && typeof ResizeObserver !== 'undefined') {
-            try {
-                this._resizeObserver = new ResizeObserver(() => scheduleResize('ResizeObserver'));
-                this._resizeObserver.observe(termContainer);
-            } catch (e) {
-                console.warn('Terminal: ResizeObserver setup failed', e);
-            }
+        // Lives in client/js/terminal-layout.js: the event sources, the
+        // debounce and the explicit window.TerminalLayout.requestFit()
+        // entry point other modules call when they knowingly change the
+        // terminal's box (the sidebar pin does). Extracted because this
+        // file is over the 500-line ceiling.
+        if (window.TerminalLayout) {
+            window.TerminalLayout.install(this);
+        } else {
+            console.error('Terminal: TerminalLayout missing - the terminal '
+                + 'will not refit on rotate, keyboard or sidebar pin');
         }
 
         // Setup scroll event listener for auto-scroll detection

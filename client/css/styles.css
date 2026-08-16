@@ -118,15 +118,36 @@
     box-sizing: border-box;
 }
 
+/* APP SHELL HEIGHT - the terminal depends on this being DEFINITE.
+ *
+ * This used to be `min-height: 100vh` with `height: auto`. A flex column
+ * whose own height is auto has no free space to distribute, so
+ * `.screen { flex: 1 }` and `.terminal-container { flex: 1 }` degraded to
+ * content sizing: the terminal's height was set by the xterm element,
+ * whose height was set by `rows`, which FitAddon derived from the
+ * terminal's height. That loop can only ratchet UP. Measured on a
+ * 390x844 phone shell: rotate to landscape (390 tall) and rows stayed at
+ * 45 with the terminal 720px tall inside a 390px window - the prompt sat
+ * below the fold and tmux kept the taller geometry. Same failure for the
+ * on-screen keyboard.
+ *
+ * A DEFINITE height breaks the loop: the shell is exactly one viewport,
+ * `.screen` gets the leftover, and the terminal shrinks as well as grows.
+ * `100dvh` tracks the iOS URL bar collapsing; `100vh` is the fallback for
+ * browsers without dynamic viewport units. `overflow: hidden` on the
+ * shell is the consequence of a fixed height - each `.screen` is its own
+ * scroll container (see `.screen` below), so nothing loses scrollability.
+ */
 body {
     font-family: var(--font-mono);
     background: var(--color-bg);
     color: var(--color-fg);
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     margin: 0;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 /* Header */
@@ -375,7 +396,23 @@ button.danger:hover:not(:disabled) {
     box-shadow: 0 0 12px var(--color-danger-glow);
 }
 
-/* Tooltip on hover (only for buttons with data-tooltip) */
+/* Tooltip on hover (only for buttons with data-tooltip).
+ *
+ * The button MUST be the containing block. Without this the tooltip's
+ * `position: absolute` resolved against whatever positioned ancestor
+ * happened to exist - `.controls` for the header cluster (so all six
+ * header tooltips stacked at one spot instead of under their own
+ * button), and the INITIAL containing block for the terminal tool strip,
+ * which has no positioned ancestor at all. The second case is what put a
+ * sideways scroll inside the session: a viewport-anchored `left: 50%`
+ * tooltip extended 42px past the right edge of `#terminal-screen`, and
+ * that element's `overflow: auto` turned the invisible pseudo-element
+ * into a real 42px horizontal scroll the user could drag. Measured
+ * before: `#terminal-screen.scrollLeft` reached 42 at 390px wide. */
+button[data-tooltip] {
+    position: relative;
+}
+
 button[data-tooltip]::after {
     content: attr(data-tooltip);
     position: absolute;
@@ -457,14 +494,21 @@ button[data-tooltip]:hover::after {
     opacity: 1;
 }
 
-/* Terminal container */
+/* Terminal container.
+ *
+ * `min-height: 0`, never a pixel floor. A floor here is the same ratchet
+ * as the one on `body`: it makes the container taller than the space it
+ * was given, the overflow goes below the fold, and FitAddon then reads
+ * the floor rather than the viewport and hands tmux too many rows. The
+ * old 400px floor (350px under 768px, 300px under 480px) is exactly what
+ * a phone in landscape or with the keyboard up cannot satisfy. */
 .terminal-container {
     flex: 1;
     padding: 15px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    min-height: 400px;
+    min-height: 0;
 }
 
 #terminal {
@@ -574,6 +618,10 @@ button[data-tooltip]:hover::after {
     display: none;
     flex: 1;
     overflow: auto;
+    /* A flex item's automatic minimum size is its CONTENT size, which
+     * would let a tall child (the terminal) push the shell past one
+     * viewport and re-open the ratchet described on `body`. */
+    min-height: 0;
 }
 
 .screen.active {
@@ -1031,9 +1079,22 @@ button[data-tooltip]:hover::after {
     filter: drop-shadow(0 0 16px var(--color-accent-border-strong));
 }
 
-/* Terminal screen */
+/* Terminal screen.
+ *
+ * `position: relative` makes this the containing block for the tool
+ * strip, which overlays the terminal rather than displacing it (see
+ * terminal-tools.css).
+ *
+ * `overflow: hidden` overrides `.screen`'s `auto`. The terminal screen
+ * must never scroll in either axis: xterm owns vertical scrolling inside
+ * `.xterm-viewport`, and horizontal scroll here is always a bug - it
+ * means something escaped the viewport width. Belt and braces alongside
+ * the tooltip containing-block fix above. */
 #terminal-screen {
     flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
 }
 
 /* Mobile responsive */
@@ -1063,7 +1124,6 @@ button[data-tooltip]:hover::after {
 
     .terminal-container {
         padding: 10px;
-        min-height: 350px;
     }
 
     .info {
@@ -1101,7 +1161,6 @@ button[data-tooltip]:hover::after {
 
     .terminal-container {
         padding: 8px;
-        min-height: 300px;
     }
 
     .auth-prompt {
