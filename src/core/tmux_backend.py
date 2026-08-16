@@ -1387,6 +1387,61 @@ class TmuxBackend(SessionBackend):
             # future-Item-7 concern.
             self.replay_in_progress = False
 
+    def pane_in_alternate_screen(self) -> bool:
+        """Report whether pane 0 is on the alternate screen buffer.
+
+        Returns:
+            True when tmux reports ``#{alternate_on}`` as 1. False on any
+            failure - the caller's fallback is the safer branch.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{alternate_on}",
+            check=False,
+        )
+        if rc != 0:
+            return False
+        return out.decode("utf-8", errors="replace").strip() == "1"
+
+    def capture_visible_screen(self) -> bytes:
+        """Capture the pane's visible screen as a replayable byte stream.
+
+        ``-S 0`` starts at the first line of the visible pane (history is
+        addressed with negative numbers), so this is the viewport and
+        nothing above it. ``-e`` keeps the ANSI attributes. We do NOT pass
+        ``-J``: the scrollback path joins wrapped lines so the browser can
+        re-wrap them, but here the pane was just resized to the client's
+        exact geometry, so tmux's own line breaks are the correct ones and
+        joining them would re-wrap content that is already right.
+
+        Trailing blank lines are dropped so the cursor ends up immediately
+        after the last real character. That is what makes an unterminated
+        prompt ("password: ") look like a prompt rather than like text
+        with the cursor parked below it.
+
+        Returns:
+            Bytes with CRLF line endings, or ``b""`` on failure.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "capture-pane",
+            "-p",
+            "-e",
+            "-S",
+            "0",
+            "-t",
+            _safe_target(self.tmux_session),
+            check=False,
+        )
+        if rc != 0:
+            return b""
+        body = out.rstrip(b"\r\n")
+        if not body.strip():
+            return b""
+        return normalize_replay_newlines(body)
+
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""
         if self._reader_task and not self._reader_task.done():

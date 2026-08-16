@@ -201,6 +201,38 @@ class SessionBackend(ABC):
                 `AuthConfig.session.scrollback_lines` (3000).
         """
 
+    # ---- attach-time repaint support ------------------------------------
+    # Concrete, not abstract: a backend that cannot answer these is not
+    # broken, it just falls back to the old blind-Ctrl+L behavior.
+
+    def pane_in_alternate_screen(self) -> bool:
+        """Report whether the pane's foreground app owns the whole screen.
+
+        The alternate screen buffer is what a full-screen TUI switches to
+        (vim, less, the Claude CLI). It is a reliable proxy for "this
+        process reads its input in raw mode and treats Ctrl+L as redraw".
+        A process reading a line in canonical mode - a password prompt,
+        a shell `read` - is never on the alternate screen, and for it
+        Ctrl+L is a data byte, not a command.
+
+        Returns:
+            True when the pane is on the alternate screen. False when it
+            is not, or when the backend cannot tell.
+        """
+        return False
+
+    def capture_visible_screen(self) -> bytes:
+        """Capture only the pane's visible screen, as a terminal stream.
+
+        Distinct from :meth:`capture_scrollback`, which reaches back into
+        history. This is the current viewport and nothing else, for
+        repainting a client that has just attached.
+
+        Returns:
+            Bytes with CRLF line endings, or ``b""`` when unsupported.
+        """
+        return b""
+
 
 def build_backend(
     settings_obj: Any,
