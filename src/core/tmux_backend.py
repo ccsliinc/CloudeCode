@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core.pane_locale import apply_pane_locale
 from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
 
@@ -366,9 +367,6 @@ class TmuxBackend(SessionBackend):
             "-y",
             str(use_rows),
         ]
-        if command:
-            args.append(command)
-
         # Merge env overlay into this tmux invocation's environment so the
         # new session inherits it. tmux captures the environment of the
         # `new-session` call.
@@ -377,6 +375,32 @@ class TmuxBackend(SessionBackend):
         tmux_env.setdefault("COLORTERM", "truecolor")
         if env:
             tmux_env.update(env)
+
+        # ---- Pane locale ----------------------------------------------------
+        # A LaunchAgent-spawned server inherits no LANG at all, so the
+        # pane's shell lands in the 7-bit "C" locale and zsh prints
+        # "character not in range" once per line of any function that
+        # touches a multibyte character - on every session start, before
+        # the user has typed anything.
+        #
+        # It has to travel as ``new-session -e``, NOT merely in tmux_env.
+        # When a tmux SERVER is already running on our socket (the normal
+        # case after the first session), the new session's environment is
+        # taken from the SERVER's global environment, and the client's
+        # environment is discarded. So exporting LANG here would silently
+        # do nothing for every session but the first. ``-e`` sets the
+        # session environment explicitly, and it applies to pane 0 because
+        # it is part of the same command that creates it. ``set-environment``
+        # after the fact would be too late for pane 0, and
+        # ``update-environment`` only feeds attaching clients, which we
+        # never have - we stream via pipe-pane.
+        apply_pane_locale(tmux_env)
+        pane_lang = tmux_env.get("LANG")
+        if pane_lang:
+            args.extend(["-e", f"LANG={pane_lang}"])
+
+        if command:
+            args.append(command)
 
         argv = self._tmux_base() + args
         proc = await asyncio.create_subprocess_exec(
