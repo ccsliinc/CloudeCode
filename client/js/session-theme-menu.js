@@ -95,22 +95,50 @@
     }
 
     /**
-     * Drive ThemeAudio's global mute to match a desired on/off state.
-     * ThemeAudio exposes a toggle rather than a setter, so we only touch
-     * it when the states actually differ.
+     * Apply this session's opt-in to ThemeAudio's SESSION gate.
      *
-     * @param {boolean} on - true to play, false to silence.
+     * This used to drive ThemeAudio's single global mute via toggleMute(),
+     * which meant every session attach overwrote the header's "app sound
+     * (all sessions)" switch with a per-session default of OFF. Turning
+     * app sound on and then entering a session silently re-muted the app,
+     * and the header button did not repaint, so it still looked on. That
+     * is the bug behind "still dont hear audio". The session gate is now
+     * separate and this function cannot touch the master.
+     *
+     * @param {boolean} on - true if this session opted into music.
      * @returns {void}
      */
     function applyAudioState(on) {
         if (!window.ThemeAudio) return;
         try {
-            var muted = window.ThemeAudio.isMuted();
-            if (on === muted) {
+            if (typeof window.ThemeAudio.setSessionEnabled === 'function') {
+                window.ThemeAudio.setSessionEnabled(on);
+                return;
+            }
+            // Older ThemeAudio without the two-gate API: fall back to the
+            // toggle so a version skew degrades rather than throwing.
+            if (on === window.ThemeAudio.isMuted()) {
                 window.ThemeAudio.toggleMute();
             }
         } catch (err) {
-            console.warn('SessionThemeMenu: ThemeAudio toggle failed', err);
+            console.warn('SessionThemeMenu: ThemeAudio session gate failed', err);
+        }
+    }
+
+    /**
+     * Is the global app sound master switch off?
+     *
+     * @returns {boolean} true only when we can positively confirm it is off.
+     */
+    function appSoundIsOff() {
+        if (!window.ThemeAudio ||
+            typeof window.ThemeAudio.isAppSoundOn !== 'function') {
+            return false;
+        }
+        try {
+            return !window.ThemeAudio.isAppSoundOn();
+        } catch (err) {
+            return false;
         }
     }
 
@@ -278,17 +306,37 @@
         var name = activeSession();
         var next = !isAudioOn(name);
         setAudioOn(name, next);
+
+        // Turning session music on while the global master is off used to
+        // do exactly nothing, with no explanation: two controls, one of
+        // them silently vetoing the other. Turning music on is an explicit
+        // request for sound, so lift the master too and SAY so - one tap,
+        // no dead end, and the user learns the other control exists.
+        var liftedAppSound = false;
+        if (next && appSoundIsOff() &&
+            typeof window.ThemeAudio.setAppSound === 'function') {
+            try {
+                window.ThemeAudio.setAppSound(true);
+                liftedAppSound = true;
+            } catch (err) {
+                console.warn('SessionThemeMenu: could not enable app sound', err);
+            }
+        }
+
         applyAudioState(next);
         paintAudioButton(btn);
 
-        if (next && !activeThemeHasAudio() && termWrapper &&
-            typeof termWrapper._showStatusPill === 'function') {
-            // Be honest rather than pretend: the plumbing is on, the
-            // theme just has no track to play.
-            termWrapper._showStatusPill(
-                'music on for this session - this theme has no track yet',
-                'info'
-            );
+        var pill = termWrapper && typeof termWrapper._showStatusPill === 'function'
+            ? function (msg) { termWrapper._showStatusPill(msg, 'info'); }
+            : null;
+        if (next && pill) {
+            if (!activeThemeHasAudio()) {
+                // Be honest rather than pretend: the plumbing is on, the
+                // theme just has no track to play.
+                pill('music on for this session - this theme has no track yet');
+            } else if (liftedAppSound) {
+                pill('music on - app sound was off for all sessions, turned it on');
+            }
         }
         return next;
     }

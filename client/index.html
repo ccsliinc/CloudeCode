@@ -375,9 +375,11 @@
          app.js so window.ThemeAudio is defined when the app wires the
          header toggle button + calls ThemeAudio.init().
          themeAudioNode.js holds the per-node mechanics (build, ramp, play,
-         tear down) and MUST load first: themeAudio.js calls into
-         window.ThemeAudioNode. -->
+         tear down) and themeAudioSettings.js holds persistence plus the
+         stored-settings migration. Both MUST load first: themeAudio.js
+         calls into window.ThemeAudioNode and window.ThemeAudioSettings. -->
     <script src="/static/js/themeAudioNode.js"></script>
+    <script src="/static/js/themeAudioSettings.js"></script>
     <script src="/static/js/themeAudio.js"></script>
 
     <!-- Per-session theme picker + per-session music opt-in, mounted on

@@ -283,7 +283,14 @@ class AppController {
         const svg = btn.querySelector('svg');
 
         const paint = () => {
-            const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
+            // Paint from the APP SOUND gate, which is what this button
+            // owns. isMuted() is the effective gate and also reflects the
+            // per-session opt-in, so painting from it made the master
+            // switch show itself as off whenever the attached session had
+            // simply not opted into music.
+            const muted = window.ThemeAudio && typeof window.ThemeAudio.isAppSoundOn === 'function'
+                ? !window.ThemeAudio.isAppSoundOn()
+                : (window.ThemeAudio ? window.ThemeAudio.isMuted() : true);
             // "app sound", not "theme music". The session editor FAB has
             // its own per-session music row; two speakers labelled the
             // same thing read as one control that lost track of itself.
@@ -301,6 +308,11 @@ class AppController {
             btn.setAttribute('title', label);
         };
         paint();
+
+        // Repaint when something OTHER than this button moves the state -
+        // the session music row can now lift the master switch. Without
+        // this the button keeps its last self-painted icon and lies.
+        document.addEventListener('cloude:audio-state', paint);
 
         btn.addEventListener('click', () => {
             if (!window.ThemeAudio) return;
