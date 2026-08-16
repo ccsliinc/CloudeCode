@@ -148,7 +148,14 @@ body.session-sidebar-pinned .session-sidebar-panel {
     letter-spacing: 0.3px;
 }
 
-.session-sidebar-close {
+/* ID selector, not a class: the markup at client/index.html carries only
+ * `id="session-sidebar-close"` and no class attribute, so the class form
+ * of this rule matched nothing and the button fell through to the generic
+ * `button` reset - an accent-filled 36/40/44px circle next to the 28px
+ * transparent pin in the same flex header. #config-editor-close is the
+ * sibling that got this right; matching it keeps both close buttons
+ * addressed the same way and needs no markup change. */
+#session-sidebar-close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -164,7 +171,7 @@ body.session-sidebar-pinned .session-sidebar-panel {
     transition: color 120ms ease, background 120ms ease;
 }
 
-.session-sidebar-close:hover {
+#session-sidebar-close:hover {
     color: var(--color-accent);
     background: var(--color-accent-bg-soft);
 }

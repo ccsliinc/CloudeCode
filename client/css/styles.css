@@ -864,6 +864,9 @@ button[data-tooltip]:hover::after {
 
 .auth-button {
     width: 100%;
+    /* Without this the generic `button` height wins and the 12px vertical
+     * padding is absorbed: a 36px pill under a 46px .auth-input. */
+    height: auto;
     padding: 12px 20px;
     background: var(--color-accent-bg);
     color: var(--color-accent);
@@ -1015,32 +1018,15 @@ button[data-tooltip]:hover::after {
     transform: rotate(90deg);
 }
 
-.new-session-btn {
-    width: 100%;
-    padding: 16px 20px;
-    background: var(--color-accent-bg);
-    color: var(--color-accent);
-    border: 1px solid var(--color-accent-border);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.new-session-btn:hover {
-    background: var(--color-accent-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
-
-.new-session-btn + .new-session-btn {
-    margin-top: 10px;
-}
+/* .new-session-btn and .reset-server-btn used to live here. Both are gone,
+ * for the same reason and by two different routes: the "new session" button
+ * left index.html at 344d82d when the launchpad was consolidated, and
+ * "reset server" became the "restart server" row inside the bottom-bar
+ * server-controls popup at cc248bf. Neither class is emitted by any
+ * template or any JS any more, so the generic `button` height reset that
+ * fix/audit-sweep wrote for them corrected a box that nothing renders.
+ * Removed rather than merged - a rule for an absent element is furniture
+ * that reads as coverage. */
 
 .project-list {
     display: flex;
@@ -2074,6 +2060,12 @@ button[data-tooltip]:hover::after {
     flex-shrink: 0;
 }
 
+/* No `min-width: 0` here on purpose. A flex item's automatic minimum size
+ * is its content size ONLY while its main-axis overflow is `visible`; the
+ * `overflow: hidden` below already zeroes it, so this shrinks and
+ * ellipsizes correctly as written. Measured at 390px with a 460px name:
+ * item 230px wide, list scrollWidth == clientWidth == 278. Same for
+ * .provider-item-name below. */
 .folder-picker-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2231,6 +2223,21 @@ button[data-tooltip]:hover::after {
 
 .running-session-name {
     flex: 1;
+    /* Unlike .folder-picker-name above this had NO overflow at all, so
+     * its automatic minimum size really was its content size and the row
+     * could not shrink. Measured at 390px with an all-underscore tmux
+     * name: the name laid out 501px wide in a 280px row, and the kill
+     * control's right edge landed at 573px - 293px off-screen, reachable
+     * only by scrolling #launchpad-screen sideways. `overflow: hidden`
+     * is what actually zeroes the automatic minimum; min-width: 0 states
+     * the same intent explicitly so a later overflow change cannot
+     * silently bring the bug back.
+     *
+     * No `white-space: nowrap`: ordinary multi-word names should still
+     * wrap. This bounds the unbreakable-token case only. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-weight: bold;
     color: var(--color-accent);
 }
@@ -2820,6 +2827,14 @@ button[data-tooltip]:hover::after {
  * ===================================================================== */
 .cloude-touch-copy {
     position: fixed;
+    /* The generic `button` rule pins every button to a
+     * var(--control-size) SQUARE, and with border-box that swallowed the
+     * padding below whole: the box measured 38x36 on desktop and 40x40 at
+     * 390px, a 0-2px content box for a 33.7px label. Reset both axes to
+     * auto, the way .launchpad-section-toggle does, so this is a real
+     * labelled pill sized by its own padding. */
+    width: auto;
+    height: auto;
     padding: 10px 18px;
     background: var(--color-bg-elevated);
     color: var(--color-fg);
