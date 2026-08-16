@@ -274,11 +274,11 @@
         <!-- NO TOOL OVERLAY IN THE TOP-RIGHT CORNER ANY MORE.
              A folded strip used to float here holding copy output /
              session theme / session music, while a second paperclip menu
-             in the bottom-right held paste / attach image. Two menus,
-             both "session tools", no learnable rule for which held what.
-             They are now one menu behind #terminalToolsBtn at the bottom
-             of this file, so the terminal's top edge is uncovered.
-             See client/js/terminal-tools-menu.js. -->
+             in the bottom-right held paste / attach image. The strip is
+             gone entirely, so the terminal's top edge is uncovered, and
+             its contents were re-split by JOB rather than by corner:
+             #terminalToolsBtn moves content, #sessionEditorBtn configures
+             the session. Both are at the bottom of this file. -->
 
         <div class="terminal-container">
             <div id="terminal"></div>
@@ -467,12 +467,17 @@
          the CSS end-ellipsis in styles.css if it is absent. -->
     <script src="/static/js/header-title-fit.js"></script>
 
-    <!-- Session tools menu - the single menu behind #terminalToolsBtn.
-         Must load AFTER anchor-popover.js (placement), copy-output.js,
+    <!-- The two session-scoped FAB menus. fab-menu.js carries the shared
+         open/close/dismiss/wire machinery and MUST load first; the two
+         modules below only declare their own rows.
+
+         Both must load AFTER anchor-popover.js (placement), copy-output.js,
          clipboard.js and session-theme-menu.js, whose exported functions
-         its rows call. terminal.js hands it the Terminal wrapper from
-         _applyTerminalTools(). -->
+         their rows call. terminal.js hands each of them the Terminal
+         wrapper from _applyTerminalTools() / _applySessionEditor(). -->
+    <script src="/static/js/fab-menu.js"></script>
     <script src="/static/js/terminal-tools-menu.js"></script>
+    <script src="/static/js/session-editor-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>
@@ -483,10 +488,15 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- SESSION TOOLS - the one control for every session-scoped tool:
-         copy output, paste from clipboard, attach image, session theme,
-         session music. Wired by terminal.js#_applyTerminalTools() and
-         driven by client/js/terminal-tools-menu.js.
+    <!-- THE TWO SESSION-SCOPED FAB MENUS, both on the bottom row with the
+         d-pad so every floating control hovers over the command line
+         together instead of being scattered across corners and a stack.
+
+         TERMINAL TOOLS (slot 0, the right edge) moves content across the
+         terminal's boundary: copy output, paste from clipboard, attach
+         image. SESSION EDITOR (slot 2, past the d-pad) configures the
+         session itself: theme and music. Two coherent groups with a rule
+         a user can learn, not one drawer of everything.
 
          The hidden file input is the "attach image" path, opened
          programmatically by that menu row; the change handler lives in
@@ -497,9 +507,22 @@
          presentation attribute on the path beats a stylesheet rule that
          targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
-    <button type="button" id="terminalToolsBtn" class="terminal-tools-fab"
+
+    <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
+    <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"
             aria-haspopup="menu" aria-expanded="false" aria-controls="terminalToolsMenu"
-            aria-label="session tools" title="session tools">
+            aria-label="terminal tools" title="terminal tools">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M5.5 2.5h-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-10a1 1 0 0 0-1-1h-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="5.5" y="1.5" width="5" height="2.5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 8h4M6 10.5h2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+    </button>
+
+    <!-- Sliders glyph: this one CONFIGURES rather than moves anything. -->
+    <button type="button" id="sessionEditorBtn" class="fab-menu-btn session-editor-fab"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
+            aria-label="session editor" title="session editor">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>

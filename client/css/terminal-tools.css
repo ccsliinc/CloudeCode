@@ -1,7 +1,14 @@
 /* =====================================================================
- * Terminal-screen tools: the session tools button and its menu, and the
- * per-session theme picker. The copy-output sheet the "copy output" row
- * opens lives in copy-output.css.
+ * Terminal-screen session controls: the two FAB menus and the per-session
+ * theme picker one of them opens. The copy-output sheet the "copy output"
+ * row opens lives in copy-output.css.
+ *
+ * TWO MENUS, ON PURPOSE, WITH A LEARNABLE RULE.
+ *   .terminal-tools-fab   moves content across the terminal's boundary:
+ *                         copy output, paste from clipboard, attach image
+ *   .session-editor-fab   configures the session itself: theme, music
+ * They share their look and their machinery (.fab-menu-btn here,
+ * fab-menu.js there) and differ only in glyph, rows and slot.
  *
  * Everything here is theme-aware through the same semantic tokens the
  * rest of the chrome uses, so a per-session theme restyles these
@@ -12,44 +19,31 @@
  * ===================================================================== */
 
 /* ---------------------------------------------------------------------
- * Session tools FAB + menu
+ * FAB triggers
  *
- * ONE CONTROL, NOT TWO. There used to be a folded tool strip pinned over
- * the terminal's TOP-RIGHT corner (copy / theme / music) AND a paperclip
- * FAB in the BOTTOM-RIGHT with its own popup (paste / attach image).
- * Both were "session tools" and nothing told a user which corner held
- * which. The strip is gone entirely - the terminal's top edge is no
- * longer covered by anything - and every tool is a row of this button's
- * menu, in the bottom-right FAB column where a floating control already
- * lived next to the d-pad.
+ * NOTHING IS PINNED OVER THE TERMINAL'S TOP EDGE. A folded tool strip
+ * used to sit over the top-right corner; it is gone entirely, not
+ * hidden, and the terminal's top edge is uncovered.
  *
- * FAB GEOMETRY IS SHARED, NOT RESTATED. The paperclip sat at
- * `right: 16px` with a 44px box while `.dpad-float-button` directly
- * below it sits at `right: 20px` with a 45px box, so their centres were
- * 38px and 42.5px from the right edge: a 4.5px horizontal misalignment,
- * visible as a wobble in a vertical stack of round buttons. The three
- * numbers now live in tokens and every button in the column derives
- * from them, which is what stops the two drifting apart again.
+ * GEOMETRY IS SHARED, NOT RESTATED. The old paperclip sat at
+ * `right: 16px` with a 44px box while `.dpad-float-button` sat at
+ * `right: 20px` with a 45px box, so their centres were 4.5px apart. The
+ * numbers now live in --fab-size / --fab-edge / --fab-gap in styles.css
+ * and every floating button derives from them. Appearance lives once on
+ * .fab-menu-btn; the per-button rules below carry ONLY a slot.
  * ------------------------------------------------------------------- */
-/* --fab-size / --fab-edge / --fab-gap are declared once, in styles.css,
- * alongside the d-pad and slash-commands buttons that share them. */
-/* Shown on the terminal screen at EVERY pointer type. The paperclip it
- * replaces was coarse-pointer only because it was an iOS paste
- * workaround; this button now owns the copy sheet and the theme picker
- * too, which desktop used to reach through the strip that is gone. */
-.terminal-tools-fab {
+.fab-menu-btn {
     display: flex;
     position: fixed;
-    right: var(--fab-edge);
-    /* Directly above the d-pad, same column, same centre line. */
-    bottom: calc(var(--fab-edge) + var(--fab-size) + var(--fab-gap));
+    /* One bottom row with the d-pad, hovering over the command line. */
+    bottom: var(--fab-edge);
     width: var(--fab-size);
     height: var(--fab-size);
     padding: 0;
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-full, 999px);
-    /* Opaque: it floats over live terminal output. */
+    /* Opaque: they float over live terminal output. */
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
     color: var(--color-fg-muted);
@@ -61,32 +55,62 @@
 
 /* Terminal-only. `#launchpad-screen.active` is set by app.js#showLaunchpad
  * and cleared by hideAllScreens() before any other screen is activated,
- * so this reliably scopes the button to live sessions. */
-body:has(#launchpad-screen.active) .terminal-tools-fab,
-body:has(#auth-screen.active) .terminal-tools-fab {
+ * so this reliably scopes both buttons to live sessions. Neither one
+ * names anything on a screen with no session attached. */
+body:has(#launchpad-screen.active) .fab-menu-btn,
+body:has(#auth-screen.active) .fab-menu-btn {
     display: none !important;
 }
 
-.terminal-tools-fab:hover:not(:disabled),
-.terminal-tools-fab:focus-visible {
+.fab-menu-btn:hover:not(:disabled),
+.fab-menu-btn:focus-visible {
     color: var(--color-accent);
     border-color: var(--color-accent);
     outline: none;
 }
 
-.terminal-tools-fab:active {
+.fab-menu-btn:active {
     transform: scale(0.95);
 }
 
-.terminal-tools-fab[aria-expanded="true"] {
+.fab-menu-btn[aria-expanded="true"] {
     color: var(--color-accent);
     border-color: var(--color-accent);
     background: var(--color-accent-bg, var(--color-bg-elevated));
 }
 
-/* The menu itself. Placed by client/js/anchor-popover.js, so only the
- * box is described here. */
-.terminal-tools-menu {
+/* Slot 0, the right edge. Shown at EVERY pointer type: the paperclip it
+ * replaces was coarse-pointer only because it was an iOS paste
+ * workaround, but this button also owns the copy sheet, which desktop
+ * used to reach through the strip that is gone. */
+.terminal-tools-fab {
+    right: var(--fab-slot-0);
+}
+
+/* Slot 2, one clear step past the d-pad in slot 1. Furthest from the
+ * corner because it is the least-used of the three: a theme is set once
+ * per session, output is copied all day. */
+.session-editor-fab {
+    right: var(--fab-slot-2);
+}
+
+/* DESKTOP RECLAIMS SLOT 1. styles.css hides `.dpad-float-button` outright
+ * at this width - the d-pad is a touch control - so leaving the editor at
+ * slot 2 would strand a 57px hole in the middle of the row that reads as
+ * a button that failed to render. Same breakpoint as the rule that hides
+ * the d-pad, and the same tokens, so the two cannot drift. */
+@media (min-width: 769px) {
+    .session-editor-fab {
+        right: var(--fab-slot-1);
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * The menus themselves. Placed by client/js/anchor-popover.js, so only
+ * the box is described here. Both menus carry `.fab-menu` plus their own
+ * class, so the shared look cannot drift between them.
+ * ------------------------------------------------------------------- */
+.fab-menu {
     position: fixed;
     z-index: 10001;
     display: flex;
@@ -109,7 +133,7 @@ body:has(#auth-screen.active) .terminal-tools-fab {
  * to a presentation attribute: check the COMPUTED value, not the rule you
  * wrote. `.cloude-session-theme__item` below carries these for the same
  * reason. */
-.terminal-tools-menu__item {
+.fab-menu__item {
     display: flex;
     align-items: center;
     justify-content: flex-start;
@@ -130,32 +154,32 @@ body:has(#auth-screen.active) .terminal-tools-fab {
     -webkit-tap-highlight-color: transparent;
 }
 
-.terminal-tools-menu__item svg {
+.fab-menu__item svg {
     flex: 0 0 auto;
     color: var(--color-fg-muted);
 }
 
-.terminal-tools-menu__item:hover,
-.terminal-tools-menu__item:focus-visible {
+.fab-menu__item:hover,
+.fab-menu__item:focus-visible {
     background: var(--color-bg-hover);
     outline: none;
 }
 
-.terminal-tools-menu__item:hover svg,
-.terminal-tools-menu__item:focus-visible svg {
+.fab-menu__item:hover svg,
+.fab-menu__item:focus-visible svg {
     color: var(--color-accent);
 }
 
-/* A tool that is actively doing something, currently only the music
+/* A row that is actively doing something, currently only the music
  * opt-in. Matches the accent treatment the old strip used. */
-.terminal-tools-menu__item.is-on,
-.terminal-tools-menu__item.is-on svg {
+.fab-menu__item.is-on,
+.fab-menu__item.is-on svg {
     color: var(--color-accent);
 }
 
 /* One line per row. A wrapped label turns a 44px row into a 90px one and
  * the menu stops looking like a list. */
-.terminal-tools-menu__label {
+.fab-menu__label {
     flex: 1 1 auto;
     white-space: nowrap;
     overflow: hidden;
@@ -163,7 +187,7 @@ body:has(#auth-screen.active) .terminal-tools-fab {
 }
 
 /* ---------------------------------------------------------------------
- * Per-session theme picker
+ * Per-session theme picker, opened by the session editor's theme row.
  * ------------------------------------------------------------------- */
 .cloude-session-theme {
     position: fixed;
@@ -203,9 +227,9 @@ body:has(#auth-screen.active) .terminal-tools-fab {
     overflow-y: auto;
 }
 
-/* See the note on .terminal-tools-menu__item: without an explicit width,
- * height and justify-content these rows inherit 36x36 centred from the
- * bare `button` rule in styles.css. */
+/* See the note on .fab-menu__item: without an explicit width, height and
+ * justify-content these rows inherit 36x36 centred from the bare `button`
+ * rule in styles.css. */
 .cloude-session-theme__item {
     display: flex;
     align-items: center;

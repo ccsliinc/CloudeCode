@@ -59,14 +59,9 @@ html {
  * needs the bottom inset added to its own offset or it sits under the
  * home indicator. Values mirror the base offsets in styles.css. */
 .dpad-float-button,
-.slash-commands-btn {
+.slash-commands-btn,
+.fab-menu-btn {
     bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
-}
-
-/* Stacked directly above the d-pad; the offset is derived from the same
- * --fab-* tokens as its base rule so the two cannot drift apart. */
-.terminal-tools-fab {
-    bottom: calc(var(--fab-edge) + var(--fab-size) + var(--fab-gap) + env(safe-area-inset-bottom));
 }
 
 /* Slide-over panels run the full height of the viewport, so they own both

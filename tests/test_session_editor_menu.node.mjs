@@ -1,0 +1,302 @@
+// Node test for client/js/session-editor-menu.js - the EDITOR half of
+// the two session-scoped FAB menus.
+//
+// Session theme and session music were briefly merged into the terminal
+// tools menu. They do not belong there: they configure the session's
+// appearance and sound rather than moving content across the terminal's
+// boundary. This suite pins the half of the split that owns them.
+//
+// The properties that matter:
+//   1. TWO ROWS, and they reach SessionThemeMenu, which still owns the
+//      picker, the opt-in and its persistence.
+//   2. THE MUSIC ROW REPORTS LIVE STATE. Rows are rebuilt per open, so
+//      the label and aria-pressed follow the per-session opt-in.
+//   3. THE THEME ROW ANCHORS TO THIS BUTTON, not to the tools button -
+//      a picker that pops out of the wrong control is the merge again.
+//   4. IT IS SESSION-SCOPED. Hidden on every screen with no session,
+//      which is exactly why it is not a header-kebab row.
+//   5. THE TWO MENUS ARE INDEPENDENT. Opening one does not open, close
+//      or stack the other.
+//
+// Run with: node tests/test_session_editor_menu.node.mjs
+
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+import { createEnvironment } from './mini-dom.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+let failures = 0;
+let passes = 0;
+
+function test(name, fn) {
+    try {
+        fn();
+        passes++;
+        console.log(`ok - ${name}`);
+    } catch (err) {
+        failures++;
+        console.error(`NOT OK - ${name}`);
+        console.error(err && err.stack ? err.stack : err);
+    }
+}
+
+/**
+ * Read a file under client/.
+ * @param {...string} parts  Path segments under client/.
+ * @returns {string} File contents.
+ */
+function clientFile(...parts) {
+    return fs.readFileSync(path.join(__dirname, '..', 'client', ...parts), 'utf8');
+}
+
+/** The two rows, in the order the editor declares them. */
+const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow'];
+
+/**
+ * Load the editor menu against a mini-DOM. fab-menu.js carries the
+ * shared plumbing and is evaluated first, exactly as index.html orders
+ * them. Both menu modules are loaded so the independence tests have a
+ * real second menu to check against.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.musicOn] - the per-session opt-in to report.
+ * @returns {{env: object, editor: object, tools: object, trigger: object,
+ *   toolsTrigger: object, calls: object}}
+ */
+function load(opts) {
+    const options = opts || {};
+    const env = createEnvironment({});
+    const calls = { themeOpen: 0, themeAnchor: null, audioToggle: 0 };
+
+    const trigger = env.document.createElement('button');
+    trigger.setAttribute('id', 'sessionEditorBtn');
+    trigger.className = 'fab-menu-btn session-editor-fab';
+    env.document.body.appendChild(trigger);
+
+    const toolsTrigger = env.document.createElement('button');
+    toolsTrigger.setAttribute('id', 'terminalToolsBtn');
+    toolsTrigger.className = 'fab-menu-btn terminal-tools-fab';
+    env.document.body.appendChild(toolsTrigger);
+
+    env.window.SessionThemeMenu = {
+        open: (anchor) => { calls.themeOpen++; calls.themeAnchor = anchor; },
+        toggleAudio: () => { calls.audioToggle++; return true; },
+        isAudioOn: () => !!options.musicOn,
+    };
+    env.window.Themes = { getActiveSession: () => 'demo-Main' };
+    env.window.CopyOutput = { open() {} };
+    env.window.ClipboardTools = { pasteFromClipboard() {} };
+    env.window.AnchorPopover = { place: () => ({ left: 0, top: 0 }) };
+
+    const sandbox = {
+        window: env.window,
+        document: env.document,
+        console: { log() {}, warn() {}, error() {} },
+        setTimeout: (fn) => fn(),
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(clientFile('js', 'fab-menu.js'), sandbox);
+    vm.runInContext(clientFile('js', 'terminal-tools-menu.js'), sandbox);
+    vm.runInContext(clientFile('js', 'session-editor-menu.js'), sandbox);
+
+    const editor = env.window.SessionEditorMenu;
+    const tools = env.window.TerminalToolsMenu;
+    editor.wire({ _showStatusPill() {} }, trigger);
+    tools.wire({ _showStatusPill() {} }, toolsTrigger, null);
+    return { env, editor, tools, trigger, toolsTrigger, calls };
+}
+
+/**
+ * Every open menu element carrying the given class.
+ * @param {object} env  The mini-DOM environment.
+ * @param {string} cls  The full className to match.
+ * @returns {object[]}
+ */
+function menusOf(env, cls) {
+    return env.document.body.children.filter((c) => c.className === cls);
+}
+
+/**
+ * Find a row by id inside the open editor menu.
+ * @param {object} env  The mini-DOM environment.
+ * @param {string} id   One of ENTRY_IDS.
+ * @returns {object} The row element.
+ */
+function row(env, id) {
+    const found = menusOf(env, 'fab-menu session-editor-menu')
+        .flatMap((m) => m.children)
+        .find((r) => r.getAttribute('id') === id);
+    assert.ok(found, `row ${id} is missing from the open menu`);
+    return found;
+}
+
+// ---------------------------------------------------------------------
+// The two rows
+// ---------------------------------------------------------------------
+
+test('the menu is closed on load and opens on its own trigger', () => {
+    const { editor, trigger } = load();
+    assert.equal(editor.isOpen(), false);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+    trigger.dispatchEvent('click');
+    assert.equal(editor.isOpen(), true);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+    trigger.dispatchEvent('click');
+    assert.equal(editor.isOpen(), false);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+});
+
+test('THE SPLIT: exactly the two session-config rows, in order', () => {
+    const { env, editor } = load();
+    editor.open();
+    const ids = menusOf(env, 'fab-menu session-editor-menu')
+        .flatMap((m) => m.children)
+        .map((r) => r.getAttribute('id'));
+    assert.deepEqual(ids, ENTRY_IDS);
+});
+
+test('THE SPLIT: the content tools are NOT rows of the session editor', () => {
+    const { env, editor } = load();
+    editor.open();
+    const ids = menusOf(env, 'fab-menu session-editor-menu')
+        .flatMap((m) => m.children)
+        .map((r) => r.getAttribute('id'));
+    for (const id of ['toolCopyOutput', 'toolPasteClipboard', 'toolAttachImage']) {
+        assert.ok(!ids.includes(id), `${id} belongs to the terminal tools menu`);
+    }
+    const src = clientFile('js', 'session-editor-menu.js');
+    assert.ok(!src.includes('CopyOutput'));
+    assert.ok(!src.includes('ClipboardTools'));
+    assert.ok(!src.includes('cloude-image-attach-input'));
+});
+
+test('each row reaches SessionThemeMenu, which still owns the behaviour', () => {
+    const theme = load();
+    theme.editor.open();
+    row(theme.env, 'sessionThemeRow').dispatchEvent('click');
+    assert.equal(theme.calls.themeOpen, 1);
+
+    const music = load();
+    music.editor.open();
+    row(music.env, 'sessionMusicRow').dispatchEvent('click');
+    assert.equal(music.calls.audioToggle, 1);
+});
+
+test('THE PICKER ANCHORS TO THIS BUTTON, not to the tools button', () => {
+    const { env, editor, trigger, calls } = load();
+    editor.open();
+    row(env, 'sessionThemeRow').dispatchEvent('click');
+    assert.equal(calls.themeAnchor, trigger,
+        'a picker popping out of the wrong FAB is the merge in disguise');
+});
+
+test('the music row reports the LIVE per-session opt-in on every open', () => {
+    const off = load({ musicOn: false });
+    off.editor.open();
+    const rOff = row(off.env, 'sessionMusicRow');
+    assert.equal(rOff.getAttribute('aria-pressed'), 'false');
+    assert.ok(!rOff.classList.contains('is-on'));
+
+    const on = load({ musicOn: true });
+    on.editor.open();
+    const rOn = row(on.env, 'sessionMusicRow');
+    assert.equal(rOn.getAttribute('aria-pressed'), 'true');
+    assert.ok(rOn.classList.contains('is-on'));
+    assert.equal(rOn.getAttribute('aria-label'),
+        'turn off music for this session');
+});
+
+test('picking a row closes the menu, so it never sits over the terminal', () => {
+    const { env, editor } = load();
+    editor.open();
+    row(env, 'sessionMusicRow').dispatchEvent('click');
+    assert.equal(editor.isOpen(), false);
+});
+
+test('Escape closes, and a click outside closes', () => {
+    const esc = load();
+    esc.editor.open();
+    esc.env.document.dispatchEvent('keydown', { key: 'Escape' });
+    assert.equal(esc.editor.isOpen(), false);
+
+    const out = load();
+    out.editor.open();
+    const elsewhere = out.env.document.createElement('div');
+    out.env.document.body.appendChild(elsewhere);
+    out.env.document.dispatchEvent('pointerdown', { target: elsewhere });
+    assert.equal(out.editor.isOpen(), false);
+});
+
+test('wire() is idempotent - a session swap does not double-bind', () => {
+    const { editor, trigger } = load();
+    editor.wire({ _showStatusPill() {} }, trigger);
+    editor.wire({ _showStatusPill() {} }, trigger);
+    trigger.dispatchEvent('click');
+    assert.equal(editor.isOpen(), true, 'a doubled handler would toggle twice');
+});
+
+// ---------------------------------------------------------------------
+// Independent of the tools menu
+// ---------------------------------------------------------------------
+
+test('the two menus are independent controllers, not one shared state', () => {
+    const { env, editor, tools } = load();
+    editor.open();
+    assert.equal(editor.isOpen(), true);
+    assert.equal(tools.isOpen(), false, 'one trigger must not open both');
+
+    tools.open();
+    assert.equal(tools.isOpen(), true);
+    assert.equal(editor.isOpen(), true,
+        'each controller owns its own element; neither closes the other');
+    assert.equal(menusOf(env, 'fab-menu session-editor-menu').length, 1);
+    assert.equal(menusOf(env, 'fab-menu terminal-tools-menu').length, 1);
+
+    editor.close();
+    assert.equal(editor.isOpen(), false);
+    assert.equal(tools.isOpen(), true, 'closing one must not close the other');
+});
+
+test('the two triggers report their own aria-expanded', () => {
+    const { editor, trigger, toolsTrigger } = load();
+    editor.open();
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(toolsTrigger.getAttribute('aria-expanded'), 'false');
+});
+
+// ---------------------------------------------------------------------
+// Session-scoped, which is why it is not a header-kebab row
+// ---------------------------------------------------------------------
+
+test('the editor FAB is hidden on every screen with no session', () => {
+    const css = clientFile('css', 'terminal-tools.css');
+    // Both FABs share the base class, so the scoping rule covers both
+    // and cannot be applied to one and forgotten on the other.
+    assert.match(css,
+        /body:has\(#launchpad-screen\.active\) \.fab-menu-btn,\s*\n\s*body:has\(#auth-screen\.active\) \.fab-menu-btn \{\s*\n\s*display: none !important;/,
+        'a session control on the launchpad names nothing');
+    const html = clientFile('index.html');
+    for (const id of ['terminalToolsBtn', 'sessionEditorBtn']) {
+        const at = html.indexOf(`id="${id}"`);
+        assert.ok(html.slice(at - 200, at + 200).includes('fab-menu-btn'),
+            `${id} must carry the shared base class`);
+    }
+});
+
+test('session theme and music did NOT land in the app-scoped kebab', () => {
+    const kebab = clientFile('js', 'header-menu.js');
+    for (const needle of ['sessionEditor', 'sessionThemeRow', 'sessionMusicRow',
+        'SessionThemeMenu', 'SessionEditorMenu']) {
+        assert.ok(!kebab.includes(needle),
+            `the header kebab is app-scoped and must not claim ${needle}`);
+    }
+});
+
+console.log(`\n${passes} passed, ${failures} failed`);
+if (failures > 0) { console.error('FAILURES'); process.exit(1); }
+console.log('ALL PASS');

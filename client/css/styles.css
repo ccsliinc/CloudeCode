@@ -121,16 +121,33 @@
     --radius-pill: 50px;
     --radius-full: 50%;
 
-    /* Floating action buttons in the terminal-screen corners: the d-pad,
-     * the slash-commands button and the session tools button. ONE set of
-     * numbers for all three. They used to be restated per button and had
+    /* Floating action buttons on the terminal screen: slash commands, the
+     * session editor, the d-pad and the terminal tools button. ONE set of
+     * numbers for all four. They used to be restated per button and had
      * already drifted - the attach button sat at right:16px/44px against
      * the d-pad's right:20px/45px, so their centres were 4.5px apart and
      * the vertical stack visibly wobbled. */
     --fab-size: 45px;
     --fab-edge: 20px;
-    /* Vertical gap between two FABs stacked in the same column. */
+    /* Gap between two adjacent FABs. */
     --fab-gap: 12px;
+
+    /* THEY ALL SIT ON ONE BOTTOM ROW, hovering over the command line,
+     * rather than being scattered across three corners and a stack. One
+     * slot is one button plus one gap, so the slot tokens are the only
+     * place a horizontal offset is ever written.
+     *
+     *   slot 0  terminal tools   (the right edge)
+     *   slot 1  d-pad
+     *   slot 2  session editor
+     *
+     * Slash commands keeps the LEFT edge: it is the one control that
+     * types into the prompt rather than acting on the session, and the
+     * left thumb is where it has always been. */
+    --fab-step: calc(var(--fab-size) + var(--fab-gap));
+    --fab-slot-0: var(--fab-edge);
+    --fab-slot-1: calc(var(--fab-edge) + var(--fab-step));
+    --fab-slot-2: calc(var(--fab-edge) + var(--fab-step) * 2);
 }
 
 /* Base styles */
@@ -1267,12 +1284,16 @@ button[data-tooltip]:hover::after {
     }
 }
 
-/* Mobile D-Pad Styles */
+/* Mobile D-Pad Styles
+ *
+ * Slot 1 of the bottom row, not the corner. The terminal tools button
+ * sits to its right at slot 0 so every floating control hovers over the
+ * command line together instead of stacking up the right edge. */
 .dpad-float-button {
     display: none; /* Hidden by default, shown on mobile via JS */
     position: fixed;
     bottom: var(--fab-edge);
-    right: var(--fab-edge);
+    right: var(--fab-slot-1);
     width: var(--fab-size);
     height: var(--fab-size);
     border-radius: var(--radius-full);
@@ -2538,10 +2559,10 @@ button[data-tooltip]:hover::after {
 
 /* The image attach button that used to live here is GONE. Its two jobs -
  * opening the OS picker and pasting the device clipboard - are now rows
- * of the single session tools menu, and the button that opens that menu
- * is `.terminal-tools-fab` in client/css/terminal-tools.css, where its
+ * of the terminal tools menu, and the button that opens that menu is
+ * `.terminal-tools-fab` in client/css/terminal-tools.css, where its
  * geometry is derived from the same --fab-* tokens as the d-pad button
- * so the two stay on one centre line. */
+ * so every floating control shares one bottom row. */
 
 /* =====================================================================
  * IMG-PASTE — inline status pill

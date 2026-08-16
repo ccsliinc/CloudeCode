@@ -300,10 +300,11 @@ class Terminal {
         // so term.reset() during session swap does not wipe them.
         this._applyTouchSelection();
 
-        // Terminal-screen tool strip: copy-output sheet, per-session theme
-        // picker, per-session music opt-in. Same load-order guarantee as
-        // the hooks above — the modules are loaded before initTerminal()
-        // runs, and the guards inside cover a failed static fetch.
+        // The two session-scoped FAB menus: tools (copy sheet, paste,
+        // attach image) and session editor (theme, music). Same
+        // load-order guarantee as the hooks above - the modules are
+        // loaded before initTerminal() runs, and the guards inside cover
+        // a failed static fetch.
         this._applyTerminalTools();
 
         // Handle terminal input
@@ -526,26 +527,31 @@ class Terminal {
     }
 
     /**
-     * Wire the single session tools control.
+     * Wire the two session-scoped FAB menus, split by JOB not by corner.
      *
-     * ONE button, ONE menu. Copy output, paste from clipboard, attach
-     * image, session theme and session music used to be split across a
-     * folded strip over the terminal's top-right corner and a paperclip
-     * FAB in the bottom-right, each with its own popup. They are now rows
-     * of #terminalToolsBtn's menu (terminal-tools-menu.js).
+     * TOOLS (#terminalToolsBtn) moves content across the terminal's
+     * boundary: copy output, paste from clipboard, attach image. SESSION
+     * EDITOR (#sessionEditorBtn) configures the session itself: theme and
+     * music. They were merged into one drawer once and the grouping had
+     * no rule a user could learn; keep them apart.
      *
-     * The button and the file input live outside #terminal so
-     * term.reset() on a session swap cannot wipe the handlers; the menu
+     * Both buttons and the file input live OUTSIDE #terminal, so
+     * term.reset() on a session swap cannot wipe their handlers and the
+     * terminal's own touch guard cannot swallow their gestures. Each menu
      * module guards its own re-entry and only refreshes the wrapper its
      * rows act on.
      *
      * @returns {void}
      */
     _applyTerminalTools() {
-        const toolsBtn = document.getElementById('terminalToolsBtn');
         const input = document.getElementById('cloude-image-attach-input');
         if (window.TerminalToolsMenu) {
-            window.TerminalToolsMenu.wire(this, toolsBtn, input);
+            window.TerminalToolsMenu.wire(
+                this, document.getElementById('terminalToolsBtn'), input);
+        }
+        if (window.SessionEditorMenu) {
+            window.SessionEditorMenu.wire(
+                this, document.getElementById('sessionEditorBtn'));
         }
     }
 
