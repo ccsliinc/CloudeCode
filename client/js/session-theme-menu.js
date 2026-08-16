@@ -267,8 +267,8 @@
      * Lives here rather than inside a button handler because the opt-in
      * is now driven from a MENU ROW (the session editor's "play music"
      * row, session-editor-menu.js) that is rebuilt on every open, so
-     * there is no long-lived button to hang the logic off. wire() still
-     * calls it for the button form.
+     * there is no long-lived button to hang the logic off. The old
+     * wire() button form was removed once its buttons were deleted.
      *
      * @param {object} [termWrapper] - the Terminal wrapper, for the pill.
      * @param {HTMLElement} [btn] - a button to repaint, if one exists.
@@ -293,39 +293,7 @@
         return next;
     }
 
-    /**
-     * Wire both terminal-screen buttons. Idempotent.
-     *
-     * @param {object} termWrapper - the Terminal wrapper (status pill).
-     * @param {HTMLElement} themeBtn - the palette button.
-     * @param {HTMLElement} audioBtn - the speaker button.
-     * @returns {void}
-     */
-    function wire(termWrapper, themeBtn, audioBtn) {
-        if (themeBtn && !themeBtn._sessionThemeWired) {
-            themeBtn._sessionThemeWired = true;
-            themeBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                if (pickerEl) {
-                    close();
-                } else {
-                    open(themeBtn);
-                }
-            });
-        }
-
-        if (audioBtn && !audioBtn._sessionAudioWired) {
-            audioBtn._sessionAudioWired = true;
-            audioBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                toggleAudio(termWrapper, audioBtn);
-            });
-            paintAudioButton(audioBtn);
-        }
-    }
-
     window.SessionThemeMenu = {
-        wire: wire,
         toggleAudio: toggleAudio,
         open: open,
         close: close,

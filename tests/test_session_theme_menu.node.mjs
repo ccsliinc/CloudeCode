@@ -200,17 +200,20 @@ test('REGRESSION: music does not leak from one session into the next', () => {
     assert.equal(isMuted(), true, 'beta must be silenced on entry');
 });
 
-test('tapping the audio button toggles and persists the opt-in', () => {
+// toggleAudio is now reached from the session editor's "play music" MENU
+// ROW (session-editor-menu.js), which rebuilds on every open, so these
+// call it directly rather than through a long-lived button. The optional
+// btn argument is still exercised because the row repaints itself.
+test('toggling audio flips and persists the opt-in', () => {
     const { api, store, isMuted } = load({ session: 'alpha', muted: true });
     const audioBtn = fakeEl('sessionAudioBtn');
-    api.wire({ _showStatusPill() {} }, fakeEl('sessionThemeBtn'), audioBtn);
 
-    audioBtn.handlers.click({ stopPropagation() {} });
+    api.toggleAudio({ _showStatusPill() {} }, audioBtn);
     assert.equal(store['cloude.audio.session.alpha'], 'on');
     assert.equal(isMuted(), false);
     assert.equal(audioBtn.getAttribute('aria-pressed'), 'true');
 
-    audioBtn.handlers.click({ stopPropagation() {} });
+    api.toggleAudio({ _showStatusPill() {} }, audioBtn);
     assert.equal(store['cloude.audio.session.alpha'], 'off');
     assert.equal(isMuted(), true);
     assert.equal(audioBtn.getAttribute('aria-pressed'), 'false');
@@ -219,13 +222,10 @@ test('tapping the audio button toggles and persists the opt-in', () => {
 test('opting in on a theme with no track says so instead of pretending', () => {
     const { api } = load({ session: 'alpha', muted: true });
     const pills = [];
-    const audioBtn = fakeEl('sessionAudioBtn');
-    api.wire(
+    api.toggleAudio(
         { _showStatusPill(msg, kind) { pills.push({ msg, kind }); } },
-        fakeEl('sessionThemeBtn'),
-        audioBtn
+        fakeEl('sessionAudioBtn')
     );
-    audioBtn.handlers.click({ stopPropagation() {} });
     assert.equal(pills.length, 1);
     assert.ok(/no track/.test(pills[0].msg), `unexpected message: ${pills[0].msg}`);
 });
@@ -266,17 +266,10 @@ test('the picker names the session it is scoped to', () => {
     assert.equal(head.textContent, 'theme for my-project-Main');
 });
 
-test('wire() is idempotent', () => {
-    const { api } = load({ session: 'alpha' });
-    const audioBtn = fakeEl('sessionAudioBtn');
-    let added = 0;
-    audioBtn.addEventListener = function (type, fn) { added++; this.handlers[type] = fn; };
-    const termWrapper = { _showStatusPill() {} };
-    api.wire(termWrapper, fakeEl('a'), audioBtn);
-    const first = added;
-    api.wire(termWrapper, fakeEl('a'), audioBtn);
-    assert.equal(added, first, 'second wire must not double-bind');
-});
+// The 'wire() is idempotent' test was removed with wire() itself: the
+// two terminal-screen buttons it bound were deleted in 784433c, and
+// nothing has called it since. The behaviour it guarded now lives in
+// SessionEditorMenu.wire, which has its own idempotence test.
 
 test('the picker is placed by the SHARED anchor rule, not a local copy', () => {
     const { api, created } = load({ session: 'alpha' });
