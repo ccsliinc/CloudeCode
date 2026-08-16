@@ -58,6 +58,34 @@
     var wired = false;
 
     /**
+     * Returns the live xterm Terminal, or null. Set by init(). A getter
+     * rather than the instance because the listeners are wired once onto
+     * #terminal (never recreated) while `term` IS replaced on a session
+     * swap.
+     *
+     * @type {function(): (object|null)}
+     */
+    var getTerm = function () { return null; };
+
+    /** pageY of the previous touchmove, for per-event deltas. */
+    var lastTouchY = 0;
+
+    /**
+     * Vertical pixels moved by the touchmove currently being dispatched,
+     * measured in the capture-phase listener so the value is correct no
+     * matter who handles the event afterwards. Positive = finger moved
+     * up = scroll forward through the buffer, matching xterm's own sign
+     * convention in `Viewport#handleTouchMove`.
+     */
+    var pendingDy = 0;
+
+    /** Sub-row remainder carried between touchmoves so slow drags move. */
+    var pendingRows = 0;
+
+    /** Fallback row height (px) when the viewport cannot be measured. */
+    var FALLBACK_CELL_HEIGHT = 17;
+
+    /**
      * Is the terminal viewport scrolled to the live bottom?
      *
      * @param {object} term - an xterm.js Terminal instance.
@@ -131,6 +159,95 @@
     }
 
     /**
+     * Height of one terminal row in CSS pixels.
+     *
+     * Measured from the DOM rather than read out of xterm's private
+     * render service, so it cannot break on a vendored-bundle bump.
+     *
+     * @param {object} term - an xterm.js Terminal instance.
+     * @returns {number} row height in px, never zero.
+     */
+    function cellHeight(term) {
+        try {
+            var vp = document.querySelector('.xterm-viewport');
+            if (vp && vp.clientHeight > 0 && term.rows > 0) {
+                return vp.clientHeight / term.rows;
+            }
+        } catch (err) {
+            console.warn('TerminalScroll: cell height read failed', err);
+        }
+        return FALLBACK_CELL_HEIGHT;
+    }
+
+    /**
+     * Can the terminal buffer still move in the direction of this drag?
+     *
+     * This is the whole distinction between a drag the terminal can
+     * CONSUME and a drag that is trying to ESCAPE to the page. It is
+     * asked of the xterm buffer, not of any DOM scroll position, because
+     * the buffer is what the user is actually looking at.
+     *
+     * @param {object} term - an xterm.js Terminal instance.
+     * @param {number} rows - whole rows to scroll; >0 forward, <0 back.
+     * @returns {boolean} true when scrolling by `rows` would move the view.
+     */
+    function canConsumeScroll(term, rows) {
+        if (!term || !rows) return false;
+        try {
+            var buf = term.buffer && term.buffer.active;
+            if (!buf) return false;
+            return rows < 0 ? buf.viewportY > 0 : buf.viewportY < buf.baseY;
+        } catch (err) {
+            console.warn('TerminalScroll: buffer read failed', err);
+            return false;
+        }
+    }
+
+    /**
+     * Scroll the terminal by hand for a drag xterm declined to handle.
+     *
+     * WHY THIS IS NEEDED (measured on iPhone 16e / iOS 26.1, 2026-08-16):
+     * xterm 5.3.0 gates BOTH of its touch handlers on
+     * `!coreMouseService.areMouseEventsActive`, so the moment an
+     * application turns on mouse reporting - which Claude Code does,
+     * VT200 with SGR encoding - xterm stops scrolling the viewport by
+     * touch entirely and stops cancelling the touchmove as well. The
+     * wheel path is gated on a narrower condition (only the wheel bit of
+     * the active protocol, which VT200 does not set), so the desktop
+     * wheel keeps working. That asymmetry IS the reported bug: scrollback
+     * exists, desktop scrolls, the phone cannot.
+     *
+     * Native scrolling is not an available fallback either: the touch
+     * lands on `canvas.xterm-link-layer`, which is a SIBLING of
+     * `.xterm-viewport`, so the scrollable element is not on the touch
+     * target's ancestor chain at all.
+     *
+     * @param {number} dy - pixels the finger moved this event, up-positive.
+     * @returns {boolean} true when the view actually moved.
+     */
+    function consumeDragScroll(dy) {
+        var term = getTerm();
+        if (!term || !dy) return false;
+        pendingRows += dy / cellHeight(term);
+        var rows = pendingRows > 0 ? Math.floor(pendingRows) : Math.ceil(pendingRows);
+        if (!rows) return false;
+        if (!canConsumeScroll(term, rows)) {
+            // At the boundary. Drop the remainder so it cannot accumulate
+            // into a jump when the user drags back the other way.
+            pendingRows = 0;
+            return false;
+        }
+        pendingRows -= rows;
+        try {
+            term.scrollLines(rows);
+        } catch (err) {
+            console.warn('TerminalScroll: scrollLines failed', err);
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Stop a boundary drag from escaping to the page.
      *
      * xterm's own touchmove handler scrolls `.xterm-viewport` in JS and
@@ -156,6 +273,22 @@
      *   - touch-select.js calls stopPropagation() while a selection
      *     drag is live, so this never runs during select mode.
      *
+     * It must, however, distinguish the two very different reasons a
+     * touchmove can arrive here uncancelled, because the original version
+     * only knew about the first and swallowed the second:
+     *
+     *   ESCAPE  - the terminal is at a scrollback boundary, so there is
+     *             nothing left to show in that direction. Cancel and stop,
+     *             which is the pull-to-refresh block.
+     *   CONSUMABLE - the terminal is NOT at that boundary and simply was
+     *             not offered the event, because mouse reporting is on
+     *             (see consumeDragScroll). Scroll it here, then cancel.
+     *
+     * The test is `canConsumeScroll`: it asks the xterm buffer whether
+     * `viewportY` can still move in the direction of THIS drag. Nothing
+     * else can tell them apart - the event flags are identical in both
+     * cases, which is precisely why the bug was invisible.
+     *
      * @param {TouchEvent} ev - the bubbling touchmove.
      * @returns {void}
      */
@@ -163,6 +296,8 @@
         if (ev.defaultPrevented) return;
         if (!ev.cancelable) return;
         if (ev.touches && ev.touches.length !== 1) return;
+        consumeDragScroll(pendingDy);
+        pendingDy = 0;
         ev.preventDefault();
     }
 
@@ -172,21 +307,38 @@
      * session swap does not wipe them.
      *
      * @param {HTMLElement} container - the #terminal element.
+     * @param {function(): (object|null)} [termGetter] - returns the live
+     *   xterm Terminal. Required for touch scrolling under mouse
+     *   reporting; omitting it degrades to block-only behaviour.
      * @returns {void}
      */
-    function init(container) {
+    function init(container, termGetter) {
+        if (typeof termGetter === 'function') getTerm = termGetter;
         if (wired || !container) return;
         wired = true;
 
         // Passive: we never cancel these, we only observe that the user
         // is driving the viewport. Cancelling would break xterm's own
         // native touch scrolling, which is what we want to preserve.
-        container.addEventListener('touchstart', function () {
+        container.addEventListener('touchstart', function (ev) {
             touchActive = true;
+            pendingRows = 0;
+            pendingDy = 0;
+            if (ev && ev.touches && ev.touches.length) lastTouchY = ev.touches[0].pageY;
             noteUserScroll();
         }, { capture: true, passive: true });
 
-        container.addEventListener('touchmove', function () {
+        // Capture phase on purpose: the per-event delta has to be taken
+        // BEFORE xterm's own handler runs, so the number is right whether
+        // xterm consumes the event or declines it.
+        container.addEventListener('touchmove', function (ev) {
+            if (ev && ev.touches && ev.touches.length === 1) {
+                var y = ev.touches[0].pageY;
+                pendingDy = lastTouchY - y;
+                lastTouchY = y;
+            } else {
+                pendingDy = 0;
+            }
             noteUserScroll();
         }, { capture: true, passive: true });
 
@@ -211,11 +363,17 @@
         lastGestureAt = 0;
         touchActive = false;
         wired = false;
+        lastTouchY = 0;
+        pendingDy = 0;
+        pendingRows = 0;
+        getTerm = function () { return null; };
     }
 
     window.TerminalScroll = {
         init: init,
         blockOverscrollEscape: blockOverscrollEscape,
+        canConsumeScroll: canConsumeScroll,
+        consumeDragScroll: consumeDragScroll,
         isPinnedToBottom: isPinnedToBottom,
         shouldFollowOutput: shouldFollowOutput,
         noteUserScroll: noteUserScroll,

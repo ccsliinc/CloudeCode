@@ -665,7 +665,8 @@ class Terminal {
     setupScrollListener() {
         const container = document.getElementById('terminal');
         if (window.TerminalScroll && container) {
-            window.TerminalScroll.init(container);
+            // Getter, not the instance: this.term is replaced on session swap.
+            window.TerminalScroll.init(container, () => this.term);
         }
     }
 
