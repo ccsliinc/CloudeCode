@@ -505,6 +505,157 @@ await test('a short row still ends the line, so the /login code survives', () =>
     );
 });
 
+
+/**
+ * Minimal element stub: exactly what buildRow/buildChip touch.
+ *
+ * @param {string} tag - the tag name, so the test can find the anchor.
+ * @returns {object} an element-shaped object.
+ */
+function stubEl(tag) {
+    return {
+        tag,
+        children: [],
+        dataset: {},
+        style: {},
+        classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+        setAttribute(k, v) { this[k] = v; },
+        getAttribute(k) { return this[k]; },
+        addEventListener() {},
+        appendChild(c) { this.children.push(c); return c; },
+    };
+}
+
+/**
+ * Load CopyOutput against the stub document, so the DOM-building
+ * functions can be exercised rather than only the pure ones.
+ *
+ * @returns {object} the CopyOutput namespace.
+ */
+function loadOutputWithDom() {
+    const sandbox = {
+        window: {},
+        document: { createElement: (tag) => stubEl(tag) },
+        console: { warn() {} },
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(outputSrc, sandbox);
+    return sandbox.window.CopyOutput;
+}
+
+/* ===================================================================
+ * OPEN IN A NEW TAB.
+ *
+ * A url chip now carries a real <a target="_blank"> beside it, because
+ * on the phone that printed the sign-in link, following it beats copying
+ * it. That turns a string scraped out of arbitrary terminal output into
+ * an href, which is a live injection surface: a pane can print anything,
+ * including `javascript:...`. The gate is an ALLOW-LIST of http/https,
+ * matching the deny-list shape in client/js/markdown-lite.js#isSafeUrl
+ * but stricter, and a code token never gets a link at all.
+ * =================================================================== */
+
+await test('only http and https are ever offered as a link', () => {
+    const out = loadOutput();
+    for (const ok of [
+        'http://example.com/x',
+        'https://claude.com/cai/oauth/authorize?code=true',
+        'HTTPS://EXAMPLE.COM/Y',
+    ]) {
+        assert.equal(out.isHttpUrl(ok), true, `${ok} should be linkable`);
+    }
+});
+
+await test('HOSTILE SCHEMES ARE REFUSED, including obfuscated ones', () => {
+    const out = loadOutput();
+    const hostile = [
+        'javascript:alert(1)',
+        'JaVaScRiPt:alert(1)',
+        // Whitespace and control characters inside the scheme: a browser
+        // ignores them, so a naive check does not see the scheme at all.
+        'java\nscript:alert(1)',
+        'java\tscript:alert(1)',
+        ' javascript:alert(1)',
+        'java script:alert(1)',
+        'data:text/html;base64,PHNjcmlwdD4=',
+        'vbscript:msgbox(1)',
+        'file:///etc/passwd',
+        // Looks like it starts with http, is not an http url.
+        'javascript:x?http://evil.example',
+        // A code token is not a url and must never be linkable.
+        'WDJB-MJHT',
+        'sk-ant-0000',
+        '',
+        null,
+        undefined,
+    ];
+    for (const bad of hostile) {
+        assert.equal(out.isHttpUrl(bad), false, `${bad} must NOT be linkable`);
+    }
+});
+
+await test('the link is a real anchor with target and rel, and only for urls', () => {
+    const sandboxed = loadOutputWithDom();
+
+    const urlRow = sandboxed.buildRow(null, { kind: 'url', value: 'https://example.com/a' });
+    const anchor = urlRow.children.find((c) => c.tag === 'a');
+    assert.ok(anchor, 'an http url must get an open link');
+    assert.equal(anchor.href, 'https://example.com/a');
+    assert.equal(anchor.target, '_blank');
+    assert.equal(anchor.rel, 'noopener noreferrer',
+        'noopener severs window.opener so the new tab cannot navigate this one');
+
+    // A hostile "url" reaches buildRow the same way a real one does.
+    const badRow = sandboxed.buildRow(null, { kind: 'url', value: 'javascript:alert(1)' });
+    assert.equal(badRow.children.find((c) => c.tag === 'a'), undefined,
+        'a javascript: url must render no anchor at all');
+
+    const codeRow = sandboxed.buildRow(null, { kind: 'code', value: 'WDJB-MJHT' });
+    assert.equal(codeRow.children.find((c) => c.tag === 'a'), undefined,
+        'a code token must render no anchor at all');
+});
+
+await test('the sheet styles ship in copy-output.css AND index.html loads it', () => {
+    const cssDir = path.join(__dirname, '..', 'client', 'css');
+    const sheetCss = fs.readFileSync(path.join(cssDir, 'copy-output.css'), 'utf8');
+    const toolsCss = fs.readFileSync(path.join(cssDir, 'terminal-tools.css'), 'utf8');
+    for (const cls of ['.cloude-copy-sheet', '.cloude-copy-chip', '.cloude-copy-row',
+        '.cloude-copy-open', '.cloude-copy-sheet__action']) {
+        assert.ok(sheetCss.includes(cls + ' {') || sheetCss.includes(cls + ','),
+            `${cls} must be styled in copy-output.css`);
+        assert.ok(!toolsCss.includes(cls),
+            `${cls} must not be left behind in terminal-tools.css`);
+    }
+    // A stylesheet on disk that no page links is the same as no styles.
+    const html = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
+    assert.ok(html.includes('/static/css/copy-output.css'),
+        'index.html must load the split stylesheet');
+    // 500-line limit: the split exists because the combined file broke it.
+    for (const f of ['copy-output.css', 'terminal-tools.css']) {
+        const lines = fs.readFileSync(path.join(cssDir, f), 'utf8').split('\n').length;
+        assert.ok(lines < 500, `${f} is ${lines} lines, over the 500 limit`);
+    }
+});
+
+/* copy all must not be a lopsided pill again: --radius-full is 50%. */
+await test('copy all matches the chips it sits under, and shows a copied state', () => {
+    const css = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'css', 'copy-output.css'), 'utf8');
+    const at = css.indexOf('.cloude-copy-sheet__action {');
+    const block = css.slice(at, css.indexOf('}', at));
+    assert.ok(/border-radius:\s*6px;/.test(block),
+        'the pill shape was the main complaint - 6px matches the chips');
+    assert.ok(!/--radius-full/.test(block), '--radius-full is 50%, not a stadium');
+    assert.ok(/font-size:\s*12px;/.test(block), 'same size as the chips above it');
+    assert.ok(/min-height:\s*44px;/.test(block));
+    assert.ok(/width:\s*auto;/.test(block),
+        'without an explicit width the bare `button` rule makes it 36px');
+    assert.ok(css.includes('.cloude-copy-sheet__action.is-copied'),
+        'copyAndReport() adds .is-copied - it must render');
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) {
     console.error('FAILURES');

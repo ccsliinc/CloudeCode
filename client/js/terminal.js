@@ -480,34 +480,32 @@ class Terminal {
     }
 
     /**
-     * IMG-PASTE — mobile / iOS attach-button hook point.
+     * IMG-PASTE - hidden image file input hook point.
      *
      * iOS Safari does NOT reliably fire ``paste`` events for image data
-     * outside focused contenteditable elements, so we surface an explicit
-     * 📎 button (gated to ``pointer: coarse`` via CSS). All wiring lives
-     * in clipboard.js (``ClipboardTools.wireAttachButton``): the button
-     * opens a menu with "paste from clipboard" (clipboard image → the
-     * existing ``_uploadAndInjectImage`` flow, clipboard text → injected
-     * as terminal input) and "attach image" (the original hidden
-     * file-input picker). This method only locates the DOM nodes and
-     * hands them over.
+     * outside focused contenteditable elements, so an explicit picker has
+     * to exist. It used to hang off a paperclip FAB with its own popup
+     * menu; that menu is now the "attach image" row of the single session
+     * tools menu (terminal-tools-menu.js), which opens THIS input.
      *
-     * The file input has ``accept="image/*,image/heic,image/heif"`` so
-     * the OS picker offers both Photos library + Files; the server
-     * rejects HEIC at validation time with a "convert to PNG/JPEG"
-     * message (intentional v1 scope).
+     * Only the change handler is wired here, via
+     * ``ClipboardTools.wireFileInput``. The input has
+     * ``accept="image/*,image/heic,image/heif"`` so the OS picker offers
+     * both Photos library + Files; the server rejects HEIC at validation
+     * time with a "convert to PNG/JPEG" message (intentional v1 scope).
+     *
+     * @returns {void}
      */
     _applyImageAttachButton() {
-        const btn = document.getElementById('cloude-image-attach-button');
         const input = document.getElementById('cloude-image-attach-input');
-        if (!btn || !input) return;
+        if (!input) return;
 
         // clipboard.js is loaded right after this file and initTerminal()
         // only runs after the async xterm CDN wait, so ClipboardTools is
         // always defined here in practice; the guard covers a failed
-        // static fetch (button simply goes inert rather than throwing).
-        if (window.ClipboardTools && typeof window.ClipboardTools.wireAttachButton === 'function') {
-            window.ClipboardTools.wireAttachButton(this, btn, input);
+        // static fetch (the picker simply goes inert rather than throwing).
+        if (window.ClipboardTools && typeof window.ClipboardTools.wireFileInput === 'function') {
+            window.ClipboardTools.wireFileInput(this, input);
         }
     }
 
@@ -528,27 +526,26 @@ class Terminal {
     }
 
     /**
-     * Wire the terminal-screen tool strip.
+     * Wire the single session tools control.
      *
-     * Three session-scoped controls, all mounted in index.html and wired
-     * here once: the copy-output sheet (copy-output.js), the per-session
-     * theme picker and the per-session music opt-in (both in
-     * session-theme-menu.js). Buttons live outside #terminal so
-     * term.reset() on a session swap cannot wipe the handlers; each
-     * module guards its own re-entry.
+     * ONE button, ONE menu. Copy output, paste from clipboard, attach
+     * image, session theme and session music used to be split across a
+     * folded strip over the terminal's top-right corner and a paperclip
+     * FAB in the bottom-right, each with its own popup. They are now rows
+     * of #terminalToolsBtn's menu (terminal-tools-menu.js).
+     *
+     * The button and the file input live outside #terminal so
+     * term.reset() on a session swap cannot wipe the handlers; the menu
+     * module guards its own re-entry and only refreshes the wrapper its
+     * rows act on.
      *
      * @returns {void}
      */
     _applyTerminalTools() {
-        const copyBtn = document.getElementById('terminalCopyBtn');
-        if (copyBtn && window.CopyOutput) {
-            window.CopyOutput.wireButton(this, copyBtn);
-        }
-
-        const themeBtn = document.getElementById('sessionThemeBtn');
-        const audioBtn = document.getElementById('sessionAudioBtn');
-        if (window.SessionThemeMenu) {
-            window.SessionThemeMenu.wire(this, themeBtn, audioBtn);
+        const toolsBtn = document.getElementById('terminalToolsBtn');
+        const input = document.getElementById('cloude-image-attach-input');
+        if (window.TerminalToolsMenu) {
+            window.TerminalToolsMenu.wire(this, toolsBtn, input);
         }
     }
 

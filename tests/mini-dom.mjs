@@ -7,10 +7,12 @@
 // the module under test. Two modules now need a real element tree with
 // event bubbling, so the stub is shared rather than copied twice.
 //
-// SCOPE: exactly the DOM surface client/js/dismiss-guard.js and
-// client/js/header-menu.js touch - tree mutation, classList, attributes,
-// closest/contains/matches, and click/keydown dispatch that bubbles to
-// document. It is NOT a browser. Anything beyond that surface should be
+// SCOPE: exactly the DOM surface client/js/dismiss-guard.js,
+// client/js/header-menu.js and client/js/terminal-tools-menu.js touch -
+// tree mutation (including ChildNode.remove()), classList, attributes
+// (id and title reflect, as they do in a real browser),
+// closest/contains/matches, and click/keydown/pointerdown dispatch that
+// bubbles to document. It is NOT a browser. Anything beyond that surface should be
 // verified in a real browser instead, which is where the visual pass on
 // this feature happened.
 //
@@ -172,6 +174,9 @@ class MiniElement {
     get hidden() { return this.hasAttribute('hidden'); }
     set hidden(v) { v ? this.setAttribute('hidden', '') : this.removeAttribute('hidden'); }
     get title() { return this.getAttribute('title') || ''; }
+    set title(v) { this.setAttribute('title', v); }
+    get id() { return this.getAttribute('id') || ''; }
+    set id(v) { this.setAttribute('id', v); }
 
     // ---- tree ----
     appendChild(node) {
@@ -195,6 +200,13 @@ class MiniElement {
         if (i !== -1) this.childNodes.splice(i, 1);
         node.parentNode = null;
         return node;
+    }
+
+    /** ChildNode.remove(). Detach self from the parent; a no-op when
+     *  already detached, exactly like the real thing. */
+    remove() {
+        if (this.parentNode) this.parentNode.removeChild(this);
+        return this;
     }
 
     get children() { return this.childNodes.slice(); }

@@ -414,19 +414,29 @@ test('tooltips are anchored to their own button, not to an ancestor', () => {
     assert.ok(/position:\s*relative;/.test(ruleBody(css, 'button[data-tooltip]')),
         'an unpositioned button lets the tooltip escape to the initial containing block, '
         + 'which is what produced 42px of horizontal scroll inside the session');
+    // The strip whose rightmost tooltip used to hang past the viewport
+    // no longer exists, and its replacement carries a plain `title`
+    // rather than a CSS tooltip, so there is nothing left to overflow
+    // from that corner. Assert the absence, not a rule for a dead node.
     const tools = readClientCss('terminal-tools.css');
-    assert.ok(/right:\s*0;/.test(ruleBody(tools, '.terminal-tools button[data-tooltip]::after')),
-        'the rightmost tooltip must be right-aligned or it hangs past the viewport');
+    assert.ok(!tools.includes('data-tooltip'),
+        'a CSS tooltip in the terminal corner is what overflowed before');
 });
 
-test('the tool strip is an overlay, so it consumes no terminal rows', () => {
-    const body = ruleBody(readClientCss('terminal-tools.css'), '.terminal-tools');
-    assert.ok(/position:\s*absolute;/.test(body));
-    assert.ok(/top:\s*0;/.test(body) && /right:\s*0;/.test(body));
-    assert.ok(/pointer-events:\s*none;/.test(body),
-        'the strip gaps must not swallow taps meant for the terminal');
-    assert.ok(/pointer-events:\s*auto;/.test(ruleBody(readClientCss('terminal-tools.css'), '.terminal-tools > *')),
-        'the buttons themselves must stay tappable');
+test('nothing overlays the terminal any more except one floating button', () => {
+    const css = readClientCss('terminal-tools.css');
+    // The strip that used to sit over the top-right corner is GONE, so
+    // the terminal's top edge is uncovered rather than covered by one
+    // folded chip. Absence is the assertion: a `.terminal-tools` rule
+    // coming back means the second menu came back with it.
+    assert.ok(!/\.terminal-tools\s*\{/.test(css),
+        'the top-right tool strip must not be reintroduced');
+    // Its replacement is position:fixed, so like the d-pad it is outside
+    // the flow and consumes no terminal rows either.
+    const fab = ruleBody(css, '.terminal-tools-fab');
+    assert.ok(/position:\s*fixed;/.test(fab));
+    assert.ok(/right:\s*var\(--fab-edge\);/.test(fab),
+        'the FAB must derive its offset from the shared token');
 });
 
 test('terminal.js delegates the resize pipeline instead of growing', () => {

@@ -22,10 +22,19 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const src = fs.readFileSync(
-    path.join(__dirname, '..', 'client', 'js', 'session-theme-menu.js'),
-    'utf8'
-);
+/**
+ * Read a client JS file.
+ * @param {string} name  File name under client/js/.
+ * @returns {string} File contents.
+ */
+function clientJs(name) {
+    return fs.readFileSync(path.join(__dirname, '..', 'client', 'js', name), 'utf8');
+}
+
+// anchor-popover.js first: session-theme-menu.js delegates its placement
+// to window.AnchorPopover rather than carrying its own copy of the rule.
+const popoverSrc = clientJs('anchor-popover.js');
+const src = clientJs('session-theme-menu.js');
 
 let failures = 0;
 let passes = 0;
@@ -118,12 +127,13 @@ function load(opts) {
             removeEventListener() {},
             getElementById: () => null,
         },
-        console: { warn() {} },
+        console: { log() {}, warn() {} },
         setTimeout: (fn) => fn(),
         Date,
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
+    vm.runInContext(popoverSrc, sandbox);
     vm.runInContext(src, sandbox);
     return {
         api: sandbox.window.SessionThemeMenu,
@@ -266,6 +276,22 @@ test('wire() is idempotent', () => {
     const first = added;
     api.wire(termWrapper, fakeEl('a'), audioBtn);
     assert.equal(added, first, 'second wire must not double-bind');
+});
+
+test('the picker is placed by the SHARED anchor rule, not a local copy', () => {
+    const { api, created } = load({ session: 'alpha' });
+    const anchor = fakeEl('sessionThemeBtn');
+    api.open(anchor);
+    // The picker is the first element the module creates.
+    const picker = created[0];
+    assert.equal(typeof picker.style.left, 'string',
+        'the picker must have been positioned');
+    assert.equal(typeof picker.style.top, 'string');
+    // And the rule itself is not restated in this module.
+    assert.ok(!src.includes('visualViewport'),
+        'placement must live in anchor-popover.js, not be copied back in');
+    assert.ok(popoverSrc.includes('visualViewport'),
+        'the shared rule must still clamp to the visual viewport');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
