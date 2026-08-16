@@ -55,6 +55,9 @@
     <!-- Terminal-screen tool strip, copy-output sheet and per-session
          theme picker. After styles.css so it inherits the theme vars. -->
     <link rel="stylesheet" href="/static/css/terminal-tools.css" />
+    <!-- Copy-sheet feedback layer. Split out of terminal-tools.css only
+         to keep concurrent edits apart; must load after it. -->
+    <link rel="stylesheet" href="/static/css/copy-output.css" />
     <!-- Stacked-modal chrome (scroll lock + what a COVERED modal looks
          like). Must load before the two config-editor stylesheets, which
          style the modals that stack. -->
