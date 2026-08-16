@@ -4,9 +4,13 @@
  * The point of theming a tmux session INDIVIDUALLY is to tell your
  * sessions apart at a glance: the office box is green, the media box is
  * amber, and you know which one you are typing into before you read a
- * word. This is the terminal-screen control for that. The default theme
- * and the home theme stay where they are, in settings - this picker only
- * ever changes the session you are currently looking at.
+ * word. This module owns the picker and the music opt-in; the control
+ * that opens it is the SESSION EDITOR FAB (#sessionEditorBtn,
+ * session-editor-menu.js), which is deliberately separate from the
+ * terminal tools FAB beside it - configuring a session and copying its
+ * output are different jobs. The default theme and the home theme stay
+ * where they are, in settings - this picker only ever changes the
+ * session you are currently looking at.
  *
  * PERSISTENCE. Nothing is stored client-side. Picking a theme calls
  * `Themes.applyGlobal()`, which - because app.js has put the registry in
@@ -261,9 +265,10 @@
      * Flip this session's music opt-in and apply it.
      *
      * Lives here rather than inside a button handler because the opt-in
-     * is now driven from a MENU ROW (terminal-tools-menu.js) that is
-     * rebuilt on every open, so there is no long-lived button to hang
-     * the logic off. wire() still calls it for the button form.
+     * is now driven from a MENU ROW (the session editor's "play music"
+     * row, session-editor-menu.js) that is rebuilt on every open, so
+     * there is no long-lived button to hang the logic off. wire() still
+     * calls it for the button form.
      *
      * @param {object} [termWrapper] - the Terminal wrapper, for the pill.
      * @param {HTMLElement} [btn] - a button to repaint, if one exists.

@@ -423,20 +423,23 @@ test('tooltips are anchored to their own button, not to an ancestor', () => {
         'a CSS tooltip in the terminal corner is what overflowed before');
 });
 
-test('nothing overlays the terminal any more except one floating button', () => {
+test('nothing overlays the terminal any more except the bottom-row FABs', () => {
     const css = readClientCss('terminal-tools.css');
     // The strip that used to sit over the top-right corner is GONE, so
     // the terminal's top edge is uncovered rather than covered by one
     // folded chip. Absence is the assertion: a `.terminal-tools` rule
-    // coming back means the second menu came back with it.
+    // coming back means the top-corner overlay came back with it.
     assert.ok(!/\.terminal-tools\s*\{/.test(css),
         'the top-right tool strip must not be reintroduced');
-    // Its replacement is position:fixed, so like the d-pad it is outside
-    // the flow and consumes no terminal rows either.
-    const fab = ruleBody(css, '.terminal-tools-fab');
-    assert.ok(/position:\s*fixed;/.test(fab));
-    assert.ok(/right:\s*var\(--fab-edge\);/.test(fab),
-        'the FAB must derive its offset from the shared token');
+    // Both FAB triggers share one base rule, so neither can drift into
+    // the flow. position:fixed means they consume no terminal rows.
+    const base = ruleBody(css, '.fab-menu-btn');
+    assert.ok(/position:\s*fixed;/.test(base));
+    assert.ok(/bottom:\s*var\(--fab-edge\);/.test(base),
+        'both FABs sit on the bottom row, over the command line');
+    // Each button then carries ONLY a slot, from the shared tokens.
+    assert.match(ruleBody(css, '.terminal-tools-fab'), /right:\s*var\(--fab-slot-0\);/);
+    assert.match(ruleBody(css, '.session-editor-fab'), /right:\s*var\(--fab-slot-2\);/);
 });
 
 test('terminal.js delegates the resize pipeline instead of growing', () => {
@@ -445,7 +448,7 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     assert.ok(!src.includes('new ResizeObserver('),
         'the observer moved to terminal-layout.js; two of them would double-fire');
     const lines = src.split('\n').length;
-    assert.ok(lines < 2371, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2370, `terminal.js must not grow, is ${lines} lines`);
 });
 
 await runQueue();
