@@ -91,5 +91,10 @@
     "brightCyan": "#a3eeed",
     "brightWhite": "#ffffff"
   },
-  "themeCss": "theme.css"
+  "themeCss": "theme.css",
+  "audio": {
+    "src": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+    "volume": 0.22,
+    "fadeMs": 2000
+  }
 }

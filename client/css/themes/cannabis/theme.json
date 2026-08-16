@@ -96,5 +96,10 @@
     "brightMagenta": "#B89878",
     "brightCyan": "#A8C4A8",
     "brightWhite": "#F4ECD4"
+  },
+  "audio": {
+    "src": "/static/assets/audio/forest-ambience.ogg",
+    "volume": 0.25,
+    "fadeMs": 2000
   }
 }

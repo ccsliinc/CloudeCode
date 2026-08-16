@@ -96,5 +96,10 @@
     "brightMagenta": "#D98AED",
     "brightCyan": "#7FE0F0",
     "brightWhite": "#FFFFFF"
+  },
+  "audio": {
+    "src": "/static/assets/audio/observing-the-star.ogg",
+    "volume": 0.22,
+    "fadeMs": 1500
   }
 }

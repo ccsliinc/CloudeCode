@@ -96,5 +96,10 @@
     "brightMagenta": "#7a4e78",
     "brightCyan": "#5fb3a8",
     "brightWhite": "#cce0d2"
+  },
+  "audio": {
+    "src": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+    "volume": 0.22,
+    "fadeMs": 2000
   }
 }
