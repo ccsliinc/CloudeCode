@@ -44,9 +44,14 @@
 //          480px media query) and a class only overrides the properties it
 //          actually declares - a `width`-only class would leave the height.
 //
-// 3. THE VERSION CHIP.  h1 is a flex row with no gap and `.version` carried no
-//    margin, so the chip sat flush against the title: measured gap 0.0px at
-//    both 1527px and 390px. Now 10.0px at both.
+// 3. THE VERSION CHIP.  Originally: h1 is a gapless flex row and `.version`
+//    carried no margin, so the chip sat flush against the title (0.0px at both
+//    1527px and 390px), fixed with a 10px margin-left. That fix is now MOOT,
+//    not wrong - the home bar moved the chip out of the header entirely, so
+//    the title it was being separated from is no longer its sibling. What is
+//    locked here now is the other half of that move: no leftover margin on an
+//    element that relocated, and exactly ONE chip in the whole app rather than
+//    one in each place. See the section-3 header below.
 //
 // Run with: node tests/test_home_screen_polish.node.mjs
 
@@ -137,6 +142,26 @@ function mediaBody(sheet, condition) {
 
 const styles = css('styles.css');
 const launchpad = js('launchpad.js');
+
+/**
+ * Read client/index.html with HTML comments stripped.
+ *
+ * COMMENTS MUST GO, OR THE VERSION-CHIP TEST LIES. index.html carries a
+ * comment where the header chip used to be, and that comment quotes the old
+ * `<span class="version">` markup verbatim to explain what moved. A naive
+ * search for the chip therefore finds it in the very comment that says it is
+ * gone - a test that can be defeated by prose is not a test.
+ *
+ * @returns {string} index.html with every `<!-- ... -->` removed.
+ */
+function indexHtmlNoComments() {
+    const raw = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'index.html'), 'utf8'
+    );
+    return raw.replace(/<!--[\s\S]*?-->/g, '');
+}
+
+const index = indexHtmlNoComments();
 
 /* ---------------------------------------------------------------------------
  * 1. FAB icon column alignment
@@ -284,20 +309,58 @@ test('the adopt-help touch target is 44px without a 44px layout box', () => {
 
 /* ---------------------------------------------------------------------------
  * 3. The version chip
+ *
+ * SUPERSEDED BY THE HOME BAR, DELIBERATELY. This section originally locked a
+ * `margin-left: 10px` on `.version`, because the chip was a flex child of the
+ * gapless header h1 and measured 0px of separation from the title. The home
+ * bar landed after that and moved the chip OUT of the header altogether, so
+ * there is no title left for it to be flush against and the margin has
+ * nothing to do. The later decision wins: the version lives in the bar.
+ *
+ * The assertions below are the inverse of the originals on purpose. They are
+ * not "the margin fix was wrong" - it was right for the layout it was written
+ * against - they are "that layout is gone, and a margin left behind on an
+ * element that moved is dead space nobody will explain later".
  * ------------------------------------------------------------------------- */
 
-test('the version chip is separated from the title', () => {
+test('the version chip carries no leftover header margin', () => {
+    // The 10px was separation from the header title. The chip is in the home
+    // bar now (client/css/home-bar.css places it), and that bar sets its own
+    // gap, so a margin-left here would be unexplained padding in a box this
+    // rule does not own.
     const body = ruleBody(styles, '.version');
-    const m = body.match(/margin-left:\s*(\d+)px/);
-    assert.ok(m, 'h1 is a gapless flex row; without this margin the gap measures 0px');
-    assert.ok(Number(m[1]) >= 8, `needs real separation, got ${m[1]}px`);
+    assert.ok(
+        !/margin-left:/.test(body),
+        'the chip moved to the home bar; a header margin must not survive the move'
+    );
+});
+
+test('the version chip renders exactly once, in the home bar', () => {
+    // Not in both places. The header markup must have given the chip up, and
+    // the launchpad markup must be the single thing that renders it.
+    const headerHits = index.match(/<span[^>]*class="[^"]*\bversion\b[^"]*"/g) || [];
+    assert.equal(
+        headerHits.length, 0,
+        `the header still renders ${headerHits.length} version chip(s); it belongs to the bar now`
+    );
+
+    const barHits = launchpad.match(/class="[^"]*\bversion\b[^"]*"/g) || [];
+    assert.equal(
+        barHits.length, 1,
+        `expected exactly one version chip in the launchpad markup, found ${barHits.length}`
+    );
+    assert.match(
+        barHits[0], /home-bar__version/,
+        'the one chip must be the home bar chip'
+    );
 });
 
 test('the version chip still refuses to shrink', () => {
-    // It is metadata next to a truncatable title; if it can shrink, the
-    // header-overflow work concentrates shrinking in the wrong child.
+    // Still true, for a new reason: it is now a flex child of the home bar
+    // row rather than of the header. Either way it is a fixed-width label
+    // that must keep its own width rather than absorb the row's squeeze.
     const body = ruleBody(styles, '.version');
-    assert.match(body, /flex-shrink:\s*0/, 'only #header-title-text may shrink');
+    assert.match(body, /flex-shrink:\s*0/, 'the chip must keep its width');
 });
 
 /* ---------------------------------------------------------------------------

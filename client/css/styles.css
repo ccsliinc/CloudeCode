@@ -307,20 +307,23 @@ h1:hover {
     white-space: nowrap;
 }
 
-/* Version chip. h1 is a flex row with no gap, so with no margin of its own
- * this sat flush against the title - measured 0px between the title's right
- * edge and the chip's left edge at both 1527px and 390px, which read as part
- * of the product name rather than metadata about it.
+/* Version chip. TYPE AND COLOUR ONLY - this rule no longer places anything.
  *
- * `margin-left` and not a `gap` on h1: h1's other flex children (the identity
- * icon, the rename pencil) already carry their own spacing, and a gap would
- * add to theirs. This is the only child that needs separating. */
+ * NO `margin-left` HERE, AND IT MUST NOT COME BACK. This chip used to be a
+ * flex child of the header h1, which is a gapless flex row, so it sat flush
+ * against the title (measured 0px at both 1527px and 390px) and a 10px
+ * margin-left was the fix for that. The chip has since MOVED OUT of the
+ * header entirely: it is the home screen's bottom bar now, rendered by
+ * launchpad.js as `.version.home-bar__version` and placed by
+ * client/css/home-bar.css. There is no longer a title to be flush against,
+ * so the margin has nothing to separate - it would just be 10px of dead
+ * space inside a flex row that already sets its own gap. Placement belongs
+ * to whoever owns the box the chip sits in, and that is home-bar.css. */
 .version {
     font-size: 0.7rem;
     color: var(--color-fg-faint);
     font-weight: normal;
     flex-shrink: 0;
-    margin-left: 10px;
 }
 
 /* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
