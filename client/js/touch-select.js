@@ -316,9 +316,18 @@
         }
     }
 
+    /**
+     * Take down whatever this module last reported. Routed through the
+     * shared notice because the terminal's own pill element no longer
+     * exists - it was painted under the header and both mechanisms
+     * collapsed into FabMenu.notify.
+     *
+     * @returns {void}
+     */
     function hidePill() {
-        const pill = document.getElementById('cloude-status-pill');
-        if (pill) pill.classList.remove('visible');
+        if (window.FabMenu && typeof window.FabMenu.dismissNotice === 'function') {
+            window.FabMenu.dismissNotice();
+        }
     }
 
     window.TouchSelect = { init };

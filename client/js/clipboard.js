@@ -43,6 +43,36 @@
     'use strict';
 
     /* =================================================================
+     * Reporting
+     * ================================================================= */
+
+    /**
+     * Report a result somewhere the user can actually see it.
+     *
+     * Everything in this file is reached from a session tools menu row,
+     * and the terminal status pill (z-index 70) is painted over by the
+     * sticky header (1000) and by every overlay a row can open. That is
+     * why the paste row looked like it did nothing at all over plain
+     * http: it DID report, underneath the header. FabMenu.notify is the
+     * shared fix; the pill stays as the fallback for a document that
+     * somehow loaded this without fab-menu.js.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {string} message - lowercase user-facing text.
+     * @param {string} kind - 'info', 'success' or 'error'.
+     * @returns {void}
+     */
+    function report(term, message, kind) {
+        if (window.FabMenu && typeof window.FabMenu.notify === 'function') {
+            window.FabMenu.notify(message, kind);
+            return;
+        }
+        if (term && typeof term._showStatusPill === 'function') {
+            term._showStatusPill(message, kind);
+        }
+    }
+
+    /* =================================================================
      * Copy chord
      * ================================================================= */
 
@@ -88,7 +118,7 @@
         // back to execCommand, which is not secure-context gated.
         window.CopyCompat.copyText(text).then((result) => {
             if (!result.ok) {
-                term._showStatusPill('copy blocked by browser — use the system copy shortcut', 'error');
+                report(term, 'copy blocked by browser - use the system copy shortcut', 'error');
             }
         });
     }
@@ -125,18 +155,25 @@
      * Reads the LOCAL device clipboard. Only called from the menu tap
      * (user gesture) to satisfy clipboard-permission rules.
      *
-     * Order: rich read() first — an image wins when present (mirrors
+     * Order: rich read() first - an image wins when present (mirrors
      * the desktop paste interceptor in terminal.js). Text comes from
      * the same rich items when available, else the readText() fallback.
-     * Any denial or API absence degrades to a status-pill message
-     * pointing at the keyboard paste path. Never throws.
+     *
+     * DETECT, DO NOT ASSUME. The read APIs need a secure context, which
+     * a LAN address never is, so on http they are simply absent and on
+     * https they can still reject with NotAllowedError. Either way we
+     * stop asking the browser and ask the USER instead, via the paste
+     * fallback - the one path that works on every origin. Never throws.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @returns {Promise<void>}
      */
     async function pasteFromClipboard(term) {
         const canRead = !!(navigator.clipboard && typeof navigator.clipboard.read === 'function');
         const canReadText = !!(navigator.clipboard && typeof navigator.clipboard.readText === 'function');
 
         if (!canRead && !canReadText) {
-            term._showStatusPill('paste unavailable on this connection — use cmd+v / ctrl+v in the terminal', 'error');
+            openFallback(term);
             return;
         }
 
@@ -158,7 +195,7 @@
                         return;
                     }
                 }
-                term._showStatusPill('clipboard is empty', 'info');
+                report(term, 'clipboard is empty', 'info');
                 return;
             } catch (err) {
                 // Permission denied / unsupported MIME — fall through to
@@ -172,15 +209,33 @@
                 if (text) {
                     injectText(term, text);
                 } else {
-                    term._showStatusPill('clipboard is empty', 'info');
+                    report(term, 'clipboard is empty', 'info');
                 }
                 return;
             } catch (err) {
-                // Fall through to the blocked message below.
+                // Permission denied. Fall through to the fallback.
             }
         }
 
-        term._showStatusPill('paste blocked by browser — use cmd+v / ctrl+v in the terminal', 'error');
+        openFallback(term);
+    }
+
+    /**
+     * Hand the paste over to the user because the browser will not hand
+     * it to us. Passes injectText in so the fallback shares this file's
+     * injection path rather than growing a second one.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @returns {void}
+     */
+    function openFallback(term) {
+        if (window.PasteFallback && typeof window.PasteFallback.open === 'function') {
+            window.PasteFallback.open(term, injectText);
+            return;
+        }
+        report(term,
+            'paste unavailable on this connection - use cmd+v / ctrl+v in the terminal',
+            'error');
     }
 
     /**
@@ -188,23 +243,33 @@
      * frame via the existing Terminal#insertText() (the same send path
      * term.onData uses) so the server's >256B bracketed-paste heuristic
      * sees the whole paste as a single payload.
+     *
+     * THE ONLY INJECTION PATH. Both the secure-context read above and
+     * the paste fallback in paste-fallback.js land here, so bracketed
+     * paste and the single-frame send cannot diverge between them.
+     * Newlines are passed through untouched.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {string} text - the text to inject, newlines included.
+     * @returns {void}
      */
     function injectText(term, text) {
         if (!text) {
-            term._showStatusPill('clipboard is empty', 'info');
+            report(term, 'clipboard is empty', 'info');
             return;
         }
         if (!term.ws || term.ws.readyState !== WebSocket.OPEN) {
-            term._showStatusPill('terminal not connected', 'error');
+            report(term, 'terminal not connected', 'error');
             return;
         }
         term.insertText(text);
-        term._showStatusPill('pasted from clipboard', 'success');
+        report(term, 'pasted from clipboard', 'success');
     }
 
     window.ClipboardTools = {
         handleCopyChord,
         pasteFromClipboard,
         wireFileInput,
+        injectText,
     };
 })();

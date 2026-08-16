@@ -2673,9 +2673,27 @@ button[data-tooltip]:hover::after {
  * translateY (compositor-only — no layout thrash). Auto-dismissed by
  * the JS controller (3s info/success, 5s error).
  * ===================================================================== */
-.cloude-status-pill {
+/* THE ONE TOAST. Was .cloude-status-pill, built by terminal.js at
+ * `z-index: 70` - under the sticky header (1000), which sits in exactly
+ * this band, and under every overlay a menu row can open. So every
+ * caller reported invisibly. The element and this rule are now the same
+ * thing that fab-menu.js's notify() builds, and there is no second
+ * mechanism to drift.
+ *
+ * NO z-index HERE ON PURPOSE. fab-menu.js writes it inline from
+ * NOTICE_Z, because "above every chrome layer" is an invariant a test
+ * asserts against the other stylesheets, not a styling choice.
+ *
+ * BELOW THE HEADER, NOT OVER IT. Raising the stacking alone put the
+ * toast on top of the header title, and the kind backgrounds are
+ * deliberately 10% alpha (--color-danger-bg), so the title read
+ * straight through it and BOTH became unreadable - measured in the
+ * browser 2026-08-16. Being on top of the header is not the goal; not
+ * being hidden is. Clearing --header-h means it never argues with the
+ * title, while the stacking still beats every overlay a row can open. */
+.fab-menu-notice {
     position: fixed;
-    top: 16px;
+    top: calc(var(--header-h) + 12px);
     left: 50%;
     transform: translateX(-50%) translateY(-12px);
     padding: 8px 14px;
@@ -2689,25 +2707,24 @@ button[data-tooltip]:hover::after {
     opacity: 0;
     pointer-events: none;
     transition: opacity 200ms ease, transform 200ms ease;
-    z-index: 70;
     max-width: 80vw;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.cloude-status-pill.visible {
+.fab-menu-notice.visible {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
 }
 
-.cloude-status-pill[data-kind="error"] {
+.fab-menu-notice[data-kind="error"] {
     background: var(--color-danger-bg);
     color: var(--color-danger);
     border-color: var(--color-danger-border);
 }
 
-.cloude-status-pill[data-kind="success"] {
+.fab-menu-notice[data-kind="success"] {
     background: var(--color-accent-bg);
     color: var(--color-accent);
     border-color: var(--color-accent-border);

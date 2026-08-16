@@ -59,6 +59,9 @@
     <!-- The copy-output sheet those tools open. Split from
          terminal-tools.css at the 500-line limit; same load reasoning. -->
     <link rel="stylesheet" href="/static/css/copy-output.css" />
+    <!-- The paste fallback the "paste from clipboard" tool opens when the
+         origin is not a secure context. Same load reasoning again. -->
+    <link rel="stylesheet" href="/static/css/paste-fallback.css" />
     <!-- Stacked-modal chrome (scroll lock + what a COVERED modal looks
          like). Must load before the two config-editor stylesheets, which
          style the modals that stack. -->
@@ -464,6 +467,10 @@
          their rows call. terminal.js hands each of them the Terminal
          wrapper from _applyTerminalTools() / _applySessionEditor(). -->
     <script src="/static/js/fab-menu.js"></script>
+    <!-- The paste fallback. Called by clipboard.js at runtime only, so
+         the order between the two does not matter, but it must load
+         after fab-menu.js whose notify() it reports through. -->
+    <script src="/static/js/paste-fallback.js"></script>
     <script src="/static/js/terminal-tools-menu.js"></script>
     <script src="/static/js/session-editor-menu.js"></script>
 

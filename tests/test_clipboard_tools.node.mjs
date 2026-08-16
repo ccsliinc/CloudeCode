@@ -16,10 +16,16 @@
 // on a LAN host in real use, where `navigator.clipboard` is UNDEFINED
 // rather than permission-denied. Copy has an execCommand fallback for
 // that case; READING has none, because no browser offers a
-// non-secure-context clipboard read. So the insecure case is a DECLARED,
-// tested outcome - a status message pointing at the keyboard - and not
-// an accident. If someone ever "fixes" that branch into a silent no-op,
-// this suite fails.
+// non-secure-context clipboard read.
+//
+// What the insecure branch DOES was superseded 2026-08-16. It used to
+// report a message naming the keyboard path, which is honest but still
+// left the user with nothing to press - and on the desktop nobody even
+// saw it, because that message rendered under the sticky header. It now
+// opens the paste fallback (paste-fallback.js), which the user pastes
+// INTO. The old outcome is still asserted below as the degraded path
+// for a document that loaded clipboard.js without paste-fallback.js.
+// Full coverage of the fallback is tests/test_paste_fallback.node.mjs.
 //
 // Run with: node tests/test_clipboard_tools.node.mjs
 
@@ -114,6 +120,35 @@ function load(clipboard) {
     return { env, tools: env.window.ClipboardTools };
 }
 
+/**
+ * Load clipboard.js the way index.html actually serves it: with
+ * fab-menu.js and paste-fallback.js alongside. `load()` above
+ * deliberately omits both so the degraded path stays covered too.
+ *
+ * @param {object|undefined} clipboard  What `navigator.clipboard` is.
+ * @returns {{env: object, tools: object}}
+ */
+function loadShipped(clipboard) {
+    const env = createEnvironment({});
+    env.window.navigator = { clipboard };
+    env.window.WebSocket = { OPEN: 1 };
+    const sandbox = {
+        window: env.window,
+        document: env.document,
+        navigator: env.window.navigator,
+        WebSocket: env.window.WebSocket,
+        console: { log() {}, warn() {}, error() {} },
+        setTimeout: () => 0,
+        clearTimeout: () => {},
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(clientFile('js', 'fab-menu.js'), sandbox);
+    vm.runInContext(clientFile('js', 'paste-fallback.js'), sandbox);
+    vm.runInContext(clientFile('js', 'clipboard.js'), sandbox);
+    return { env, tools: env.window.ClipboardTools };
+}
+
 /** A clipboard item carrying one MIME type and one payload. */
 function item(types, payload) {
     return { types, getType: () => Promise.resolve(payload) };
@@ -123,11 +158,21 @@ function item(types, payload) {
 // PASTE, insecure origin - the state the app is actually deployed in
 // ---------------------------------------------------------------------
 
-test('INSECURE ORIGIN: paste cannot read, and SAYS SO instead of no-oping', async () => {
-    // Over plain http `navigator.clipboard` is undefined entirely. There
-    // is no fallback tier for READING - unlike copy, which has
-    // execCommand - so the honest outcome is a message pointing at the
-    // keyboard path, and that is what must happen.
+test('INSECURE ORIGIN: paste opens the fallback the user can paste into', async () => {
+    // The shipped wiring. Over plain http `navigator.clipboard` is
+    // undefined entirely and no browser offers a read tier, so the app
+    // stops asking the browser and gives the user a target instead.
+    const { env, tools } = loadShipped(undefined);
+    const term = makeTerm();
+    await tools.pasteFromClipboard(term);
+    assert.ok(env.document.getElementById('pasteFallback'),
+        'a message with nothing to press is still a dead tap');
+    assert.deepEqual(term.inserted, [], 'nothing reaches the terminal yet');
+});
+
+test('DEGRADED: without paste-fallback.js it still SAYS SO instead of no-oping', async () => {
+    // clipboard.js on its own, which is not how index.html serves it.
+    // Kept so the branch can never become a silent no-op.
     const { tools } = load(undefined);
     const term = makeTerm();
     await tools.pasteFromClipboard(term);
@@ -191,15 +236,17 @@ test('read() refusal falls through to readText rather than giving up', async () 
     assert.deepEqual(term.inserted, ['from the text tier']);
 });
 
-test('both tiers refused reports blocked, and injects nothing', async () => {
-    const { tools } = load({
+test('both tiers refused opens the fallback, and injects nothing', async () => {
+    // A secure origin where the user denied the permission lands here.
+    // Same answer as the insecure one: let them hand it over.
+    const { env, tools } = loadShipped({
         read: () => Promise.reject(new Error('no')),
         readText: () => Promise.reject(new Error('no'))
     });
     const term = makeTerm();
     await tools.pasteFromClipboard(term);
     assert.deepEqual(term.inserted, []);
-    assert.match(term.pills[0], /^error: paste blocked by browser/);
+    assert.ok(env.document.getElementById('pasteFallback'));
 });
 
 test('an empty clipboard is reported, not injected as an empty write', async () => {

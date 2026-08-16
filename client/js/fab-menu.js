@@ -21,12 +21,105 @@
  * ROWS ARE BUILT FRESH ON EVERY OPEN so a row that reflects live state
  * (the music opt-in) reports the current value rather than one captured
  * at wire time.
+ *
+ * FEEDBACK THAT CANNOT HIDE. A row that reports a result used to raise
+ * the terminal status pill, which is `position: fixed; top: 16px;
+ * z-index: 70`. Two things paint over it: the sticky app header
+ * (z-index 1000), which occupies exactly that top band, and any overlay
+ * a row opens (the copy sheet at 10000, either fab menu at 10001). So a
+ * row could report "paste unavailable on this connection" and the user
+ * would see nothing at all - which is what the paste row did over plain
+ * http. copy-output.js already grew its own in-sheet status line for the
+ * same reason; the lesson never reached the menu rows.
+ *
+ * notify() below is the fix, and it lives here rather than in any one
+ * caller so the next row added cannot reintroduce the bug. It paints at
+ * NOTICE_Z, declared in JS because the invariant "above every chrome
+ * layer" is what matters, not the number, and a test can only assert it
+ * where it is written once.
  */
 
 console.log('[FabMenu Module] Loading...');
 
 (function () {
     'use strict';
+
+    /**
+     * Stacking order for the shared notice, and the reason it is a
+     * constant in JS rather than only a CSS declaration: every other
+     * layer in the app is below it and a test asserts that, so the
+     * number has to be readable from one place.
+     *
+     * Above .fab-menu (10001), the copy sheet (10000), the paste
+     * fallback (10002) and the sticky header (1000).
+     *
+     * @type {number}
+     */
+    var NOTICE_Z = 10005;
+
+    /** How long a notice stays up, by kind, in milliseconds. */
+    var NOTICE_MS = { error: 5000, info: 3000, success: 3000 };
+
+    /** The live notice element, or null. Only ever one. */
+    var noticeEl = null;
+
+    /** Timer id for the pending auto-dismiss, or null. */
+    var noticeTimer = null;
+
+    /**
+     * Report a row's result somewhere the user can actually see it,
+     * whether or not the menu that owns the row is still open and
+     * whether or not the row opened an overlay of its own.
+     *
+     * Prefer this over the terminal status pill for ANY message raised
+     * from a menu row. The pill is fine for terminal-initiated messages
+     * (an upload finishing) because nothing is covering it then.
+     *
+     * @param {string} message - lowercase user-facing text.
+     * @param {string} [kind] - 'info' (default), 'success' or 'error'.
+     * @returns {HTMLElement|null} the notice, or null with no document.
+     */
+    function notify(message, kind) {
+        if (!message) return null;
+        var level = NOTICE_MS[kind] ? kind : 'info';
+
+        if (!noticeEl || !noticeEl.parentNode) {
+            noticeEl = document.createElement('div');
+            noticeEl.setAttribute('id', 'fabMenuNotice');
+            noticeEl.className = 'fab-menu-notice';
+            noticeEl.setAttribute('role', 'status');
+            noticeEl.setAttribute('aria-live', 'polite');
+            document.body.appendChild(noticeEl);
+        }
+        // Written inline as well as in the stylesheet. The stylesheet is
+        // the styling; this is the invariant, and it must hold even if a
+        // later rule forgets it.
+        noticeEl.style.zIndex = String(NOTICE_Z);
+        noticeEl.textContent = message;
+        noticeEl.setAttribute('data-kind', level);
+        noticeEl.classList.add('visible');
+
+        if (noticeTimer) clearTimeout(noticeTimer);
+        noticeTimer = setTimeout(function () {
+            noticeTimer = null;
+            if (noticeEl) noticeEl.classList.remove('visible');
+        }, NOTICE_MS[level]);
+        return noticeEl;
+    }
+
+    /**
+     * Take the notice down now, for a caller that has replaced it with
+     * feedback of its own (the paste fallback does this when it opens).
+     *
+     * @returns {void}
+     */
+    function dismissNotice() {
+        if (noticeTimer) {
+            clearTimeout(noticeTimer);
+            noticeTimer = null;
+        }
+        if (noticeEl) noticeEl.classList.remove('visible');
+    }
 
     /**
      * Build one 16x16 icon in the shared terminal-tool geometry.
@@ -62,7 +155,10 @@ console.log('[FabMenu Module] Loading...');
      * @param {string} spec.id - the row's stable id, read by the tests.
      * @param {SVGElement|null} spec.icon - a built icon, or null.
      * @param {string} spec.label - lowercase user-facing text.
-     * @param {Function} spec.onPick - invoked after the menu closes.
+     * @param {Function} spec.onPick - invoked after the menu closes, with
+     *   notify() as its only argument. Any result the row reports MUST
+     *   go through that rather than the terminal status pill, which the
+     *   header and every overlay paint over.
      * @param {Function} spec.close - the owning menu's close().
      * @returns {HTMLButtonElement}
      */
@@ -83,7 +179,7 @@ console.log('[FabMenu Module] Loading...');
         item.addEventListener('click', function (e) {
             e.stopPropagation();
             spec.close();
-            spec.onPick();
+            spec.onPick(notify);
         });
         return item;
     }
@@ -233,14 +329,18 @@ console.log('[FabMenu Module] Loading...');
             isOpen: isOpen,
             wire: wire,
             item: item,
-            trigger: trigger
+            trigger: trigger,
+            notify: notify
         };
         return controller;
     }
 
     window.FabMenu = {
         create: create,
-        buildIcon: buildIcon
+        buildIcon: buildIcon,
+        notify: notify,
+        dismissNotice: dismissNotice,
+        NOTICE_Z: NOTICE_Z
     };
 })();
 
