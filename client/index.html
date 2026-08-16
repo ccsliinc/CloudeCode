@@ -219,7 +219,7 @@
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
-         launchpad's "recent projects" section heading by launchpad.js
+         launchpad's "running sessions" section heading by launchpad.js
          (renderLaunchpadUI). The full-screen click-outside backdrop stays
          here at top-level so it can blanket the viewport when open. -->
     <div class="new-fab__backdrop" id="new-fab-backdrop" hidden></div>
@@ -369,7 +369,9 @@
          the explicit refit hook session-sidebar-pin.js calls. -->
     <!-- Shared anchored-popover placement. Must load BEFORE
          session-theme-menu.js and terminal-tools-menu.js, which both
-         call window.AnchorPopover.place(). -->
+         call window.AnchorPopover.place(). launchpad.js also calls it
+         (placeNewFabMenu) but loads earlier - that is fine, because the
+         call happens on a user tap, long after every script has run. -->
     <script src="/static/js/anchor-popover.js"></script>
     <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
          and terminal.js, both of which fit through

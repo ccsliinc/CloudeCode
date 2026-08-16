@@ -999,7 +999,7 @@ button[data-tooltip]:hover::after {
 }
 
 /* Heading row variant: text hugs left, inline action button hugs right.
- * Used by the "recent projects" section so the + speed-dial sits beside
+ * Used by the "running sessions" section so the + speed-dial sits beside
  * the heading instead of floating in the chrome. */
 .launchpad-section-title--row {
     display: flex;
@@ -2446,8 +2446,9 @@ button[data-tooltip]:hover::after {
 /* =====================================================================
  * New-action speed-dial FAB
  * ---------------------------------------------------------------------
- * Floating "+" anchored to the top-right of the viewport (visually
- * sitting just under the header's right edge). Tap to fan out 3
+ * Inline "+" sitting at the right end of the "running sessions" section
+ * heading row (NOT floating in the chrome, and NOT the "recent projects"
+ * heading - both of those descriptions are stale). Tap to fan out 6
  * sub-action buttons in a vertical column. All colors flow through
  * theme tokens so every theme retints automatically. All animations
  * use transform + opacity ONLY (GPU compositor) — no layout thrash.
@@ -2545,10 +2546,31 @@ button[data-tooltip]:hover::after {
 }
 
 /* ---- Menu (vertical fan-out column) -------------------------------- */
+/* FIXED, NOT ABSOLUTE, AND WHY. This used to be `position: absolute;
+ * top: 44px; right: 0`, which pinned the column BELOW the trigger
+ * unconditionally and left it a descendant of `.launchpad-scroll`
+ * (client/css/home-bar.css) - a real `overflow-y: auto` box. So whenever
+ * the heading sat low in the viewport the ~318px column was CLIPPED by
+ * the scroller instead of flipping above the trigger. The home bar did
+ * not cause that, it only moved the clip point up by the bar's height
+ * (36px, 44px on a coarse pointer) and made it easy to hit.
+ *
+ * `position: fixed` takes the menu out of the scroller's clip entirely
+ * (no ancestor here establishes a containing block via transform /
+ * filter / will-change, so fixed really is viewport-relative), and
+ * client/js/anchor-popover.js supplies left/top: above the anchor by
+ * default, below only when there is no room above, clamped into the
+ * VISUAL viewport either way. Same primitive the two terminal FAB menus
+ * use via client/js/fab-menu.js.
+ *
+ * left/top here are only the pre-measurement values. Launchpad.openNewFab()
+ * overwrites both before the menu becomes visible. Do NOT put `right: 0`
+ * back: AnchorPopover writes `left`, and a competing `right` would
+ * stretch the box and destroy the shared right edge below. */
 .new-fab__menu {
-    position: absolute;
-    top: 44px;              /* trigger height (36) + 8px gap */
-    right: 0;
+    position: fixed;
+    top: 0;
+    left: 0;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -2721,7 +2743,11 @@ button[data-tooltip]:hover::after {
 /* ---- Mobile tweaks ------------------------------------------------- */
 @media (max-width: 600px) {
     .new-fab__trigger { width: 34px; height: 34px; }
-    .new-fab__menu { top: 42px; gap: 8px; }
+    /* `top` is JS-owned now (see the placement note on .new-fab__menu);
+     * this rule used to also set `top: 42px`, which is exactly the value
+     * that pinned the column below the trigger and let the scroller clip
+     * it. Only the gap is a phone concern. */
+    .new-fab__menu { gap: 8px; }
     /* Height deliberately NOT shrunk. The label gets smaller on a phone;
      * the touch target must not. This rule used to set 38px, which put
      * the launchpad's primary actions under the 44px minimum on the only
