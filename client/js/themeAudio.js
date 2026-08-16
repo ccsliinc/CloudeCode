@@ -7,10 +7,14 @@
  *
  * Manifest shape (optional, per theme.json):
  *   "audio": {
- *     "src":     "https://github.com/.../releases/download/theme-music-v1/<id>.mp3",
+ *     "src":     "/static/assets/audio/<slug>.ogg",
  *     "volume":  0.3,      // 0..1 target gain after fade-in
  *     "fadeMs":  1500      // crossfade duration in ms
  *   }
+ *
+ * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
+ * falls back to `default-src 'self'` and any remote URL is blocked outright.
+ * Bundled clips live in client/assets/audio/ and are served from /static.
  *
  * Public surface (singleton on window.ThemeAudio):
  *   init()                       — call once on app load
@@ -27,13 +31,15 @@
  *   Primary path uses Web Audio via MediaElementAudioSourceNode → GainNode → ctx.destination.
  *   This gives clean linearRampToValueAtTime crossfades between themes.
  *
- *   PROBLEM: <audio crossorigin="anonymous" src="<github-release-url>"> piped
- *   through createMediaElementSource() can taint or CORS-fail because GitHub's
- *   release-download URL is a 302 to a non-CORS-friendly origin. When that
- *   happens we silently fall back to bare HTMLAudioElement mode and drive
- *   volume ramps with requestAnimationFrame instead of GainNode automation.
- *   The user-facing behavior is identical; only the precision of the fade
- *   curve differs (still sub-perceptible).
+ *   Bundled clips are same-origin (/static/...), so createMediaElementSource()
+ *   neither taints nor CORS-fails on them and the GainNode path is the one
+ *   that actually runs. The requestAnimationFrame fallback below is retained
+ *   for the case where AudioContext construction itself fails (older WebKit,
+ *   or an AudioContext exhausted by another tab). User-facing behavior is
+ *   identical; only the precision of the fade curve differs.
+ *
+ *   Historical note: an earlier draft of this file pointed `src` at a GitHub
+ *   release URL. That would never have worked — see the CSP note above.
  *
  *   GAPLESS LOOP CAVEAT: HTMLAudioElement `loop = true` still has audible gaps
  *   on Chromium/WebKit/Gecko in 2026. For v0.7.0 the gap is acceptable for

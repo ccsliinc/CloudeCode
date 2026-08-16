@@ -96,5 +96,10 @@
     "brightMagenta": "#FF55D5",
     "brightCyan": "#66FFEE",
     "brightWhite": "#ffffff"
+  },
+  "audio": {
+    "src": "/static/assets/audio/dungeon-ambience.ogg",
+    "volume": 0.28,
+    "fadeMs": 2500
   }
 }

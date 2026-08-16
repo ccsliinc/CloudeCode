@@ -98,5 +98,10 @@
     "brightWhite": "#fff5e0"
   },
   "themeCss": "theme.css",
-  "effects": "effects.js"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/cyber-city.ogg",
+    "volume": 0.2,
+    "fadeMs": 2000
+  }
 }

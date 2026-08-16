@@ -96,5 +96,10 @@
     "brightMagenta": "#8A5CD4",
     "brightCyan": "#5CE0D0",
     "brightWhite": "#FFFFFF"
+  },
+  "audio": {
+    "src": "/static/assets/audio/dead-ship.ogg",
+    "volume": 0.22,
+    "fadeMs": 1500
   }
 }

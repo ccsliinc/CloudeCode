@@ -91,5 +91,10 @@
     "brightCyan": "#88ccdd",
     "brightWhite": "#ffe699"
   },
-  "themeCss": "theme.css"
+  "themeCss": "theme.css",
+  "audio": {
+    "src": "/static/assets/audio/out-there.ogg",
+    "volume": 0.22,
+    "fadeMs": 1500
+  }
 }

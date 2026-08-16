@@ -96,5 +96,10 @@
     "brightMagenta": "#FF00FF",
     "brightCyan": "#00FFFF",
     "brightWhite": "#FFFFFF"
+  },
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.28,
+    "fadeMs": 2500
   }
 }

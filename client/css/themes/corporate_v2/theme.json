@@ -41,5 +41,10 @@
     "brightMagenta": "#c084fc",
     "brightCyan": "#22d3ee",
     "brightWhite": "#fafafa"
+  },
+  "audio": {
+    "src": "/static/assets/audio/cyber-city.ogg",
+    "volume": 0.2,
+    "fadeMs": 2000
   }
 }

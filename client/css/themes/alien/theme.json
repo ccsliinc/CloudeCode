@@ -91,5 +91,10 @@
     "brightCyan": "#ccffee",
     "brightWhite": "#ccffd0"
   },
-  "themeCss": "theme.css"
+  "themeCss": "theme.css",
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.28,
+    "fadeMs": 2500
+  }
 }

@@ -96,5 +96,10 @@
     "brightMagenta": "#9E4F9E",
     "brightCyan": "#F0A028",
     "brightWhite": "#FFFFFF"
+  },
+  "audio": {
+    "src": "/static/assets/audio/out-there.ogg",
+    "volume": 0.22,
+    "fadeMs": 1500
   }
 }
