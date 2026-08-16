@@ -2,6 +2,7 @@
 
 import os
 import json
+import mimetypes
 import structlog
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -384,6 +385,25 @@ class NoCacheStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
+
+# Pin .m4a to audio/mp4 BEFORE any StaticFiles mount is constructed.
+#
+# Python's mimetypes table maps .m4a to `audio/mp4a-latm`, and Starlette's
+# FileResponse takes the served Content-Type straight from that table. But
+# `audio/mp4a-latm` (RFC 6416) names raw MPEG-4 audio in LATM/LOAS transport
+# syntax - a bare elementary stream with NO container. Our theme beds are the
+# opposite thing: `file` reports "ISO Media, Apple iTunes ALAC/AAC-LC (.M4A)"
+# and the header opens with an `ftyp M4A isomiso2` box, i.e. an MP4 container,
+# whose registered type is `audio/mp4` (RFC 4337).
+#
+# This is not a cosmetic label. Every response here carries
+# `X-Content-Type-Options: nosniff` (see csp_headers), which explicitly
+# FORBIDS the browser from correcting a wrong Content-Type by sniffing the
+# bytes. So a browser that does not recognise `audio/mp4a-latm` as a
+# decodable type has no fallback left and simply refuses the file. The
+# hardening header and the bad type combine into a failure neither one
+# would cause alone.
+mimetypes.add_type("audio/mp4", ".m4a")
 
 app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static")
 
