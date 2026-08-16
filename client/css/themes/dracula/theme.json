@@ -1,11 +1,11 @@
 {
   "id": "dracula",
   "name": "Dracula",
-  "description": "The canonical dev theme by Zeno Rocha — high-contrast saturated accents on flat dark.",
+  "description": "The canonical dev theme by Zeno Rocha \u2014 high-contrast saturated accents on flat dark.",
   "author": "Cloude Code (palette by Zeno Rocha)",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#282a36",
     "--color-bg-page": "#1e1f29",
     "--color-bg-elevated": "#44475a",

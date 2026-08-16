@@ -1,11 +1,11 @@
 {
   "id": "jagermeister",
-  "name": "Jägermeister",
+  "name": "J\u00e4germeister",
   "description": "Forest-bottle green + heritage orange. 1878 ritual gravitas.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#0E2A1A",
     "--color-bg-page": "#081f12",
     "--color-bg-elevated": "#1A5632",

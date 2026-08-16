@@ -288,18 +288,22 @@ logger.info("CORS allowed origins", origins=settings.allowed_origins)
 # Policy rationale for a local / LAN-only SPA:
 # - `default-src 'self'` — lock everything to same-origin by default.
 # - `script-src 'self'` — no inline or eval; all JS ships from /static.
-#   xterm.js is loaded from a CDN in index.html; if that stays, we will
-#   need to allow that CDN host here. The current policy will log CSP
-#   violations for CDN-hosted xterm until we self-host it (Item 14 follow-up).
+#   xterm.js and its addons used to load from cdn.jsdelivr.net; they are
+#   now vendored under client/vendor/xterm/ (see that dir's VERSION.md)
+#   and served same-origin, so the CDN host is no longer needed here.
 # - `style-src 'self' 'unsafe-inline'` — xterm addons (webgl, fit) inject
 #   inline style attributes on DOM nodes they manage. Without
 #   `'unsafe-inline'` the terminal renders blank. This is the smallest
-#   concession that keeps the terminal usable.
+#   concession that keeps the terminal usable. cdn.jsdelivr.net dropped
+#   here too now that xterm.css is vendored same-origin.
 # - `connect-src 'self' ws: wss:` — WebSocket terminal stream runs on
 #   the same origin; allow ws:/wss: so future tunnels (Cloudflare named)
 #   with a different scheme can still connect.
 # - `img-src 'self' data:` — data: URIs are used for QR codes / emoji SVGs.
-# - `font-src 'self' data:` — xterm embeds icon fonts as data: URIs.
+# - `font-src 'self' data:` — xterm embeds icon fonts as data: URIs. This
+#   never actually needed cdn.jsdelivr.net (xterm.css references no
+#   remote font URL), so nothing changes here beyond the comment being
+#   made honest.
 # - `frame-ancestors 'none'` — clickjack defense; Cloude Code is never
 #   meant to be iframed.
 @app.middleware("http")
@@ -308,11 +312,11 @@ async def csp_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self' ws: wss:; "
         "img-src 'self' data:; "
-        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "font-src 'self' data:; "
         "frame-ancestors 'none';"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"

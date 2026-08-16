@@ -746,6 +746,13 @@ class WSMessageType(str, Enum):
     # and ``document.title``. Dot notation matches ``toast.*`` for namespace
     # consistency in client switch statements.
     SESSION_RENAMED = "session.renamed"
+    # fix/multiclient-tmux-size — server -> client, sent after the server
+    # applies a negotiated (possibly smaller-than-requested) terminal size
+    # to a session with more than one attached client. Lets a client tell
+    # that it is being letterboxed for another client's benefit, rather
+    # than silently wondering why the pane is smaller than its own
+    # viewport. See src/core/terminal_size.py for the negotiation rule.
+    TERMINAL_SIZE = "terminal_size"
 
 
 class Toast(BaseModel):

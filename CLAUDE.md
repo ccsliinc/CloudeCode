@@ -63,23 +63,36 @@ half. Never increment without a floor, never assume a `Stop` follows the
 `UserPromptSubmit` you saw.
 
 **Security posture.** CSP is stamped on every response by the middleware in
-`src/main.py` (header built at `src/main.py:309-317`). The baseline is
-`default-src 'self'` with `frame-ancestors 'none'`, but the CDN exception is
-wider than one directive: `https://cdn.jsdelivr.net` is allowed in **three** of
-them, `script-src` (`:311`), `style-src` (`:312`) and `font-src` (`:315`). That
-is where xterm.js 5.3.0 and its fit / webgl / unicode11 addons are still loaded
-from in `client/index.html`. `style-src` also carries `'unsafe-inline'`: xterm
-addons set inline style attributes on nodes they manage, and without it the
-terminal renders blank. Inline **styles** are therefore already permitted; inline
-**script** and `eval` are not. All of this is debt, not a pattern to copy.
+`src/main.py`. As of 2026-08-16 there is **no third-party origin in any
+directive**: the baseline is `default-src 'self'` with `frame-ancestors 'none'`,
+and `https://cdn.jsdelivr.net` has been removed from `script-src`, `style-src`
+and `font-src`. It used to sit in all three because xterm.js 5.3.0, its CSS and
+its fit / webgl / unicode11 addons loaded straight from the CDN in
+`client/index.html`. They are now vendored under `client/vendor/xterm/`.
+`style-src` still carries `'unsafe-inline'` and must keep it: xterm addons set
+inline style attributes on nodes they manage, and the terminal renders blank
+without it. Inline **styles** are therefore permitted; inline **script** and
+`eval` are not.
+
+**Why the CDN removal was a correctness fix, not only hardening.** A remote
+xterm asset is one content blocker away from breaking the terminal for
+everybody. Brave Shields on a phone dropped enough of it that xterm ran but
+`xterm.css` did not apply, so the character cell was measured wrong, `FitAddon`
+derived a bogus cols/rows from it, and `sendResize` reflowed the real tmux pane
+to a grid matching nothing on screen. The symptom was a terminal that rendered
+garbage on the device while the desktop and the desktop mobile emulator both
+looked perfect, which is exactly what you would least suspect a CDN of. Nothing
+the terminal needs may be loaded off-origin again. `tests/test_no_remote_assets.py`
+fails the build if a third-party URL reappears in `client/index.html`.
 
 New third-party libraries get **vendored** under `client/vendor/<lib>/` and
-served from `/static`, with a `VERSION.md` beside the files recording version and
-upstream source. CodeMirror 6 is the worked example; it lands with the
-config-editor work, so `client/vendor/` may not exist yet in the tree you have.
-Do not add a host to the CSP, do not weaken `frame-ancestors 'none'`, do not
-introduce inline script or `eval`, and do not read `style-src 'unsafe-inline'`
-as license to widen anything further.
+served from `/static`, with a `VERSION.md` beside the files recording version,
+upstream source URL and sha256, plus a refresh script under
+`scripts/<lib>-vendor/`. CodeMirror 6 and xterm are the worked examples
+(`scripts/xterm-vendor/fetch.sh` re-downloads the pinned versions and hard-fails
+on a hash mismatch). Do not add a host to the CSP, do not weaken
+`frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
+read `style-src 'unsafe-inline'` as license to widen anything further.
 
 **Config writes are atomic and backed up.** Copy the pattern in
 `Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the

@@ -185,7 +185,12 @@ class Terminal {
         this.term = new XTerminal({
             cursorBlink: true,
             fontSize: 14,
-            fontFamily: '"SF Mono", monospace',
+            // Must stay in sync with --font-mono in styles.css. "SF Mono"
+            // by literal name does not resolve on iOS (all iOS browsers are
+            // WebKit), so it fell through to generic `monospace` and xterm
+            // measured a different face than the desktop did. `ui-monospace`
+            // is the portable way to name the platform monospace face.
+            fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Mono", "Roboto Mono", "Courier New", monospace',
             fontWeight: 'normal',
             fontWeightBold: 'bold',
             allowTransparency: false,
@@ -1045,7 +1050,12 @@ class Terminal {
      * Wait for fonts and layout to be ready
      */
     async waitForFontsAndLayout(container) {
-        if (document.fonts?.ready) {
+        // TerminalMetrics.waitForFonts bounds the wait so a font that never
+        // resolves cannot hang the terminal forever. See that module for why
+        // document.fonts.ready alone is a weaker guarantee than it looks.
+        if (window.TerminalMetrics?.waitForFonts) {
+            await window.TerminalMetrics.waitForFonts();
+        } else if (document.fonts?.ready) {
             try { await document.fonts.ready; } catch {}
         }
         const t0 = performance.now();
@@ -1077,10 +1087,23 @@ class Terminal {
         const container = document.getElementById('terminal');
         await this.waitForFontsAndLayout(container);
 
-        // Fit terminal with multiple attempts to ensure proper sizing
-        this.fitAddon.fit();
+        // Fit terminal with multiple attempts to ensure proper sizing.
+        // Both attempts go through the measurement guard so a fit taken
+        // before xterm.css applied cannot set a bogus grid.
+        const fitOnce = () => {
+            if (window.TerminalMetrics?.guardedFit) {
+                const r = window.TerminalMetrics.guardedFit(this);
+                if (!r.fitted) {
+                    console.warn(`Terminal: initial fit skipped, reason=${r.reason}`);
+                }
+                return r.fitted;
+            }
+            this.fitAddon.fit();
+            return true;
+        };
+        fitOnce();
         await new Promise(resolve => setTimeout(resolve, 50));
-        this.fitAddon.fit();
+        fitOnce();
 
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
 

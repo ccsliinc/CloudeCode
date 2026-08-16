@@ -1,11 +1,11 @@
 {
   "id": "lovecraft",
   "name": "HP Lovecraft",
-  "description": "Abyssal teal, sickly green, blood-violet — cosmic horror palette.",
+  "description": "Abyssal teal, sickly green, blood-violet \u2014 cosmic horror palette.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#080f12",
     "--color-bg-page": "#04080a",
     "--color-bg-elevated": "#10181d",
