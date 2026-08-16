@@ -1790,6 +1790,22 @@ button[data-tooltip]:hover::after {
     transform: translateX(4px);
 }
 
+/* overflow-wrap is LOAD-BEARING. Command descriptions come from scraped
+ * docs and user-authored skill frontmatter, and some contain a single
+ * unbreakable token - a filesystem path, a URL, a hostname. With the
+ * default `overflow-wrap: normal` such a token never breaks: measured at
+ * 375px, `~/Development/.../config/servers.yaml.` rendered 491.3px inside a
+ * 234.3px line box, which pushed `.modal-body` (overflow-x: auto) to
+ * scrollWidth 520 against clientWidth 292. That 228px of slack is what made
+ * the whole list slide left and right while scrolling vertically. Breaking
+ * inside the token keeps every row inside the container. */
+.command-name,
+.command-description {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .command-name {
     color: var(--color-accent);
     font-family: var(--font-mono);
@@ -1801,6 +1817,42 @@ button[data-tooltip]:hover::after {
     color: var(--color-fg-muted);
     font-size: 0.85rem;
     line-height: 1.4;
+}
+
+/* A flex item defaults to min-width: auto (its min-content width), so a
+ * wide child would still be able to push these containers past the
+ * viewport even after the wrapping fix above. Belt and braces: the list
+ * can never be wider than the modal body that scrolls it. */
+.all-commands-list,
+.command-category,
+.command-item {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* The "more"/"less" control that reveals a truncated description in place.
+ * A phone has no hover, so the full text has to be reachable by a tap;
+ * a title attribute would be a control the user can never see. */
+.command-more {
+    width: auto;
+    height: auto;
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-pill, 999px);
+    color: var(--color-fg-subtle);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+
+.command-more:hover,
+.command-more:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    outline: none;
 }
 
 /* Live-filter input (Task 4) — sits above the all-commands list, inside

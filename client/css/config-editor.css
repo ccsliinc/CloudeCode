@@ -51,6 +51,72 @@
     letter-spacing: 0.3px;
 }
 
+/* "+ new file" - sits between the title and the close control. Declares
+ * width/height for the bare-`button` reason documented on the tree rows
+ * below; `margin-left: auto` pushes it and the close button to the right
+ * of the flex header while the title stays left. */
+.config-editor-new {
+    width: auto;
+    height: auto;
+    min-height: 30px;
+    margin-left: auto;
+    margin-right: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.config-editor-new:hover,
+.config-editor-new:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+/* New-file prompt: the root select, the path input, and the inline error.
+ * Reuses .modal-overlay / .modal-btn from styles.css for the chrome. */
+.config-editor-new-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+
+.config-editor-new-form label {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+}
+
+.config-editor-new-form select,
+.config-editor-new-form input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    padding: 8px 10px;
+}
+
+.config-editor-new-hint {
+    color: var(--color-fg-subtle);
+    font-size: 0.75rem;
+}
+
+.config-editor-new-form select:focus,
+.config-editor-new-form input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
 #config-editor-close {
     display: inline-flex;
     align-items: center;
@@ -148,6 +214,12 @@
     justify-content: flex-start;
     gap: 6px;
     width: 100%;
+    /* Explicit, for the same reason as .config-editor-mode-toggle button in
+     * config-editor-modal.css: the bare `button` reset in styles.css pins
+     * height to 36px (40px under @media max-width 480px), and min-height
+     * cannot raise a declared height. Without this a row is a fixed 40px
+     * box regardless of its content. */
+    height: auto;
     padding: 7px 6px;
     border: none;
     background: transparent;

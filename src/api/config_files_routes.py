@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 import structlog
 
 from src.api.auth import require_auth
-from src.core import config_files
+from src.core import config_files, config_files_create
 
 logger = structlog.get_logger()
 
@@ -50,6 +50,29 @@ class ConfigFileWriteRequest(BaseModel):
     project_path: Optional[str] = None
     acknowledge_executable: bool = False
     acknowledge_sensitive: bool = False
+
+
+class ConfigFileCreateRequest(BaseModel):
+    """Body for POST /config-files/create.
+
+    Same fields as ConfigFileWriteRequest, with ``content`` defaulting to
+    empty so "make me an empty file" needs no body gymnastics. ``path``
+    names a file that must NOT already exist; its parent directory must.
+    """
+    root: str
+    path: str
+    content: str = ""
+    project_path: Optional[str] = None
+    acknowledge_executable: bool = False
+    acknowledge_sensitive: bool = False
+
+
+class ConfigFileCreateResponse(BaseModel):
+    ok: bool = True
+    created: bool
+    rel_path: str
+    is_executable: bool
+    is_sensitive: bool
 
 
 class ConfigFileTreeResponse(BaseModel):
@@ -159,3 +182,43 @@ async def write_config_file(body: ConfigFileWriteRequest):
         logger.warning("config_files_write_rejected", root=body.root, path=body.path, error=str(exc))
         raise HTTPException(status_code=400, detail=str(exc))
     return ConfigFileWriteResponse(**result)
+
+
+@router.post("/create", response_model=ConfigFileCreateResponse, dependencies=[Depends(require_auth)])
+async def create_config_file(body: ConfigFileCreateRequest):
+    """
+    Description: create one NEW file under a browsable root. Refuses to
+      overwrite anything that already exists at that path; requires the
+      parent directory to exist (this endpoint never creates directories);
+      validates JSON for a .json name; and applies the same executable /
+      sensitive acknowledgement gates and the same read-only-root refusal
+      as /write. Path safety is the SAME guard as every other endpoint
+      here - config_files.resolve_safe_path, reached through
+      config_files_create.create_file. Never logs ``body.content``.
+    Inputs: body (ConfigFileCreateRequest).
+    Output: ConfigFileCreateResponse.
+    Raises: HTTPException(400) - any rejection from
+      config_files_create.create_file (traversal, absolute path, existing
+      name, missing parent, read-only root, malformed JSON, missing
+      acknowledgement), translated from config_files.ConfigFileError.
+    """
+    logger.info(
+        "config_files_create_request",
+        root=body.root,
+        path=body.path,
+        acknowledge_executable=body.acknowledge_executable,
+        acknowledge_sensitive=body.acknowledge_sensitive,
+    )
+    try:
+        result = config_files_create.create_file(
+            root_id=body.root,
+            rel_path=body.path,
+            content=body.content,
+            project_path=body.project_path,
+            acknowledge_executable=body.acknowledge_executable,
+            acknowledge_sensitive=body.acknowledge_sensitive,
+        )
+    except config_files.ConfigFileError as exc:
+        logger.warning("config_files_create_rejected", root=body.root, path=body.path, error=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+    return ConfigFileCreateResponse(**result)
