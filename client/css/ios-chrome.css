@@ -57,6 +57,43 @@ html {
     padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* THE HOME SCREEN IS EXCLUDED FROM THE RULE ABOVE, BY NAME.
+ *
+ * It carries a bottom bar (client/css/home-bar.css) that reaches both
+ * side edges and the bottom edge. Padding the SCREEN would park the bar
+ * one inset up from the bottom with a strip of bare page background
+ * underneath it, which reads as a rendering fault. The bar takes the
+ * inset itself, below, so its own background paints down over the
+ * home-indicator strip while its contents stay above it.
+ *
+ * An id beats the `.screen` class, so no !important and no ordering
+ * dependency. Same shape as the `:not(.session-editor-fab)` exclusion
+ * further down: an element that owns its own inset says so here rather
+ * than silently taking the generic one as well. */
+#launchpad-screen {
+    padding-bottom: 0;
+}
+
+/* The bar's inset. home-bar.css defaults --home-bar-inset to 0px and does
+ * all of its box arithmetic against the token, so this one declaration is
+ * the whole standalone story - and this file stays the ONE place in the
+ * app that reads env(safe-area-inset-*).
+ *
+ * IT CANNOT BE JUDGED FROM A BROWSER TAB. env(safe-area-inset-bottom) is
+ * 0 in Safari browser mode and only becomes non-zero once the app is
+ * installed to the Home Screen, so this rule is invisible until then. To
+ * verify the geometry without installing, override the token from
+ * devtools - `document.documentElement.style.setProperty(
+ * '--home-bar-inset', '34px')` - and the bar must grow by exactly 34px
+ * downward while every item inside it stays where it was. That override
+ * is why the token is redefined on :root and NOT on .home-bar: an inline
+ * style on the root element beats a stylesheet rule on :root, but a
+ * stylesheet rule on the closer .home-bar would shadow it and the
+ * simulation would silently do nothing. */
+:root {
+    --home-bar-inset: env(safe-area-inset-bottom);
+}
+
 /* Floating controls are positioned against the viewport edge, so each one
  * needs the bottom inset added to its own offset or it sits under the
  * home indicator. Values mirror the base offsets in styles.css.
