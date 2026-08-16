@@ -47,6 +47,28 @@
  *     `clipboardData.setData`, so what lands on the clipboard cannot
  *     drift from what was asked for and a copy event that never fires is
  *     DETECTABLE. Success is reported only when that listener ran.
+ *
+ * SECOND MEASURED FAILURE, real iOS Safari 26.1 over an insecure origin,
+ * 2026-08-16. That fix passes in Chromium and still reported success on
+ * iOS while the clipboard came back EMPTY from `xcrun simctl pbpaste` -
+ * and it wiped a sentinel that was already there, so a copy genuinely
+ * ran and carried nothing. A passing Chromium test is not evidence for
+ * WebKit. The two holes it left, both now closed in copyViaExecCommand:
+ *   - `setData` returns nothing, so "it was honoured" was an assumption.
+ *     It is now READ BACK off the event, and `preventDefault` is called
+ *     only on a match, so a no-op write falls through to the native
+ *     selection copy instead of suppressing it.
+ *   - the copy event firing was treated as proof that something was
+ *     copied. It only proves the browser acted. Success now requires
+ *     one of the two delivery routes to be PROVEN: the injected write
+ *     read back matching, or a selection that held exactly the text.
+ *
+ * Measured the same session, and worth knowing because it kills the
+ * obvious over-correction: WebKit fires the copy event and honours
+ * `setData` even with NOTHING selected (execCommand true, one event,
+ * readback matched, full value on the pasteboard). So an empty selection
+ * is not by itself a failure on iOS, and refusing to issue the command
+ * without one would discard the only route that works there.
  */
 (function () {
     'use strict';
@@ -92,7 +114,8 @@
      * give it focus, which is what makes the browser fire a copy event.
      *
      * @param {HTMLElement} el - an element with real text children.
-     * @returns {boolean} true when a non-empty selection resulted.
+     * @returns {string} what the document selection actually holds
+     *   afterwards, '' when no selection could be made.
      */
     function selectAll(el) {
         if (typeof el.focus === 'function') {
@@ -103,12 +126,40 @@
             }
         }
         var sel = window.getSelection ? window.getSelection() : null;
-        if (!sel || typeof document.createRange !== 'function') return false;
+        if (!sel || typeof document.createRange !== 'function') return '';
         var range = document.createRange();
         range.selectNodeContents(el);
         sel.removeAllRanges();
         sel.addRange(range);
-        return sel.toString().length > 0;
+        return sel.toString();
+    }
+
+    /**
+     * Write the text into a copy event and PROVE it took.
+     *
+     * `setData` has no return value, so the only way to know it was
+     * honoured is to read the same slot back off the event. When the
+     * readback does not match, `preventDefault` is deliberately NOT
+     * called, so the browser falls through to copying the live selection,
+     * which the caller has already verified is exactly this text.
+     *
+     * @param {ClipboardEvent} e - the in-flight copy event.
+     * @param {string} text - the exact text to place on the clipboard.
+     * @returns {boolean} true only when the readback matched.
+     */
+    function writeAndVerify(e, text) {
+        var data = e.clipboardData;
+        if (!data || typeof data.setData !== 'function') return false;
+        try {
+            data.setData('text/plain', text);
+            if (typeof data.getData !== 'function') return false;
+            if (data.getData('text/plain') !== text) return false;
+        } catch (err) {
+            console.warn('CopyCompat: clipboardData write failed', err);
+            return false;
+        }
+        e.preventDefault();
+        return true;
     }
 
     /**
@@ -118,33 +169,56 @@
      * execCommand's return value on its own - see the header comment for
      * the measured case where it returned true having copied nothing.
      *
+     * A copy lands on the clipboard by exactly one of TWO routes, and
+     * success is claimed only when one of them is PROVEN:
+     *
+     *   INJECTED - `clipboardData.setData` took, proven by reading the
+     *     same slot back off the event, and `preventDefault` was
+     *     therefore called so the injected value is what gets written.
+     *   NATIVE - the event ran to its default and the browser copied the
+     *     live selection, which is only correct when that selection held
+     *     exactly this text.
+     *
+     * `preventDefault` is the hinge and it is deliberately conditional.
+     * `setData` returns nothing, so the old code assumed it worked and
+     * suppressed the default regardless. Measured on real iOS Safari
+     * 26.1 over an insecure origin, 2026-08-16: that combination wiped a
+     * sentinel already on the clipboard, left it EMPTY, and reported
+     * success. Now a write that cannot be read back leaves the default
+     * alone, so the native route still delivers the same string.
+     *
+     * Neither route proven means the function returns false and the
+     * caller shows the honest long-press fallback. It never claims a
+     * copy it did not witness.
+     *
+     * The empty-selection case is NOT pre-refused, because WebKit still
+     * fires the event and still honours `setData` with nothing selected
+     * (measured, same session), and refusing would throw away the one
+     * route that works there.
+     *
      * @param {string} text - the exact text to place on the clipboard.
-     * @returns {boolean} true only when a copy event actually fired and
-     *   carried this text.
+     * @returns {boolean} true only when the injected write was read back
+     *   matching, or the copied selection was exactly this text.
      */
     function copyViaExecCommand(text) {
         var el = makeCopySource(text);
-        var wrote = false;
+        var fired = false;
+        var injected = false;
 
         /**
-         * @param {ClipboardEvent} e
+         * @param {ClipboardEvent} e - the in-flight copy event.
          * @returns {void}
          */
         function onCopy(e) {
-            if (e.clipboardData && typeof e.clipboardData.setData === 'function') {
-                e.clipboardData.setData('text/plain', text);
-                e.preventDefault();
-            }
-            // Even without clipboardData the selection IS the text, so
-            // the native copy is correct. Either way the event proves the
-            // browser acted on our selection.
-            wrote = true;
+            fired = true;
+            injected = writeAndVerify(e, text);
         }
 
         var reported = false;
+        var selected = '';
         document.addEventListener('copy', onCopy, true);
         try {
-            selectAll(el);
+            selected = selectAll(el);
             reported = document.execCommand('copy');
         } catch (err) {
             console.warn('CopyCompat: execCommand copy threw', err);
@@ -155,7 +229,12 @@
             if (sel) sel.removeAllRanges();
             el.remove();
         }
-        return !!(reported && wrote);
+        var proven = injected || selected === text;
+        if (reported && fired && !proven) {
+            console.warn('CopyCompat: copy ran unproven, selection held ' +
+                selected.length + ' chars, wanted ' + text.length);
+        }
+        return !!(reported && fired && proven);
     }
 
     /**
