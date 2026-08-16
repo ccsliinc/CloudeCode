@@ -26,8 +26,27 @@
  *   3. neither worked -> resolve `manual`, and the caller shows the text
  *      preselected so the user can copy with the OS long-press menu.
  *
- * Tier 2 uses a contenteditable textarea and an explicit Range because
- * iOS Safari ignores `select()` on a readonly textarea.
+ * Tier 2 selects a contenteditable DIV holding a real text node.
+ *
+ * MEASURED FAILURE, real browser, 2026-08-16. The first version used a
+ * textarea whose value was assigned through `.value`. Such a textarea has
+ * NO child nodes, so `Range.selectNodeContents()` over it yields an EMPTY
+ * range, and nothing was ever focused. That did not error: the `copy`
+ * event fired with `getSelection().toString() === ''` and
+ * `document.activeElement` still the chip button, `execCommand('copy')`
+ * returned TRUE, the browser faithfully copied nothing, and the caller
+ * announced "copied". A false success is worse than a dead end - the user
+ * taps, is told it worked, and pastes an empty clipboard. That is the
+ * "clicking it does nothing" report.
+ *
+ * Two things retire that whole class:
+ *   - a focused selection over a real text node, so the copy event fires
+ *     at all (iOS also honors this, unlike `select()` on a readonly
+ *     input, which was the original reason for the Range);
+ *   - a one-shot `copy` listener writing the exact string through
+ *     `clipboardData.setData`, so what lands on the clipboard cannot
+ *     drift from what was asked for and a copy event that never fires is
+ *     DETECTABLE. Success is reported only when that listener ran.
  */
 (function () {
     'use strict';
@@ -42,62 +61,101 @@
     }
 
     /**
-     * Select the full contents of an element in a way iOS Safari honors.
+     * Build the throwaway element the copy selection lives in.
      *
-     * @param {HTMLTextAreaElement} el
-     * @returns {void}
+     * A DIV with a real text child, not a textarea: a Range can only
+     * select nodes that exist, and `textarea.value = x` creates none.
+     * Position is fixed inside the viewport at near-zero opacity rather
+     * than display:none or a far negative offset, because an unrendered
+     * element cannot hold a selection. font-size 16px keeps iOS Safari
+     * from zooming when it takes focus.
+     *
+     * @param {string} text - the exact text to hold.
+     * @returns {HTMLDivElement} already appended to the document body.
      */
-    function selectAll(el) {
-        // iOS refuses select() on readonly inputs; contenteditable plus a
-        // DOM Range is the combination that works on both iOS and desktop.
-        var wasReadOnly = el.readOnly;
-        el.contentEditable = 'true';
-        el.readOnly = false;
-
-        var range = document.createRange();
-        range.selectNodeContents(el);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        el.setSelectionRange(0, el.value.length);
-
-        el.readOnly = wasReadOnly;
+    function makeCopySource(text) {
+        var el = document.createElement('div');
+        el.setAttribute('aria-hidden', 'true');
+        el.setAttribute('contenteditable', 'true');
+        el.style.cssText =
+            'position:fixed;top:0;left:0;max-width:1px;max-height:1px;' +
+            'overflow:hidden;padding:0;border:none;outline:none;' +
+            'opacity:0.01;font-size:16px;white-space:pre;' +
+            '-webkit-user-select:text;user-select:text;';
+        el.appendChild(document.createTextNode(text));
+        document.body.appendChild(el);
+        return el;
     }
 
     /**
-     * Tier 2: copy via execCommand over an offscreen textarea.
+     * Put the document selection over an element's whole contents and
+     * give it focus, which is what makes the browser fire a copy event.
      *
-     * Must be called inside a user gesture. Position is fixed at the top
-     * of the viewport with near-zero opacity rather than display:none or
-     * a negative offset, because a non-rendered or offscreen element
-     * cannot hold a selection and the copy silently fails.
+     * @param {HTMLElement} el - an element with real text children.
+     * @returns {boolean} true when a non-empty selection resulted.
+     */
+    function selectAll(el) {
+        if (typeof el.focus === 'function') {
+            try {
+                el.focus({ preventScroll: true });
+            } catch (err) {
+                el.focus();
+            }
+        }
+        var sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || typeof document.createRange !== 'function') return false;
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return sel.toString().length > 0;
+    }
+
+    /**
+     * Tier 2: copy through `document.execCommand('copy')`.
      *
-     * @param {string} text
-     * @returns {boolean} true when the browser reported the copy done.
+     * Must be called synchronously inside a user gesture. Never trusts
+     * execCommand's return value on its own - see the header comment for
+     * the measured case where it returned true having copied nothing.
+     *
+     * @param {string} text - the exact text to place on the clipboard.
+     * @returns {boolean} true only when a copy event actually fired and
+     *   carried this text.
      */
     function copyViaExecCommand(text) {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('aria-hidden', 'true');
-        ta.style.cssText =
-            'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;' +
-            'border:none;outline:none;box-shadow:none;background:transparent;' +
-            'opacity:0.01;font-size:16px;';
-        document.body.appendChild(ta);
+        var el = makeCopySource(text);
+        var wrote = false;
 
-        var copied = false;
+        /**
+         * @param {ClipboardEvent} e
+         * @returns {void}
+         */
+        function onCopy(e) {
+            if (e.clipboardData && typeof e.clipboardData.setData === 'function') {
+                e.clipboardData.setData('text/plain', text);
+                e.preventDefault();
+            }
+            // Even without clipboardData the selection IS the text, so
+            // the native copy is correct. Either way the event proves the
+            // browser acted on our selection.
+            wrote = true;
+        }
+
+        var reported = false;
+        document.addEventListener('copy', onCopy, true);
         try {
-            selectAll(ta);
-            copied = document.execCommand('copy');
+            selectAll(el);
+            reported = document.execCommand('copy');
         } catch (err) {
             console.warn('CopyCompat: execCommand copy threw', err);
-            copied = false;
+            reported = false;
         } finally {
-            var sel = window.getSelection();
+            document.removeEventListener('copy', onCopy, true);
+            var sel = window.getSelection ? window.getSelection() : null;
             if (sel) sel.removeAllRanges();
-            ta.remove();
+            el.remove();
         }
-        return copied;
+        return !!(reported && wrote);
     }
 
     /**

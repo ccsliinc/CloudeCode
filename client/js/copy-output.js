@@ -31,12 +31,24 @@
     /** Escape handler bound while the sheet is open. */
     var onDocKey = null;
 
+    /** Longest chip label before it is shortened in the middle. */
+    var CHIP_LABEL_MAX = 44;
+
     /**
-     * Read the tail of the xterm buffer as plain text.
+     * Read the tail of the xterm buffer as plain text, REJOINING lines
+     * the pane only wrapped for display.
      *
-     * Uses translateToString(true) to trim each line's trailing blanks,
-     * then drops leading/trailing empty lines so the sheet does not open
-     * on a screenful of padding.
+     * xterm stores one buffer row per VISUAL row and flags continuations
+     * with `isWrapped`. Joining every row with a newline therefore cuts a
+     * long token at the pane width, which is a correctness bug and not a
+     * cosmetic one: measured 2026-08-16, a 30 column pane turned
+     * `https://claude.ai/oauth/authorize?...` into
+     * `https://claude.ai/oauth/author` and `WDJB-MJHT` into `WDJB-MJH`.
+     * That is why the phone showed a stub of the sign-in url while the
+     * wide desktop pane showed all of it - same code, different wrap.
+     *
+     * A row is only right-trimmed when it ENDS a logical line; trimming a
+     * continuation would eat characters that belong mid-token.
      *
      * @param {object} term - an xterm.js Terminal instance.
      * @param {number} [lines=LINE_COUNT] - how many buffer rows to read.
@@ -50,10 +62,18 @@
             var end = buf.length;
             var start = Math.max(0, end - want);
             var rows = [];
+            var current = null;
             for (var i = start; i < end; i++) {
                 var line = buf.getLine(i);
-                rows.push(line ? line.translateToString(true) : '');
+                var raw = line ? line.translateToString(false) : '';
+                if (line && line.isWrapped && current !== null) {
+                    current += raw;
+                    continue;
+                }
+                if (current !== null) rows.push(current.replace(/\s+$/, ''));
+                current = raw;
             }
+            if (current !== null) rows.push(current.replace(/\s+$/, ''));
             while (rows.length && rows[0].trim() === '') rows.shift();
             while (rows.length && rows[rows.length - 1].trim() === '') rows.pop();
             return rows.join('\n');
@@ -64,33 +84,121 @@
     }
 
     /**
+     * Shorten a chip LABEL from the middle so both ends stay readable and
+     * the fact that something was removed is visible.
+     *
+     * The label is display only. Every copy path uses the full value, and
+     * a test asserts that specifically, because a chip that copies what it
+     * shows instead of what it holds would hand out a broken url.
+     *
+     * @param {string} value - the full token.
+     * @param {number} [max=CHIP_LABEL_MAX] - longest label to allow.
+     * @returns {string} value itself, or head + ellipsis + tail.
+     */
+    function shortenForChip(value, max) {
+        var limit = typeof max === 'number' ? max : CHIP_LABEL_MAX;
+        var text = value || '';
+        if (limit < 8 || text.length <= limit) return text;
+        var keep = limit - 3;
+        var head = Math.ceil(keep / 2);
+        var tail = keep - head;
+        return text.slice(0, head) + '...' + text.slice(text.length - tail);
+    }
+
+    /** The sheet's inline status line, or null when the sheet is closed. */
+    var statusEl = null;
+
+    /** The sheet's selectable textarea, or null. */
+    var textEl = null;
+
+    /**
+     * Say what just happened, INSIDE the sheet.
+     *
+     * The terminal status pill sits at z-index 70 and the sheet at 10000,
+     * so a pill raised while the sheet is open is painted underneath it
+     * and the user sees nothing at all. Feedback that only exists behind
+     * an overlay is the same as no feedback, so the sheet carries its own
+     * line and the pill is a bonus for after it closes.
+     *
+     * @param {string} message - lowercase, user facing.
+     * @param {string} kind - 'success' | 'error' | 'info'.
+     * @returns {void}
+     */
+    function setStatus(message, kind) {
+        if (!statusEl) return;
+        statusEl.textContent = message;
+        statusEl.dataset.kind = kind || 'info';
+    }
+
+    /**
+     * Select a token inside the raw-output textarea so the OS long-press
+     * menu lands on it, for when no programmatic tier worked.
+     *
+     * @param {string} value - the token to highlight.
+     * @returns {boolean} true when it was found and selected.
+     */
+    function selectInRawText(value) {
+        if (!textEl || !value) return false;
+        var at = textEl.value.indexOf(value);
+        if (at < 0) return false;
+        try {
+            textEl.focus({ preventScroll: true });
+            textEl.setSelectionRange(at, at + value.length);
+            return true;
+        } catch (err) {
+            console.warn('CopyOutput: could not preselect raw text', err);
+            return false;
+        }
+    }
+
+    /**
      * Copy handler shared by every control in the sheet. Runs inside the
      * click gesture so CopyCompat's execCommand tier stays usable.
      *
+     * Success does NOT close the sheet: `/login` prints a url AND a code
+     * and the user needs both, so closing after the first one made the
+     * second a second trip.
+     *
      * @param {object} termWrapper - the Terminal wrapper (status pill).
-     * @param {string} text - what to copy.
+     * @param {string} text - the FULL text to copy, never the chip label.
      * @param {string} label - what to name it in the confirmation.
-     * @returns {void}
+     * @param {HTMLElement} [source] - the control that was tapped, marked
+     *   copied so the confirmation is where the finger already is.
+     * @returns {Promise} resolves once the result has been reported.
      */
-    function copyAndReport(termWrapper, text, label) {
-        window.CopyCompat.copyText(text).then(function (result) {
+    function copyAndReport(termWrapper, text, label, source) {
+        return window.CopyCompat.copyText(text).then(function (result) {
             if (result.ok) {
-                termWrapper._showStatusPill('copied ' + label, 'success');
-                close();
+                setStatus('copied ' + label + ' to clipboard', 'success');
+                if (source) {
+                    source.classList.add('is-copied');
+                    source.setAttribute('data-copied', 'copied');
+                }
+                if (termWrapper && termWrapper._showStatusPill) {
+                    termWrapper._showStatusPill('copied ' + label, 'success');
+                }
             } else {
-                // Both tiers refused. The textarea below is already on
-                // screen and selectable, so point at it rather than
-                // leaving a dead end.
-                termWrapper._showStatusPill(
-                    'copy blocked - long press the text below and use copy',
+                // Nothing programmatic worked. Never claim otherwise, and
+                // never leave a dead tap: put the OS selection on the text
+                // so the long-press menu is one gesture away.
+                var picked = selectInRawText(text);
+                setStatus(
+                    picked
+                        ? 'copy blocked by the browser. the ' + label +
+                          ' is selected below - long press it and choose copy'
+                        : 'copy blocked by the browser. long press the text ' +
+                          'below and choose copy',
                     'error'
                 );
             }
+            return result;
         });
     }
 
     /**
      * Build one tap-to-copy chip.
+     *
+     * The label may be shortened; `item.value` is what gets copied.
      *
      * @param {object} termWrapper
      * @param {{kind: string, value: string}} item
@@ -101,6 +209,10 @@
         chip.type = 'button';
         chip.className = 'cloude-copy-chip cloude-copy-chip--' + item.kind;
         chip.title = item.value;
+        chip.setAttribute('aria-label', 'copy ' + item.kind + ' ' + item.value);
+        // Read by the tests and by anything that needs the whole token
+        // back off the DOM. The label is not a reliable source for it.
+        chip.dataset.value = item.value;
 
         var kind = document.createElement('span');
         kind.className = 'cloude-copy-chip__kind';
@@ -108,12 +220,22 @@
 
         var value = document.createElement('span');
         value.className = 'cloude-copy-chip__value';
-        value.textContent = item.value;
+        value.textContent = shortenForChip(item.value);
 
         chip.appendChild(kind);
         chip.appendChild(value);
+
+        if (item.value.length > CHIP_LABEL_MAX) {
+            // Otherwise a shortened label is indistinguishable from a
+            // short token, which is exactly the doubt the phone raised.
+            var size = document.createElement('span');
+            size.className = 'cloude-copy-chip__size';
+            size.textContent = item.value.length + ' chars';
+            chip.appendChild(size);
+        }
+
         chip.addEventListener('click', function () {
-            copyAndReport(termWrapper, item.value, item.kind);
+            copyAndReport(termWrapper, item.value, item.kind, chip);
         });
         return chip;
     }
@@ -171,12 +293,25 @@
             panel.appendChild(none);
         }
 
+        // Above the raw text so a failure message and the text it points
+        // at are visible together without scrolling.
+        statusEl = document.createElement('p');
+        statusEl.className = 'cloude-copy-status';
+        statusEl.setAttribute('role', 'status');
+        statusEl.setAttribute('aria-live', 'polite');
+        statusEl.dataset.kind = 'info';
+        statusEl.textContent = items.length
+            ? 'tap an item to copy it'
+            : 'nothing to tap - copy the raw text below';
+        panel.appendChild(statusEl);
+
         var area = document.createElement('textarea');
         area.className = 'cloude-copy-sheet__text';
         area.setAttribute('readonly', '');
         area.setAttribute('aria-label', 'recent terminal output');
         area.value = text;
         panel.appendChild(area);
+        textEl = area;
 
         var foot = document.createElement('div');
         foot.className = 'cloude-copy-sheet__foot';
@@ -186,7 +321,7 @@
         copyAll.className = 'cloude-copy-sheet__action';
         copyAll.textContent = 'copy all';
         copyAll.addEventListener('click', function () {
-            copyAndReport(termWrapper, text, 'output');
+            copyAndReport(termWrapper, text, 'output', copyAll);
         });
 
         var hint = document.createElement('span');
@@ -226,6 +361,8 @@
             sheetEl.remove();
             sheetEl = null;
         }
+        statusEl = null;
+        textEl = null;
     }
 
     /**
@@ -252,6 +389,8 @@
         open: open,
         close: close,
         wireButton: wireButton,
-        readRecentOutput: readRecentOutput
+        readRecentOutput: readRecentOutput,
+        shortenForChip: shortenForChip,
+        buildChip: buildChip
     };
 })();
