@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
 
 logger = structlog.get_logger()
@@ -1322,6 +1323,19 @@ class TmuxBackend(SessionBackend):
         tmux emits each pane-width-wrapped visual line as a separate output line,
         and xterm's re-wrap conflicts with tmux's pane-width wraps, producing
         visually jumbled scrollback when the user scrolls above the live viewport.
+
+        The bytes are passed through
+        ``scrollback_replay.normalize_replay_newlines`` before they are
+        returned. ``-p`` separates lines with a BARE LF, and the client's
+        xterm runs ``convertEol: false`` (correctly - a live PTY sends
+        ``\\r\\n`` and TUIs need a bare LF to mean "down one row, keep the
+        column"). Replaying bare LFs therefore staircases every captured
+        line to the column where the previous one ended, which is the
+        "scrolling back janks the alignment" report. See that module.
+
+        Returns:
+            Captured pane bytes with CRLF line endings, or ``b""`` when
+            the tmux call fails.
         """
         if lines <= 0:
             lines = self.scrollback_lines
@@ -1341,7 +1355,7 @@ class TmuxBackend(SessionBackend):
             )
             if rc != 0:
                 return b""
-            return out
+            return normalize_replay_newlines(out)
         finally:
             # Note: Item 7 will move this flag flip closer to the WS send
             # site (after bytes are written to the socket). For now we
