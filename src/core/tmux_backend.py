@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core.pane_locale import apply_pane_locale
 from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
 
@@ -366,9 +367,6 @@ class TmuxBackend(SessionBackend):
             "-y",
             str(use_rows),
         ]
-        if command:
-            args.append(command)
-
         # Merge env overlay into this tmux invocation's environment so the
         # new session inherits it. tmux captures the environment of the
         # `new-session` call.
@@ -377,6 +375,32 @@ class TmuxBackend(SessionBackend):
         tmux_env.setdefault("COLORTERM", "truecolor")
         if env:
             tmux_env.update(env)
+
+        # ---- Pane locale ----------------------------------------------------
+        # A LaunchAgent-spawned server inherits no LANG at all, so the
+        # pane's shell lands in the 7-bit "C" locale and zsh prints
+        # "character not in range" once per line of any function that
+        # touches a multibyte character - on every session start, before
+        # the user has typed anything.
+        #
+        # It has to travel as ``new-session -e``, NOT merely in tmux_env.
+        # When a tmux SERVER is already running on our socket (the normal
+        # case after the first session), the new session's environment is
+        # taken from the SERVER's global environment, and the client's
+        # environment is discarded. So exporting LANG here would silently
+        # do nothing for every session but the first. ``-e`` sets the
+        # session environment explicitly, and it applies to pane 0 because
+        # it is part of the same command that creates it. ``set-environment``
+        # after the fact would be too late for pane 0, and
+        # ``update-environment`` only feeds attaching clients, which we
+        # never have - we stream via pipe-pane.
+        apply_pane_locale(tmux_env)
+        pane_lang = tmux_env.get("LANG")
+        if pane_lang:
+            args.extend(["-e", f"LANG={pane_lang}"])
+
+        if command:
+            args.append(command)
 
         argv = self._tmux_base() + args
         proc = await asyncio.create_subprocess_exec(
@@ -1362,6 +1386,61 @@ class TmuxBackend(SessionBackend):
             # clear it immediately — the callback-suppression is still a
             # future-Item-7 concern.
             self.replay_in_progress = False
+
+    def pane_in_alternate_screen(self) -> bool:
+        """Report whether pane 0 is on the alternate screen buffer.
+
+        Returns:
+            True when tmux reports ``#{alternate_on}`` as 1. False on any
+            failure - the caller's fallback is the safer branch.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{alternate_on}",
+            check=False,
+        )
+        if rc != 0:
+            return False
+        return out.decode("utf-8", errors="replace").strip() == "1"
+
+    def capture_visible_screen(self) -> bytes:
+        """Capture the pane's visible screen as a replayable byte stream.
+
+        ``-S 0`` starts at the first line of the visible pane (history is
+        addressed with negative numbers), so this is the viewport and
+        nothing above it. ``-e`` keeps the ANSI attributes. We do NOT pass
+        ``-J``: the scrollback path joins wrapped lines so the browser can
+        re-wrap them, but here the pane was just resized to the client's
+        exact geometry, so tmux's own line breaks are the correct ones and
+        joining them would re-wrap content that is already right.
+
+        Trailing blank lines are dropped so the cursor ends up immediately
+        after the last real character. That is what makes an unterminated
+        prompt ("password: ") look like a prompt rather than like text
+        with the cursor parked below it.
+
+        Returns:
+            Bytes with CRLF line endings, or ``b""`` on failure.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "capture-pane",
+            "-p",
+            "-e",
+            "-S",
+            "0",
+            "-t",
+            _safe_target(self.tmux_session),
+            check=False,
+        )
+        if rc != 0:
+            return b""
+        body = out.rstrip(b"\r\n")
+        if not body.strip():
+            return b""
+        return normalize_replay_newlines(body)
 
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""

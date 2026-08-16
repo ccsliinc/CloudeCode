@@ -22,10 +22,26 @@ from src.api.resize_negotiation import (
     apply_negotiated_resize,
     release_client_resize,
 )
+from src.api.ws_startup_paint import paint_on_attach
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
+def _resolve_backend(session_manager, session_id: Optional[str]):
+    """Get the backend for a session id, tolerating older managers.
+
+    Args:
+        session_manager: The active SessionManager.
+        session_id: Target session, or None for the manager's current one.
+
+    Returns:
+        The SessionBackend, or None when it cannot be resolved.
+    """
+    if session_id and hasattr(session_manager, "get_backend"):
+        return session_manager.get_backend(session_id)
+    return getattr(session_manager, "backend", None)
 
 
 class ConnectionManager:
@@ -288,10 +304,12 @@ async def websocket_terminal(websocket: WebSocket):
     #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
     #      process (Claude/bash/etc.) and that process has a chance to
     #      finish any in-flight ANSI write before we stomp its buffer.
-    #   5. Server writes Ctrl+L (0x0c) to the pane. Claude/bash/readline
-    #      treat Ctrl+L as "redraw" — the app clears its own screen and
-    #      re-renders at the NEW size. Live-stream bytes then arrive via
-    #      pipe-pane as usual.
+    #   5. Server paints the pane's screen (see ws_startup_paint). A
+    #      full-screen TUI gets Ctrl+L and re-renders itself at the NEW
+    #      size; every other pane gets its visible screen captured
+    #      post-resize and sent to the client, because Ctrl+L into a
+    #      canonical-mode line reader is data, not a redraw. Live-stream
+    #      bytes then arrive via pipe-pane as usual.
     #
     # Trade-off: user loses historical scrollback on reconnect. Accepted
     # because a clean screen beats a corrupted one, and xterm.js retains
@@ -367,39 +385,26 @@ async def websocket_terminal(websocket: WebSocket):
             # so the event loop keeps draining other tasks.
             await asyncio.sleep(0.15)
 
-            # Force a redraw at the new size. Ctrl+L is readline / tmux /
-            # Claude's "clear + repaint" convention — the app owns the
-            # repaint, which means it paints at its CURRENT (post-resize)
-            # cell grid, not the stale grid any cached output was drawn in.
-            _hs_backend = (
-                session_manager.get_backend(target_sid)
-                if target_sid and hasattr(session_manager, "get_backend")
-                else getattr(session_manager, "backend", None)
+            # Make the pane's screen visible at the new size. A TUI gets
+            # Ctrl+L and repaints itself; anything else gets the pane's
+            # visible screen captured post-resize. See ws_startup_paint
+            # for why the second branch exists.
+            _strategy = await paint_on_attach(
+                websocket,
+                _resolve_backend(session_manager, target_sid),
             )
-            if _hs_backend is not None:
-                try:
-                    await _hs_backend.write(b"\x0c")
-                    logger.debug("ws_handshake_ctrl_l_sent")
-                except Exception as exc:
-                    logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
+            logger.debug("ws_handshake_painted", strategy=_strategy)
         else:
             # Degraded-mode fallback: client never delivered handshake dims
             # (timeout, bad dims, or disconnect-during-handshake recovered).
-            # A frozen banner is the worst possible UX — at least force a
-            # redraw at the pane's current (birth) size so the user sees
-            # SOMETHING. Ctrl+L is harmless if the foreground app can't honor it.
-            _hs_backend = (
-                session_manager.get_backend(target_sid)
-                if target_sid and hasattr(session_manager, "get_backend")
-                else getattr(session_manager, "backend", None)
+            # A frozen banner is the worst possible UX — paint at the
+            # pane's current (birth) size so the user sees SOMETHING.
+            await asyncio.sleep(0.15)
+            _strategy = await paint_on_attach(
+                websocket,
+                _resolve_backend(session_manager, target_sid),
             )
-            if _hs_backend is not None:
-                try:
-                    await asyncio.sleep(0.15)
-                    await _hs_backend.write(b"\x0c")
-                    logger.info("ws_handshake_ctrl_l_sent_fallback")
-                except Exception as exc:
-                    logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
+            logger.info("ws_handshake_painted_fallback", strategy=_strategy)
 
         # feat/settings-tabs-and-commands — a console launched from the
         # settings "terminal" tab has a configured command waiting on it.
