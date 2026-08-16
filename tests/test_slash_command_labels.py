@@ -145,3 +145,60 @@ class TestCommandsOnly:
     def test_projects_back_to_bare_strings(self):
         details = labels.normalize(["/clear", {"command": "/x", "description": "y"}])
         assert labels.commands_only(details) == ["/clear", "/x"]
+
+
+class TestEntryCommand:
+    """Reads the command out of a RAW entry, without normalizing the list.
+    A config migration needs this: it must know what an entry names while
+    still writing the user's own entry back untouched."""
+
+    def test_reads_a_bare_string(self):
+        assert labels.entry_command("/login") == "/login"
+
+    def test_reads_an_object(self):
+        assert labels.entry_command({"command": "/login", "description": "x"}) == "/login"
+
+    def test_adds_the_missing_slash(self):
+        assert labels.entry_command("login") == "/login"
+
+    def test_unusable_entries_are_empty_not_an_error(self):
+        assert labels.entry_command(None) == ""
+        assert labels.entry_command("  ") == ""
+        assert labels.entry_command({}) == ""
+
+
+class TestAppendMissingCommands:
+    def test_appends_at_the_end(self):
+        assert labels.append_missing_commands(["/clear"], ["/login"]) == [
+            "/clear", "/login",
+        ]
+
+    def test_skips_one_already_present_as_a_string(self):
+        assert labels.append_missing_commands(["/login"], ["/login"]) == ["/login"]
+
+    def test_skips_one_already_present_as_an_object(self):
+        entries = [{"command": "/login", "description": "mine"}]
+        assert labels.append_missing_commands(entries, ["/login"]) == entries
+
+    def test_existing_entries_keep_their_original_form(self):
+        entries = ["/clear", {"command": "/diff", "description": "review changes"}]
+        out = labels.append_missing_commands(entries, ["/login"])
+        assert out[:2] == entries
+
+    def test_a_non_list_is_treated_as_empty(self):
+        assert labels.append_missing_commands(None, ["/login"]) == ["/login"]
+
+    def test_is_idempotent(self):
+        once = labels.append_missing_commands(["/clear"], ["/login"])
+        assert labels.append_missing_commands(once, ["/login"]) == once
+
+    def test_does_not_mutate_the_input(self):
+        entries = ["/clear"]
+        labels.append_missing_commands(entries, ["/login"])
+        assert entries == ["/clear"]
+
+    def test_migration_list_matches_the_tail_of_the_defaults(self):
+        """The two must agree or a fresh install and a migrated one end up
+        with different chip rows."""
+        n = len(labels.MIGRATION_APPENDED_COMMANDS)
+        assert labels.DEFAULT_COMMON_COMMANDS[-n:] == labels.MIGRATION_APPENDED_COMMANDS

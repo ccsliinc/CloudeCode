@@ -93,6 +93,17 @@ DEFAULT_COMMON_COMMANDS: List[str] = [
     "/resume",
     "/rewind",
     "/usage",
+    "/login",
+]
+
+# Commands appended to an EXISTING user's list by a config migration, in
+# order. A user whose config.json already declares
+# ``common_slash_commands`` never sees a change to DEFAULT_COMMON_COMMANDS
+# above, because the config wins; the migration is the only way a new
+# default reaches them. Keep this list in sync with the tail of
+# DEFAULT_COMMON_COMMANDS.
+MIGRATION_APPENDED_COMMANDS: List[str] = [
+    "/login",
 ]
 
 
@@ -157,6 +168,63 @@ def normalize(
         if not command:
             continue
         out.append({"command": command, "description": description})
+    return out
+
+
+def entry_command(entry: Any) -> str:
+    """Read the command out of one raw ``common_slash_commands`` entry.
+
+    Works on both supported entry forms without normalizing the whole
+    list, so a caller that must PRESERVE the user's original entries
+    (a config migration, say) can still tell what each one names.
+
+    Inputs:
+        entry: a bare string, or a ``{"command", "description"}`` dict.
+    Returns:
+        The command with a leading slash, or "" when the entry carries
+        no usable command (including for types this format never had).
+    Example:
+        >>> entry_command({"command": "login"})
+        '/login'
+    """
+    if isinstance(entry, str):
+        command = entry.strip()
+    elif isinstance(entry, dict):
+        command = str(entry.get("command", "")).strip()
+    else:
+        return ""
+    if not command:
+        return ""
+    return command if command.startswith("/") else "/" + command
+
+
+def append_missing_commands(raw: Any, commands: List[str]) -> List[Any]:
+    """Append commands a list does not already contain, preserving it.
+
+    Purely additive: every existing entry is passed through byte-for-byte
+    in its original form (string or object), so a user's own wording and
+    ordering survive. Appends bare strings, which is the historical form
+    and lets the built-in description table supply the label.
+
+    Inputs:
+        raw: the existing ``common_slash_commands`` value; a non-list is
+            treated as an empty list.
+        commands: commands to ensure are present, appended in order.
+    Returns:
+        A NEW list. Equal in content to the input when every command was
+        already present, which makes repeated calls idempotent.
+    Example:
+        >>> append_missing_commands(["/clear"], ["/login"])
+        ['/clear', '/login']
+    """
+    existing = list(raw) if isinstance(raw, list) else []
+    present = {entry_command(e) for e in existing}
+    out = list(existing)
+    for command in commands:
+        key = command if command.startswith("/") else "/" + command
+        if key not in present:
+            out.append(key)
+            present.add(key)
     return out
 
 

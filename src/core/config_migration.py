@@ -61,6 +61,7 @@ from src.core.config_migration_steps import (
     _step_v0_to_v1,
     _step_v1_to_v2,
     _step_v2_to_v3,
+    _step_v3_to_v4,
     build_seed_wrappers,
     probe_shell_function,
 )
@@ -87,7 +88,13 @@ logger = structlog.get_logger()
 #           path. Adds no key to ``agents`` and removes nothing: the
 #           ``*_command`` strings all stay, and every wrapper keeps its
 #           ``id`` for the same ``Session.agent_type`` reason as 1 -> 2.
-CURRENT_CONFIG_VERSION = 3
+#   3 -> 4  ADDITIVE ONLY. Appends ``/login`` to an existing
+#           ``common_slash_commands`` list (see ``_step_v3_to_v4``). The
+#           built-in default list only reaches a config that declares no
+#           list of its own, so without this step an existing install
+#           would never gain the command. Touches no wrapper and no
+#           ``id``.
+CURRENT_CONFIG_VERSION = 4
 
 # Thin, migration-seeded wrapper scripts. Deliberately NOT the real
 # multi-line cld/cldor function bodies (those live only in the user's own
@@ -105,8 +112,9 @@ def migrate_config_dict(
       proceed makes this return ``(data, False)`` with the input
       completely untouched (no partial mutation, no config_version
       stamped), never raises. Steps run in order and only for versions the
-      config hasn't reached, so a v0 config runs 0->1, 1->2 then 2->3, a
-      v2 config runs only 2->3, and a v3 config does nothing at all.
+      config hasn't reached, so a v0 config runs 0->1, 1->2, 2->3 then
+      3->4, a v3 config runs only 3->4, and a v4 config does nothing at
+      all.
     Inputs:
       data (dict) - the parsed config.json.
       has_cld (bool) / has_cldor (bool) - environment probe results (see
@@ -120,7 +128,7 @@ def migrate_config_dict(
     Raises: never — logs a warning and returns (data, False) instead.
     Example: migrate_config_dict({"agents": {}}, True, False) ->
       ({..., "agents": {..., "wrappers": [claude, cld]},
-        "terminal_commands": [...], "config_version": 3}, True)
+        "terminal_commands": [...], "config_version": 4}, True)
     """
     try:
         existing_version = data.get("config_version", 0)
@@ -146,6 +154,8 @@ def migrate_config_dict(
             working = _step_v1_to_v2(working)
         if existing_version < 3:
             working = _step_v2_to_v3(working)
+        if existing_version < 4:
+            working = _step_v3_to_v4(working)
 
         new_data = dict(working)
         new_data["config_version"] = CURRENT_CONFIG_VERSION

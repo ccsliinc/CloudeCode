@@ -171,9 +171,12 @@ def test_migration_from_v2_is_idempotent_end_to_end():
     assert second == first
 
 
-def test_a_v3_config_is_a_complete_noop():
+def test_a_config_already_at_the_current_version_is_a_complete_noop():
+    """Pinned to CURRENT_CONFIG_VERSION, not to the literal 3: a config at
+    3 is no longer current now that a 3 -> 4 step exists, and this test is
+    about the idempotent no-op, not about any one version number."""
     data = _live_v2_config()
-    data["config_version"] = 3
+    data["config_version"] = CURRENT_CONFIG_VERSION
     for w in data["agents"]["wrappers"]:
         w["family"] = "claude"
     new_data, changed = migrate_config_dict(data, True, True)
@@ -229,9 +232,10 @@ def test_v2_to_v3_tolerates_a_missing_agents_block():
 
 @pytest.mark.parametrize("start_version", [0, 1, 2, 3])
 def test_every_starting_version_ends_up_current_with_families(start_version):
-    """A config at 0, 1, 2 or already 3 must all work. Below 3 the run
-    advances it and every wrapper ends up with a family; at 3 it is a
-    no-op. Nothing raises at any starting point."""
+    """A config at 0, 1, 2 or already 3 must all work: every one of them
+    ends up with a family on every wrapper, and nothing raises at any
+    starting point. A start below CURRENT_CONFIG_VERSION reports a
+    change; one already at it does not."""
     data = _live_v2_config()
     if start_version == 0:
         del data["config_version"]
@@ -242,7 +246,7 @@ def test_every_starting_version_ends_up_current_with_families(start_version):
             w["family"] = "claude"
 
     new_data, changed = migrate_config_dict(data, has_cld=True, has_cldor=True)
-    assert changed is (start_version < 3)
+    assert changed is (start_version < CURRENT_CONFIG_VERSION)
     assert new_data["config_version"] >= CURRENT_CONFIG_VERSION
     for w in new_data["agents"]["wrappers"]:
         assert w["family"] == "claude"

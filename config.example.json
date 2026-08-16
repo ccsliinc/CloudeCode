@@ -47,7 +47,8 @@
     "/effort",
     "/plan",
     "/tasks",
-    { "command": "/diff", "description": "review changes" }
+    { "command": "/diff", "description": "review changes" },
+    "/login"
   ],
   "projects": [
     {

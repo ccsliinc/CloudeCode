@@ -23,12 +23,20 @@ import structlog
 
 from src.core.agent_families import DEFAULT_FAMILY
 from src.core.agent_wrappers import derive_accepts_model
+from src.core.slash_command_labels import (
+    MIGRATION_APPENDED_COMMANDS,
+    append_missing_commands,
+)
 from src.core.terminal_commands import (
     TERMINAL_COMMANDS_KEY,
     default_terminal_commands,
 )
 
 logger = structlog.get_logger()
+
+# Top-level config.json key holding the quick-command chips. Named here
+# rather than inline so the step and its tests agree on one spelling.
+COMMON_SLASH_COMMANDS_KEY = "common_slash_commands"
 
 _SEED_SCRIPT_CLD = 'cld "$@"'
 _SEED_SCRIPT_CLDOR = 'cldor "$@"'
@@ -293,4 +301,42 @@ def _step_v2_to_v3(data: Dict) -> Dict:
     new_agents_block = dict(agents_block)
     new_agents_block["wrappers"] = annotated
     new_data["agents"] = new_agents_block
+    return new_data
+
+
+def _step_v3_to_v4(data: Dict) -> Dict:
+    """Version step 3 -> 4: append ``/login`` to ``common_slash_commands``.
+
+    Description: ADDITIVE ONLY. ``DEFAULT_COMMON_COMMANDS`` is consulted
+      by ``/config/common-commands`` only when the config declares NO
+      list of its own, so adding a command to that default reaches a
+      fresh install and nobody else. A user whose config.json already
+      carries the list would never see the new command without this step.
+      Existing entries are passed through in their original form, string
+      or ``{"command", "description"}`` object alike, so user wording and
+      ordering survive untouched; the new commands are appended at the
+      END, and one already present is skipped, which makes the step a
+      no-op on second run.
+
+      A config with NO ``common_slash_commands`` key is left WITHOUT one
+      on purpose: the API already falls back to
+      ``DEFAULT_COMMON_COMMANDS``, which now includes ``/login``, so
+      materializing the key would freeze that user's list against every
+      future default for no visible gain. A non-list value (a
+      hand-mangled config) is likewise left alone rather than replaced.
+    Inputs: data (dict) - config dict at version 3 (never mutated).
+    Output: dict - new config dict; equal in content to the input when
+      every appended command was already present or the key is absent.
+    Example: _step_v3_to_v4({"common_slash_commands": ["/clear"]}) ->
+      {"common_slash_commands": ["/clear", "/login"]}
+    """
+    new_data = dict(data)
+
+    raw = new_data.get(COMMON_SLASH_COMMANDS_KEY)
+    if not isinstance(raw, list):
+        return new_data
+
+    new_data[COMMON_SLASH_COMMANDS_KEY] = append_missing_commands(
+        raw, MIGRATION_APPENDED_COMMANDS
+    )
     return new_data
