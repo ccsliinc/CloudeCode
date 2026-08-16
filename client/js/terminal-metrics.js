@@ -194,11 +194,141 @@ console.log('[TerminalMetrics Module] Loading...');
         return { fitted: true, reason: 'ok' };
     }
 
+    /**
+     * Sub-pixel slack, in CSS px, before a grid counts as overflowing.
+     *
+     * Two different roundings sit between the cell measurement and the
+     * painted canvas (xterm rounds the canvas to whole CSS px, then
+     * divides by cols), so an exactly-fitting grid routinely lands a
+     * fraction of a pixel over. A real overflow is a whole cell, eight
+     * px or more. Anything under one px is rounding noise and spending a
+     * column on it would cost the user a column of text for nothing.
+     * @type {number}
+     */
+    const WIDTH_EPSILON_PX = 1;
+
+    /**
+     * Read the box FitAddon fits into: the xterm parent's content width,
+     * less the .xterm element's horizontal padding, less the scrollbar
+     * xterm reserves. Deliberately mirrors FitAddon.proposeDimensions so
+     * the two cannot drift.
+     *
+     * @param {object} controller - a TerminalController with .term.
+     * @returns {?number} width in CSS px, or null when it cannot be read.
+     */
+    function availableWidth(controller) {
+        try {
+            const el = controller.term.element;
+            if (!el || !el.parentElement) return null;
+            const parent = window.getComputedStyle(el.parentElement);
+            const own = window.getComputedStyle(el);
+            const outer = Math.max(0, parseInt(parent.getPropertyValue('width'), 10));
+            const pad = parseInt(own.getPropertyValue('padding-left'), 10)
+                + parseInt(own.getPropertyValue('padding-right'), 10);
+            const core = controller.term._core;
+            const scrollbar = controller.term.options.scrollback === 0
+                ? 0
+                : (core.viewport ? core.viewport.scrollBarWidth : 0);
+            const width = outer - pad - scrollbar;
+            return Number.isFinite(width) ? width : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    /**
+     * Width the RENDERER will actually paint for the current column
+     * count, in CSS px.
+     *
+     * The load-bearing detail: this reads `dimensions.css.cell.width`,
+     * which is the pitch the active renderer lays glyphs out on. It is
+     * NOT the font's natural advance width (`_charSizeService.width`) -
+     * on an iPhone 16e those are 8.3333 and 8.65625 respectively,
+     * because the WebGL renderer floors the cell to whole device pixels.
+     * Comparing a column count against the natural advance invents an
+     * overflow that does not exist; comparing it against this number is
+     * the only comparison that means anything.
+     *
+     * @param {object} controller - a TerminalController with .term.
+     * @returns {?number} width in CSS px, or null when it cannot be read.
+     */
+    function renderedWidth(controller) {
+        try {
+            const dims = controller.term._core._renderService.dimensions;
+            const cell = dims.css.cell.width;
+            if (!Number.isFinite(cell) || cell <= 0) return null;
+            return cell * controller.term.cols;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    /**
+     * Shrink the grid until the painted width fits the available box.
+     *
+     * FitAddon derives cols from the cell width the renderer reported
+     * BEFORE the resize, and for the DOM renderer that number is itself
+     * a function of the old column count, so the post-resize pitch can
+     * come out slightly wider than the one the division used. This is
+     * the check that the two agree after the fact, and it always errs
+     * toward FEWER columns: a column that does not fit is text the user
+     * cannot read, while a spare pixel of margin is invisible.
+     *
+     * Called after a successful fit and before the resize is shipped to
+     * tmux, so the pty never learns about a grid that does not fit.
+     *
+     * @param {object} controller - a TerminalController with .term.
+     * @returns {{changed: boolean, cols: ?number, painted: ?number,
+     *   available: ?number, reason: string}} changed true when columns
+     *   were dropped; reason names the outcome for the log line.
+     */
+    function enforceWidthFit(controller) {
+        const out = { changed: false, cols: null, painted: null, available: null,
+            reason: 'ok' };
+        if (!controller || !controller.term) {
+            out.reason = 'no-controller';
+            return out;
+        }
+        const available = availableWidth(controller);
+        let painted = renderedWidth(controller);
+        if (available === null || painted === null) {
+            out.reason = 'unmeasurable';
+            return out;
+        }
+        out.available = available;
+        out.cols = controller.term.cols;
+        out.painted = painted;
+        if (painted <= available + WIDTH_EPSILON_PX) return out;
+
+        const cell = painted / controller.term.cols;
+        const fitted = Math.max(MIN_COLS, Math.floor(available / cell));
+        if (fitted >= controller.term.cols) {
+            out.reason = 'overflow-unfixable';
+            return out;
+        }
+        try {
+            controller.term.resize(fitted, controller.term.rows);
+        } catch (err) {
+            out.reason = 'resize-threw';
+            return out;
+        }
+        painted = renderedWidth(controller);
+        out.changed = true;
+        out.cols = controller.term.cols;
+        out.painted = painted === null ? out.painted : painted;
+        out.reason = 'shrunk';
+        return out;
+    }
+
     window.TerminalMetrics = {
         waitForFonts,
         xtermStylesheetApplied,
         proposalIsSane,
         guardedFit,
+        availableWidth,
+        renderedWidth,
+        enforceWidthFit,
+        WIDTH_EPSILON_PX,
         MIN_COLS,
         MIN_ROWS,
         MAX_COLS,
