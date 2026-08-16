@@ -987,7 +987,16 @@ class Launchpad {
      * Render launchpad UI structure
      */
     renderLaunchpadUI() {
+        // TWO CHILDREN, ONE OF WHICH SCROLLS. #launchpad-screen is a flex
+        // column that does not scroll; .launchpad-scroll takes the
+        // leftover height and scrolls, and .home-bar sits below it and
+        // does not shrink. That split is what makes the bar a real bottom
+        // bar rather than the last thing in the scrolled content, and it
+        // is why the bar can never overlap a project row or the "+" FAB's
+        // fan-out menu: they are in different boxes. See
+        // client/css/home-bar.css.
         this.launchpadScreen.innerHTML = `
+            <div class="launchpad-scroll">
             <div class="launchpad-container">
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
@@ -1095,42 +1104,53 @@ class Launchpad {
                     </div>
                 </div>
 
-                <div class="launchpad-section">
-                    <div class="launchpad-section-title">
-                        <button type="button" class="launchpad-section-toggle" id="server-management-toggle" aria-expanded="true" aria-controls="server-management-content">
-                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
-                            server management
-                        </button>
-                    </div>
-                    <div id="server-management-content">
-                        <button class="reset-server-btn" id="reset-server-btn">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                <path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                            <span>reset server</span>
-                        </button>
-                    </div>
+                <!-- NO "SERVER MANAGEMENT" SECTION HERE ANY MORE. Its one
+                     control, "reset server", is now the "restart server"
+                     row of the home bar's server-controls menu below
+                     (client/js/server-controls-menu.js). It is in ONE
+                     place, not two. A collapsible section plus a
+                     full-width button was a lot of the home screen's
+                     vertical budget for a control pressed roughly never. -->
                 </div>
+            </div>
 
-                <div class="launchpad-footer">
-                    <a href="https://nyedis.ai" target="_blank" rel="noopener noreferrer">
-                        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
+            <!-- THE HOME BAR. A flex row whose direct children are its
+                 items: everything before .home-bar__spacer hugs the left
+                 edge, everything after it the right. Adding an item later
+                 is adding one child on the side it belongs to - there is
+                 no slot table and no layout to rewrite.
+
+                 HOME SCREEN ONLY. This markup is rendered into
+                 #launchpad-screen and nowhere else, so it cannot appear on
+                 the terminal screen, which spends its vertical pixels on
+                 the terminal. -->
+            <div class="home-bar" role="toolbar" aria-label="home bar">
+                <button type="button" id="server-controls-btn" class="home-bar__btn"
+                        aria-haspopup="menu" aria-expanded="false"
+                        aria-label="server controls" title="server controls">
+                    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M8 10.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M13 8c0-.38-.04-.75-.12-1.1l1.34-.98-1.5-2.6-1.55.62a5.05 5.05 0 0 0-1.9-1.1L9.05 1h-3l-.22 1.84c-.7.24-1.35.62-1.9 1.1l-1.55-.62-1.5 2.6 1.34.98a5.1 5.1 0 0 0 0 2.2l-1.34.98 1.5 2.6 1.55-.62c.55.48 1.2.86 1.9 1.1L6.05 15h3l.22-1.84c.7-.24 1.35-.62 1.9-1.1l1.55.62 1.5-2.6-1.34-.98c.08-.35.12-.72.12-1.1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <span class="home-bar__spacer" aria-hidden="true"></span>
+                <span class="version home-bar__version" id="home-bar-version"></span>
+                <a class="home-bar__link" href="https://nyedis.ai" target="_blank" rel="noopener noreferrer"
+                   aria-label="nyedis.ai" title="nyedis.ai">
+                        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
                             <path d="M 409.0 883.5 L 408.5 882.0 L 458.5 804.0 L 489.5 748.0 L 488.0 747.5 L 453.0 783.5 L 437.0 797.5 L 403.0 823.5 L 377.0 839.5 L 376.5 838.0 L 398.5 816.0 L 438.5 771.0 L 469.5 732.0 L 478.5 718.0 L 474.0 719.5 L 436.0 750.5 L 388.0 785.5 L 394.5 766.0 L 409.5 739.0 L 408.0 738.5 L 386.0 753.5 L 377.0 758.5 L 375.5 758.0 L 382.5 743.0 L 394.5 725.0 L 410.5 705.0 L 410.5 703.0 L 374.0 704.5 L 361.0 702.5 L 360.5 701.0 L 409.0 681.5 L 481.0 647.5 L 520.0 625.5 L 546.0 607.5 L 565.5 589.0 L 570.5 580.0 L 570.5 576.0 L 561.0 575.5 L 542.0 580.5 L 545.5 574.0 L 560.5 556.0 L 594.0 522.5 L 632.5 489.0 L 630.0 487.5 L 588.0 488.5 L 551.0 493.5 L 516.0 500.5 L 529.5 487.0 L 532.5 480.0 L 532.0 473.5 L 515.0 472.5 L 491.0 468.5 L 451.0 455.5 L 435.5 448.0 L 452.0 439.5 L 456.5 435.0 L 456.0 433.5 L 420.0 426.5 L 402.0 420.5 L 394.5 416.0 L 427.0 414.5 L 442.0 411.5 L 445.0 410.5 L 445.0 408.5 L 399.0 408.5 L 375.0 406.5 L 333.0 400.5 L 305.5 393.0 L 306.0 391.5 L 309.0 391.5 L 344.0 394.5 L 429.0 395.5 L 461.0 394.5 L 461.0 392.5 L 426.0 390.5 L 378.0 384.5 L 302.0 370.5 L 249.0 358.5 L 180.0 339.5 L 138.0 331.5 L 75.0 314.5 L 34.0 299.5 L 19.0 291.5 L 15.5 287.0 L 18.0 285.5 L 173.5 287.0 L 173.0 285.5 L 125.0 275.5 L 91.0 264.5 L 68.0 252.5 L 59.5 244.0 L 59.0 238.5 L 134.0 251.5 L 227.5 271.0 L 225.5 266.0 L 218.0 259.5 L 181.5 238.0 L 185.0 237.5 L 297.0 264.5 L 434.0 294.5 L 546.0 316.5 L 613.0 326.5 L 613.5 325.0 L 607.0 320.5 L 591.0 312.5 L 561.0 301.5 L 509.0 287.5 L 450.0 276.5 L 449.5 275.0 L 483.0 262.5 L 505.0 257.5 L 534.0 253.5 L 600.0 252.5 L 625.0 255.5 L 632.5 255.0 L 622.0 245.5 L 609.0 239.5 L 588.0 233.5 L 551.5 228.0 L 568.0 220.5 L 585.0 217.5 L 612.0 217.5 L 644.0 221.5 L 692.0 232.5 L 737.0 247.5 L 741.0 247.5 L 747.0 241.5 L 754.0 237.5 L 771.0 233.5 L 797.0 235.5 L 814.0 240.5 L 827.0 246.5 L 841.5 259.0 L 844.5 265.0 L 845.5 281.0 L 843.5 288.0 L 836.5 301.0 L 824.5 316.0 L 805.0 334.5 L 782.0 351.5 L 769.5 365.0 L 761.5 379.0 L 761.5 390.0 L 765.0 393.5 L 767.0 393.5 L 778.0 388.5 L 795.0 383.5 L 807.0 381.5 L 827.0 381.5 L 852.0 387.5 L 865.0 393.5 L 879.0 402.5 L 904.5 426.0 L 925.5 454.0 L 946.5 492.0 L 957.5 518.0 L 961.5 532.0 L 944.0 513.5 L 932.0 503.5 L 923.0 497.5 L 903.0 488.5 L 889.0 485.5 L 873.0 485.5 L 853.0 490.5 L 839.0 497.5 L 829.0 504.5 L 814.5 519.0 L 783.5 561.0 L 754.5 604.0 L 737.5 635.0 L 737.5 659.0 L 740.0 661.5 L 765.0 671.5 L 816.0 696.5 L 826.0 699.5 L 843.0 709.5 L 857.0 720.5 L 879.5 743.0 L 894.5 762.0 L 895.5 768.0 L 881.0 780.5 L 879.5 771.0 L 875.5 764.0 L 870.0 758.5 L 856.5 750.0 L 847.5 731.0 L 834.0 716.5 L 821.0 708.5 L 808.0 704.5 L 799.0 704.5 L 800.0 700.5 L 780.0 689.5 L 722.0 666.5 L 716.5 662.0 L 715.5 650.0 L 710.0 643.5 L 705.0 641.5 L 688.0 641.5 L 683.5 644.0 L 682.5 651.0 L 689.0 666.5 L 752.0 692.5 L 793.0 711.5 L 808.0 722.5 L 824.5 738.0 L 834.5 751.0 L 840.5 762.0 L 838.5 766.0 L 828.0 772.5 L 816.0 774.5 L 815.5 762.0 L 811.5 753.0 L 805.5 744.0 L 794.0 732.5 L 786.0 729.5 L 777.0 728.5 L 765.0 729.5 L 764.5 728.0 L 768.0 724.5 L 774.0 722.5 L 774.5 721.0 L 767.0 719.5 L 734.0 699.5 L 701.0 684.5 L 681.0 679.5 L 670.0 679.5 L 668.5 671.0 L 664.0 665.5 L 657.0 663.5 L 651.0 664.5 L 646.5 669.0 L 643.5 677.0 L 645.5 705.0 L 644.5 753.0 L 643.5 756.0 L 641.0 756.5 L 637.5 748.0 L 633.0 742.5 L 627.0 739.5 L 620.5 740.0 L 623.5 754.0 L 623.5 772.0 L 620.5 790.0 L 616.0 803.5 L 614.5 795.0 L 611.0 789.5 L 603.0 783.5 L 595.0 782.5 L 593.5 798.0 L 589.5 812.0 L 581.5 826.0 L 567.0 840.5 L 564.5 841.0 L 566.5 830.0 L 566.5 816.0 L 565.5 807.0 L 564.0 806.5 L 549.5 828.0 L 532.0 845.5 L 514.0 858.5 L 512.5 858.0 L 519.5 849.0 L 523.5 840.0 L 526.5 828.0 L 526.0 823.5 L 503.0 844.5 L 479.0 860.5 L 487.5 844.0 L 495.5 819.0 L 501.5 788.0 L 500.0 786.5 L 461.5 835.0 L 427.0 869.5 L 409.0 883.5 Z" fill="currentColor"/>
                         </svg>
                     </a>
                 </div>
-            </div>
-        `;
+            `;
 
         // Event listeners
         // Note: the 3 "new project" actions (create / open-folder / clone-github)
         // are wired in setupNewFab() — the inline speed-dial sits to the right
         // of the "recent projects" section heading on the launchpad screen.
 
-        document.getElementById('reset-server-btn').addEventListener('click', () => {
-            this.resetServer();
-        });
+        this.renderHomeBarVersion();
+        this.wireServerControls();
 
         this.initSectionDisclosures();
 
@@ -1140,18 +1160,65 @@ class Launchpad {
     }
 
     /**
-     * Wire up the three launchpad section headings ("running sessions",
-     * "recent projects", "server management") as real collapsible
-     * disclosures. Collapsed state persists per-section in localStorage
-     * under `cloude.launchpad.collapsed`, following the same convention
-     * as `cloude.theme` / `cloude.audio.muted`.
+     * Stamp the app version into the home bar's chip.
+     *
+     * The version is resolved server-side and stamped into the
+     * `cloude-app-version` meta tag by src/main.py; this markup is built
+     * at runtime and so has no server-rendered token of its own. An
+     * absent or empty meta leaves the chip empty, which
+     * `.home-bar__version:empty` then removes from the layout - a blank
+     * gap beside the bird would read as a broken control.
+     *
+     * @returns {void}
+     */
+    renderHomeBarVersion() {
+        const chip = document.getElementById('home-bar-version');
+        if (!chip) return;
+        const meta = document.querySelector('meta[name="cloude-app-version"]');
+        const version = meta ? (meta.getAttribute('content') || '').trim() : '';
+        chip.textContent = version;
+    }
+
+    /**
+     * Wire the home bar's server-controls trigger to its menu.
+     *
+     * The menu itself (rows, icons, what each row does) lives in
+     * client/js/server-controls-menu.js and rides the shared FabMenu
+     * plumbing. Wiring is idempotent, so a re-render that mints a fresh
+     * button cannot double-bind the click.
+     *
+     * @returns {void}
+     */
+    wireServerControls() {
+        const btn = document.getElementById('server-controls-btn');
+        if (!btn) return;
+        if (window.ServerControlsMenu && typeof window.ServerControlsMenu.wire === 'function') {
+            window.ServerControlsMenu.wire(btn);
+            return;
+        }
+        // The module is a plain script with no load guarantee relative to
+        // this render. Say so rather than leaving a dead button: a
+        // control that does nothing when pressed is the worse failure.
+        btn.disabled = true;
+        btn.setAttribute('title', 'server controls unavailable');
+        console.warn('Launchpad: ServerControlsMenu not loaded; server controls disabled');
+    }
+
+    /**
+     * Wire up the two launchpad section headings ("running sessions" and
+     * "recent projects") as real collapsible disclosures. Collapsed state
+     * persists per-section in localStorage under
+     * `cloude.launchpad.collapsed`, following the same convention as
+     * `cloude.theme` / `cloude.audio.muted`.
+     *
+     * There used to be a third, "server management". Its one control now
+     * lives in the home bar's server-controls menu.
      */
     initSectionDisclosures() {
         const collapsedState = this.getLaunchpadCollapsedState();
         const sections = [
             { id: 'running-sessions', toggleId: 'running-sessions-toggle', contentId: 'running-sessions-list' },
             { id: 'recent-projects', toggleId: 'projects-section-toggle', contentId: 'project-list' },
-            { id: 'server-management', toggleId: 'server-management-toggle', contentId: 'server-management-content' },
         ];
 
         sections.forEach(({ id, toggleId, contentId }) => {
@@ -1493,40 +1560,55 @@ class Launchpad {
     }
 
     /**
-     * Reset the server
+     * Restart the web server process.
+     *
+     * WHY "RESTART" AND NOT "RESET". This was labelled "reset server",
+     * which reads like it clears state. Traced end to end, it does not:
+     * POST /api/v1/server/reset spawns reset.sh, which either asks launchd
+     * to kickstart its own managed job (`launchctl kickstart -k`, the
+     * macOS menu-bar app's setup) or falls back to stop.sh + start.sh.
+     * stop.sh kills whatever holds port 8000; start.sh brings the FastAPI
+     * process back. Nothing in that path touches tmux, the config, the
+     * project list or anything on disk. It is a process restart, so the
+     * control says so. The API route keeps its `/server/reset` path - the
+     * name a user reads and the name on the wire are different contracts,
+     * and renaming the endpoint would be a breaking change for no gain.
+     *
+     * The confirmation copy is held to the same standard: the tmux
+     * sessions genuinely do keep running and re-attach, so it says that
+     * rather than inventing a scare or a reassurance.
+     *
+     * @returns {Promise<void>} resolves once the reload is scheduled, or
+     *   immediately if the user cancels.
      */
-    async resetServer() {
+    async restartServer() {
         try {
-            // Show confirmation modal
             const confirmed = await this.showConfirmModal(
-                'reset server',
-                'are you sure you want to reset the server?',
-                'the python server will restart and re-attach your tmux sessions — sessions keep running, only the web connection briefly drops.'
+                'restart server',
+                'restart the cloude code server?',
+                'the python web server stops and starts again. your tmux sessions keep running and re-attach afterwards, so nothing you have open is lost. this browser tab loses its connection for a few seconds and then reloads itself.'
             );
 
             if (!confirmed) {
                 return;
             }
 
-            // Show loading state
-            this.updateStatus('resetting server...');
+            this.updateStatus('restarting server...');
 
-            // Call reset API
             await window.API.resetServer();
 
-            console.log('Launchpad: Server reset initiated');
+            console.log('Launchpad: Server restart initiated');
 
-            // Show success message
-            this.updateStatus('server reset initiated - reconnecting...');
+            this.updateStatus('server restarting - reconnecting...');
 
-            // Wait a moment for the server to restart, then reload the page
+            // Wait a moment for the server to come back, then reload.
             setTimeout(() => {
                 window.location.reload();
             }, 3000);
 
         } catch (error) {
-            console.error('Launchpad: Failed to reset server:', error);
-            this.showError('failed to reset server: ' + error.message);
+            console.error('Launchpad: Failed to restart server:', error);
+            this.showError('failed to restart server: ' + error.message);
         }
     }
 

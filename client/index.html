@@ -26,6 +26,16 @@
          which is why ios-chrome.css must pad the header by the top inset. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Cloude">
+    <!-- The app version, stamped server-side by src/main.py's
+         `{{VERSION}}` substitution. It used to be a `<span class="version">`
+         chip inside the header `<h1>`; it now renders in the home screen's
+         bottom bar, which is built by launchpad.js at runtime and so has
+         no server-rendered markup of its own to stamp. A meta tag is the
+         handoff: main.py's replace() is a plain string substitution and
+         does not care where the token lives, and Launchpad reads it back
+         with one querySelector. Empty content means the version could not
+         be resolved, and the chip renders nothing at all. -->
+    <meta name="cloude-app-version" content="{{VERSION}}">
     <meta name="theme-color" content="#0a0a0a">
     <link rel="manifest" href="/manifest.webmanifest">
     <!-- iOS ignores manifest icons and reads this instead. PNG only. -->
@@ -73,6 +83,11 @@
          theme custom properties, the second must win on equal specificity
          where it re-pads the header. -->
     <link rel="stylesheet" href="/static/css/header-menu.css" />
+    <!-- The home screen's thin bottom bar. Must load BEFORE ios-chrome.css,
+         which overrides its --home-bar-inset token with the real
+         env(safe-area-inset-bottom) and excludes #launchpad-screen from the
+         generic `.screen` bottom inset. -->
+    <link rel="stylesheet" href="/static/css/home-bar.css" />
     <link rel="stylesheet" href="/static/css/ios-chrome.css" />
     <!-- Two-line common-command chips. After styles.css, which owns the
          base .command-button rule this narrows. -->
@@ -105,7 +120,15 @@
         <h1 id="appTitle">
             <span id="header-icon" class="header-icon" aria-hidden="true">☁️</span>
             <span id="header-title-text">Cloude Code</span>
-            <span class="version">{{VERSION}}</span>
+            <!-- NO VERSION CHIP HERE ANY MORE. It moved to the home
+                 screen's bottom bar (client/css/home-bar.css). It was a
+                 fixed-width, flex-shrink: 0 sibling of the title, so every
+                 pixel it occupied came straight off the title's truncation
+                 budget on every screen including the terminal, where the
+                 title is a session name that needs the room. See
+                 client/js/header-title-fit.js, which subtracts each
+                 non-shrinking sibling from the budget and therefore
+                 recovers this width with no code change. -->
         </h1>
         <div class="controls">
             <!-- APP-LEVEL SOUND, NOT THE PER-SESSION ONE. This is the
@@ -475,6 +498,12 @@
     <script src="/static/js/paste-fallback.js"></script>
     <script src="/static/js/terminal-tools-menu.js"></script>
     <script src="/static/js/session-editor-menu.js"></script>
+    <!-- The home bar's server-controls menu. Same shared plumbing, but
+         APP-scoped rather than session-scoped, which is why it mounts on
+         the home screen and the two above do not. Must load after
+         fab-menu.js and anchor-popover.js; launchpad.js wires it on
+         render, so the order relative to launchpad.js does not matter. -->
+    <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

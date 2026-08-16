@@ -195,8 +195,13 @@ function slotWidth(el) {
  *
  * Two steps, for the reason given on `slotWidth`: take the slot the
  * header grants the `h1`, then subtract everything else inside the `h1`
- * (identity icon, rename pencil, version chip) which are all
- * `flex-shrink: 0` and therefore fixed.
+ * (identity icon, rename pencil) which are all `flex-shrink: 0` and
+ * therefore fixed.
+ *
+ * The version chip used to be one of them. It moved to the home screen's
+ * bottom bar, and because this loop enumerates the h1's LIVE children
+ * rather than a hard-coded list, its width came back to the title budget
+ * with no change here.
  *
  * @param {Element} titleEl  The `#header-title-text` span.
  * @returns {number} Available width, or 0 when it cannot be determined.
