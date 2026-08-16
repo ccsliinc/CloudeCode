@@ -29,6 +29,11 @@ ENV/
 # Environment Variables
 .env
 .env.local
+# Every .env sidecar. A dated .env.bak from a deploy was found untracked
+# and NOT ignored on 2026-08-16, one `git add .` from publishing the TOTP
+# and JWT secrets. .env.example is negated below so it stays tracked.
+.env.*
+!.env.example
 config.json
 # The app rewrites config.json in place and drops the previous copy beside it
 # as config.json.bak (and dated config.json.bak.<stamp> variants). Those are
