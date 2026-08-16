@@ -124,18 +124,21 @@ class FakeAudio {
  *
  * @returns {{win: object, els: FakeAudio[]}}
  */
-function loadModules() {
+function loadModules(seedStore) {
     const els = [];
-    const store = {};
+    const store = Object.assign({}, seedStore || {});
     const win = {
         console: { log() {}, warn() {}, error() {} },
         localStorage: {
             getItem: (k) => (k in store ? store[k] : null),
-            setItem: (k, v) => { store[k] = String(v); }
+            setItem: (k, v) => { store[k] = String(v); },
+            removeItem: (k) => { delete store[k]; }
         },
+        CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
         document: {
             hidden: false,
-            addEventListener() {}
+            addEventListener() {},
+            dispatchEvent() {}
         },
         requestAnimationFrame: () => 1,
         cancelAnimationFrame() {},
@@ -152,8 +155,9 @@ function loadModules() {
 
     const ctx = vm.createContext(win);
     vm.runInContext(clientJs('themeAudioNode.js'), ctx);
+    vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
     vm.runInContext(clientJs('themeAudio.js'), ctx);
-    return { win, els };
+    return { win, els, store };
 }
 
 /** The manifest block shape the themes actually ship. */
@@ -333,6 +337,224 @@ test('a clean play() clears the recorded error', () => {
     win.ThemeAudio.setTheme(CFG);
     win.ThemeAudio.toggleMute();
     assert.equal(win.ThemeAudio.getLastPlayError(), null);
+});
+
+// ---------------------------------------------------------------------
+// Stale stored settings - the upgrade bug class.
+//
+// These are the tests a fresh browser can never fail. Every other test in
+// this file starts from an empty localStorage, which is exactly the state
+// the affected user is NOT in. Up to v0.7.2 the master volume was an
+// attenuator defaulting to 0.3, and a stored value overrides a default by
+// construction - so raising the default to 1.0 changed nothing for anyone
+// who already had a number in `cloude.audio.volume`. The migration drops
+// those values; without it the fix is invisible to precisely the people
+// who hit the bug.
+// ---------------------------------------------------------------------
+
+test('a stale master volume from an old build is dropped on upgrade', () => {
+    // The shape of a browser that ran the old build and had setVolume()
+    // called on it: a low master volume and NO version stamp.
+    const { win, store } = loadModules({ 'cloude.audio.volume': '0.28' });
+    win.ThemeAudio.init();
+
+    assert.equal(
+        win.ThemeAudio.getVolume(), 1,
+        'a stale 0.28 master must not survive the upgrade - it re-applies ' +
+        'the old inaudible gain budget on top of the new manifest volumes'
+    );
+    assert.ok(
+        !('cloude.audio.volume' in store),
+        'the stale key must be cleared, not just ignored in memory'
+    );
+    assert.equal(store['cloude.audio.settingsVersion'], '2');
+});
+
+test('every stale master volume below unity is dropped, not just 0.28', () => {
+    for (const stale of ['0', '0.05', '0.3', '0.5', '0.99']) {
+        const { win } = loadModules({ 'cloude.audio.volume': stale });
+        win.ThemeAudio.init();
+        assert.equal(
+            win.ThemeAudio.getVolume(), 1,
+            `stored master volume ${stale} survived the migration`
+        );
+    }
+});
+
+test('a stamped store keeps its master volume - migration is not a reset', () => {
+    // Once stamped at the current version, a deliberate value is the
+    // user's, and an upgrade must not keep stomping it.
+    const { win } = loadModules({
+        'cloude.audio.volume': '0.4',
+        'cloude.audio.settingsVersion': '2'
+    });
+    win.ThemeAudio.init();
+    assert.equal(win.ThemeAudio.getVolume(), 0.4);
+});
+
+test('migration leaves the app sound switch alone', () => {
+    // Only the volume's MEANING changed. A user who had unmuted stays
+    // unmuted across the upgrade.
+    const { win, store } = loadModules({
+        'cloude.audio.volume': '0.28',
+        'cloude.audio.muted': 'false'
+    });
+    win.ThemeAudio.init();
+    assert.equal(store['cloude.audio.muted'], 'false');
+    assert.equal(win.ThemeAudio.isAppSoundOn(), true);
+});
+
+test('migration is idempotent', () => {
+    const seed = { 'cloude.audio.volume': '0.28' };
+    const first = loadModules(seed);
+    first.win.ThemeAudio.init();
+    const afterFirst = Object.assign({}, first.store);
+
+    const second = loadModules(afterFirst);
+    second.win.ThemeAudio.init();
+    assert.equal(second.win.ThemeAudio.getVolume(), 1);
+    assert.equal(second.store['cloude.audio.settingsVersion'], '2');
+});
+
+// ---------------------------------------------------------------------
+// The two gates. A session attach must not be able to undo the header.
+// ---------------------------------------------------------------------
+
+test('a session attach cannot clobber the app sound master switch', () => {
+    // The exact reported sequence: turn app sound on in the header, then
+    // enter a session that never opted into music. The master used to be
+    // the SAME boolean the attach drove from the per-session default of
+    // OFF, so the app went silent and the header still showed itself on.
+    const { win } = loadModules();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setAppSound(true);
+
+    win.ThemeAudio.setSessionEnabled(false); // attach, session opted out
+    assert.equal(
+        win.ThemeAudio.isAppSoundOn(), true,
+        'the attach silently turned the master switch off'
+    );
+    assert.equal(win.ThemeAudio.isMuted(), true, 'no session opt-in, so silent');
+
+    win.ThemeAudio.setSessionEnabled(true); // the user taps "play music"
+    assert.equal(win.ThemeAudio.isMuted(), false, 'both gates on must play');
+});
+
+test('sound requires BOTH gates', () => {
+    const { win } = loadModules();
+    win.ThemeAudio.init();
+
+    win.ThemeAudio.setAppSound(false);
+    win.ThemeAudio.setSessionEnabled(true);
+    assert.equal(win.ThemeAudio.isMuted(), true, 'app sound off must win');
+
+    win.ThemeAudio.setAppSound(true);
+    win.ThemeAudio.setSessionEnabled(false);
+    assert.equal(win.ThemeAudio.isMuted(), true, 'session opt-out must win');
+});
+
+test('the app sound switch persists across a reload', () => {
+    const first = loadModules();
+    first.win.ThemeAudio.init();
+    first.win.ThemeAudio.setAppSound(true);
+
+    const second = loadModules(first.store);
+    second.win.ThemeAudio.init();
+    assert.equal(second.win.ThemeAudio.isAppSoundOn(), true);
+});
+
+// ---------------------------------------------------------------------
+// The element-volume trap: the actual cause of "still dont hear audio".
+// ---------------------------------------------------------------------
+
+/**
+ * Build a sandbox whose AudioContext succeeds, so makeNode() takes the
+ * webaudio branch. Measured in desktop Chrome 150 on 2026-08-16:
+ * HTMLMediaElement.volume attenuates UPSTREAM of the graph, so with
+ * el.volume=0 the output RMS is exactly 0 no matter what the GainNode
+ * says. Every observable signal still looks healthy.
+ *
+ * @returns {{win: object, els: object[]}}
+ */
+function loadModulesWebAudio() {
+    const els = [];
+    const store = {};
+    const gains = [];
+    const win = {
+        console: { log() {}, warn() {}, error() {} },
+        localStorage: {
+            getItem: (k) => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = String(v); },
+            removeItem: (k) => { delete store[k]; }
+        },
+        CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
+        document: { hidden: false, addEventListener() {}, dispatchEvent() {} },
+        requestAnimationFrame: () => 1,
+        cancelAnimationFrame() {},
+        performance: { now: () => 0 },
+        AudioContext: class {
+            constructor() { this.state = 'running'; this.currentTime = 0; }
+            createMediaElementSource() { return { connect: (n) => n, disconnect() {} }; }
+            createGain() {
+                const g = {
+                    gain: {
+                        value: 0,
+                        cancelScheduledValues() {},
+                        setValueAtTime() {},
+                        linearRampToValueAtTime(v) { g.gain.value = v; }
+                    },
+                    connect: (n) => n,
+                    disconnect() {}
+                };
+                gains.push(g);
+                return g;
+            }
+            resume() { return Promise.resolve(); }
+        },
+        webkitAudioContext: null
+    };
+    win.window = win;
+    win.Audio = function () { const a = new FakeAudio(); els.push(a); return a; };
+
+    const ctx = vm.createContext(win);
+    vm.runInContext(clientJs('themeAudioNode.js'), ctx);
+    vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
+    vm.runInContext(clientJs('themeAudio.js'), ctx);
+    return { win, els, gains };
+}
+
+test('webaudio mode opens the element volume so the gain node is heard', () => {
+    const { win, els } = loadModulesWebAudio();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setTheme(CFG);
+
+    assert.equal(win.ThemeAudioNode.getEngineKind(), 'webaudio');
+    assert.equal(
+        els[0].volume, 1,
+        'element volume left at 0 multiplies the whole graph by zero: ' +
+        'currentTime advances, gain reads 0.6, play() never rejects, silence'
+    );
+});
+
+test('element mode still starts silent so the fade can ramp up', () => {
+    // No AudioContext in this sandbox, so the element's own volume IS the
+    // fade and must start at 0. The webaudio fix must not leak here.
+    const { win, els } = loadModules();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setTheme(CFG);
+
+    assert.equal(win.ThemeAudioNode.getEngineKind(), 'element');
+    assert.equal(els[0].volume, 0);
+});
+
+test('the fade reaches the manifest target, not something near zero', () => {
+    const { win, gains } = loadModulesWebAudio();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setAppSound(true);   // both gates on
+    win.ThemeAudio.setTheme(CFG);
+
+    // CFG.volume 0.6 x master 1.0. A stale master would land at 0.168.
+    assert.equal(gains[0].gain.value, 0.6);
 });
 
 // ---------------------------------------------------------------------

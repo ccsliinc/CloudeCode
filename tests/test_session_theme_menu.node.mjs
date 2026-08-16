@@ -82,32 +82,64 @@ function fakeEl(id) {
 /**
  * Build a sandbox with fake Themes/ThemeAudio/localStorage.
  *
+ * ThemeAudio is faked with the TWO-GATE API it really has: an app sound
+ * master switch and a per-session gate, silent unless both are on. Pass
+ * `legacyThemeAudio: true` to fake an older ThemeAudio that only exposes
+ * isMuted/toggleMute, which exercises the version-skew fallback.
+ *
  * @param {object} opts
  * @param {string|null} opts.session - active tmux session name.
  * @param {object} opts.store - backing object for localStorage.
- * @param {boolean} opts.muted - ThemeAudio's starting mute state.
+ * @param {boolean} opts.muted - starting effective mute (legacy fake only).
+ * @param {boolean} opts.appSound - starting app sound master state.
+ * @param {boolean} opts.legacyThemeAudio - omit the two-gate API.
  */
 function load(opts) {
     const store = opts.store || {};
     const created = [];
     const calls = { applyGlobal: [], toggleMute: 0 };
     let muted = opts.muted === undefined ? true : opts.muted;
+    let appSoundOn = opts.appSound === undefined ? false : opts.appSound;
+    let sessionOn = true;
 
     const sandbox = {
         window: {
             Themes: {
                 getActiveSession: () => opts.session,
-                getActiveGlobal: () => ({ id: 'claude', name: 'Claude' }),
+                // `hasTrack` decides whether the active theme declares an
+                // audio block. Without one the control honestly reports
+                // "no track", which would otherwise mask the messages the
+                // app-sound tests are actually asserting on.
+                getActiveGlobal: () => (opts.hasTrack
+                    ? {
+                        id: 'claude',
+                        name: 'Claude',
+                        audio: { src: '/static/assets/audio/dead-ship.m4a' }
+                    }
+                    : { id: 'claude', name: 'Claude' }),
                 listAll: () => [
                     { id: 'claude', name: 'Claude' },
                     { id: 'matrix', name: 'Matrix' },
                 ],
                 applyGlobal(id) { calls.applyGlobal.push(id); return true; },
             },
-            ThemeAudio: {
-                isMuted: () => muted,
-                toggleMute() { muted = !muted; calls.toggleMute++; return muted; },
-            },
+            ThemeAudio: opts.legacyThemeAudio
+                ? {
+                    isMuted: () => muted,
+                    toggleMute() { muted = !muted; calls.toggleMute++; return muted; },
+                }
+                : {
+                    isMuted: () => !(appSoundOn && sessionOn),
+                    toggleMute() {
+                        appSoundOn = !appSoundOn;
+                        calls.toggleMute++;
+                        return !(appSoundOn && sessionOn);
+                    },
+                    isAppSoundOn: () => appSoundOn,
+                    setAppSound(on) { appSoundOn = !!on; return !(appSoundOn && sessionOn); },
+                    isSessionEnabled: () => sessionOn,
+                    setSessionEnabled(on) { sessionOn = !!on; return !(appSoundOn && sessionOn); },
+                },
             getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
             innerWidth: 400,
             innerHeight: 800,
@@ -140,7 +172,9 @@ function load(opts) {
         calls,
         store,
         created,
-        isMuted: () => muted,
+        isMuted: () => (opts.legacyThemeAudio ? muted : !(appSoundOn && sessionOn)),
+        isAppSoundOn: () => appSoundOn,
+        isSessionEnabled: () => sessionOn,
     };
 }
 
@@ -177,27 +211,48 @@ test('a null session name is never on and never written', () => {
     assert.equal(Object.keys(store).length, 0);
 });
 
-test('entering an opted-in session unmutes', () => {
+test('entering an opted-in session opens its gate without touching the master', () => {
+    // This used to assert toggleMute was called once, which encoded the
+    // bug: an attach reached for the app sound master switch. It now
+    // drives only the session gate.
     const store = { 'cloude.audio.session.alpha': 'on' };
-    const { api, calls, isMuted } = load({ session: 'alpha', store, muted: true });
+    const { api, calls, isMuted, isSessionEnabled } = load({
+        session: 'alpha', store, appSound: true
+    });
     api.syncForSession();
-    assert.equal(calls.toggleMute, 1);
-    assert.equal(isMuted(), false);
+    assert.equal(calls.toggleMute, 0, 'an attach must never flip the master switch');
+    assert.equal(isSessionEnabled(), true);
+    assert.equal(isMuted(), false, 'app sound on plus an opted-in session is audible');
+});
+
+test('an opted-in session is still silent while app sound is off', () => {
+    const store = { 'cloude.audio.session.alpha': 'on' };
+    const { api, isMuted, isSessionEnabled } = load({
+        session: 'alpha', store, appSound: false
+    });
+    api.syncForSession();
+    assert.equal(isSessionEnabled(), true, 'the session gate reflects the opt-in');
+    assert.equal(isMuted(), true, 'the master switch must still win');
 });
 
 test('entering a session that never opted in leaves it silent', () => {
-    const { api, calls, isMuted } = load({ session: 'beta', muted: true });
+    const { api, calls, isMuted } = load({ session: 'beta', appSound: true });
     api.syncForSession();
     assert.equal(calls.toggleMute, 0, 'no autoplay without an explicit opt-in');
     assert.equal(isMuted(), true);
 });
 
 test('REGRESSION: music does not leak from one session into the next', () => {
-    // Left session alpha unmuted, now entering beta which never opted in.
+    // Left session alpha playing, now entering beta which never opted in.
+    // App sound is ON, so the session gate is the only thing that can
+    // silence beta - without it this assertion would pass vacuously.
     const store = { 'cloude.audio.session.alpha': 'on' };
-    const { api, isMuted } = load({ session: 'beta', store, muted: false });
+    const { api, isMuted, isAppSoundOn } = load({
+        session: 'beta', store, appSound: true
+    });
     api.syncForSession();
     assert.equal(isMuted(), true, 'beta must be silenced on entry');
+    assert.equal(isAppSoundOn(), true, 'and it must do that without muting the app');
 });
 
 // toggleAudio is now reached from the session editor's "play music" MENU
@@ -217,6 +272,60 @@ test('toggling audio flips and persists the opt-in', () => {
     assert.equal(store['cloude.audio.session.alpha'], 'off');
     assert.equal(isMuted(), true);
     assert.equal(audioBtn.getAttribute('aria-pressed'), 'false');
+});
+
+test('entering a session sets the session gate, never the app sound master', () => {
+    // The reported bug: the header switch is "app sound (all sessions)",
+    // but an attach used to drive that same boolean from the per-session
+    // opt-in, so entering any session that had not opted into music
+    // silently muted the whole app and the header kept showing itself on.
+    const { api, isAppSoundOn, isSessionEnabled } = load({
+        session: 'alpha', appSound: true
+    });
+    api.syncForSession();
+    assert.equal(isAppSoundOn(), true, 'the attach clobbered the master switch');
+    assert.equal(isSessionEnabled(), false, 'alpha never opted in, so its gate is off');
+});
+
+test('turning music on while app sound is off lifts it and says so', () => {
+    // Two controls where one silently vetoes the other is a dead end: the
+    // user taps "play music", nothing happens, and nothing explains why.
+    const { api, isAppSoundOn, isMuted } = load({
+        session: 'alpha', appSound: false, hasTrack: true
+    });
+    const pills = [];
+    api.toggleAudio(
+        { _showStatusPill(msg, kind) { pills.push({ msg, kind }); } },
+        fakeEl('sessionAudioBtn')
+    );
+
+    assert.equal(isAppSoundOn(), true, 'app sound must be lifted in the same tap');
+    assert.equal(isMuted(), false, 'both gates should now be open');
+    assert.equal(pills.length, 1, 'the user must be told, not silently overridden');
+    assert.ok(
+        /app sound/.test(pills[0].msg),
+        `the message must name the other control: ${pills[0].msg}`
+    );
+});
+
+test('turning music on when app sound is already on says nothing extra', () => {
+    const { api } = load({ session: 'alpha', appSound: true, hasTrack: true });
+    const pills = [];
+    api.toggleAudio(
+        { _showStatusPill(msg, kind) { pills.push({ msg, kind }); } },
+        fakeEl('sessionAudioBtn')
+    );
+    assert.equal(pills.length, 0, 'nothing to explain when nothing was overridden');
+});
+
+test('an older ThemeAudio without the two-gate API still toggles', () => {
+    // Version skew between a cached client and a deployed one must
+    // degrade, not throw.
+    const { api, isMuted } = load({
+        session: 'alpha', muted: true, legacyThemeAudio: true
+    });
+    api.toggleAudio({ _showStatusPill() {} }, fakeEl('sessionAudioBtn'));
+    assert.equal(isMuted(), false);
 });
 
 test('opting in on a theme with no track says so instead of pretending', () => {

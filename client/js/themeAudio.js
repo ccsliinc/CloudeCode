@@ -13,19 +13,10 @@
  *     "fadeMs":      1500   // crossfade duration in ms
  *   }
  *
- * WHY TWO FORMATS, AND WHY m4a IS FIRST. The clips first shipped as Ogg
- * Vorbis only, and on iOS that is SILENT. Measured on iPhone 16e,
- * iOS 26.1 / Safari 26.1, 2026-08-16:
- *
- *   canPlayType('audio/ogg; codecs=vorbis') -> "probably"
- *   <audio src="....ogg">  -> error MEDIA_ERR_SRC_NOT_SUPPORTED (4)
- *   <audio src="....m4a">  -> loadedmetadata, duration 164.98
- *
- * canPlayType LIES here: WebKit recognises the Ogg container, claims
- * Vorbis, then fails to decode. So a canPlayType-based probe would still
- * pick the ogg on iOS and still be silent. The order is therefore FIXED
- * (AAC first, decoded by every current engine) and the fallback is driven
- * by a real load ERROR, never by asking the browser what it supports.
+ * FORMAT ORDER IS FIXED, m4a first: iOS returns "probably" for Ogg Vorbis
+ * from canPlayType and then fails to decode it, so the fallback is driven
+ * by a real load ERROR rather than a capability probe. The measurements
+ * are in ThemeAudioNode.candidates() in themeAudioNode.js.
  *
  * GAIN BUDGET (read before lowering any of these numbers). The clips are
  * loudnorm'd to about -24 LUFS, already quiet. The master and the
@@ -33,23 +24,50 @@
  * the original 0.28 x 0.3 gave a linear gain of 0.084, i.e. -21.5 dB on
  * top of -24 LUFS, roughly -45 LUFS at the speaker - inaudible on a phone.
  * The master now defaults to 1.0 and manifests carry 0.45..0.60, landing
- * near -31..-28 LUFS: present, still background.
+ * near -31..-28 LUFS: present, still background. A THIRD multiplier hid
+ * here until 2026-08-16: the <audio> element's own `.volume`, which
+ * attenuates upstream of the Web Audio graph. See ThemeAudioNode.makeNode().
  *
  * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
  * falls back to `default-src 'self'` and any remote URL is blocked.
+ *
+ * TWO GATES, NOT ONE. Sound requires BOTH:
+ *
+ *   1. APP SOUND, the master switch in the header kebab, labelled "app
+ *      sound (all sessions)". Persisted, default OFF.
+ *   2. The PER-SESSION music opt-in, owned by session-theme-menu.js and
+ *      keyed by tmux session name. Applied on every attach, default OFF.
+ *
+ * These used to be the SAME boolean, so the header switch did not survive
+ * contact with a session: the next attach called syncForSession(), drove
+ * that boolean from the per-session opt-in, found the default OFF and
+ * re-muted - silently, and without repainting the header button, so the
+ * control still showed itself as on. An attach now sets gate 2 and cannot
+ * touch gate 1.
+ *
+ * Gate 2 defaults to TRUE so the header switch alone can play the home
+ * theme before any session is attached. Once a session IS attached,
+ * syncForSession() sets it from that session's stored opt-in, which is
+ * where "off by default per session" actually lives.
  *
  * Public surface (singleton on window.ThemeAudio):
  *   init()                       - call once on app load
  *   setTheme(audioConfig|null)   - called by the themes registry on every
  *                                  applyTheme(); null fades out to silence
- *   toggleMute()                 - gesture handler; returns new muted state
- *   isMuted()                    - boolean for UI
+ *   setAppSound(on)/isAppSoundOn() - gate 1, persisted
+ *   setSessionEnabled(on)/isSessionEnabled() - gate 2, in-memory
+ *   toggleMute()                 - gesture handler, flips gate 1; returns
+ *                                  the new EFFECTIVE muted state
+ *   isMuted()                    - effective gate, for UI
  *   getLastPlayError()           - name of the last play() rejection, or null
  *   getVolume() / setVolume(v)   - master 0..1, persisted; no UI yet
  *
- * Persistence:
- *   localStorage['cloude.audio.muted']  -> 'true' | 'false'  (default 'true')
- *   localStorage['cloude.audio.volume'] -> '1' (float 0..1 as string)
+ * Persistence lives in themeAudioSettings.js, which also owns the
+ * upgrade migration for stale stored values.
+ *
+ * A `cloude:audio-state` CustomEvent is dispatched on `document` whenever
+ * either gate changes, so the header button can repaint when something
+ * other than its own click moved the state.
  *
  * Engine: MediaElementAudioSourceNode -> GainNode -> destination, which
  * gives clean linearRampToValueAtTime crossfades. Clips are same-origin so
@@ -75,212 +93,163 @@
         return;
     }
 
-    var LS_MUTED = 'cloude.audio.muted';
-    var LS_VOLUME = 'cloude.audio.volume';
+    var Settings = window.ThemeAudioSettings;
+
     // The user's master gain. Defaults to unity: the per-theme volume in
     // the manifest is the ONLY attenuation in the normal path, so the two
     // numbers cannot quietly multiply each other into silence.
-    var DEFAULT_MASTER_VOLUME = 1.0;
-
-    // Target gain for a theme whose manifest declares audio but omits a
-    // volume. Deliberately mid-scale, not unity.
-    var DEFAULT_TRACK_VOLUME = 0.5;
+    var DEFAULT_MASTER_VOLUME = Settings.DEFAULT_MASTER_VOLUME;
 
     // ---- State ----
     var initialized = false;
-    var muted = true;                         // default muted — overridden in init()
+    // Gate 1: the header master switch. Persisted, default off.
+    var appSoundOn = false;
+    // Gate 2: the per-session opt-in. In-memory; session-theme-menu.js
+    // sets it on every attach. True until then so the header switch alone
+    // can play the home theme.
+    var sessionOn = true;
+    // Derived from the two gates above — never assigned directly.
+    var muted = true;
     var globalVolume = DEFAULT_MASTER_VOLUME; // 0..1; multiplied with per-theme volume
     var currentConfig = null;          // last audioConfig passed to setTheme()
 
-    // Current playback node (one of two engines — see init/_engineKind).
-    // Both engines share the same node shape so the rest of the code is uniform.
-    //   { audio: HTMLAudioElement, src: string, volume: number, fadeMs: number,
-    //     gain?: GainNode, sourceNode?: MediaElementAudioSourceNode,
-    //     rafHandle?: number }
+    // Current playback node. The node shape and the choice of engine
+    // (webaudio vs element) both live in themeAudioNode.js, which also
+    // owns the shared AudioContext; this file only holds which node is
+    // playing and which is fading out.
     var currentNode = null;
     var outgoingNode = null; // held during crossfade only
 
-
-    // Web Audio (lazy-init on first user gesture)
-    var audioCtx = null;
-    var engineKind = null; // 'webaudio' | 'element' | null (decided on first play)
-
-    // ---- LocalStorage helpers (defensive — never throw) ----
-    function _readMuted() {
+    // ---- Gate plumbing ----
+    /**
+     * Tell listeners (the header button) that a gate moved. Fired for any
+     * change, including ones the header did not cause, because the header
+     * used to repaint only on its own click and therefore lied whenever
+     * something else muted the app.
+     *
+     * @returns {void}
+     */
+    function _emitChange() {
         try {
-            var v = localStorage.getItem(LS_MUTED);
-            // Default to muted; only an explicit 'false' unmutes.
-            return v === null ? true : v !== 'false';
-        } catch (_) { return true; }
-    }
-    function _writeMuted(b) {
-        try { localStorage.setItem(LS_MUTED, b ? 'true' : 'false'); } catch (_) { /* ignore */ }
-    }
-    function _readVolume() {
-        try {
-            var v = localStorage.getItem(LS_VOLUME);
-            if (v === null) return DEFAULT_MASTER_VOLUME;
-            var n = parseFloat(v);
-            if (isFinite(n) && n >= 0 && n <= 1) return n;
-            return DEFAULT_MASTER_VOLUME;
-        } catch (_) { return DEFAULT_MASTER_VOLUME; }
-    }
-    function _writeVolume(v) {
-        try { localStorage.setItem(LS_VOLUME, String(v)); } catch (_) { /* ignore */ }
+            if (typeof document === 'undefined' ||
+                typeof document.dispatchEvent !== 'function' ||
+                typeof CustomEvent !== 'function') {
+                return;
+            }
+            document.dispatchEvent(new CustomEvent('cloude:audio-state', {
+                detail: { appSoundOn: appSoundOn, sessionOn: sessionOn, muted: muted }
+            }));
+        } catch (err) { /* an event is never worth an exception */ }
     }
 
-    // ---- AudioContext lifecycle ----
-    function _ensureAudioCtx() {
-        if (audioCtx) return audioCtx;
-        try {
-            var Ctor = window.AudioContext || window.webkitAudioContext;
-            if (!Ctor) return null;
-            audioCtx = new Ctor();
-            return audioCtx;
-        } catch (e) {
-            console.warn('ThemeAudio: AudioContext construction failed', e);
-            return null;
+    /**
+     * Start or stop playback to match the current gate state. Idempotent:
+     * safe to call when nothing actually changed.
+     *
+     * @returns {void}
+     */
+    function _applyGate() {
+        if (muted) {
+            if (!currentNode) return;
+            var outMs = Math.min(currentNode.fadeMs, 400);
+            window.ThemeAudioNode.ramp(currentNode, 0, outMs, _ctx());
+            setTimeout(function () {
+                if (currentNode && muted) {
+                    try { currentNode.audio.pause(); } catch (_) { /* ignore */ }
+                }
+            }, outMs + 20);
+            return;
+        }
+        // Unmuting is normally the user-gesture moment, so resume the
+        // context here rather than at construction time.
+        _resumeCtxIfSuspended();
+        if (currentNode && !document.hidden) {
+            _tryPlay(currentNode);
+            window.ThemeAudioNode.ramp(
+                currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, _ctx());
         }
     }
 
-    function _resumeCtxIfSuspended() {
-        if (audioCtx && audioCtx.state === 'suspended') {
-            audioCtx.resume().catch(function (e) {
-                console.warn('ThemeAudio: ctx.resume() rejected', e);
-            });
-        }
+    /**
+     * Recompute the effective mute from the two gates and act on it.
+     *
+     * @returns {boolean} the new effective muted state.
+     */
+    function _recompute() {
+        var next = !(appSoundOn && sessionOn);
+        var changed = next !== muted;
+        muted = next;
+        if (changed) _applyGate();
+        _emitChange();
+        return muted;
     }
 
     // ---- Node construction ----
     /**
-     * Handle a media load error on a node: advance to the next declared
-     * format if there is one, otherwise tear the node down.
-     *
-     * Retrying reuses the SAME element, so the Web Audio graph hanging off
-     * it (MediaElementAudioSourceNode -> GainNode) survives the swap.
-     * createMediaElementSource can only ever be called once per element,
-     * so building a fresh element here would throw on the second attempt.
-     *
-     * @param {object} node - the node whose element errored.
-     * @returns {void}
+     * Policy callbacks handed to ThemeAudioNode.makeNode(). The mechanics
+     * of building and retrying a node live in that module; these four
+     * answers are the only things it needs from the policy layer, and
+     * keeping them as callbacks is what lets the two files stay separate.
      */
-    function _onNodeError(node) {
-        var el = node.audio;
-        var code = el && el.error ? el.error.code : null;
-        var next = node.sourceIndex + 1;
+    var nodeHost = {
+        /**
+         * Is this node the one currently in play?
+         *
+         * @param {object} node - a playback node.
+         * @returns {boolean}
+         */
+        isCurrent: function (node) { return node === currentNode; },
 
-        if (next < node.sources.length) {
-            console.warn('ThemeAudio: ' + node.sources[node.sourceIndex] +
-                ' failed (code ' + code + '), trying ' + node.sources[next]);
-            node.sourceIndex = next;
-            node.loadedSrc = node.sources[next];
-            try {
-                el.src = node.sources[next];
-                el.load();
-            } catch (e) {
-                console.warn('ThemeAudio: fallback src swap threw', e);
-                return;
-            }
-            // load() resets the element, so re-assert the state the node was
-            // in. Volume is re-ramped rather than set, so a mid-fade swap
-            // does not click.
-            if (node === currentNode && !muted && !document.hidden) {
-                _resumeCtxIfSuspended();
-                _tryPlay(node);
-                window.ThemeAudioNode.ramp(node, _effectiveTarget(node), node.fadeMs, audioCtx);
-            }
-            return;
+        /**
+         * Should audio be running right now?
+         *
+         * @returns {boolean}
+         */
+        shouldPlay: function () { return !muted && !document.hidden; },
+
+        /**
+         * The node's gain target once the master is applied.
+         *
+         * @param {object} node - a playback node.
+         * @returns {number} 0..1.
+         */
+        effectiveTarget: function (node) { return _effectiveTarget(node); },
+
+        /**
+         * Forget a node whose sources are all exhausted.
+         *
+         * @param {object} node - the node being dropped.
+         * @returns {void}
+         */
+        onDrop: function (node) {
+            if (currentNode === node) currentNode = null;
+            if (outgoingNode === node) outgoingNode = null;
         }
+    };
 
-        console.warn('ThemeAudio: no playable source for', node.sources.join(', '),
-            '(last error code ' + code + ')');
-        window.ThemeAudioNode.teardown(node);
-        if (currentNode === node) currentNode = null;
-        if (outgoingNode === node) outgoingNode = null;
+    /**
+     * Build a playback node for a manifest `audio` block.
+     *
+     * @param {object|null} cfg - a manifest `audio` block.
+     * @returns {object|null} the node, or null for an unusable cfg.
+     */
+    function _makeNode(cfg) {
+        return window.ThemeAudioNode.makeNode(cfg, nodeHost);
     }
 
     /**
-     * Build a playback node for the given audio config. Returns null if the
-     * config is missing or src is empty. Does NOT call .play() — caller decides.
+     * The shared AudioContext, or null. Owned by ThemeAudioNode.
      *
-     * The node holds an <audio> element (always) plus optional Web Audio graph
-     * (GainNode + MediaElementAudioSourceNode) if the engine has been settled
-     * on 'webaudio'. If 'element' mode, gain is null and volume is driven by
-     * the element's .volume property directly (ThemeAudioNode.ramp).
-     *
-     * @param {{src: string, srcFallback?: string, volume?: number,
-     *          fadeMs?: number}|null} cfg - a manifest `audio` block.
-     * @returns {object|null} the playback node, or null for an unusable cfg.
+     * @returns {AudioContext|null}
      */
-    function _makeNode(cfg) {
-        if (!cfg || typeof cfg !== 'object' || !cfg.src || typeof cfg.src !== 'string') {
-            return null;
-        }
-        var el = new Audio();
-        // crossorigin BEFORE src per spec — Safari/WebKit caches the request
-        // mode at src-set time.
-        el.crossOrigin = 'anonymous';
-        el.loop = true;
-        el.preload = 'auto';
-        el.volume = 0; // start silent; fade-in handles the ramp
+    function _ctx() { return window.ThemeAudioNode.getCtx(); }
 
-        var node = {
-            audio: el,
-            // Ordered candidate list, best-supported format first. See the
-            // header: this order is FIXED rather than chosen by canPlayType,
-            // because canPlayType claims Ogg Vorbis works on iOS and it does
-            // not. `src` tracks whichever candidate is currently loaded so
-            // setTheme()'s same-track no-op still compares correctly.
-            sources: window.ThemeAudioNode.candidates(cfg),
-            sourceIndex: 0,
-            // `src` is the track's IDENTITY (always the manifest's primary),
-            // which is what setTheme() compares to decide "same track". It
-            // must NOT follow a fallback swap, or re-applying the same theme
-            // after a fallback would look like a track change and restart it.
-            src: cfg.src,
-            // `loadedSrc` is the candidate actually on the element right now.
-            loadedSrc: cfg.src,
-            targetVolume: typeof cfg.volume === 'number' ? cfg.volume : DEFAULT_TRACK_VOLUME,
-            fadeMs: typeof cfg.fadeMs === 'number' && cfg.fadeMs >= 0 ? cfg.fadeMs : 1500,
-            gain: null,
-            sourceNode: null,
-            rafHandle: null
-        };
-
-        // A load error is not automatically fatal any more: if another format
-        // is declared, try it before giving up. Only an exhausted candidate
-        // list tears the node down.
-        el.addEventListener('error', function () { _onNodeError(node); });
-
-        el.src = node.sources[0];
-
-        // Try to wire Web Audio graph. If createMediaElementSource fails
-        // (CORS taint, codec issues, etc.), fall back to 'element' mode for
-        // the rest of the session.
-        if (engineKind !== 'element') {
-            var ctx = _ensureAudioCtx();
-            if (ctx) {
-                try {
-                    var src = ctx.createMediaElementSource(el);
-                    var gain = ctx.createGain();
-                    gain.gain.value = 0;
-                    src.connect(gain).connect(ctx.destination);
-                    node.gain = gain;
-                    node.sourceNode = src;
-                    engineKind = 'webaudio';
-                } catch (e) {
-                    // CORS taint or other graph-construction failure.
-                    // Drop to element mode permanently for this session.
-                    console.warn('ThemeAudio: WebAudio graph failed, falling back to element mode', e);
-                    engineKind = 'element';
-                }
-            } else {
-                engineKind = 'element';
-            }
-        }
-
-        return node;
-    }
+    /**
+     * Resume the AudioContext if the browser suspended it.
+     *
+     * @returns {void}
+     */
+    function _resumeCtxIfSuspended() { window.ThemeAudioNode.resumeCtx(); }
 
     // ---- Effective volume helpers ----
     function _effectiveTarget(node) {
@@ -322,7 +291,7 @@
                 currentNode.fadeMs = typeof audioConfig.fadeMs === 'number' && audioConfig.fadeMs >= 0
                     ? audioConfig.fadeMs : currentNode.fadeMs;
                 if (!muted && !document.hidden) {
-                    window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
+                    window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, _ctx());
                 }
             }
             return;
@@ -338,7 +307,7 @@
         if (currentNode) {
             outgoingNode = currentNode;
             var outFade = outgoingNode.fadeMs;
-            window.ThemeAudioNode.ramp(outgoingNode, 0, outFade, audioCtx);
+            window.ThemeAudioNode.ramp(outgoingNode, 0, outFade, _ctx());
             (function (n, ms) {
                 setTimeout(function () {
                     if (n === outgoingNode) {
@@ -362,44 +331,67 @@
         if (!muted && !document.hidden) {
             _resumeCtxIfSuspended();
             _tryPlay(node);
-            window.ThemeAudioNode.ramp(node, _effectiveTarget(node), node.fadeMs, audioCtx);
+            window.ThemeAudioNode.ramp(node, _effectiveTarget(node), node.fadeMs, _ctx());
         }
     }
 
     /**
-     * Toggle mute. MUST be called from a user-gesture handler (header button
-     * click) for the FIRST unmute — that's the only way the autoplay grant
-     * gets issued to the AudioContext.
+     * Set gate 1, the app sound master switch. Persisted. MUST be called
+     * from a user-gesture handler the FIRST time it turns sound on -
+     * that is the only way the autoplay grant reaches the AudioContext.
      *
-     * Returns the new muted state (boolean).
+     * @param {boolean} on - true to allow sound, false to mute everything.
+     * @returns {boolean} the new EFFECTIVE muted state.
      */
-    function toggleMute() {
-        muted = !muted;
-        _writeMuted(muted);
-
-        if (muted) {
-            // Mute: ramp current track to 0, then pause (don't tear down —
-            // user may unmute again and we want the buffer warm).
-            if (currentNode) {
-                window.ThemeAudioNode.ramp(currentNode, 0, Math.min(currentNode.fadeMs, 400), audioCtx);
-                setTimeout(function () {
-                    if (currentNode && muted) {
-                        try { currentNode.audio.pause(); } catch (_) { /* ignore */ }
-                    }
-                }, Math.min(currentNode.fadeMs, 400) + 20);
-            }
-        } else {
-            // Unmute: this is (likely) the user-gesture moment. Resume ctx
-            // and play.
-            _resumeCtxIfSuspended();
-            if (currentNode && !document.hidden) {
-                _tryPlay(currentNode);
-                window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
-            }
-        }
-        return muted;
+    function setAppSound(on) {
+        appSoundOn = !!on;
+        Settings.writeAppSoundOn(localStorage, appSoundOn);
+        return _recompute();
     }
 
+    /**
+     * Is gate 1 (app sound, all sessions) on?
+     *
+     * @returns {boolean}
+     */
+    function isAppSoundOn() { return appSoundOn; }
+
+    /**
+     * Set gate 2, the current session's music opt-in. NOT persisted here:
+     * session-theme-menu.js owns the per-session key, because it is the
+     * thing that knows which session is attached.
+     *
+     * @param {boolean} on - true if this session opted into music.
+     * @returns {boolean} the new EFFECTIVE muted state.
+     */
+    function setSessionEnabled(on) {
+        sessionOn = !!on;
+        return _recompute();
+    }
+
+    /**
+     * Is gate 2 (this session's music opt-in) on?
+     *
+     * @returns {boolean}
+     */
+    function isSessionEnabled() { return sessionOn; }
+
+    /**
+     * Flip the app sound master switch. Kept as the header button's
+     * handler; it drives gate 1 only, so an attach can no longer undo it.
+     *
+     * @returns {boolean} the new EFFECTIVE muted state.
+     */
+    function toggleMute() {
+        return setAppSound(!appSoundOn);
+    }
+
+    /**
+     * The effective gate: silent unless BOTH app sound and the session
+     * opt-in are on.
+     *
+     * @returns {boolean}
+     */
     function isMuted() { return muted; }
 
     /**
@@ -414,9 +406,9 @@
     function setVolume(v) {
         var clamped = Math.max(0, Math.min(1, v));
         globalVolume = clamped;
-        _writeVolume(clamped);
+        Settings.writeVolume(localStorage, clamped);
         if (currentNode && !muted && !document.hidden) {
-            window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), 200, audioCtx);
+            window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), 200, _ctx());
         }
     }
 
@@ -424,7 +416,7 @@
     function _onVisibilityChange() {
         if (document.hidden) {
             if (currentNode) {
-                window.ThemeAudioNode.ramp(currentNode, 0, 200, audioCtx);
+                window.ThemeAudioNode.ramp(currentNode, 0, 200, _ctx());
                 setTimeout(function () {
                     if (currentNode && document.hidden) {
                         try { currentNode.audio.pause(); } catch (_) { /* ignore */ }
@@ -435,20 +427,41 @@
             if (!muted && currentNode) {
                 _resumeCtxIfSuspended();
                 _tryPlay(currentNode);
-                window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, audioCtx);
+                window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), currentNode.fadeMs, _ctx());
             }
         }
     }
 
+    /**
+     * Read persisted settings and wire the visibility handler. Call once.
+     *
+     * The migration runs BEFORE the volume is read, so a master volume
+     * left over from the old attenuating gain budget is dropped rather
+     * than silently overriding the new unity default. See
+     * themeAudioSettings.js for why that value cannot simply be trusted.
+     *
+     * @returns {void}
+     */
     function init() {
         if (initialized) return;
         initialized = true;
 
-        muted = _readMuted();
-        globalVolume = _readVolume();
+        var m = Settings.migrate(localStorage);
+        if (m.migrated) {
+            console.log('ThemeAudio: migrated settings v' + m.fromVersion +
+                ' -> v' + Settings.SETTINGS_VERSION +
+                (m.clearedVolume === null
+                    ? ''
+                    : ' (dropped stale master volume ' + m.clearedVolume + ')'));
+        }
+
+        appSoundOn = Settings.readAppSoundOn(localStorage);
+        globalVolume = Settings.readVolume(localStorage);
+        muted = !(appSoundOn && sessionOn);
 
         document.addEventListener('visibilitychange', _onVisibilityChange);
-        console.log('ThemeAudio: initialized — muted=' + muted + ' volume=' + globalVolume);
+        console.log('ThemeAudio: initialized - appSound=' + appSoundOn +
+            ' session=' + sessionOn + ' muted=' + muted + ' volume=' + globalVolume);
     }
 
     window.ThemeAudio = {
@@ -456,6 +469,10 @@
         setTheme: setTheme,
         toggleMute: toggleMute,
         isMuted: isMuted,
+        setAppSound: setAppSound,
+        isAppSoundOn: isAppSoundOn,
+        setSessionEnabled: setSessionEnabled,
+        isSessionEnabled: isSessionEnabled,
         getLastPlayError: getLastPlayError,
         getVolume: getVolume,
         setVolume: setVolume

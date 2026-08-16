@@ -36,6 +36,59 @@
     var lastPlayError = null;
 
     /**
+     * The shared AudioContext, built lazily so construction always happens
+     * inside a user gesture, and the engine that decision settled on:
+     * 'webaudio' | 'element' | null (undecided). Both are per-session and
+     * belong here rather than in themeAudio.js, which owns policy only.
+     */
+    var audioCtx = null;
+    var engineKind = null;
+
+    /**
+     * Target gain for a theme whose manifest declares audio but omits a
+     * volume. Deliberately mid-scale, not unity.
+     */
+    var DEFAULT_TRACK_VOLUME = 0.5;
+
+    /**
+     * The shared AudioContext, constructing it on first use.
+     *
+     * @returns {AudioContext|null} null when the engine has none.
+     */
+    function ensureCtx() {
+        if (audioCtx) return audioCtx;
+        try {
+            var Ctor = window.AudioContext || window.webkitAudioContext;
+            if (!Ctor) return null;
+            audioCtx = new Ctor();
+            return audioCtx;
+        } catch (err) {
+            console.warn('ThemeAudioNode: AudioContext construction failed', err);
+            return null;
+        }
+    }
+
+    /**
+     * The shared AudioContext without constructing one.
+     *
+     * @returns {AudioContext|null}
+     */
+    function getCtx() { return audioCtx; }
+
+    /**
+     * Resume the context if the browser suspended it. Safe to call always.
+     *
+     * @returns {void}
+     */
+    function resumeCtx() {
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(function (err) {
+                console.warn('ThemeAudioNode: ctx.resume() rejected', err);
+            });
+        }
+    }
+
+    /**
      * The ordered list of URLs to try for one manifest `audio` block.
      *
      * The order is FIXED, not chosen by canPlayType: on iOS, canPlayType
@@ -184,11 +237,164 @@
         return lastPlayError;
     }
 
+    /**
+     * Handle a media load error: advance to the next declared format if
+     * there is one, otherwise tear the node down.
+     *
+     * Retrying reuses the SAME element, so the Web Audio graph hanging off
+     * it (MediaElementAudioSourceNode -> GainNode) survives the swap.
+     * createMediaElementSource can only ever be called once per element,
+     * so building a fresh element here would throw on the second attempt.
+     *
+     * @param {object} node - the node whose element errored.
+     * @param {object} host - the policy callbacks passed to makeNode().
+     * @returns {void}
+     */
+    function _onNodeError(node, host) {
+        var el = node.audio;
+        var code = el && el.error ? el.error.code : null;
+        var next = node.sourceIndex + 1;
+
+        if (next < node.sources.length) {
+            console.warn('ThemeAudioNode: ' + node.sources[node.sourceIndex] +
+                ' failed (code ' + code + '), trying ' + node.sources[next]);
+            node.sourceIndex = next;
+            node.loadedSrc = node.sources[next];
+            try {
+                el.src = node.sources[next];
+                el.load();
+            } catch (err) {
+                console.warn('ThemeAudioNode: fallback src swap threw', err);
+                return;
+            }
+            // load() resets the element, so re-assert the state the node was
+            // in. Volume is re-ramped rather than set, so a mid-fade swap
+            // does not click.
+            if (host.isCurrent(node) && host.shouldPlay()) {
+                resumeCtx();
+                play(node);
+                ramp(node, host.effectiveTarget(node), node.fadeMs, audioCtx);
+            }
+            return;
+        }
+
+        console.warn('ThemeAudioNode: no playable source for',
+            node.sources.join(', '), '(last error code ' + code + ')');
+        teardown(node);
+        host.onDrop(node);
+    }
+
+    /**
+     * Build a playback node for a manifest `audio` block. Returns null for
+     * an unusable config. Does NOT call play() - the caller decides.
+     *
+     * The node holds an <audio> element (always) plus, in webaudio mode, a
+     * MediaElementAudioSourceNode -> GainNode graph. In element mode the
+     * gain is null and ramp() drives the element's own .volume.
+     *
+     * @param {{src: string, srcFallback?: string, volume?: number,
+     *          fadeMs?: number}|null} cfg - a manifest `audio` block.
+     * @param {{isCurrent: Function, shouldPlay: Function,
+     *          effectiveTarget: Function, onDrop: Function}} host -
+     *          policy callbacks, used only when a source fails to load.
+     * @returns {object|null} the playback node, or null.
+     */
+    function makeNode(cfg, host) {
+        if (!cfg || typeof cfg !== 'object' || !cfg.src || typeof cfg.src !== 'string') {
+            return null;
+        }
+        var el = new Audio();
+        // crossorigin BEFORE src per spec - WebKit caches the request mode
+        // at src-set time.
+        el.crossOrigin = 'anonymous';
+        el.loop = true;
+        el.preload = 'auto';
+        el.volume = 0; // start silent; the element-mode fade ramps this up
+
+        var node = {
+            audio: el,
+            sources: candidates(cfg),
+            sourceIndex: 0,
+            // `src` is the track's IDENTITY (always the manifest's primary),
+            // which is what setTheme() compares to decide "same track". It
+            // must NOT follow a fallback swap, or re-applying the same theme
+            // after a fallback would look like a track change and restart it.
+            src: cfg.src,
+            // `loadedSrc` is the candidate actually on the element right now.
+            loadedSrc: cfg.src,
+            targetVolume: typeof cfg.volume === 'number' ? cfg.volume : DEFAULT_TRACK_VOLUME,
+            fadeMs: typeof cfg.fadeMs === 'number' && cfg.fadeMs >= 0 ? cfg.fadeMs : 1500,
+            gain: null,
+            sourceNode: null,
+            rafHandle: null
+        };
+
+        // A load error is not automatically fatal: if another format is
+        // declared, try it before giving up.
+        el.addEventListener('error', function () { _onNodeError(node, host); });
+
+        el.src = node.sources[0];
+
+        if (engineKind !== 'element') {
+            var ctx = ensureCtx();
+            if (ctx) {
+                try {
+                    var src = ctx.createMediaElementSource(el);
+                    var gain = ctx.createGain();
+                    gain.gain.value = 0;
+                    src.connect(gain).connect(ctx.destination);
+                    node.gain = gain;
+                    node.sourceNode = src;
+                    engineKind = 'webaudio';
+                    // THE SILENT BUG, measured in desktop Chrome 150 on
+                    // 2026-08-16 with an AnalyserNode on the graph:
+                    // HTMLMediaElement.volume attenuates the signal
+                    // UPSTREAM of createMediaElementSource. With gain fixed
+                    // at 0.6, el.volume=1 gave RMS 0.0342, el.volume=0 gave
+                    // RMS exactly 0, and restoring it mid-play recovered to
+                    // 0.0377. The element is constructed at volume 0 so the
+                    // ELEMENT-mode fade can ramp up from silence, but in
+                    // webaudio mode the GainNode owns the fade and a 0 here
+                    // multiplies the whole graph by zero - permanently,
+                    // because ramp() returns early in webaudio mode and
+                    // never touches el.volume again. The symptom is the
+                    // worst kind: currentTime advances, gain reads 0.6,
+                    // play() never rejects, and there is no sound. In
+                    // webaudio mode the element must be wide open and the
+                    // GainNode must be the only attenuator.
+                    el.volume = 1;
+                } catch (err) {
+                    // CORS taint or other graph-construction failure. Drop
+                    // to element mode permanently for this session.
+                    console.warn('ThemeAudioNode: WebAudio graph failed, ' +
+                        'falling back to element mode', err);
+                    engineKind = 'element';
+                }
+            } else {
+                engineKind = 'element';
+            }
+        }
+
+        return node;
+    }
+
+    /**
+     * Which engine this session settled on.
+     *
+     * @returns {string|null} 'webaudio', 'element', or null if undecided.
+     */
+    function getEngineKind() { return engineKind; }
+
     window.ThemeAudioNode = {
         candidates: candidates,
         ramp: ramp,
         teardown: teardown,
         play: play,
+        makeNode: makeNode,
+        ensureCtx: ensureCtx,
+        getCtx: getCtx,
+        resumeCtx: resumeCtx,
+        getEngineKind: getEngineKind,
         getLastPlayError: getLastPlayError
     };
 })();
