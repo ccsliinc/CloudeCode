@@ -1,11 +1,11 @@
 {
   "id": "legacy_apple",
   "name": "Legacy Apple",
-  "description": "Mac OS Classic / Platinum — cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
+  "description": "Mac OS Classic / Platinum \u2014 cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'Monaco', 'Andale Mono', 'Courier New', monospace",
+    "--font-mono": "Monaco, 'Andale Mono', ui-monospace, SFMono-Regular, 'Courier New', monospace",
     "--color-bg": "#DCD0BD",
     "--color-bg-page": "#cfc4b4",
     "--color-bg-elevated": "#EAEAEA",

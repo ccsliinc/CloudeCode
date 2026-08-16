@@ -57,6 +57,19 @@ console.log('[TerminalLayout Module] Loading...');
     let pendingReasons = [];
 
     /**
+     * How many times to retry a fit the measurement guard refused before
+     * giving up. Bounded so a genuinely broken page does not spin.
+     * @type {number}
+     */
+    const MAX_FIT_RETRIES = 8;
+
+    /** Base retry delay in ms; multiplied by the attempt number. @type {number} */
+    const RETRY_MS = 120;
+
+    /** @type {number} Consecutive guard refusals since the last good fit. */
+    let retries = 0;
+
+    /**
      * Refit the terminal to its container and ship the new geometry to
      * the backend. Runs at most once per debounce window.
      *
@@ -68,16 +81,60 @@ console.log('[TerminalLayout Module] Loading...');
         timer = null;
         pendingReasons = [];
         if (!controller || !controller.fitAddon || !controller.term) return;
-        try {
-            controller.fitAddon.fit();
-        } catch (err) {
-            console.warn('TerminalLayout: fit failed', err);
-            return;
+
+        // The fit goes through TerminalMetrics.guardedFit, which refuses to
+        // measure when xterm.css has not applied or when the proposed grid
+        // is implausible. A bad measurement is invisible: it produces a
+        // working-looking terminal whose cols/rows match nothing on screen,
+        // and sendResize would then reflow the real tmux pane to that wrong
+        // grid. Skipping and retrying keeps the last known-good grid, which
+        // is always the better failure.
+        const metrics = window.TerminalMetrics;
+        if (metrics && typeof metrics.guardedFit === 'function') {
+            const result = metrics.guardedFit(controller);
+            if (!result.fitted) {
+                console.warn(
+                    `TerminalLayout: fit skipped, reason=${result.reason} source=${reason}`);
+                scheduleRetry(reason);
+                return;
+            }
+        } else {
+            // Module missing (load order regression). Fall back to the raw
+            // fit rather than leaving the terminal unsized.
+            try {
+                controller.fitAddon.fit();
+            } catch (err) {
+                console.warn('TerminalLayout: fit failed', err);
+                return;
+            }
         }
+
+        retries = 0;
         // sendResize is the ONLY path to tmux. A client-side fit that is
         // not followed by this leaves xterm and the pty disagreeing about
         // the grid, which is what "tmux does not resize" looks like.
         controller.sendResize(reason);
+    }
+
+    /**
+     * Re-attempt a fit that the guard refused, with a bounded backoff.
+     *
+     * The conditions the guard rejects on are transient by nature: a
+     * stylesheet still arriving, a container mid-transition, a font not yet
+     * resolved. Retrying a handful of times covers all of them without
+     * spinning forever if something is genuinely broken.
+     *
+     * @param {string} reason - original fit reason, carried into the retry.
+     * @returns {void}
+     */
+    function scheduleRetry(reason) {
+        if (retries >= MAX_FIT_RETRIES) {
+            console.warn('TerminalLayout: giving up on fit retries');
+            return;
+        }
+        retries += 1;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => flush(reason), RETRY_MS * retries);
     }
 
     /**
@@ -144,6 +201,8 @@ console.log('[TerminalLayout Module] Loading...');
         install,
         requestFit,
         DEBOUNCE_MS,
+        MAX_FIT_RETRIES,
+        RETRY_MS,
         /** Test seam: the live observer, or null when unsupported. */
         get observer() { return observer; },
     };

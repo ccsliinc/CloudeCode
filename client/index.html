@@ -32,8 +32,16 @@
     <link rel="apple-touch-icon" href="/static/assets/icons/icon-180.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/assets/icons/icon-192.png">
 
-    <!-- xterm.js CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <!-- Vendored xterm.js CSS (see client/vendor/xterm/VERSION.md) - served
+         from this app's own origin instead of cdn.jsdelivr.net. A CDN
+         request blocked or delayed by an ad blocker (Brave Shields on
+         mobile, confirmed) leaves xterm's character-measurement element
+         without its rules; the backend pane size still comes out right,
+         so only the on-device render breaks. Same-origin removes the
+         failure class instead of hoping the CDN answers. Must load in
+         <head>, before styles.css, so app CSS can still override xterm's
+         defaults. -->
+    <link rel="stylesheet" href="/static/vendor/xterm/xterm.css" />
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/styles.css" />
@@ -305,11 +313,13 @@
         </div>
     </div>
 
-    <!-- xterm.js -->
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
+    <!-- Vendored xterm.js + addons (see client/vendor/xterm/VERSION.md) -
+         served from this app's own origin so the terminal no longer
+         depends on cdn.jsdelivr.net being reachable. -->
+    <script src="/static/vendor/xterm/xterm.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-fit.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-webgl.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-unicode11.js"></script>
 
     <!-- Application modules -->
     <!-- Shared click-dismissal guard. Loaded FIRST because it is a
@@ -359,6 +369,11 @@
     <!-- Terminal resize pipeline. Must load BEFORE terminal.js, whose
          initTerminal() calls window.TerminalLayout.install(this). Also
          the explicit refit hook session-sidebar-pin.js calls. -->
+    <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
+         and terminal.js, both of which fit through
+         window.TerminalMetrics.guardedFit so an untrustworthy cell
+         measurement is skipped instead of being shipped to tmux. -->
+    <script src="/static/js/terminal-metrics.js"></script>
     <script src="/static/js/terminal-layout.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: paperclip paste menu + terminal copy chord.

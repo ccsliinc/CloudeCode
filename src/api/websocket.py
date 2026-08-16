@@ -18,6 +18,10 @@ from src.models import (
     WSErrorMessage
 )
 from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
+from src.api.resize_negotiation import (
+    apply_negotiated_resize,
+    release_client_resize,
+)
 
 logger = structlog.get_logger()
 
@@ -350,8 +354,9 @@ async def websocket_terminal(websocket: WebSocket):
                 rows=handshake_rows,
             )
             try:
-                session_manager.resize_terminal(
-                    handshake_cols, handshake_rows, session_id=target_sid
+                await apply_negotiated_resize(
+                    session_manager, target_sid, websocket,
+                    handshake_cols, handshake_rows, connection_manager,
                 )
             except Exception as exc:
                 logger.error("ws_handshake_resize_failed", error=str(exc))
@@ -416,6 +421,8 @@ async def websocket_terminal(websocket: WebSocket):
         session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
+        await release_client_resize(
+            session_manager, target_sid, websocket, connection_manager)
         connection_manager.disconnect(websocket)
         return
     except Exception as exc:
@@ -456,6 +463,14 @@ async def websocket_terminal(websocket: WebSocket):
         session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
+        # fix/multiclient-tmux-size — drop this client from size negotiation
+        # and re-apply the recomputed effective size so the pane grows back
+        # for whoever is left, rather than staying letterboxed forever.
+        # Hooked here (the endpoint's own finally, not ConnectionManager.
+        # disconnect) because that method is sync bookkeeping with no
+        # access to session_manager/resize_terminal or the session id.
+        await release_client_resize(
+            session_manager, target_sid, websocket, connection_manager)
         connection_manager.disconnect(websocket)
 
 
@@ -504,9 +519,10 @@ async def receive_messages(websocket: WebSocket, session_manager, session_id=Non
                             resize_msg = WSPTYResizeMessage(**msg)
                             logger.info("terminal_resize_request", cols=resize_msg.cols, rows=resize_msg.rows)
                             try:
-                                session_manager.resize_terminal(
+                                await apply_negotiated_resize(
+                                    session_manager, session_id, websocket,
                                     resize_msg.cols, resize_msg.rows,
-                                    session_id=session_id,
+                                    connection_manager,
                                 )
                             except Exception as e:
                                 logger.error("resize_failed", error=str(e))

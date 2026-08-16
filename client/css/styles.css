@@ -12,7 +12,18 @@
  * ===================================================================== */
 :root {
     /* ---- Fonts -------------------------------------------------- */
-    --font-mono: 'SF Mono', monospace;
+    /* This used to be `'SF Mono', monospace`, which silently degrades on
+     * phones. The literal family name "SF Mono" is NOT exposed to web
+     * content on iOS, so every iOS browser (all of them are WebKit,
+     * including Brave and Chrome) skipped straight past it to the generic
+     * `monospace`, landing on Courier - a different metric from what the
+     * desktop measures. `ui-monospace` is the correct way to ask for the
+     * platform monospace face and DOES resolve to SF Mono on iOS and
+     * macOS. The rest of the chain is an explicit, metric-compatible
+     * fallback per platform so that a miss degrades to a known face
+     * instead of whatever `monospace` happens to mean. */
+    --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco,
+                 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace;
 
     /* ---- Backgrounds -------------------------------------------- */
     --color-bg:               #1e1e1e;            /* body / terminal / modal */

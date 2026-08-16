@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#0B1E3F",
     "--color-bg-page": "#081730",
     "--color-bg-elevated": "#14305C",
