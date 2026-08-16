@@ -1,9 +1,17 @@
-// Node test for client/js/header-menu.js — the mobile top-right dropdown.
+// Node test for client/js/header-menu.js — the header OVERFLOW menu.
 //
-// The property that matters most is NOTHING IS LOST: every control that
-// was reachable inline at desktop width must still be reachable after the
-// fold, as the SAME node (ids and listeners intact), and must come back
-// in the original order when the viewport widens again.
+// It used to be a phone-only fold of the whole six-icon cluster. It now
+// holds three rarely-used app controls at EVERY width: app sound, logout,
+// settings. The properties that matter:
+//
+//   1. THE CONTENTS ARE EXACTLY THOSE THREE. Home and detach are gone
+//      from the header entirely (title click goes home; detach moved to
+//      the session editor FAB), and the file editor stays INLINE - "we
+//      keep editor very accessible" is the whole point of the split.
+//   2. NOTHING IS LOST. Each control is the SAME node after the move,
+//      ids and listeners intact.
+//   3. NO WIDTH CHANGES THE CONTENTS. A control that only exists below
+//      768px is a control desktop users never learn.
 //
 // Run with: node tests/test_header_menu.node.mjs
 
@@ -31,15 +39,18 @@ function test(name, fn) {
     }
 }
 
-/** Ids of the header controls, in the order index.html declares them. */
+/** Ids the overflow menu owns, in the order index.html declares them. */
 const EXPECTED_IDS = [
     'audioToggleBtn',
-    'homeBtn',
-    'detachSessionBtn',
     'logoutBtn',
     'settingsBtn',
-    'configEditorBtn',
 ];
+
+/** Ids that must stay inline in the header at every width. */
+const INLINE_IDS = ['configEditorBtn'];
+
+/** Ids that must no longer exist as header buttons at all. */
+const REMOVED_IDS = ['homeBtn', 'detachSessionBtn'];
 
 /**
  * Build the real header shape from index.html: .header > .controls with
@@ -52,7 +63,7 @@ function buildHeader(document) {
     header.className = 'header';
     const controls = document.createElement('div');
     controls.className = 'controls';
-    for (const id of EXPECTED_IDS) {
+    for (const id of EXPECTED_IDS.concat(INLINE_IDS)) {
         const btn = document.createElement('button');
         btn.setAttribute('type', 'button');
         btn.setAttribute('id', id);
@@ -94,6 +105,7 @@ function load(options = {}) {
         menu: env.window.HeaderMenu,
         controls: built.controls,
         status: built.status,
+        menuConstants: env.window.HeaderMenuConstants,
         setMediaMatches: env.setMediaMatches,
     };
 }
@@ -109,32 +121,77 @@ function buttonIds(node) {
 // Inventory: nothing is lost
 // ---------------------------------------------------------------------
 
-test('the module and index.html agree on which controls fold', () => {
+test('the module and index.html agree on which controls the menu owns', () => {
     const html = fs.readFileSync(
         path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
     const src = fs.readFileSync(
         path.join(__dirname, '..', 'client', 'js', 'header-menu.js'), 'utf8');
-    // Every id the module folds must actually exist in the shell, or the
-    // fold silently drops a control.
+    // Every id the module moves must actually exist in the shell, or the
+    // move silently drops a control.
     for (const id of EXPECTED_IDS) {
         assert.ok(src.includes(`'${id}'`), `header-menu.js forgot ${id}`);
         assert.ok(html.includes(`id="${id}"`), `index.html has no ${id}`);
     }
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(load().menuConstants.CONTROL_IDS)),
+        EXPECTED_IDS, 'the exported list is the contract');
 });
 
-test('desktop: every control is inline and in declaration order', () => {
-    const { controls } = load({ mobile: false });
-    assert.deepEqual(buttonIds(controls), EXPECTED_IDS);
-});
-
-test('mobile: every control moved into the panel, none lost', () => {
-    const { env, controls } = load({ mobile: true });
+test('THE OVERFLOW HOLDS EXACTLY volume, logout and settings', () => {
+    const { env, controls } = load();
     const panel = env.document.getElementById('header-menu-panel');
     assert.deepEqual(buttonIds(panel), EXPECTED_IDS);
-    assert.deepEqual(buttonIds(controls), [], 'no control left behind inline');
+    // ...and the file editor is NOT among them. It is used constantly,
+    // so it stays one tap away. This is the requirement most likely to
+    // be undone by a later "tidy the header" change.
+    assert.deepEqual(buttonIds(controls), INLINE_IDS,
+        'the file editor must stay inline, not fold into the overflow');
+    const src = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'header-menu.js'), 'utf8');
+    assert.ok(!/HEADER_MENU_CONTROL_IDS\s*=\s*\[[^\]]*configEditorBtn/.test(src),
+        'configEditorBtn must never enter the overflow list');
 });
 
-test('mobile: the folded controls are the SAME nodes, not copies', () => {
+test('HOME AND DETACH ARE GONE from the header, markup included', () => {
+    const html = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
+    for (const id of REMOVED_IDS) {
+        assert.ok(!html.includes(`id="${id}"`),
+            `${id} must be deleted, not hidden - a hidden button is still `
+            + 'a node every id lookup and fold list has to keep agreeing on');
+    }
+    // The actions survive, on other surfaces: the title goes home and
+    // the session editor detaches. Those are asserted where they live
+    // (app.js title wiring below, and test_session_editor_menu.node.mjs).
+    const app = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'app.js'), 'utf8');
+    assert.ok(!/getElementById\(['"]homeBtn['"]\)/.test(app),
+        'app.js must not look up a button that no longer exists');
+});
+
+test('THE TITLE IS THE HOME CONTROL, and it calls goHome()', () => {
+    const app = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'app.js'), 'utf8');
+    // Routed through DismissGuard.onContainerActivate, NOT a bare click
+    // listener: #appTitle also hosts the rename input, and a bare
+    // listener navigated away mid-edit. That fix must survive the home
+    // button's deletion.
+    const wire = app.slice(app.indexOf("const appTitle ="));
+    assert.match(wire, /DismissGuard\.onContainerActivate\(appTitle/,
+        'the title must stay behind the dismiss guard');
+    assert.ok(!/appTitle\.addEventListener\(\s*['"]click['"]/.test(app),
+        'a bare click listener on #appTitle is the rename-focus bug');
+    // And it must do what the deleted button did - goHome() also pauses
+    // the terminal WebSocket via pauseForHome(); showLaunchpad() alone
+    // does not, so wiring the title to that would silently drop it.
+    const handler = wire.slice(0, wire.indexOf('});'));
+    assert.match(handler, /this\.goHome\(\)/,
+        'the title must call goHome(), not bare showLaunchpad()');
+    assert.match(app, /goHome\(\)\s*\{[\s\S]*?pauseForHome\(\)/,
+        'goHome must still pause the socket');
+});
+
+test('the controls in the menu are the SAME nodes, not copies', () => {
     const { env } = load({ mobile: true });
     // A duplicate id would break every getElementById in the app.
     for (const id of EXPECTED_IDS) {
@@ -143,12 +200,12 @@ test('mobile: the folded controls are the SAME nodes, not copies', () => {
     }
 });
 
-test('mobile: listeners survive the move', () => {
+test('listeners survive the move', () => {
     const { env } = load({ mobile: true });
-    const home = env.document.getElementById('homeBtn');
+    const audio = env.document.getElementById('audioToggleBtn');
     let clicked = 0;
-    home.addEventListener('click', () => { clicked++; });
-    home.dispatchEvent('click');
+    audio.addEventListener('click', () => { clicked++; });
+    audio.dispatchEvent('click');
     assert.equal(clicked, 1);
 });
 
@@ -171,34 +228,46 @@ test('the sidebar toggle is never touched', () => {
 // Reflow
 // ---------------------------------------------------------------------
 
-test('widening restores the original inline order exactly', () => {
-    const { env, controls, setMediaMatches } = load({ mobile: true });
-    const panel = env.document.getElementById('header-menu-panel');
-    assert.deepEqual(buttonIds(panel), EXPECTED_IDS);
-    setMediaMatches(false);
-    assert.deepEqual(buttonIds(controls), EXPECTED_IDS);
-    assert.deepEqual(buttonIds(panel), []);
+test('THE CONTENTS DO NOT CHANGE WITH WIDTH', () => {
+    // The old module re-parented on a MediaQueryList. Two layouts meant
+    // two sets of reachable controls and a reflow that could drop or
+    // duplicate a node. Neither width does anything different now.
+    const narrow = load({ mobile: true });
+    const wide = load({ mobile: false });
+    for (const built of [narrow, wide]) {
+        const panel = built.env.document.getElementById('header-menu-panel');
+        assert.deepEqual(buttonIds(panel), EXPECTED_IDS);
+        assert.deepEqual(buttonIds(built.controls), INLINE_IDS);
+    }
+    const src = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'header-menu.js'), 'utf8');
+    assert.ok(!src.includes('matchMedia'),
+        'no media query: the contents are width-invariant by construction');
 });
 
-test('narrowing then widening repeatedly does not duplicate or drop', () => {
+test('a width change cannot duplicate or drop a control', () => {
     const { env, controls, setMediaMatches } = load({ mobile: false });
     const panel = env.document.getElementById('header-menu-panel');
     for (let i = 0; i < 3; i++) {
         setMediaMatches(true);
-        assert.deepEqual(buttonIds(panel), EXPECTED_IDS, `fold ${i}`);
         setMediaMatches(false);
-        assert.deepEqual(buttonIds(controls), EXPECTED_IDS, `unfold ${i}`);
+        assert.deepEqual(buttonIds(panel), EXPECTED_IDS, `cycle ${i}`);
+        assert.deepEqual(buttonIds(controls), INLINE_IDS, `cycle ${i}`);
+        for (const id of EXPECTED_IDS.concat(INLINE_IDS)) {
+            assert.equal(env.document.querySelectorAll(`#${id}`).length, 1,
+                `${id} duplicated on cycle ${i}`);
+        }
     }
 });
 
-test('the trigger stays last in the row after unfolding', () => {
-    const { env, controls, setMediaMatches } = load({ mobile: true });
-    setMediaMatches(false);
+test('the trigger stays last in the row', () => {
+    const { env, controls } = load();
     const toggleIndex = controls.children.indexOf(
         env.document.getElementById('header-menu-toggle'));
-    const lastControlIndex = controls.children.indexOf(
+    const editorIndex = controls.children.indexOf(
         env.document.getElementById('configEditorBtn'));
-    assert.ok(toggleIndex > lastControlIndex);
+    assert.ok(toggleIndex > editorIndex,
+        'the overflow trigger sits after the inline file editor');
 });
 
 test('a second init() is a no-op', () => {
@@ -257,7 +326,7 @@ test('a key other than Escape does not close it', () => {
     assert.equal(menu.isOpen, true);
 });
 
-test('tapping a folded control closes the menu behind it', () => {
+test('tapping a control in the menu closes it behind them', () => {
     const { env, menu } = load({ mobile: true });
     env.document.getElementById('header-menu-toggle').dispatchEvent('click');
     env.document.getElementById('settingsBtn').dispatchEvent('click');
@@ -271,13 +340,21 @@ test('a tap on the panel padding does NOT close it', () => {
     assert.equal(menu.isOpen, true);
 });
 
-test('unfolding to desktop closes an open dropdown', () => {
-    const { env, menu, setMediaMatches } = load({ mobile: true });
-    env.document.getElementById('header-menu-toggle').dispatchEvent('click');
-    assert.equal(menu.isOpen, true);
-    setMediaMatches(false);
-    assert.equal(menu.isOpen, false);
-    assert.equal(env.document.getElementById('header-menu-panel').hidden, true);
+test('every control in the menu keeps an accessible name', () => {
+    // The menu is the only way to reach these three now, so a control
+    // that lost its label is unreachable to a screen reader entirely.
+    const html = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
+    for (const id of EXPECTED_IDS.concat(INLINE_IDS)) {
+        const at = html.indexOf(`id="${id}"`);
+        assert.ok(at > 0, `${id} missing`);
+        const tag = html.slice(html.lastIndexOf('<', at), html.indexOf('>', at));
+        assert.match(tag, /aria-label="[^"]+"/, `${id} needs an accessible name`);
+    }
+    // The trigger builds its own, in JS.
+    const src = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'header-menu.js'), 'utf8');
+    assert.match(src, /setAttribute\('aria-label', '[^']+'\)/);
 });
 
 // ---------------------------------------------------------------------

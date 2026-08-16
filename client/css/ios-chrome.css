@@ -27,14 +27,17 @@ html {
  * padding by the landscape insets, which are non-zero when the phone is
  * rotated and the notch is on the left or right edge. */
 .header {
-    padding-top: calc(12px + env(safe-area-inset-top));
+    /* --header-pad-y already carries the per-breakpoint value, so the
+     * top inset is added ONCE here rather than restated three times.
+     * The same token feeds --header-h, which the top-right FAB below
+     * clears itself against. */
+    padding-top: calc(var(--header-pad-y) + env(safe-area-inset-top));
     padding-left: calc(20px + env(safe-area-inset-left));
     padding-right: calc(20px + env(safe-area-inset-right));
 }
 
 @media (max-width: 768px) {
     .header {
-        padding-top: calc(10px + env(safe-area-inset-top));
         padding-left: calc(15px + env(safe-area-inset-left));
         padding-right: calc(15px + env(safe-area-inset-right));
     }
@@ -42,7 +45,6 @@ html {
 
 @media (max-width: 480px) {
     .header {
-        padding-top: calc(8px + env(safe-area-inset-top));
         padding-left: calc(12px + env(safe-area-inset-left));
         padding-right: calc(12px + env(safe-area-inset-right));
     }
@@ -57,11 +59,26 @@ html {
 
 /* Floating controls are positioned against the viewport edge, so each one
  * needs the bottom inset added to its own offset or it sits under the
- * home indicator. Values mirror the base offsets in styles.css. */
+ * home indicator. Values mirror the base offsets in styles.css.
+ *
+ * The session editor is EXCLUDED because it is not on the bottom row any
+ * more - it hangs from the top-right rail and takes the TOP inset
+ * instead, below. This file loads after terminal-tools.css, so without
+ * the :not() the bottom rule here would win on equal specificity and
+ * quietly drag the editor back down to the command line. */
 .dpad-float-button,
 .slash-commands-btn,
-.fab-menu-btn {
+.fab-menu-btn:not(.session-editor-fab) {
     bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
+}
+
+/* The top-right rail. The header grows by exactly the top inset above,
+ * so the editor's clearance below it is the same --fab-gap it is in
+ * browser mode. `bottom: auto` is restated because the base rule in
+ * terminal-tools.css is what this file is layered over. */
+.session-editor-fab {
+    top: calc(var(--fab-top-edge) + env(safe-area-inset-top));
+    bottom: auto;
 }
 
 /* Slide-over panels run the full height of the viewport, so they own both

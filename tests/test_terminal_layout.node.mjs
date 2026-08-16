@@ -436,10 +436,17 @@ test('nothing overlays the terminal any more except the bottom-row FABs', () => 
     const base = ruleBody(css, '.fab-menu-btn');
     assert.ok(/position:\s*fixed;/.test(base));
     assert.ok(/bottom:\s*var\(--fab-edge\);/.test(base),
-        'both FABs sit on the bottom row, over the command line');
-    // Each button then carries ONLY a slot, from the shared tokens.
+        'the bottom row hovers over the command line');
+    // Each button then carries ONLY a position, from the shared tokens.
+    // They share the right rail; the editor differs on the OTHER axis.
     assert.match(ruleBody(css, '.terminal-tools-fab'), /right:\s*var\(--fab-slot-0\);/);
-    assert.match(ruleBody(css, '.session-editor-fab'), /right:\s*var\(--fab-slot-2\);/);
+    const editor = ruleBody(css, '.session-editor-fab');
+    assert.match(editor, /right:\s*var\(--fab-slot-0\);/);
+    assert.match(editor, /top:\s*var\(--fab-top-edge\);/);
+    assert.match(editor, /bottom:\s*auto;/);
+    // Overlaying output is allowed and asked for, but only as one small
+    // button: 45px wide against a full-width strip.
+    assert.match(base, /width:\s*var\(--fab-size\);/);
 });
 
 test('terminal.js delegates the resize pipeline instead of growing', () => {

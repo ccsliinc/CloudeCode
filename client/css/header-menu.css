@@ -1,8 +1,11 @@
-/* Header Menu (mobile)
+/* Header overflow menu
  *
- * Folds the top-right icon cluster into one dropdown at phone width and
- * leaves the desktop row untouched. See client/js/header-menu.js for why
- * the controls are re-parented rather than mirrored.
+ * Holds the three rarely-used app controls (app sound, logout, settings)
+ * at EVERY width. It used to be a phone-only fold of the whole six-icon
+ * cluster; it is now a permanent overflow, so the trigger is always
+ * visible and the file editor stays inline beside it. See
+ * client/js/header-menu.js for why the controls are re-parented rather
+ * than mirrored, and for what is deliberately kept out.
  *
  * Loaded after styles.css so the theme custom properties it uses
  * (--color-bg-page, --color-accent, --radius-md, ...) are already defined,
@@ -14,21 +17,16 @@
     position: relative;
 }
 
-/* Desktop: the cluster is already visible inline, so the trigger is dead
- * weight. Hidden by width, not by pointer type - a narrow desktop window
- * gets the folded layout too, which is the honest behavior when the row
- * would not fit. */
+/* ALWAYS VISIBLE. There is no width at which these three controls come
+ * back out inline: the menu is an overflow now, not a responsive fold,
+ * and a control that only exists below 768px is a control desktop users
+ * never learn. flex-shrink:0 so a long session title elides instead of
+ * squeezing the trigger. */
 .header-menu-toggle {
-    display: none;
-}
-
-@media (max-width: 768px) {
-    .header-menu-toggle {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
 
 .header-menu-toggle > svg {

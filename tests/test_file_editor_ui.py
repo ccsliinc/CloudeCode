@@ -103,13 +103,29 @@ def test_internal_identifiers_were_deliberately_left_alone():
 
 def test_bare_button_reset_still_exists_so_this_guard_is_not_vacuous():
     """If the bare reset is ever removed, these tests stop protecting
-    anything and should be revisited rather than left as decoration."""
+    anything and should be revisited rather than left as decoration.
+
+    The reset is still a hard square; it is now written through
+    ``--control-size`` because the header's height (and therefore the
+    top-right FAB's clearance below it) is derived from the same number.
+    Assert the RESET and the RESOLVED VALUES, not the literal that used
+    to spell them, or this guard breaks on every refactor that keeps its
+    meaning intact.
+    """
     css = (CSS_DIR / "styles.css").read_text(encoding="utf-8")
-    assert re.search(r"\nbutton \{[^}]*width: 36px", css), \
+    assert re.search(r"\nbutton \{[^}]*width: var\(--control-size\)", css), \
         "the bare `button` width reset is gone - re-evaluate the rules below"
-    narrow = css[css.index("@media (max-width: 480px) {"):]
-    assert re.search(r"\n    button \{\n        width: 40px", narrow), \
-        "the 480px bare-button bump is gone - re-evaluate the rules below"
+    # The token still resolves to the same three sizes it used to state
+    # inline, so every rule below still fights the same square.
+    assert re.search(r"--control-size:\s*36px;", css), "base square changed"
+    assert re.search(
+        r"@media \(max-width: 768px\) \{\s*\n\s*:root \{[^}]*--control-size:\s*44px;",
+        css,
+    ), "the 768px bare-button bump is gone - re-evaluate the rules below"
+    assert re.search(
+        r"@media \(max-width: 480px\) \{\s*\n\s*:root \{[^}]*--control-size:\s*40px;",
+        css,
+    ), "the 480px bare-button bump is gone - re-evaluate the rules below"
 
 
 @pytest.mark.parametrize("css_path,selector", LABELLED_BUTTON_RULES)
