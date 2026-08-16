@@ -131,6 +131,42 @@
     }
 
     /**
+     * Stop a boundary drag from escaping to the page.
+     *
+     * xterm's own touchmove handler scrolls `.xterm-viewport` in JS and
+     * calls preventDefault ONLY while the viewport can still move in
+     * that direction (`_bubbleScroll`); at either boundary it returns
+     * without cancelling, on purpose, so the host page can take over.
+     * On a page whose body is `overflow: hidden` there is nothing for
+     * the page to scroll, so iOS Safari claims the gesture instead and
+     * reloads - the "it tries to refresh" the user reported. The CSS
+     * `overscroll-behavior: contain` on `.terminal-container` is the
+     * declarative half of this fix; this is the half that does not
+     * depend on an engine honouring that property on a non-scrollable
+     * scroll container.
+     *
+     * Deliberately narrow:
+     *   - runs in the BUBBLE phase on #terminal, so xterm (bound on the
+     *     descendant `.xterm`) has already had the event and already
+     *     cancelled it whenever it consumed the scroll;
+     *   - `defaultPrevented` short-circuit means normal in-range
+     *     scrolling is never touched, only the released boundary case;
+     *   - single-touch only, so pinch-zoom over the terminal still
+     *     reaches the browser;
+     *   - touch-select.js calls stopPropagation() while a selection
+     *     drag is live, so this never runs during select mode.
+     *
+     * @param {TouchEvent} ev - the bubbling touchmove.
+     * @returns {void}
+     */
+    function blockOverscrollEscape(ev) {
+        if (ev.defaultPrevented) return;
+        if (!ev.cancelable) return;
+        if (ev.touches && ev.touches.length !== 1) return;
+        ev.preventDefault();
+    }
+
+    /**
      * Wire the gesture listeners. Idempotent; listeners ride on the
      * #terminal container (never recreated) so a term.reset() during a
      * session swap does not wipe them.
@@ -164,6 +200,10 @@
         container.addEventListener('wheel', function () {
             noteUserScroll();
         }, { capture: true, passive: true });
+
+        // The one NON-passive listener here: it has to be able to cancel.
+        // Bubble phase on purpose - see blockOverscrollEscape().
+        container.addEventListener('touchmove', blockOverscrollEscape, { passive: false });
     }
 
     /** Test seam: reset module state between assertions. */
@@ -175,6 +215,7 @@
 
     window.TerminalScroll = {
         init: init,
+        blockOverscrollEscape: blockOverscrollEscape,
         isPinnedToBottom: isPinnedToBottom,
         shouldFollowOutput: shouldFollowOutput,
         noteUserScroll: noteUserScroll,

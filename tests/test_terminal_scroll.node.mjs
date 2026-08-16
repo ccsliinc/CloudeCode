@@ -127,10 +127,17 @@ test('touchstart marks a gesture, so a write during a drag cannot yank', () => {
     assert.equal(api.shouldFollowOutput(fakeTerm(500, 500)), false);
 });
 
-test('touch gestures are registered passively (native scrolling preserved)', () => {
-    // Regression guard: cancelling these would break xterm's own touch
-    // scrolling, which is the thing we are trying to make work.
-    const opts = {};
+test('touch gestures are observed passively (native scrolling preserved)', () => {
+    // Regression guard: cancelling the OBSERVERS would break xterm's own
+    // touch scrolling, which is the thing we are trying to make work.
+    //
+    // Collected as a LIST, not keyed by type: there are two touchmove
+    // listeners now. The capture-phase one here only observes and stays
+    // passive; the bubble-phase one added by the pull-to-refresh fix has
+    // to be able to cancel, and is asserted separately in
+    // test_terminal_scroll_gesture.node.mjs. Keying by type let the
+    // second registration silently overwrite the first.
+    const registered = [];
     const sandbox = {
         window: {},
         console: { warn() {}, log() {} },
@@ -141,12 +148,14 @@ test('touch gestures are registered passively (native scrolling preserved)', () 
     vm.runInContext(src, sandbox);
     sandbox.window.TerminalScroll.init({
         addEventListener(type, handler, options) {
-            opts[type] = options;
+            registered.push({ type, options: options || {} });
         },
     });
+    const observers = registered.filter((r) => r.options.capture === true);
     ['touchstart', 'touchmove', 'touchend', 'wheel'].forEach((type) => {
-        assert.equal(opts[type].passive, true, `${type} must be passive`);
-        assert.equal(opts[type].capture, true, `${type} must be capture-phase`);
+        const found = observers.filter((r) => r.type === type);
+        assert.equal(found.length, 1, `exactly one capture-phase ${type} observer`);
+        assert.equal(found[0].options.passive, true, `${type} must be passive`);
     });
 });
 

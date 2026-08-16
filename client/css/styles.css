@@ -584,6 +584,25 @@ button[data-tooltip]:hover::after {
     display: flex;
     flex-direction: column;
     min-height: 0;
+
+    /* Pull-to-refresh barrier. A drag on the terminal lands on
+     * `canvas.xterm-link-layer`, which is NOT a descendant of
+     * `.xterm-viewport` - the two are siblings under `.xterm`. So when
+     * xterm's own touchmove handler declines the gesture (it calls
+     * preventDefault only while the viewport can still move, and
+     * deliberately releases it at either boundary), the browser walks
+     * the ancestor chain of the CANVAS, not of the scroller. That chain
+     * is `.xterm-screen` -> `.xterm` -> `#terminal` -> here, and every
+     * link above was `overscroll-behavior: auto`, so a downward drag at
+     * the top of the scrollback reached the document and iOS Safari
+     * read it as pull-to-refresh.
+     *
+     * This is the NARROWEST element that can stop it: the first
+     * ancestor of the touch target that is a scroll container at all
+     * (`overflow: hidden` makes one). `contain`, not `none`, so the
+     * terminal keeps its own local bounce. Nothing document-wide is
+     * touched, so page-level gestures everywhere else are unchanged. */
+    overscroll-behavior: contain;
 }
 
 #terminal {
