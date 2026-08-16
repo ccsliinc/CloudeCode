@@ -25,7 +25,7 @@
  * IMAGES TOO. `event.clipboardData.items` carries image blobs on an
  * insecure origin, which navigator.clipboard.read() cannot. The paste
  * listener below routes the first image item into the same
- * Terminal#_uploadAndInjectImage() the secure path and the attach-image
+ * Terminal#_uploadAndInjectFile() the secure path and the attach-file
  * row use, so pasting a screenshot over plain http works rather than
  * silently arriving as empty text.
  */
@@ -142,20 +142,30 @@ console.log('[PasteFallback Module] Loading...');
     }
 
     /**
-     * The first image item on a paste event, or null.
+     * The first FILE item on a paste event, or null.
+     *
+     * Widened from images 2026-08-16 to match the terminal's own paste
+     * interceptor: `kind === 'file'` is the test that separates a file
+     * paste from a text paste, and a pasted pdf is as useful to hand
+     * Claude as a screenshot is. Text still falls through and lands in
+     * the textarea as usual.
+     *
+     * `kind` is checked first and the type test is only a fallback, since
+     * some browsers leave `kind` undefined on a synthesised event.
      *
      * @param {object} e - the ClipboardEvent.
-     * @returns {{blob: Blob, type: string}|null}
+     * @returns {{blob: Blob, name: string}|null}
      */
-    function firstImage(e) {
+    function firstFile(e) {
         var items = (e && e.clipboardData && e.clipboardData.items) || [];
         for (var i = 0; i < items.length; i++) {
             var type = items[i].type || '';
-            if (type.indexOf('image/') !== 0) continue;
+            var isFile = items[i].kind === 'file' || type.indexOf('image/') === 0;
+            if (!isFile) continue;
             var blob = typeof items[i].getAsFile === 'function'
                 ? items[i].getAsFile()
                 : null;
-            if (blob) return { blob: blob, type: type };
+            if (blob) return { blob: blob, name: blob.name || '' };
         }
         return null;
     }
@@ -219,11 +229,11 @@ console.log('[PasteFallback Module] Loading...');
         document.body.appendChild(overlayEl);
 
         inputEl.addEventListener('paste', function (e) {
-            var img = firstImage(e);
-            if (!img) return; // text lands in the field as usual
+            var picked = firstFile(e);
+            if (!picked) return; // text lands in the field as usual
             if (typeof e.preventDefault === 'function') e.preventDefault();
             close();
-            term._uploadAndInjectImage(img.blob, img.type);
+            term._uploadAndInjectFile(picked.blob, picked.name);
         });
 
         onDocKey = function (e) {

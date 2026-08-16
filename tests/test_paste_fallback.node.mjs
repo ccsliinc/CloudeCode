@@ -32,8 +32,9 @@
 //   7. ESCAPE AND CANCEL BOTH DISMISS WITHOUT INJECTING.
 //   8. THE FIELD IS PASTE-ABLE ON iOS: writable, real size, selectable,
 //      16px so Safari does not zoom.
-//   9. IMAGES STILL WORK over http, through the clipboard EVENT, which
-//      is not secure-context gated the way the read API is.
+//   9. FILES STILL WORK over http, through the clipboard EVENT, which
+//      is not secure-context gated the way the read API is. Widened from
+//      images to any file 2026-08-16.
 //
 // Run with: node tests/test_paste_fallback.node.mjs
 
@@ -48,17 +49,44 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let failures = 0;
 let passes = 0;
+const queue = [];
 
+/**
+ * Register a test.
+ *
+ * MUST await fn(). It used to call `fn()` bare inside a try/catch, which
+ * for the ten `async` tests in this file meant the catch could never fire:
+ * an async function returns a promise instead of throwing, so every
+ * assertion in them was reported "ok" without ever being evaluated, and
+ * the trailing process.exit() suppressed the unhandled-rejection notice
+ * that would otherwise have given it away. Found 2026-08-16 by replacing
+ * an assertion with an unconditional `throw` and still getting "ok".
+ *
+ * @param {string} name  What is being asserted.
+ * @param {function(): (void|Promise<void>)} fn  The assertions.
+ * @returns {void}
+ */
 function test(name, fn) {
-    try {
-        fn();
-        passes++;
-        console.log(`ok - ${name}`);
-    } catch (err) {
-        failures++;
-        console.error(`NOT OK - ${name}`);
-        console.error(err && err.stack ? err.stack : err);
-    }
+    queue.push(async () => {
+        try {
+            await fn();
+            passes++;
+            console.log(`ok - ${name}`);
+        } catch (err) {
+            failures++;
+            console.error(`NOT OK - ${name}`);
+            console.error(err && err.stack ? err.stack : err);
+        }
+    });
+}
+
+/**
+ * Run every registered test in order.
+ *
+ * @returns {Promise<void>}
+ */
+async function runQueue() {
+    for (const t of queue) await t();
 }
 
 /**
@@ -105,7 +133,7 @@ function load(opts = {}) {
     const term = {
         ws: { readyState: 1 },
         insertText(text) { calls.inserted.push(text); },
-        _uploadAndInjectImage(blob, type) { calls.uploads.push({ blob, type }); },
+        _uploadAndInjectFile(blob, name) { calls.uploads.push({ blob, name }); },
         _showStatusPill(msg, kind) { calls.pills.push({ msg, kind }); },
     };
 
@@ -362,7 +390,7 @@ test('the field is one iOS will focus and paste into', async () => {
         'this is the only way to paste on a phone, so it must fit one');
 });
 
-test('IMAGES: a pasted image over http routes to the existing upload path', async () => {
+test('FILES: a pasted image over http routes to the existing upload path', async () => {
     const { env, win, term, calls } = load({ clipboard: undefined });
     await win.ClipboardTools.pasteFromClipboard(term);
     const field = env.document.getElementById('pasteFallbackInput');
@@ -380,9 +408,33 @@ test('IMAGES: a pasted image over http routes to the existing upload path', asyn
 
     // navigator.clipboard.read() cannot do this on an insecure origin;
     // the clipboard EVENT can, because the user's paste gesture is the
-    // permission. Same upload path as the attach-image row.
-    assert.deepEqual(calls.uploads, [{ blob, type: 'image/png' }]);
+    // permission. Same upload path as the attach-file row.
+    //
+    // The name is '' because a clipboard blob carries none; api.js is
+    // what turns that into "paste.<ext>" from the blob's mime type.
+    assert.deepEqual(calls.uploads, [{ blob, name: '' }]);
     assert.equal(overlay(env), null);
+});
+
+test('FILES: a pasted NON-image file takes the upload path too', async () => {
+    const { env, win, term, calls } = load({ clipboard: undefined });
+    await win.ClipboardTools.pasteFromClipboard(term);
+    const field = env.document.getElementById('pasteFallbackInput');
+
+    // Widened from images 2026-08-16. This used to fall through to the
+    // text path, which is how a pasted pdf became "[object File]".
+    const blob = { name: 'report.pdf' };
+    let prevented = false;
+    field.dispatchEvent('paste', {
+        clipboardData: {
+            items: [{ kind: 'file', type: 'application/pdf', getAsFile: () => blob }],
+        },
+        preventDefault() { prevented = true; },
+    });
+
+    assert.equal(prevented, true, 'the file must not also land as text');
+    assert.deepEqual(calls.uploads, [{ blob, name: 'report.pdf' }]);
+    assert.equal(overlay(env), null, 'the sheet closes once the upload starts');
 });
 
 test('a text paste is left in the field for the user to confirm', async () => {
@@ -409,6 +461,8 @@ test('both new files are actually served, in a workable order', () => {
         < html.indexOf('/static/js/paste-fallback.js'),
         'the fallback reports through FabMenu.notify');
 });
+
+await runQueue();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

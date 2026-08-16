@@ -88,12 +88,36 @@ function makeTerm() {
         ws: { readyState: 1 },
         insertText(text) { term.inserted.push(text); },
         _showStatusPill(message, kind) { term.pills.push(`${kind}: ${message}`); },
-        _uploadAndInjectImage(blob, mime) {
-            term.uploads.push({ mime, blob });
-            return Promise.resolve();
-        }
+        _sessionId() { return 'ses_test01'; },
     };
     return term;
+}
+
+/**
+ * Stub window.API.uploadFile so the REAL uploadAndInject() flow runs and
+ * records what it was handed.
+ *
+ * The recorder lives on the term (`term.uploads`) so every existing
+ * assertion keeps its shape. `mime` is derived from the blob the way the
+ * server would see it, since api.js is what turns a nameless blob into
+ * "paste.<ext>" and that module is not loaded here.
+ *
+ * @param {object} env - the sandbox environment from load().
+ * @param {object} term - the wrapper from makeTerm().
+ * @returns {void}
+ */
+function stubUploadAPI(env, term) {
+    env.window.API = {
+        uploadFile(blob, filename, sessionId) {
+            const mime = (blob && blob.type) || 'image/jpeg';
+            term.uploads.push({ mime, blob, filename, sessionId });
+            return Promise.resolve({
+                path: '/tmp/wd/.cloude_uploads/abc12345-' + (filename || 'paste.png'),
+                filename: 'abc12345-' + (filename || 'paste.png'),
+                size: 4,
+            });
+        },
+    };
 }
 
 /**
@@ -273,30 +297,39 @@ test('a closed socket is reported, so the paste is never silently lost', async (
 
 test('an image on the clipboard uploads instead of pasting its bytes', async () => {
     const blob = { size: 4, type: 'image/png' };
-    const { tools } = load({
+    const { env, tools } = load({
         read: () => Promise.resolve([item(['image/png', 'text/plain'], blob)]),
         readText: () => Promise.resolve('should not be reached')
     });
     const term = makeTerm();
+    stubUploadAPI(env, term);
     await tools.pasteFromClipboard(term);
     assert.equal(term.uploads.length, 1, 'the image must take the upload path');
     assert.equal(term.uploads[0].mime, 'image/png');
-    assert.deepEqual(term.inserted, [],
+    // What lands in the pty is the server's PATH, never the bytes. This
+    // used to assert nothing was inserted at all, which was only true
+    // because the old stub swallowed the whole flow before injection.
+    assert.equal(term.inserted.length, 1);
+    assert.match(term.inserted[0], /^\/tmp\/wd\/\.cloude_uploads\/abc12345-/);
+    assert.ok(!term.inserted[0].includes('image/png'),
         'raw image bytes must never be typed into the pty');
 });
 
 test('an image wins over text when the clipboard carries both items', async () => {
     const blob = { size: 4, type: 'image/png' };
-    const { tools } = load({
+    const { env, tools } = load({
         read: () => Promise.resolve([
             item(['text/plain'], { text: () => Promise.resolve('ignored') }),
             item(['image/png'], blob)
         ])
     });
     const term = makeTerm();
+    stubUploadAPI(env, term);
     await tools.pasteFromClipboard(term);
     assert.equal(term.uploads.length, 1);
-    assert.deepEqual(term.inserted, []);
+    assert.equal(term.inserted.length, 1);
+    assert.match(term.inserted[0], /^\/tmp\/wd\/\.cloude_uploads\//,
+        'the image wins and its PATH is what reaches the pty');
 });
 
 // ---------------------------------------------------------------------
@@ -312,6 +345,7 @@ test('ATTACH: the row opens the picker and the file reaches the upload', async (
     env.document.body.appendChild(input);
 
     const term = makeTerm();
+    stubUploadAPI(env, term);
     tools.wireFileInput(term, input);
 
     // Step 1: the menu row's entire action is `fileInputEl.click()`,
@@ -344,6 +378,7 @@ test('ATTACH: a file with no type still uploads, under a jpeg default', async ()
     input.value = '';
     env.document.body.appendChild(input);
     const term = makeTerm();
+    stubUploadAPI(env, term);
     tools.wireFileInput(term, input);
     input.files = [{ name: 'x', type: '', size: 1 }];
     input.dispatchEvent('change');
@@ -358,6 +393,7 @@ test('ATTACH: cancelling the picker is a no-op, not an empty upload', async () =
     input.setAttribute('id', 'cloude-image-attach-input');
     env.document.body.appendChild(input);
     const term = makeTerm();
+    stubUploadAPI(env, term);
     tools.wireFileInput(term, input);
     input.files = [];
     input.dispatchEvent('change');
@@ -372,6 +408,7 @@ test('ATTACH: wiring twice does not upload twice', async () => {
     input.value = '';
     env.document.body.appendChild(input);
     const term = makeTerm();
+    stubUploadAPI(env, term);
     tools.wireFileInput(term, input);
     tools.wireFileInput(term, input);
     input.files = [{ name: 'x', type: 'image/png', size: 1 }];
@@ -390,7 +427,10 @@ test('the shipped wiring matches what these tests exercised', () => {
     const term = clientFile('js', 'terminal.js');
     // The input exists, is hidden, and accepts what the picker needs.
     assert.match(html, /id="cloude-image-attach-input"/);
-    assert.match(html, /accept="image\/\*,image\/heic,image\/heif"/);
+    // NO accept attribute since 2026-08-16: it steered the iOS picker at
+    // the Photos library and made every non-image unreachable.
+    assert.ok(!/id="cloude-image-attach-input"[^>]*accept=/.test(html),
+        'the picker must offer Files, not just Photos');
     assert.match(html, /<input type="file" id="cloude-image-attach-input"[^>]*hidden/);
     // The attach row opens exactly that input.
     assert.match(menu, /if \(fileInputEl\) fileInputEl\.click\(\);/);

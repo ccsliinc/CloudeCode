@@ -440,60 +440,65 @@ class Terminal {
     }
 
     /**
-     * IMG-PASTE — desktop clipboard paste interceptor.
+     * FILE-PASTE — desktop clipboard paste interceptor.
      *
      * Listens on the #terminal container in capture phase so we see the
      * paste BEFORE xterm's internal handler. Iterates clipboardData.items
-     * looking for the first ``kind === 'file'`` item with an ``image/*``
-     * type. If found, we suppress xterm's default text paste, upload the
-     * blob, and inject the returned absolute path with a trailing space
-     * (NOT a newline — preserves Claude Code's native UX where the user
-     * keeps typing the prompt). If no image item is present we let the
-     * event fall through to xterm's text-paste path unchanged.
+     * looking for the first ``kind === 'file'`` item of ANY type. If found,
+     * we suppress xterm's default text paste, upload the blob, and inject
+     * the returned absolute path with a trailing space (NOT a newline -
+     * preserves Claude Code's native UX where the user keeps typing the
+     * prompt). If no file item is present we let the event fall through to
+     * xterm's text-paste path unchanged, which is how cmd+V text still
+     * works.
      *
+     * WIDENED FROM IMAGES 2026-08-16. The check used to also demand
+     * ``type.startsWith('image/')``; a pasted pdf or zip fell through to
+     * the text path and xterm rendered "[object File]" garbage.
+     * ``kind === 'file'`` is what actually separates a file paste from a
+     * text paste, so it is now the only test.
      * Capture phase + stopPropagation matter: xterm registers its own
      * paste listener on the same container in bubble phase; without
-     * capture-first interception the text-paste path would still fire
-     * for an image (which xterm renders as the literal text "[object
-     * File]" garbage in the prompt buffer).
+     * capture-first interception the text-paste path would still fire.
      */
     _applyPasteHandler() {
         const container = document.getElementById('terminal');
         if (!container) return;
         container.addEventListener('paste', async (e) => {
             const items = (e.clipboardData && e.clipboardData.items) || [];
-            let imageItem = null;
+            let fileItem = null;
             for (const item of items) {
-                if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
-                    imageItem = item;
+                if (item.kind === 'file') {
+                    fileItem = item;
                     break;
                 }
             }
-            if (!imageItem) return;
+            if (!fileItem) return;
 
             e.preventDefault();
             e.stopPropagation();
-            const blob = imageItem.getAsFile();
+            const blob = fileItem.getAsFile();
             if (!blob) return;
 
-            await this._uploadAndInjectImage(blob, imageItem.type);
+            await this._uploadAndInjectFile(blob, blob.name || '');
         }, true);
     }
 
     /**
-     * IMG-PASTE - hidden image file input hook point.
+     * FILE-PASTE - hidden file input hook point.
      *
-     * iOS Safari does NOT reliably fire ``paste`` events for image data
+     * iOS Safari does NOT reliably fire ``paste`` events for file data
      * outside focused contenteditable elements, so an explicit picker has
      * to exist. It used to hang off a paperclip FAB with its own popup
-     * menu; that menu is now the "attach image" row of the single session
+     * menu; that menu is now the "attach file" row of the single session
      * tools menu (terminal-tools-menu.js), which opens THIS input.
      *
      * Only the change handler is wired here, via
-     * ``ClipboardTools.wireFileInput``. The input has
-     * ``accept="image/*,image/heic,image/heif"`` so the OS picker offers
-     * both Photos library + Files; the server rejects HEIC at validation
-     * time with a "convert to PNG/JPEG" message (intentional v1 scope).
+     * ``ClipboardTools.wireFileInput``. The input carries NO ``accept``
+     * attribute as of 2026-08-16: it was ``image/*,image/heic,image/heif``,
+     * which on iOS steered the picker at the Photos library and made every
+     * non-image unreachable. Bare offers Files too; the server decides
+     * what is acceptable.
      *
      * @returns {void}
      */
@@ -556,28 +561,24 @@ class Terminal {
     }
 
     /**
-     * IMG-PASTE — shared upload + path-injection routine.
+     * FILE-PASTE — upload + path-injection hook point.
      *
-     * Trailing SPACE (not Enter) is intentional: Claude Code's CLI
-     * auto-attaches any absolute image path that appears in its prompt
-     * buffer once the user submits, so we want the path to land in the
-     * buffer with a space separator and let the user keep typing their
-     * prompt. Auto-Enter would submit a path-only message and waste the
-     * round-trip.
+     * A THIN DELEGATE. The flow lives in ClipboardTools.uploadAndInject,
+     * next to the other things that move content across the terminal
+     * boundary and, unlike this file, reachable from a unit test.
+     * Generalised from _uploadAndInjectImage() 2026-08-16: same steps for
+     * any file, so it is one path, not two.
+     * @param {Blob} blob - bytes to upload; a File carries its own name.
+     * @param {string} [filename] - declared name; empty for a clipboard
+     *   blob, where api.js derives "paste.<ext>" from the blob type.
+     * @returns {Promise<void>}
      */
-    async _uploadAndInjectImage(blob, mimeType) {
-        this._showStatusPill('Uploading image...', 'info');
-        try {
-            // Multi-session: scope the upload to THIS tab's session so the
-            // image lands in the right project's working dir.
-            const sessionId = this._sessionId();
-            const result = await window.API.uploadImage(blob, mimeType, sessionId);
-            this.insertText(result.path + ' ');
-            this._showStatusPill('Pasted: ' + result.filename, 'success');
-        } catch (err) {
-            console.error('[IMG-PASTE] upload failed', err);
-            this._showStatusPill('Upload failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+    async _uploadAndInjectFile(blob, filename) {
+        if (!window.ClipboardTools || typeof window.ClipboardTools.uploadAndInject !== 'function') {
+            this._showStatusPill('upload unavailable', 'error');
+            return;
         }
+        await window.ClipboardTools.uploadAndInject(this, blob, filename || '');
     }
 
     /**

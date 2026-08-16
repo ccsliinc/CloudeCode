@@ -634,17 +634,21 @@ class MkdirRequest(BaseModel):
 
 
 class UploadImageResponse(BaseModel):
-    """Response model for ``POST /sessions/upload-image``.
+    """Response model for ``POST /sessions/upload-file`` (and its alias).
 
-    Returned after a validated image has been persisted into the active
+    Returned after a validated upload has been persisted into the active
     session's ``.cloude_uploads/`` bucket. ``path`` is the absolute on-disk
-    location the client injects into the terminal (Claude Code's CLI
-    auto-attaches files referenced by absolute path with an image
-    extension). ``filename`` is the UUID-named basename for display in
-    the client's status pill; ``size`` lets the client surface a friendly
-    "uploaded N KB" confirmation without re-reading the file.
+    location the client injects into the terminal: Claude Code's CLI
+    auto-attaches an absolute image path, and reads any other absolute path
+    with its own file tools. ``filename`` is the saved
+    ``<uuid8>-<safe_name>`` basename for display in the client's status
+    pill; ``size`` lets the client surface a friendly "uploaded N KB"
+    confirmation without re-reading the file.
+
+    Name retained (rather than ``UploadFileResponse``) because the shape is
+    unchanged and it is referenced by the retained ``/upload-image`` alias.
     """
-    path: str = Field(..., description="Absolute path to the saved image file")
+    path: str = Field(..., description="Absolute path to the saved file")
     filename: str = Field(..., description="Saved filename (basename only)")
     size: int = Field(..., description="Saved file size in bytes")
 

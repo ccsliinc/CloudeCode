@@ -636,7 +636,7 @@ class API {
     }
 
     /**
-     * Sessions: Upload an image blob to the active session.
+     * Sessions: Upload any file blob to the active session.
      *
      * Why this lives outside ``call()``: ``call()`` unconditionally
      * ``JSON.stringify``s any ``typeof body === 'object'`` payload (line
@@ -649,21 +649,28 @@ class API {
      * Auth + 401 retry mirrors ``call()`` exactly (single-flight refresh,
      * one replay, then handleUnauthorized) — no behavior drift.
      *
-     * @param {Blob} blob - Image bytes from the clipboard / file picker.
-     * @param {string} mimeType - e.g. ``'image/png'``. Used only for the
-     *   multipart filename suffix; the server renames to ``<uuid>.<ext>``.
+     * @param {Blob} blob - Bytes from the clipboard / file picker. A File
+     *   carries its own name; a raw clipboard Blob does not.
+     * @param {string} [filename] - the name to declare to the server, which
+     *   SANITISES it and preserves the extension. Empty for a nameless
+     *   clipboard blob, in which case ``paste.<ext>`` is derived from the
+     *   blob's own mime type so an image paste still lands as ``.png``.
      * @param {string|null} [sessionId] - which session's working dir to
-     *   write into. The pasting tab passes its own id so the image lands
-     *   in the right project; omitted → current session (back-compat).
+     *   write into. The pasting tab passes its own id so the file lands
+     *   in the right project; omitted -> current session (back-compat).
      * @param {object} [_meta] - internal; callers pass ``{_retrying: true}``
      *   to break the refresh-then-retry loop.
      * @returns {Promise<{path: string, filename: string, size: number}>}
      */
-    async uploadImage(blob, mimeType, sessionId = null, _meta = {}) {
-        const ext = (mimeType && mimeType.split('/')[1]) || 'png';
-        const filename = `paste.${ext}`;
+    async uploadFile(blob, filename = '', sessionId = null, _meta = {}) {
+        let declared = String(filename || '').trim();
+        if (!declared) {
+            const type = (blob && blob.type) || '';
+            const ext = (type.split('/')[1] || 'bin').split(';')[0];
+            declared = `paste.${ext}`;
+        }
         const form = new FormData();
-        form.append('file', blob, filename);
+        form.append('file', blob, declared);
 
         const token = this.getToken();
         const headers = {};
@@ -672,7 +679,7 @@ class API {
         }
 
         const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
-        const url = `${this.baseURL}/sessions/upload-image${q}`;
+        const url = `${this.baseURL}/sessions/upload-file${q}`;
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -684,11 +691,11 @@ class API {
                 if (!_meta._retrying && window.Auth && window.Auth.getRefreshToken()) {
                     const refreshed = await this._singleFlightRefresh();
                     if (refreshed === true) {
-                        console.log('API: 401 recovered via refresh, retrying uploadImage');
-                        return this.uploadImage(blob, mimeType, sessionId, { _retrying: true });
+                        console.log('API: 401 recovered via refresh, retrying uploadFile');
+                        return this.uploadFile(blob, declared, sessionId, { _retrying: true });
                     }
                     if (refreshed === 'network-error') {
-                        console.warn('API: 401 + refresh hit network error on uploadImage — preserving refresh token');
+                        console.warn('API: 401 + refresh hit network error on uploadFile — preserving refresh token');
                         if (window.Auth) {
                             window.Auth.clearToken({ accessOnly: true });
                         }
@@ -698,7 +705,7 @@ class API {
                         throw err;
                     }
                 }
-                console.log('API: 401 Unauthorized on uploadImage - triggering re-auth');
+                console.log('API: 401 Unauthorized on uploadFile - triggering re-auth');
                 this.handleUnauthorized();
                 throw new Error('Authentication required. Please log in again.');
             }
@@ -710,7 +717,7 @@ class API {
 
             return await response.json();
         } catch (error) {
-            console.error('API Error [uploadImage]:', error);
+            console.error('API Error [uploadFile]:', error);
             throw error;
         }
     }

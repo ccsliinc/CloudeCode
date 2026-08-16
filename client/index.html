@@ -503,7 +503,7 @@
          preventDefault on single-touch drags there, so a control mounted
          inside it loses its gestures.
 
-         The hidden file input is the "attach image" path, opened
+         The hidden file input is the "attach file" path, opened
          programmatically by that menu row; the change handler lives in
          clipboard.js (ClipboardTools.wireFileInput).
 
@@ -511,7 +511,7 @@
          0 0 16 16 viewBox with stroke-width declared PER PATH. A
          presentation attribute on the path beats a stylesheet rule that
          targets the svg, so the value has to be right here. -->
-    <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
+    <input type="file" id="cloude-image-attach-input" hidden />
 
     <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
     <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"
