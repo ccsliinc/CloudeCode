@@ -224,15 +224,20 @@ test('THE ATTACH CAPABILITY SURVIVED: the row opens the real file input', () => 
     const html = clientFile('index.html');
     assert.ok(html.includes('id="cloude-image-attach-input"'),
         'the hidden file input must still be mounted');
-    assert.ok(html.includes('accept="image/*,image/heic,image/heif"'),
-        'the picker must still offer the Photos library and Files');
+    // NO accept attribute since 2026-08-16: it steered the iOS picker at
+    // the Photos library, which made every non-image unreachable on the
+    // device the picker exists for.
+    assert.ok(!/id="cloude-image-attach-input"[^>]*accept=/.test(html),
+        'the picker must offer Files, not just Photos');
     // The change handler lives in clipboard.js#wireFileInput and drives
-    // _uploadAndInjectImage; terminal.js must still wire it.
+    // uploadAndInject; terminal.js must still wire it.
     assert.ok(clientFile('js', 'clipboard.js').includes('function wireFileInput'));
     const term = clientFile('js', 'terminal.js');
     assert.ok(term.includes('ClipboardTools.wireFileInput'));
-    assert.ok(term.includes('_uploadAndInjectImage'),
+    assert.ok(term.includes('_uploadAndInjectFile'),
         'the upload + path-injection flow must survive the resplit');
+    assert.ok(clientFile('js', 'clipboard.js').includes('function uploadAndInject'),
+        'the flow itself lives in clipboard.js, not in terminal.js');
 });
 
 test('picking a tool closes the menu, so it never sits over the terminal', () => {

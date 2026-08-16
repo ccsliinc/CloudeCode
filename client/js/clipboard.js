@@ -8,7 +8,7 @@
  *
  *  1. PASTE FROM CLIPBOARD - reads the LOCAL device clipboard via
  *     navigator.clipboard.read(): the first image/* item routes through
- *     the existing Terminal#_uploadAndInjectImage() flow; otherwise
+ *     the uploadAndInject() flow below; otherwise
  *     text/plain (or the readText() fallback) is injected via
  *     Terminal#insertText() - the same binary WebSocket path as
  *     term.onData - sent as ONE frame so the server's >256B
@@ -24,7 +24,7 @@
  *     inside a user gesture, which the permission model requires.
  *
  *     THE MENU THAT USED TO LIVE HERE IS GONE. The paperclip FAB owned a
- *     two-item popup (paste / attach image) while a second folded strip
+ *     two-item popup (paste / attach file) while a second folded strip
  *     over the terminal's top-right corner owned copy / theme / music.
  *     Both are now rows of the single session tools menu in
  *     client/js/terminal-tools-menu.js, which calls the two functions
@@ -124,13 +124,16 @@
     }
 
     /* =================================================================
-     * Image file input
+     * File input
      * ================================================================= */
 
     /**
-     * Wire the hidden image file input. The picker itself is opened by
-     * the "attach image" row of the session tools menu; this only owns
-     * what happens once a file comes back.
+     * Wire the hidden file input. The picker itself is opened by the
+     * "attach file" row of the session tools menu; this only owns what
+     * happens once a file comes back.
+     *
+     * Any file, not just an image: the server sanitises the name and the
+     * terminal gets a path Claude can read for itself.
      *
      * @param {object} term - the Terminal wrapper.
      * @param {HTMLInputElement} input - the hidden file input.
@@ -142,9 +145,76 @@
         input.addEventListener('change', async () => {
             const file = input.files && input.files[0];
             if (!file) return;
-            await term._uploadAndInjectImage(file, file.type || 'image/jpeg');
+            await uploadAndInject(term, file, file.name || '');
             input.value = '';
         });
+    }
+
+    /* =================================================================
+     * Upload + path injection
+     * ================================================================= */
+
+    /**
+     * Upload a blob and inject the resulting absolute path into the terminal.
+     *
+     * THE one upload flow, for every entry point: the desktop paste
+     * interceptor, the paste-fallback sheet, and the attach-file picker.
+     * Generalised from Terminal#_uploadAndInjectImage() 2026-08-16 rather
+     * than given a sibling, because nothing in the old body was
+     * image-specific beyond the wording. Images behave exactly as before;
+     * the server still applies the stricter image contract (magic-byte
+     * cross-check, tighter size cap) to anything with an image extension.
+     *
+     * Trailing SPACE, not Enter: Claude Code auto-attaches an absolute
+     * image path that appears in its prompt buffer, and reads any other
+     * absolute path with its own file tools, so the path lands with a
+     * separator and the user keeps typing. Auto-Enter would submit a
+     * path-only message and waste the round-trip.
+     *
+     * @param {object} term - the Terminal wrapper (insertText, status pill).
+     * @param {Blob} blob - the bytes to upload.
+     * @param {string} [filename] - declared name; empty for a nameless
+     *   clipboard blob, where api.js derives "paste.<ext>" from the type.
+     * @returns {Promise<void>}
+     */
+    async function uploadAndInject(term, blob, filename) {
+        report(term, 'uploading...', 'info');
+        try {
+            // Multi-session: scope the upload to THIS tab's session so the
+            // file lands in the right project's working dir.
+            const sessionId = typeof term._sessionId === 'function' ? term._sessionId() : null;
+            const result = await window.API.uploadFile(blob, filename || '', sessionId);
+            term.insertText(quotePathForPrompt(result.path) + ' ');
+            report(term, 'attached: ' + result.filename, 'success');
+        } catch (err) {
+            console.error('[FILE-PASTE] upload failed', err);
+            report(term, 'upload failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+        }
+    }
+
+    /**
+     * Render an absolute path so it survives the shell prompt it lands in.
+     *
+     * The server sanitises the BASENAME it writes, so the injected string
+     * is usually already bare-safe. The DIRECTORY half is the session's
+     * working dir, which the app does not control and which routinely
+     * contains spaces on macOS ("~/Library/Mobile Documents/..."). So the
+     * decision is made on the whole string, not on the part we sanitised.
+     *
+     * Bare when every character is in the shell-safe set, otherwise
+     * single-quoted with the standard `'\''` break-out for any embedded
+     * single quote. Single quotes are used rather than double because
+     * they suppress $ and ` expansion too, and Claude Code reads a quoted
+     * absolute path the same as a bare one.
+     *
+     * @param {string} p - absolute path from the upload response.
+     * @returns {string} the path, bare or single-quoted.
+     */
+    function quotePathForPrompt(p) {
+        var s = String(p == null ? '' : p);
+        if (s === '') return s;
+        if (/^[A-Za-z0-9._\-\/~+=:,@]+$/.test(s)) return s;
+        return "'" + s.split("'").join("'\\''") + "'";
     }
 
     /* =================================================================
@@ -184,7 +254,9 @@
                     const imageType = (item.types || []).find((t) => t.indexOf('image/') === 0);
                     if (imageType) {
                         const blob = await item.getType(imageType);
-                        await term._uploadAndInjectImage(blob, imageType);
+                        // A clipboard blob carries no name; api.js derives
+                        // "paste.<ext>" from the blob's own mime type.
+                        await uploadAndInject(term, blob, '');
                         return;
                     }
                 }
@@ -271,5 +343,7 @@
         pasteFromClipboard,
         wireFileInput,
         injectText,
+        quotePathForPrompt,
+        uploadAndInject,
     };
 })();

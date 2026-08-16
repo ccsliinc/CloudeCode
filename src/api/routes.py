@@ -51,7 +51,7 @@ from src.models import (
 )
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
-from src.api.uploads import validate_image, save_to_session_dir
+from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
@@ -821,29 +821,49 @@ async def send_command(request: Request, body: CommandRequest):
 
 
 @router.post(
-    "/sessions/upload-image",
+    "/sessions/upload-file",
     response_model=UploadImageResponse,
     status_code=201,
     dependencies=[Depends(require_auth)],
 )
-async def upload_image(
+@router.post(
+    "/sessions/upload-image",
+    response_model=UploadImageResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+    include_in_schema=False,
+)
+async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     session_id: Optional[str] = None,
 ):
-    """Persist a pasted browser image into a session's upload bucket.
+    """Persist an uploaded file into a session's upload bucket.
 
-    The validated file is written to ``<working_dir>/.cloude_uploads/<uuid>.<ext>``
-    with mode 0o600 (directory 0o700). The client then injects the returned
-    absolute ``path`` into the terminal so Claude Code's CLI auto-attaches it.
+    Accepts ANY file, not only images: the point of the feature is to hand
+    Claude a path to something it can read for itself. Images keep the
+    stricter contract (magic-byte cross-check, tighter size cap); everything
+    else is size-capped and name-sanitised but its bytes are never parsed.
+    See ``src/api/uploads.py`` for the full validation contract.
+
+    The validated file is written to
+    ``<working_dir>/.cloude_uploads/<uuid8>-<safe_name>`` with mode 0o600
+    (directory 0o700), via ``O_EXCL`` so nothing is silently overwritten. The
+    client then injects the returned absolute ``path`` into the terminal.
+
+    TWO PATHS, ONE HANDLER. ``/sessions/upload-file`` is the canonical route.
+    ``/sessions/upload-image`` is retained (and hidden from the schema)
+    because this is a PWA: a browser holding a cached older ``api.js`` would
+    otherwise 404 on every paste until its service worker updated.
 
     ``session_id`` (query, optional) picks which session's working dir to
     write into; omitted uses the current session. The terminal tab that's
-    pasting passes its own session id so the image lands in the right project.
+    pasting passes its own session id so the file lands in the right project.
 
     Raises:
         HTTPException: 409 if no matching session, 400 on validation failure
-            (bad extension, oversize, magic-byte mismatch), 500 on disk error.
+            (oversize, empty, or an image failing its magic-byte check), 500
+            on disk error.
     """
     session_manager = request.app.state.session_manager
 
@@ -862,27 +882,35 @@ async def upload_image(
     data = await file.read()
 
     logger.info(
-        "api_upload_image_request",
+        "api_upload_file_request",
         declared_filename=declared_filename,
         size=len(data),
+        # Logged for diagnostics only. The client's content-type is NOT
+        # trusted and never has been; type is inferred from the sanitised
+        # extension inside validate_upload().
         content_type=file.content_type,
     )
 
-    max_size_mb = settings.load_auth_config().uploads.max_size_mb
-    validated_bytes, ext = validate_image(data, declared_filename, max_size_mb)
+    uploads_cfg = settings.load_auth_config().uploads
+    validated_bytes, safe_name = validate_upload(
+        data,
+        declared_filename,
+        uploads_cfg.max_size_mb,
+        uploads_cfg.max_file_size_mb,
+    )
 
     try:
-        target_path = save_to_session_dir(
-            validated_bytes, ext, session.working_dir
+        target_path = save_upload_to_session_dir(
+            validated_bytes, safe_name, session.working_dir
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("upload_image_save_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+    except OSError as e:
+        logger.error("upload_file_save_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     logger.info(
-        "api_upload_image_saved",
+        "api_upload_file_saved",
         path=str(target_path),
         size=len(validated_bytes),
     )

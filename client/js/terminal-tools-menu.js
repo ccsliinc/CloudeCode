@@ -1,7 +1,7 @@
 /**
  * Terminal tools menu - getting content IN AND OUT of the terminal.
  * ----------------------------------------------------------------------
- * THREE ROWS, ONE IDEA: copy output, paste from clipboard, attach image.
+ * THREE ROWS, ONE IDEA: copy output, paste from clipboard, attach file.
  * Every one of them moves content across the terminal's boundary, which
  * is the rule a user can actually learn for what lives behind this
  * button. It is the successor to the paperclip FAB, which already owned
@@ -39,7 +39,7 @@ console.log('[TerminalToolsMenu Module] Loading...');
     /** The Terminal wrapper handed over by terminal.js, or null. */
     var termWrapper = null;
 
-    /** The hidden image file input, or null. */
+    /** The hidden file input, or null. */
     var fileInputEl = null;
 
     /**
@@ -98,7 +98,7 @@ console.log('[TerminalToolsMenu Module] Loading...');
                     window.ClipboardTools.pasteFromClipboard(termWrapper);
                 }
             }),
-            c.item(ENTRY_IDS[2], buildIcon('image'), 'attach image', function () {
+            c.item(ENTRY_IDS[2], buildIcon('image'), 'attach file', function () {
                 if (fileInputEl) fileInputEl.click();
             })
         ];
@@ -110,7 +110,7 @@ console.log('[TerminalToolsMenu Module] Loading...');
      *
      * @param {object} wrapper - the Terminal wrapper (status pill, ws).
      * @param {HTMLElement} btn - #terminalToolsBtn.
-     * @param {HTMLElement} input - the hidden image file input.
+     * @param {HTMLElement} input - the hidden file input.
      * @returns {void}
      */
     function wire(wrapper, btn, input) {
