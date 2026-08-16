@@ -8,7 +8,7 @@
  *                         copy output, paste from clipboard, attach image
  *   .session-editor-fab   configures the session itself: theme, music
  * They share their look and their machinery (.fab-menu-btn here,
- * fab-menu.js there) and differ only in glyph, rows and slot.
+ * fab-menu.js there) and differ only in glyph, rows and placement.
  *
  * Everything here is theme-aware through the same semantic tokens the
  * rest of the chrome uses, so a per-session theme restyles these
@@ -21,21 +21,25 @@
 /* ---------------------------------------------------------------------
  * FAB triggers
  *
- * NOTHING IS PINNED OVER THE TERMINAL'S TOP EDGE. A folded tool strip
- * used to sit over the top-right corner; it is gone entirely, not
- * hidden, and the terminal's top edge is uncovered.
+ * NO STRIP OVER THE TERMINAL'S TOP EDGE. A folded three-icon tool strip
+ * used to sit over the top-right corner and cover output across its
+ * whole width; it is gone entirely, not hidden. The session editor is
+ * pinned back over that corner as ONE 45px button, which is what was
+ * asked for; the strip is not coming back.
  *
  * GEOMETRY IS SHARED, NOT RESTATED. The old paperclip sat at
  * `right: 16px` with a 44px box while `.dpad-float-button` sat at
  * `right: 20px` with a 45px box, so their centres were 4.5px apart. The
  * numbers now live in --fab-size / --fab-edge / --fab-gap in styles.css
  * and every floating button derives from them. Appearance lives once on
- * .fab-menu-btn; the per-button rules below carry ONLY a slot.
+ * .fab-menu-btn; the per-button rules below carry ONLY a position.
  * ------------------------------------------------------------------- */
 .fab-menu-btn {
     display: flex;
     position: fixed;
-    /* One bottom row with the d-pad, hovering over the command line. */
+    /* The bottom row with the d-pad, hovering over the command line.
+     * .session-editor-fab overrides this with `bottom: auto` and a top
+     * offset - it is on the top-right rail, not in this row. */
     bottom: var(--fab-edge);
     width: var(--fab-size);
     height: var(--fab-size);
@@ -87,22 +91,33 @@ body:has(#auth-screen.active) .fab-menu-btn {
     right: var(--fab-slot-0);
 }
 
-/* Slot 2, one clear step past the d-pad in slot 1. Furthest from the
- * corner because it is the least-used of the three: a theme is set once
- * per session, output is copied all day. */
+/* THE TOP-RIGHT RAIL, NOT A BOTTOM SLOT.
+ *
+ * The session editor configures the session rather than acting on its
+ * output, so it is the one control that does not belong in the row of
+ * things you reach for while working. It is back in the top-right
+ * corner, where it was before the bottom row was unified.
+ *
+ * ONE BUTTON, AND IT STAYS ONE. The wide three-icon strip that used to
+ * live here covered terminal output and removing it uncovered the
+ * terminal's top edge, which was a real gain. This is a single 45px
+ * target on the same right rail as the terminal-tools button below it
+ * (both take --fab-slot-0), so the two read as one column rather than
+ * two loose corners.
+ *
+ * `bottom: auto` is REQUIRED, not decorative: .fab-menu-btn above sets
+ * `bottom: var(--fab-edge)`, and a box with both top and bottom set and
+ * a fixed height honours top and ignores bottom only because height is
+ * declared - stating auto is what makes that explicit rather than
+ * accidental. ios-chrome.css has the matching pair for standalone mode.
+ *
+ * No breakpoint. The bottom row needed one because desktop hides the
+ * d-pad and left a hole in the middle of it; a rail of one control has
+ * no hole to close, so the same rule serves phone and desktop. */
 .session-editor-fab {
-    right: var(--fab-slot-2);
-}
-
-/* DESKTOP RECLAIMS SLOT 1. styles.css hides `.dpad-float-button` outright
- * at this width - the d-pad is a touch control - so leaving the editor at
- * slot 2 would strand a 57px hole in the middle of the row that reads as
- * a button that failed to render. Same breakpoint as the rule that hides
- * the d-pad, and the same tokens, so the two cannot drift. */
-@media (min-width: 769px) {
-    .session-editor-fab {
-        right: var(--fab-slot-1);
-    }
+    top: var(--fab-top-edge);
+    bottom: auto;
+    right: var(--fab-slot-0);
 }
 
 /* ---------------------------------------------------------------------
@@ -125,7 +140,8 @@ body:has(#auth-screen.active) .fab-menu-btn {
 }
 
 /* WIDTH, HEIGHT AND JUSTIFY ARE DECLARED ON PURPOSE. styles.css carries a
- * bare `button { width: 36px; height: 36px; justify-content: center; }`
+ * bare `button { width: var(--control-size); height: var(--control-size);
+ * justify-content: center; }`
  * base rule. A class selector outranks it, but ONLY for the properties
  * the class actually declares - so a menu row that did not mention width
  * came out 36px wide with its icon hanging outside its own box, measured
@@ -175,6 +191,29 @@ body:has(#auth-screen.active) .fab-menu-btn {
 .fab-menu__item.is-on,
 .fab-menu__item.is-on svg {
     color: var(--color-accent);
+}
+
+/* A row that leaves the session, currently only "detach session". It is
+ * fenced off from the rows above rather than sitting flush against them,
+ * because a mis-tap on the row above costs a theme change and a mis-tap
+ * here costs the attachment. The rule, not the colour, is what carries
+ * that: the colour alone is invisible to a colour-blind user and to
+ * anyone reading it at arm's length. */
+.fab-menu__item--separated {
+    margin-top: 4px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+}
+
+.fab-menu__item--danger,
+.fab-menu__item--danger svg {
+    color: var(--color-danger, var(--color-fg));
+}
+
+.fab-menu__item--danger:hover,
+.fab-menu__item--danger:focus-visible,
+.fab-menu__item--danger:hover svg,
+.fab-menu__item--danger:focus-visible svg {
+    color: var(--color-danger, var(--color-fg));
 }
 
 /* One line per row. A wrapped label turns a 44px row into a 90px one and

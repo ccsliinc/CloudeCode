@@ -105,62 +105,29 @@
             <span class="version">{{VERSION}}</span>
         </h1>
         <div class="controls">
-            <!-- v0.7.0+ — per-theme background music toggle. Muted by default.
-                 Click is the required user-gesture that grants the AudioContext
-                 autoplay permission for the rest of the page lifetime. -->
-            <!-- Icon is swapped between the muted/unmuted SVG markup by
+            <!-- APP-LEVEL SOUND, NOT THE PER-SESSION ONE. This is the
+                 whole app's audio switch: it gates sound everywhere and
+                 is present on the launchpad, where no session exists.
+                 The session editor FAB carries a SEPARATE "play music for
+                 this session" row (session-editor-menu.js). Two controls,
+                 two scopes - the labels here and there both say which,
+                 because a bare speaker icon in two places would read as
+                 one control that failed to stay in sync.
+                 Click is also the required user-gesture that grants the
+                 AudioContext autoplay permission for the page lifetime.
+
+                 Icon is swapped between the muted/unmuted SVG markup by
                  App._wireAudioToggle()/AUDIO_ICON_SVG (app.js) — never an
                  emoji. Emoji render in full system color and ignore
                  currentColor, which broke the monotone header icon family;
                  this stays inline SVG so it themes and recolors identically
-                 to detach/logout/delete. Starts muted (speaker+X) to match
-                 the real default state. -->
-            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable theme music" title="Enable theme music" data-tooltip="Enable theme music">
+                 to its neighbours. Starts muted (speaker+X) to match the
+                 real default state. -->
+            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable app sound (all sessions)" title="app sound" data-tooltip="app sound (all sessions)">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                     <path d="M9.5 6.25L13 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                     <path d="M13 6.25L9.5 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <!-- Home: go back to the launcher WITHOUT touching the session.
-                 Does not call detachSession()/destroySession() and does not
-                 flip sessionActive — the session stays fully adopted
-                 server-side and keeps showing up in GET /sessions/list (not
-                 just /attachable), so returning to it is immediate. No
-                 confirmation: this is pure navigation, not an exit, and
-                 gating it would train click-through on the real destructive
-                 dialogs. Placed first among the exit-shaped controls because
-                 it reads as "go back", the least consequential of the three.
-                 Icon is a conventional house outline (roof + walls + door) —
-                 structurally distinct from detach's box-with-escaping-arrow
-                 and logout's door-bracket-with-passthrough-arrow below: a
-                 closed silhouette with a peaked roof, nothing like either
-                 open-ended "leaving" glyph. See AppController.goHome() /
-                 TerminalController.pauseForHome() in app.js / terminal.js. -->
-            <button type="button" id="homeBtn" class="hidden" aria-label="Home" title="home" data-tooltip="Home">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M2.5 7.5L8 3L13.5 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M4 6.5V12.5C4 12.7761 4.22386 13 4.5 13H11.5C11.7761 13 12 12.7761 12 12.5V6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M6.5 13V9.5C6.5 9.22386 6.72386 9 7 9H9C9.27614 9 9.5 9.22386 9.5 9.5V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </button>
-            <!-- Detach: soft exit. Leaves tmux alive for later re-adoption
-                 (see API.detachSession() / TerminalController.detachSession()).
-                 Delete is deliberately not reachable from inside a session
-                 (see #session-sidebar-panel and the launcher's project-delete
-                 row for the two remaining delete entry points). Icon is the
-                 conventional "external link" glyph: a box with its top-right
-                 corner left open and a diagonal arrow shooting out through
-                 that gap. Chosen specifically because it is structurally
-                 nothing like the logout glyph below (diagonal arrow escaping
-                 a corner gap vs. a horizontal arrow passing through a door) —
-                 the two "leaving" actions read as different shapes, not just
-                 different rotations of the same shape. -->
-            <button type="button" id="detachSessionBtn" class="hidden" aria-label="Detach session" title="detach session" data-tooltip="Detach session">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M6.5 3.5H4.25C3.69772 3.5 3.25 3.94772 3.25 4.5V11.5C3.25 12.0523 3.69772 12.5 4.25 12.5H11.25C11.8023 12.5 12.25 12.0523 12.25 11.5V9.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M9.25 3.5H12.5V6.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M7 9L12.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
             <!-- Logout: door frame (three-sided bracket, open on the right)
@@ -278,14 +245,17 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
-        <!-- NO TOOL OVERLAY IN THE TOP-RIGHT CORNER ANY MORE.
-             A folded strip used to float here holding copy output /
-             session theme / session music, while a second paperclip menu
-             in the bottom-right held paste / attach image. The strip is
-             gone entirely, so the terminal's top edge is uncovered, and
-             its contents were re-split by JOB rather than by corner:
+        <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
+             strip used to float here holding copy output / session theme
+             / session music, while a second paperclip menu in the
+             bottom-right held paste / attach image. The STRIP is gone for
+             good - it covered terminal output across its whole width.
+             Its contents were re-split by JOB rather than by corner:
              #terminalToolsBtn moves content, #sessionEditorBtn configures
-             the session. Both are at the bottom of this file. -->
+             the session. Both are at the bottom of this file, and the
+             session editor alone is pinned back over this corner as a
+             SINGLE 45px button. One button is not a strip; do not grow it
+             back into one. -->
 
         <div class="terminal-container">
             <div id="terminal"></div>
@@ -502,15 +472,23 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- THE TWO SESSION-SCOPED FAB MENUS, both on the bottom row with the
-         d-pad so every floating control hovers over the command line
-         together instead of being scattered across corners and a stack.
+    <!-- THE TWO SESSION-SCOPED FAB MENUS, split by JOB and by how often
+         you reach for them.
 
-         TERMINAL TOOLS (slot 0, the right edge) moves content across the
-         terminal's boundary: copy output, paste from clipboard, attach
-         image. SESSION EDITOR (slot 2, past the d-pad) configures the
-         session itself: theme and music. Two coherent groups with a rule
-         a user can learn, not one drawer of everything.
+         TERMINAL TOOLS (bottom row, slot 0, the right edge) moves content
+         across the terminal's boundary: copy output, paste from
+         clipboard, attach image. It stays on the bottom row with the
+         d-pad, over the command line, because it is used all day.
+
+         SESSION EDITOR (top-right rail) configures the session itself:
+         theme and music. Set once per session, so it is out of the
+         working row entirely. Two coherent groups with a rule a user can
+         learn, not one drawer of everything.
+
+         Both are direct children of <body>. NOTHING may move inside
+         #terminal: TerminalScroll.blockOverscrollEscape calls
+         preventDefault on single-touch drags there, so a control mounted
+         inside it loses its gestures.
 
          The hidden file input is the "attach image" path, opened
          programmatically by that menu row; the change handler lives in

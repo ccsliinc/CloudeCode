@@ -11,7 +11,7 @@
  * merged into this menu and that was wrong: they do not move content,
  * they configure the session's appearance and sound. They are the SESSION
  * EDITOR (#sessionEditorBtn, session-editor-menu.js), a separate control
- * with its own glyph in the same bottom row. Two coherent groups beat one
+ * with its own glyph on the top-right rail. Two coherent groups beat one
  * drawer of everything.
  *
  * ALSO NOT HERE: the header kebab (#header-menu-toggle, header-menu.js)

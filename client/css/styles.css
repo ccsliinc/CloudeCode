@@ -132,22 +132,67 @@
     /* Gap between two adjacent FABs. */
     --fab-gap: 12px;
 
-    /* THEY ALL SIT ON ONE BOTTOM ROW, hovering over the command line,
-     * rather than being scattered across three corners and a stack. One
-     * slot is one button plus one gap, so the slot tokens are the only
-     * place a horizontal offset is ever written.
+    /* THE BOTTOM ROW hovers over the command line. One slot is one
+     * button plus one gap, so the slot tokens are the only place a
+     * horizontal offset is ever written.
      *
      *   slot 0  terminal tools   (the right edge)
      *   slot 1  d-pad
-     *   slot 2  session editor
      *
      * Slash commands keeps the LEFT edge: it is the one control that
      * types into the prompt rather than acting on the session, and the
-     * left thumb is where it has always been. */
+     * left thumb is where it has always been.
+     *
+     * There is no slot 2. The session editor USED to sit there and now
+     * lives in the top-right rail below; a token nothing reads is how a
+     * dead layout gets revived by accident. */
     --fab-step: calc(var(--fab-size) + var(--fab-gap));
     --fab-slot-0: var(--fab-edge);
     --fab-slot-1: calc(var(--fab-edge) + var(--fab-step));
-    --fab-slot-2: calc(var(--fab-edge) + var(--fab-step) * 2);
+
+    /* THE TOP-RIGHT RAIL. A DIFFERENT AXIS, NOT A THIRD BOTTOM SLOT.
+     *
+     * The session editor is the only control up here. It shares the
+     * bottom row's right edge (--fab-slot-0), so it and the terminal
+     * tools button sit on ONE vertical rail against the right edge
+     * rather than at two unrelated insets, and it is offset DOWNWARD
+     * from the header rather than from the viewport top.
+     *
+     * A wide three-icon strip used to cover the terminal's top edge
+     * here. It was removed and the uncovered top edge was a real gain.
+     * This rail is deliberately expressed as a single vertical offset
+     * with NO step token: there is nothing to lay a second control out
+     * against, so adding one takes a deliberate edit rather than a
+     * copy-paste of `--fab-top-slot-1`.
+     *
+     * --header-h is derived, not measured. Its three parts are the same
+     * tokens .header and the bare `button` rule use at each breakpoint,
+     * so the clearance cannot drift when the header is restyled. The
+     * standalone safe-area inset is added in ios-chrome.css, where the
+     * header takes it too. */
+    --header-pad-y: 12px;
+    --header-border: 2px;
+    --header-h: calc(var(--control-size) + var(--header-pad-y) * 2
+                     + var(--header-border));
+    --fab-top-edge: calc(var(--header-h) + var(--fab-gap));
+
+    /* The app's default round control, and therefore what sets the
+     * header's height. Bumped to a thumb target on touch widths. */
+    --control-size: 36px;
+}
+
+@media (max-width: 768px) {
+    :root {
+        --header-pad-y: 10px;
+        --control-size: 44px;
+    }
+}
+
+@media (max-width: 480px) {
+    :root {
+        --header-pad-y: 8px;
+        --control-size: 40px;
+    }
 }
 
 /* Base styles */
@@ -195,8 +240,11 @@ body {
     top: 0;
     z-index: 1000;
     background: var(--color-bg-page);
-    padding: 12px 20px;
-    border-bottom: 2px solid var(--color-accent);
+    /* Vertical padding and the border are two of the three parts of
+     * --header-h, which the top-right FAB clears itself against. Write
+     * the number here and the FAB slides under the header. */
+    padding: var(--header-pad-y) 20px;
+    border-bottom: var(--header-border) solid var(--color-accent);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -449,8 +497,10 @@ button {
     color: var(--color-accent);
     border: 1px solid var(--color-accent-border);
     padding: 0;
-    width: 36px;
-    height: 36px;
+    /* The third part of --header-h: these are the controls in .header,
+     * so their size is the header's content height. */
+    width: var(--control-size);
+    height: var(--control-size);
     border-radius: var(--radius-full);
     cursor: pointer;
     font-size: 16px;
@@ -1212,7 +1262,11 @@ button[data-tooltip]:hover::after {
 /* Mobile responsive */
 @media (max-width: 768px) {
     .header {
-        padding: 10px 15px;
+        /* Side padding only. The vertical half and the control size come
+         * from the :root overrides at the top of this file so --header-h
+         * tracks them. */
+        padding-left: 15px;
+        padding-right: 15px;
     }
 
     h1 {
@@ -1220,8 +1274,6 @@ button[data-tooltip]:hover::after {
     }
 
     button {
-        width: 44px;
-        height: 44px;
         font-size: 18px;
     }
 
@@ -1262,13 +1314,9 @@ button[data-tooltip]:hover::after {
         font-size: 1rem;
     }
 
-    button {
-        width: 40px;
-        height: 40px;
-    }
-
     .header {
-        padding: 8px 12px;
+        padding-left: 12px;
+        padding-right: 12px;
     }
 
     .terminal-container {

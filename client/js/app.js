@@ -158,13 +158,15 @@ class AppController {
         this.logoutBtn = null;
         // No destroyBtn: delete is no longer reachable from the session
         // header (see the conversation sidebar + launcher rows instead).
-        this.detachBtn = null;
-        // Home: go back to the launcher without touching the session
-        // (see goHome()). Same visibility wiring as detachBtn.
-        this.homeBtn = null;
+        // NO detachBtn either. Detach moved into the session editor FAB
+        // (session-editor-menu.js): it acts on the SESSION, so it belongs
+        // with the session-scoped control, not in the app-scoped header
+        // that also mounts on the launchpad where there is no session.
+        // NO homeBtn. Clicking #appTitle is the one home control; see
+        // the DismissGuard wiring in _wireControls() and goHome().
         // Settings gear — visible whenever authenticated (launchpad AND
         // terminal), hidden pre-auth. Same visibility wiring as
-        // logoutBtn, not gated to a single screen like homeBtn/detachBtn.
+        // logoutBtn, not gated to a single screen.
         this.settingsBtn = null;
         // Claude-config editor button — same always-visible-when-authenticated
         // wiring as settingsBtn (config applies whether or not a session
@@ -185,8 +187,6 @@ class AppController {
         console.log('App: Initializing');
 
         this.logoutBtn = document.getElementById('logoutBtn');
-        this.detachBtn = document.getElementById('detachSessionBtn');
-        this.homeBtn = document.getElementById('homeBtn');
         this.settingsBtn = document.getElementById('settingsBtn');
         this.configEditorBtn = document.getElementById('configEditorBtn');
 
@@ -284,7 +284,12 @@ class AppController {
 
         const paint = () => {
             const muted = window.ThemeAudio ? window.ThemeAudio.isMuted() : true;
-            const label = muted ? 'Enable theme music' : 'Mute theme music';
+            // "app sound", not "theme music". The session editor FAB has
+            // its own per-session music row; two speakers labelled the
+            // same thing read as one control that lost track of itself.
+            const label = muted
+                ? 'Enable app sound (all sessions)'
+                : 'Mute app sound (all sessions)';
             if (svg) {
                 svg.innerHTML = muted
                     ? AppController.AUDIO_ICON_SVG.muted
@@ -394,30 +399,31 @@ class AppController {
             this.showLaunchpad();
         });
 
-        // Title click - navigate back to launchpad (only from terminal).
+        // Title click - go home. THE ONLY HOME CONTROL NOW.
         //
-        // Routed through DismissGuard.onContainerActivate, not a bare click
-        // listener. #appTitle is also the mount point for the rename pencil
-        // and the inline rename input (see TerminalController
-        // ._enterHeaderRename): with a bare listener, clicking into the
-        // rename field navigated away from the session mid-edit. Only a
-        // click on the title chrome itself counts as "go back" now.
+        // #homeBtn is gone: the title already did this, and two controls
+        // for one navigation is a control the header cannot afford at
+        // phone width. It calls goHome() rather than showLaunchpad(),
+        // which is the behaviour the button carried and the title did
+        // NOT - goHome() also pauses the terminal's WebSocket via
+        // pauseForHome(). Wiring the title to bare showLaunchpad() while
+        // deleting the button would have silently dropped that pause.
+        //
+        // Routed through DismissGuard.onContainerActivate, not a bare
+        // click listener. #appTitle is also the mount point for the
+        // rename pencil and the inline rename input (see
+        // TerminalController._enterHeaderRename): with a bare listener,
+        // clicking into the rename field navigated away from the session
+        // mid-edit. Only a click on the title chrome itself counts as
+        // "go back". Do not replace this with addEventListener.
         // See client/js/dismiss-guard.js.
         const appTitle = document.getElementById('appTitle');
         window.DismissGuard.onContainerActivate(appTitle, () => {
             if (this.currentScreen === 'terminal') {
-                console.log('App: Title clicked, navigating to launchpad');
-                this.showLaunchpad();
+                console.log('App: Title clicked, returning to launcher');
+                this.goHome();
             }
         });
-
-        // Home button - same "leave without touching the session"
-        // navigation as the title click above, wired separately so it has
-        // its own visible, tappable affordance (the title click has no
-        // visual cue and is useless on a phone).
-        if (this.homeBtn) {
-            this.homeBtn.addEventListener('click', () => this.goHome());
-        }
 
         // Settings gear — click wiring only; visibility is toggled
         // alongside logoutBtn in showAuth/showLaunchpad/showTerminal.
@@ -475,8 +481,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
         this.logoutBtn.classList.add('hidden');
-        if (this.detachBtn) this.detachBtn.classList.add('hidden');
-        if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.add('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
@@ -515,8 +519,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        if (this.detachBtn) this.detachBtn.classList.add('hidden');
-        if (this.homeBtn) this.homeBtn.classList.add('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
@@ -594,8 +596,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        if (this.detachBtn) this.detachBtn.classList.remove('hidden');
-        if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
@@ -717,8 +717,6 @@ class AppController {
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
         this.logoutBtn.classList.remove('hidden');
-        if (this.detachBtn) this.detachBtn.classList.remove('hidden');
-        if (this.homeBtn) this.homeBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';

@@ -7,8 +7,10 @@
 // boundary. This suite pins the half of the split that owns them.
 //
 // The properties that matter:
-//   1. TWO ROWS, and they reach SessionThemeMenu, which still owns the
-//      picker, the opt-in and its persistence.
+//   1. THREE ROWS - theme, music, detach - and the first two reach
+//      SessionThemeMenu, which still owns the picker, the opt-in and its
+//      persistence. Detach reaches TerminalController.detachSession(),
+//      the same method the deleted #detachSessionBtn called.
 //   2. THE MUSIC ROW REPORTS LIVE STATE. Rows are rebuilt per open, so
 //      the label and aria-pressed follow the per-session opt-in.
 //   3. THE THEME ROW ANCHORS TO THIS BUTTON, not to the tools button -
@@ -53,8 +55,8 @@ function clientFile(...parts) {
     return fs.readFileSync(path.join(__dirname, '..', 'client', ...parts), 'utf8');
 }
 
-/** The two rows, in the order the editor declares them. */
-const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow'];
+/** The three rows, in the order the editor declares them. */
+const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow', 'sessionDetachRow'];
 
 /**
  * Load the editor menu against a mini-DOM. fab-menu.js carries the
@@ -70,7 +72,7 @@ const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow'];
 function load(opts) {
     const options = opts || {};
     const env = createEnvironment({});
-    const calls = { themeOpen: 0, themeAnchor: null, audioToggle: 0 };
+    const calls = { themeOpen: 0, themeAnchor: null, audioToggle: 0, detach: 0 };
 
     const trigger = env.document.createElement('button');
     trigger.setAttribute('id', 'sessionEditorBtn');
@@ -88,6 +90,7 @@ function load(opts) {
         isAudioOn: () => !!options.musicOn,
     };
     env.window.Themes = { getActiveSession: () => 'demo-Main' };
+    env.window.TerminalController = { detachSession: () => { calls.detach++; } };
     env.window.CopyOutput = { open() {} };
     env.window.ClipboardTools = { pasteFromClipboard() {} };
     env.window.AnchorPopover = { place: () => ({ left: 0, top: 0 }) };
@@ -151,7 +154,7 @@ test('the menu is closed on load and opens on its own trigger', () => {
     assert.equal(trigger.getAttribute('aria-expanded'), 'false');
 });
 
-test('THE SPLIT: exactly the two session-config rows, in order', () => {
+test('THE SPLIT: exactly the three session-scoped rows, in order', () => {
     const { env, editor } = load();
     editor.open();
     const ids = menusOf(env, 'fab-menu session-editor-menu')
@@ -173,6 +176,49 @@ test('THE SPLIT: the content tools are NOT rows of the session editor', () => {
     assert.ok(!src.includes('CopyOutput'));
     assert.ok(!src.includes('ClipboardTools'));
     assert.ok(!src.includes('cloude-image-attach-input'));
+});
+
+test('DETACH MOVED HERE, and still calls the same method', () => {
+    // It was #detachSessionBtn in the app-scoped header kebab, which
+    // also mounts on the launchpad where there is no session to detach.
+    // Detach acts on the SESSION, so it belongs to the session-scoped
+    // control - the same rule that kept theme and music out of the
+    // tools menu. Only the surface moved; the behaviour did not.
+    const { env, editor, calls } = load();
+    editor.open();
+    row(env, 'sessionDetachRow').dispatchEvent('click');
+    assert.equal(calls.detach, 1,
+        'the row must call TerminalController.detachSession()');
+});
+
+test('detach is fenced off and named, not flush against the music row', () => {
+    const { env, editor } = load();
+    editor.open();
+    const r = row(env, 'sessionDetachRow');
+    // A mis-tap one row up changes a theme; a mis-tap here ends the
+    // attachment. The separator carries that, not the colour alone.
+    assert.ok(r.classList.contains('fab-menu__item--separated'));
+    assert.ok(r.classList.contains('fab-menu__item--danger'));
+    assert.equal(r.getAttribute('aria-label'),
+        'detach session, leaves it running for later');
+    // Last, so it is never the row a thumb lands on by momentum.
+    const ids = menusOf(env, 'fab-menu session-editor-menu')
+        .flatMap((m) => m.children)
+        .map((x) => x.getAttribute('id'));
+    assert.equal(ids[ids.length - 1], 'sessionDetachRow');
+    // And the modifiers are real rules, not classes nothing styles.
+    const css = clientFile('css', 'terminal-tools.css');
+    assert.match(css, /\.fab-menu__item--separated \{[^}]*border-top:/);
+    assert.match(css, /\.fab-menu__item--danger[\s\S]{0,80}color: var\(--color-danger/);
+});
+
+test('a missing TerminalController does not throw', () => {
+    // The FAB is session-scoped and hidden with no session, but the row
+    // must degrade rather than throw if it is ever reached early.
+    const { env, editor } = load();
+    delete env.window.TerminalController;
+    editor.open();
+    row(env, 'sessionDetachRow').dispatchEvent('click');
 });
 
 test('each row reaches SessionThemeMenu, which still owns the behaviour', () => {

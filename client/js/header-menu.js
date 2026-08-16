@@ -1,26 +1,41 @@
 /**
- * Header Menu (mobile)
+ * Header overflow menu.
  *
- * At phone width the top-right icon cluster folds into a single dropdown;
- * at desktop width the icons sit inline exactly as before. Web-first and
- * mobile-first are both first class here, so this is a reflow, not a
- * rebuild: the SAME button nodes move between the two layouts.
+ * AN OVERFLOW, NOT A RESPONSIVE FOLD ANY MORE. This used to move the
+ * whole six-icon cluster into a dropdown below 768px and lay it back out
+ * inline above it. It now holds THREE controls at EVERY width - app
+ * sound, logout, settings - because those are the rarely-used ones, and
+ * a control that is rare on a phone is rare on a desktop too. A layout
+ * that changes what is reachable with the window width teaches two
+ * different apps.
+ *
+ * WHAT IS DELIBERATELY *NOT* IN HERE:
+ *   - `#configEditorBtn` (file editor). Used constantly, so it stays
+ *     inline and one tap away at every width. This is the whole point of
+ *     the split; do not "tidy" it into the menu.
+ *   - `#statusText`. A live state light, not an action. Hiding it behind
+ *     a tap would mean connection state is only visible to someone who
+ *     went looking for it.
+ *   - `#session-sidebar-toggle`, top-LEFT and the one-handed reach
+ *     target on a phone. This module never touches it.
+ *   - Home and detach, which no longer exist as header buttons: clicking
+ *     the title goes home, and detach moved to the session editor FAB.
+ *
+ * SCOPE BOUNDARY, THE RULE THAT SURVIVED A CORRECTION: this menu is
+ * APP-scoped and mounts on every screen including the launchpad, where
+ * no session exists. Anything session-scoped belongs to the session
+ * editor FAB, which hides itself when nothing is attached. "App sound"
+ * lives here; "play music for this session" lives there. They are two
+ * controls with two scopes and their labels both say so.
  *
  * WHY MOVE THE NODES INSTEAD OF RENDERING A SECOND COPY: every one of
  * these controls is addressed by id from elsewhere in the app
- * (`document.getElementById('homeBtn')`, `.classList.remove('hidden')` on
- * screen change, click listeners wired once in app.js). A cloned mirror
- * menu would duplicate ids, strip listeners, and drift out of sync with
- * the show/hide gating the moment anything changed. Re-parenting keeps
- * one node per control, so every existing id lookup, listener and
- * `.hidden` toggle keeps working untouched in both layouts.
- *
- * NOT folded in: `#statusText`. It is a live state light, not an action -
- * hiding it behind a tap would mean the connection state is only visible
- * to someone who already went looking for it. It stays inline.
- *
- * Also not folded in: `#session-sidebar-toggle`, which is top-LEFT and is
- * the one-handed reach target on a phone. This module never touches it.
+ * (`document.getElementById('settingsBtn')`, `.classList.remove('hidden')`
+ * on screen change, click listeners wired once in app.js). A cloned
+ * mirror menu would duplicate ids, strip listeners, and drift out of
+ * sync with the show/hide gating the moment anything changed.
+ * Re-parenting keeps one node per control, so every existing id lookup,
+ * listener and `.hidden` toggle keeps working untouched.
  *
  * Depends on window.DismissGuard (client/js/dismiss-guard.js) for
  * outside-click dismissal - deliberately click-based, never focusout, so
@@ -30,19 +45,19 @@
 
 console.log('[HeaderMenu Module] Loading...');
 
-/** Width at or below which the cluster folds. Matches the existing
- *  `@media (max-width: 768px)` header breakpoint in styles.css. */
-const HEADER_MENU_BREAKPOINT = '(max-width: 768px)';
-
-/** Ids of the controls that fold, in their canonical inline order. */
+/** Ids of the controls the overflow owns, in their canonical order. */
 const HEADER_MENU_CONTROL_IDS = [
     'audioToggleBtn',
-    'homeBtn',
-    'detachSessionBtn',
     'logoutBtn',
-    'settingsBtn',
-    'configEditorBtn'
+    'settingsBtn'
 ];
+
+/**
+ * Ids that must stay inline in the header at every width. Asserted by
+ * tests: this is the "we keep editor very accessible" requirement, and
+ * it is easier to defend as data than as a comment.
+ */
+const HEADER_INLINE_CONTROL_IDS = ['configEditorBtn'];
 
 class HeaderMenu {
     constructor() {
@@ -51,13 +66,15 @@ class HeaderMenu {
         /** @type {Element|null} */ this.panel = null;
         /** @type {boolean} */ this.isOpen = false;
         /** @type {boolean} */ this.isFolded = false;
-        /** @type {MediaQueryList|null} */ this.mql = null;
     }
 
     /**
-     * Description: build the toggle + panel, then apply the layout that
-     *   matches the current viewport and keep applying it on resize or
-     *   rotate. Idempotent - a second call is a no-op.
+     * Description: build the toggle + panel and move the overflow
+     *   controls into it. Idempotent - a second call is a no-op.
+     *
+     *   There is no MediaQueryList any more: the contents are the same at
+     *   every width, so there is nothing to re-evaluate on resize or
+     *   rotate and no second layout to drift out of sync with the first.
      * Inputs: none.
      * Output: void.
      */
@@ -71,17 +88,6 @@ class HeaderMenu {
 
         this._buildChrome();
         this._wireEvents();
-
-        this.mql = window.matchMedia(HEADER_MENU_BREAKPOINT);
-        const onChange = () => this.applyLayout();
-        // addEventListener on MediaQueryList is the modern form; older
-        // WebKit (including some iOS versions still in the wild) only has
-        // addListener. Support both rather than silently never reflowing.
-        if (typeof this.mql.addEventListener === 'function') {
-            this.mql.addEventListener('change', onChange);
-        } else if (typeof this.mql.addListener === 'function') {
-            this.mql.addListener(onChange);
-        }
         this.applyLayout();
         console.log('[HeaderMenu] initialized');
     }
@@ -160,16 +166,17 @@ class HeaderMenu {
     }
 
     /**
-     * Description: fold or unfold to match the current viewport width.
-     *   Safe to call repeatedly; each direction is a no-op when already
-     *   in that state.
+     * Description: move the overflow controls into the panel. Kept as a
+     *   named method (rather than inlined into init) because the tests
+     *   and the unfold path below both address it, and because a future
+     *   width-dependent rule would land here rather than in init.
+     *   Idempotent.
      * Inputs: none.
      * Output: void.
      */
     applyLayout() {
-        const shouldFold = !!(this.mql && this.mql.matches);
-        if (shouldFold === this.isFolded) return;
-        shouldFold ? this._fold() : this._unfold();
+        if (this.isFolded) return;
+        this._fold();
     }
 
     /**
@@ -226,8 +233,8 @@ class HeaderMenu {
 
 window.HeaderMenu = new HeaderMenu();
 window.HeaderMenuConstants = {
-    BREAKPOINT: HEADER_MENU_BREAKPOINT,
-    CONTROL_IDS: HEADER_MENU_CONTROL_IDS
+    CONTROL_IDS: HEADER_MENU_CONTROL_IDS,
+    INLINE_CONTROL_IDS: HEADER_INLINE_CONTROL_IDS
 };
 
 if (document.readyState === 'loading') {

@@ -388,28 +388,31 @@ test('GEOMETRY: the bottom row is measured from the tokens, not eyeballed', () =
         // right edge, so smaller numbers are further right.
         'terminal tools': slot(0),
         'd-pad': slot(1),
-        'session editor': slot(2),
     };
-    assert.deepEqual(boxes, {
-        'terminal tools': 20, 'd-pad': 77, 'session editor': 134,
-    });
-    // Adjacent centres are exactly one step apart: 42.5 / 99.5 / 156.5
-    // from the right edge. The regression this guards is the 4.5px
-    // mismatch a hand-written right:16px/44px box produced.
+    assert.deepEqual(boxes, { 'terminal tools': 20, 'd-pad': 77 });
+    // Adjacent centres are exactly one step apart: 42.5 / 99.5 from the
+    // right edge. The regression this guards is the 4.5px mismatch a
+    // hand-written right:16px/44px box produced.
     const centres = Object.values(boxes).map((r) => r + size / 2);
-    assert.deepEqual(centres, [42.5, 99.5, 156.5]);
+    assert.deepEqual(centres, [42.5, 99.5]);
     for (let i = 1; i < centres.length; i++) {
         assert.equal(centres[i] - centres[i - 1], step,
             'two FABs must be exactly one slot apart');
-    }
-    // No overlap: the near edge of each box clears the far edge of the
-    // previous one by exactly --fab-gap.
-    for (let i = 1; i < centres.length; i++) {
+        // No overlap: the near edge clears the far edge of the previous
+        // box by exactly --fab-gap.
         const clearance = Object.values(boxes)[i] - (Object.values(boxes)[i - 1] + size);
         assert.equal(clearance, gap, 'FABs must not overlap');
     }
-    // And they share one y: every one of them derives its bottom from
-    // the same token, in the base rule and in the iOS safe-area rule.
+    // THE ROW IS TWO CONTROLS NOW. The session editor moved to the
+    // top-right rail, so slot 2 is gone rather than left defined and
+    // unread - an orphan token is how a retired layout gets revived.
+    assert.ok(!base.includes('--fab-slot-2'),
+        'slot 2 must be removed with the control that used it');
+    assert.ok(!tools.includes('--fab-slot-2'));
+
+    // And the row shares one y: every one of them derives its bottom
+    // from the same token, in the base rule and in the iOS safe-area
+    // rule. The editor is excluded from both, by name.
     assert.match(ruleOf(tools, '.fab-menu-btn'), /bottom:\s*var\(--fab-edge\);/);
     assert.match(ruleOf(base, '.dpad-float-button'), /bottom:\s*var\(--fab-edge\);/);
     assert.match(ruleOf(base, '.slash-commands-btn'), /bottom:\s*var\(--fab-edge\);/);
@@ -417,11 +420,98 @@ test('GEOMETRY: the bottom row is measured from the tokens, not eyeballed', () =
     assert.ok(!/\.terminal-tools-fab\s*\{/.test(ios),
         'the old stacked safe-area override must be gone, not left to drift');
     assert.match(ios,
-        /\.dpad-float-button,\n\.slash-commands-btn,\n\.fab-menu-btn \{\n\s*bottom: calc\(var\(--fab-edge\) \+ env\(safe-area-inset-bottom\)\);/,
-        'one safe-area rule for the whole row keeps them on one line');
+        /\.dpad-float-button,\n\.slash-commands-btn,\n\.fab-menu-btn:not\(\.session-editor-fab\) \{\n\s*bottom: calc\(var\(--fab-edge\) \+ env\(safe-area-inset-bottom\)\);/,
+        'one safe-area rule for the whole row keeps them on one line, and it '
+        + 'must NOT reach the editor: this file loads after terminal-tools.css, '
+        + 'so an unexcluded bottom here silently drags it back down');
 
     assert.ok(!base.includes('.cloude-image-attach-button'),
         'the old hardcoded attach-button geometry must be gone');
+});
+
+test('GEOMETRY: the top-right rail clears the header from the same tokens', () => {
+    const base = clientFile('css', 'styles.css');
+    const tools = clientFile('css', 'terminal-tools.css');
+    const ios = clientFile('css', 'ios-chrome.css');
+
+    // The editor is placed by TOKENS, on its own named axis. Hardcoding
+    // a top offset here is the drift this whole system exists to stop.
+    const rule = ruleOf(tools, '.session-editor-fab');
+    assert.match(rule, /top:\s*var\(--fab-top-edge\);/,
+        'the top offset must come from a token, not a number');
+    assert.match(rule, /bottom:\s*auto;/,
+        'without this the shared .fab-menu-btn bottom still applies');
+    assert.match(rule, /right:\s*var\(--fab-slot-0\);/,
+        'same right rail as the terminal-tools button below it');
+    assert.ok(!/\d+px/.test(rule), `no raw pixels in the placement: ${rule}`);
+
+    // --header-h is DERIVED from the header's own three parts, so a
+    // restyle of the header moves the FAB with it instead of sliding it
+    // under the header.
+    assert.match(base,
+        /--header-h:\s*calc\(var\(--control-size\) \+ var\(--header-pad-y\) \* 2\s*\n?\s*\+ var\(--header-border\)\);/);
+    assert.match(base, /--fab-top-edge:\s*calc\(var\(--header-h\) \+ var\(--fab-gap\)\);/);
+    // ...and the header really does read those parts, or the derivation
+    // is a fiction that happens to agree today.
+    const header = ruleOf(base, '.header');
+    assert.match(header, /padding:\s*var\(--header-pad-y\) 20px;/);
+    assert.match(header, /border-bottom:\s*var\(--header-border\) solid/);
+    assert.match(ruleOf(base, 'button'),
+        /width:\s*var\(--control-size\);\n\s*height:\s*var\(--control-size\);/);
+
+    // Resolve the three breakpoints the way the browser will and check
+    // the editor clears the header at every one of them.
+    const gap = 12, size = 45, border = 2;
+    const widths = [
+        { w: 1280, pad: 12, control: 36 },
+        { w: 768, pad: 10, control: 44 },
+        { w: 390, pad: 8, control: 40 },
+    ];
+    for (const { w, pad, control } of widths) {
+        const headerH = control + pad * 2 + border;
+        const top = headerH + gap;
+        assert.ok(top >= headerH + gap,
+            `at ${w}px the editor must clear the ${headerH}px header`);
+        // It must also stay clear of the bottom row on the shortest
+        // viewport we support, or it stops being a top-right control.
+        const shortest = 699;
+        assert.ok(top + size < shortest - 20 - size,
+            `at ${w}px the editor (${top}..${top + size}) must not reach the bottom row`);
+    }
+    // Phone: 40 + 16 + 2 = 58px header, so the button is 70..115.
+    assert.equal(40 + 8 * 2 + border + gap, 70);
+    // Desktop: 36 + 24 + 2 = 62px header, so the button is 74..119.
+    assert.equal(36 + 12 * 2 + border + gap, 74);
+
+    // Standalone mode grows the header by the top inset, so the FAB
+    // takes the same inset or the clearance silently shrinks to zero.
+    assert.match(ios,
+        /padding-top:\s*calc\(var\(--header-pad-y\) \+ env\(safe-area-inset-top\)\);/);
+    assert.match(ruleOf(ios, '.session-editor-fab'),
+        /top:\s*calc\(var\(--fab-top-edge\) \+ env\(safe-area-inset-top\)\);/);
+    assert.match(ruleOf(ios, '.session-editor-fab'), /bottom:\s*auto;/);
+});
+
+test('the top-right corner holds ONE button, never a strip again', () => {
+    const html = clientFile('index.html');
+    const tools = clientFile('css', 'terminal-tools.css');
+    // The folded three-icon strip that used to cover the terminal's top
+    // edge across its whole width is gone and stays gone. Exactly one
+    // control names the top rail.
+    assert.ok(!/\.terminal-tools\s*\{/.test(tools),
+        'the top-right tool strip must not be reintroduced');
+    const onRail = (tools.match(/top:\s*var\(--fab-top-edge\)/g) || []).length;
+    assert.equal(onRail, 1, 'exactly one control may sit on the top-right rail');
+    // No step token for that rail: a second control up there has to be a
+    // deliberate edit, not a copy-paste of --fab-top-slot-1.
+    // A DECLARATION, not a mention: the token block names the token it
+    // deliberately does not define, and that prose must not trip this.
+    assert.ok(!/--fab-top-slot-\d+\s*:/.test(clientFile('css', 'styles.css')),
+        'the top rail is one slot on purpose - do not build a row here');
+    // And it is a full 45px target, same as every other FAB.
+    assert.match(ruleOf(tools, '.fab-menu-btn'), /width:\s*var\(--fab-size\);/);
+    assert.match(ruleOf(tools, '.fab-menu-btn'), /height:\s*var\(--fab-size\);/);
+    assert.ok(html.includes('id="sessionEditorBtn"'));
 });
 
 test('NOTHING MOVED INSIDE #terminal, so the scroll guard cannot eat a tap', () => {
@@ -441,6 +531,17 @@ test('NOTHING MOVED INSIDE #terminal, so the scroll guard cannot eat a tap', () 
         assert.ok(html.indexOf(`id="${id}"`) > screenEnd,
             `${id} must sit outside #terminal-screen, not inside #terminal`);
     }
+    // THE EDITOR IS STILL BODY-LEVEL AFTER MOVING TO THE TOP-RIGHT.
+    // Pinning a control over the terminal's top corner is exactly the
+    // change that tempts someone to mount it inside #terminal so it can
+    // be positioned against it. That would hand every tap and drag on it
+    // to blockOverscrollEscape. A byte offset only proves it comes after
+    // some marker; measure the real NESTING DEPTH instead.
+    assert.equal(depthOfElement(html, 'sessionEditorBtn'), 0,
+        '#sessionEditorBtn must be a DIRECT child of <body>');
+    // The controls it must not have fallen into, for the same reason.
+    assert.ok(html.indexOf('id="sessionEditorBtn"') > html.indexOf('id="terminal">'),
+        'and it must come after #terminal closes');
     // And the popups are appended to body, never into the terminal.
     const fab = clientFile('js', 'fab-menu.js');
     assert.ok(fab.includes('document.body.appendChild(menuEl)'));
@@ -454,22 +555,58 @@ test('NOTHING MOVED INSIDE #terminal, so the scroll guard cannot eat a tap', () 
         /\.terminal-container \{[^}]*overscroll-behavior: contain;/s);
 });
 
-test('GEOMETRY: desktop closes the row rather than leaving the d-pad hole', () => {
+test('GEOMETRY: desktop leaves no hole in the bottom row', () => {
     const base = clientFile('css', 'styles.css');
     const tools = clientFile('css', 'terminal-tools.css');
     // styles.css hides the d-pad outright at >=769px: it is a touch
     // control. Slot 1 therefore goes empty on desktop.
     const hide = /@media \(min-width: 769px\) \{[\s\S]*?\.dpad-float-button \{\s*\n\s*display: none !important;/;
     assert.match(base, hide, 'the d-pad must still be touch-only');
-    // So the editor moves up into it. Without this the row renders as two
-    // buttons 69px apart with a gap that reads as a failed render.
-    assert.match(tools,
-        /@media \(min-width: 769px\) \{\s*\n\s*\.session-editor-fab \{\s*\n\s*right: var\(--fab-slot-1\);/,
-        'desktop must reclaim slot 1, from the same tokens');
-    // Same breakpoint in both files, or the hole reopens at some width.
-    const breakpoints = (tools.match(/@media \(min-width: (\d+)px\)/g) || []);
-    assert.ok(breakpoints.includes('@media (min-width: 769px)'));
+    // The editor used to need a desktop-only rule to move UP into that
+    // empty slot 1, because leaving it at slot 2 stranded a 57px hole in
+    // the middle of the row that read as a button that failed to render.
+    // Moving it to the top-right rail dissolves that problem instead of
+    // patching it: slot 1 is now the LAST slot, so an empty slot 1 is
+    // simply the end of a one-button row, not a hole between two.
+    assert.ok(!/@media \(min-width: 769px\)[\s\S]*?\.session-editor-fab/.test(tools),
+        'the editor is off the bottom row, so it needs no width override');
+    assert.ok(!tools.includes('--fab-slot-1'),
+        'only the d-pad reads slot 1, and styles.css is where it does it');
 });
+
+/**
+ * How deeply an element is nested inside <body>.
+ *
+ * There is no HTML parser here (mini-dom.mjs builds a DOM, it does not
+ * read markup), and a byte offset only proves an element comes after
+ * some marker - it cannot tell "after #terminal-screen closed" from
+ * "inside #terminal-screen, near the end". So count container tags
+ * between <body> and the element, ignoring comments and void elements.
+ *
+ * @param {string} html  The full index.html text.
+ * @param {string} id    The element's id attribute value.
+ * @returns {number} 0 when the element is a direct child of <body>.
+ */
+function depthOfElement(html, id) {
+    const bodyAt = html.indexOf('<body');
+    const target = html.indexOf(`id="${id}"`);
+    assert.ok(bodyAt >= 0 && target > bodyAt, `${id} must appear inside <body>`);
+    // Start after <body ...> itself, and stop at the target's own tag.
+    const from = html.indexOf('>', bodyAt) + 1;
+    const tagStart = html.lastIndexOf('<', target);
+    const region = html.slice(from, tagStart).replace(/<!--[\s\S]*?-->/g, '');
+
+    const VOID = new Set(['input', 'br', 'hr', 'img', 'link', 'meta', 'source']);
+    let depth = 0;
+    for (const m of region.matchAll(/<(\/?)([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
+        const [, closing, name, attrs] = m;
+        const tag = name.toLowerCase();
+        if (VOID.has(tag) || attrs.trimEnd().endsWith('/')) continue;
+        depth += closing ? -1 : 1;
+        assert.ok(depth >= 0, `unbalanced markup before #${id}`);
+    }
+    return depth;
+}
 
 /**
  * The declaration block of a rule, by exact selector.
