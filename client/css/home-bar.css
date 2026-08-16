@@ -179,6 +179,57 @@
     background: var(--color-accent-bg);
 }
 
+/* The connection light and its LABEL.
+ *
+ * The dot moved here from the header because on the home screen there is
+ * room to say what it means. `.status::after` in styles.css is a
+ * hover-only tooltip and hover does not exist on a phone, so in the bar
+ * the tooltip is suppressed outright and a real, always-visible label sits
+ * beside the dot instead. Nothing here changes the dot: `.status` keeps
+ * its own 12px box, colour and pulse, so one set of state classes still
+ * drives it in both homes.
+ *
+ * It shrinks and truncates rather than pushing the right-hand items off
+ * the edge - `server unreachable - Failed to fetch` is longer than a 390px
+ * bar can hold, and the version chip and the bird are fixed-width
+ * neighbours that must not move. */
+.home-bar__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    /* Shrinkable, and min-width:0 because a flex item's automatic minimum
+     * is its content size - without it the label's full string would set
+     * the floor and overflow the bar instead of ellipsing. */
+    flex: 0 1 auto;
+    min-width: 0;
+    /* The bar's height is the tap-target height; this item is not a tap
+     * target, so it takes the height without claiming the hit area. */
+    height: 100%;
+}
+
+.home-bar__status-text {
+    font-size: 0.7rem;
+    color: var(--color-fg-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+/* The dot is a fixed 12px marker (14px under the 480px media query in
+ * styles.css) and must never be squeezed into an oval to make room for
+ * the label - the label is the shrinkable half of this pair. */
+.home-bar__status .status {
+    flex-shrink: 0;
+}
+
+/* No hover tooltip in the bar - the label above already says it, and a
+ * tooltip anchored 30px BELOW a dot that sits in the bottom bar would
+ * render off the bottom of the viewport. */
+.home-bar__status .status::after {
+    content: none;
+}
+
 /* The version chip. Reuses .version from styles.css for type and colour
  * (it is the same chip, moved, not a new one); this rule only places it. */
 .home-bar__version {
