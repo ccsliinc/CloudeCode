@@ -33,8 +33,8 @@ class Launchpad {
         this.launchpadScreen = document.getElementById('launchpad-screen');
         this.renderLaunchpadUI();
         // Wire the inline "+ new" speed-dial FAB. Markup was just injected
-        // by renderLaunchpadUI() into the right side of the "recent
-        // projects" section heading row; the 3 sub-actions route back
+        // by renderLaunchpadUI() into the right side of the "running
+        // sessions" section heading row; the 6 sub-actions route back
         // into the same handlers the old inline "new project" section used.
         this.setupNewFab();
         // Note: loadProjects() will be called by App.showLaunchpad()
@@ -45,7 +45,7 @@ class Launchpad {
      * Wire the inline "+ new" speed-dial FAB.
      *
      * Markup is injected by renderLaunchpadUI() into the right side of
-     * the "recent projects" section heading row (#new-fab). Three
+     * the "running sessions" section heading row (#new-fab). Six
      * sub-actions route into the same handlers the old inline "new
      * project" section used — no logic duplicated. Idempotent: safe to
      * call multiple times (guarded by a flag).
@@ -137,6 +137,32 @@ class Launchpad {
     }
 
     /**
+     * Place the fan-out menu against the "+" trigger.
+     *
+     * `.new-fab__menu` is `position: fixed` (see the placement note in
+     * client/css/styles.css), so this is the only thing that decides
+     * where it lands. AnchorPopover puts it ABOVE the trigger with their
+     * right edges flush, drops it below only when there is no room
+     * above, and clamps into the visual viewport either way - which is
+     * what makes it impossible for `.launchpad-scroll` to clip it no
+     * matter how low the heading has been scrolled.
+     *
+     * Right-edge-flush is load-bearing: the pills share a right edge
+     * (`align-items: flex-end`) and each row is `row-reverse` so the
+     * icons form a single straight column under the "+". Any placement
+     * rule that moved the menu's right edge off the trigger's would
+     * break that alignment.
+     *
+     * @returns {void}
+     */
+    placeNewFabMenu() {
+        const trigger = document.getElementById('new-fab-trigger');
+        const menu = document.querySelector('#new-fab .new-fab__menu');
+        if (!trigger || !menu || !window.AnchorPopover) return;
+        window.AnchorPopover.place(menu, trigger);
+    }
+
+    /**
      * Open the FAB menu (idempotent).
      */
     openNewFab() {
@@ -144,7 +170,24 @@ class Launchpad {
         const trigger = document.getElementById('new-fab-trigger');
         const backdrop = document.getElementById('new-fab-backdrop');
         if (!fab || !trigger || !backdrop) return;
+        // Measure and place BEFORE the open class lands, so the menu
+        // animates in at its final position rather than sliding there.
+        // The items are laid out (opacity 0 and a transform, neither of
+        // which affects layout) so the menu measures its true size here.
+        this.placeNewFabMenu();
         fab.classList.add('new-fab--open');
+        // A viewport change while the menu is open (rotation, iOS URL bar
+        // collapse, a scroll driven by the keyboard) moves the trigger
+        // out from under a fixed menu. Re-place instead of drifting.
+        if (!this._newFabReposition) {
+            this._newFabReposition = () => this.placeNewFabMenu();
+        }
+        window.addEventListener('resize', this._newFabReposition);
+        window.addEventListener('scroll', this._newFabReposition, true);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', this._newFabReposition);
+            window.visualViewport.addEventListener('scroll', this._newFabReposition);
+        }
         trigger.setAttribute('aria-expanded', 'true');
         backdrop.hidden = false;
         backdrop.setAttribute('data-open', '1');
@@ -162,6 +205,14 @@ class Launchpad {
         const backdrop = document.getElementById('new-fab-backdrop');
         if (!fab) return;
         fab.classList.remove('new-fab--open');
+        if (this._newFabReposition) {
+            window.removeEventListener('resize', this._newFabReposition);
+            window.removeEventListener('scroll', this._newFabReposition, true);
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', this._newFabReposition);
+                window.visualViewport.removeEventListener('scroll', this._newFabReposition);
+            }
+        }
         if (trigger) trigger.setAttribute('aria-expanded', 'false');
         if (backdrop) {
             backdrop.removeAttribute('data-open');
@@ -1176,9 +1227,10 @@ class Launchpad {
             `;
 
         // Event listeners
-        // Note: the 3 "new project" actions (create / open-folder / clone-github)
-        // are wired in setupNewFab() — the inline speed-dial sits to the right
-        // of the "recent projects" section heading on the launchpad screen.
+        // Note: the 6 speed-dial actions (create / open-folder /
+        // clone-github / openclaw / hermes / console) are wired in
+        // setupNewFab() — the inline speed-dial sits to the right of the
+        // "running sessions" section heading on the launchpad screen.
 
         this.renderHomeBarVersion();
         this.wireServerControls();
