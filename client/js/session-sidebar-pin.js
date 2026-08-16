@@ -66,8 +66,19 @@ console.log('[SessionSidebarPin Module] Loading...');
      */
     const BODY_CLASS = 'session-sidebar-pinned';
 
+    /**
+     * How long the docked-layout padding takes to animate, per
+     * session-sidebar.css (`transition: padding-left 160ms ease`). The
+     * refit is requested after this so it measures the settled box, not
+     * a mid-transition one.
+     * @type {number}
+     */
+    const LAYOUT_SETTLE_MS = 200;
+
     let pinned = false;
     let btnEl = null;
+    /** Last body-class state pushed, so a refit is asked for only on change. */
+    let lastEffective = null;
 
     /**
      * True when the viewport is too narrow to dock a sidebar.
@@ -129,7 +140,25 @@ console.log('[SessionSidebarPin Module] Loading...');
     function apply() {
         const sidebar = window.SessionSidebar;
         const effective = isEffectivelyPinned();
-        document.body.classList.toggle(BODY_CLASS, effective && !!sidebar && sidebar.isOpen);
+        const docked = effective && !!sidebar && sidebar.isOpen;
+        document.body.classList.toggle(BODY_CLASS, docked);
+
+        // Docking pads `.screen` by 320px, so the terminal's box changes
+        // and tmux has to be told. The original version of this feature
+        // relied on terminal.js's ResizeObserver noticing on its own and
+        // said nothing; the user reported the terminal did not resize.
+        // An announced layout change gets an explicit refit - the
+        // observer stays as the net for changes nobody announces, and
+        // both routes share one debounce so this cannot double-send.
+        if (docked !== lastEffective) {
+            lastEffective = docked;
+            if (window.TerminalLayout) {
+                setTimeout(
+                    () => window.TerminalLayout.requestFit('sidebar-pin'),
+                    LAYOUT_SETTLE_MS,
+                );
+            }
+        }
 
         // A docked bar covers nothing, so its backdrop would only be a
         // full-screen click target that closes it by accident.

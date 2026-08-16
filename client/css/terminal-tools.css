@@ -14,12 +14,49 @@
 /* ---------------------------------------------------------------------
  * Tool strip
  * ------------------------------------------------------------------- */
+/* OVERLAY, NOT A ROW. This strip used to be a flow sibling of
+ * `.terminal-container`, so its 50px of height came straight off the
+ * terminal - about three rows of a phone screen, permanently, to hold
+ * three icons. It now floats over the terminal's top-right corner and
+ * costs nothing.
+ *
+ * Why the top-right corner is safe to cover: the terminal is pinned to
+ * the bottom (see terminal-scroll.js), so the live prompt and the newest
+ * output are at the BOTTOM edge. The top row is the oldest line still on
+ * screen and scrolls away on the next write. The strip is also only
+ * ~150px wide, so the left ~60% of that first line stays readable.
+ * The alternative - reserving rows for the overlay - would cost the same
+ * real estate the user asked us to stop spending.
+ *
+ * The buttons carry an opaque background rather than the old transparent
+ * one so glyphs underneath cannot make the icons unreadable. */
 .terminal-tools {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 5;
     display: flex;
     gap: 8px;
     align-items: center;
     justify-content: flex-end;
     padding: 6px 10px 0;
+    /* The strip's own gaps and padding must not swallow taps meant for
+     * the terminal underneath; only the buttons are interactive. */
+    pointer-events: none;
+}
+
+.terminal-tools > * {
+    pointer-events: auto;
+}
+
+/* Right-align the tooltip under its own button instead of centring it.
+ * A centred tooltip on the rightmost button is wider than the button and
+ * hangs past the viewport edge; that is the overflow `#terminal-screen`
+ * used to turn into a sideways scroll. */
+.terminal-tools button[data-tooltip]::after {
+    left: auto;
+    right: 0;
+    transform: none;
 }
 
 .terminal-tool {
@@ -30,7 +67,9 @@
     height: 32px;
     padding: 0;
     border-radius: var(--radius-full, 999px);
-    background: transparent;
+    /* Opaque: the strip overlays live terminal output now, and a
+     * transparent chip over a dense line of text is unreadable. */
+    background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
     color: var(--color-fg-muted);
     cursor: pointer;
