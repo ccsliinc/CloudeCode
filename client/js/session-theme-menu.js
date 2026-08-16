@@ -26,13 +26,13 @@
  * per tmux session name in localStorage; entering a session applies that
  * session's choice.
  *
- * NOTE ON WHAT ACTUALLY MAKES SOUND: this control drives ThemeAudio,
- * which is complete plumbing with no content behind it. No theme
- * manifest declares an `audio` block and no audio assets are shipped or
- * hosted, so turning this on today correctly results in silence. See
- * tests/manual_audio_check.md. Nothing here fakes a playing state: the
- * button reflects the opt-in, and reports honestly when the active theme
- * has no track.
+ * NOTE ON WHAT ACTUALLY MAKES SOUND: this control drives ThemeAudio.
+ * That used to be plumbing with nothing behind it; as of the theme-audio
+ * work eight CC0 ogg tracks ship under /static/assets/audio/ and the
+ * theme manifests in client/css/themes/<name>/theme.json declare an
+ * `audio` block pointing at them. A theme WITHOUT one is still silent,
+ * which is why nothing here fakes a playing state: the control reflects
+ * the opt-in, and reports honestly when the active theme has no track.
  */
 (function () {
     'use strict';
@@ -161,34 +161,19 @@
     }
 
     /**
-     * Position the picker above its anchor, clamped into the visible
-     * viewport (visualViewport when present, so an open mobile keyboard
-     * or pinch-zoom cannot push it off screen).
+     * Position the picker against its anchor. The placement rule (above
+     * the anchor, right edges flush, clamped into the VISUAL viewport)
+     * is shared with the session tools menu and lives in
+     * client/js/anchor-popover.js - it used to be copied into every
+     * anchored surface and the copies drifted.
      *
-     * @param {HTMLElement} el
-     * @param {HTMLElement} anchor
+     * @param {HTMLElement} el - the picker.
+     * @param {HTMLElement} anchor - the control it belongs to.
      * @returns {void}
      */
     function position(el, anchor) {
-        var rect = anchor.getBoundingClientRect();
-        var vp = window.visualViewport || null;
-        var vw = vp ? vp.width : window.innerWidth;
-        var vh = vp ? vp.height : window.innerHeight;
-        var offL = vp ? vp.offsetLeft : 0;
-        var offT = vp ? vp.offsetTop : 0;
-        var margin = 8;
-
-        var w = el.offsetWidth;
-        var h = el.offsetHeight;
-
-        var left = rect.right - w;
-        var top = rect.top - h - margin;
-        if (top < offT + margin) top = rect.bottom + margin;
-
-        left = Math.min(Math.max(left, offL + margin), offL + vw - w - margin);
-        top = Math.min(Math.max(top, offT + margin), offT + vh - h - margin);
-        el.style.left = left + 'px';
-        el.style.top = top + 'px';
+        if (!window.AnchorPopover) return;
+        window.AnchorPopover.place(el, anchor);
     }
 
     /**
@@ -273,6 +258,37 @@
     }
 
     /**
+     * Flip this session's music opt-in and apply it.
+     *
+     * Lives here rather than inside a button handler because the opt-in
+     * is now driven from a MENU ROW (terminal-tools-menu.js) that is
+     * rebuilt on every open, so there is no long-lived button to hang
+     * the logic off. wire() still calls it for the button form.
+     *
+     * @param {object} [termWrapper] - the Terminal wrapper, for the pill.
+     * @param {HTMLElement} [btn] - a button to repaint, if one exists.
+     * @returns {boolean} the new opt-in state.
+     */
+    function toggleAudio(termWrapper, btn) {
+        var name = activeSession();
+        var next = !isAudioOn(name);
+        setAudioOn(name, next);
+        applyAudioState(next);
+        paintAudioButton(btn);
+
+        if (next && !activeThemeHasAudio() && termWrapper &&
+            typeof termWrapper._showStatusPill === 'function') {
+            // Be honest rather than pretend: the plumbing is on, the
+            // theme just has no track to play.
+            termWrapper._showStatusPill(
+                'music on for this session - this theme has no track yet',
+                'info'
+            );
+        }
+        return next;
+    }
+
+    /**
      * Wire both terminal-screen buttons. Idempotent.
      *
      * @param {object} termWrapper - the Terminal wrapper (status pill).
@@ -297,20 +313,7 @@
             audioBtn._sessionAudioWired = true;
             audioBtn.addEventListener('click', function (e) {
                 e.stopPropagation();
-                var name = activeSession();
-                var next = !isAudioOn(name);
-                setAudioOn(name, next);
-                applyAudioState(next);
-                paintAudioButton(audioBtn);
-
-                if (next && !activeThemeHasAudio() && termWrapper) {
-                    // Be honest rather than pretend: the plumbing is on,
-                    // the theme just has no track to play.
-                    termWrapper._showStatusPill(
-                        'music on for this session — this theme has no track yet',
-                        'info'
-                    );
-                }
+                toggleAudio(termWrapper, audioBtn);
             });
             paintAudioButton(audioBtn);
         }
@@ -318,6 +321,7 @@
 
     window.SessionThemeMenu = {
         wire: wire,
+        toggleAudio: toggleAudio,
         open: open,
         close: close,
         syncForSession: syncForSession,

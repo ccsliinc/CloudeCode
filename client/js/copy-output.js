@@ -11,6 +11,8 @@
  *   - one-tap copy chips for every url and code-shaped token found
  *     (output-scan.js - it knows nothing about the login flow, so any
  *     url or token in any output gets the same treatment),
+ *   - an "open" link beside every http(s) url, because on the device you
+ *     are already holding, following a sign-in link beats copying it,
  *   - "copy all" for the whole visible block,
  *   - the raw text in a selectable textarea as the last resort, so even
  *     when both programmatic clipboard tiers fail the user can long-press
@@ -257,6 +259,69 @@
     }
 
     /**
+     * True when a value is safe to put in a real `href` that the user can
+     * follow.
+     *
+     * ONLY http and https. This is an allow-list, not a deny-list: a code
+     * token is not a url and must never render as a link, and the hostile
+     * schemes (`javascript:`, `data:`, `vbscript:`) are excluded by the
+     * simple fact that they are not http. The whitespace and control-char strip
+     * before the test is the obfuscation defence copied from
+     * `MarkdownLite.isSafeUrl` in client/js/markdown-lite.js - a browser
+     * ignores leading control characters and interior whitespace in a
+     * scheme, so `java\nscript:x` is a live javascript url, and a naive
+     * `startsWith('http')` on the raw string would also pass
+     * `javascript:x?http://y`.
+     *
+     * @param {string} value - the candidate url.
+     * @returns {boolean} true only for http:// and https://.
+     */
+    function isHttpUrl(value) {
+        var stripped = String(value == null ? '' : value)
+            .replace(/[\s -]+/g, '')
+            .toLowerCase();
+        return /^https?:\/\/[^/]/.test(stripped);
+    }
+
+    /**
+     * Build one result row: the copy chip, plus an "open" link when the
+     * item is a real http(s) url.
+     *
+     * WHY A REAL ANCHOR. Copying is not what a user wants from a sign-in
+     * link on the device they are already holding - they want to follow
+     * it. `window.open()` from a handler is what a popup blocker eats, so
+     * this is a genuine `<a target="_blank" rel="noopener noreferrer">`
+     * that the browser treats as a user-initiated navigation. `noopener`
+     * also severs `window.opener`, so the opened page cannot navigate the
+     * terminal tab.
+     *
+     * The link is NOT rendered for a code token and NOT rendered for
+     * anything that is not http(s). See isHttpUrl().
+     *
+     * @param {object} termWrapper - the Terminal wrapper.
+     * @param {{kind: string, value: string}} item
+     * @returns {HTMLElement} the row.
+     */
+    function buildRow(termWrapper, item) {
+        var row = document.createElement('div');
+        row.className = 'cloude-copy-row';
+        row.appendChild(buildChip(termWrapper, item));
+
+        if (item.kind === 'url' && isHttpUrl(item.value)) {
+            var link = document.createElement('a');
+            link.className = 'cloude-copy-open';
+            link.href = item.value;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'open';
+            link.setAttribute('aria-label', 'open ' + item.value + ' in a new tab');
+            link.title = 'open in a new tab';
+            row.appendChild(link);
+        }
+        return row;
+    }
+
+    /**
      * Open the sheet for the current terminal contents.
      *
      * @param {object} termWrapper - the Terminal wrapper instance.
@@ -299,7 +364,7 @@
             var chips = document.createElement('div');
             chips.className = 'cloude-copy-sheet__chips';
             items.forEach(function (item) {
-                chips.appendChild(buildChip(termWrapper, item));
+                chips.appendChild(buildRow(termWrapper, item));
             });
             panel.appendChild(chips);
         } else {
@@ -407,6 +472,8 @@
         wireButton: wireButton,
         readRecentOutput: readRecentOutput,
         shortenForChip: shortenForChip,
-        buildChip: buildChip
+        buildChip: buildChip,
+        buildRow: buildRow,
+        isHttpUrl: isHttpUrl
     };
 })();

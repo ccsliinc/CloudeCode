@@ -120,6 +120,17 @@
     --radius-lg:   8px;
     --radius-pill: 50px;
     --radius-full: 50%;
+
+    /* Floating action buttons in the terminal-screen corners: the d-pad,
+     * the slash-commands button and the session tools button. ONE set of
+     * numbers for all three. They used to be restated per button and had
+     * already drifted - the attach button sat at right:16px/44px against
+     * the d-pad's right:20px/45px, so their centres were 4.5px apart and
+     * the vertical stack visibly wobbled. */
+    --fab-size: 45px;
+    --fab-edge: 20px;
+    /* Vertical gap between two FABs stacked in the same column. */
+    --fab-gap: 12px;
 }
 
 /* Base styles */
@@ -1145,9 +1156,10 @@ button[data-tooltip]:hover::after {
 
 /* Terminal screen.
  *
- * `position: relative` makes this the containing block for the tool
- * strip, which overlays the terminal rather than displacing it (see
- * terminal-tools.css).
+ * `position: relative` was the containing block for the tool strip that
+ * used to overlay the terminal's top-right corner. That strip is gone
+ * (see terminal-tools.css); this stays because the terminal screen is
+ * still a positioning context for anything mounted inside it.
  *
  * `overflow: hidden` overrides `.screen`'s `auto`. The terminal screen
  * must never scroll in either axis: xterm owns vertical scrolling inside
@@ -1240,10 +1252,10 @@ button[data-tooltip]:hover::after {
 .dpad-float-button {
     display: none; /* Hidden by default, shown on mobile via JS */
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 45px;
-    height: 45px;
+    bottom: var(--fab-edge);
+    right: var(--fab-edge);
+    width: var(--fab-size);
+    height: var(--fab-size);
     border-radius: var(--radius-full);
     background: var(--color-accent-bg);
     border: 2px solid var(--color-accent-border);
@@ -1542,10 +1554,10 @@ button[data-tooltip]:hover::after {
 /* Slash Commands Button */
 .slash-commands-btn {
     position: fixed;
-    bottom: 20px;
-    left: 20px;
-    width: 45px;
-    height: 45px;
+    bottom: var(--fab-edge);
+    left: var(--fab-edge);
+    width: var(--fab-size);
+    height: var(--fab-size);
     background: var(--color-accent-bg);
     border: 2px solid var(--color-accent-border);
     border-radius: var(--radius-full);
@@ -2505,58 +2517,12 @@ button[data-tooltip]:hover::after {
     }
 }
 
-/* =====================================================================
- * IMG-PASTE — image attach button (mobile / touch only)
- * ---------------------------------------------------------------------
- * Hidden by default; revealed on coarse-pointer devices (phones /
- * tablets) where the desktop paste-event path is unreliable on iOS
- * Safari. Fixed-positioned over the bottom-right; sits BELOW the
- * dpad-float-button (z-index 9998) so the d-pad always wins z-order
- * priority but the attach button remains tappable on its own slot.
- * ===================================================================== */
-.cloude-image-attach-button {
-    display: none;
-    position: fixed;
-    right: 16px;
-    bottom: 80px;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-full);
-    background: var(--color-bg-elevated);
-    color: var(--color-fg);
-    border: 1px solid var(--color-border);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    z-index: 60;
-    box-shadow: var(--shadow-modal);
-    padding: 0;
-    align-items: center;
-    justify-content: center;
-}
-
-.cloude-image-attach-button:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
-
-.cloude-image-attach-button:active {
-    transform: scale(0.95);
-}
-
-@media (pointer: coarse) {
-    .cloude-image-attach-button {
-        display: flex;
-    }
-    /* Hide the attach FAB on the launchpad — it's terminal-only.
-     * `#launchpad-screen.active` is set by app.js#showLaunchpad and
-     * cleared by hideAllScreens() before any other screen is activated,
-     * so this reliably scopes the FAB to live sessions only. */
-    body:has(#launchpad-screen.active) .cloude-image-attach-button {
-        display: none !important;
-    }
-}
+/* The image attach button that used to live here is GONE. Its two jobs -
+ * opening the OS picker and pasting the device clipboard - are now rows
+ * of the single session tools menu, and the button that opens that menu
+ * is `.terminal-tools-fab` in client/css/terminal-tools.css, where its
+ * geometry is derived from the same --fab-* tokens as the d-pad button
+ * so the two stay on one centre line. */
 
 /* =====================================================================
  * IMG-PASTE — inline status pill

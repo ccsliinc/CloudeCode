@@ -1,382 +1,165 @@
 /* =====================================================================
- * Terminal-screen tools: the tool strip, the copy-output sheet and the
- * per-session theme picker.
+ * Terminal-screen tools: the session tools button and its menu, and the
+ * per-session theme picker. The copy-output sheet the "copy output" row
+ * opens lives in copy-output.css.
  *
  * Everything here is theme-aware through the same semantic tokens the
  * rest of the chrome uses, so a per-session theme restyles these
  * controls along with the terminal itself.
  *
- * Web-first and mobile-first at once: the strip is a normal flow row on
- * a wide screen and the sheet is a centred dialog; below 768px the sheet
- * becomes a bottom sheet and every hit area grows to a thumb-sized 44px.
+ * Web-first and mobile-first at once: every row is already a thumb-sized
+ * 44px at every width.
  * ===================================================================== */
 
 /* ---------------------------------------------------------------------
- * Tool strip
+ * Session tools FAB + menu
+ *
+ * ONE CONTROL, NOT TWO. There used to be a folded tool strip pinned over
+ * the terminal's TOP-RIGHT corner (copy / theme / music) AND a paperclip
+ * FAB in the BOTTOM-RIGHT with its own popup (paste / attach image).
+ * Both were "session tools" and nothing told a user which corner held
+ * which. The strip is gone entirely - the terminal's top edge is no
+ * longer covered by anything - and every tool is a row of this button's
+ * menu, in the bottom-right FAB column where a floating control already
+ * lived next to the d-pad.
+ *
+ * FAB GEOMETRY IS SHARED, NOT RESTATED. The paperclip sat at
+ * `right: 16px` with a 44px box while `.dpad-float-button` directly
+ * below it sits at `right: 20px` with a 45px box, so their centres were
+ * 38px and 42.5px from the right edge: a 4.5px horizontal misalignment,
+ * visible as a wobble in a vertical stack of round buttons. The three
+ * numbers now live in tokens and every button in the column derives
+ * from them, which is what stops the two drifting apart again.
  * ------------------------------------------------------------------- */
-/* OVERLAY, NOT A ROW. This strip used to be a flow sibling of
- * `.terminal-container`, so its 50px of height came straight off the
- * terminal - about three rows of a phone screen, permanently, to hold
- * three icons. It now floats over the terminal's top-right corner and
- * costs nothing.
- *
- * Why the top-right corner is safe to cover: the terminal is pinned to
- * the bottom (see terminal-scroll.js), so the live prompt and the newest
- * output are at the BOTTOM edge. The top row is the oldest line still on
- * screen and scrolls away on the next write. The strip is also narrow -
- * ~44px collapsed, which is its normal state (see FOLDED BY DEFAULT
- * below), and ~150px for as long as the user keeps it open.
- * The alternative - reserving rows for the overlay - would cost the same
- * real estate the user asked us to stop spending.
- *
- * The buttons carry an opaque background rather than the old transparent
- * one so glyphs underneath cannot make the icons unreadable. */
-.terminal-tools {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 5;
+/* --fab-size / --fab-edge / --fab-gap are declared once, in styles.css,
+ * alongside the d-pad and slash-commands buttons that share them. */
+/* Shown on the terminal screen at EVERY pointer type. The paperclip it
+ * replaces was coarse-pointer only because it was an iOS paste
+ * workaround; this button now owns the copy sheet and the theme picker
+ * too, which desktop used to reach through the strip that is gone. */
+.terminal-tools-fab {
     display: flex;
-    gap: 8px;
+    position: fixed;
+    right: var(--fab-edge);
+    /* Directly above the d-pad, same column, same centre line. */
+    bottom: calc(var(--fab-edge) + var(--fab-size) + var(--fab-gap));
+    width: var(--fab-size);
+    height: var(--fab-size);
+    padding: 0;
     align-items: center;
-    justify-content: flex-end;
-    padding: 6px 10px 0;
-    /* The strip's own gaps and padding must not swallow taps meant for
-     * the terminal underneath; only the buttons are interactive. */
-    pointer-events: none;
+    justify-content: center;
+    border-radius: var(--radius-full, 999px);
+    /* Opaque: it floats over live terminal output. */
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    z-index: 60;
+    box-shadow: var(--shadow-modal);
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.terminal-tools > * {
-    pointer-events: auto;
+/* Terminal-only. `#launchpad-screen.active` is set by app.js#showLaunchpad
+ * and cleared by hideAllScreens() before any other screen is activated,
+ * so this reliably scopes the button to live sessions. */
+body:has(#launchpad-screen.active) .terminal-tools-fab,
+body:has(#auth-screen.active) .terminal-tools-fab {
+    display: none !important;
 }
 
-/* ---------------------------------------------------------------------
- * FOLDED BY DEFAULT
- *
- * Three chips plus their gaps covered roughly 150px of the terminal's top
- * line permanently. Folding leaves ONE chip in the corner and reveals the
- * rest on demand, which is what was asked for: one blocking element, not
- * three.
- *
- * `display: none` rather than opacity/visibility so the collapsed tools
- * take no layout space at all - a zero-opacity chip still reserves the
- * width it was covering, which would defeat the whole point.
- *
- * DISTINGUISHING THIS FROM THE HEADER KEBAB. `#header-menu-toggle` folds
- * the APP controls and sits in the header bar; this folds the SESSION
- * tools and floats over the terminal. Two collapsing menus in one corner
- * is a usability trap, so they are made different on every axis that is
- * free to differ:
- *   - row: the kebab is inside the header's border-bottom, this is below it
- *   - glyph: vertical dots there, horizontal sliders here
- *   - shape: the kebab is a square-ish header button, this is a pill chip
- *     with an opaque background because it overlays live output
- *   - scope: app-wide vs this tmux session
- * See client/js/terminal-tools-fold.js for why they are not merged.
- * ------------------------------------------------------------------- */
-.terminal-tools .terminal-tool:not(.terminal-tools__toggle) {
-    display: none;
+.terminal-tools-fab:hover:not(:disabled),
+.terminal-tools-fab:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    outline: none;
 }
 
-.terminal-tools--open .terminal-tool:not(.terminal-tools__toggle) {
-    display: inline-flex;
+.terminal-tools-fab:active {
+    transform: scale(0.95);
 }
 
-/* Open state reads as "this menu is currently spending your screen",
- * matching the accent treatment `.terminal-tool.is-on` uses for a tool
- * that is actively doing something. */
-.terminal-tools__toggle[aria-expanded="true"] {
+.terminal-tools-fab[aria-expanded="true"] {
     color: var(--color-accent);
     border-color: var(--color-accent);
     background: var(--color-accent-bg, var(--color-bg-elevated));
 }
 
-/* Right-align the tooltip under its own button instead of centring it.
- * A centred tooltip on the rightmost button is wider than the button and
- * hangs past the viewport edge; that is the overflow `#terminal-screen`
- * used to turn into a sideways scroll. */
-.terminal-tools button[data-tooltip]::after {
-    left: auto;
-    right: 0;
-    transform: none;
-}
-
-.terminal-tool {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    border-radius: var(--radius-full, 999px);
-    /* Opaque: the strip overlays live terminal output now, and a
-     * transparent chip over a dense line of text is unreadable. */
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border);
-    color: var(--color-fg-muted);
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.terminal-tool:hover,
-.terminal-tool:focus-visible {
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-    outline: none;
-}
-
-.terminal-tool.is-on {
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-    background: var(--color-accent-bg, transparent);
-}
-
-/* Touch targets. `pointer: coarse` covers phones and tablets, where the
- * 32px desktop button is below the 44px minimum comfortable tap size. */
-@media (pointer: coarse) {
-    .terminal-tool {
-        width: 44px;
-        height: 44px;
-    }
-}
-
-/* ---------------------------------------------------------------------
- * Copy-output sheet
- * ------------------------------------------------------------------- */
-.cloude-copy-sheet {
+/* The menu itself. Placed by client/js/anchor-popover.js, so only the
+ * box is described here. */
+.terminal-tools-menu {
     position: fixed;
-    inset: 0;
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-bg-overlay);
-    padding: 16px;
-}
-
-.cloude-copy-sheet__panel {
+    z-index: 10001;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    width: 100%;
-    max-width: 640px;
-    max-height: 80vh;
-    max-height: 80dvh;
-    padding: 16px;
-    border-radius: 12px;
+    min-width: 220px;
+    max-width: min(280px, calc(100vw - 16px));
+    border-radius: 8px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
-    box-shadow: 0 10px 40px var(--color-bg-overlay-soft);
+    box-shadow: 0 8px 28px var(--color-bg-overlay-soft);
+    overflow: hidden;
 }
 
-.cloude-copy-sheet__head {
+/* WIDTH, HEIGHT AND JUSTIFY ARE DECLARED ON PURPOSE. styles.css carries a
+ * bare `button { width: 36px; height: 36px; justify-content: center; }`
+ * base rule. A class selector outranks it, but ONLY for the properties
+ * the class actually declares - so a menu row that did not mention width
+ * came out 36px wide with its icon hanging outside its own box, measured
+ * in Chrome 2026-08-16. Same failure mode as a `stroke-width` rule losing
+ * to a presentation attribute: check the COMPUTED value, not the rule you
+ * wrote. `.cloude-session-theme__item` below carries these for the same
+ * reason. */
+.terminal-tools-menu__item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-}
-
-.cloude-copy-sheet__title {
-    font-family: var(--font-mono);
-    font-size: 14px;
-    color: var(--color-accent);
-}
-
-.cloude-copy-sheet__close {
-    width: 32px;
-    height: 32px;
+    justify-content: flex-start;
+    gap: 10px;
+    width: 100%;
+    height: auto;
+    min-height: 44px;
+    border-radius: 0;
+    padding: 0 12px;
+    text-align: left;
     background: transparent;
     border: none;
-    color: var(--color-fg-muted);
-    font-family: var(--font-mono);
-    font-size: 16px;
-    cursor: pointer;
-}
-
-.cloude-copy-sheet__close:hover {
-    color: var(--color-accent);
-}
-
-.cloude-copy-sheet__chips {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 30vh;
-    max-height: 30dvh;
-    overflow-y: auto;
-}
-
-/* The sheet's own status line. Terminal status pills render at z-index
- * 70 and the sheet at 10000, so a pill raised while the sheet is open is
- * painted underneath it and the user sees nothing. Feedback has to live
- * inside the overlay that covers it. */
-.cloude-copy-status {
-    margin: 0;
-    min-height: 18px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--color-fg-muted);
-}
-
-.cloude-copy-status[data-kind="success"] {
-    color: var(--color-accent);
-}
-
-.cloude-copy-status[data-kind="error"] {
-    color: var(--color-danger);
-}
-
-.cloude-copy-chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 44px;
-    padding: 6px 10px;
-    text-align: left;
-    border-radius: 6px;
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
     color: var(--color-fg);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
-    /* A tap must land instantly and must not be read as the start of a
-     * text selection or a double-tap zoom. */
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
 
-.cloude-copy-chip:hover,
-.cloude-copy-chip:focus-visible {
-    border-color: var(--color-accent);
+.terminal-tools-menu__item svg {
+    flex: 0 0 auto;
+    color: var(--color-fg-muted);
+}
+
+.terminal-tools-menu__item:hover,
+.terminal-tools-menu__item:focus-visible {
+    background: var(--color-bg-hover);
     outline: none;
 }
 
-/* Confirmation where the finger already is, not only in the status line. */
-.cloude-copy-chip.is-copied {
-    border-color: var(--color-accent);
-    background: var(--color-accent-bg, transparent);
-}
-
-.cloude-copy-chip__kind {
-    flex: 0 0 auto;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: var(--color-bg-elevated);
-    color: var(--color-accent);
-    font-size: 10px;
-    text-transform: lowercase;
-}
-
-.cloude-copy-chip.is-copied .cloude-copy-chip__kind {
+.terminal-tools-menu__item:hover svg,
+.terminal-tools-menu__item:focus-visible svg {
     color: var(--color-accent);
 }
 
-.cloude-copy-chip.is-copied .cloude-copy-chip__kind::after {
-    content: " copied";
+/* A tool that is actively doing something, currently only the music
+ * opt-in. Matches the accent treatment the old strip used. */
+.terminal-tools-menu__item.is-on,
+.terminal-tools-menu__item.is-on svg {
+    color: var(--color-accent);
 }
 
-/* The value is the long part (a sign-in url can be 200 chars). It is NOT
- * ellipsised: on a phone that hides the END of the url, the part that
- * distinguishes one sign-in link from another. copy-output.js already
- * shortens the label from the MIDDLE and caps its length, so both ends
- * render and this is at most two short lines. The full value is in the
- * title attribute and in the textarea below. */
-.cloude-copy-chip__value {
+/* One line per row. A wrapped label turns a 44px row into a 90px one and
+ * the menu stops looking like a list. */
+.terminal-tools-menu__label {
     flex: 1 1 auto;
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    word-break: break-all;
-}
-
-/* Shown only when the label was shortened, so a middle-ellipsis label is
- * never mistaken for a genuinely short token. The whole value is what
- * gets copied regardless of what the label shows. */
-.cloude-copy-chip__size {
-    flex: 0 0 auto;
-    color: var(--color-fg-muted);
-    font-size: 10px;
     white-space: nowrap;
-}
-
-.cloude-copy-sheet__empty {
-    margin: 0;
-    color: var(--color-fg-muted);
-    font-family: var(--font-mono);
-    font-size: 12px;
-}
-
-/* The always-there fallback: real selectable text, so even when both
- * programmatic clipboard tiers are refused the user can long-press and
- * use the OS copy menu. user-select must be explicit because the
- * terminal chrome around it disables selection. */
-.cloude-copy-sheet__text {
-    flex: 1 1 auto;
-    min-height: 120px;
-    padding: 8px;
-    border-radius: 6px;
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-    color: var(--color-fg);
-    font-family: var(--font-mono);
-    /* 16px keeps iOS Safari from auto-zooming when the field is focused. */
-    font-size: 16px;
-    line-height: 1.4;
-    resize: none;
-    white-space: pre;
-    overflow: auto;
-    -webkit-user-select: text;
-    user-select: text;
-}
-
-.cloude-copy-sheet__foot {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.cloude-copy-sheet__action {
-    min-height: 44px;
-    padding: 0 18px;
-    border-radius: var(--radius-full, 999px);
-    background: var(--color-accent-bg, transparent);
-    border: 1px solid var(--color-accent);
-    color: var(--color-accent);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.cloude-copy-sheet__action:hover {
-    background: var(--color-accent-bg-active, transparent);
-}
-
-.cloude-copy-sheet__hint {
-    flex: 1 1 160px;
-    color: var(--color-fg-muted);
-    font-family: var(--font-mono);
-    font-size: 11px;
-}
-
-/* Bottom sheet on phones: anchored to the bottom edge, within thumb
- * reach, and tall enough to show a wrapped url without scrolling. */
-@media (max-width: 768px) {
-    .cloude-copy-sheet {
-        align-items: flex-end;
-        padding: 0;
-    }
-
-    .cloude-copy-sheet__panel {
-        max-width: none;
-        max-height: 88vh;
-        max-height: 88dvh;
-        border-radius: 12px 12px 0 0;
-        border-bottom: none;
-        padding-bottom: max(16px, env(safe-area-inset-bottom));
-    }
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ---------------------------------------------------------------------
@@ -420,8 +203,17 @@
     overflow-y: auto;
 }
 
+/* See the note on .terminal-tools-menu__item: without an explicit width,
+ * height and justify-content these rows inherit 36x36 centred from the
+ * bare `button` rule in styles.css. */
 .cloude-session-theme__item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: auto;
     min-height: 44px;
+    border-radius: 0;
     padding: 0 12px;
     text-align: left;
     background: transparent;

@@ -1,49 +1,46 @@
 /**
- * Clipboard Tools (paperclip menu + terminal copy chord)
+ * Clipboard Tools (clipboard paste + terminal copy chord)
  * ----------------------------------------------------------------------
  * Two features, wired into terminal.js through two hook points (this
  * file is loaded right AFTER terminal.js in index.html; terminal.js
  * only calls in at runtime, after the async xterm CDN wait, so
  * window.ClipboardTools is always defined by then):
  *
- *  1. PAPERCLIP MENU — Terminal#_applyImageAttachButton() hands the 📎
- *     button + hidden file input to wireAttachButton(). The button now
- *     opens a small fixed-position menu:
- *       - "paste from clipboard" — reads the LOCAL device clipboard via
- *         navigator.clipboard.read(): the first image/* item routes
- *         through the existing Terminal#_uploadAndInjectImage() flow;
- *         otherwise text/plain (or the readText() fallback) is injected
- *         via Terminal#insertText() — the same binary WebSocket path as
- *         term.onData — sent as ONE frame so the server's >256B
- *         bracketed-paste heuristic in tmux_backend.py treats large
- *         pastes correctly.
- *       - "attach image" — the original hidden-file-input picker.
+ *  1. PASTE FROM CLIPBOARD - reads the LOCAL device clipboard via
+ *     navigator.clipboard.read(): the first image/* item routes through
+ *     the existing Terminal#_uploadAndInjectImage() flow; otherwise
+ *     text/plain (or the readText() fallback) is injected via
+ *     Terminal#insertText() - the same binary WebSocket path as
+ *     term.onData - sent as ONE frame so the server's >256B
+ *     bracketed-paste heuristic in tmux_backend.py treats large pastes
+ *     correctly.
  *
  *     Clipboard API realities: read()/readText() require a secure
  *     context + permission. On LAN http (non-localhost) the API can be
  *     entirely undefined, and where present it can reject with
  *     NotAllowedError. Every path degrades to the existing status pill
- *     pointing at the keyboard paste path — nothing throws unhandled.
- *     pasteFromClipboard() is only ever invoked from the menu tap, i.e.
+ *     pointing at the keyboard paste path - nothing throws unhandled.
+ *     pasteFromClipboard() is only ever invoked from a menu tap, i.e.
  *     inside a user gesture, which the permission model requires.
  *
- *  2. COPY CHORD — Terminal#_applyKeyHandlers()' xterm custom key
+ *     THE MENU THAT USED TO LIVE HERE IS GONE. The paperclip FAB owned a
+ *     two-item popup (paste / attach image) while a second folded strip
+ *     over the terminal's top-right corner owned copy / theme / music.
+ *     Both are now rows of the single session tools menu in
+ *     client/js/terminal-tools-menu.js, which calls the two functions
+ *     exported below. This file no longer builds or positions any UI.
+ *
+ *  2. COPY CHORD - Terminal#_applyKeyHandlers()' xterm custom key
  *     handler calls handleCopyChord() first for every key event.
  *     Cmd+C (mac) / Ctrl+Shift+C (win/linux) WITH an active xterm
  *     selection writes the selection to the system clipboard and
- *     swallows the event. Bare Ctrl+C is NEVER intercepted — it must
+ *     swallows the event. Bare Ctrl+C is NEVER intercepted - it must
  *     reach the pty as SIGINT (0x03). The selection is left in place
  *     after copy (macOS Terminal behavior: selection stays).
  */
 
 (function () {
     'use strict';
-
-    /** Singleton menu element + bound dismiss handlers (one menu max). */
-    let menuEl = null;
-    let menuAnchorBtn = null;
-    let onDocPointer = null;
-    let onDocKey = null;
 
     /* =================================================================
      * Copy chord
@@ -97,142 +94,27 @@
     }
 
     /* =================================================================
-     * Paperclip menu
+     * Image file input
      * ================================================================= */
 
     /**
-     * Replaces the stock 📎 wiring. The hidden file input keeps the
-     * original change-handler behavior (the "attach image" path); the
-     * button now opens the menu instead of acting immediately.
+     * Wire the hidden image file input. The picker itself is opened by
+     * the "attach image" row of the session tools menu; this only owns
+     * what happens once a file comes back.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {HTMLInputElement} input - the hidden file input.
+     * @returns {void}
      */
-    function wireAttachButton(term, btn, input) {
+    function wireFileInput(term, input) {
+        if (!input || input._clipboardWired) return;
+        input._clipboardWired = true;
         input.addEventListener('change', async () => {
             const file = input.files && input.files[0];
             if (!file) return;
             await term._uploadAndInjectImage(file, file.type || 'image/jpeg');
             input.value = '';
         });
-
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (menuEl) {
-                closeMenu();
-            } else {
-                openMenu(term, btn, input);
-            }
-        });
-    }
-
-    function openMenu(term, btn, input) {
-        closeMenu();
-
-        menuEl = document.createElement('div');
-        menuEl.className = 'cloude-attach-menu';
-        menuEl.setAttribute('role', 'menu');
-
-        menuEl.appendChild(menuItem('paste from clipboard', () => {
-            closeMenu();
-            pasteFromClipboard(term);
-        }));
-        menuEl.appendChild(menuItem('attach image', () => {
-            closeMenu();
-            input.click();
-        }));
-
-        document.body.appendChild(menuEl);
-        positionMenu(menuEl, btn);
-        menuAnchorBtn = btn;
-
-        // Dismiss on any outside tap or Escape. Deferred one tick so the
-        // tap that opened the menu doesn't immediately close it again.
-        // Taps on the 📎 button itself are excluded here — the button's
-        // own click handler toggles the menu, and pointerdown (capture)
-        // fires before click, so dismissing on button taps would make
-        // every re-tap close+reopen instead of closing.
-        onDocPointer = (e) => {
-            if (!menuEl) return;
-            if (menuEl.contains(e.target)) return;
-            if (menuAnchorBtn && menuAnchorBtn.contains(e.target)) return;
-            closeMenu();
-        };
-        onDocKey = (e) => {
-            if (e.key === 'Escape') closeMenu();
-        };
-        setTimeout(() => {
-            document.addEventListener('pointerdown', onDocPointer, true);
-            document.addEventListener('keydown', onDocKey, true);
-        }, 0);
-    }
-
-    function menuItem(label, onPick) {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'cloude-attach-menu__item';
-        item.setAttribute('role', 'menuitem');
-        item.textContent = label;
-        item.addEventListener('click', onPick);
-        return item;
-    }
-
-    /**
-     * Anchor the menu directly above the 📎 button, right-aligned to it,
-     * clamped fully inside the VISIBLE viewport.
-     *
-     * Uses left/top taken straight from the button's viewport rect so the
-     * menu and the measurement always live in the same coordinate space.
-     * (The previous version positioned via right/bottom computed from
-     * window.innerWidth/innerHeight minus the rect — on iOS Safari the
-     * layout and visual viewports diverge whenever the URL bar collapses,
-     * the keyboard opens, or the page is pinch/auto-zoomed, which made
-     * that subtraction produce out-of-range offsets and parked the menu
-     * at the bottom-left corner, half off-screen.)
-     *
-     * Clamp bounds come from window.visualViewport when available (the
-     * actually-visible area under keyboard/zoom), offset into layout
-     * coordinates via offsetLeft/offsetTop so position:fixed resolves
-     * correctly; falls back to innerWidth/innerHeight elsewhere. Even a
-     * bogus rect can no longer push the menu off-screen — worst case it
-     * lands flush against a screen edge with an 8px margin.
-     */
-    function positionMenu(el, btn) {
-        const rect = btn.getBoundingClientRect();
-        const vp = window.visualViewport || null;
-        const vw = vp ? vp.width : window.innerWidth;
-        const vh = vp ? vp.height : window.innerHeight;
-        const offL = vp ? vp.offsetLeft : 0;
-        const offT = vp ? vp.offsetTop : 0;
-        const MARGIN = 8;
-
-        const w = el.offsetWidth;
-        const h = el.offsetHeight;
-
-        // Preferred spot: above the button, right edges aligned. If there
-        // is no room above, drop below the button instead.
-        let left = rect.right - w;
-        let top = rect.top - h - MARGIN;
-        if (top < offT + MARGIN) top = rect.bottom + MARGIN;
-
-        left = Math.min(Math.max(left, offL + MARGIN), offL + vw - w - MARGIN);
-        top = Math.min(Math.max(top, offT + MARGIN), offT + vh - h - MARGIN);
-
-        el.style.left = left + 'px';
-        el.style.top = top + 'px';
-    }
-
-    function closeMenu() {
-        if (onDocPointer) {
-            document.removeEventListener('pointerdown', onDocPointer, true);
-            onDocPointer = null;
-        }
-        if (onDocKey) {
-            document.removeEventListener('keydown', onDocKey, true);
-            onDocKey = null;
-        }
-        if (menuEl) {
-            menuEl.remove();
-            menuEl = null;
-        }
-        menuAnchorBtn = null;
     }
 
     /* =================================================================
@@ -322,6 +204,7 @@
 
     window.ClipboardTools = {
         handleCopyChord,
-        wireAttachButton,
+        pasteFromClipboard,
+        wireFileInput,
     };
 })();

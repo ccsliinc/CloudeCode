@@ -52,9 +52,13 @@
     <!-- Session sidebar + status lights. Loaded after styles.css for the
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
-    <!-- Terminal-screen tool strip, copy-output sheet and per-session
-         theme picker. After styles.css so it inherits the theme vars. -->
+    <!-- Session tools button + menu and the per-session theme picker.
+         After styles.css so it inherits the theme vars, AND so its
+         explicit width/height beat the bare `button` base rule there. -->
     <link rel="stylesheet" href="/static/css/terminal-tools.css" />
+    <!-- The copy-output sheet those tools open. Split from
+         terminal-tools.css at the 500-line limit; same load reasoning. -->
+    <link rel="stylesheet" href="/static/css/copy-output.css" />
     <!-- Stacked-modal chrome (scroll lock + what a COVERED modal looks
          like). Must load before the two config-editor stylesheets, which
          style the modals that stack. -->
@@ -267,60 +271,14 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
-        <!-- Terminal-screen tool strip. Session-scoped controls only:
-             the theme picker here themes THIS tmux session (the default
-             and home themes live in settings), the speaker is this
-             session's music opt-in, and copy opens the selectable
-             copy-output sheet. Sized for a thumb, shown at every width.
-             Folded behind #terminalToolsToggle by default so only one
-             chip covers terminal output - see terminal-tools-fold.js. -->
-        <div class="terminal-tools" id="terminalTools">
-            <button type="button" id="terminalCopyBtn" class="terminal-tool"
-                    aria-label="Copy output" title="copy output" data-tooltip="Copy output">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
-                    <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <button type="button" id="sessionThemeBtn" class="terminal-tool"
-                    aria-label="Session theme" title="session theme" data-tooltip="Session theme">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M8 1.75a6.25 6.25 0 1 0 0 12.5c.69 0 1.25-.56 1.25-1.25 0-.32-.13-.62-.34-.84a1.19 1.19 0 0 1 .84-2.03h1.44A3.06 3.06 0 0 0 14.25 7 6.25 6.25 0 0 0 8 1.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <circle cx="5.25" cy="6" r="0.9" fill="currentColor"/>
-                    <circle cx="8" cy="4.5" r="0.9" fill="currentColor"/>
-                    <circle cx="10.75" cy="6" r="0.9" fill="currentColor"/>
-                </svg>
-            </button>
-            <button type="button" id="sessionAudioBtn" class="terminal-tool"
-                    aria-pressed="false" aria-label="Play music for this session"
-                    title="play music for this session" data-tooltip="Play music for this session">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M6.5 5.5 9.5 3v10L6.5 10.5H4a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5h2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M11.75 6.25a2.5 2.5 0 0 1 0 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <!-- Fold trigger. LAST in the DOM so it is the rightmost chip:
-                 the three tools expand to its LEFT and the trigger itself
-                 never moves, which keeps it a stable thumb target across
-                 both states. Collapsed by default (terminal-tools-fold.js).
-
-                 Glyph is horizontal SLIDERS, deliberately not the vertical
-                 dots of #header-menu-toggle one row up. Two collapsing
-                 menus in one corner is a usability trap, so the two are
-                 separated on every axis available: different row, different
-                 glyph, different scope (this one is session-scoped, the
-                 kebab is app-scoped). See terminal-tools-fold.js. -->
-            <button type="button" id="terminalToolsToggle" class="terminal-tool terminal-tools__toggle"
-                    aria-expanded="false" aria-controls="terminalTools"
-                    aria-label="session tools" title="session tools" data-tooltip="session tools">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-                    <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-                </svg>
-            </button>
-        </div>
+        <!-- NO TOOL OVERLAY IN THE TOP-RIGHT CORNER ANY MORE.
+             A folded strip used to float here holding copy output /
+             session theme / session music, while a second paperclip menu
+             in the bottom-right held paste / attach image. Two menus,
+             both "session tools", no learnable rule for which held what.
+             They are now one menu behind #terminalToolsBtn at the bottom
+             of this file, so the terminal's top edge is uncovered.
+             See client/js/terminal-tools-menu.js. -->
 
         <div class="terminal-container">
             <div id="terminal"></div>
@@ -392,6 +350,10 @@
     <!-- Terminal resize pipeline. Must load BEFORE terminal.js, whose
          initTerminal() calls window.TerminalLayout.install(this). Also
          the explicit refit hook session-sidebar-pin.js calls. -->
+    <!-- Shared anchored-popover placement. Must load BEFORE
+         session-theme-menu.js and terminal-tools-menu.js, which both
+         call window.AnchorPopover.place(). -->
+    <script src="/static/js/anchor-popover.js"></script>
     <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
          and terminal.js, both of which fit through
          window.TerminalMetrics.guardedFit so an untrustworthy cell
@@ -399,9 +361,10 @@
     <script src="/static/js/terminal-metrics.js"></script>
     <script src="/static/js/terminal-layout.js"></script>
     <script src="/static/js/terminal.js"></script>
-    <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
-         Must load AFTER terminal.js — terminal.js calls into
-         window.ClipboardTools from its key/attach-button hook points. -->
+    <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
+         No UI of its own any more - the session tools menu calls
+         ClipboardTools.pasteFromClipboard(). Must load AFTER terminal.js,
+         which calls handleCopyChord() from its key handler. -->
     <script src="/static/js/clipboard.js"></script>
     <!-- Touch selection: long-press → drag → floating copy button on
          coarse-pointer devices. Must load AFTER terminal.js — terminal.js
@@ -504,11 +467,12 @@
          the CSS end-ellipsis in styles.css if it is absent. -->
     <script src="/static/js/header-title-fit.js"></script>
 
-    <!-- Session tool strip folding. Must load AFTER dismiss-guard.js
-         (window.DismissGuard) for click-outside collapse. Independent of
-         terminal.js wiring the three tool buttons: this module only shows
-         and hides them, it never touches their handlers. -->
-    <script src="/static/js/terminal-tools-fold.js"></script>
+    <!-- Session tools menu - the single menu behind #terminalToolsBtn.
+         Must load AFTER anchor-popover.js (placement), copy-output.js,
+         clipboard.js and session-theme-menu.js, whose exported functions
+         its rows call. terminal.js hands it the Terminal wrapper from
+         _applyTerminalTools(). -->
+    <script src="/static/js/terminal-tools-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>
@@ -519,12 +483,29 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- IMG-PASTE — image attach controls. The hidden file input is
-         triggered programmatically by the 📎 button in terminal.js
-         (_applyImageAttachButton). Visibility of the button is gated
-         to coarse-pointer (touch) devices via CSS so desktop users get
-         the paste-only flow. -->
+    <!-- SESSION TOOLS - the one control for every session-scoped tool:
+         copy output, paste from clipboard, attach image, session theme,
+         session music. Wired by terminal.js#_applyTerminalTools() and
+         driven by client/js/terminal-tools-menu.js.
+
+         The hidden file input is the "attach image" path, opened
+         programmatically by that menu row; the change handler lives in
+         clipboard.js (ClipboardTools.wireFileInput).
+
+         Icon geometry is the terminal-tool set exactly: 16x16 in a
+         0 0 16 16 viewBox with stroke-width declared PER PATH. A
+         presentation attribute on the path beats a stylesheet rule that
+         targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
-    <button type="button" id="cloude-image-attach-button" class="cloude-image-attach-button" aria-label="Attach image" title="Attach image">📎</button>
+    <button type="button" id="terminalToolsBtn" class="terminal-tools-fab"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="terminalToolsMenu"
+            aria-label="session tools" title="session tools">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+    </button>
 </body>
 </html>
