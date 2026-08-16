@@ -433,6 +433,78 @@ await test('shortening is a display concern only and never mutates input', () =>
     assert.equal(value, WRAPPED_URL);
 });
 
+/* ===================================================================
+ * HARD-WRAPPED ROWS. The regression the user actually hit.
+ *
+ * `isWrapped` is only set when tmux relies on autowrap. When the emitting
+ * program hard-wraps at the pane width itself, which is what claude's own
+ * renderer does, tmux writes each row with explicit cursor positioning and
+ * EVERY row comes back isWrapped=false. Measured 2026-08-16 at 43 columns:
+ * the user got `https://claude.com/cai/oauth/authorize?code`, exactly 43
+ * characters, because the rejoin never fired.
+ * =================================================================== */
+
+/**
+ * A terminal whose rows are space-padded to `cols`, like the real
+ * translateToString(false), and where NO row is flagged isWrapped.
+ *
+ * @param {string[]} rows - logical row contents, unpadded.
+ * @param {number} cols - pane width.
+ * @returns {object} something shaped like a Terminal.
+ */
+function hardWrappedTerm(rows, cols) {
+    const padded = rows.map((r) => r + ' '.repeat(Math.max(0, cols - r.length)));
+    return {
+        cols,
+        buffer: {
+            active: {
+                length: padded.length,
+                getLine(i) {
+                    const row = padded[i];
+                    if (row === undefined) return null;
+                    return { isWrapped: false, translateToString: () => row };
+                },
+            },
+        },
+    };
+}
+
+const OAUTH_URL =
+    'https://claude.com/cai/oauth/authorize?code=true&client_id=abc123'
+    + '&response_type=code&redirect_uri=https%3A%2F%2Fx.dev%2Fcb&scope=user';
+
+await test('hard-wrapped url is rejoined whole across 2, 3 and 4 rows', () => {
+    const out = loadOutput();
+    for (const cols of [64, 43, 34]) {
+        const rows = [];
+        for (let i = 0; i < OAUTH_URL.length; i += cols) {
+            rows.push(OAUTH_URL.slice(i, i + cols));
+        }
+        assert.ok(rows.length >= 2, `${cols} cols should split the url`);
+        const text = out.readRecentOutput(hardWrappedTerm(rows, cols));
+        assert.ok(
+            text.includes(OAUTH_URL),
+            `at ${cols} cols the url must survive whole, got: ${text}`,
+        );
+    }
+});
+
+await test('a short row still ends the line, so the /login code survives', () => {
+    const out = loadOutput();
+    // A full row, its continuation, then a separate short line. The short
+    // row must NOT be glued onto whatever follows it.
+    const term = hardWrappedTerm(
+        ['https://claude.com/cai/oauth/authorize?code=true', 'x', 'WDJB-MJHT'],
+        48,
+    );
+    const text = out.readRecentOutput(term);
+    assert.ok(text.includes('WDJB-MJHT'), 'the short code must stay intact');
+    assert.ok(
+        !text.includes('xWDJB'),
+        'a short row must not be joined to the next line',
+    );
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) {
     console.error('FAILURES');

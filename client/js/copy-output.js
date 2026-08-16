@@ -47,6 +47,17 @@
      * That is why the phone showed a stub of the sign-in url while the
      * wide desktop pane showed all of it - same code, different wrap.
      *
+     * `isWrapped` alone is NOT enough. It is only set when tmux relies on
+     * autowrap. When the emitting program hard-wraps at the pane width
+     * itself, which is what claude's own renderer does, tmux writes each
+     * row with explicit cursor positioning and EVERY row comes back
+     * `isWrapped=false`. Measured 2026-08-16 against the vendored xterm at
+     * 43 columns: the rows split at exactly 43 characters and the user got
+     * `https://claude.com/cai/oauth/authorize?code`, a 43 character stub.
+     * So a row whose LAST CELL is occupied is also treated as continuing,
+     * joined with nothing. A short row still ends the logical line, which
+     * keeps the `/login` short-code case intact.
+     *
      * A row is only right-trimmed when it ENDS a logical line; trimming a
      * continuation would eat characters that belong mid-token.
      *
@@ -61,12 +72,17 @@
             var buf = term.buffer.active;
             var end = buf.length;
             var start = Math.max(0, end - want);
+            var cols = typeof term.cols === 'number' ? term.cols : 0;
             var rows = [];
             var current = null;
+            var prevFilled = false;
             for (var i = start; i < end; i++) {
                 var line = buf.getLine(i);
                 var raw = line ? line.translateToString(false) : '';
-                if (line && line.isWrapped && current !== null) {
+                var continues = (line && line.isWrapped) || prevFilled;
+                prevFilled = cols > 0 && raw.length >= cols &&
+                    raw.charAt(cols - 1) !== ' ';
+                if (continues && current !== null) {
                     current += raw;
                     continue;
                 }
