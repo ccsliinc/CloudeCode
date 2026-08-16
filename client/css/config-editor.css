@@ -233,27 +233,59 @@
     min-height: 34px;
 }
 
-.config-editor-toggle:hover,
-.config-editor-file:hover,
+/* A tree row's hover affordance is COLOR ONLY - it must never change the
+ * row's horizontal extent.
+ *
+ * These rows are real <button> elements, so the bare `button` reset in
+ * styles.css reaches them, and its `button:hover:not(:disabled)` rule
+ * (styles.css:514) applies `transform: scale(1.05)` plus a 12px outset
+ * glow. That reset is written for the round 36x36 header controls, where
+ * growing 5% on hover is the intended flourish. On a full-width row it is
+ * an overflow bug: a 485px row scaled 1.05 renders 509px, overhanging
+ * 12px past its own right edge, and `.config-editor-tree` has
+ * `overflow-y: auto` - which per CSS overflow-3 computes the OTHER axis to
+ * `auto` as well - so the overhang became a real horizontal scrollbar that
+ * appeared the instant the pointer touched any row. Measured before this
+ * rule: tree scrollWidth 505 against clientWidth 501 at desktop width, and
+ * 364 against 363 with the panel at its 390px-viewport width, at every
+ * nesting depth. After: 501/501 and 363/363.
+ *
+ * The `:not(:disabled)` here is not defensive noise - it is what raises
+ * these selectors to (0,3,0), above the reset's (0,2,1), so the intended
+ * background actually wins too. Without it the reset's accent tint was
+ * silently overriding both colors declared below. Same shape as
+ * `.launchpad-section-toggle:hover:not(:disabled)` in styles.css:985.
+ *
+ * If a row ever needs a hover affordance that wants more room, it has to
+ * fit INSIDE the existing width - absolutely positioned within the row, or
+ * space the row already reserves at rest - never a transform or an outset
+ * shadow. */
+.config-editor-toggle:hover:not(:disabled),
+.config-editor-file:hover:not(:disabled),
 .config-editor-toggle:focus-visible,
 .config-editor-file:focus-visible {
     background: var(--color-bg-hover);
     outline: none;
-}
-
-.config-editor-file:focus-visible,
-.config-editor-toggle:focus-visible {
-    box-shadow: inset 0 0 0 1px var(--color-accent);
+    transform: none;
+    box-shadow: none;
 }
 
 .config-editor-file {
     color: var(--color-fg-muted);
 }
 
-.config-editor-file:hover,
+.config-editor-file:hover:not(:disabled),
 .config-editor-file:focus-visible {
     color: var(--color-accent);
     background: var(--color-accent-bg-soft);
+}
+
+/* The focus ring is INSET, so it paints inside the row's own box and adds
+ * no width either. Declared last so it survives the `box-shadow: none`
+ * above, which exists only to kill the reset's outset glow. */
+.config-editor-file:focus-visible:not(:disabled),
+.config-editor-toggle:focus-visible:not(:disabled) {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 .config-editor-toggle svg,
