@@ -583,27 +583,26 @@ class Terminal {
     /**
      * IMG-PASTE — inline status pill.
      *
-     * Lazy-creates the pill the first time it is needed. The element is
-     * positioned ``fixed`` near the top center via CSS, so its DOM
-     * insertion point is irrelevant. Auto-dismisses after 3s for
-     * info/success and 5s for errors so the user has time to read the
-     * failure reason.
+     * NOW A THIN DELEGATE, and the element it used to build is gone.
+     * That element was `z-index: 70`, and the sticky header is 1000 and
+     * occupies exactly the top band it rendered in, so EVERY caller -
+     * this image upload, the touch-select copy result, the music
+     * toggle, the copy sheet, the paste row - was reporting underneath
+     * the header. Two toasts with the same look and different stacking
+     * is the bug, not the fix, so there is one now: FabMenu.notify.
+     *
+     * @param {string} message - user-facing text.
+     * @param {string} [kind] - 'info' (default), 'success' or 'error'.
+     * @returns {void}
      */
     _showStatusPill(message, kind) {
-        let pill = document.getElementById('cloude-status-pill');
-        if (!pill) {
-            pill = document.createElement('div');
-            pill.id = 'cloude-status-pill';
-            pill.className = 'cloude-status-pill';
-            document.body.appendChild(pill);
+        if (window.FabMenu && typeof window.FabMenu.notify === 'function') {
+            window.FabMenu.notify(message, kind);
+            return;
         }
-        pill.textContent = message;
-        pill.dataset.kind = kind || 'info';
-        pill.classList.add('visible');
-        if (this._statusPillTimeout) clearTimeout(this._statusPillTimeout);
-        this._statusPillTimeout = setTimeout(() => {
-            pill.classList.remove('visible');
-        }, kind === 'error' ? 5000 : 3000);
+        // Only reachable from a document that did not load fab-menu.js.
+        // Say so rather than dropping the message without a trace.
+        console.warn('[terminal] no FabMenu to report through:', message);
     }
 
     /**
