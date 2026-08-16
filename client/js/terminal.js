@@ -452,11 +452,10 @@ class Terminal {
      * xterm's text-paste path unchanged, which is how cmd+V text still
      * works.
      *
-     * WIDENED FROM IMAGES 2026-08-16. The check used to also demand
-     * ``type.startsWith('image/')``; a pasted pdf or zip fell through to
-     * the text path and xterm rendered "[object File]" garbage.
-     * ``kind === 'file'`` is what actually separates a file paste from a
-     * text paste, so it is now the only test.
+     * WIDENED FROM IMAGES 2026-08-16. It also demanded
+     * ``type.startsWith('image/')``, so a pasted pdf hit the text path as
+     * "[object File]" garbage. ``kind === 'file'`` is now the only test.
+     *
      * Capture phase + stopPropagation matter: xterm registers its own
      * paste listener on the same container in bubble phase; without
      * capture-first interception the text-paste path would still fire.
