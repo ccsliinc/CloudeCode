@@ -178,6 +178,81 @@ class AppController {
         // same dot via its WS updateStatus() calls, so the poller
         // yields whenever currentScreen === 'terminal'.
         this._healthPollerInterval = null;
+        // MutationObserver mirroring #statusText's data-status into the
+        // home bar's label. Created once, in _observeStatusText().
+        this._statusTextObserver = null;
+    }
+
+    /**
+     * Move the ONE connection-light node to the screen that is showing.
+     *
+     * WHY MOVE AND NOT CLONE: `#statusText` is written by id from two
+     * places (this class's `_pollHealth()` and TerminalController's
+     * `updateStatus()`). A second copy would need a second writer and
+     * would drift, which is the same reasoning header-menu.js records for
+     * re-parenting header controls instead of mirroring them.
+     *
+     * HOME SCREEN: into `.home-bar`, beside a visible text label - the
+     * light is app-scoped state and the bar is where the app-scoped odds
+     * and ends now live, and the bar has the room to say what it means.
+     *
+     * AUTH AND TERMINAL SCREENS: back into `.header .controls`, as its
+     * last child (the `.status::after` tooltip's z-index assumes that).
+     * The terminal screen has no home bar by construction - it spends no
+     * vertical pixels on one - and mid-session is exactly when a dropped
+     * connection matters most, so the light stays in the header there
+     * rather than disappearing.
+     *
+     * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
+     * @returns {void}
+     */
+    _placeStatusLight(screen) {
+        const el = document.getElementById('statusText');
+        if (!el) return;
+        const target = screen === 'launchpad'
+            ? document.getElementById('home-bar-status')
+            : document.querySelector('.header .controls');
+        if (!target || el.parentElement === target) return;
+        if (screen === 'launchpad') {
+            // Before the label span, so the dot leads the pair.
+            target.insertBefore(el, target.firstChild);
+        } else {
+            target.appendChild(el);
+        }
+        this._syncStatusLabel();
+    }
+
+    /**
+     * Copy `#statusText`'s current `data-status` into the home bar label.
+     *
+     * The attribute stays the single source of truth; this only renders
+     * it somewhere a touch user can read without hovering.
+     *
+     * @returns {void}
+     */
+    _syncStatusLabel() {
+        const label = document.getElementById('home-bar-status-text');
+        if (!label) return;
+        const el = document.getElementById('statusText');
+        label.textContent = el ? (el.getAttribute('data-status') || '') : '';
+    }
+
+    /**
+     * Watch `#statusText` so the home bar label can never go stale.
+     *
+     * An observer rather than a call added to each writer: there are two
+     * writers today (`_pollHealth()` here and TerminalController's
+     * `updateStatus()`) and the next one would have to remember. Watching
+     * the attribute means the label follows whoever wrote it.
+     *
+     * @returns {void}
+     */
+    _observeStatusText() {
+        if (this._statusTextObserver) return;
+        const el = document.getElementById('statusText');
+        if (!el || typeof MutationObserver !== 'function') return;
+        this._statusTextObserver = new MutationObserver(() => this._syncStatusLabel());
+        this._statusTextObserver.observe(el, { attributes: true, attributeFilter: ['data-status'] });
     }
 
     /**
@@ -189,6 +264,7 @@ class AppController {
         this.logoutBtn = document.getElementById('logoutBtn');
         this.settingsBtn = document.getElementById('settingsBtn');
         this.configEditorBtn = document.getElementById('configEditorBtn');
+        this._observeStatusText();
 
         // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
         // any async work — kills FOUC for repeat visitors. The full manifest
@@ -497,6 +573,7 @@ class AppController {
         if (this.configEditorBtn) this.configEditorBtn.classList.add('hidden');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
+        this._placeStatusLight('auth');
         // Leaving the terminal: drop any session-scoped theme so xterm
         // and the terminal screen revert to the global theme on next entry.
         if (window.Themes && typeof window.Themes.clearSession === 'function') {
@@ -580,6 +657,11 @@ class AppController {
             window.Launchpad.init();
         }
 
+        // The home bar only exists once the launchpad markup is rendered,
+        // which is why this is here and not beside the currentScreen
+        // assignment above like the other two screens.
+        this._placeStatusLight('launchpad');
+
         // Reload projects
         window.Launchpad.loadProjects();
     }
@@ -611,6 +693,7 @@ class AppController {
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+        this._placeStatusLight('terminal');
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
         // ThemeSelector swaps will PATCH the server-side pin instead of
@@ -732,6 +815,7 @@ class AppController {
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+        this._placeStatusLight('terminal');
 
         // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session
         // arg here is typically a SessionInfo (carries tmux_session +

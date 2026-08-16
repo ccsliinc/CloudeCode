@@ -1164,6 +1164,19 @@ class Launchpad {
                         <path d="M13 8c0-.38-.04-.75-.12-1.1l1.34-.98-1.5-2.6-1.55.62a5.05 5.05 0 0 0-1.9-1.1L9.05 1h-3l-.22 1.84c-.7.24-1.35.62-1.9 1.1l-1.55-.62-1.5 2.6 1.34.98a5.1 5.1 0 0 0 0 2.2l-1.34.98 1.5 2.6 1.55-.62c.55.48 1.2.86 1.9 1.1L6.05 15h3l.22-1.84c.7-.24 1.35-.62 1.9-1.1l1.55.62 1.5-2.6-1.34-.98c.08-.35.12-.72.12-1.1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                     </svg>
                 </button>
+                <!-- Connection light, LEFT group. The dot itself is NOT in
+                     this markup on purpose: this is a MOUNT POINT, not a
+                     copy. The one #statusText node lives in the header on
+                     the auth and terminal screens and is moved in here by
+                     App._placeStatusLight() while the home screen is up,
+                     the same node-moving rule header-menu.js follows,
+                     because it is addressed by id by app.js and
+                     terminal.js. The label is written from that node's
+                     data-status by App._observeStatusText(), so the string
+                     still has exactly one author. -->
+                <span class="home-bar__status" id="home-bar-status">
+                    <span class="home-bar__status-text" id="home-bar-status-text"></span>
+                </span>
                 <span class="home-bar__spacer" aria-hidden="true"></span>
                 <span class="version home-bar__version" id="home-bar-version"></span>
                 <a class="home-bar__link" href="https://nyedis.ai" target="_blank" rel="noopener noreferrer"

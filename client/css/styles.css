@@ -273,8 +273,32 @@ body {
  * the shrinking is concentrated in `#header-title-text`, which is the
  * only part that is safe to truncate.
  */
+/* THE ICON AND THE TITLE MUST SHARE ONE LINE BOX.
+ *
+ * `line-height` here is an ALIGNMENT declaration, not typography. h1 is a
+ * flex row with `align-items: center`, so the icon BOX and the title BOX
+ * are centred against each other correctly and always were - measured
+ * delta 0.01px at 1280 and 0.00px at 390. The glyphs inside them were
+ * not. `#header-icon` holds a bare emoji, so its content is an ANONYMOUS
+ * flex item whose line box is sized by the colour-emoji fallback font,
+ * whose ascent is far larger than the monospace strut's: with
+ * `line-height: normal` that line box measured 23px inside a 19.19px icon
+ * box at 390px (scrollHeight 23 vs clientHeight 19). Centring an oversized
+ * line box centres the BOX, not the baseline inside it, so the cloud sat
+ * 1.5px below the title's centre at 390px and 0.52px at 1280 - the report
+ * was "top header cloud icon and title are not aligned vertically".
+ *
+ * A fixed unitless line-height on the SHARED parent gives both children
+ * the same line box height, so neither child's font metrics can move its
+ * own baseline relative to the other's. Measured after: 0.00px delta at
+ * BOTH 1280 and 390. 1.2 specifically, because it equals `.header-icon`'s
+ * own 1.2em box, so the line box never exceeds the h1 content height and
+ * `overflow: hidden` above cannot clip a descender out of a session name.
+ * Header height is unchanged at both widths (58px at 390px).
+ */
 h1 {
     font-size: 1.3rem;
+    line-height: 1.2;
     margin: 0;
     color: var(--color-accent);
     white-space: nowrap;
@@ -335,7 +359,13 @@ h1:hover {
     justify-content: center;
     width: 1.2em;
     height: 1.2em;
-    vertical-align: -0.18em;
+    /* NO `vertical-align` HERE, AND IT MUST NOT COME BACK. This carried
+     * `vertical-align: -0.18em` from the days when the icon was an inline
+     * box on the title's baseline. h1 is `display: flex`, so the icon is a
+     * flex item and `vertical-align` does not apply to it at all - the
+     * declaration was inert, and the harm was that it made this box LOOK
+     * like alignment had been handled here. It has not: alignment is the
+     * `line-height` on h1 above. */
     margin-right: 0.15em;
     /* h1 is a flex container now; the identity icon is a fixed-size
      * marker and must never be squeezed to make room for the name. */
@@ -644,8 +674,23 @@ button[data-tooltip]:hover::after {
     z-index: 1;
 }
 
-.status:hover::after {
+/* Hover is a MOUSE affordance, and this tooltip was the only way the
+ * status text was ever revealed - so on a touch device the light was a
+ * coloured circle with no explanation. `:focus` is the touch and keyboard
+ * path: the span carries `tabindex="0"`, a tap focuses it, tapping
+ * elsewhere blurs it. Not `:focus-visible` - that deliberately does NOT
+ * match a pointer tap, which is the exact case this exists for. */
+.status:hover::after,
+.status:focus::after {
     opacity: 1;
+}
+
+/* The span is focusable only to reveal its own text, so it gets the ring
+ * treatment used elsewhere rather than the UA outline, which would draw a
+ * square around a 12px circle. */
+.status:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
 }
 
 /* Terminal container.

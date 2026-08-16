@@ -201,7 +201,21 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <span class="status" id="statusText" data-status="Ready" role="status" aria-live="polite" aria-label="Ready"></span>
+            <!-- Connection light. ONE node, re-parented between here and
+                 the home screen's bottom bar by App._placeStatusLight() -
+                 never cloned, for the same reason header-menu.js moves
+                 nodes rather than mirroring them: it is addressed by id by
+                 app.js and terminal.js.
+
+                 `tabindex="0"` is the non-hover path to its text. The
+                 `.status::after` tooltip used to be reachable ONLY by
+                 hover, which on a phone meant a coloured circle with no
+                 way to learn what it means. A tap focuses it and
+                 `.status:focus::after` reveals the same string; tapping
+                 away blurs it. On the home screen the bar renders the
+                 text outright and this tooltip is suppressed. -->
+            <span class="status" id="statusText" data-status="Ready" tabindex="0"
+                  role="status" aria-live="polite" aria-label="Ready"></span>
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
