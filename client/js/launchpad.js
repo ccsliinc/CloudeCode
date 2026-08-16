@@ -992,26 +992,57 @@ class Launchpad {
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
+                <!-- ADOPT-EXTERNAL HELP. Lives at the TOP of the pane, under the
+                     launcher title and its subtitle - NOT in the running-sessions
+                     heading row where it used to sit. Two reasons it moved:
+                     (a) the running-sessions section is display:none until a
+                     session exists, so the one explanation of how to adopt a
+                     session you started yourself was hidden from exactly the
+                     user who had not started one yet; (b) as a bordered text "?"
+                     pill it was the only non-SVG glyph on the pane and read as a
+                     different weight from every icon around it.
+                     The marker is now an inline SVG in the same family as the
+                     .new-fab__icon set: viewBox "0 0 24 24" with stroke-width
+                     1.8 as a PRESENTATION ATTRIBUTE on the svg, inherited by
+                     the paths. Do not move stroke-width into a CSS svg rule -
+                     a presentation attribute on a child path beats it, which
+                     has silently defeated stroke restyles here twice.
+                     It stays a native details/summary, never a button: the
+                     bare "button { width: 36px; height: 36px }" reset in
+                     styles.css would force a 36px box on it (40px under the
+                     480px media query) and a class only overrides the properties
+                     it actually declares.
+                     NOTE FOR ANY FUTURE EDIT OF THIS BLOCK: no backticks in
+                     here. The whole return value is a template literal, so a
+                     backtick in a comment ends the string and takes the module
+                     out with it. -->
+                <details class="adopt-disclosure">
+                    <summary aria-label="how to adopt an external tmux session" title="adopting external sessions">
+                        <svg class="adopt-disclosure__icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
+                            <line x1="12" y1="17.5" x2="12" y2="17.5"/>
+                        </svg>
+                    </summary>
+                    <div class="adopt-disclosure-body">
+                        <p>you don't have to launch through cloude — <em>any</em> tmux session on the <code>cloude</code> socket with <code>claude</code> running inside it is adoptable from here. start one yourself in any terminal:</p>
+                        <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork; claude</code></pre>
+                        <p>it shows up in this list tagged <code>EXTERNAL</code> — click it to adopt. note the <code>-L cloude</code>: a plain <code>tmux new -s mywork</code> lives on the default socket and won't appear here.</p>
+                        <p>to launch claude in one line so the pane survives claude exiting:</p>
+                        <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
+                        <p>the <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
+                        <p>if you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
+                        <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
+                        <p>full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                    </div>
+                </details>
+
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
                     <div class="launchpad-section-title launchpad-section-title--row">
                         <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
                             <span class="launchpad-section-chevron" aria-hidden="true">►</span>
                             <span class="launchpad-section-title__text">running sessions</span>
                         </button>
-                        <details class="adopt-disclosure">
-                            <summary>?</summary>
-                            <div class="adopt-disclosure-body">
-                                <p>you don't have to launch through cloude — <em>any</em> tmux session on the <code>cloude</code> socket with <code>claude</code> running inside it is adoptable from here. start one yourself in any terminal:</p>
-                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork; claude</code></pre>
-                                <p>it shows up in this list tagged <code>EXTERNAL</code> — click it to adopt. note the <code>-L cloude</code>: a plain <code>tmux new -s mywork</code> lives on the default socket and won't appear here.</p>
-                                <p>to launch claude in one line so the pane survives claude exiting:</p>
-                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
-                                <p>the <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
-                                <p>if you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
-                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
-                                <p>full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
-                            </div>
-                        </details>
                         <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" title="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
