@@ -72,6 +72,7 @@ class ConfigEditorPanelController {
         this.overlay = null;
         this.panel = null;
         this.closeBtn = null;
+        this.newBtn = null;
         this.treeEl = null;
 
         this.isOpen = false;
@@ -112,10 +113,12 @@ class ConfigEditorPanelController {
         this.overlay = document.getElementById('config-editor-overlay');
         this.panel = this.overlay ? this.overlay.querySelector('.config-editor-picker-content') : null;
         this.closeBtn = document.getElementById('config-editor-close');
+        this.newBtn = document.getElementById('config-editor-new');
         this.treeEl = document.getElementById('config-editor-tree');
         if (!this.overlay || !this.panel) return;
 
         this.closeBtn.addEventListener('click', () => this.close());
+        if (this.newBtn) this.newBtn.addEventListener('click', () => this.createFile());
         // The overlay IS the backdrop now - a click that lands on it
         // rather than on the dialog inside it is a dismissal, same
         // contract as every other .modal-overlay in the app.
@@ -168,6 +171,31 @@ class ConfigEditorPanelController {
             this._triggerEl.setAttribute('aria-expanded', 'false');
             this._triggerEl.focus();
         }
+    }
+
+    /**
+     * Ask for a new file, create it, then reload the tree and open the
+     * new file in the editor - so "create" lands the user where they were
+     * going anyway rather than back at a tree they now have to search.
+     * Offers only the roots this panel is actually showing: "user" always,
+     * "project"/"workdir" only when a session is attached, because the
+     * server cannot resolve either without a working directory.
+     * Inputs: none. Output: Promise<void>.
+     */
+    async createFile() {
+        const projectPath = this._currentProjectPath();
+        const roots = CONFIG_EDITOR_ROOTS
+            .filter(r => r.id === 'user' || projectPath)
+            .map(r => ({ id: r.id, label: r.label }));
+        const created = await window.ConfigEditorNewFile.open(roots, projectPath);
+        if (!created) return;
+        await this._loadTree();
+        window.ConfigEditorModal.open(
+            created.root,
+            created.path,
+            false,
+            created.root === 'user' ? null : projectPath,
+        );
     }
 
     // ---- collapsed-state persistence (cloude.* localStorage convention) --

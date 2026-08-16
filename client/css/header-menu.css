@@ -110,7 +110,7 @@
 }
 
 /* Label text. Taken from the button's own `title`, which is already the
- * lowercase house copy ("home", "detach session", "claude config") and is
+ * lowercase house copy ("home", "detach session", "file editor") and is
  * kept current by whatever code owns each button - the audio toggle swaps
  * its title when it flips state, and this label follows for free.
  *

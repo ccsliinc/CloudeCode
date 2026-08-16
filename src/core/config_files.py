@@ -73,13 +73,12 @@ from src.core.config_files_constants import (
     BLOCKLIST_ONLY_ROOTS,
     HIDE_NAMES,
     HIDE_PREFIXES,
-    SENSITIVE_NAMES,
-    SENSITIVE_PREFIXES,
-    SENSITIVE_SUFFIXES,
-    EXECUTABLE_EXTENSIONS,
-    EXECUTABLE_DIRS,
     MAX_READ_BYTES,
 )
+# classify/atomic_write/is_sensitive_name live in config_files_io so this
+# module and config_files_create share ONE implementation of each - see
+# that module's docstring.
+from src.core.config_files_io import atomic_write, classify, is_sensitive_name
 
 logger = structlog.get_logger()
 
@@ -127,25 +126,6 @@ def _is_hidden(name: str) -> bool:
     if name in HIDE_NAMES:
         return True
     return any(name.startswith(p) for p in HIDE_PREFIXES)
-
-
-def _is_sensitive(name: str) -> bool:
-    """
-    Description: True if a filesystem entry name is credentials/secret/
-      key-shaped (``.env*``, ``.credentials.json``, ``id_rsa``,
-      ``id_ed25519``, ``*.pem``, ``*.key``). Sensitive entries ARE shown
-      and ARE resolvable — this only drives the on-screen masking /
-      reveal-confirmation and the write-time acknowledgement, never
-      access refusal.
-    Inputs: name (str) - a single path component (basename).
-    Output: bool.
-    Example: _is_sensitive(".env.local") -> True
-    """
-    if name in SENSITIVE_NAMES:
-        return True
-    if any(name.startswith(p) for p in SENSITIVE_PREFIXES):
-        return True
-    return any(name.endswith(s) for s in SENSITIVE_SUFFIXES)
 
 
 def resolve_roots(project_path: Optional[str]) -> dict:
@@ -239,28 +219,6 @@ def resolve_safe_path(root_id: str, rel_path: str, project_path: Optional[str]) 
     return candidate
 
 
-def _classify(root: Path, path: Path) -> tuple:
-    """
-    Description: compute (is_executable, is_sensitive, read_only) for
-      one path relative to its root.
-    Inputs: root (Path); path (Path) - must be inside root.
-    Output: tuple[bool, bool, bool].
-    """
-    try:
-        rel_parts = path.relative_to(root).parts
-    except ValueError:
-        rel_parts = ()
-    top = rel_parts[0] if rel_parts else ""
-    read_only = top in READONLY_COLLAPSED_DIRS
-    is_executable = (
-        path.is_file()
-        and path.suffix in EXECUTABLE_EXTENSIONS
-        and any(part in EXECUTABLE_DIRS for part in rel_parts[:-1])
-    )
-    is_sensitive = path.is_file() and _is_sensitive(path.name)
-    return is_executable, is_sensitive, read_only
-
-
 def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str) -> Optional[TreeNode]:
     """
     Description: recursively build one TreeNode for a path, applying the
@@ -282,7 +240,7 @@ def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str
         if path.is_file() and name not in ALLOWED_TOP_LEVEL_FILES:
             return None
 
-    is_executable, is_sensitive, read_only = _classify(root, path)
+    is_executable, is_sensitive, read_only = classify(root, path)
     rel = str(path.relative_to(root)).replace(os.sep, "/")
     collapsed = read_only  # plugins/ (and any future read-only root) starts collapsed.
     node = TreeNode(
@@ -386,7 +344,7 @@ def read_file(root_id: str, rel_path: str, project_path: Optional[str]) -> dict:
     except UnicodeDecodeError:
         raise ConfigFileError("file is not text/utf-8 - not editable here")
 
-    is_executable, is_sensitive, read_only = _classify(root or path.parent, path)
+    is_executable, is_sensitive, read_only = classify(root or path.parent, path)
     return {
         "content": content,
         "is_executable": is_executable,
@@ -436,7 +394,7 @@ def write_file(
     roots = resolve_roots(project_path)
     root = roots[root_id]
 
-    is_executable, is_sensitive, read_only = _classify(root, path)
+    is_executable, is_sensitive, read_only = classify(root, path)
     if read_only:
         raise ConfigFileError("this file is under a read-only root (plugins/)")
     if is_executable and not acknowledge_executable:
@@ -466,12 +424,7 @@ def write_file(
             logger.warning("config_files_backup_failed", path=str(path), error=str(exc))
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    atomic_write(path, content)
 
     logger.info(
         "config_files_write",

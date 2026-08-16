@@ -295,9 +295,16 @@ class SlashCommandsModal {
 
     /**
      * Render all commands grouped by the server-derived groups (Task 3).
-     * Each group becomes a `.command-category`; unchanged markup/classes
-     * from the previous hand-curated-category rendering so existing CSS
-     * applies without modification.
+     * Each group becomes a `.command-category`.
+     *
+     * Descriptions render SHORTENED (window.CommandDescription), because a
+     * 240-character scraped description is seven wrapped lines on a phone
+     * and 145 of them make the list run forever. The FULL text is the
+     * value and stays on the row as `data-description`: the live filter
+     * searches that (see client/js/slash-command-filter.js), and the
+     * `.command-more` button swaps the short text for it in place. Nothing
+     * reads the rendered string as data.
+     * Inputs: none (reads this.groups). Output: string - HTML.
      */
     renderAllCommands() {
         if (!this.groups || this.groups.length === 0) {
@@ -310,18 +317,50 @@ class SlashCommandsModal {
             return `
                 <div class="command-category" data-group-id="${this._escapeHtml(group.id)}">
                     <h4 class="category-title">${this._escapeHtml(group.label)}</h4>
-                    ${commands.map(cmd => {
-                        const display = cmd.args ? `${cmd.command} ${cmd.args}` : cmd.command;
-                        return `
-                        <div class="command-item" data-command="${this._escapeHtml(cmd.command)}">
-                            <span class="command-name">${this._escapeHtml(display)}</span>
-                            <span class="command-description">${this._escapeHtml(cmd.description)}</span>
-                        </div>
-                    `;
-                    }).join('')}
+                    ${commands.map(cmd => this._renderCommandItem(cmd)).join('')}
                 </div>
             `;
         }).join('');
+    }
+
+    /**
+     * Render one `.command-item` row.
+     * Inputs: cmd (object) - {command, args, description} from the server.
+     * Output: string - HTML for one row.
+     */
+    _renderCommandItem(cmd) {
+        const display = cmd.args ? `${cmd.command} ${cmd.args}` : cmd.command;
+        const full = cmd.description || '';
+        const short = window.CommandDescription.shorten(full);
+        const more = window.CommandDescription.isShortened(full)
+            ? '<button type="button" class="command-more" aria-expanded="false">more</button>'
+            : '';
+        return `
+            <div class="command-item" data-command="${this._escapeHtml(cmd.command)}" data-description="${this._escapeHtml(full)}">
+                <span class="command-name">${this._escapeHtml(display)}</span>
+                <span class="command-description">${this._escapeHtml(short)}</span>
+                ${more}
+            </div>
+        `;
+    }
+
+    /**
+     * Swap one row's description between its shortened display form and
+     * the full text held in `data-description`. The row's canonical value
+     * is never touched, so the filter's index stays correct either way.
+     * Inputs: btn (Element) - the `.command-more` button that was tapped.
+     * Output: void.
+     */
+    _toggleFullDescription(btn) {
+        const item = btn.closest('.command-item');
+        if (!item) return;
+        const descEl = item.querySelector('.command-description');
+        if (!descEl) return;
+        const full = item.dataset.description || '';
+        const expanded = btn.getAttribute('aria-expanded') === 'true';
+        descEl.textContent = expanded ? window.CommandDescription.shorten(full) : full;
+        btn.setAttribute('aria-expanded', String(!expanded));
+        btn.textContent = expanded ? 'more' : 'less';
     }
 
     /**
@@ -377,6 +416,17 @@ class SlashCommandsModal {
             item.addEventListener('click', () => {
                 const command = item.dataset.command;
                 this.selectCommand(command);
+            });
+        });
+
+        // "more" reveals the full description in place. stopPropagation is
+        // required: the button sits INSIDE .command-item, whose own click
+        // handler above selects the command and closes the modal, so
+        // without it asking to read more would run the command instead.
+        this.modal.querySelectorAll('.command-more').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleFullDescription(btn);
             });
         });
 

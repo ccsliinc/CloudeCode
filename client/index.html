@@ -203,7 +203,7 @@
                  whether or not a session is open. Icon is an open folder,
                  distinct from settings' gear-circle and every other glyph
                  in this row. -->
-            <button type="button" id="configEditorBtn" class="hidden" aria-label="Claude config" title="claude config" data-tooltip="Claude config" aria-expanded="false" aria-controls="config-editor-panel">
+            <button type="button" id="configEditorBtn" class="hidden" aria-label="File editor" title="file editor" data-tooltip="file editor" aria-expanded="false" aria-controls="config-editor-panel">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
@@ -243,19 +243,26 @@
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
     </aside>
 
-    <!-- Claude-config FILE PICKER — a real modal now (it used to be a
+    <!-- FILE EDITOR file picker - a real modal now (it used to be a
          right-hand slide-over panel), so it and the editor that opens
          over it are the same kind of surface. Both register with
          client/js/modal-stack.js, which is what makes Escape close only
          the top one and what takes this one off screen entirely on a
-         phone while the editor sits above it. Scope is Claude config plus
-         the active project's working directory, never a general
+         phone while the editor sits above it. Scope is the claude config
+         directories plus the active project's working directory, never a general
          filesystem browser. See client/js/config-editor-panel.js. -->
     <div class="modal-overlay config-editor-picker-overlay" id="config-editor-overlay" hidden data-modal="config-picker">
         <div class="config-editor-picker-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-title">
             <div class="modal-header config-editor-header">
-                <span class="config-editor-title" id="config-editor-title">claude config</span>
-                <button type="button" id="config-editor-close" aria-label="Close claude config" title="close">&times;</button>
+                <span class="config-editor-title" id="config-editor-title">file editor</span>
+                <!-- Create a new file. Sits next to the title rather than on
+                     each directory row because a tree row is already a
+                     <button> and a button cannot nest another one; the
+                     prompt this opens asks for the root and the path
+                     instead. See client/js/config-editor-new-file.js. -->
+                <button type="button" id="config-editor-new" class="config-editor-new"
+                        aria-label="New file" title="new file">+ new file</button>
+                <button type="button" id="config-editor-close" aria-label="Close file editor" title="close">&times;</button>
             </div>
             <div class="modal-body config-editor-body">
                 <div id="config-editor-tree" class="config-editor-tree"></div>
@@ -376,6 +383,10 @@
     <script src="/static/js/output-scan.js"></script>
     <script src="/static/js/copy-output.js"></script>
     <script src="/static/js/dpad.js"></script>
+    <!-- Display-only shortening of a command's full description. Must load
+         BEFORE both files below: the filter reads the FULL value off the
+         row, the renderer writes the shortened one into it. -->
+    <script src="/static/js/command-description.js"></script>
     <script src="/static/js/slash-command-filter.js"></script>
     <script src="/static/js/slash-commands.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
@@ -452,6 +463,9 @@
          pair. Must load BEFORE both of them. -->
     <script src="/static/js/modal-stack.js"></script>
     <script src="/static/js/config-editor-modal.js"></script>
+    <!-- "new file" prompt. Must load BEFORE config-editor-panel.js, whose
+         header button calls window.ConfigEditorNewFile.open(). -->
+    <script src="/static/js/config-editor-new-file.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js

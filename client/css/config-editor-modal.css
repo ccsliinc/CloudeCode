@@ -41,6 +41,13 @@
  * needs no signpost. */
 .config-editor-modal-back {
     display: none;
+    /* Same bare-`button` 36/40px square trap as the mode toggle above.
+     * The @media (max-width: 700px) block below sets width: fit-content,
+     * which happens to rescue the width on a phone, but height was still
+     * pinned at 40px and nothing rescued it at 481-700px. Declare both
+     * here so the rescue is not doing load-bearing work by accident. */
+    width: auto;
+    height: auto;
     align-items: center;
     gap: 5px;
     margin-bottom: 6px;
@@ -120,7 +127,18 @@
     flex-shrink: 0;
 }
 
+/* width/height are LOAD-BEARING, not decoration. styles.css carries a bare
+ * `button { width: 36px; height: 36px }` reset for the header icon row, and
+ * `@media (max-width: 480px)` raises it to 40x40 for touch. A class only
+ * beats that rule for the properties it actually declares, so without these
+ * two lines every labelled button here collapses to a 40px square on a
+ * phone and its label renders straight over the border. Measured at 375px
+ * before this rule: box 40x40, content box 10px wide, "preview" 44.1px -
+ * a 34.1px spill. Same trap the .settings-tab rule in styles.css documents. */
 .config-editor-mode-toggle button {
+    width: auto;
+    height: auto;
+    min-height: 32px;
     padding: 5px 14px;
     border-radius: var(--radius-md);
     border: 1px solid var(--color-border);

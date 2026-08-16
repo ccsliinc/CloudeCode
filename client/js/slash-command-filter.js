@@ -30,8 +30,19 @@ class SlashCommandFilter {
         const items = root ? Array.from(root.querySelectorAll('.command-item')) : [];
         this._items = items.map(element => {
             const command = element.dataset.command || '';
+            // THE FULL description, from `data-description` - NEVER the
+            // rendered `.command-description` text, which is a shortened
+            // DISPLAY form (client/js/command-description.js). Searching
+            // the rendered string would silently drop every word in the
+            // truncated-away tail, so typing a real word from a command's
+            // own docs would return nothing. Fall back to the rendered
+            // text only for a row that carries no data attribute at all.
             const descEl = element.querySelector('.command-description');
-            const searchText = (command + ' ' + (descEl ? descEl.textContent : '')).toLowerCase();
+            const hasFull = element.dataset.description != null;
+            const description = hasFull
+                ? element.dataset.description
+                : (descEl ? descEl.textContent : '');
+            const searchText = (command + ' ' + description).toLowerCase();
             return { element, command, searchText };
         });
         this._visibleItems = this._items.slice();
