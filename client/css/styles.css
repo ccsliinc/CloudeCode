@@ -175,6 +175,28 @@ body {
     gap: 15px;
 }
 
+/* HEADER TITLE MUST SHRINK, CONTROLS MUST NOT.
+ *
+ * This rule used to be `white-space: nowrap` and nothing else. As a flex
+ * item of `.header` that is a layout bug with a very specific shape: a
+ * flex item's `min-width` defaults to `auto`, which is its MIN-CONTENT
+ * size, and min-content for a nowrap single line is the whole string. So
+ * the title refused to shrink below its own text and pushed everything
+ * after it out of the box instead. Measured on a 390px viewport with a
+ * real session name: h1 ran x=63..413 (23px past the edge), `.controls`
+ * sat at x=428..488 entirely off screen, `#header-menu-toggle` was 58px
+ * of fully invisible kebab, and documentElement.scrollWidth was 488
+ * against a 390 innerWidth - 98px of horizontal overflow.
+ *
+ * `min-width: 0` is the required half of the fix, not an optimisation.
+ * This is the third time the min-width:auto flex trap has bitten this
+ * codebase; see `.session-row` and `.cloude-session-theme__head`.
+ *
+ * h1 becomes a flex CONTAINER too, so the icon, the version chip and the
+ * rename pencil can each opt out of shrinking (`flex-shrink: 0`) and all
+ * the shrinking is concentrated in `#header-title-text`, which is the
+ * only part that is safe to truncate.
+ */
 h1 {
     font-size: 1.3rem;
     margin: 0;
@@ -182,16 +204,38 @@ h1 {
     white-space: nowrap;
     cursor: pointer;
     transition: opacity 0.2s ease;
+    display: flex;
+    align-items: center;
+    /* Take the leftover space, give it back before .controls does. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
 }
 
 h1:hover {
     opacity: 0.8;
 }
 
+/* The only shrinkable, truncatable part of the header identity. The CSS
+ * end-ellipsis here is the FLOOR, not the finished behaviour: it is what
+ * renders if header-title-fit.js never runs. When that module is alive it
+ * replaces the text with a MIDDLE-elided string, because session names
+ * share long project prefixes (`cloude_claude-config-sync-2`) and an
+ * end-ellipsis would truncate away the only part that distinguishes one
+ * session from another. See client/js/header-title-fit.js. */
+#header-title-text {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .version {
     font-size: 0.7rem;
     color: var(--color-fg-faint);
     font-weight: normal;
+    flex-shrink: 0;
 }
 
 /* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
@@ -205,6 +249,9 @@ h1:hover {
     height: 1.2em;
     vertical-align: -0.18em;
     margin-right: 0.15em;
+    /* h1 is a flex container now; the identity icon is a fixed-size
+     * marker and must never be squeezed to make room for the name. */
+    flex-shrink: 0;
 }
 
 .header-icon img {
@@ -306,6 +353,12 @@ h1:hover {
     display: flex;
     gap: 8px;
     align-items: center;
+    /* THE CONTROLS ARE THE LAST THING TO GIVE UP SPACE. Every child is a
+     * fixed-size hit target, so there is nothing here that can shrink
+     * gracefully - squeezing this box just pushes the buttons off screen,
+     * which is exactly the bug the h1 min-width fix above exists to kill.
+     * The title truncates; this does not. */
+    flex-shrink: 0;
     /* Was `overflow: hidden`. Children never exceed this box's static
      * bounds (fixed-size buttons + gap), so hidden was only ever clipping
      * intentional overflow effects: the button:hover scale/glow and the
@@ -1237,6 +1290,7 @@ button[data-tooltip]:hover::after {
     from {
         opacity: 0;
         transform: translate(calc(50vw - 50%), calc(50vh - 50%)) scale(0.3);
+        transform: translate(calc(50vw - 50%), calc(50dvh - 50%)) scale(0.3);
     }
     to {
         opacity: 1;
@@ -1542,6 +1596,7 @@ button[data-tooltip]:hover::after {
     width: 90%;
     max-width: 700px;
     max-height: 85vh;
+    max-height: 85dvh;
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
@@ -1937,6 +1992,7 @@ button[data-tooltip]:hover::after {
     .slash-commands-modal-content {
         width: 95%;
         max-height: 90vh;
+        max-height: 90dvh;
     }
 
     .slash-commands-modal-content .modal-body {
@@ -2118,7 +2174,7 @@ button[data-tooltip]:hover::after {
  * class itself is unchanged, still theme-aware via CSS vars so each
  * bundled theme re-skins it automatically with no per-theme rule.
  * Native control = free keyboard nav + accessible by default. The
- * dropdown is constrained to 60vh via `size` proxy on the popup
+ * dropdown is constrained to 60dvh via `size` proxy on the popup
  * (browser-specific; we set max-height as a hint where supported).
  * ===================================================================== */
 .theme-selector {
@@ -2163,6 +2219,7 @@ button[data-tooltip]:hover::after {
     background: var(--color-bg-elevated);
     color: var(--color-fg);
     max-height: 60vh;
+    max-height: 60dvh;
 }
 
 /* Inside the settings panel there's a full-width field column to work
@@ -2646,6 +2703,7 @@ button[data-tooltip]:hover::after {
     width: 92%;
     max-width: 560px;
     max-height: 88vh;
+    max-height: 88dvh;
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;

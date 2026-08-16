@@ -1342,7 +1342,16 @@ class Terminal {
         }
         if (titleEl) {
             titleEl.style.display = '';
-            if (newName) titleEl.textContent = newName;
+            // Same contract as setHeaderIdentity: hand the FULL name to the
+            // fitter and let it own truncation, so a rename to a long name
+            // does not reintroduce the header overflow.
+            if (newName) {
+                if (window.HeaderTitleFit) {
+                    window.HeaderTitleFit.setTitle(newName);
+                } else {
+                    titleEl.textContent = newName;
+                }
+            }
         }
         if (pencilEl) pencilEl.style.display = '';
     }

@@ -23,8 +23,9 @@
  * Why the top-right corner is safe to cover: the terminal is pinned to
  * the bottom (see terminal-scroll.js), so the live prompt and the newest
  * output are at the BOTTOM edge. The top row is the oldest line still on
- * screen and scrolls away on the next write. The strip is also only
- * ~150px wide, so the left ~60% of that first line stays readable.
+ * screen and scrolls away on the next write. The strip is also narrow -
+ * ~44px collapsed, which is its normal state (see FOLDED BY DEFAULT
+ * below), and ~150px for as long as the user keeps it open.
  * The alternative - reserving rows for the overlay - would cost the same
  * real estate the user asked us to stop spending.
  *
@@ -47,6 +48,47 @@
 
 .terminal-tools > * {
     pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------------
+ * FOLDED BY DEFAULT
+ *
+ * Three chips plus their gaps covered roughly 150px of the terminal's top
+ * line permanently. Folding leaves ONE chip in the corner and reveals the
+ * rest on demand, which is what was asked for: one blocking element, not
+ * three.
+ *
+ * `display: none` rather than opacity/visibility so the collapsed tools
+ * take no layout space at all - a zero-opacity chip still reserves the
+ * width it was covering, which would defeat the whole point.
+ *
+ * DISTINGUISHING THIS FROM THE HEADER KEBAB. `#header-menu-toggle` folds
+ * the APP controls and sits in the header bar; this folds the SESSION
+ * tools and floats over the terminal. Two collapsing menus in one corner
+ * is a usability trap, so they are made different on every axis that is
+ * free to differ:
+ *   - row: the kebab is inside the header's border-bottom, this is below it
+ *   - glyph: vertical dots there, horizontal sliders here
+ *   - shape: the kebab is a square-ish header button, this is a pill chip
+ *     with an opaque background because it overlays live output
+ *   - scope: app-wide vs this tmux session
+ * See client/js/terminal-tools-fold.js for why they are not merged.
+ * ------------------------------------------------------------------- */
+.terminal-tools .terminal-tool:not(.terminal-tools__toggle) {
+    display: none;
+}
+
+.terminal-tools--open .terminal-tool:not(.terminal-tools__toggle) {
+    display: inline-flex;
+}
+
+/* Open state reads as "this menu is currently spending your screen",
+ * matching the accent treatment `.terminal-tool.is-on` uses for a tool
+ * that is actively doing something. */
+.terminal-tools__toggle[aria-expanded="true"] {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, var(--color-bg-elevated));
 }
 
 /* Right-align the tooltip under its own button instead of centring it.
@@ -119,6 +161,7 @@
     width: 100%;
     max-width: 640px;
     max-height: 80vh;
+    max-height: 80dvh;
     padding: 16px;
     border-radius: 12px;
     background: var(--color-bg-elevated);
@@ -158,6 +201,7 @@
     flex-direction: column;
     gap: 6px;
     max-height: 30vh;
+    max-height: 30dvh;
     overflow-y: auto;
 }
 
@@ -328,6 +372,7 @@
     .cloude-copy-sheet__panel {
         max-width: none;
         max-height: 88vh;
+        max-height: 88dvh;
         border-radius: 12px 12px 0 0;
         border-bottom: none;
         padding-bottom: max(16px, env(safe-area-inset-bottom));
@@ -363,12 +408,15 @@
     white-space: nowrap;
 }
 
-/* 60vh so a large theme library scrolls inside the menu rather than
- * running off the viewport. */
+/* 60dvh so a large theme library scrolls inside the menu rather than
+ * running off the viewport. Dynamic, not raw `vh`: on iOS the large
+ * viewport is 739px against 699px visible, so `60vh` quietly bought 24px
+ * of height that was never on screen. */
 .cloude-session-theme__list {
     display: flex;
     flex-direction: column;
     max-height: 60vh;
+    max-height: 60dvh;
     overflow-y: auto;
 }
 

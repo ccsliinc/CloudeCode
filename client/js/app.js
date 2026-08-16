@@ -27,7 +27,16 @@ function setHeaderIdentity(opts) {
         }
     }
     if (textEl) {
-        textEl.textContent = opts.title || 'Cloude Code';
+        // Route through HeaderTitleFit so a long session name is
+        // MIDDLE-elided (keeping the distinguishing tail) rather than
+        // end-truncated by CSS. Falls back to a plain write when the
+        // module is absent - the CSS ellipsis still prevents overflow.
+        var fullTitle = opts.title || 'Cloude Code';
+        if (window.HeaderTitleFit) {
+            window.HeaderTitleFit.setTitle(fullTitle);
+        } else {
+            textEl.textContent = fullTitle;
+        }
     }
     // v0.7.2 — when we're painting a session identity (icon='cloude'),
     // make the title span itself the click target for inline rename.

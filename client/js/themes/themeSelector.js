@@ -4,7 +4,7 @@
  * Spec section "Architecture B" / "Pluggability Surface":
  *   - Native <select> for free keyboard nav + accessibility.
  *   - aria-label="Theme", text labels only.
- *   - max-height: 60vh enforced via CSS so 50 user themes don't blow past viewport.
+ *   - max-height: 60dvh enforced via CSS so 50 user themes don't blow past viewport.
  *   - Theme-aware via the same CSS vars the rest of the chrome uses.
  *   - Pre-selects the active global theme; on change → Themes.applyGlobal(value).
  */

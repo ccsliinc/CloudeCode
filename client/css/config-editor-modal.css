@@ -15,6 +15,7 @@
     width: 94%;
     max-width: 900px;
     height: min(85vh, 780px);
+    height: min(85dvh, 780px);
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
@@ -346,5 +347,6 @@
     .config-editor-modal-content {
         width: 98%;
         height: 92vh;
+        height: 92dvh;
     }
 }

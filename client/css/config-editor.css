@@ -30,6 +30,7 @@
     width: 94%;
     max-width: 520px;
     height: min(85vh, 780px);
+    height: min(85dvh, 780px);
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
@@ -287,5 +288,6 @@
     .config-editor-picker-content {
         width: 98%;
         height: 92vh;
+        height: 92dvh;
     }
 }

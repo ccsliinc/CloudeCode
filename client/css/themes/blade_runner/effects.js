@@ -102,7 +102,11 @@ export function init() {
     position: "fixed",
     inset: "0",
     width: "100vw",
-    height: "100vh",
+    // Overwritten with an innerHeight pixel value by resize()
+    // below on the very next statement, so this is only the value that
+    // applies for a single frame. Dynamic unit anyway: raw 100vh is the
+    // 739px LARGE viewport on a 699px iOS screen.
+    height: "100dvh",
     zIndex: "-1",
     pointerEvents: "none",
     background: "#0a0e1a",
