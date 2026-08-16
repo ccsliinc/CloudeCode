@@ -98,6 +98,18 @@ console.log('[TerminalLayout Module] Loading...');
                 scheduleRetry(reason);
                 return;
             }
+            // The fit divided the box by the cell width the renderer
+            // reported BEFORE the resize. Confirm the post-resize grid
+            // still paints inside the box, and drop columns if it does
+            // not. Runs before sendResize so tmux is never told about a
+            // grid wider than the screen.
+            const width = metrics.enforceWidthFit(controller);
+            if (width.changed) {
+                console.warn(
+                    `TerminalLayout: grid shrunk to ${width.cols} cols, `
+                    + `painted ${width.painted}px in ${width.available}px `
+                    + `source=${reason}`);
+            }
         } else {
             // Module missing (load order regression). Fall back to the raw
             // fit rather than leaving the terminal unsized.

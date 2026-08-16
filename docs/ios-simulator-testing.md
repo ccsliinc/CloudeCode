@@ -214,6 +214,33 @@ first resolvable family, and a proportional face makes every column wrong.
 Any future edit that moves `ui-monospace` off the front of that list must be
 re-checked with this exact test.
 
+### The terminal cell width, and the one that is a decoy
+
+Three different "cell widths" are readable at once and only one of them is the
+pitch the renderer draws on. Measured 2026-08-16, iPhone 16e, 14px font:
+
+| quantity | value | what it is |
+|---|---|---|
+| `_core._charSizeService.width` | 8.65625 | the FONT's natural advance. A decoy. |
+| `dimensions.css.cell.width` | 8.33333 | `floor(8.65625 * 3) / 3`, what WebGL draws on |
+| `css.canvas.width / cols` | 8.32558 | `358 / 43`, the painted pitch |
+
+The WebGL renderer floors the cell to whole device pixels, so 43 columns paint
+`358` CSS px inside a `374` px viewport and nothing overflows. Counting ink
+runs in a screenshot row confirms it: 43 separate glyph runs spanning
+x=8.67..365.33, against an `.xterm-screen` box of 8..366.
+
+Multiplying a column count by `_charSizeService.width` gives 372.1px and
+"proves" an overflow that does not exist. Do not use that number. The
+invariant that matters, and the one the guard in `client/js/terminal-metrics.js`
+enforces, is `cols * dimensions.css.cell.width <= available width`.
+
+The first two or three rows at the right edge ARE covered, by the
+`.terminal-tools` chip (`position: absolute; top: 0; right: 0; z-index: 5`),
+which is deliberate. Before the tools were folded there were three chips
+covering ~150px, which looks exactly like clipped columns in a screenshot.
+Check a row further down before concluding anything about column count.
+
 ### Horizontal overflow
 
 ```js
@@ -269,7 +296,7 @@ collapsed-toolbar behaviour. The dynamic viewport case that *does* occur is the
 software keyboard, which shrinks `visualViewport.height` while `innerHeight`
 stays put. Test that on a screen with a focused input.
 
-## 8. The app is login-gated, and automation cannot get in
+## 8. The app is login-gated, and automation cannot get into a deployed one
 
 `/` returns the full 32KB SPA to an unauthenticated client; the gate is a
 client-side screen (`#auth-screen`) plus server-side auth on the APIs. TOTP.
@@ -295,6 +322,45 @@ document.getElementById('header-title-text').textContent='some-long-session-name
 Always label results from this as a forced local render. It proves CSS layout.
 It does not prove anything about live data, websockets, xterm sizing against a
 real pty, or anything the server would have sent.
+
+### Getting a REAL live session anyway: run your own instance
+
+A forced render cannot answer anything about xterm sizing or scrollback,
+because both need a live pty behind a websocket. The way in is not to defeat
+the deployed instance's auth - never do that - but to stand up your own
+throwaway one and let it issue you a token:
+
+```sh
+cp config.example.json config.json
+printf 'HOST=127.0.0.1\nPORT=<free port>\nTOTP_SECRET=<fresh base32>\n'  > .env
+printf 'JWT_SECRET=<fresh random>\nAUTH_CONFIG_FILE=./config.json\n'    >> .env
+printf 'DEFAULT_WORKING_DIR=<scratch dir>\nLOG_DIRECTORY=/tmp/cloude-x\n'>> .env
+chmod 600 .env
+venv/bin/python3 -m src.main &
+venv/bin/python3 -c "from src.api.auth import create_jwt_token; \
+                     print(create_jwt_token(600)[0])"
+```
+
+Then in the safaridriver session, before navigating:
+
+```js
+localStorage.setItem('claude_tunnel_token', '<the token>');
+```
+
+Reload and the app is authenticated. The secrets are yours, generated for this
+run, and `.env` plus `config.json` are both gitignored. Never read, copy or log
+the deployed instance's secrets to do this.
+
+Two traps that cost real time:
+
+- **`session.tmux_socket_name` in `config.json` did not isolate the sessions**
+  on 2026-08-16: sessions still landed on the shared `cloude` socket. Assume
+  your test sessions will appear next to the user's, name them so you can tell
+  them apart, snapshot `tmux -L cloude ls` before you start, and diff it after
+  you clean up.
+- `tests/test_session_backend.py` adopt tests are flaky on a busy host
+  (`attach_existing: tmux session adopt_itest_... is not alive`). Confirm
+  against a stashed tree before blaming your change.
 
 ## 9. What the simulator CANNOT reproduce
 
