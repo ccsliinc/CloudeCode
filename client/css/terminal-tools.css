@@ -161,6 +161,27 @@
     overflow-y: auto;
 }
 
+/* The sheet's own status line. Terminal status pills render at z-index
+ * 70 and the sheet at 10000, so a pill raised while the sheet is open is
+ * painted underneath it and the user sees nothing. Feedback has to live
+ * inside the overlay that covers it. */
+.cloude-copy-status {
+    margin: 0;
+    min-height: 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.cloude-copy-status[data-kind="success"] {
+    color: var(--color-accent);
+}
+
+.cloude-copy-status[data-kind="error"] {
+    color: var(--color-danger);
+}
+
 .cloude-copy-chip {
     display: flex;
     align-items: center;
@@ -176,12 +197,22 @@
     font-family: var(--font-mono);
     font-size: 12px;
     cursor: pointer;
+    /* A tap must land instantly and must not be read as the start of a
+     * text selection or a double-tap zoom. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .cloude-copy-chip:hover,
 .cloude-copy-chip:focus-visible {
     border-color: var(--color-accent);
     outline: none;
+}
+
+/* Confirmation where the finger already is, not only in the status line. */
+.cloude-copy-chip.is-copied {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, transparent);
 }
 
 .cloude-copy-chip__kind {
@@ -194,13 +225,35 @@
     text-transform: lowercase;
 }
 
-/* The value is the long part (a sign-in url can be 200 chars). Ellipsis
- * rather than wrap so the chip list stays scannable; the full value is
- * in the title attribute and in the textarea below. */
+.cloude-copy-chip.is-copied .cloude-copy-chip__kind {
+    color: var(--color-accent);
+}
+
+.cloude-copy-chip.is-copied .cloude-copy-chip__kind::after {
+    content: " copied";
+}
+
+/* The value is the long part (a sign-in url can be 200 chars). It is NOT
+ * ellipsised: on a phone that hides the END of the url, the part that
+ * distinguishes one sign-in link from another. copy-output.js already
+ * shortens the label from the MIDDLE and caps its length, so both ends
+ * render and this is at most two short lines. The full value is in the
+ * title attribute and in the textarea below. */
 .cloude-copy-chip__value {
     flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-all;
+}
+
+/* Shown only when the label was shortened, so a middle-ellipsis label is
+ * never mistaken for a genuinely short token. The whole value is what
+ * gets copied regardless of what the label shows. */
+.cloude-copy-chip__size {
+    flex: 0 0 auto;
+    color: var(--color-fg-muted);
+    font-size: 10px;
     white-space: nowrap;
 }
 
