@@ -1,24 +1,16 @@
 // Node tests for the mobile copy workaround:
-//   client/js/output-scan.js      — finding urls / codes in pane output
-//   client/js/clipboard-compat.js — the clipboard tier ladder
-//   client/js/copy-output.js      — buffer reading and chip labelling
+//   client/js/output-scan.js   - finding urls / codes in pane output
+//   client/js/copy-output.js   - buffer reading, chip labelling, the sheet
+//
+// The clipboard tier ladder moved to tests/test_clipboard_compat.node.mjs
+// on 2026-08-16, when the second false-success fix grew this file past
+// the 500 line limit.
 //
 // 2026-08-16: these tests all passed while the feature was completely
-// broken in a browser, which is the reason for two of the sections below.
-// A simulated execCommand cannot reproduce "returned true, copied an
-// empty selection", so the ladder is now asserted on the COPY EVENT it
-// raises rather than on execCommand's return value, and a false-success
-// case is asserted explicitly. The end-to-end proof lives in
+// broken in a browser, which is why the wrapped-buffer and
+// label-vs-value cases below assert on what would actually be COPIED
+// rather than on what is rendered. The end-to-end proof lives in
 // tests/manual/verify_copy_output.py, which drives real Chromium.
-//
-// WHY THESE MATTER: `navigator.clipboard` is gated on a secure context.
-// This app is served over plain http on a Tailscale hostname, so the API
-// is not merely permission-denied, it is UNDEFINED — measured in a real
-// browser on 2026-08-15 (http://<lan-ip>:5001 -> isSecureContext false,
-// navigator.clipboard undefined). Testing on 127.0.0.1 hides this
-// completely because localhost is exempt from the secure-context rule,
-// which is exactly how the dead end survived. The absent-API case below
-// is therefore the load-bearing assertion.
 //
 // Run with: node tests/test_copy_output.node.mjs
 
@@ -35,7 +27,6 @@ function read(file) {
 }
 
 const scanSrc = read('output-scan.js');
-const compatSrc = read('clipboard-compat.js');
 const outputSrc = read('copy-output.js');
 
 let failures = 0;
@@ -59,105 +50,6 @@ function loadScan() {
     vm.createContext(sandbox);
     vm.runInContext(scanSrc, sandbox);
     return sandbox.window.OutputScan;
-}
-
-/**
- * Load clipboard-compat with a controllable environment.
- *
- * The fake DOM models the parts that actually decide the outcome: real
- * text nodes (so a Range over them has content), focus, and a copy event
- * that only fires when there is something selected. `suppressCopyEvent`
- * reproduces the measured shipped failure — execCommand answering true
- * while no copy event is raised at all.
- *
- * @param {object} opts
- * @param {boolean} opts.asyncClipboard    - expose navigator.clipboard.
- * @param {boolean} opts.asyncRejects      - make writeText reject.
- * @param {boolean} opts.execWorks         - execCommand('copy') return value.
- * @param {boolean} opts.suppressCopyEvent - return true but raise no event.
- * @param {boolean} opts.noClipboardData   - event without clipboardData.
- * @returns {{api: object, calls: object}}
- */
-function loadCompat(opts) {
-    const calls = { writeText: [], exec: [], setData: [], focused: [] };
-    const navigator = {};
-    if (opts.asyncClipboard) {
-        navigator.clipboard = {
-            writeText(text) {
-                calls.writeText.push(text);
-                return opts.asyncRejects
-                    ? Promise.reject(new Error('denied'))
-                    : Promise.resolve();
-            },
-        };
-    }
-
-    const makeEl = () => ({
-        style: {},
-        children: [],
-        setAttribute() {},
-        appendChild(node) { this.children.push(node); },
-        focus() { calls.focused.push(this); },
-        remove() {},
-        text() { return this.children.map((c) => c.nodeValue || '').join(''); },
-    });
-
-    // A Range holds text; the SELECTION only holds it once the range is
-    // added. Modelling that separately matters, because the real code
-    // clears the selection between building the range and adding it.
-    let ranged = '';
-    let selected = '';
-    const listeners = [];
-
-    const document = {
-        body: { appendChild() {} },
-        createElement: makeEl,
-        createTextNode: (value) => ({ nodeValue: value }),
-        createRange: () => ({
-            selectNodeContents(el) { ranged = el.text ? el.text() : ''; },
-        }),
-        addEventListener(type, fn) { listeners.push({ type, fn }); },
-        removeEventListener(type, fn) {
-            const i = listeners.findIndex((l) => l.fn === fn);
-            if (i >= 0) listeners.splice(i, 1);
-        },
-        execCommand(cmd) {
-            calls.exec.push(cmd);
-            if (!opts.execWorks) return false;
-            if (opts.suppressCopyEvent) return true;
-            // A browser only raises a copy event when something is
-            // selected. That is the whole point of the fix.
-            if (!selected) return true;
-            const event = {
-                clipboardData: opts.noClipboardData ? null : {
-                    setData(type, value) { calls.setData.push(value); },
-                },
-                preventDefault() {},
-            };
-            listeners
-                .filter((l) => l.type === 'copy')
-                .forEach((l) => l.fn(event));
-            return true;
-        },
-    };
-
-    const sandbox = {
-        window: {
-            getSelection: () => ({
-                removeAllRanges() { selected = ''; },
-                addRange() { selected = ranged; },
-                toString() { return selected; },
-            }),
-        },
-        navigator,
-        document,
-        console: { warn() {} },
-        Promise,
-    };
-    sandbox.globalThis = sandbox;
-    vm.createContext(sandbox);
-    vm.runInContext(compatSrc, sandbox);
-    return { api: sandbox.window.CopyCompat, calls };
 }
 
 /**
@@ -271,100 +163,6 @@ await test('scan respects its limit', () => {
     let text = '';
     for (let i = 0; i < 40; i++) text += `https://example.com/path${i}\n`;
     assert.equal(loadScan().scan(text, 5).length, 5);
-});
-
-/* ===================================================================
- * clipboard-compat
- * =================================================================== */
-
-await test('secure context uses the async clipboard', async () => {
-    const { api, calls } = loadCompat({ asyncClipboard: true });
-    const result = await api.copyText('hello');
-    assert.equal(result.ok, true);
-    assert.equal(result.method, 'async');
-    assert.equal(calls.writeText.join(','), 'hello');
-    assert.equal(calls.exec.length, 0, 'must not also run execCommand');
-});
-
-await test('THE BUG: no clipboard API at all still copies via execCommand', async () => {
-    // Plain http on Tailscale. Previously this path reported "clipboard
-    // unavailable on this connection" and copied nothing.
-    const { api, calls } = loadCompat({ asyncClipboard: false, execWorks: true });
-    assert.equal(api.hasAsyncClipboard(), false);
-    const result = await api.copyText('WDJB-MJHT');
-    assert.equal(result.ok, true);
-    assert.equal(result.method, 'exec');
-    assert.equal(calls.exec.join(','), 'copy');
-});
-
-await test('async present but refused falls back to execCommand', async () => {
-    const { api, calls } = loadCompat({
-        asyncClipboard: true, asyncRejects: true, execWorks: true,
-    });
-    const result = await api.copyText('x');
-    assert.equal(result.ok, true);
-    assert.equal(result.method, 'exec');
-    assert.equal(calls.exec.join(','), 'copy');
-});
-
-await test('both tiers refused reports manual, never a false success', async () => {
-    const { api } = loadCompat({ asyncClipboard: false, execWorks: false });
-    const result = await api.copyText('x');
-    assert.equal(result.ok, false);
-    assert.equal(result.method, 'manual');
-});
-
-await test('empty text is a no-op, not a copy', async () => {
-    const { api, calls } = loadCompat({ asyncClipboard: true });
-    const result = await api.copyText('');
-    assert.equal(result.ok, false);
-    assert.equal(result.method, 'manual');
-    assert.equal(calls.writeText.length, 0);
-});
-
-await test('copyText never rejects', async () => {
-    const { api } = loadCompat({ asyncClipboard: true, asyncRejects: true, execWorks: false });
-    const result = await api.copyText('x');
-    assert.equal(result.ok, false);
-});
-
-await test('the exec tier focuses and selects real text before copying', async () => {
-    // The shipped bug: nothing was focused and the Range covered a
-    // textarea with no child nodes, so the selection was empty. Measured
-    // in Chromium 2026-08-16 — the copy event fired with
-    // getSelection().toString() === '' and activeElement still the chip.
-    const { api, calls } = loadCompat({ asyncClipboard: false, execWorks: true });
-    const result = await api.copyText('https://claude.ai/oauth/authorize?x=1');
-    assert.equal(result.ok, true);
-    assert.equal(calls.focused.length, 1, 'copy source must take focus');
-    assert.equal(calls.setData.join(','), 'https://claude.ai/oauth/authorize?x=1');
-});
-
-await test('THE FALSE SUCCESS: execCommand true with no copy event is a failure', async () => {
-    // Worse than a dead tap: the user is told it worked and pastes
-    // nothing. Success is now conditional on the event actually firing.
-    const { api } = loadCompat({
-        asyncClipboard: false, execWorks: true, suppressCopyEvent: true,
-    });
-    const result = await api.copyText('WDJB-MJHT');
-    assert.equal(result.ok, false);
-    assert.equal(result.method, 'manual');
-});
-
-await test('a copy event without clipboardData still counts, the selection IS the text', async () => {
-    const { api, calls } = loadCompat({
-        asyncClipboard: false, execWorks: true, noClipboardData: true,
-    });
-    const result = await api.copyText('WDJB-MJHT');
-    assert.equal(result.ok, true);
-    assert.equal(result.method, 'exec');
-    assert.equal(calls.setData.length, 0);
-});
-
-await test('newlines survive the exec tier, so copy all is not one long line', async () => {
-    const { api, calls } = loadCompat({ asyncClipboard: false, execWorks: true });
-    await api.copyText('line one\nline two');
-    assert.equal(calls.setData.join(''), 'line one\nline two');
 });
 
 /* ===================================================================
