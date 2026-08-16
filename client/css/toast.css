@@ -86,6 +86,13 @@
   border: none;
   color: var(--color-fg-muted, #858585);
   cursor: pointer;
+  /* styles.css pins every button to a var(--control-size) square, which
+     turned this 2px/6px glyph into a 36px box on desktop and a 44px one
+     at the 768px breakpoint - wider than the toast is tall, overhanging
+     the title row and painting the glyph off-centre. Size it from its
+     own padding instead. */
+  width: auto;
+  height: auto;
   padding: 2px 6px;
   font-size: 16px;
   line-height: 1;
