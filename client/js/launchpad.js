@@ -379,23 +379,32 @@ class Launchpad {
                     existing.session_id = liveId || existing.session_id;
                     existing.status = liveStatus;
                     existing.unread = liveUnread;
+                    existing.created_by_cloude = !!live.created_by_cloude;
                     if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
-                        // NOT a hardcoded `true`. Every OPEN session lands
-                        // here, because /sessions/attachable filters open
-                        // sessions out to prevent a self-adopt footgun -
-                        // so claiming ownership here badged an ADOPTED
-                        // external session `TMUX` the moment you opened
-                        // it, while an identical unopened one stayed
-                        // `EXTERNAL`. The server never owns an adopted
-                        // session (SessionManager.adopt_external_session
-                        // deliberately does not add it to
-                        // owned_tmux_sessions) and says so in the id:
-                        // `adopted:<name>` for adopted, a plain id for
-                        // one Cloude Code created.
-                        created_by_cloude: !String(liveId || '').startsWith('adopted:'),
+                        // The badge means: did THIS APP CREATE this tmux
+                        // session, or did it merely ADOPT one started
+                        // outside the app? That is a fact about origin, so
+                        // it must not flip when the session is opened or
+                        // closed, and it must survive a server restart.
+                        //
+                        // Never derived here. The server answers it from
+                        // its persisted `owned_tmux_sessions` set and ships
+                        // it on SessionInfo.created_by_cloude - the same
+                        // source AttachableSession uses, so a row merged
+                        // from either endpoint agrees. Two previous local
+                        // derivations were both wrong: a hardcoded `true`
+                        // badged every OPEN session TMUX (open sessions
+                        // reach us only here, because /sessions/attachable
+                        // filters them out), and an `adopted:`-id-prefix
+                        // test badged nearly everything EXTERNAL, because a
+                        // server restart re-attaches to still-running tmux
+                        // sessions through the adopt path and mints
+                        // `adopted:` ids for sessions the server still
+                        // owns. The id is not durable; the NAME is.
+                        created_by_cloude: !!live.created_by_cloude,
                         created_at_epoch: live.created_at_epoch || 0,
                         window_count: 1,
                         is_active: true,
