@@ -3202,6 +3202,37 @@ button[data-tooltip]:hover::after {
     display: none;
 }
 
+/* SCROLL AFFORDANCE. Five tabs do not fit a phone - at a 390px viewport
+ * the strip is 355px against a 444px scroll width and the fifth tab
+ * ("general") sits entirely off-screen - and the strip gave no signal
+ * whatsoever that there was more, because the last visible tab ended in
+ * clean whitespace. Fading the overflowing edge says "keep going" without
+ * costing a row of vertical space, which is the reason this strip does
+ * not wrap in the first place.
+ *
+ * A mask rather than an overlaid gradient: the strip IS the scroll
+ * container, so an absolutely positioned child would scroll away with
+ * the tabs, and a wrapper element would mean restructuring markup that
+ * carries role="tablist".
+ *
+ * The classes are set from measurement in settings-tabs.js
+ * (updateEdgeHints), so a strip that fits gets NO fade at either edge
+ * rather than a permanent decorative one. */
+.settings-tabs--more-after {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.settings-tabs--more-before {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+}
+
+.settings-tabs--more-before.settings-tabs--more-after {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
 .settings-tab {
     flex: 0 0 auto;
     /* There is a bare `button { width: 36px; display: flex }` rule
@@ -3228,10 +3259,38 @@ button[data-tooltip]:hover::after {
 
 .settings-tab:hover {
     color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
 }
 
+/* THE ACTIVE TAB, in every theme including the light ones.
+ *
+ * It used to be accent-coloured text plus an accent underline, and the
+ * text colour was doing most of the work. That reads well on the dark
+ * themes the app was built against and badly on the light ones: the
+ * `calming` accent #7ba374 on its #F5F1E8 background is about 2.6:1,
+ * under the 4.5:1 floor for body text, so the ACTIVE tab was the
+ * hardest one on the strip to read.
+ *
+ * So the text now uses --color-fg, which every theme picks to sit on its
+ * own background, and the accent stays only where it is a marker rather
+ * than a glyph: the underline and a soft tinted panel. Three cues
+ * (weight, fill, underline), and the state survives losing any one.
+ *
+ * Measured contrast of the active tab's TEXT against the strip, before
+ * (accent) and after (--color-fg):
+ *     calming         2.54 -> 10.13      codex           4.06 -> 16.28
+ *     legacy_apple    4.21 -> 13.80      legacy_windows  8.80 -> 11.54
+ *     claude          5.29 -> 11.25      gameboy         6.02 -> 6.02
+ * Worst case moves from 2.54:1 to 6.02:1.
+ *
+ * NOT --color-accent-strong for the underline, which reads like the
+ * higher-contrast choice and is not: themes define it as a BRIGHTER
+ * accent, tuned for dark backgrounds. legacy_windows pairs accent
+ * #000080 (8.80:1 on its silver) with accent-strong #1084D0 (2.21:1), so
+ * "strong" would have made that underline four times worse. */
 .settings-tab--active {
-    color: var(--color-accent);
+    color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
     border-bottom-color: var(--color-accent);
     font-weight: bold;
 }

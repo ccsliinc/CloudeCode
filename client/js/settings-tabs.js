@@ -75,6 +75,66 @@
     }
 
     /**
+     * The strip's inline padding, in px. Kept in lock-step with the
+     * `padding: 0 20px` on `.settings-tabs` in styles.css: `revealTab`
+     * scrolls a tab clear of it, so a tab is never left tucked half
+     * under the strip's own edge.
+     */
+    var STRIP_PAD_PX = 20;
+
+    /**
+     * Scroll the strip so one tab is fully inside the visible window.
+     *
+     * Five tabs do not fit a phone: measured at a 390px viewport the
+     * strip is 355px wide against a 444px scroll width, and the fifth
+     * tab ("general") starts at x=354.3 - entirely off-screen. Arrowing
+     * onto it used to move focus and the active state to a tab the user
+     * could not see. This is the fix for that, and it also handles the
+     * panel being opened straight onto a later tab.
+     *
+     * A no-op when the strip does not scroll.
+     *
+     * @param {Element} stripEl - the `.settings-tabs` scroll container.
+     * @param {Element} btn - one `.settings-tab` inside it.
+     * @returns {void}
+     */
+    function revealTab(stripEl, btn) {
+        if (!stripEl || !btn) return;
+        var left = btn.offsetLeft - STRIP_PAD_PX;
+        var right = btn.offsetLeft + btn.offsetWidth + STRIP_PAD_PX;
+        if (left < stripEl.scrollLeft) {
+            stripEl.scrollLeft = left > 0 ? left : 0;
+        } else if (right > stripEl.scrollLeft + stripEl.clientWidth) {
+            stripEl.scrollLeft = right - stripEl.clientWidth;
+        }
+    }
+
+    /**
+     * Mark which edges of the strip have more tabs beyond them, so the
+     * stylesheet can fade that edge.
+     *
+     * Without it the strip gave NO signal at all that it scrolled: the
+     * fifth tab was simply absent from the screen and the last visible
+     * one ended in clean whitespace, which reads as "that is all of
+     * them". Three states, not two - a strip that fits gets no fade at
+     * either edge rather than a permanent decorative one.
+     *
+     * @param {Element} stripEl - the `.settings-tabs` scroll container.
+     * @returns {void}
+     */
+    function updateEdgeHints(stripEl) {
+        if (!stripEl) return;
+        var slack = stripEl.scrollWidth - stripEl.clientWidth;
+        var scrolls = slack > 1;
+        stripEl.classList.toggle(
+            'settings-tabs--more-before', scrolls && stripEl.scrollLeft > 1
+        );
+        stripEl.classList.toggle(
+            'settings-tabs--more-after', scrolls && stripEl.scrollLeft < slack - 1
+        );
+    }
+
+    /**
      * Show one tab and hide the rest, without touching any pane's content.
      * Inputs:
      *   rootEl (Element) - element containing the strip and the panes.
@@ -82,25 +142,30 @@
      * Output: void.
      */
     function activate(rootEl, tabId) {
+        var stripEl = rootEl.querySelector('.settings-tabs');
         rootEl.querySelectorAll('[data-settings-tab]').forEach(function (btn) {
             var isActive = btn.getAttribute('data-settings-tab') === tabId;
             btn.classList.toggle('settings-tab--active', isActive);
             btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
             btn.setAttribute('tabindex', isActive ? '0' : '-1');
+            if (isActive) revealTab(stripEl, btn);
         });
         rootEl.querySelectorAll('[data-settings-tabpanel]').forEach(function (panel) {
             var isActive = panel.getAttribute('data-settings-tabpanel') === tabId;
             panel.classList.toggle('hidden', !isActive);
         });
+        updateEdgeHints(stripEl);
     }
 
     /**
-     * Wire click and arrow-key navigation for an already-rendered strip.
+     * Wire click and arrow-key navigation for an already-rendered strip,
+     * plus the scroll-edge hints.
      * Inputs: rootEl (Element) - element containing the strip and panes.
      * Output: void.
      */
     function wire(rootEl) {
         var buttons = Array.prototype.slice.call(rootEl.querySelectorAll('[data-settings-tab]'));
+        var stripEl = rootEl.querySelector('.settings-tabs');
         buttons.forEach(function (btn, i) {
             btn.addEventListener('click', function () {
                 activate(rootEl, btn.getAttribute('data-settings-tab'));
@@ -114,6 +179,18 @@
                 next.focus();
             });
         });
+        if (stripEl) {
+            stripEl.addEventListener('scroll', function () {
+                updateEdgeHints(stripEl);
+            }, { passive: true });
+            // The strip's own width changes with the viewport (the modal
+            // is a percentage width), so "does it scroll" is not a
+            // one-time answer.
+            window.addEventListener('resize', function () {
+                updateEdgeHints(stripEl);
+            });
+            updateEdgeHints(stripEl);
+        }
     }
 
     /**
