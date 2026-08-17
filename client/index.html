@@ -77,6 +77,10 @@
          style the modals that stack. -->
     <link rel="stylesheet" href="/static/css/modal-stack.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
+    <!-- The file browser's BOX: right-hand drawer geometry, the docked
+         (pinned) layout and the pin control. Must load AFTER
+         config-editor.css, which owns everything inside the drawer. -->
+    <link rel="stylesheet" href="/static/css/config-drawer.css" />
     <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
     <!-- Mobile header dropdown (client/js/header-menu.js) and iOS
          safe-area chrome. Both load after styles.css: the first needs the
@@ -191,21 +195,12 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <!-- Connection light. ONE node, re-parented between here and
-                 the home screen's bottom bar by App._placeStatusLight() -
-                 never cloned, for the same reason header-menu.js moves
-                 nodes rather than mirroring them: it is addressed by id by
-                 app.js and terminal.js.
-
-                 `tabindex="0"` is the non-hover path to its text. The
-                 `.status::after` tooltip used to be reachable ONLY by
-                 hover, which on a phone meant a coloured circle with no
-                 way to learn what it means. A tap focuses it and
-                 `.status:focus::after` reveals the same string; tapping
-                 away blurs it. On the home screen the bar renders the
-                 text outright and this tooltip is suppressed. -->
-            <span class="status" id="statusText" data-status="Ready" tabindex="0"
-                  role="status" aria-live="polite" aria-label="Ready"></span>
+            <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
+                 the last child here. It is now a bar-or-rail control,
+                 never a header one - see #status-rail near the FABs at the
+                 bottom of this file, and App._placeStatusLight(). Do not
+                 put it back: the header row is actions, and the light is
+                 state. -->
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
@@ -240,14 +235,18 @@
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
     </aside>
 
-    <!-- FILE EDITOR file picker - a real modal now (it used to be a
-         right-hand slide-over panel), so it and the editor that opens
-         over it are the same kind of surface. Both register with
-         client/js/modal-stack.js, which is what makes Escape close only
-         the top one and what takes this one off screen entirely on a
-         phone while the editor sits above it. Scope is the claude config
-         directories plus the active project's working directory, never a general
-         filesystem browser. See client/js/config-editor-panel.js. -->
+    <!-- FILE BROWSER - a right-hand DRAWER, and optionally a docked one.
+         It was a centred dialog covering the terminal it was about; it is
+         back to sliding in from the right edge, full height, and it can be
+         PINNED so the app pays for it in layout and the terminal narrows
+         to what is left rather than being covered (client/js/config-drawer-
+         pin.js, the same mechanism as the session sidebar's pin, docked
+         only above 700px). It still registers with client/js/modal-stack.js,
+         which is what makes Escape close only the top surface and what
+         takes this one off screen while the full-screen editor is up on a
+         phone. Scope is the claude config directories plus the active
+         project's working directory, never a general filesystem browser.
+         See client/js/config-editor-panel.js. -->
     <div class="modal-overlay config-editor-picker-overlay" id="config-editor-overlay" hidden data-modal="config-picker">
         <div class="config-editor-picker-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-title">
             <div class="modal-header config-editor-header">
@@ -259,6 +258,22 @@
                      instead. See client/js/config-editor-new-file.js. -->
                 <button type="button" id="config-editor-new" class="config-editor-new"
                         aria-label="New file" title="new file">+ new file</button>
+                <!-- Pin the DRAWER open (docked, no backdrop, the terminal
+                     narrows to what is left instead of being covered).
+                     aria-pressed carries the real state; the pushpin glyph
+                     is presentational, and is the same glyph the session
+                     sidebar's pin uses because it is the same gesture.
+                     Hidden below 700px by client/js/config-drawer-pin.js -
+                     a docked drawer on a phone leaves no terminal. -->
+                <button type="button" id="config-drawer-pin" class="config-drawer-pin"
+                        aria-pressed="false" aria-label="Pin file drawer open"
+                        title="pin file drawer open">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="12" y1="17" x2="12" y2="22"/>
+                        <path d="M5 17h14l-2-4V4H7v9l-2 4z"/>
+                    </svg>
+                </button>
                 <button type="button" id="config-editor-close" aria-label="Close file editor" title="close">&times;</button>
             </div>
             <div class="modal-body config-editor-body">
@@ -515,7 +530,16 @@
          absent" sentences. Must load BEFORE config-editor-panel.js, which
          reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
     <script src="/static/js/config-editor-roots.js"></script>
+    <!-- Which tree nodes start collapsed, and the localStorage map behind
+         it. Must load BEFORE config-editor-panel.js, which renders against
+         window.ConfigEditorTreeState. -->
+    <script src="/static/js/config-editor-tree-state.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
+    <!-- Docking the file drawer open. Must load AFTER
+         config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and
+         it is the panel's _wire() that calls init(). Same split, same
+         reasons, as session-sidebar-pin.js beside session-sidebar.js. -->
+    <script src="/static/js/config-drawer-pin.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
          (window.DismissGuard). It re-parents the existing header control
@@ -599,6 +623,41 @@
          presentation attribute on the path beats a stylesheet rule that
          targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" hidden />
+
+    <!-- CONNECTION LIGHT RAIL - the terminal screen's home for the ONE
+         #statusText node.
+
+         THE RULE THAT PUT IT HERE. The light is out of the top header
+         entirely. Where a screen has a bottom bar the light lives in that
+         bar; the home screen already does (.home-bar). The TERMINAL screen
+         deliberately has no bottom bar - it fought its vertical pixels back
+         from 720 to 770 of 786 and is not giving them up - and a running
+         session with no indicator is exactly the case where a dropped
+         socket matters most. So the terminal gets the light as a rail
+         item instead of a bar item: `position: fixed` on the same
+         right-hand column as #sessionEditorBtn, directly under it, so it
+         costs ZERO vertical layout space. It is not a second bar and must
+         not grow into one - one 12px dot, nothing else.
+
+         The AUTH screen has neither a bar nor a rail, so it shows no
+         light, which is the stated rule applied honestly: this container
+         is display:none there and the parked node goes with it. Nothing is
+         lost - the auth screen reports its own server failures inline.
+
+         ONE NODE, NEVER CLONED. app.js and terminal.js both write it by
+         id, so App._placeStatusLight() MOVES it between here and
+         #home-bar-status. A copy would leave one writer updating an
+         invisible node.
+
+         `tabindex="0"` is the non-hover path to its text: the
+         `.status::after` tooltip was hover-only, which on a phone is a
+         coloured circle with no way to learn what it means. A tap focuses
+         it and `.status:focus::after` reveals the same string. On the home
+         screen the bar renders the text outright instead. -->
+    <div class="status-rail" id="status-rail">
+        <span class="status" id="statusText" data-status="Ready" tabindex="0"
+              role="status" aria-live="polite" aria-label="Ready"></span>
+    </div>
 
     <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
     <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"

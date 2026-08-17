@@ -34,8 +34,8 @@
  * built into the DOM until it is first expanded, and every directory
  * starts collapsed (READONLY_COLLAPSED_DIRS roots like plugins/
  * additionally IGNORE any persisted "expanded" state - see
- * _startsCollapsed). This is what keeps a repo with thousands of files
- * under plugins/ or skills/ from building thousands of DOM nodes on open
+ * ConfigEditorTreeState.startsCollapsed). This keeps a repo with
+ * thousands of files under plugins/ from building thousands of nodes on open
  * - previously ALL of it rendered eagerly (~965 DOM nodes observed
  * against this user's ~/.claude), burying CLAUDE.md in the wall.
  *
@@ -47,12 +47,10 @@
 
 console.log('[ConfigEditorPanel Module] Loading...');
 
-// Directories that are read-only in the tree (see config_files.py's
-// READONLY_COLLAPSED_DIRS) always start collapsed, and stay collapsed
-// across reloads regardless of what a user previously expanded - a
-// stray persisted "expanded" flag for a 1000+ file directory would
-// reintroduce the exact wall-of-nodes bug this rebuild fixes.
-const CONFIG_EDITOR_FORCE_COLLAPSED_DIRS = new Set(['plugins']);
+// The tree's collapsed-state persistence (and the forced-collapsed
+// directory list) lives in client/js/config-editor-tree-state.js -
+// window.ConfigEditorTreeState. Split out for the 500-line rule; read its
+// docstring before changing what "collapsed by default" means.
 
 // The three roots this panel browses, the working-directory resolver and
 // every "why is this root absent" sentence live in config-editor-roots.js
@@ -70,12 +68,6 @@ class ConfigEditorPanelController {
 
         this.isOpen = false;
         this._wired = false;
-
-        // localStorage-backed map of "root:relPath" -> collapsed (bool),
-        // following the cloude.* convention (cloude.theme,
-        // cloude.launchpad.collapsed, ...). Lazily loaded on first use.
-        // Root nodes themselves use the key "root:__root__".
-        this._collapsedState = null;
     }
 
     /**
@@ -117,16 +109,23 @@ class ConfigEditorPanelController {
 
         this.closeBtn.addEventListener('click', () => this.close());
         if (this.newBtn) this.newBtn.addEventListener('click', () => this.createFile());
-        // The overlay IS the backdrop now - a click that lands on it
-        // rather than on the dialog inside it is a dismissal, same
-        // contract as every other .modal-overlay in the app.
+        // The overlay IS the backdrop - a click that lands on it rather
+        // than on the drawer inside it is a dismissal, same contract as
+        // every other .modal-overlay in the app. A PINNED drawer is part
+        // of the layout, not something overlaid that a stray click should
+        // sweep away, so it opts out (the same question
+        // session-sidebar.js asks its own pin module).
         this.overlay.addEventListener('click', (e) => {
-            if (e.target === this.overlay) this.close();
+            if (e.target !== this.overlay) return;
+            if (window.ConfigDrawerPin
+                && !window.ConfigDrawerPin.shouldDismissOnOutsideClick()) return;
+            this.close();
         });
         // No document-level Escape listener: ModalStack owns Escape for
         // this modal and the editor above it, which is the whole reason
         // one keypress no longer collapses both.
         this._wired = true;
+        if (window.ConfigDrawerPin) window.ConfigDrawerPin.init();
     }
 
     /**
@@ -141,12 +140,33 @@ class ConfigEditorPanelController {
         this._triggerEl = triggerEl || null;
         this.isOpen = true;
         this.overlay.hidden = false;
-        window.ModalStack.push(this.overlay, { onEscape: () => this.close() });
+        // A PINNED drawer is layout, not an overlay, so Escape leaves it
+        // alone - the same call session-sidebar.js's keydown handler makes.
+        // The close BUTTON still works; Escape is the gesture for
+        // "dismiss the thing covering my work", and a docked drawer
+        // covers nothing.
+        window.ModalStack.push(this.overlay, { onEscape: () => this._escape() });
         if (this._triggerEl) this._triggerEl.setAttribute('aria-expanded', 'true');
         if (this.closeBtn) {
             try { this.closeBtn.focus(); } catch (_) { /* no-op */ }
         }
+        // Push the docked layout AFTER isOpen is true - apply() reads it,
+        // and it is what asks TerminalLayout for the refit that makes the
+        // terminal narrow to the space beside the drawer.
+        if (window.ConfigDrawerPin) window.ConfigDrawerPin.apply();
         await this._loadTree();
+    }
+
+    /**
+     * What Escape should do to the drawer. A pinned (docked) drawer is
+     * part of the layout and covers nothing, so Escape leaves it alone -
+     * the same rule session-sidebar.js applies to a pinned sidebar. Every
+     * other case dismisses.
+     * @returns {Promise<void>} Resolves once the close (if any) is done.
+     */
+    async _escape() {
+        if (window.ConfigDrawerPin && window.ConfigDrawerPin.isEffectivelyPinned()) return;
+        await this.close();
     }
 
     /**
@@ -165,6 +185,9 @@ class ConfigEditorPanelController {
         this.isOpen = false;
         window.ModalStack.pop(this.overlay);
         this.overlay.hidden = true;
+        // Undock: drop the body class and give the terminal its width back.
+        // apply() reads isOpen, so this must run after it is cleared.
+        if (window.ConfigDrawerPin) window.ConfigDrawerPin.apply();
         if (this._triggerEl) {
             this._triggerEl.setAttribute('aria-expanded', 'false');
             this._triggerEl.focus();
@@ -194,63 +217,6 @@ class ConfigEditorPanelController {
             false,
             created.root === 'user' ? null : projectPath,
         );
-    }
-
-    // ---- collapsed-state persistence (cloude.* localStorage convention) --
-
-    /**
-     * Read the persisted collapsed-state map, lazily.
-     * Inputs: none. Output: Object<string, boolean> - "root:relPath" ->
-     *   collapsed.
-     */
-    _loadCollapsedState() {
-        if (this._collapsedState) return this._collapsedState;
-        try {
-            const raw = localStorage.getItem('cloude.configEditor.collapsed');
-            this._collapsedState = raw ? JSON.parse(raw) : {};
-        } catch (err) {
-            console.warn('ConfigEditorPanel: failed to read collapsed-state:', err);
-            this._collapsedState = {};
-        }
-        return this._collapsedState;
-    }
-
-    /**
-     * Persist one node's collapsed flag.
-     * Inputs: key (string) - "root:relPath"; collapsed (bool).
-     * Output: void.
-     */
-    _setNodeCollapsed(key, collapsed) {
-        const state = this._loadCollapsedState();
-        state[key] = collapsed;
-        try {
-            localStorage.setItem('cloude.configEditor.collapsed', JSON.stringify(state));
-        } catch (err) {
-            console.warn('ConfigEditorPanel: failed to persist collapsed-state:', err);
-        }
-    }
-
-    /**
-     * Resolve whether one directory (or root) node should start
-     * collapsed: forced-collapsed dirs (plugins/) always win; otherwise a
-     * persisted user choice wins; otherwise `fallbackExpanded` (a root's
-     * own declared default, from CONFIG_EDITOR_ROOTS) applies if given,
-     * else every directory defaults to collapsed (the "collapsed by
-     * default" requirement) regardless of the server's per-node
-     * `collapsed` hint, which today only flags read-only roots.
-     * Inputs: rootId (string); node (object) - server TreeNode, or a
-     *   synthetic root node ({name, rel_path: '', is_dir: true});
-     *   fallbackExpanded (bool|undefined) - default state when nothing
-     *   is persisted (used for root nodes; directory nodes omit this and
-     *   fall through to "collapsed").
-     * Output: bool.
-     */
-    _startsCollapsed(rootId, node, fallbackExpanded) {
-        if (CONFIG_EDITOR_FORCE_COLLAPSED_DIRS.has(node.name)) return true;
-        const key = `${rootId}:${node.rel_path || '__root__'}`;
-        const state = this._loadCollapsedState();
-        if (Object.prototype.hasOwnProperty.call(state, key)) return state[key];
-        return fallbackExpanded === undefined ? true : !fallbackExpanded;
     }
 
     // ---- tree loading / rendering -----------------------------------
@@ -367,7 +333,8 @@ class ConfigEditorPanelController {
         const guides = this._buildGuides(depth);
 
         if (node.is_dir) {
-            const collapsed = this._startsCollapsed(rootId, node, isRoot ? rootOpts.defaultExpanded : undefined);
+            const collapsed = window.ConfigEditorTreeState.startsCollapsed(
+                rootId, node, isRoot ? rootOpts.defaultExpanded : undefined);
             const key = `${rootId}:${node.rel_path || '__root__'}`;
 
             const toggle = document.createElement('button');
@@ -409,8 +376,8 @@ class ConfigEditorPanelController {
                 toggle.setAttribute('aria-expanded', String(nowExpanded));
                 toggle.querySelector('.config-editor-toggle-glyph').textContent = nowExpanded ? '-' : '+';
                 childList.hidden = !nowExpanded;
-                if (!CONFIG_EDITOR_FORCE_COLLAPSED_DIRS.has(node.name)) {
-                    this._setNodeCollapsed(key, !nowExpanded);
+                if (!window.ConfigEditorTreeState.isForcedCollapsed(node.name)) {
+                    window.ConfigEditorTreeState.setNodeCollapsed(key, !nowExpanded);
                 }
             });
 
