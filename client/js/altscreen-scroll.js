@@ -196,20 +196,46 @@
      */
     function detectState(term) {
         var type = null;
+        var baseY = null;
         try {
-            if (term && term.buffer && term.buffer.active) {
-                type = term.buffer.active.type;
+            var buf = term && term.buffer && term.buffer.active;
+            if (buf) {
+                type = buf.type;
+                baseY = buf.baseY;
             }
         } catch (err) {
-            console.warn('AltScreenScroll: buffer type read failed', err);
+            console.warn('AltScreenScroll: buffer read failed', err);
             return 'unknown';
         }
         // "I could not read the buffer" is NOT "it is the main screen".
         // Collapsing the two would let an unreadable buffer authorise the
         // main-screen path, which is the same false-green shape this
         // module exists to avoid on the other side.
-        if (typeof type !== 'string') return 'unknown';
-        if (type !== 'alternate') return 'main';
+        if (typeof type !== 'string' || typeof baseY !== 'number') return 'unknown';
+        // THE GATE IS "IS THERE SCROLLBACK", NOT "IS IT THE ALT BUFFER".
+        //
+        // `type === 'alternate'` looked like the obvious gate and it is
+        // WRONG on the path that matters most. Measured 2026-08-17
+        // against a live fullscreen session: this app streams the pane
+        // with `tmux pipe-pane`, which only carries bytes emitted AFTER it
+        // attached, and a reconnecting client is repainted with Ctrl+L
+        // (src/api/ws_startup_paint.py, gated on `#{alternate_on}`).
+        // Claude answers a Ctrl+L by redrawing - it does NOT re-send
+        // `?1049h`, because from its side it never left the alternate
+        // screen. So the pane is in fullscreen, the pane's own
+        // `#{alternate_on}` is 1, and the browser's xterm is sitting on
+        // the NORMAL buffer with identical content. Gating on the buffer
+        // type there means the feature is dead for every user who
+        // backgrounds the tab and comes back, which on a phone is most of
+        // them.
+        //
+        // `baseY` answers the question we actually have. It is the number
+        // of rows that have scrolled off the top, so `baseY === 0` IS
+        // "there is no scrollback to move" - true on the alternate buffer
+        // by construction, and true on the mislabelled normal buffer of a
+        // reconnect. Above zero there is real scrollback and
+        // `term.scrollLines()` is the right tool, so we stand down.
+        if (baseY > 0) return 'main';
 
         var rows = visibleRows(term);
         if (!rows.length) return 'unknown';

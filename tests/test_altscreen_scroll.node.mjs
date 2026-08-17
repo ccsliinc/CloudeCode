@@ -100,19 +100,22 @@ const CLAUDE_DIALOG = [
  *
  * @param {string} type - 'normal' or 'alternate'.
  * @param {string[]} rows - visible row text, top row first.
+ * @param {number} [baseY] - rows scrolled off the top. Zero means "no
+ *   scrollback", which is the real gate.
  * @returns {object} a Terminal-shaped stub.
  */
-function fakeTerm(type, rows) {
+function fakeTerm(type, rows, baseY = 0) {
     return {
         rows: rows.length,
         buffer: {
             active: {
                 type,
-                viewportY: 0,
-                baseY: 0,
+                viewportY: baseY,
+                baseY,
                 getLine(i) {
-                    if (i < 0 || i >= rows.length) return null;
-                    return { translateToString: () => rows[i] };
+                    const k = i - baseY;
+                    if (k < 0 || k >= rows.length) return null;
+                    return { translateToString: () => rows[k] };
                 },
             },
         },
@@ -160,12 +163,32 @@ function load() {
 
 // ---------------------------------------------------------------- detect
 
-test('main screen is never claimed', () => {
+test('a buffer with real scrollback is never claimed', () => {
     const m = load();
-    m.setTerm(fakeTerm('normal', CLAUDE_LIVE));
-    assert.equal(m.api.detectState(m.api === null ? null : fakeTerm('normal', CLAUDE_LIVE)), 'main');
+    // baseY > 0 means rows HAVE scrolled off, so scrollLines() works and
+    // this module must stand down - even though the claude prompt frame
+    // is right there on screen, which is exactly the `tui: default` case.
+    m.setTerm(fakeTerm('normal', CLAUDE_LIVE, 900));
+    assert.equal(m.api.detectState(fakeTerm('normal', CLAUDE_LIVE, 900)), 'main');
     assert.equal(m.api.scrollByRows(-5), false, 'main screen must fall through to scrollLines');
     assert.deepEqual(m.sent, []);
+    m.setTerm(fakeTerm('alternate', CLAUDE_LIVE, 1));
+    assert.equal(m.api.scrollByRows(-5), false, 'scrollback wins over the buffer label too');
+    assert.deepEqual(m.sent, []);
+});
+
+test('REGRESSION: a reconnect leaves the NORMAL buffer with no scrollback', () => {
+    // Measured 2026-08-17: pipe-pane plus a Ctrl+L repaint reproduces the
+    // pane's fullscreen screen on the client's NORMAL buffer, because
+    // claude never re-sends ?1049h. Gating on the buffer type killed the
+    // feature for every reconnecting client. baseY === 0 is the real
+    // "there is nothing to scroll" test and catches both shapes.
+    const m = load();
+    assert.equal(m.api.detectState(fakeTerm('normal', CLAUDE_LIVE, 0)), 'live');
+    assert.equal(m.api.detectState(fakeTerm('normal', CLAUDE_TRANSCRIPT, 0)), 'transcript');
+    m.setTerm(fakeTerm('normal', CLAUDE_TRANSCRIPT, 0));
+    m.api.scrollByRows(-4);
+    assert.deepEqual(m.sent, ['\x1b[A'.repeat(4)], 'a reconnected client still scrolls');
 });
 
 test('claude normal view detected by its prompt frame', () => {
@@ -325,11 +348,14 @@ test('the quiet period is long enough to be a real guard', () => {
     assert.ok(m.api._timing.TYPING_QUIET_MS >= 1000);
 });
 
-test('leaving the alternate screen mid-open cancels the arrows', () => {
+test('gaining scrollback mid-open cancels the arrows', () => {
+    // claude exited and dropped back to a shell with real scrollback
+    // while our toggle was still in flight. Send nothing: the arrows
+    // would land in whatever now owns the pane.
     const m = load();
     m.setTerm(fakeTerm('alternate', CLAUDE_LIVE));
     m.api.scrollByRows(-5);
-    m.setTerm(fakeTerm('normal', CLAUDE_LIVE));
+    m.setTerm(fakeTerm('normal', CLAUDE_LIVE, 500));
     m.tick();
     assert.deepEqual(m.sent, ['\x0f']);
 });

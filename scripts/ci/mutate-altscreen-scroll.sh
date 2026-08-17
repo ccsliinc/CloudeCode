@@ -77,7 +77,13 @@ mutate "main screen is claimed instead of falling through" \
   "if (state === 'main') return false;||=>||if (state === 'main') return true;"
 
 mutate "unreadable buffer reported as main screen" \
-  "if (typeof type !== 'string') return 'unknown';||=>||if (typeof type !== 'string') return 'main';"
+  "if (typeof type !== 'string' || typeof baseY !== 'number') return 'unknown';||=>||if (typeof type !== 'string' || typeof baseY !== 'number') return 'main';"
+
+mutate "gate goes back to the buffer label instead of scrollback" \
+  "if (baseY > 0) return 'main';||=>||if (type !== 'alternate') return 'main';"
+
+mutate "existing scrollback is hijacked instead of left to scrollLines" \
+  "if (baseY > 0) return 'main';||=>||if (baseY < 0) return 'main';"
 
 if [ "$survived" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
