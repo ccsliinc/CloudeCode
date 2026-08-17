@@ -102,14 +102,21 @@ class _StubBackend:
     tmux_session = "cloude_probe"
     replay_in_progress = False
 
-    def __init__(self, payload: bytes, rc: int = 0):
+    def __init__(self, payload: bytes, rc: int = 0, alternate: bool = False):
         self._payload = payload
         self._rc = rc
+        self._alternate = alternate
         self.args: tuple = ()
+        self.calls = 0
 
     def _run_tmux_sync(self, *args, **kwargs):
         self.args = args
+        self.calls += 1
         return self._rc, self._payload, b""
+
+    def pane_in_alternate_screen(self) -> bool:
+        """Stand in for the real ``#{alternate_on}`` probe."""
+        return self._alternate
 
 
 def test_capture_scrollback_normalizes_its_output():
@@ -126,6 +133,25 @@ def test_capture_scrollback_failure_still_returns_empty():
     turn a failure into a success."""
     stub = _StubBackend(b"whatever\n", rc=1)
     assert tmux_backend_mod.TmuxBackend.capture_scrollback(stub, lines=10) == b""
+
+
+def test_capture_scrollback_skips_an_alternate_screen_pane():
+    """A full-screen TUI's history is whatever ran BEFORE it, and none of
+    it is reachable inside the TUI. Replaying it into the client fabricates
+    a scrollback the pane does not have, which is what made a fullscreen
+    claude session scroll back through pre-claude noise instead of
+    claude's transcript. Nothing is captured, and no tmux capture-pane
+    call is even made."""
+    stub = _StubBackend(b"SEEDLINE 1\nSEEDLINE 2\n", alternate=True)
+    assert tmux_backend_mod.TmuxBackend.capture_scrollback(stub, lines=10) == b""
+    assert stub.calls == 0, "no capture-pane work for a pane we will not replay"
+
+
+def test_capture_scrollback_still_runs_on_the_main_screen():
+    """The counterpart: an ordinary pane is unaffected. Guards against the
+    alternate-screen skip being widened into a blanket disable."""
+    stub = _StubBackend(b"SEEDLINE 1\n", alternate=False)
+    assert tmux_backend_mod.TmuxBackend.capture_scrollback(stub, lines=10) == b"SEEDLINE 1\r\n"
 
 
 @pytest.mark.parametrize("flag", ["-p", "-e", "-J"])
