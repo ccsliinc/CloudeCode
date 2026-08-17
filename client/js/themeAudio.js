@@ -24,28 +24,29 @@
  * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
  * falls back to `default-src 'self'` and any remote URL is blocked.
  *
- * TWO GATES, NOT ONE. Sound requires BOTH:
+ * ONE GATE, AND IT IS SESSION-SCOPED. Sound requires a tmux session to be
+ * in scope AND that session to have opted into music from the session
+ * editor FAB. Both halves live in a single expression, `_gateOpen()`.
  *
- *   1. APP SOUND, the master switch in the header kebab, labelled "app
- *      sound (all sessions)". Persisted, default OFF.
- *   2. The PER-SESSION music opt-in, owned by session-theme-menu.js and
- *      keyed by tmux session name. Applied on every attach, default OFF.
+ * There used to be a SECOND gate in front of it: an app sound master
+ * switch in the header kebab, persisted and defaulting to OFF, which
+ * outranked every per-session control. Two controls each able to veto the
+ * other is the reason this feature was silent through five separate
+ * fixes, so the master switch was deleted outright and its stored key is
+ * dropped by the settings migration (themeAudioSettings.js, v2 -> v3).
+ * Do not reintroduce an app-scoped mute.
  *
- * These used to be the SAME boolean, so an attach silently overwrote the
- * header switch with the per-session default of OFF without repainting the
- * button. An attach now sets gate 2 and cannot touch gate 1.
- *
- * Gate 2 is OPEN whenever no session is in scope, so the header switch
- * alone plays the home theme. syncForSession() sets it from the attached
- * session's stored opt-in, and re-opens it on detach - a closed gate
- * surviving a detach was its own silent-mute bug.
+ * NO AUDIO ON THE HOME SCREEN. With no session in scope the gate cannot
+ * open, by construction rather than by a mute: `sessionName` is null and
+ * `_gateOpen()` is false regardless of the opt-in flag. Leaving a session
+ * therefore does not need to mute anything, and syncForSession() does not
+ * try to.
  *
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
- * driven by the themes registry, the two gate pairs setAppSound/isAppSoundOn
- * and setSessionEnabled/isSessionEnabled, toggleMute() and isMuted() for the
- * effective state, getLastPlayError(), getStatus() for diagnosis, and
- * getVolume()/setVolume() for the master, which still has no UI. Each is
- * documented at its definition.
+ * driven by the themes registry, setSessionAudio(name, on) and
+ * isSessionEnabled() for the one gate, isMuted() for the effective state,
+ * getLastPlayError(), getStatus() for diagnosis, and getVolume()/setVolume()
+ * for the master, which has no UI. Each is documented at its definition.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
  * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
@@ -89,13 +90,14 @@
 
     // ---- State ----
     var initialized = false;
-    // Gate 1: the header master switch. Persisted, default off.
-    var appSoundOn = false;
-    // Gate 2: the per-session opt-in. In-memory; session-theme-menu.js
-    // sets it on every attach. True until then so the header switch alone
-    // can play the home theme.
-    var sessionOn = true;
-    // Derived from the two gates above — never assigned directly.
+    // The session in scope, or null on the home screen. In-memory:
+    // session-theme-menu.js sets it on every attach and clears it on every
+    // leave. Null is not a mute, it is the absence of anything to play for.
+    var sessionName = null;
+    // The in-scope session's music opt-in. In-memory; session-theme-menu.js
+    // owns the persisted per-session key.
+    var sessionOn = false;
+    // Derived from the gate below — never assigned directly.
     var muted = true;
     var globalVolume = DEFAULT_MASTER_VOLUME; // 0..1; multiplied with per-theme volume
     var currentConfig = null;          // last audioConfig passed to setTheme()
@@ -109,10 +111,22 @@
 
     // ---- Gate plumbing ----
     /**
-     * Tell listeners (the header button) that a gate moved. Fired for any
-     * change, including ones the header did not cause, because the header
-     * used to repaint only on its own click and therefore lied whenever
-     * something else muted the app.
+     * The one gate. A session must be in scope AND opted into music.
+     *
+     * Written as a single expression on purpose: the previous shape kept
+     * two independent booleans that could each veto the other, and every
+     * silent-audio bug this feature shipped lived in the gap between them.
+     *
+     * @returns {boolean} true when sound is allowed to reach the speaker.
+     */
+    function _gateOpen() {
+        return !!sessionName && sessionOn;
+    }
+
+    /**
+     * Tell listeners that the gate moved. Fired for any change, including
+     * ones the caller did not cause, so a control never paints from a
+     * state something else has since changed.
      *
      * @returns {void}
      */
@@ -124,7 +138,11 @@
                 return;
             }
             document.dispatchEvent(new CustomEvent('cloude:audio-state', {
-                detail: { appSoundOn: appSoundOn, sessionOn: sessionOn, muted: muted }
+                detail: {
+                    sessionName: sessionName,
+                    sessionOn: sessionOn,
+                    muted: muted
+                }
             }));
         } catch (err) { /* an event is never worth an exception */ }
     }
@@ -158,12 +176,12 @@
     }
 
     /**
-     * Recompute the effective mute from the two gates and act on it.
+     * Recompute the effective mute from the gate and act on it.
      *
      * @returns {boolean} the new effective muted state.
      */
     function _recompute() {
-        var next = !(appSoundOn && sessionOn);
+        var next = !_gateOpen();
         var changed = next !== muted;
         muted = next;
         if (changed) _applyGate();
@@ -323,59 +341,45 @@
     }
 
     /**
-     * Set gate 1, the app sound master switch. Persisted. MUST be called
-     * from a user-gesture handler the FIRST time it turns sound on -
-     * that is the only way the autoplay grant reaches the AudioContext.
+     * Set the one gate: which session is in scope, and whether it opted
+     * into music. MUST be called from a user-gesture handler the FIRST
+     * time it turns sound on - that is the only way the autoplay grant
+     * reaches the AudioContext.
      *
-     * @param {boolean} on - true to allow sound, false to mute everything.
+     * Not persisted here: session-theme-menu.js owns the per-session key,
+     * because it is the thing that knows what a session is.
+     *
+     * Passing a null name is how the home screen is expressed. It is not
+     * a mute: there is simply nothing in scope for music to belong to, so
+     * the gate cannot open whatever `on` says.
+     *
+     * @param {string|null} name - the tmux session in scope, or null.
+     * @param {boolean} on - true if that session opted into music.
      * @returns {boolean} the new EFFECTIVE muted state.
      */
-    function setAppSound(on) {
-        appSoundOn = !!on;
-        Settings.writeAppSoundOn(localStorage, appSoundOn);
-        return _recompute();
-    }
-
-    /**
-     * Is gate 1 (app sound, all sessions) on?
-     *
-     * @returns {boolean}
-     */
-    function isAppSoundOn() { return appSoundOn; }
-
-    /**
-     * Set gate 2, the current session's music opt-in. NOT persisted here:
-     * session-theme-menu.js owns the per-session key, because it is the
-     * thing that knows which session is attached.
-     *
-     * @param {boolean} on - true if this session opted into music.
-     * @returns {boolean} the new EFFECTIVE muted state.
-     */
-    function setSessionEnabled(on) {
+    function setSessionAudio(name, on) {
+        sessionName = name ? String(name) : null;
         sessionOn = !!on;
         return _recompute();
     }
 
     /**
-     * Is gate 2 (this session's music opt-in) on?
+     * Is the gate open - a session in scope, opted into music?
      *
      * @returns {boolean}
      */
-    function isSessionEnabled() { return sessionOn; }
+    function isSessionEnabled() { return _gateOpen(); }
 
     /**
-     * Flip the app sound master switch. Kept as the header button's
-     * handler; it drives gate 1 only, so an attach can no longer undo it.
+     * The session currently in scope, or null on the home screen.
      *
-     * @returns {boolean} the new EFFECTIVE muted state.
+     * @returns {string|null}
      */
-    function toggleMute() {
-        return setAppSound(!appSoundOn);
-    }
+    function getSessionName() { return sessionName; }
 
     /**
-     * The effective gate: silent unless BOTH app sound and the session
-     * opt-in are on.
+     * The effective gate, inverted: silent unless a session is in scope
+     * and has opted into music.
      *
      * @returns {boolean}
      */
@@ -397,7 +401,7 @@
      * from this shape to a sentence. Never throws, because it is called
      * from paint paths.
      *
-     * @returns {{appSoundOn: boolean, sessionOn: boolean, muted: boolean,
+     * @returns {{sessionName: string|null, sessionOn: boolean, muted: boolean,
      *            masterVolume: number, hidden: boolean, hasTrack: boolean,
      *            playError: string|null, loadError: string|null,
      *            node: null|{src: string, loadedSrc: string, paused: boolean,
@@ -407,8 +411,8 @@
     function getStatus() {
         var Node = window.ThemeAudioNode;
         return {
-            appSoundOn: appSoundOn,
-            sessionOn: sessionOn,
+            sessionName: sessionName,
+            sessionOn: _gateOpen(),
             muted: muted,
             masterVolume: globalVolume,
             hidden: typeof document !== 'undefined' && !!document.hidden,
@@ -453,10 +457,10 @@
     /**
      * Read persisted settings and wire the visibility handler. Call once.
      *
-     * The migration runs BEFORE the volume is read, so a master volume
-     * left over from the old attenuating gain budget is dropped rather
-     * than silently overriding the new unity default. See
-     * themeAudioSettings.js for why that value cannot simply be trusted.
+     * The migration runs BEFORE anything is read, so neither a master
+     * volume left over from the old attenuating gain budget nor the
+     * retired app sound mute flag can override the current defaults. See
+     * themeAudioSettings.js for why those values cannot simply be trusted.
      *
      * @returns {void}
      */
@@ -470,27 +474,28 @@
                 ' -> v' + Settings.SETTINGS_VERSION +
                 (m.clearedVolume === null
                     ? ''
-                    : ' (dropped stale master volume ' + m.clearedVolume + ')'));
+                    : ' (dropped stale master volume ' + m.clearedVolume + ')') +
+                (m.clearedMute === null
+                    ? ''
+                    : ' (dropped retired app sound mute ' + m.clearedMute + ')'));
         }
 
-        appSoundOn = Settings.readAppSoundOn(localStorage);
         globalVolume = Settings.readVolume(localStorage);
-        muted = !(appSoundOn && sessionOn);
+        muted = !_gateOpen();
 
         document.addEventListener('visibilitychange', _onVisibilityChange);
-        console.log('ThemeAudio: initialized - appSound=' + appSoundOn +
-            ' session=' + sessionOn + ' muted=' + muted + ' volume=' + globalVolume);
+        console.log('ThemeAudio: initialized - session=' + sessionName +
+            ' sessionOn=' + sessionOn + ' muted=' + muted +
+            ' volume=' + globalVolume);
     }
 
     window.ThemeAudio = {
         init: init,
         setTheme: setTheme,
-        toggleMute: toggleMute,
         isMuted: isMuted,
-        setAppSound: setAppSound,
-        isAppSoundOn: isAppSoundOn,
-        setSessionEnabled: setSessionEnabled,
+        setSessionAudio: setSessionAudio,
         isSessionEnabled: isSessionEnabled,
+        getSessionName: getSessionName,
         getLastPlayError: getLastPlayError,
         getStatus: getStatus,
         getVolume: getVolume,
