@@ -93,6 +93,10 @@
          base .command-button rule this narrows. -->
     <link rel="stylesheet" href="/static/css/slash-command-chips.css" />
 
+    <!-- The settings panel's music volume slider. After styles.css, which
+         owns the .settings-field rules this builds on. -->
+    <link rel="stylesheet" href="/static/css/settings-audio.css" />
+
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
     <link rel="stylesheet" id="theme-css" />
@@ -444,6 +448,10 @@
          time. -->
     <script src="/static/js/settings-tabs.js"></script>
     <script src="/static/js/settings-sections.js"></script>
+    <!-- The global music volume row in the general tab. Reads
+         window.ThemeAudio for the current gain and the floor, so it loads
+         AFTER themeAudio.js and BEFORE settings-panel.js renders it. -->
+    <script src="/static/js/settings-audio.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -

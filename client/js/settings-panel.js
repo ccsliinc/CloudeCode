@@ -5,8 +5,9 @@
  * TABBED (feat/settings-tabs-and-commands). Five tabs, declared in TABS
  * below: claude (launch wrappers + the legacy command they supersede),
  * agents (the other agent CLIs), terminal (the runnable command list),
- * notifications, and general (appearance + the read-only server block).
- * Every pane is built ONCE at open and switching only shows/hides, so a
+ * notifications, and general (appearance, the global music volume, and
+ * the read-only server block). Every pane is built ONCE at open and
+ * switching only shows/hides, so a
  * half-typed edit survives moving between tabs and Save still collects
  * from every tab at once. Section MARKUP lives in settings-sections.js
  * and the tab strip in settings-tabs.js; this file owns the lifecycle,
@@ -99,8 +100,9 @@
     // Grouping follows what the code actually is, not a guess: how claude
     // launches (wrappers + the legacy command they supersede), the other
     // agent CLIs, the new terminal command list, notifications, and
-    // general (appearance + the read-only server block). Every pane is
-    // rendered once at open and only shown/hidden afterwards, so unsaved
+    // general (appearance, the global music volume, and the read-only
+    // server block). Every pane is rendered once at open and only
+    // shown/hidden afterwards, so unsaved
     // edits survive tab switches — see settings-tabs.js.
     var TABS = [
         // feat/universal-wrappers — one screen for every family's
@@ -111,7 +113,12 @@
         { id: 'agents', label: 'agents', sectionIds: ['agent'], slots: [] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
         { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
-        { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'server'] },
+        // 'audio' is the global music volume (settings-audio.js). It sits
+        // in general next to appearance because it is an app-wide output
+        // preference attached to themes, not to any one agent, terminal
+        // or notification channel. Like the theme picker it applies
+        // immediately and never joins the batched Save.
+        { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'audio', 'server'] },
     ];
 
     // Module state — the last GET /config/settings payload, so re-renders
@@ -140,6 +147,8 @@
         tab.slots.forEach(function (slot) {
             if (slot === 'appearance') {
                 parts.push(Sections.renderAppearanceSection());
+            } else if (slot === 'audio') {
+                parts.push(window.SettingsAudio ? window.SettingsAudio.render() : '');
             } else if (slot === 'server') {
                 parts.push(Sections.renderServerSection(lastSummary));
             } else {
@@ -286,6 +295,7 @@
      */
     function mountSlots() {
         mountThemeSlot();
+        if (window.SettingsAudio) window.SettingsAudio.wire(overlayEl);
         if (window.AgentWrappersPanel) {
             var wrapperSlot = overlayEl.querySelector('#settings-wrappers-slot');
             if (wrapperSlot) window.AgentWrappersPanel.mount(wrapperSlot);
