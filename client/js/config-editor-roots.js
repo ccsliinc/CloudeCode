@@ -13,7 +13,18 @@
  * indistinguishable from a correct one, so the user reads it as "my
  * project files are gone". Absence must be NARRATED: three outcomes
  * (listed / genuinely absent / could not evaluate), never two.
+ *
+ * SCOPING. Everything below lives inside an IIFE and reaches the app only
+ * as `window.ConfigEditorRoots`. These are classic <script> tags sharing
+ * ONE global scope, so a top-level `const CONFIG_EDITOR_ROOTS` here
+ * collides with the identically named binding in config-editor-panel.js:
+ * the second declaration is an uncaught SyntaxError that kills the whole
+ * panel file at parse time, leaving window.ConfigEditorPanel undefined and
+ * the editor button dead. Do not lift anything out of this closure.
  */
+
+(function () {
+'use strict';
 
 /**
  * Single source of truth for the three roots the panel browses: API root
@@ -120,3 +131,5 @@ window.ConfigEditorRoots = {
     planRoots,
 };
 console.log('[ConfigEditorRoots Module] Exported as window.ConfigEditorRoots');
+
+}());

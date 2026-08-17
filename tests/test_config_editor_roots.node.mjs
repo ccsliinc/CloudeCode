@@ -209,5 +209,35 @@ test('index.html loads the roots module before the panel', () => {
     assert.ok(roots < panel, 'the panel reads ConfigEditorRoots.ROOTS at definition time');
 });
 
+test('REGRESSION: roots.js and panel.js share a global scope without colliding', () => {
+    // These ship as classic <script> tags, so both files' top-level
+    // bindings land in ONE global scope. Both legitimately want the name
+    // CONFIG_EDITOR_ROOTS, and a duplicate top-level `const` is an
+    // uncaught SyntaxError that kills the SECOND file at parse time -
+    // window.ConfigEditorPanel never gets defined and the file editor
+    // button does nothing at all. Loading them back to back in one
+    // context is the only check that reproduces it; reading either file
+    // alone cannot. roots.js keeps its bindings inside a closure.
+    const read = (name) => fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', name), 'utf8',
+    );
+    const fakeWindow = {};
+    fakeWindow.window = fakeWindow;
+    const context = {
+        window: fakeWindow,
+        console: { log() {} },
+        document: { createElement: () => ({ style: {} }) },
+    };
+    vm.createContext(context);
+    vm.runInContext(read('config-editor-roots.js'), context);
+    vm.runInContext(read('config-editor-panel.js'), context);
+    assert.ok(fakeWindow.ConfigEditorPanel,
+        'the panel must still define window.ConfigEditorPanel after roots.js loaded');
+    assert.deepEqual(
+        plain(fakeWindow.ConfigEditorRoots.ROOTS.map((r) => r.id)),
+        ['user', 'project', 'workdir'],
+    );
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
