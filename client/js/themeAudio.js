@@ -40,10 +40,9 @@
  * false whatever the opt-in flag says.
  *
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
- * driven by the themes registry, setSessionAudio(name, on) and
- * isSessionEnabled() for the one gate, isMuted() for the effective state,
- * getLastPlayError(), getStatus() for diagnosis, and getVolume()/setVolume()
- * for the master, which has no UI. Each is documented at its definition.
+ * from the themes registry, setSessionAudio(name, on) / isSessionEnabled() /
+ * getSessionName() for the gate, isMuted(), getLastPlayError(), getStatus()
+ * for diagnosis, getVolume()/setVolume() for the UI-less master.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
  * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
@@ -346,9 +345,9 @@
      * Not persisted here: session-theme-menu.js owns the per-session key,
      * because it is the thing that knows what a session is.
      *
-     * Passing a null name is how the home screen is expressed. It is not
-     * a mute: there is simply nothing in scope for music to belong to, so
-     * the gate cannot open whatever `on` says.
+     * A null name is how the home screen is expressed. It is not a mute:
+     * nothing is in scope for music to belong to, so the gate cannot open
+     * whatever `on` says.
      *
      * @param {string|null} name - the tmux session in scope, or null.
      * @param {boolean} on - true if that session opted into music.
