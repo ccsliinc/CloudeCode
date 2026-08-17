@@ -87,8 +87,7 @@
     // ---- State ----
     var initialized = false;
     // The session in scope, or null on the home screen. In-memory:
-    // session-theme-menu.js sets it on every attach and clears it on every
-    // leave. Null is not a mute, it is the absence of anything to play for.
+    // session-theme-menu.js sets it on attach and clears it on leave.
     var sessionName = null;
     // The in-scope session's music opt-in. In-memory; session-theme-menu.js
     // owns the persisted per-session key.
