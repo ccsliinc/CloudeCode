@@ -41,7 +41,6 @@ function test(name, fn) {
 
 /** Ids the overflow menu owns, in the order index.html declares them. */
 const EXPECTED_IDS = [
-    'audioToggleBtn',
     'logoutBtn',
     'settingsBtn',
 ];
@@ -49,8 +48,15 @@ const EXPECTED_IDS = [
 /** Ids that must stay inline in the header at every width. */
 const INLINE_IDS = ['configEditorBtn'];
 
-/** Ids that must no longer exist as header buttons at all. */
-const REMOVED_IDS = ['homeBtn', 'detachSessionBtn'];
+/**
+ * Ids that must no longer exist as header buttons at all.
+ *
+ * `audioToggleBtn` was the app sound master switch. It was app-scoped,
+ * persisted and defaulted OFF, so it sat in front of the session editor's
+ * per-session music row and silently vetoed it. Audio is session-only now
+ * and re-adding a header control here is a regression, not a feature.
+ */
+const REMOVED_IDS = ['homeBtn', 'detachSessionBtn', 'audioToggleBtn'];
 
 /**
  * Build the real header shape from index.html: .header > .controls with
@@ -152,7 +158,7 @@ test('THE OVERFLOW HOLDS EXACTLY volume, logout and settings', () => {
         'configEditorBtn must never enter the overflow list');
 });
 
-test('HOME AND DETACH ARE GONE from the header, markup included', () => {
+test('HOME, DETACH AND APP SOUND ARE GONE from the header, markup included', () => {
     const html = fs.readFileSync(
         path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
     for (const id of REMOVED_IDS) {
@@ -202,10 +208,10 @@ test('the controls in the menu are the SAME nodes, not copies', () => {
 
 test('listeners survive the move', () => {
     const { env } = load({ mobile: true });
-    const audio = env.document.getElementById('audioToggleBtn');
+    const logout = env.document.getElementById('logoutBtn');
     let clicked = 0;
-    audio.addEventListener('click', () => { clicked++; });
-    audio.dispatchEvent('click');
+    logout.addEventListener('click', () => { clicked++; });
+    logout.dispatchEvent('click');
     assert.equal(clicked, 1);
 });
 
