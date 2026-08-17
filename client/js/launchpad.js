@@ -1305,7 +1305,7 @@ class Launchpad {
      * "recent projects") as real collapsible disclosures. Collapsed state
      * persists per-section in localStorage under
      * `cloude.launchpad.collapsed`, following the same convention as
-     * `cloude.theme` / `cloude.audio.muted`.
+     * `cloude.theme` / `cloude.audio.volume`.
      *
      * There used to be a third, "server management". Its one control now
      * lives in the home bar's server-controls menu.

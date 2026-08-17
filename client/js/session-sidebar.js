@@ -44,7 +44,7 @@ class SessionSidebarController {
 
     /**
      * Storage key for open/closed persistence - follows the app's existing
-     * localStorage convention (cloude.theme, cloude.audio.muted).
+     * localStorage convention (cloude.theme, cloude.audio.volume).
      * @type {string}
      */
     static get STORAGE_KEY() { return 'cloude.session.sidebar'; }
