@@ -24,7 +24,7 @@ os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
 os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 # ruff: noqa: E402
-from src.api.ws_startup_paint import paint_on_attach
+from src.api.ws_startup_paint import STALL_AFTER_SECONDS, paint_on_attach
 
 
 class FakeWS:
@@ -43,13 +43,25 @@ class FakeWS:
 class FakeBackend:
     """Backend stub with controllable pane state."""
 
-    def __init__(self, alternate: bool = False, screen: bytes = b"") -> None:
+    def __init__(
+        self,
+        alternate: bool = False,
+        screen: bytes = b"",
+        age: "float | None" = 0.0,
+    ) -> None:
         self._alternate = alternate
         self._screen = screen
+        self._age = age
         self.written: list[bytes] = []
         self.alt_raises = False
         self.capture_raises = False
         self.write_raises = False
+        self.age_raises = False
+
+    def session_age_seconds(self) -> "float | None":
+        if self.age_raises:
+            raise RuntimeError("tmux gone")
+        return self._age
 
     def pane_in_alternate_screen(self) -> bool:
         if self.alt_raises:
@@ -96,12 +108,95 @@ async def test_screen_paint_clears_before_painting():
 
 
 @pytest.mark.asyncio
-async def test_empty_screen_paints_nothing_at_all():
-    """No content and no Ctrl+L: the live stream will carry what comes next."""
-    ws, backend = FakeWS(), FakeBackend(screen=b"")
+async def test_empty_screen_on_a_young_session_paints_nothing_at_all():
+    """No content and no Ctrl+L: the live stream will carry what comes next.
+
+    A session a fraction of a second old that has not painted yet is the
+    normal case, not a finding. Announcing here would cry wolf on every
+    fast launch.
+    """
+    ws, backend = FakeWS(), FakeBackend(screen=b"", age=0.2)
     assert await paint_on_attach(ws, backend) == "none"
     assert ws.frames == []
     assert backend.written == []
+
+
+# --- stall detection ------------------------------------------------------
+# A blank screen is TWO outcomes. Collapsing them is what let a shell rc
+# blocked on `read` look identical to a healthy session that had not
+# painted yet. See the module docstring's stall-detection section.
+
+
+@pytest.mark.asyncio
+async def test_blank_screen_on_an_old_session_is_announced():
+    """The regression test for the invisible startup hang.
+
+    Before stall detection this returned "none" and the client showed an
+    empty terminal indefinitely.
+    """
+    ws, backend = FakeWS(), FakeBackend(screen=b"", age=STALL_AFTER_SECONDS + 1)
+    assert await paint_on_attach(ws, backend) == "stalled"
+    assert len(ws.frames) == 1
+    assert b"printed nothing" in ws.frames[0]
+    assert b"waiting on input" in ws.frames[0]
+
+
+@pytest.mark.asyncio
+async def test_stall_notice_never_writes_to_the_pane():
+    """Reporting the hang must not recreate the ^L bug that caused it."""
+    ws, backend = FakeWS(), FakeBackend(screen=b"", age=999.0)
+    await paint_on_attach(ws, backend)
+    assert backend.written == [], "nothing may enter a pane that may be reading"
+
+
+@pytest.mark.asyncio
+async def test_stall_boundary_is_inclusive_and_below_it_is_silent():
+    """Exactly at the threshold announces; a hair under it does not."""
+    at = FakeBackend(screen=b"", age=STALL_AFTER_SECONDS)
+    assert await paint_on_attach(FakeWS(), at) == "stalled"
+    under = FakeBackend(screen=b"", age=STALL_AFTER_SECONDS - 0.01)
+    assert await paint_on_attach(FakeWS(), under) == "none"
+
+
+@pytest.mark.asyncio
+async def test_unknown_age_never_invents_an_alarm():
+    """The third outcome resolves to silence, not to a fabricated warning."""
+    ws, backend = FakeWS(), FakeBackend(screen=b"", age=None)
+    assert await paint_on_attach(ws, backend) == "none"
+    assert ws.frames == []
+
+
+@pytest.mark.asyncio
+async def test_age_probe_failure_is_survivable():
+    ws, backend = FakeWS(), FakeBackend(screen=b"")
+    backend.age_raises = True
+    assert await paint_on_attach(ws, backend) == "none"
+    assert ws.frames == []
+
+
+@pytest.mark.asyncio
+async def test_backend_without_the_probe_degrades_to_silence():
+    """An older or non-tmux backend must not crash the paint path."""
+
+    class NoProbe:
+        def pane_in_alternate_screen(self) -> bool:
+            return False
+
+        def capture_visible_screen(self) -> bytes:
+            return b""
+
+        async def write(self, data: bytes) -> None:
+            raise AssertionError("must not write")
+
+    assert await paint_on_attach(FakeWS(), NoProbe()) == "none"
+
+
+@pytest.mark.asyncio
+async def test_a_painted_screen_is_never_called_a_stall():
+    """Content on screen ends the question; age is irrelevant then."""
+    ws, backend = FakeWS(), FakeBackend(screen=b"hello", age=99999.0)
+    assert await paint_on_attach(ws, backend) == "screen"
+    assert b"printed nothing" not in ws.frames[0]
 
 
 @pytest.mark.asyncio

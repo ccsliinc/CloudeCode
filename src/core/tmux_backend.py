@@ -1406,6 +1406,38 @@ class TmuxBackend(SessionBackend):
             return False
         return out.decode("utf-8", errors="replace").strip() == "1"
 
+    def session_age_seconds(self) -> Optional[float]:
+        """How long this tmux session has existed, in seconds.
+
+        Used by ``src/api/ws_startup_paint.py`` to tell a session that is
+        merely young (nothing painted yet, perfectly normal) apart from
+        one that has been alive for a while and has still produced no
+        output at all - the signature of a shell startup script blocked
+        on a prompt nobody can see.
+
+        Returns:
+            Age in seconds, or ``None`` when it cannot be determined -
+            tmux failed, is not running, or returned an unparseable
+            ``#{session_created}``. ``None`` is a distinct third outcome
+            and must NOT be read as "young" or as "old"; the caller
+            declines to make a claim.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{session_created}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        try:
+            created = int(out.decode("utf-8", errors="replace").strip())
+        except ValueError:
+            return None
+        return max(0.0, time.time() - created)
+
     def capture_visible_screen(self) -> bytes:
         """Capture the pane's visible screen as a replayable byte stream.
 
