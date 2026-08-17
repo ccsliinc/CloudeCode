@@ -310,11 +310,17 @@ class Terminal {
 
         // Handle terminal input
         this.term.onData(data => {
+            // xterm delivers MOUSE REPORTS through onData too, and under
+            // claude's `?1003h` any-event tracking it emits one per pointer
+            // MOTION. Those bytes must still reach the session, but they are
+            // not the user asking for anything - see terminal-input-kind.js.
+            var isMouse = !!(window.TerminalInputKind
+                && window.TerminalInputKind.isMouseReport(data));
             // Typing guard for altscreen-scroll.js: never synthesise keys
             // into a prompt the user is mid-sentence in.
-            if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
+            if (window.AltScreenScroll && !isMouse) window.AltScreenScroll.noteUserInput();
             // The "take me back to live" half of scrollOnUserInput: false.
-            if (window.TerminalScroll) window.TerminalScroll.pinToBottom(this.term);
+            if (window.TerminalScroll && !isMouse) window.TerminalScroll.pinToBottom(this.term);
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 // Convert special symbols for mobile keyboard shortcuts
                 if (data === '¥') {

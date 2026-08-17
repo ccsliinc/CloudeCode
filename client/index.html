@@ -360,6 +360,11 @@
          touch path so the two cannot cover different distances. -->
     <script src="/static/js/terminal-scroll-step.js"></script>
     <script src="/static/js/terminal-scroll.js"></script>
+    <!-- Is this onData payload a keystroke or a mouse report? Must load
+         BEFORE terminal.js, whose onData handler asks before it treats a
+         payload as a request to go back to the live bottom. Under claude's
+         `?1003h` any-event tracking, plain pointer motion arrives here. -->
+    <script src="/static/js/terminal-input-kind.js"></script>
     <!-- Alternate-screen scrollback (claude's `tui: fullscreen`, where the
          terminal has no scrollback at all). Must load BEFORE terminal.js,
          which wires it in setupScrollListener(), and terminal-scroll.js
