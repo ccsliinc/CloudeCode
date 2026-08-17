@@ -42,7 +42,11 @@
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
  * from the themes registry, setSessionAudio(name, on) / isSessionEnabled() /
  * getSessionName() for the gate, isMuted(), getLastPlayError(), getStatus()
- * for diagnosis, getVolume()/setVolume() for the UI-less master.
+ * for diagnosis, getVolume()/setVolume()/getMinVolume() for the master
+ * gain, which the settings panel's volume slider drives
+ * (client/js/settings-audio.js). That master is an ATTENUATOR ONLY: it is
+ * floored above zero and cannot silence anything, because the per-session
+ * music control is the only on/off this feature has.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
  * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
@@ -419,15 +423,44 @@
                 ? Node.snapshot(currentNode) : null
         };
     }
+    /**
+     * The master gain applied on top of every theme's manifest volume.
+     *
+     * @returns {number} MIN_MASTER_VOLUME..1.
+     */
     function getVolume() { return globalVolume; }
+
+    /**
+     * Set the master gain, persist it, and APPLY IT LIVE to whatever is
+     * playing - a volume control that needs a restart to be heard is the
+     * same silent-failure shape as the rest of this feature's history.
+     *
+     * Clamped to [MIN_MASTER_VOLUME, 1], never to zero: a master of zero
+     * is a mute, and the per-session music control is the only on/off in
+     * this app. The stored value and the in-memory one are the same
+     * number by construction, so a reload cannot surprise anyone.
+     *
+     * @param {number} v - requested gain; clamped into the usable band.
+     * @returns {number} the gain actually applied.
+     */
     function setVolume(v) {
-        var clamped = Math.max(0, Math.min(1, v));
+        var clamped = Settings.clampVolume(parseFloat(v));
         globalVolume = clamped;
         Settings.writeVolume(localStorage, clamped);
         if (currentNode && !muted && !document.hidden) {
             window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), 200, _ctx());
         }
+        return clamped;
     }
+
+    /**
+     * The lowest gain setVolume() will apply. Exposed so the settings
+     * control renders the same floor the engine enforces rather than
+     * hardcoding a second copy of the number.
+     *
+     * @returns {number} 0..1.
+     */
+    function getMinVolume() { return Settings.MIN_MASTER_VOLUME; }
 
     // ---- Page Visibility ----
     function _onVisibilityChange() {
@@ -494,6 +527,7 @@
         getLastPlayError: getLastPlayError,
         getStatus: getStatus,
         getVolume: getVolume,
-        setVolume: setVolume
+        setVolume: setVolume,
+        getMinVolume: getMinVolume
     };
 })();
