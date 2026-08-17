@@ -1031,24 +1031,28 @@ class API {
     /**
      * Server: which release this install is, and whether it is current.
      *
-     * NOT IMPLEMENTED BY THIS BRANCH. The version and self-check plumbing
-     * is owned by the packaging work; this is the call the status panel
-     * makes, and it is written against the shape that work is expected to
-     * expose:
+     * Backed by `GET /api/v1/version` (src/api/version_routes.py), which is
+     * the single documented feed for both the header version chip and the
+     * server-status panel. The shape:
      *
-     *   `{available, error, current_tag, latest_tag, update_available,
-     *     checked_at, upgrade_command}`
+     *   `{version, update: {status, current_version, latest_version,
+     *     remote, checked_at, reason, upgrade_command}}`
      *
-     * with `update_available` strictly three-valued (true / false / null
-     * for "the check could not run") and `checked_at` unix seconds for
-     * when the comparison last actually ran. A 404 or any other failure
-     * surfaces in the panel as "could not check", never as "up to date".
-     * If the endpoint lands at a different path, change it here.
+     * where `status` is one of `current`, `update_available` or `unknown`.
+     * `unknown` is a real, visible outcome and carries a `reason`; it must
+     * never render as "up to date". `checked_at` is unix seconds for when
+     * the comparison last actually ran, so a stale answer is visibly
+     * stale. Any failure of this call surfaces in the panel as "could not
+     * check", never as "up to date".
      *
-     * @returns {Promise<object>} the release payload.
+     * An earlier draft of the panel assumed `/server/release` with a
+     * tri-valued `update_available` boolean. That path never existed; this
+     * is the reconciled one.
+     *
+     * @returns {Promise<object>} the version payload.
      */
     async getReleaseStatus() {
-        return await this.call('/server/release');
+        return await this.call('/version');
     }
 
     /**

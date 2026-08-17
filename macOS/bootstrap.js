@@ -503,6 +503,53 @@ function provisionUserThemesDir() {
 }
 
 // ---------------------------------------------------------------------------
+// VERSION stamp
+// ---------------------------------------------------------------------------
+
+/**
+ * Header written into serverDir/VERSION. Must stay byte-identical to
+ * VERSION_FILE_HEADER in src/core/version.py, which is the reader.
+ * @type {string}
+ */
+const VERSION_FILE_HEADER =
+  '# GENERATED FROM THE GIT TAG AT RELEASE TIME. DO NOT EDIT BY HAND.\n' +
+  '# See src/core/version.py for the resolution order.\n';
+
+/**
+ * Stamp the app version into serverDir/VERSION.
+ *
+ * WHY THIS EXISTS. The Python server resolves its version through
+ * src/core/version.py, whose first source is the CLOUDE_APP_VERSION env var
+ * that server-manager.js injects at spawn. That covers the normal path and
+ * nothing else: serverDir is a plain copy of src/ + client/ with NO .git and
+ * NO macOS/package.json, so a server started any other way - by hand, by a
+ * future wrapper, by a debugging session - resolves to "" and the release
+ * self check correctly but uselessly reports "unknown". Writing the file the
+ * resolver already looks for second closes that on disk, where it survives.
+ *
+ * @param {string} serverDir - Application Support/.../server dir.
+ * @param {string} version - the app version, from app.getVersion().
+ * @returns {boolean} true when written; false on any failure (non-fatal:
+ *   the env var still covers the spawn path).
+ */
+function writeVersionStamp(serverDir, version) {
+  const value = String(version || '').trim();
+  if (!value) return false;
+  try {
+    fs.writeFileSync(
+      path.join(serverDir, 'VERSION'),
+      `${VERSION_FILE_HEADER}${value}\n`,
+      'utf8'
+    );
+    console.log(`[bootstrap] stamped VERSION=${value}`);
+    return true;
+  } catch (err) {
+    console.warn(`[bootstrap] could not stamp VERSION: ${err.message}`);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main bootstrap orchestrator
 // ---------------------------------------------------------------------------
 
@@ -515,9 +562,14 @@ function provisionUserThemesDir() {
  *                                       bundleResourcesDir path (contains
  *                                       '.app/Contents/Resources').
  * @param {Function} opts.onStateChange - (state: string) => void — state observer
+ * @param {string} [opts.appVersion]   - app.getVersion(), stamped into
+ *                                       serverDir/VERSION so the Python
+ *                                       resolver has an on-disk answer.
  * @returns {Promise<{status: string, freshInstall: boolean, details?: string}>}
  */
-async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, onStateChange }) {
+async function bootstrapIfNeeded({
+  serverDir, bundleResourcesDir, isPackaged, onStateChange, appVersion,
+}) {
   const emit = (state) => {
     if (onStateChange) {
       try { onStateChange(state); } catch (_) { /* observer errors are non-fatal */ }
@@ -587,6 +639,9 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, on
         details: `asset resync failed: ${sync.details}`,
       };
     }
+    // Stamp AFTER the resync: the resync does not carry a VERSION file, and
+    // an upgrade must overwrite the previous release's stamp.
+    writeVersionStamp(serverDir, appVersion);
   }
 
   // -------------------------------------------------------------------------
@@ -786,5 +841,7 @@ module.exports = {
   sha256File,
   syncBundledAssets,
   provisionUserThemesDir,
+  writeVersionStamp,
+  VERSION_FILE_HEADER,
   RESYNC_ALLOWLIST,
 };

@@ -115,6 +115,7 @@ function loadModule(file, exportName) {
 
 const F = loadModule('server-status-format.js', 'ServerStatusFormat');
 const panelSrc = read('client', 'js', 'server-status-panel.js');
+const apiSrc = read('client', 'js', 'api.js');
 const menuSrc = read('client', 'js', 'server-controls-menu.js');
 const actionsSrc = read('client', 'js', 'session-row-actions.js');
 const launchpadSrc = read('client', 'js', 'launchpad.js');
@@ -258,44 +259,83 @@ test('a real history-limit is printed as lines', () => {
 
 test('release: an unreachable check is never rendered as up to date', () => {
     const html = F.renderRelease({
-        available: true, current_tag: 'v0.7.1', latest_tag: null,
-        update_available: null, checked_at: 100, error: 'github unreachable',
+        version: '0.7.1',
+        update: {
+            status: 'unknown', current_version: '0.7.1', latest_version: '',
+            checked_at: 100, reason: 'github unreachable',
+        },
     }, 3700);
     assert.match(html, /could not check: github unreachable/);
     assert.doesNotMatch(html, /up to date/);
 });
 
-test('release: a missing endpoint is could-not-check, not up to date', () => {
+test('release: a transport failure is could-not-check, not up to date', () => {
+    // The panel synthesises this marker when the call never landed.
+    const html = F.renderRelease({
+        available: false, error: 'this server has no version check yet',
+    });
+    assert.match(html, /cannot determine: this server has no version check yet/);
+    assert.doesNotMatch(html, /up to date/);
+});
+
+test('release: a missing payload is could-not-check, not up to date', () => {
     const html = F.renderRelease(null);
     assert.match(html, /cannot determine/);
     assert.doesNotMatch(html, /up to date/);
 });
 
+test('release: an unrecognised status falls to could-not-check', () => {
+    // A status string this client has never heard of is precisely the case
+    // where it does not know the answer. It must not resolve to up to date.
+    const html = F.renderRelease({
+        version: '0.8.0',
+        update: { status: 'brand_new_thing', checked_at: 100, reason: '' },
+    }, 3700);
+    assert.match(html, /could not check/);
+    assert.doesNotMatch(html, /up to date/);
+});
+
 test('release: an available update names the newer tag', () => {
     const html = F.renderRelease({
-        available: true, current_tag: 'v0.7.1', latest_tag: 'v0.8.0',
-        update_available: true, checked_at: 100,
-        upgrade_command: 'brew upgrade --cask cloudecode',
+        version: '0.7.1',
+        update: {
+            status: 'update_available', current_version: '0.7.1',
+            latest_version: '0.8.0', checked_at: 100,
+            upgrade_command: 'open https://example.test/releases/latest',
+        },
     }, 3700);
-    assert.match(html, /update available: v0\.8\.0/);
-    assert.match(html, /brew upgrade --cask cloudecode/);
+    assert.match(html, /update available: 0\.8\.0/);
+    assert.match(html, /open https:\/\/example\.test\/releases\/latest/);
+    assert.doesNotMatch(html, /up to date/);
 });
 
 test('release: up to date is only claimed on a real comparison', () => {
     const html = F.renderRelease({
-        available: true, current_tag: 'v0.8.0', latest_tag: 'v0.8.0',
-        update_available: false, checked_at: 100,
+        version: '0.8.0',
+        update: {
+            status: 'current', current_version: '0.8.0',
+            latest_version: '0.8.0', checked_at: 100,
+        },
     }, 3700);
     assert.match(html, /up to date/);
     assert.match(html, /1h 0m ago/);
+    assert.doesNotMatch(html, /could not check/);
 });
 
 test('release: a check with no timestamp says so rather than looking fresh', () => {
     const html = F.renderRelease({
-        available: true, current_tag: 'v0.8.0', update_available: false,
-        checked_at: null,
+        version: '0.8.0',
+        update: { status: 'current', checked_at: null },
     });
     assert.match(html, /cannot determine: no check has been recorded/);
+});
+
+test('release: the running line shows the resolved version', () => {
+    const html = F.renderRelease({
+        version: '0.9.2',
+        update: { status: 'current', checked_at: 1 },
+    }, 2);
+    assert.match(html, /0\.9\.2/);
 });
 
 test('a failed release fetch is reworded into this app\'s lowercase voice', () => {
@@ -309,11 +349,21 @@ test('a failed release fetch is reworded into this app\'s lowercase voice', () =
 
 test('release offers a copyable command, never a one-click upgrade', () => {
     const html = F.renderRelease({
-        available: true, current_tag: 'v1', update_available: false,
-        checked_at: 1, upgrade_command: 'brew upgrade --cask cloudecode',
+        version: '1.0.0',
+        update: {
+            status: 'current', checked_at: 1,
+            upgrade_command: 'open https://example.test/releases/latest',
+        },
     }, 2);
     assert.match(html, /<code class="server-status-command">/);
     assert.doesNotMatch(panelSrc, /upgradeNow|runUpgrade|performUpgrade/);
+});
+
+test('the release call targets the one endpoint the server actually serves', () => {
+    // /server/release never existed. src/api/version_routes.py serves
+    // /api/v1/version and nothing else answers this question.
+    assert.match(apiSrc, /getReleaseStatus\(\)[\s\S]{0,200}this\.call\('\/version'\)/);
+    assert.doesNotMatch(apiSrc, /'\/server\/release'/);
 });
 
 // ---------------------------------------------------------------------

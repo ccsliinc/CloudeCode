@@ -222,64 +222,73 @@ console.log('[ServerStatusFormat Module] Loading...');
     /**
      * The release section: what this install is, and whether it is current.
      *
-     * THE DATA IS NOT OURS. Version and self-check plumbing belongs to the
-     * packaging work; this panel only renders whatever that exposes. The
-     * shape assumed here is:
+     * THE SHAPE IS `GET /api/v1/version`, defined by
+     * src/api/version_routes.py and rendered nowhere else:
      *
-     *   { available, error, current_tag, latest_tag, update_available,
-     *     checked_at, upgrade_command }
+     *   { version, update: { status, current_version, latest_version,
+     *     remote, checked_at, reason, upgrade_command } }
      *
-     * where `update_available` is strictly three-valued - true, false, or
-     * null for "the check could not run" - and `checked_at` is unix
-     * seconds for when the comparison last actually RAN. If the endpoint
-     * lands with different field names, this function is the only place
-     * that has to change.
+     * `status` is one of the three strings `current`, `update_available`
+     * or `unknown`, and `checked_at` is unix seconds for when the
+     * comparison last actually RAN.
+     *
+     * A TRANSPORT FAILURE arrives instead as `{available: false, error}`,
+     * synthesised by the panel's fetchRelease when the call itself never
+     * landed. That is a fourth thing the server cannot report about
+     * itself, and it renders the same way `unknown` does.
      *
      * THREE OUTCOMES, AND THE THIRD IS THE POINT. A cached "up to date"
      * with no timestamp is indistinguishable from a fresh one, and an
      * offline check that renders as "up to date" is a lie with a long
-     * shelf life. So: `true` names the newer tag, `false` says up to
-     * date, and anything else says "could not check" with the reason.
+     * shelf life. So: `update_available` names the newer tag, `current`
+     * says up to date, and ANY other value - including a missing update
+     * block or an unrecognised string - says "could not check" with
+     * whatever reason there is. Unrecognised falls to the honest state on
+     * purpose; a new server status this client has never heard of is
+     * exactly the case where it does not know the answer.
      *
      * NO ONE-CLICK UPGRADE. The command is rendered as copyable text on
      * purpose. An unattended upgrade can pull the claude binary out from
      * under a running agent session, and the user decides when that
      * happens.
      *
-     * @param {object|null} release - the release payload, or null when it
-     *   could not be fetched at all.
+     * @param {object|null} release - the `/version` payload, the
+     *   `{available: false, error}` marker, or null when it could not be
+     *   fetched at all.
      * @param {number} [nowSeconds] - injectable clock for tests.
      * @returns {string} HTML.
      */
     function renderRelease(release, nowSeconds) {
         var r = release || {};
-        if (!r.available) {
+        if (r.available === false) {
             return section('release', line('release', UNKNOWN + ': '
                 + (r.error || 'the version check is not available on this server'),
                 'server-status-value--unknown'));
         }
-        var body = line('running', r.current_tag || UNKNOWN);
+        var u = r.update || {};
+        var body = line('running', r.version || u.current_version || UNKNOWN);
 
-        if (r.update_available === true) {
-            body += line('status', 'update available: ' + (r.latest_tag || 'a newer release'),
+        if (u.status === 'update_available') {
+            body += line('status', 'update available: '
+                + (u.latest_version || 'a newer release'),
                 'server-status-value--attention');
-        } else if (r.update_available === false) {
+        } else if (u.status === 'current') {
             body += line('status', 'up to date');
         } else {
             body += line('status', 'could not check: '
-                + (r.error || 'no comparison was made'),
+                + (u.reason || 'no comparison was made'),
                 'server-status-value--unknown');
         }
 
-        body += (typeof r.checked_at === 'number' && r.checked_at > 0)
-            ? line('checked', since(r.checked_at, nowSeconds))
+        body += (typeof u.checked_at === 'number' && u.checked_at > 0)
+            ? line('checked', since(u.checked_at, nowSeconds))
             : line('checked', UNKNOWN + ': no check has been recorded',
                 'server-status-value--unknown');
 
-        if (r.upgrade_command) {
+        if (u.upgrade_command) {
             body += '<div class="server-status-line">'
                 + '<span class="server-status-label">upgrade with</span>'
-                + '<code class="server-status-command">' + esc(r.upgrade_command) + '</code>'
+                + '<code class="server-status-command">' + esc(u.upgrade_command) + '</code>'
                 + '</div>';
         }
         return section('release', body);

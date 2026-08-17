@@ -28,6 +28,9 @@ from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
+from src.core.version import resolve_version
+from src.core.update_check import UpdateChecker
+from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
@@ -192,6 +195,17 @@ async def lifespan(app: FastAPI):
             ttl_seconds=cfg.ttl_seconds,
         )
 
+    # Release self check. Runs on its own daemon thread, first check 30s
+    # after boot, so nothing on the startup path or any page load ever waits
+    # on a network call. It NEVER upgrades anything; it reports, and the
+    # three outcomes include an explicit "could not check".
+    update_checker = UpdateChecker(
+        config_path=Path(settings.auth_config_file).expanduser(),
+    )
+    set_update_checker(update_checker)
+    app.state.update_checker = update_checker
+    update_checker.start()
+
     logger.info("application_ready")
     logger.info(
         "server_ready_local_only",
@@ -203,6 +217,11 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown
     logger.info("application_shutting_down")
+
+    # Signal the release self check to exit. It is a daemon thread, so this
+    # is politeness rather than a requirement.
+    update_checker.stop()
+    set_update_checker(None)
 
     # Stop the upload sweeper first — it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window
@@ -340,6 +359,7 @@ app.add_middleware(SlowAPIMiddleware)
 app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
 app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
+app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
 app.include_router(ws_router)                       # WebSocket routes
 
@@ -414,45 +434,21 @@ app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static
 # App version injection (header chip)
 #
 # The web client's version chip is `{{VERSION}}` in client/index.html and is
-# stamped at serve time so it NEVER drifts from the real release in
-# macOS/package.json. Two sources, in priority order:
-#   1. CLOUDE_APP_VERSION env var — set by the Electron menu-bar app
-#      (server-manager.js injects `app.getVersion()` at spawn). This is the
-#      ONLY reliable source inside the packaged .app, because package.json
-#      ships inside app.asar and is NOT on the filesystem the Python server
-#      sees (it runs from a copied serverDir with just src/ + client/).
-#   2. macOS/package.json on disk — found by walking up parent dirs from
-#      this file. Covers the dev repo layout (and any non-Electron run).
-# On any failure we fall back to "" so the chip renders blank rather than a
-# wrong/stale literal. Resolved once at import time (the value is immutable
-# for the life of the process).
+# stamped at serve time so it NEVER drifts from the real release.
+#
+# THE RELEASE TAG IS THE SOURCE OF TRUTH. The full resolution order (env var,
+# then the generated VERSION file, then an exact `git describe` tag, then the
+# legacy macOS/package.json, then a loose describe) lives in ONE place:
+# src/core/version.py. Do not add a second resolver here or anywhere else. On
+# total failure the resolver returns "" so the chip renders blank rather than
+# a wrong literal.
+#
+# Resolved once at import time (immutable for the life of the process).
 # ---------------------------------------------------------------------------
 _VERSION_PLACEHOLDER = "{{VERSION}}"
 
-
-def _resolve_app_version() -> str:
-    """Resolve the app version, preferring the Electron-injected env var and
-    falling back to macOS/package.json on disk. Returns "" on any failure."""
-    env_version = os.environ.get("CLOUDE_APP_VERSION", "").strip()
-    if env_version:
-        return env_version
-
-    # Walk up from this file looking for macOS/package.json (dev layout).
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "macOS" / "package.json"
-        if candidate.is_file():
-            try:
-                with candidate.open("r", encoding="utf-8") as f:
-                    return str(json.load(f).get("version", "")).strip()
-            except (OSError, ValueError):
-                # Unreadable / malformed — fall through to the empty default
-                # rather than crash the route that serves the SPA shell.
-                return ""
-    return ""
-
-
-# Cached at import time — version is fixed for the process lifetime.
-APP_VERSION = _resolve_app_version()
+# Cached at import time - version is fixed for the process lifetime.
+APP_VERSION = resolve_version()
 
 
 def _render_index_html() -> str:
