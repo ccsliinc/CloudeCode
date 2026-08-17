@@ -167,16 +167,26 @@ class AppController {
      * would drift, which is the same reasoning header-menu.js records for
      * re-parenting header controls instead of mirroring them.
      *
-     * HOME SCREEN: into `.home-bar`, beside a visible text label - the
-     * light is app-scoped state and the bar is where the app-scoped odds
-     * and ends now live, and the bar has the room to say what it means.
+     * THE LIGHT IS NEVER IN THE HEADER. It used to return to
+     * `.header .controls` on the auth and terminal screens; it does not
+     * any more. The header row is actions, the light is state, and the
+     * rule is "the light lives in the screen's bottom furniture, or
+     * nowhere".
      *
-     * AUTH AND TERMINAL SCREENS: back into `.header .controls`, as its
-     * last child (the `.status::after` tooltip's z-index assumes that).
-     * The terminal screen has no home bar by construction - it spends no
-     * vertical pixels on one - and mid-session is exactly when a dropped
-     * connection matters most, so the light stays in the header there
+     * HOME SCREEN: into `#home-bar-status` in `.home-bar`, beside a
+     * visible text label - the light is app-scoped state and the bar has
+     * the room to say what it means.
+     *
+     * TERMINAL SCREEN: into `#status-rail`, a fixed-position slot on the
+     * right-hand FAB column under #sessionEditorBtn. The terminal screen
+     * has no bottom bar by construction and is not getting one, but
+     * mid-session is exactly when a dropped socket matters most, so the
+     * light goes somewhere that costs no vertical layout space at all
      * rather than disappearing.
+     *
+     * AUTH SCREEN: also parked in `#status-rail`, which terminal-tools.css
+     * hides on that screen. No bar, no rail, no light - the stated rule,
+     * applied honestly. The auth screen reports its own failures inline.
      *
      * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
      * @returns {void}
@@ -186,7 +196,7 @@ class AppController {
         if (!el) return;
         const target = screen === 'launchpad'
             ? document.getElementById('home-bar-status')
-            : document.querySelector('.header .controls');
+            : document.getElementById('status-rail');
         if (!target || el.parentElement === target) return;
         if (screen === 'launchpad') {
             // Before the label span, so the dot leads the pair.

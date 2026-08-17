@@ -15,7 +15,10 @@
  *     the split; do not "tidy" it into the menu.
  *   - `#statusText`. A live state light, not an action. Hiding it behind
  *     a tap would mean connection state is only visible to someone who
- *     went looking for it.
+ *     went looking for it. It is no longer in the header row at all -
+ *     it lives in the home screen's bottom bar or, on the terminal
+ *     screen, on the FAB rail (see App._placeStatusLight). This module
+ *     never sees it, and must not gain a rule that does.
  *   - `#session-sidebar-toggle`, top-LEFT and the one-handed reach
  *     target on a phone. This module never touches it.
  *   - Home and detach, which no longer exist as header buttons: clicking

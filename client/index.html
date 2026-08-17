@@ -191,21 +191,12 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <!-- Connection light. ONE node, re-parented between here and
-                 the home screen's bottom bar by App._placeStatusLight() -
-                 never cloned, for the same reason header-menu.js moves
-                 nodes rather than mirroring them: it is addressed by id by
-                 app.js and terminal.js.
-
-                 `tabindex="0"` is the non-hover path to its text. The
-                 `.status::after` tooltip used to be reachable ONLY by
-                 hover, which on a phone meant a coloured circle with no
-                 way to learn what it means. A tap focuses it and
-                 `.status:focus::after` reveals the same string; tapping
-                 away blurs it. On the home screen the bar renders the
-                 text outright and this tooltip is suppressed. -->
-            <span class="status" id="statusText" data-status="Ready" tabindex="0"
-                  role="status" aria-live="polite" aria-label="Ready"></span>
+            <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
+                 the last child here. It is now a bar-or-rail control,
+                 never a header one - see #status-rail near the FABs at the
+                 bottom of this file, and App._placeStatusLight(). Do not
+                 put it back: the header row is actions, and the light is
+                 state. -->
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
@@ -594,6 +585,41 @@
          presentation attribute on the path beats a stylesheet rule that
          targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" hidden />
+
+    <!-- CONNECTION LIGHT RAIL - the terminal screen's home for the ONE
+         #statusText node.
+
+         THE RULE THAT PUT IT HERE. The light is out of the top header
+         entirely. Where a screen has a bottom bar the light lives in that
+         bar; the home screen already does (.home-bar). The TERMINAL screen
+         deliberately has no bottom bar - it fought its vertical pixels back
+         from 720 to 770 of 786 and is not giving them up - and a running
+         session with no indicator is exactly the case where a dropped
+         socket matters most. So the terminal gets the light as a rail
+         item instead of a bar item: `position: fixed` on the same
+         right-hand column as #sessionEditorBtn, directly under it, so it
+         costs ZERO vertical layout space. It is not a second bar and must
+         not grow into one - one 12px dot, nothing else.
+
+         The AUTH screen has neither a bar nor a rail, so it shows no
+         light, which is the stated rule applied honestly: this container
+         is display:none there and the parked node goes with it. Nothing is
+         lost - the auth screen reports its own server failures inline.
+
+         ONE NODE, NEVER CLONED. app.js and terminal.js both write it by
+         id, so App._placeStatusLight() MOVES it between here and
+         #home-bar-status. A copy would leave one writer updating an
+         invisible node.
+
+         `tabindex="0"` is the non-hover path to its text: the
+         `.status::after` tooltip was hover-only, which on a phone is a
+         coloured circle with no way to learn what it means. A tap focuses
+         it and `.status:focus::after` reveals the same string. On the home
+         screen the bar renders the text outright instead. -->
+    <div class="status-rail" id="status-rail">
+        <span class="status" id="statusText" data-status="Ready" tabindex="0"
+              role="status" aria-live="polite" aria-label="Ready"></span>
+    </div>
 
     <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
     <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"

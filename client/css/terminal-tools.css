@@ -121,6 +121,70 @@ body:has(#auth-screen.active) .fab-menu-btn {
 }
 
 /* ---------------------------------------------------------------------
+ * THE CONNECTION-LIGHT RAIL.
+ *
+ * The status light is out of the top header for good. On a screen with
+ * bottom furniture it lives there (the home screen's .home-bar). The
+ * terminal screen has none and is not getting one, so it gets this: the
+ * same right-hand column as .session-editor-fab, one slot below it,
+ * `position: fixed` so it spends NO vertical layout space. One 12px dot.
+ * It is not a bar and must not become one - anything else that wants to
+ * live on the terminal screen goes in a FAB menu, not here.
+ *
+ * Not a flex row with a label like the home bar's: there is no width to
+ * spend over live output. The `.status:focus::after` tooltip is the text,
+ * and it is right-anchored below.
+ * ------------------------------------------------------------------- */
+.status-rail {
+    position: fixed;
+    top: calc(var(--fab-top-edge) + var(--fab-size) + var(--fab-gap));
+    right: var(--fab-slot-0);
+    width: var(--fab-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 60;
+    /* The rail is a positioning shell, not a target. Only the dot inside
+     * it takes pointer events, so the empty width either side of a 12px
+     * circle never eats a click meant for the terminal underneath. */
+    pointer-events: none;
+}
+
+.status-rail > .status {
+    pointer-events: auto;
+}
+
+/* When the light is mounted in the home bar this container is empty, so
+ * it collapses rather than sitting invisible over the launchpad. Belt and
+ * braces with the screen-scoped rule below, which is the one that also
+ * covers the auth screen. */
+.status-rail:empty {
+    display: none;
+}
+
+/* Same screen scoping as .fab-menu-btn above: no session, no rail. On the
+ * home screen the light is in the bar; on the auth screen there is no bar
+ * and therefore no light, which is the rule rather than an oversight. */
+body:has(#launchpad-screen.active) .status-rail,
+body:has(#auth-screen.active) .status-rail {
+    display: none;
+}
+
+/* The tooltip is centred under the dot everywhere else. On this rail the
+ * dot is ~26px from the right edge and the string can be long ("server
+ * unreachable - Failed to fetch"), so a centred nowrap box runs off
+ * screen. Anchor its RIGHT edge to the dot instead and let it grow
+ * leftwards, capped at the viewport. */
+.status-rail .status::after {
+    left: auto;
+    right: 0;
+    transform: none;
+    max-width: calc(100vw - var(--fab-edge) * 2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------
  * The menus themselves. Placed by client/js/anchor-popover.js, so only
  * the box is described here. Both menus carry `.fab-menu` plus their own
  * class, so the shared look cannot drift between them.
