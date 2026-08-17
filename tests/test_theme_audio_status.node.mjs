@@ -81,7 +81,7 @@ function test(name, fn) {
  */
 function healthy(over) {
     return Object.assign({
-        appSoundOn: true,
+        sessionName: 'alpha',
         sessionOn: true,
         muted: false,
         masterVolume: 1,
@@ -134,7 +134,7 @@ test('CAUSE 3: an exhausted load outranks the gates', () => {
     // here would send the user to the wrong control.
     const v = Status.describe(healthy({
         loadError: 'no playable source (a.m4a, a.ogg), last media error code 4',
-        appSoundOn: false,
+        sessionOn: false,
         node: null
     }));
     assert.equal(v.playing, false);
@@ -159,10 +159,25 @@ test('CAUSE 5: a closed session gate is named as such', () => {
     assert.match(v.reason, /off for this session/);
 });
 
-test('a closed master gate names the all-sessions switch', () => {
-    const v = Status.describe(healthy({ appSoundOn: false }));
+test('the home screen is named as such, not blamed on a control', () => {
+    // Audio is session-only. With no session in scope there is nothing a
+    // music track can belong to, and there is no app-level switch left to
+    // point the user at, so the reason has to say where sound lives.
+    const v = Status.describe(healthy({ sessionName: null }));
     assert.equal(v.playing, false);
-    assert.match(v.reason, /all sessions/);
+    assert.equal(v.settling, false);
+    assert.match(v.reason, /only plays inside a session/);
+});
+
+test('the retired app sound master switch is named by NO reason', () => {
+    // A status branch that can never fire is worse than no branch: it
+    // sends whoever reads it looking for a control that does not exist.
+    const src = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'themeAudioStatus.js'),
+        'utf8');
+    assert.ok(!/reason:\s*'app sound is off for all sessions'/.test(src));
+    assert.ok(!/status\.appSoundOn/.test(src),
+        'nothing may read a field ThemeAudio.getStatus() no longer emits');
 });
 
 test('a blocked autoplay tells the user to tap again', () => {
@@ -241,7 +256,7 @@ test('AbortError is benign and does not mask a real verdict', () => {
 
 test('no silent snapshot is ever reported as playing, and every failure names itself', () => {
     const axes = {
-        appSoundOn: [true, false],
+        sessionName: ['alpha', null],
         sessionOn: [true, false],
         hasTrack: [true, false],
         hidden: [true, false],
@@ -253,7 +268,7 @@ test('no silent snapshot is ever reported as playing, and every failure names it
 
     let checked = 0;
     let sawPlaying = 0;
-    for (const appSoundOn of axes.appSoundOn) {
+    for (const sessionName of axes.sessionName) {
         for (const sessionOn of axes.sessionOn) {
             for (const hasTrack of axes.hasTrack) {
                 for (const hidden of axes.hidden) {
@@ -269,16 +284,16 @@ test('no silent snapshot is ever reported as playing, and every failure names it
                                                 ? Object.assign({}, base, { effectiveGain: 0, currentTime: 9 })
                                                 : Object.assign({}, base);
                                     const snap = {
-                                        appSoundOn, sessionOn, hasTrack, hidden,
+                                        sessionName, sessionOn, hasTrack, hidden,
                                         masterVolume, loadError, playError, node,
-                                        muted: !(appSoundOn && sessionOn)
+                                        muted: !(sessionName && sessionOn)
                                     };
                                     const v = Status.describe(snap);
                                     checked++;
 
                                     // The one and only combination that is
                                     // genuinely audible.
-                                    const audible = appSoundOn && sessionOn && hasTrack &&
+                                    const audible = !!sessionName && sessionOn && hasTrack &&
                                         !hidden && masterVolume > 0 && !loadError &&
                                         (!playError || playError === 'AbortError') &&
                                         nodeState === 'playing';
