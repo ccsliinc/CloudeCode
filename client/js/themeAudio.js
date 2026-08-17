@@ -53,18 +53,14 @@
  * click moved the state.
  *
  * Engine: MediaElementAudioSourceNode -> GainNode -> destination, for clean
- * linearRampToValueAtTime crossfades. The requestAnimationFrame ramp is the
- * fallback for when AudioContext construction fails; same behaviour, coarser
- * curve. Looping uses `el.loop`, which still gaps audibly in 2026 and is
- * acceptable for ambience; the upgrade path is AudioBufferSourceNode.
- *
- * Page Visibility: pause when document.hidden, resume when visible if not
- * muted. Explicit, because browsers do not universally pause backgrounded
- * tabs.
- *
- * Autoplay: setTheme() only preloads, it never calls play(). The
- * AudioContext is built by makeNode(), which is NOT inside a gesture, so it
- * starts suspended; the first unmute resumes it from inside the gesture.
+ * linearRampToValueAtTime crossfades; a requestAnimationFrame ramp is the
+ * fallback when AudioContext construction fails. Looping uses `el.loop`,
+ * which still gaps audibly in 2026 and is acceptable for ambience.
+ * Visibility is handled explicitly (pause on hidden, resume on visible if
+ * unmuted) because browsers do not universally pause backgrounded tabs.
+ * setTheme() only preloads, never plays; the AudioContext is built by
+ * makeNode() outside any gesture so it starts suspended, and the first
+ * unmute resumes it from inside the gesture.
  *
  * WHERE THE MANIFEST COMES FROM, and why this module was dead code until
  * 2026-08-16. setTheme() is fed from GET /api/v1/themes, NOT from
