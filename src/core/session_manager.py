@@ -2655,7 +2655,11 @@ class SessionManager:
         return rows
 
     async def adopt_external_session(
-        self, name: str, confirm_detach: bool = False
+        self,
+        name: str,
+        confirm_detach: bool = False,
+        initial_cols: Optional[int] = None,
+        initial_rows: Optional[int] = None,
     ) -> dict:
         """Adopt an externally-created tmux session on our socket.
 
@@ -2673,12 +2677,28 @@ class SessionManager:
           3. Record ``fifo_start_offset = os.path.getsize(pipe_path)``
              right after pipe-pane is active — the WS tailer seeks here
              so the client doesn't see bytes already painted via scrollback.
+          3b. Resize the pane to the attaching client's dimensions, when
+             it supplied them. An external session is born 80x24 and this
+             app never attaches a tmux client, so nothing else will ever
+             reshape it - measured 2026-08-17, an adopted session sat at
+             80x24 next to an app-created 163x46 one on the same socket.
+             This runs BEFORE the capture so the captured bytes are
+             emitted at the width the client will render them at, which
+             is the same ordering the rejoin path already uses.
           4. Capture scrollback via ``backend.capture_scrollback()``.
           5. Register the session/backend (keyed ``adopted:<name>``) and
              stash the FIFO offset for the WS handler to consume.
 
         The adopted session is NOT added to ``owned_tmux_sessions`` — it
         isn't ours, we're borrowing it.
+
+        Args:
+            name: literal tmux session name on our socket.
+            confirm_detach: accepted for API back-compat, ignored.
+            initial_cols: client-measured grid width, or None.
+            initial_rows: client-measured grid height, or None. Both must
+                be supplied for the pre-capture resize to run; one alone
+                is not enough to describe a grid and is ignored.
 
         Returns:
             dict with ``session``, ``initial_scrollback_b64``, and
@@ -2734,6 +2754,32 @@ class SessionManager:
         # Step 3 — ensure pipe-pane BEFORE capturing scrollback so the
         # FIFO is guaranteed warm at the moment we read its size.
         await backend.attach_existing(needs_pipe_setup=True)
+
+        # Step 3b — reshape the adopted pane to the client's grid before
+        # anything reads it. See the docstring: without this an adopted
+        # session keeps tmux's 80x24 birth geometry forever.
+        if initial_cols and initial_rows:
+            try:
+                backend.resize(initial_cols, initial_rows)
+                logger.info(
+                    "adopted_session_resized",
+                    session=name,
+                    cols=initial_cols,
+                    rows=initial_rows,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                # A failed pre-resize is not a reason to refuse the
+                # adoption: the WS resize handshake reshapes the pane
+                # again once the socket opens. Say so rather than
+                # swallowing it, because the scrollback about to be
+                # captured is then at the wrong width.
+                logger.warning(
+                    "adopted_session_resize_failed",
+                    session=name,
+                    cols=initial_cols,
+                    rows=initial_rows,
+                    error=str(exc),
+                )
 
         # Step 4 — record FIFO offset immediately. Any bytes that hit
         # the FIFO between this line and the scrollback capture below

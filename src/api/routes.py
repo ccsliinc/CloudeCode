@@ -394,6 +394,8 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
     result = await session_manager.adopt_external_session(
         name=body.session_name,
         confirm_detach=body.confirm_detach,
+        initial_cols=body.cols,
+        initial_rows=body.rows,
     )
 
     return AdoptSessionResponse(**result)

@@ -587,6 +587,23 @@ class AdoptSessionRequest(BaseModel):
             "otherwise."
         ),
     )
+    # Client-measured terminal dims, same contract as CreateSessionRequest
+    # and the rejoin path's ``getSession(includeScrollback, cols, rows)``.
+    #
+    # An externally-created tmux session is born 80x24 and, because this
+    # app never attaches a tmux CLIENT, nothing ever resizes it. Adopting
+    # one without these left the pane at 80x24 while an app-created
+    # session on the same socket was 163x46. Supplied together or not at
+    # all; the pane is reshaped BEFORE its scrollback is captured, so the
+    # captured bytes are emitted at the width the client will render them.
+    cols: Optional[int] = Field(
+        None,
+        description="Client-measured terminal columns (xterm cell grid width)"
+    )
+    rows: Optional[int] = Field(
+        None,
+        description="Client-measured terminal rows (xterm cell grid height)"
+    )
 
 
 class AdoptSessionResponse(BaseModel):

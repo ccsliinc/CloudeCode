@@ -37,6 +37,15 @@ const jsPath = path.join(__dirname, '..', 'client', 'js', 'terminal-scroll.js');
 // verbatim, which a naive text search happily matches instead of the rule.
 const css = fs.readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const src = fs.readFileSync(jsPath, 'utf8');
+// terminal-scroll.js reads window.TerminalScrollStep for every
+// pixels-to-rows conversion (the wheel and the drag share it so they
+// cannot cover different distances), so the sandbox needs it loaded.
+const stepSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'client', 'js', 'terminal-scroll-step.js'), 'utf8'
+);
+
+/** Rows per row-height of gesture travel, read from the module. */
+const GAIN = Number(/GESTURE_GAIN = (\d+)/.exec(stepSrc)[1]);
 
 let failures = 0;
 let passes = 0;
@@ -91,6 +100,7 @@ function loadModule() {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
+    vm.runInContext(stepSrc, sandbox);
     vm.runInContext(src, sandbox);
     const container = {
         addEventListener(type, fn, opts) {
@@ -305,15 +315,18 @@ function drive(term, startY, moveY, evOpts) {
 test('a drag xterm declined still scrolls the terminal', () => {
     // Mouse reporting on: xterm never touched the event, so it arrives
     // uncancelled with the buffer nowhere near a boundary. 36px of finger
-    // at an 18px row pitch is exactly two rows.
+    // at an 18px row pitch is two row-heights of travel, which is two
+    // times the gesture gain in rows. GAIN is read from the module rather
+    // than hard-coded: a gain change is a deliberate act, and a test that
+    // restates the number cannot tell the two apart.
     const { term, ev } = drive(fakeTerm(1000, 2000), 500, 464);
-    assert.deepEqual(term.scrolled, [2], 'must scroll forward by two rows');
+    assert.deepEqual(term.scrolled, [2 * GAIN], 'must scroll forward by two row-heights');
     assert.equal(ev.prevented, true, 'and still cancel the event');
 });
 
 test('drag direction is honoured', () => {
     const { term } = drive(fakeTerm(1000, 2000), 464, 500);
-    assert.deepEqual(term.scrolled, [-2], 'finger down scrolls back in history');
+    assert.deepEqual(term.scrolled, [-2 * GAIN], 'finger down scrolls back in history');
 });
 
 test('a boundary drag is blocked but not scrolled', () => {
@@ -344,7 +357,7 @@ test('a cancel from xterm does not stop the drag from scrolling', () => {
     // So the drag was cancelled by xterm, skipped by us, and moved
     // nothing. The owner must scroll regardless of who cancelled.
     const { term } = drive(fakeTerm(1000, 2000), 500, 464, { defaultPrevented: true });
-    assert.deepEqual(term.scrolled, [2], 'the capture owner scrolls it anyway');
+    assert.deepEqual(term.scrolled, [2 * GAIN], 'the capture owner scrolls it anyway');
 });
 
 test('a selection drag is never stolen by the scroller', () => {
@@ -363,7 +376,7 @@ test('a selection drag is never stolen by the scroller', () => {
     assert.deepEqual(term.scrolled, [], 'selection owns the finger');
     win.TouchSelect = { isSelecting: () => false };
     fire('touchmove', 428);
-    assert.deepEqual(term.scrolled, [2], 'and the scroller takes it back after');
+    assert.deepEqual(term.scrolled, [2 * GAIN], 'and the scroller takes it back after');
 });
 
 test('sub-row movement accumulates instead of being discarded', () => {
@@ -380,8 +393,8 @@ test('sub-row movement accumulates instead of being discarded', () => {
         api.blockOverscrollEscape(touchEvent({}));
     }
     assert.equal(
-        term.scrolled.reduce((a, b) => a + b, 0), 2,
-        '36px of 6px steps must still add up to two rows'
+        term.scrolled.reduce((a, b) => a + b, 0), 2 * GAIN,
+        '36px of 6px steps must still add up to two row-heights'
     );
 });
 

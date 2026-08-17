@@ -37,6 +37,29 @@
  * mid-drag.
  *
  * No timers decide anything here; the latch only suppresses.
+ *
+ * WHY xterm's `scrollOnUserInput` IS OFF (the "copy jumps to bottom" fix)
+ *
+ * xterm defaults it to true, and it re-pins the viewport from inside
+ * CoreService.triggerDataEvent on any data event flagged as user input.
+ * That is a SECOND owner of the same decision this module exists to own,
+ * and it fires on paths that are not a request to go to the bottom -
+ * notably the mouse reports a selection produces whenever the running
+ * application has mouse tracking on.
+ *
+ * The user diagnosed the shape of it from his own tmux config years ago:
+ * tmux binds `copy-selection-and-cancel` by default, and it is the CANCEL
+ * that leaves copy mode and snaps to the bottom, so he rebound it to
+ * `copy-selection`. Same fix here - stop doing the second half. The
+ * mechanism differs (xterm's own selection plus this module's pin logic,
+ * never a tmux copy-mode: the app attaches no tmux client at all) but the
+ * principle is identical: COMPLETING A SELECTION MUST NOT RE-PIN THE VIEW.
+ *
+ * Nothing is lost, because "back to live" still has explicit owners:
+ * pinToBottom() from the d-pad, from post-reconnect repaint, and from
+ * terminal.js's onData handler, which is the only path a real keystroke
+ * takes. See also touch-select.js clampToRows(), which removes the other
+ * half of the same defect - xterm's selection drag-scroll interval.
  */
 (function () {
     'use strict';
@@ -72,9 +95,6 @@
 
     /** Sub-row remainder carried between touchmoves so slow drags move. */
     var pendingRows = 0;
-
-    /** Fallback row height (px) when the viewport cannot be measured. */
-    var FALLBACK_CELL_HEIGHT = 17;
 
     /**
      * Is the terminal viewport scrolled to the live bottom?
@@ -147,27 +167,6 @@
         } catch (err) {
             console.warn('TerminalScroll: scrollToBottom failed', err);
         }
-    }
-
-    /**
-     * Height of one terminal row in CSS pixels.
-     *
-     * Measured from the DOM rather than read out of xterm's private
-     * render service, so it cannot break on a vendored-bundle bump.
-     *
-     * @param {object} term - an xterm.js Terminal instance.
-     * @returns {number} row height in px, never zero.
-     */
-    function cellHeight(term) {
-        try {
-            var vp = document.querySelector('.xterm-viewport');
-            if (vp && vp.clientHeight > 0 && term.rows > 0) {
-                return vp.clientHeight / term.rows;
-            }
-        } catch (err) {
-            console.warn('TerminalScroll: cell height read failed', err);
-        }
-        return FALLBACK_CELL_HEIGHT;
     }
 
     /**
@@ -248,8 +247,16 @@
     function consumeDragScroll(dy) {
         var term = getTerm();
         if (!term || !dy) return false;
-        pendingRows += dy / cellHeight(term);
-        var rows = pendingRows > 0 ? Math.floor(pendingRows) : Math.ceil(pendingRows);
+        pendingRows += window.TerminalScrollStep.rowsForPixels(dy, term);
+        // EPSILON, not decoration: the accumulator is a running sum of
+        // px/rowHeight*gain, so a drag whose steps divide exactly still
+        // lands a hair under the whole row it should have reached (six
+        // 6px steps at an 18px pitch summed to 7.999999999999999, and
+        // truncation ate a row per gesture). Tolerate that much drift.
+        var eps = 1e-9;
+        var rows = pendingRows > 0
+            ? Math.floor(pendingRows + eps)
+            : Math.ceil(pendingRows - eps);
         if (!rows) return false;
         pendingRows -= rows;
         if (!scrollByRows(term, rows)) {
@@ -279,8 +286,7 @@
         noteUserScroll();
         var term = getTerm();
         if (!term) return;
-        var dir = ev.deltaY > 0 ? 1 : -1;
-        scrollByRows(term, Math.ceil(Math.abs(ev.deltaY) / 40) * dir || dir);
+        scrollByRows(term, window.TerminalScrollStep.rowsForWheel(ev, term));
         if (ev.cancelable) ev.preventDefault();
         if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
     }

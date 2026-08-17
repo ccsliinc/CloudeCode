@@ -350,11 +350,19 @@
          calls window.TerminalScroll from flush() and setupScrollListener()),
          and it owns the decision that used to be the racing
          autoScrollEnabled flag. -->
+    <!-- How far a gesture is worth. Must load BEFORE terminal-scroll.js,
+         which reads window.TerminalScrollStep from both the wheel and the
+         touch path so the two cannot cover different distances. -->
+    <script src="/static/js/terminal-scroll-step.js"></script>
     <script src="/static/js/terminal-scroll.js"></script>
     <!-- Alternate-screen scrollback (claude's `tui: fullscreen`, where the
          terminal has no scrollback at all). Must load BEFORE terminal.js,
          which wires it in setupScrollListener(), and terminal-scroll.js
          calls window.AltScreenScroll from its one scroll primitive. -->
+    <!-- Key runs for claude's transcript view. Must load BEFORE
+         altscreen-scroll.js, which builds every synthesised scroll
+         through window.AltScreenKeys. -->
+    <script src="/static/js/altscreen-keys.js"></script>
     <script src="/static/js/altscreen-scroll.js"></script>
     <!-- Clipboard tier ladder. Must load BEFORE clipboard.js,
          touch-select.js and copy-output.js, all of which copy through

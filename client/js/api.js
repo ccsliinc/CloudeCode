@@ -850,13 +850,30 @@ class API {
      *   Required when any session is already active.
      * @returns {Promise<{session: object, initial_scrollback_b64: string,
      *   fifo_start_offset: number}>}
+     *
+     * DIMENSIONS: an externally-created tmux session is born 80x24 and
+     * this app never attaches a tmux CLIENT, so nothing else will ever
+     * reshape it - measured 2026-08-17, an adopted session sat at 80x24
+     * next to an app-created 163x46 one on the same socket. The grid is
+     * read here rather than asked of the caller so no adopt path can
+     * forget it, and it is sent BEFORE the server captures scrollback so
+     * the captured bytes are emitted at the width they will render at.
+     * An unmeasurable grid sends nothing at all; the server keeps its own
+     * defaults and the WS handshake still reshapes after connect.
      */
     async adoptSession(sessionName, confirmDetach = false) {
+        const grid = (window.TerminalMetrics
+            && typeof window.TerminalMetrics.currentGrid === 'function')
+            ? window.TerminalMetrics.currentGrid()
+            : {};
         return await this.call('/sessions/adopt', {
             method: 'POST',
             body: {
                 session_name: sessionName,
                 confirm_detach: confirmDetach,
+                ...(grid.cols && grid.rows
+                    ? { cols: grid.cols, rows: grid.rows }
+                    : {}),
             },
         });
     }

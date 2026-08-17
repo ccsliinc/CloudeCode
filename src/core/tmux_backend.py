@@ -85,6 +85,22 @@ PASTE_THRESHOLD_BYTES: int = 256
 #: Default socket name, overridable via ``AuthConfig.session.tmux_socket_name``.
 DEFAULT_SOCKET_NAME: str = "cloude"
 
+#: Scrollback rows tmux keeps per pane on OUR socket.
+#:
+#: CloudeCode carries its own explicit tmux settings and deliberately does
+#: NOT source the user's ``~/.tmux.conf``: a personal config references
+#: plugins (tpm, resurrect, continuum) that will not exist on another
+#: machine, so inheriting it makes the app's behaviour depend on the box
+#: it runs on. The cost of owning the settings is that a default we never
+#: state is the default we get - the socket was silently running tmux's
+#: stock 2000, a quarter of what the same user configures for himself.
+#:
+#: Applied with ``set-option -g`` BEFORE ``new-session``. tmux resolves
+#: history-limit through the normal option lookup when it trims a pane's
+#: history, so a later change reaches existing panes too, but setting it
+#: first means a pane is never briefly born under the stock limit.
+HISTORY_LIMIT: int = 10000
+
 #: Session name prefix — ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
 
@@ -232,6 +248,45 @@ class TmuxBackend(SessionBackend):
         """Common tmux argv prefix — always uses our dedicated socket."""
         return ["tmux", "-L", self.socket_name]
 
+    async def _apply_history_limit(self) -> None:
+        """Set this socket's scrollback depth to :data:`HISTORY_LIMIT`.
+
+        Idempotent and cheap; tmux ignores a repeat set of the same value.
+        ``check=False`` because a socket that cannot take the option is not
+        a reason to refuse the session - the pane just keeps the stock
+        depth, which is what it had before this existed.
+
+        Returns:
+            None.
+        """
+        await self._run_tmux(
+            "set-option", "-g", "history-limit", str(HISTORY_LIMIT), check=False
+        )
+
+    async def read_history_limit(self) -> Optional[int]:
+        """Read the socket's current global ``history-limit``.
+
+        Verification seam: the point of the setting is the number tmux
+        actually holds, and ``show-options`` is the only thing that
+        reports it.
+
+        Returns:
+            The configured row count, or None when tmux could not be
+            asked or answered with something non-numeric. None is a real
+            third answer - "could not determine" - and callers must not
+            read it as the default.
+        """
+        rc, out, _ = await self._run_tmux(
+            "show-options", "-gv", "history-limit", check=False
+        )
+        if rc != 0:
+            return None
+        raw = out.decode("utf-8", errors="replace").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
     def _resolve_pipe_path(self) -> Path:
         if self._pipe_path is not None:
             return self._pipe_path
@@ -343,6 +398,11 @@ class TmuxBackend(SessionBackend):
         # only matters for the brief window before the first resize frame.
         use_cols = initial_cols if (initial_cols and initial_rows) else INITIAL_COLS
         use_rows = initial_rows if (initial_cols and initial_rows) else INITIAL_ROWS
+
+        # Scrollback depth BEFORE the pane exists - see HISTORY_LIMIT.
+        # ``set-option`` also starts the tmux server when none is running,
+        # which is exactly the ordering we want on a cold socket.
+        await self._apply_history_limit()
 
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
         # If a command is supplied, tmux runs that as pane 0's process; the
@@ -708,20 +768,27 @@ class TmuxBackend(SessionBackend):
                 check=False,
             )
 
-            # 4. Surface window-size divergence. ``show-option -sv``
-            # queries the server-level option; ``resize-window -x -y``
-            # may oscillate when this isn't ``manual``.
-            rc_ws, out_ws, _ = await self._run_tmux(
-                "show-option", "-sv", "window-size", check=False,
+            # 4. Make the adopted session RESIZABLE, rather than logging a
+            # warning that it is not.
+            #
+            # MEASURED 2026-08-17: an adopted session sat at 80x24 (tmux's
+            # birth default) while an app-created one on the same socket
+            # was 163x46. The difference was entirely here. A session
+            # created outside the app keeps ``window-size latest``, which
+            # sizes the window to the most recently attached CLIENT - and
+            # this app never attaches one, it streams with ``pipe-pane``.
+            # With zero clients tmux has nothing to size to, so the window
+            # stays at its birth geometry and every ``resize-window`` we
+            # issue is undone. Adoption is a supported feature, so an
+            # adopted session gets the same three settings a created one
+            # does and the WS resize handshake then sticks.
+            await self._run_tmux(
+                "set-option", "-t", target, "window-size", "manual", check=False,
             )
-            ws_val = out_ws.decode("utf-8", errors="replace").strip() if rc_ws == 0 else ""
-            if ws_val and ws_val != "manual":
-                logger.warning(
-                    "external_session_window_size_not_manual",
-                    session=self.tmux_session,
-                    window_size=ws_val,
-                    note="resize-window -x -y may oscillate with tmux auto-resize",
-                )
+            await self._run_tmux(
+                "set-option", "-t", target, "aggressive-resize", "off", check=False,
+            )
+            await self._apply_history_limit()
 
         # Recompute / re-resolve pipe file path. It was written to by the
         # old Python process; the tmux server kept pipe-pane running, so

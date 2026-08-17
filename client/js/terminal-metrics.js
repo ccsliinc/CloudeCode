@@ -320,7 +320,45 @@ console.log('[TerminalMetrics Module] Loading...');
         return out;
     }
 
+    /**
+     * The grid the live terminal is currently rendering, fitted first.
+     *
+     * THE ONE PLACE that answers "what dimensions should the server give
+     * this pane". Every session-birth path needs it - create, rejoin and
+     * adopt - and adopt was the one that did not ask, which is why an
+     * adopted session sat at tmux's 80x24 birth size forever while an
+     * app-created one on the same socket was 163x46. A shared reader
+     * makes that class of omission visible instead of per-caller.
+     *
+     * @returns {{cols: number, rows: number}|{}} an empty object when the
+     *   terminal is not ready. Empty is a real third answer: the caller
+     *   must send nothing rather than invent a default, because the
+     *   server has its own and the WS handshake reshapes shortly after.
+     */
+    function currentGrid() {
+        try {
+            const ctl = window.TerminalController;
+            const t = ctl && ctl.term;
+            if (!t || typeof t.cols !== 'number' || typeof t.rows !== 'number') {
+                return {};
+            }
+            if (t.cols <= 0 || t.rows <= 0) return {};
+            // Fit first so the numbers describe what the renderer will
+            // actually use post-connect, not a stale pre-layout grid.
+            try {
+                if (ctl.fitAddon) ctl.fitAddon.fit();
+            } catch (err) {
+                console.warn('TerminalMetrics: pre-read fit failed', err);
+            }
+            return { cols: t.cols, rows: t.rows };
+        } catch (err) {
+            console.warn('TerminalMetrics: currentGrid failed', err);
+            return {};
+        }
+    }
+
     window.TerminalMetrics = {
+        currentGrid,
         waitForFonts,
         xtermStylesheetApplied,
         proposalIsSane,

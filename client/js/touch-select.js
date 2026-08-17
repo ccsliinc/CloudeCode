@@ -221,13 +221,69 @@
     }
 
     /**
+     * Keep a synthetic pointer inside the rendered rows.
+     *
+     * WHY THIS EXISTS - this is the "copy jumps to bottom" fix.
+     *
+     * xterm's SelectionService starts a 50ms `_dragScroll` interval on
+     * mousedown and stops it on mouseup. While it runs, a pointer BELOW
+     * the last rendered row makes it scroll the buffer down, and keep
+     * scrolling, twenty times a second, until it reaches the live bottom.
+     * On a phone the long-press that starts a selection routinely lands
+     * in the bottom rows of the screen, so the act of selecting walked
+     * the view to the bottom on its own.
+     *
+     * It is the same shape as tmux's default `copy-selection-and-cancel`,
+     * where the CANCEL is what snaps the view down and the fix is to stop
+     * doing the second half. Here the second half is the auto-scroll, and
+     * clamping the synthetic coordinates into the row band removes it
+     * without touching how selection itself works.
+     *
+     * COST, stated plainly: a drag can no longer extend a selection past
+     * the visible screen by auto-scrolling. Under `tui: fullscreen` there
+     * is nothing past the visible screen to reach (baseY is 0 by
+     * construction), and elsewhere the user can scroll and select again.
+     * A selection that silently relocates the view is the worse trade.
+     *
+     * @param {number} x - clientX of the touch.
+     * @param {number} y - clientY of the touch.
+     * @returns {{x: number, y: number}} coordinates inside the row band.
+     *   Returned unchanged when the screen element cannot be measured -
+     *   an unmeasurable box is not a reason to refuse the gesture.
+     */
+    function clampToRows(x, y) {
+        if (!screenEl || typeof screenEl.getBoundingClientRect !== 'function') {
+            return { x: x, y: y };
+        }
+        const r = screenEl.getBoundingClientRect();
+        if (!r || !r.height || !r.width) return { x: x, y: y };
+        // One row of inset: xterm compares against the row band, so the
+        // edge row itself is enough to arm the auto-scroll.
+        const rows = (term && term.rows) || 1;
+        const pad = Math.max(1, r.height / rows);
+        return {
+            x: Math.min(Math.max(x, r.left + 1), r.right - 1),
+            y: Math.min(Math.max(y, r.top + pad), r.bottom - pad),
+        };
+    }
+
+    /**
      * Synthesize a bubbling mouse event at viewport coordinates. The
      * selection listener sits on term.element and the drag listeners on
      * the ownerDocument, so dispatching on .xterm-screen (bubbles: true)
      * reaches all of them.
+     *
+     * Coordinates are clamped into the rendered row band first - see
+     * clampToRows() for why that is the whole "copy jumps to bottom" fix.
+     *
+     * @param {string} type - 'mousedown', 'mousemove' or 'mouseup'.
+     * @param {number} x - clientX of the touch.
+     * @param {number} y - clientY of the touch.
+     * @returns {void}
      */
     function dispatchMouse(type, x, y) {
         if (!screenEl) return;
+        const at = clampToRows(x, y);
         screenEl.dispatchEvent(new MouseEvent(type, {
             bubbles: true,
             cancelable: true,
@@ -235,8 +291,8 @@
             button: 0,
             buttons: type === 'mouseup' ? 0 : 1,
             detail: 1,
-            clientX: x,
-            clientY: y,
+            clientX: at.x,
+            clientY: at.y,
         }));
     }
 
@@ -345,5 +401,5 @@
         return state === 'selecting';
     }
 
-    window.TouchSelect = { init, isSelecting };
+    window.TouchSelect = { init, isSelecting, clampToRows };
 })();
