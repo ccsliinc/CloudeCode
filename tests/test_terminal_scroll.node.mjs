@@ -152,18 +152,24 @@ test('touch observers stay passive; the drag owner cancels', () => {
         },
     });
     const observers = registered.filter((r) => r.options.capture === true);
-    ['touchstart', 'touchend', 'wheel'].forEach((type) => {
+    ['touchstart', 'touchend'].forEach((type) => {
         const found = observers.filter((r) => r.type === type);
         assert.equal(found.length, 1, `exactly one capture-phase ${type} observer`);
         assert.equal(found[0].options.passive, true, `${type} must be passive`);
     });
-    // touchmove is the exception and deliberately so: it is the drag
-    // OWNER, not an observer, because xterm cancels every in-range
-    // touchmove and its own scroll goes to a DOM element that does not
-    // drive the buffer. See test_terminal_scroll_gesture.node.mjs.
-    const moves = observers.filter((r) => r.type === 'touchmove');
-    assert.equal(moves.length, 1, 'exactly one capture-phase touchmove owner');
-    assert.equal(moves[0].options.passive, false, 'the owner must be able to cancel');
+    // touchmove and wheel are the exceptions and deliberately so: they are
+    // the gesture OWNERS, not observers. touchmove because xterm cancels
+    // every in-range touchmove and its own scroll goes to a DOM element
+    // that does not drive the buffer. wheel because on the ALTERNATE
+    // screen xterm turns a wheel into cursor keys, which claude reads as
+    // "cycle previous prompts" - the wheel would edit the prompt instead
+    // of scrolling. It moved here from terminal.js so wheel and touch
+    // share one primitive. See test_altscreen_scroll.node.mjs.
+    ['touchmove', 'wheel'].forEach((type) => {
+        const owners = observers.filter((r) => r.type === type);
+        assert.equal(owners.length, 1, `exactly one capture-phase ${type} owner`);
+        assert.equal(owners[0].options.passive, false, `${type} must be able to cancel`);
+    });
 });
 
 test('pinToBottom clears the latch and scrolls', () => {

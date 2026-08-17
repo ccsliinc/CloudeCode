@@ -212,12 +212,18 @@ test('the auto-scroll race listeners are still passive', () => {
         captureTypes,
         ['touchcancel', 'touchend', 'touchmove', 'touchstart', 'wheel']
     );
-    // touchmove is the drag owner and must cancel. Everything else here
-    // only observes that the user is driving, and making any of those
-    // cancelling would break the wheel and the tap paths.
+    // touchmove and wheel are the gesture OWNERS and must cancel: both now
+    // scroll the buffer themselves through one shared primitive, so they
+    // have to keep xterm from also acting on the same event. Everything
+    // else here only observes that the user is driving, and making any of
+    // those cancelling would break the tap paths.
+    const owners = ['touchmove', 'wheel'];
     listeners
-        .filter((l) => l.opts.capture === true && l.type !== 'touchmove')
+        .filter((l) => l.opts.capture === true && owners.indexOf(l.type) === -1)
         .forEach((l) => assert.equal(l.opts.passive, true, `${l.type} must stay passive`));
+    listeners
+        .filter((l) => l.opts.capture === true && owners.indexOf(l.type) !== -1)
+        .forEach((l) => assert.equal(l.opts.passive, false, `${l.type} must cancel`));
 });
 
 /* ========== 4. the mouse-reporting hole (the iOS scrollback bug) ==========
