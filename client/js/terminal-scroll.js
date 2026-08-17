@@ -37,6 +37,29 @@
  * mid-drag.
  *
  * No timers decide anything here; the latch only suppresses.
+ *
+ * WHY xterm's `scrollOnUserInput` IS OFF (the "copy jumps to bottom" fix)
+ *
+ * xterm defaults it to true, and it re-pins the viewport from inside
+ * CoreService.triggerDataEvent on any data event flagged as user input.
+ * That is a SECOND owner of the same decision this module exists to own,
+ * and it fires on paths that are not a request to go to the bottom -
+ * notably the mouse reports a selection produces whenever the running
+ * application has mouse tracking on.
+ *
+ * The user diagnosed the shape of it from his own tmux config years ago:
+ * tmux binds `copy-selection-and-cancel` by default, and it is the CANCEL
+ * that leaves copy mode and snaps to the bottom, so he rebound it to
+ * `copy-selection`. Same fix here - stop doing the second half. The
+ * mechanism differs (xterm's own selection plus this module's pin logic,
+ * never a tmux copy-mode: the app attaches no tmux client at all) but the
+ * principle is identical: COMPLETING A SELECTION MUST NOT RE-PIN THE VIEW.
+ *
+ * Nothing is lost, because "back to live" still has explicit owners:
+ * pinToBottom() from the d-pad, from post-reconnect repaint, and from
+ * terminal.js's onData handler, which is the only path a real keystroke
+ * takes. See also touch-select.js clampToRows(), which removes the other
+ * half of the same defect - xterm's selection drag-scroll interval.
  */
 (function () {
     'use strict';

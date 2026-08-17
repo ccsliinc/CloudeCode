@@ -198,6 +198,8 @@ class Terminal {
             allowProposedApi: true,
             convertEol: false,
             scrollback: 50000,
+            // COPY MUST NOT JUMP TO THE BOTTOM - see terminal-scroll.js.
+            scrollOnUserInput: false,
             windowsMode: false
         });
 
@@ -311,6 +313,8 @@ class Terminal {
             // Typing guard for altscreen-scroll.js: never synthesise keys
             // into a prompt the user is mid-sentence in.
             if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
+            // The "take me back to live" half of scrollOnUserInput: false.
+            if (window.TerminalScroll) window.TerminalScroll.pinToBottom(this.term);
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 // Convert special symbols for mobile keyboard shortcuts
                 if (data === '¥') {
@@ -342,27 +346,14 @@ class Terminal {
         // Setup scroll event listener for auto-scroll detection
         this.setupScrollListener();
 
-        // Auto-scroll terminal to bottom on focus (mobile keyboard fix)
-        const terminalElement = document.getElementById('terminal');
-        if (terminalElement) {
-            terminalElement.addEventListener('focus', () => {
-                const container = document.querySelector('.terminal-container');
-                if (container) {
-                    setTimeout(() => {
-                        container.scrollIntoView({ behavior: 'smooth', block: 'end' });
-                    }, 100);
-                }
-            }, true);
-
-            terminalElement.addEventListener('click', () => {
-                const container = document.querySelector('.terminal-container');
-                if (container && window.innerWidth <= 768) {
-                    setTimeout(() => {
-                        container.scrollIntoView({ behavior: 'smooth', block: 'end' });
-                    }, 100);
-                }
-            });
-        }
+        // REMOVED: two listeners that called
+        // `.terminal-container.scrollIntoView({block: 'end'})` 100ms after
+        // any focus or any tap on the terminal. They predate the scroll
+        // design and contradict it: a tap is not an intent to go to the
+        // bottom, and the tap that ends a text selection is exactly the
+        // one the user complained jumps. `.terminal-container` is inside
+        // a 100dvh shell so there is no keyboard-driven page scroll left
+        // for them to correct either.
 
         this.term.writeln('\x1b[1;32mCloude Code Terminal\x1b[0m');
         this.term.writeln('');
