@@ -71,6 +71,7 @@ from src.core.agent_families import (
     DEFAULT_FAMILY,
     is_valid_family,
 )
+from src.core.shell_init import rc_prefixed
 
 # Filesystem-safe, stable identifier: used both as the wrapper's dict key
 # and as the on-disk script filename (``<id>.zsh``). Lowercase start avoids
@@ -321,15 +322,15 @@ def render_wrapper_invocation(
         call; None means no model argument at all (matches plain ``cld``
         with no args).
     Output: str - e.g.
-      ``zsh -c 'source ~/.zshrc >/dev/null 2>&1; source '"'"'/path/cld.zsh'"'"' "$@"; cld "$@"' _ some-model``
+      ``zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; source '"'"'/path/cld.zsh'"'"' "$@"; cld "$@"' _ some-model``
     Example: render_wrapper_invocation(cld_wrapper, dir, None) ->
       a zsh -c string that sources the cld.zsh file and calls cld with no args.
     """
     path = _write_script_file(wrapper, scripts_dir)
-    inner = f"source ~/.zshrc >/dev/null 2>&1; source {shlex.quote(str(path))} \"$@\""
+    inner = f"source {shlex.quote(str(path))} \"$@\""
     if wrapper.entry and wrapper.entry.strip():
         inner += f"; {shlex.quote(wrapper.entry.strip())} \"$@\""
-    outer = f"zsh -c {shlex.quote(inner)}"
+    outer = rc_prefixed(inner)
     if model:
         # `_` is a throwaway $0; the model becomes $1, forwarded through
         # every "$@" in `inner` above (source's own arg-forwarding, then

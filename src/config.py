@@ -612,7 +612,7 @@ class Settings(BaseSettings):
         invocation), so a bare ``cld`` would be "command not found".
         Empirically verified (real detached tmux session on a scratch
         ``-L`` socket, ``tmux capture-pane``) against two candidate
-        wrappers; ``zsh -c 'source ~/.zshrc >/dev/null 2>&1; <cmd>'`` was
+        wrappers; ``zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; <cmd>'`` was
         chosen over ``zsh -ic`` — see git history for the full comparison
         this docstring used to carry.
         The model, when present, is shlex-quoted at every quoting

@@ -209,7 +209,7 @@ def test_non_claude_static_commands_are_returned_raw(name, command):
 
 def test_claude_last_resort_without_a_model_is_cld():
     assert render_static_command(get_family("claude"), "") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
     )
 
 

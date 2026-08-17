@@ -273,16 +273,16 @@ def test_no_wrappers_no_claude_command_falls_back_to_hardcoded_cld(tmp_path):
     wrappers block at all — proves old-shape configs are unaffected."""
     config_data = {"agents": {}}
     s = _settings_with_config(tmp_path, config_data)
-    assert s.get_agent_command("claude") == "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+    assert s.get_agent_command("claude") == "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
     with_model = s.get_agent_command("claude", model="my-model")
-    assert with_model == "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor my-model'"
+    assert with_model == "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cldor my-model'"
 
 
 def test_no_wrappers_explicit_claude_command_still_wins(tmp_path):
     config_data = {"agents": {"claude_command": "claude --dangerously-skip-permissions"}}
     s = _settings_with_config(tmp_path, config_data)
     resolved = s.get_agent_command("claude")
-    assert resolved == "zsh -c 'source ~/.zshrc >/dev/null 2>&1; claude --dangerously-skip-permissions'"
+    assert resolved == "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; claude --dangerously-skip-permissions'"
 
 
 def test_wrappers_present_take_priority_over_claude_command():

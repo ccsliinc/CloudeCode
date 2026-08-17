@@ -137,7 +137,7 @@ def test_no_wrappers_falls_back_to_claude_command(tmp_path):
 def test_no_wrappers_and_no_claude_command_is_the_cld_last_resort(tmp_path):
     s = _settings(tmp_path, wrappers=[])
     assert s.get_agent_command("claude") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
     )
 
 
@@ -162,7 +162,7 @@ def test_a_codex_wrapper_does_not_affect_the_claude_launch(tmp_path):
     ])
     # claude has no wrappers of its own -> its own static fallback.
     assert s.get_agent_command("claude") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
     )
 
 

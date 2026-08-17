@@ -187,7 +187,7 @@ def _settings_with_agents(agents_cfg: AgentsConfig, claude_cli_path=_SENTINEL):
 # TODO.md findings log for the capture-pane evidence). ``CLAUDE_CLI_PATH``
 # remains legacy / bypassed for this type — see its field comment in
 # src/config.py.
-_EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+_EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
 
 
 @pytest.mark.parametrize(
@@ -258,7 +258,7 @@ def test_get_agent_command_claude_with_model_runs_cldor():
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
     cmd = s.get_agent_command("claude", model="openai/gpt-5.6-sol")
-    assert cmd == "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor openai/gpt-5.6-sol'"
+    assert cmd == "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cldor openai/gpt-5.6-sol'"
 
 
 def test_get_agent_command_claude_model_shell_injection_defused():
@@ -282,7 +282,7 @@ def test_get_agent_command_claude_model_shell_injection_defused():
     # tmux's internal invocation) to prove the payload stays one literal
     # argument and nothing executes.
     probed = cmd.replace(
-        "source ~/.zshrc >/dev/null 2>&1; cldor",
+        "source ~/.zshrc >/dev/null 2>&1 </dev/null; cldor",
         "cldor() { echo \"ARGC:$#|GOT:[$1]\"; }; cldor",
     )
     proc = subprocess.run(
@@ -313,7 +313,7 @@ def test_get_agent_command_explicit_claude_command_wins():
     agents = AgentsConfig(claude_command="claude --my-custom-flag")
     s = _settings_with_agents(agents)
     assert s.get_agent_command("claude") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; claude --my-custom-flag'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; claude --my-custom-flag'"
     )
 
 
@@ -324,7 +324,7 @@ def test_get_agent_command_explicit_claude_command_wins_over_model():
     agents = AgentsConfig(claude_command="claude --my-custom-flag")
     s = _settings_with_agents(agents)
     assert s.get_agent_command("claude", model="x/y") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; claude --my-custom-flag'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; claude --my-custom-flag'"
     )
 
 
@@ -347,7 +347,7 @@ def test_get_agent_command_default_claude_command_falls_back_to_cld():
     s = _settings_with_agents(AgentsConfig())
     assert s.get_agent_command("claude") == _EXPECT_CLD
     assert s.get_agent_command("claude", model="openai/gpt-5.6-sol") == (
-        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cldor openai/gpt-5.6-sol'"
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cldor openai/gpt-5.6-sol'"
     )
 
 

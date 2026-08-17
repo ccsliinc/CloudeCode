@@ -64,6 +64,8 @@ import shlex
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
+from src.core.shell_init import rc_prefixed
+
 # The default family for any wrapper that does not declare one, and for any
 # agent_type that matches neither a reserved family name nor a wrapper id.
 # "claude" because every wrapper that existed before this feature was, by
@@ -82,9 +84,8 @@ def _render_claude_last_resort(model: Optional[str]) -> str:
     Output: str - a complete ``zsh -c ...`` shell string for tmux.
     """
     if model:
-        inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
-        return f"zsh -c {shlex.quote(inner)}"
-    return "zsh -c 'source ~/.zshrc >/dev/null 2>&1; cld'"
+        return rc_prefixed(f"cldor {shlex.quote(model)}")
+    return rc_prefixed("cld")
 
 
 @dataclass(frozen=True)
@@ -328,8 +329,7 @@ def render_static_command(family: AgentFamily, command: str, model: Optional[str
     """
     if command and command.strip():
         if family.sources_zshrc:
-            inner = f"source ~/.zshrc >/dev/null 2>&1; {command}"
-            return f"zsh -c {shlex.quote(inner)}"
+            return rc_prefixed(command)
         return command
     if family.last_resort is not None:
         return family.last_resort(model)
