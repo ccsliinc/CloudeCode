@@ -153,6 +153,16 @@
 }
 
 .config-editor-loading,
+/* An absent root's explanation. Muted, not danger-coloured: "this project
+   has no .claude/" is ordinary. It exists so a short tree can never be
+   mistaken for a complete one. */
+.config-editor-notice {
+    padding: 8px 10px;
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
 .config-editor-error,
 .config-editor-empty {
     padding: 10px 8px;

@@ -54,18 +54,11 @@ console.log('[ConfigEditorPanel Module] Loading...');
 // reintroduce the exact wall-of-nodes bug this rebuild fixes.
 const CONFIG_EDITOR_FORCE_COLLAPSED_DIRS = new Set(['plugins']);
 
-// Single source of truth for the three roots this panel browses: API
-// root id, display label, and default expand/collapse state. "user" and
-// "project" default OPEN (small, config-focused, the reason this feature
-// exists); "workdir" defaults CLOSED (a real project directory can be
-// arbitrarily large - same reasoning as plugins/ being force-collapsed,
-// just a per-user-choice default rather than a forced one, since a small
-// project's workdir is perfectly reasonable to browse open).
-const CONFIG_EDITOR_ROOTS = [
-    { id: 'user', label: '~/.claude', defaultExpanded: true },
-    { id: 'project', label: 'project .claude', defaultExpanded: true },
-    { id: 'workdir', label: 'project files', defaultExpanded: false },
-];
+// The three roots this panel browses, the working-directory resolver and
+// every "why is this root absent" sentence live in config-editor-roots.js
+// (window.ConfigEditorRoots) - pure functions, no DOM, unit-tested. This
+// file only renders what that module decides.
+const CONFIG_EDITOR_ROOTS = window.ConfigEditorRoots.ROOTS;
 
 class ConfigEditorPanelController {
     constructor() {
@@ -86,22 +79,27 @@ class ConfigEditorPanelController {
     }
 
     /**
+     * Resolve the active project's working directory AND the reason when
+     * it does not resolve, so the tree can say why the project roots are
+     * absent instead of silently rendering short. See
+     * config-editor-roots.js for the unwrap and the reason codes.
+     * Inputs: none.
+     * Output: {path: string|null, reason: 'ok'|'no-session'|'no-working-dir'}.
+     */
+    _projectContext() {
+        return window.ConfigEditorRoots.resolveProjectContext(window.TerminalController);
+    }
+
+    /**
      * Best-effort resolution of the active project's working directory,
      * used for BOTH the "project" root (its `.claude/` subdirectory) and
-     * the "workdir" root (the directory itself). Reads
-     * TerminalController's current session rather than tracking its own
-     * copy - single source of truth for "what session is attached right
-     * now".
+     * the "workdir" root (the directory itself).
      * Inputs: none.
      * Output: string|null - absolute working directory, or null when no
      *   session is attached (terminal not open, or on the launchpad).
      */
     _currentProjectPath() {
-        const tc = window.TerminalController;
-        if (!tc || !tc._currentSession) return null;
-        const s = tc._currentSession;
-        const unwrapped = (s.session && typeof s.session === 'object') ? s.session : s;
-        return (unwrapped && unwrapped.working_dir) || null;
+        return this._projectContext().path;
     }
 
     /**
@@ -261,18 +259,35 @@ class ConfigEditorPanelController {
      * Load all roots' trees (each fetched independently so one root's
      * failure/emptiness doesn't block the others) and render them as one
      * flat top-level list, each root a collapsible node.
+     *
+     * A root is NEVER dropped in silence. When the working directory does
+     * not resolve, ConfigEditorRoots.planRoots() returns a notice in the
+     * project roots' place; when the server has nothing for a root that
+     * WAS asked for, a notice row names it. A tree that is short must say
+     * why, or it reads as a complete tree with the user's files missing -
+     * which is exactly how this failed in the field.
      * Inputs: none. Output: Promise<void>.
      */
     async _loadTree() {
         this.treeEl.innerHTML = '<div class="config-editor-loading">loading...</div>';
-        const projectPath = this._currentProjectPath();
+        const context = this._projectContext();
+        const projectPath = context.path;
         const list = document.createElement('ul');
         list.className = 'config-editor-list config-editor-list--roots';
 
-        for (const rootDef of CONFIG_EDITOR_ROOTS) {
-            if (rootDef.id !== 'user' && !projectPath) continue; // no session attached yet
-            const li = await this._buildRootEl(rootDef, projectPath);
-            if (li) list.appendChild(li);
+        for (const step of window.ConfigEditorRoots.planRoots(context)) {
+            if (step.kind === 'notice') {
+                list.appendChild(this._noticeLi(step.message));
+                continue;
+            }
+            const result = await this._buildRootEl(step.def, projectPath);
+            if (result.el) {
+                list.appendChild(result.el);
+            } else {
+                list.appendChild(this._noticeLi(window.ConfigEditorRoots.missingRootNotice(
+                    step.def.label, result.missingReason, projectPath,
+                )));
+            }
         }
 
         this.treeEl.innerHTML = '';
@@ -284,9 +299,13 @@ class ConfigEditorPanelController {
      * indistinguishable in interaction from a directory node inside it.
      * Inputs: rootDef (object) - one entry of CONFIG_EDITOR_ROOTS;
      *   projectPath (string|null).
-     * Output: Promise<Element|null> - <li>, or null when this root has
-     *   nothing to show and should be omitted entirely (e.g. "project"
-     *   with no .claude/ directory).
+     * Output: Promise<{el: Element|null, missingReason: string|null}> -
+     *   `el` is the <li> (including the error row for a real failure);
+     *   when `el` is null the root exists in the plan but had nothing to
+     *   show, and `missingReason` says which case that was
+     *   ('unavailable' - server has no such root, e.g. a project with no
+     *   .claude/; 'empty' - the root resolved but listed nothing). The
+     *   caller renders a notice for it; it is never just skipped.
      */
     async _buildRootEl(rootDef, projectPath) {
         let nodes;
@@ -299,19 +318,26 @@ class ConfigEditorPanelController {
             // resolve_roots() only registers the "project" root when the
             // directory exists, so list_tree() raises "unknown or
             // unavailable root" (HTTP 400) for every project that simply
-            // hasn't got project-scoped config yet - omit that root
-            // entirely rather than showing an empty/error node for it.
+            // hasn't got project-scoped config yet - report that as a
+            // named absence rather than an error node.
             // Any OTHER status (401/403/5xx, or no status for a network
             // failure) is a real failure and surfaces as an error row.
-            if (err.status === 400 && rootDef.id !== 'user') return null;
+            if (err.status === 400 && rootDef.id !== 'user') {
+                return { el: null, missingReason: 'unavailable' };
+            }
             const li = document.createElement('li');
             li.appendChild(this._errorEl(`failed to load ${rootDef.label}: ${err.message || err}`));
-            return li;
+            return { el: li, missingReason: null };
         }
-        if (rootDef.id !== 'user' && nodes.length === 0) return null;
+        if (rootDef.id !== 'user' && nodes.length === 0) {
+            return { el: null, missingReason: 'empty' };
+        }
 
         const rootNode = { name: rootDef.label, rel_path: '', is_dir: true, children: nodes };
-        return this._buildNodeEl(rootDef.id, rootNode, 0, { isRoot: true, defaultExpanded: rootDef.defaultExpanded });
+        return {
+            el: this._buildNodeEl(rootDef.id, rootNode, 0, { isRoot: true, defaultExpanded: rootDef.defaultExpanded }),
+            missingReason: null,
+        };
     }
 
     /**
@@ -430,6 +456,22 @@ class ConfigEditorPanelController {
             html += '<span class="config-editor-guide" aria-hidden="true"></span>';
         }
         return html;
+    }
+
+    /**
+     * Build a top-level <li> carrying one explanatory notice: a root that
+     * is absent, and why. Not an error - the ordinary "this project has
+     * no .claude/" case lands here too - but never silent either.
+     * Inputs: message (string). Output: Element - <li>.
+     */
+    _noticeLi(message) {
+        const li = document.createElement('li');
+        li.className = 'config-editor-node config-editor-node--notice';
+        const el = document.createElement('div');
+        el.className = 'config-editor-notice';
+        el.textContent = message;
+        li.appendChild(el);
+        return li;
     }
 
     /**
