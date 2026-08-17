@@ -31,6 +31,33 @@
  *     "Showing detailed transcript - ctrl+o to toggle - up/down scroll",
  *     which is both the state signature and the user's way out.
  *
+ * WHOSE HISTORY, AND CAN THE TERMINAL'S STILL BE REACHED (no)
+ *
+ * While claude is painting the screen full-screen, claude owns the
+ * history completely: a scroll gesture drives claude's transcript and
+ * never falls through to the terminal buffer underneath, however far the
+ * transcript has been scrolled. That is a deliberate choice over the
+ * alternative of falling through once claude's transcript is exhausted.
+ *
+ *   - There is nothing to fall through TO. The buffer under a fullscreen
+ *     paint holds whatever the shell printed before claude started, which
+ *     is the noise this whole change exists to stop showing people. The
+ *     rejoin path no longer even sends it (TmuxBackend.capture_scrollback).
+ *   - The fallthrough is not observable from here. We send arrows and read
+ *     the screen back; "claude is at the top of its transcript" and
+ *     "claude ignored that arrow" look identical, so the trigger would be
+ *     a guess, and a guess that silently changes what a gesture does.
+ *   - It would be undiscoverable. Two identical drags would move two
+ *     unrelated histories with no boundary the user can see.
+ *
+ * The state this leaves behind is discoverable by construction: claude's
+ * transcript view draws its own footer, "Showing detailed transcript -
+ * ctrl+o to toggle - up/down scroll", so the user can see where they are
+ * and how to leave, and the d-pad's scroll-to-bottom closes it. A user who
+ * wants terminal-based scrolling has it under `tui: default`, where
+ * claude's conversation IS the terminal buffer and this module stands
+ * down.
+ *
  * THE HAZARD, AND HOW IT IS CONTAINED
  *
  * This module synthesises keystrokes into a live session that may hold
@@ -163,29 +190,59 @@
     }
 
     /**
-     * WHICH PROGRAM OWNS THE ALTERNATE SCREEN, AND IN WHAT STATE.
+     * Is claude's own chrome on screen, and in which view?
+     *
+     * Pure function of the visible text, so it answers "who is painting
+     * this screen" without any opinion about the buffer underneath it.
+     * detectState() adds that second question.
+     *
+     * @param {string[]} rows - visible row text, top row first.
+     * @returns {('live'|'transcript'|null)} null when neither signature is
+     *   present, which includes claude showing a dialog in place of its
+     *   prompt frame.
+     */
+    function identifyClaude(rows) {
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].toLowerCase().indexOf(TRANSCRIPT_MARK) !== -1) {
+                return 'transcript';
+            }
+        }
+        for (var j = 0; j + 2 < rows.length; j++) {
+            if (isRule(rows[j]) && isPromptLine(rows[j + 1]) && isRule(rows[j + 2])) {
+                return 'live';
+            }
+        }
+        return null;
+    }
+
+    /**
+     * WHOSE HISTORY IS THE USER ASKING FOR?
      *
      * This is the whole safety argument, so it is worth being explicit
      * about what each answer is evidence FOR.
      *
-     *   'main'       - not the alternate screen. Real scrollback exists;
-     *                  the caller must use term.scrollLines() and this
-     *                  module must not touch anything.
+     *   'main'       - the terminal buffer owns the history. Either no
+     *                  claude chrome is on screen, or claude is drawing
+     *                  with `tui: default`, where the conversation IS the
+     *                  scrollback. The caller must use term.scrollLines()
+     *                  and this module must not touch anything.
      *   'transcript' - claude's detailed-transcript view is open. Proven
      *                  by its own footer text, which no other program
      *                  prints, and which claude only draws in that view.
      *                  Arrow keys here are the documented scroll keys.
-     *   'live'       - claude's normal view. Proven by its prompt frame:
-     *                  a rule row, a caret row, another rule row, in three
-     *                  consecutive visible rows. `less`, `htop`, `top` and
-     *                  `vim` were each run on the alternate screen and
-     *                  none of them produces that shape (verified
-     *                  2026-08-17); a shell prompt using U+276F lives on
-     *                  the MAIN screen and is excluded by the gate above.
-     *   'unknown'    - the alternate screen is owned by something we
-     *                  cannot identify, OR it is claude showing a dialog
-     *                  in place of its prompt. Both mean the same thing:
-     *                  we have no authority to synthesise a keystroke.
+     *   'live'       - claude's normal view, painted full-screen. Proven
+     *                  by its prompt frame: a rule row, a caret row,
+     *                  another rule row, in three consecutive visible
+     *                  rows. `less`, `htop`, `top` and `vim` were each run
+     *                  on the alternate screen and none of them produces
+     *                  that shape (verified 2026-08-17). A shell prompt
+     *                  using U+276F between two rules is excluded whenever
+     *                  the shell has printed anything at all, because that
+     *                  gives the buffer history and resolves to 'main'.
+     *   'unknown'    - the screen is owned by something we cannot
+     *                  identify, OR it is claude showing a dialog in place
+     *                  of its prompt. Both mean the same thing: we have no
+     *                  authority to synthesise a keystroke.
      *
      * The third outcome is a real answer, not a flavour of the other two.
      * Callers must treat 'unknown' as "inject nothing", never as "probably
@@ -212,44 +269,67 @@
         // main-screen path, which is the same false-green shape this
         // module exists to avoid on the other side.
         if (typeof type !== 'string' || typeof baseY !== 'number') return 'unknown';
-        // THE GATE IS "IS THERE SCROLLBACK", NOT "IS IT THE ALT BUFFER".
-        //
-        // `type === 'alternate'` looked like the obvious gate and it is
-        // WRONG on the path that matters most. Measured 2026-08-17
-        // against a live fullscreen session: this app streams the pane
-        // with `tmux pipe-pane`, which only carries bytes emitted AFTER it
-        // attached, and a reconnecting client is repainted with Ctrl+L
-        // (src/api/ws_startup_paint.py, gated on `#{alternate_on}`).
-        // Claude answers a Ctrl+L by redrawing - it does NOT re-send
-        // `?1049h`, because from its side it never left the alternate
-        // screen. So the pane is in fullscreen, the pane's own
-        // `#{alternate_on}` is 1, and the browser's xterm is sitting on
-        // the NORMAL buffer with identical content. Gating on the buffer
-        // type there means the feature is dead for every user who
-        // backgrounds the tab and comes back, which on a phone is most of
-        // them.
-        //
-        // `baseY` answers the question we actually have. It is the number
-        // of rows that have scrolled off the top, so `baseY === 0` IS
-        // "there is no scrollback to move" - true on the alternate buffer
-        // by construction, and true on the mislabelled normal buffer of a
-        // reconnect. Above zero there is real scrollback and
-        // `term.scrollLines()` is the right tool, so we stand down.
-        if (baseY > 0) return 'main';
 
         var rows = visibleRows(term);
-        if (!rows.length) return 'unknown';
+        // Nothing readable on screen. The buffer is still evidence: rows
+        // have scrolled off, so scrollLines() has somewhere to go.
+        if (!rows.length) return baseY > 0 ? 'main' : 'unknown';
 
-        for (var i = 0; i < rows.length; i++) {
-            if (rows[i].toLowerCase().indexOf(TRANSCRIPT_MARK) !== -1) {
-                return 'transcript';
-            }
-        }
-        for (var j = 0; j + 2 < rows.length; j++) {
-            if (isRule(rows[j]) && isPromptLine(rows[j + 1]) && isRule(rows[j + 2])) {
-                return 'live';
-            }
-        }
+        // THE QUESTION IS "WHOSE HISTORY", NOT "IS THERE ANY HISTORY".
+        //
+        // The previous gate returned 'main' the moment `baseY > 0`, i.e.
+        // as soon as ANY row had scrolled off the top. That reads as
+        // "there is something to scroll, so scroll it", which is not the
+        // user's question. A fullscreen claude session that was started
+        // from a shell which had already printed something - a seeded
+        // test run, an motd, a git status, a wrapper echo, a banner -
+        // carries that output as terminal scrollback, so the gate chose
+        // the terminal and dragged the user back through pre-claude noise
+        // while claude's own transcript stayed out of reach. Reported and
+        // reproduced 2026-08-17 with 400 seed lines ahead of claude.
+        //
+        // So identity comes FIRST: when claude's own chrome is on screen
+        // it owns the history the user is asking for, and whatever the
+        // shell printed before it started is not it.
+        var owner = identifyClaude(rows);
+
+        // Identity alone is not sufficient, because it does not say
+        // whether what we are looking at is a full-screen PAINT or
+        // terminal OUTPUT, and claude produces both:
+        //
+        //   - `tui: fullscreen` paints the alternate screen. The buffer
+        //     under it belongs to whatever ran before claude. Claude's
+        //     transcript is reachable only through ctrl+o, so this module
+        //     must take the gesture.
+        //   - `tui: default` writes the conversation into the terminal as
+        //     ordinary output. There the scrollback IS claude's
+        //     transcript, and `term.scrollLines()` already shows exactly
+        //     the content the user wants. Injecting ctrl+o would replace a
+        //     working scroll with a synthesised keystroke for no gain.
+        //
+        // Two facts separate them. `type === 'alternate'` is definitive
+        // when the client saw the `?1049h`. It is not always available:
+        // this app streams the pane with `tmux pipe-pane`, which only
+        // carries bytes emitted AFTER it attached, and a client that
+        // joins late is repainted with Ctrl+L (ws_startup_paint.py, gated
+        // on `#{alternate_on}`). Claude answers a Ctrl+L by redrawing; it
+        // does NOT re-send `?1049h`, because from its side it never left
+        // the alternate screen. That client holds a fullscreen paint on
+        // its NORMAL buffer. `baseY === 0` covers it: a fullscreen paint
+        // never scrolls the buffer, so a claude screen with no history
+        // beneath it is a paint, not output. The rejoin path no longer
+        // manufactures history beneath such a paint either - see
+        // TmuxBackend.capture_scrollback, which returns nothing for a pane
+        // on the alternate screen precisely so this stays true.
+        if (owner && (type === 'alternate' || baseY === 0)) return owner;
+
+        // Not claude, or claude writing into a real terminal buffer.
+        // Either way the buffer is the thing to move, and this module
+        // must not touch it.
+        if (baseY > 0) return 'main';
+
+        // Alternate screen (or an empty one), owned by something we
+        // cannot identify. No authority to synthesise anything.
         return 'unknown';
     }
 
