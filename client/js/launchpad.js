@@ -383,7 +383,19 @@ class Launchpad {
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
-                        created_by_cloude: true,
+                        // NOT a hardcoded `true`. Every OPEN session lands
+                        // here, because /sessions/attachable filters open
+                        // sessions out to prevent a self-adopt footgun -
+                        // so claiming ownership here badged an ADOPTED
+                        // external session `TMUX` the moment you opened
+                        // it, while an identical unopened one stayed
+                        // `EXTERNAL`. The server never owns an adopted
+                        // session (SessionManager.adopt_external_session
+                        // deliberately does not add it to
+                        // owned_tmux_sessions) and says so in the id:
+                        // `adopted:<name>` for adopted, a plain id for
+                        // one Cloude Code created.
+                        created_by_cloude: !String(liveId || '').startsWith('adopted:'),
                         created_at_epoch: live.created_at_epoch || 0,
                         window_count: 1,
                         is_active: true,

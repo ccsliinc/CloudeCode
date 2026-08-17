@@ -263,7 +263,11 @@ class SessionSidebarController {
                 } else {
                     rows.unshift({
                         name: tmuxName,
-                        created_by_cloude: true,
+                        // NOT a hardcoded `true` - see the same merge in
+                        // client/js/launchpad.js. An adopted session is
+                        // never in the server's owned set, and its id
+                        // says so: `adopted:<name>`.
+                        created_by_cloude: !String(sessionId || '').startsWith('adopted:'),
                         created_at_epoch: 0,
                         is_active: true,
                         session_id: sessionId,
