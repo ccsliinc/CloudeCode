@@ -325,7 +325,7 @@ async function testRejectedPlayIsRecorded() {
         err.name = 'NotAllowedError';
         return Promise.reject(err);
     };
-    win.ThemeAudio.toggleMute(); // unmute -> play()
+    win.ThemeAudio.setSessionAudio('alpha', true); // open the gate -> play()
 
     await new Promise((r) => setTimeout(r, 0));
     assert.equal(win.ThemeAudio.getLastPlayError(), 'NotAllowedError');
@@ -335,7 +335,7 @@ test('a clean play() clears the recorded error', () => {
     const { win } = loadModules();
     win.ThemeAudio.init();
     win.ThemeAudio.setTheme(CFG);
-    win.ThemeAudio.toggleMute();
+    win.ThemeAudio.setSessionAudio('alpha', true);
     assert.equal(win.ThemeAudio.getLastPlayError(), null);
 });
 
@@ -367,7 +367,7 @@ test('a stale master volume from an old build is dropped on upgrade', () => {
         !('cloude.audio.volume' in store),
         'the stale key must be cleared, not just ignored in memory'
     );
-    assert.equal(store['cloude.audio.settingsVersion'], '2');
+    assert.equal(store['cloude.audio.settingsVersion'], '3');
 });
 
 test('every stale master volume below unity is dropped, not just 0.28', () => {
@@ -386,22 +386,69 @@ test('a stamped store keeps its master volume - migration is not a reset', () =>
     // user's, and an upgrade must not keep stomping it.
     const { win } = loadModules({
         'cloude.audio.volume': '0.4',
-        'cloude.audio.settingsVersion': '2'
+        'cloude.audio.settingsVersion': '3'
     });
     win.ThemeAudio.init();
     assert.equal(win.ThemeAudio.getVolume(), 0.4);
 });
 
-test('migration leaves the app sound switch alone', () => {
-    // Only the volume's MEANING changed. A user who had unmuted stays
-    // unmuted across the upgrade.
+test('THE UPGRADE THAT MATTERS: a stored mute cannot gate audio any more', () => {
+    // The state of every browser that ran a v2 build: the app sound master
+    // switch persisted as muted, defaulted OFF, and outranked every
+    // per-session control. Deleting the switch while still reading the key
+    // would leave the user permanently silent with NOTHING left to undo it,
+    // which is strictly worse than the bug it replaced. So the key is
+    // dropped, and opening the session gate is sufficient on its own.
     const { win, store } = loadModules({
-        'cloude.audio.volume': '0.28',
-        'cloude.audio.muted': 'false'
+        'cloude.audio.muted': 'true',
+        'cloude.audio.settingsVersion': '2'
     });
     win.ThemeAudio.init();
-    assert.equal(store['cloude.audio.muted'], 'false');
-    assert.equal(win.ThemeAudio.isAppSoundOn(), true);
+
+    assert.ok(
+        !('cloude.audio.muted' in store) || store['cloude.audio.muted'] === '',
+        'the retired mute key must be cleared, not just ignored in memory'
+    );
+    assert.equal(store['cloude.audio.settingsVersion'], '3');
+
+    win.ThemeAudio.setSessionAudio('alpha', true);
+    assert.equal(
+        win.ThemeAudio.isMuted(), false,
+        'a stale stored mute still gates audio - the session control is dead'
+    );
+});
+
+test('an UNSTAMPED store carrying a mute migrates in one pass, v1 to v3', () => {
+    // A browser old enough to predate the volume migration as well. Both
+    // steps have to run, or the mute survives behind the version check.
+    const { win, store } = loadModules({
+        'cloude.audio.muted': 'true',
+        'cloude.audio.volume': '0.28'
+    });
+    win.ThemeAudio.init();
+
+    assert.equal(store['cloude.audio.settingsVersion'], '3');
+    assert.equal(win.ThemeAudio.getVolume(), 1);
+    win.ThemeAudio.setSessionAudio('alpha', true);
+    assert.equal(win.ThemeAudio.isMuted(), false);
+});
+
+test('no code path reads the retired mute key any more', () => {
+    // The migration is a belt; this is the braces. A reader left behind
+    // would resurrect the phantom gate for anyone whose storage is
+    // unwritable (Safari private mode makes removeItem a no-op).
+    for (const f of ['themeAudio.js', 'themeAudioSettings.js',
+        'themeAudioNode.js', 'themeAudioStatus.js', 'session-theme-menu.js']) {
+        const src = fs.readFileSync(
+            path.join(__dirname, '..', 'client', 'js', f), 'utf8');
+        assert.ok(!/getItem\(\s*LS_MUTED/.test(src), `${f} still reads LS_MUTED`);
+        // Also catch the key written out in full, which is how a reader
+        // gets reintroduced by someone who never saw the constant.
+        assert.ok(!/getItem\(\s*['"]cloude\.audio\.muted['"]/.test(src),
+            `${f} still reads the retired mute key by literal name`);
+        assert.ok(!/readAppSoundOn|writeAppSoundOn|isAppSoundOn|setAppSound/.test(src),
+            `${f} still carries an app sound master switch accessor`);
+    }
 });
 
 test('migration is idempotent', () => {
@@ -413,54 +460,58 @@ test('migration is idempotent', () => {
     const second = loadModules(afterFirst);
     second.win.ThemeAudio.init();
     assert.equal(second.win.ThemeAudio.getVolume(), 1);
-    assert.equal(second.store['cloude.audio.settingsVersion'], '2');
+    assert.equal(second.store['cloude.audio.settingsVersion'], '3');
 });
 
 // ---------------------------------------------------------------------
-// The two gates. A session attach must not be able to undo the header.
+// The one gate. Audio is session-only: a session must be in scope AND
+// opted in. There is no app-level switch left that could veto it.
 // ---------------------------------------------------------------------
 
-test('a session attach cannot clobber the app sound master switch', () => {
-    // The exact reported sequence: turn app sound on in the header, then
-    // enter a session that never opted into music. The master used to be
-    // the SAME boolean the attach drove from the per-session default of
-    // OFF, so the app went silent and the header still showed itself on.
+test('a session in scope and opted in is the whole gate', () => {
     const { win } = loadModules();
     win.ThemeAudio.init();
-    win.ThemeAudio.setAppSound(true);
+    assert.equal(win.ThemeAudio.isMuted(), true, 'silent until asked');
 
-    win.ThemeAudio.setSessionEnabled(false); // attach, session opted out
-    assert.equal(
-        win.ThemeAudio.isAppSoundOn(), true,
-        'the attach silently turned the master switch off'
-    );
-    assert.equal(win.ThemeAudio.isMuted(), true, 'no session opt-in, so silent');
-
-    win.ThemeAudio.setSessionEnabled(true); // the user taps "play music"
-    assert.equal(win.ThemeAudio.isMuted(), false, 'both gates on must play');
+    win.ThemeAudio.setSessionAudio('alpha', true);
+    assert.equal(win.ThemeAudio.isMuted(), false, 'one control, one tap');
+    assert.equal(win.ThemeAudio.isSessionEnabled(), true);
 });
 
-test('sound requires BOTH gates', () => {
+test('NO AUDIO ON THE HOME SCREEN: a null session cannot open the gate', () => {
+    // Leaving a session is not a mute, it is the loss of the thing music
+    // belonged to. The old code OPENED the gate here so the header master
+    // switch alone could play the home theme; that is the behaviour the
+    // user asked to have removed.
     const { win } = loadModules();
     win.ThemeAudio.init();
+    win.ThemeAudio.setSessionAudio('alpha', true);
+    assert.equal(win.ThemeAudio.isMuted(), false);
 
-    win.ThemeAudio.setAppSound(false);
-    win.ThemeAudio.setSessionEnabled(true);
-    assert.equal(win.ThemeAudio.isMuted(), true, 'app sound off must win');
-
-    win.ThemeAudio.setAppSound(true);
-    win.ThemeAudio.setSessionEnabled(false);
-    assert.equal(win.ThemeAudio.isMuted(), true, 'session opt-out must win');
+    win.ThemeAudio.setSessionAudio(null, true); // leave, opt-in still true
+    assert.equal(win.ThemeAudio.isMuted(), true, 'the home screen must be silent');
+    assert.equal(win.ThemeAudio.getSessionName(), null);
 });
 
-test('the app sound switch persists across a reload', () => {
+test('a session that never opted in stays silent', () => {
+    const { win } = loadModules();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setSessionAudio('beta', false);
+    assert.equal(win.ThemeAudio.isMuted(), true);
+});
+
+test('the gate is NOT persisted across a reload', () => {
+    // The per-session opt-in is persisted by session-theme-menu.js under
+    // its own key. ThemeAudio must start closed every load, so nothing can
+    // make noise before a session is attached.
     const first = loadModules();
     first.win.ThemeAudio.init();
-    first.win.ThemeAudio.setAppSound(true);
+    first.win.ThemeAudio.setSessionAudio('alpha', true);
 
     const second = loadModules(first.store);
     second.win.ThemeAudio.init();
-    assert.equal(second.win.ThemeAudio.isAppSoundOn(), true);
+    assert.equal(second.win.ThemeAudio.isMuted(), true);
+    assert.equal(second.win.ThemeAudio.getSessionName(), null);
 });
 
 // ---------------------------------------------------------------------
@@ -550,7 +601,7 @@ test('element mode still starts silent so the fade can ramp up', () => {
 test('the fade reaches the manifest target, not something near zero', () => {
     const { win, gains } = loadModulesWebAudio();
     win.ThemeAudio.init();
-    win.ThemeAudio.setAppSound(true);   // both gates on
+    win.ThemeAudio.setSessionAudio('alpha', true);   // gate open
     win.ThemeAudio.setTheme(CFG);
 
     // CFG.volume 0.6 x master 1.0. A stale master would land at 0.168.
