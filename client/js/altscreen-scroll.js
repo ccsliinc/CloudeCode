@@ -195,14 +195,20 @@
      * @returns {('main'|'live'|'transcript'|'unknown')}
      */
     function detectState(term) {
-        var type;
+        var type = null;
         try {
-            type = term && term.buffer && term.buffer.active
-                && term.buffer.active.type;
+            if (term && term.buffer && term.buffer.active) {
+                type = term.buffer.active.type;
+            }
         } catch (err) {
             console.warn('AltScreenScroll: buffer type read failed', err);
             return 'unknown';
         }
+        // "I could not read the buffer" is NOT "it is the main screen".
+        // Collapsing the two would let an unreadable buffer authorise the
+        // main-screen path, which is the same false-green shape this
+        // module exists to avoid on the other side.
+        if (typeof type !== 'string') return 'unknown';
         if (type !== 'alternate') return 'main';
 
         var rows = visibleRows(term);
@@ -326,6 +332,7 @@
      */
     function scrollByRows(rows) {
         var term = getTerm();
+        if (!term) return false;
         var state = detectState(term);
         if (state === 'main') return false;
         if (!rows) return true;

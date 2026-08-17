@@ -338,6 +338,11 @@
          and it owns the decision that used to be the racing
          autoScrollEnabled flag. -->
     <script src="/static/js/terminal-scroll.js"></script>
+    <!-- Alternate-screen scrollback (claude's `tui: fullscreen`, where the
+         terminal has no scrollback at all). Must load BEFORE terminal.js,
+         which wires it in setupScrollListener(), and terminal-scroll.js
+         calls window.AltScreenScroll from its one scroll primitive. -->
+    <script src="/static/js/altscreen-scroll.js"></script>
     <!-- Clipboard tier ladder. Must load BEFORE clipboard.js,
          touch-select.js and copy-output.js, all of which copy through
          window.CopyCompat rather than navigator.clipboard (absent over

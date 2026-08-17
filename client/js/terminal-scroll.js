@@ -195,6 +195,35 @@
     }
 
     /**
+     * THE ONE SCROLL PRIMITIVE. Both the wheel and the touch drag go
+     * through it, so the two cannot drift apart.
+     *
+     * On the ALTERNATE screen (claude's `tui: fullscreen`) there is no
+     * scrollback to move - `baseY` is pinned at 0 - so the whole gesture
+     * is handed to altscreen-scroll.js, which drives claude's own
+     * transcript view instead. It answers false only for the main screen,
+     * where real scrollback exists and `scrollLines()` is the right tool.
+     *
+     * @param {object} term - an xterm.js Terminal instance.
+     * @param {number} rows - whole rows to scroll; >0 forward, <0 back.
+     * @returns {boolean} true when the view actually moved (or the
+     *   alternate-screen path took ownership of the gesture).
+     */
+    function scrollByRows(term, rows) {
+        if (!term || !rows) return false;
+        var alt = window.AltScreenScroll;
+        if (alt && alt.scrollByRows(rows)) return true;
+        if (!canConsumeScroll(term, rows)) return false;
+        try {
+            term.scrollLines(rows);
+        } catch (err) {
+            console.warn('TerminalScroll: scrollLines failed', err);
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Scroll the terminal by hand for a drag xterm declined to handle.
      *
      * WHY THIS IS NEEDED (measured on iPhone 16e / iOS 26.1, 2026-08-16):
@@ -222,20 +251,38 @@
         pendingRows += dy / cellHeight(term);
         var rows = pendingRows > 0 ? Math.floor(pendingRows) : Math.ceil(pendingRows);
         if (!rows) return false;
-        if (!canConsumeScroll(term, rows)) {
+        pendingRows -= rows;
+        if (!scrollByRows(term, rows)) {
             // At the boundary. Drop the remainder so it cannot accumulate
             // into a jump when the user drags back the other way.
             pendingRows = 0;
             return false;
         }
-        pendingRows -= rows;
-        try {
-            term.scrollLines(rows);
-        } catch (err) {
-            console.warn('TerminalScroll: scrollLines failed', err);
-            return false;
-        }
         return true;
+    }
+
+    /**
+     * Wheel handling, sharing consumeDragScroll's destination.
+     *
+     * Capture phase on the #terminal container, which is an ANCESTOR of
+     * xterm's own element, so stopPropagation here means xterm's bubble
+     * handler never runs. That matters on the alternate screen, where
+     * xterm translates a wheel into cursor keys and claude reads those as
+     * "cycle previous prompts" - the wheel would edit the prompt instead
+     * of scrolling.
+     *
+     * @param {WheelEvent} ev - the capture-phase wheel event.
+     * @returns {void}
+     */
+    function handleWheel(ev) {
+        if (!ev || ev.deltaY === 0) return;
+        noteUserScroll();
+        var term = getTerm();
+        if (!term) return;
+        var dir = ev.deltaY > 0 ? 1 : -1;
+        scrollByRows(term, Math.ceil(Math.abs(ev.deltaY) / 40) * dir || dir);
+        if (ev.cancelable) ev.preventDefault();
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
     }
 
     /**
@@ -376,9 +423,9 @@
         container.addEventListener('touchend', endGesture, { capture: true, passive: true });
         container.addEventListener('touchcancel', endGesture, { capture: true, passive: true });
 
-        container.addEventListener('wheel', function () {
-            noteUserScroll();
-        }, { capture: true, passive: true });
+        container.addEventListener('wheel', handleWheel, {
+            capture: true, passive: false
+        });
 
         // Bubble-phase backstop - see blockOverscrollEscape().
         container.addEventListener('touchmove', blockOverscrollEscape, { passive: false });
@@ -399,6 +446,8 @@
         blockOverscrollEscape: blockOverscrollEscape,
         canConsumeScroll: canConsumeScroll,
         consumeDragScroll: consumeDragScroll,
+        scrollByRows: scrollByRows,
+        handleWheel: handleWheel,
         isPinnedToBottom: isPinnedToBottom,
         shouldFollowOutput: shouldFollowOutput,
         noteUserScroll: noteUserScroll,

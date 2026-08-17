@@ -280,10 +280,9 @@ class Terminal {
         // session swap, which would otherwise leave Shift+Enter dead).
         this._applyKeyHandlers();
 
-        // Wire the capture-phase wheel interceptor (see _applyWheelHandler).
-        // DOM listener on term.element survives term.reset() since the
-        // element isn't recreated, so a single attachment is sufficient.
-        this._applyWheelHandler();
+        // The capture-phase wheel interceptor moved to terminal-scroll.js,
+        // which now owns wheel and touch through one primitive so they
+        // cannot diverge. setupScrollListener() wires it.
 
         // IMG-PASTE — wire image-paste pipeline. Both the paste listener
         // (DOM event on #terminal container) and the mobile attach button
@@ -309,6 +308,9 @@ class Terminal {
 
         // Handle terminal input
         this.term.onData(data => {
+            // Typing guard for altscreen-scroll.js: never synthesise keys
+            // into a prompt the user is mid-sentence in.
+            if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 // Convert special symbols for mobile keyboard shortcuts
                 if (data === '¥') {
@@ -414,29 +416,20 @@ class Terminal {
     }
 
     /**
-     * Attach a capture-phase wheel listener that scrolls xterm's own
-     * scrollback instead of letting xterm translate the wheel into cursor
-     * (up/down arrow) keystrokes — which it does on the alternate screen
-     * buffer (active during a Claude Code TUI), where Claude reads those
-     * arrows as "cycle previous prompts" and the scrollback never moves.
-     * Capture phase + stopPropagation runs before xterm's own bubble-phase
-     * wheel handler, so the arrow-key path never fires.
+     * Write raw bytes to the pty WITHOUT marking them as user typing.
+     *
+     * The one entry point for keys this app synthesises (altscreen-scroll.js
+     * uses it). Kept separate from sendKeyToTerminal() so our own writes
+     * cannot extend the typing quiet period that guards them.
+     *
+     * @param {string} data - raw bytes to write.
+     * @returns {void}
      */
-    _applyWheelHandler() {
-        if (!this.term || !this.term.element || this._wheelHandlerAttached) return;
-        this.term.element.addEventListener('wheel', (e) => {
-            if (e.deltaY === 0) return;
-            // Marks a user gesture so a write landing mid-scroll cannot
-            // chase the viewport back down (terminal-scroll.js). The old
-            // `autoScrollEnabled = false` here was a point fix for the
-            // same race that only ever covered the wheel, never touch.
-            if (window.TerminalScroll) window.TerminalScroll.noteUserScroll();
-            const lines = Math.ceil(Math.abs(e.deltaY) / 40) * (e.deltaY > 0 ? 1 : -1);
-            this.term.scrollLines(lines || (e.deltaY > 0 ? 1 : -1));
-            e.preventDefault();
-            e.stopPropagation();
-        }, { capture: true });
-        this._wheelHandlerAttached = true;
+    _writeSynthetic(data) {
+        if (!data) return;
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(new TextEncoder().encode(data));
+        }
     }
 
     /**
@@ -664,6 +657,9 @@ class Terminal {
      */
     setupScrollListener() {
         const container = document.getElementById('terminal');
+        if (window.AltScreenScroll) {
+            window.AltScreenScroll.init(() => this.term, (d) => this._writeSynthetic(d));
+        }
         if (window.TerminalScroll && container) {
             // Getter, not the instance: this.term is replaced on session swap.
             window.TerminalScroll.init(container, () => this.term);
@@ -711,6 +707,9 @@ class Terminal {
     scrollToBottomAndEnableAutoScroll() {
         if (!this.term) return;
         this.autoScrollEnabled = true;
+        // On the alternate screen "back to live" means closing claude's
+        // transcript view, not pinning a viewport that cannot move.
+        if (window.AltScreenScroll && window.AltScreenScroll.exitTranscript()) return;
         // Clears the gesture latch too — this is an explicit "back to
         // live" intent and must beat a latch left by the user's last
         // drag, which would otherwise suppress the next few writes.
@@ -764,6 +763,7 @@ class Terminal {
      * @param {string} keyData - ANSI escape sequence or character
      */
     sendKeyToTerminal(keyData) {
+        if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(new TextEncoder().encode(keyData));
         } else {
