@@ -330,5 +330,20 @@
         }
     }
 
-    window.TouchSelect = { init };
+    /**
+     * Is a long-press selection drag currently driving the finger?
+     *
+     * Exposed because terminal-scroll.js now owns the touchmove in the
+     * CAPTURE phase and runs BEFORE this module's own capture listener
+     * (terminal.js wires TerminalScroll first). stopPropagation() cannot
+     * separate them - it does not stop other listeners on the same node -
+     * so the scroller has to ask.
+     *
+     * @returns {boolean} true while the drag is extending a selection.
+     */
+    function isSelecting() {
+        return state === 'selecting';
+    }
+
+    window.TouchSelect = { init, isSelecting };
 })();

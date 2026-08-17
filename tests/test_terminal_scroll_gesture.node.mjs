@@ -74,7 +74,7 @@ function ruleBody(sheet, selector) {
  * Fresh module instance with a bare window, plus a recording container
  * so listener registration can be inspected.
  *
- * @returns {{api: object, container: object, listeners: Array}}
+ * @returns {{api: object, container: object, listeners: Array, win: object}}
  */
 function loadModule() {
     const listeners = [];
@@ -97,7 +97,7 @@ function loadModule() {
             listeners.push({ type, fn, opts: opts || {} });
         },
     };
-    return { api: sandbox.window.TerminalScroll, container, listeners };
+    return { api: sandbox.window.TerminalScroll, container, listeners, win: sandbox.window };
 }
 
 /**
@@ -184,17 +184,19 @@ test('never calls preventDefault on a non-cancelable event', () => {
 
 /* ================= 3. how it is wired ================= */
 
-test('registers the guard non-passively in the bubble phase', () => {
+test('the drag owner is a cancelling CAPTURE listener', () => {
+    // Measured 2026-08-17: xterm cancels every in-range touchmove, so a
+    // bubble-phase listener that stands down on `defaultPrevented` never
+    // runs. The owner has to be ahead of xterm, and it has to be able to
+    // cancel, or xterm also moves `.xterm-viewport` and desyncs it.
     const { api, container, listeners } = loadModule();
     api.init(container);
-    const guards = listeners.filter(
+    const cancelling = listeners.filter(
         (l) => l.type === 'touchmove' && l.opts.passive === false
     );
-    assert.equal(guards.length, 1, 'exactly one cancelling touchmove listener');
-    assert.notEqual(
-        guards[0].opts.capture, true,
-        'must bubble so xterm sees the event first'
-    );
+    assert.equal(cancelling.length, 2, 'the capture owner plus the bubble backstop');
+    assert.equal(cancelling[0].opts.capture, true, 'the owner must capture');
+    assert.notEqual(cancelling[1].opts.capture, true, 'the backstop must bubble');
 });
 
 test('the auto-scroll race listeners are still passive', () => {
@@ -202,16 +204,19 @@ test('the auto-scroll race listeners are still passive', () => {
     // making any of those cancelling would break xterm's own scrolling.
     const { api, container, listeners } = loadModule();
     api.init(container);
-    const passiveTypes = listeners
+    const captureTypes = listeners
         .filter((l) => l.opts.capture === true)
         .map((l) => l.type)
         .sort();
     assert.deepEqual(
-        passiveTypes,
+        captureTypes,
         ['touchcancel', 'touchend', 'touchmove', 'touchstart', 'wheel']
     );
+    // touchmove is the drag owner and must cancel. Everything else here
+    // only observes that the user is driving, and making any of those
+    // cancelling would break the wheel and the tap paths.
     listeners
-        .filter((l) => l.opts.capture === true)
+        .filter((l) => l.opts.capture === true && l.type !== 'touchmove')
         .forEach((l) => assert.equal(l.opts.passive, true, `${l.type} must stay passive`));
 });
 
@@ -316,13 +321,40 @@ test('the other boundary is blocked but not scrolled', () => {
     assert.equal(ev.prevented, true);
 });
 
-test('a drag xterm already consumed is never scrolled twice', () => {
-    // The regression this ordering protects: xterm cancels whenever it
-    // scrolled the viewport itself, so scrolling again here would double
-    // every gesture on the no-mouse-reporting path.
-    const { term, ev } = drive(fakeTerm(1000, 2000), 500, 464, { defaultPrevented: true });
-    assert.deepEqual(term.scrolled, [], 'must not second-guess xterm');
-    assert.equal(ev.prevented, false);
+test('a cancel from xterm does not stop the drag from scrolling', () => {
+    // THE REGRESSION THIS FILE NOW EXISTS FOR. The previous version read
+    // `defaultPrevented` as proof that xterm had scrolled the buffer and
+    // stood down. Measured 2026-08-17 in a live Claude Code 2.1.199
+    // session, that inference is false in both halves:
+    //   - Claude Code 2.1.199 sets no mouse-reporting mode (only ?25,
+    //     ?2004, ?1004, ?2031), `activeProtocol` reads NONE, so xterm's
+    //     touch handler runs and cancels every in-range touchmove;
+    //   - and what it scrolls is `.xterm-viewport.scrollTop`, which is
+    //     inert here - setting it to 1000 left viewportY at 236, fired no
+    //     scroll event, and left xterm's own `_lastScrollTop` at 4592.
+    // So the drag was cancelled by xterm, skipped by us, and moved
+    // nothing. The owner must scroll regardless of who cancelled.
+    const { term } = drive(fakeTerm(1000, 2000), 500, 464, { defaultPrevented: true });
+    assert.deepEqual(term.scrolled, [2], 'the capture owner scrolls it anyway');
+});
+
+test('a selection drag is never stolen by the scroller', () => {
+    // touch-select.js stopPropagation() cannot separate the two: it does
+    // not stop other listeners on the SAME node, and terminal.js wires
+    // TerminalScroll first. So the scroller has to ask.
+    const { api, container, listeners, win } = loadModule();
+    const term = fakeTerm(1000, 2000);
+    api.init(container, () => term);
+    const fire = (type, y) => listeners
+        .filter((l) => l.type === type && l.opts.capture === true)
+        .forEach((l) => l.fn({ touches: [{ pageY: y }] }));
+    fire('touchstart', 500);
+    win.TouchSelect = { isSelecting: () => true };
+    fire('touchmove', 464);
+    assert.deepEqual(term.scrolled, [], 'selection owns the finger');
+    win.TouchSelect = { isSelecting: () => false };
+    fire('touchmove', 428);
+    assert.deepEqual(term.scrolled, [2], 'and the scroller takes it back after');
 });
 
 test('sub-row movement accumulates instead of being discarded', () => {
