@@ -22,6 +22,7 @@ Finder a retina background.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import subprocess
 import sys
@@ -107,19 +108,29 @@ def load_palette(repo_root: Path) -> dict[str, str]:
 
 
 def read_version(repo_root: Path) -> str:
-    """Read the app version from macOS/package.json.
+    """Resolve the app version through the app's own single resolver.
+
+    The release tag is the source of version truth, so the artwork must not
+    carry a second one. This loads src/core/version.py by path (this script
+    runs standalone, outside the package) and calls the same resolver the
+    running server uses.
 
     Args:
         repo_root: repository root.
 
     Returns:
-        A version string such as "0.8.1", or "" when it cannot be read. The
-        caller renders nothing rather than a wrong literal when it is empty.
+        A version string such as "0.8.1", or "" when it cannot be resolved.
+        The caller renders no chip rather than a wrong literal.
     """
+    module_path = repo_root / "src" / "core" / "version.py"
     try:
-        with (repo_root / "macOS" / "package.json").open("r", encoding="utf-8") as handle:
-            return str(json.load(handle).get("version", "")).strip()
-    except (OSError, ValueError):
+        spec = importlib.util.spec_from_file_location("cloude_version", module_path)
+        if spec is None or spec.loader is None:
+            return ""
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return str(module.resolve_version(repo_root))
+    except (OSError, ImportError, AttributeError, SyntaxError):
         return ""
 
 
@@ -138,7 +149,6 @@ def cloud_path() -> str:
         '<circle cx="38" cy="52" r="20"/>'
         '<circle cx="64" cy="38" r="28"/>'
         '<circle cx="94" cy="50" r="22"/>'
-        '<rect x="34" y="50" w="0" height="0"/>'
         '<rect x="34" y="50" width="62" height="22" rx="11"/>'
         "</g>"
     )
