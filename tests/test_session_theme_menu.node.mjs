@@ -308,14 +308,23 @@ test('turning music on while app sound is off lifts it and says so', () => {
     );
 });
 
-test('turning music on when app sound is already on says nothing extra', () => {
+test('turning music on confirms it rather than saying nothing', () => {
+    // This test used to assert ZERO messages on the happy path, which
+    // encoded the defect: staying quiet made "it worked" and "it silently
+    // did nothing" look identical, and that is how five separate causes
+    // each survived a user tapping this control. Success is now stated.
     const { api } = load({ session: 'alpha', appSound: true, hasTrack: true });
     const pills = [];
     api.toggleAudio(
         { _showStatusPill(msg, kind) { pills.push({ msg, kind }); } },
         fakeEl('sessionAudioBtn')
     );
-    assert.equal(pills.length, 0, 'nothing to explain when nothing was overridden');
+    assert.equal(pills.length, 1, 'the tap must be acknowledged');
+    assert.ok(
+        !/no sound/.test(pills[0].msg),
+        `a working track must not report a fault: ${pills[0].msg}`
+    );
+    assert.notEqual(pills[0].kind, 'error');
 });
 
 test('an older ThemeAudio without the two-gate API still toggles', () => {
@@ -336,7 +345,39 @@ test('opting in on a theme with no track says so instead of pretending', () => {
         fakeEl('sessionAudioBtn')
     );
     assert.equal(pills.length, 1);
-    assert.ok(/no track/.test(pills[0].msg), `unexpected message: ${pills[0].msg}`);
+    assert.ok(
+        /no sound: this theme has no music track/.test(pills[0].msg),
+        `unexpected message: ${pills[0].msg}`
+    );
+    assert.equal(pills[0].kind, 'error', 'a control that achieved nothing is a fault');
+});
+
+test('leaving a session re-opens the music gate for the home screen', () => {
+    // REGRESSION. syncForSession() was only ever called on ATTACH, so the
+    // session gate kept the detached session's opt-in (OFF by default).
+    // Back on the launchpad the header "app sound (all sessions)" switch
+    // painted itself ON - it paints from gate 1 - and produced nothing,
+    // because gate 2 was still vetoing it on behalf of a session that was
+    // no longer attached. No error, no message: the same silent-gate shape
+    // as the bug this file's other regression test covers.
+    const store = { 'cloude.audio.session.alpha': 'off' };
+    const { api, isSessionEnabled, isMuted } = load({
+        session: null, store, appSound: true
+    });
+    api.syncForSession();
+    assert.equal(isSessionEnabled(), true, 'no session in scope means no session veto');
+    assert.equal(isMuted(), false, 'the header switch alone must play the home theme');
+});
+
+test('the home gate does not leak back into an opted-out session', () => {
+    // The counterpart: opening the gate when there is no session must not
+    // become "on by default" once one IS attached.
+    const { api, isSessionEnabled, isMuted } = load({
+        session: 'beta', appSound: true
+    });
+    api.syncForSession();
+    assert.equal(isSessionEnabled(), false);
+    assert.equal(isMuted(), true, 'a session that never opted in stays silent');
 });
 
 test('the picker lists every registered theme and marks the active one', () => {
