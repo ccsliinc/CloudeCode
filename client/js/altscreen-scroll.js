@@ -82,8 +82,17 @@
     /** How often to re-read the buffer while waiting for that paint. */
     var OPEN_POLL_MS = 40;
 
-    /** Never send more than this many arrows for one gesture. */
-    var MAX_ROWS_PER_GESTURE = 40;
+    /**
+     * Never move more than this many rows for one dispatch.
+     *
+     * Was 40 back when every row cost one arrow key. Rows are now carried
+     * by PageUp/PageDown where they can be (altscreen-keys.js), so 240
+     * rows is 15 keystrokes rather than 240 and the cap can be what it
+     * was always meant to be - a guard against a runaway delta firing an
+     * unbounded write into a live session - instead of a ceiling on how
+     * far a flick may scroll.
+     */
+    var MAX_ROWS_PER_GESTURE = 240;
 
     /** Timestamp (ms) of the user's last real keystroke. 0 = never. */
     var lastInputAt = 0;
@@ -288,17 +297,27 @@
     }
 
     /**
-     * Build a run of arrow keys.
+     * Build the key bytes for a signed row count.
+     *
+     * Delegates to altscreen-keys.js, which carries as much of the
+     * distance as it can on PageUp/PageDown (16 rows each, measured) and
+     * the remainder on arrows. Reaching the top of a long transcript was
+     * about 440 arrow presses; the same distance is 27 pages plus 8
+     * arrows. The decomposition is exact, so the view still lands on the
+     * row that was asked for.
      *
      * @param {number} rows - signed row count; >0 scrolls down, <0 up.
      * @returns {string} the bytes to write, capped at MAX_ROWS_PER_GESTURE.
+     *   Empty when the key builder is missing, which is a load-order
+     *   regression and must send NOTHING rather than guess at arrows.
      */
     function arrowRun(rows) {
-        var n = Math.min(Math.abs(rows), MAX_ROWS_PER_GESTURE);
-        var key = rows < 0 ? CSI_UP : CSI_DOWN;
-        var out = '';
-        for (var i = 0; i < n; i++) out += key;
-        return out;
+        var keys = window.AltScreenKeys;
+        if (!keys || typeof keys.keysForRows !== 'function') {
+            console.warn('AltScreenScroll: AltScreenKeys missing, sending nothing');
+            return '';
+        }
+        return keys.keysForRows(rows, MAX_ROWS_PER_GESTURE);
     }
 
     /**

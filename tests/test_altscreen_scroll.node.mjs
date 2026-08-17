@@ -22,6 +22,14 @@ const src = fs.readFileSync(
     path.join(__dirname, '..', 'client', 'js', 'altscreen-scroll.js'),
     'utf8'
 );
+// Loaded into the same sandbox because altscreen-scroll.js builds every
+// synthesised scroll through window.AltScreenKeys. Without it the module
+// deliberately sends NOTHING, which is the correct load-order failure but
+// makes every assertion below vacuous, so it is wired here on purpose.
+const keysSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'client', 'js', 'altscreen-keys.js'),
+    'utf8'
+);
 
 let failures = 0;
 let passes = 0;
@@ -127,7 +135,8 @@ function fakeTerm(type, rows, baseY = 0) {
  *
  * @returns {{api: object, sent: string[], setTerm: function, clock: object}}
  */
-function load() {
+function load(opts) {
+    const withKeys = !opts || opts.withKeys !== false;
     const timers = [];
     const sandbox = {
         window: {},
@@ -143,6 +152,7 @@ function load() {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
+    if (withKeys) vm.runInContext(keysSrc, sandbox);
     vm.runInContext(src, sandbox);
     const api = sandbox.window.AltScreenScroll;
     const sent = [];
@@ -274,8 +284,44 @@ test('a gesture is capped so one flick cannot flood the pty', () => {
     const m = load();
     m.setTerm(fakeTerm('alternate', CLAUDE_TRANSCRIPT));
     m.api.scrollByRows(-9999);
-    const ups = m.sent.join('').split('\x1b[A').length - 1;
-    assert.equal(ups, m.api._timing.MAX_ROWS_PER_GESTURE);
+    const cap = m.api._timing.MAX_ROWS_PER_GESTURE;
+    const bytes = m.sent.join('');
+    const pages = bytes.split('\x1b[5~').length - 1;
+    const ups = bytes.split('\x1b[A').length - 1;
+    // Distance is capped, and it is carried on page keys - the cap is a
+    // guard against an unbounded write, not a ceiling on scroll distance.
+    assert.equal(pages * 16 + ups, cap, 'capped at exactly MAX_ROWS_PER_GESTURE');
+    assert.equal(pages, cap / 16);
+});
+
+test('a large move is carried on page keys, not hundreds of arrows', () => {
+    const m = load();
+    m.setTerm(fakeTerm('alternate', CLAUDE_TRANSCRIPT));
+    // The measured case: about 440 rows to reach the top of a long
+    // transcript, which used to be 440 arrow presses.
+    m.api.scrollByRows(-200);
+    const bytes = m.sent.join('');
+    const pages = bytes.split('\x1b[5~').length - 1;
+    const ups = bytes.split('\x1b[A').length - 1;
+    assert.equal(pages * 16 + ups, 200, 'lands on the row that was asked for');
+    assert.equal(pages, 12);
+    assert.equal(ups, 8);
+    assert.equal(pages + ups, 20, '200 rows costs 20 keystrokes, not 200');
+});
+
+test('a move smaller than a page is still exact, one arrow per row', () => {
+    const m = load();
+    m.setTerm(fakeTerm('alternate', CLAUDE_TRANSCRIPT));
+    m.api.scrollByRows(-5);
+    assert.deepEqual(m.sent, ['\x1b[A'.repeat(5)]);
+    assert.ok(!m.sent.join('').includes('\x1b[5~'), 'no partial page');
+});
+
+test('the key builder missing sends NOTHING rather than guessing', () => {
+    const m = load({ withKeys: false });
+    m.setTerm(fakeTerm('alternate', CLAUDE_TRANSCRIPT));
+    m.api.scrollByRows(-5);
+    assert.deepEqual(m.sent, [''], 'a load-order regression scrolls nothing');
 });
 
 // ------------------------------------------------------------ idempotence
