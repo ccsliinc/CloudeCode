@@ -93,11 +93,11 @@
      * panel being opened straight onto a later tab.
      *
      * The strip is FOUR tabs now (the "agents" tab was removed once
-     * wrappers covered every family) and fits at 390px, so this currently
-     * no-ops there. Kept, not deleted: the strip's width is a percentage
-     * of a viewport this app is driven from at many sizes, "does it
-     * scroll" is not a one-time answer, and the fifth tab comes back the
-     * moment anyone adds one.
+     * wrappers covered every family). Re-measured at 390px after that
+     * removal: scrollWidth 393 against clientWidth 355, so it STILL
+     * scrolls, by 38px instead of 89px. "general" is reachable by a
+     * shorter drag, not by no drag - do not read the shorter strip as a
+     * reason this function is dead code.
      *
      * A no-op when the strip does not scroll.
      *

@@ -115,8 +115,9 @@
         // administering the same value from two screens meant two places
         // to look and one of them called the value inert. The keys and
         // their fallback behaviour are unchanged — see the note above
-        // NOTIFICATION_FIELDS. Four tabs now, which also stops the strip
-        // needing a scroll to reach the last one at 390px.
+        // NOTIFICATION_FIELDS. Four tabs now; measured at 390px the strip
+        // is 393px against a 355px window, so it still scrolls, by 38px
+        // instead of 89px. Shorter drag, not no drag.
         { id: 'wrappers', label: 'wrappers', sectionIds: [], slots: ['wrappers'] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
         { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
