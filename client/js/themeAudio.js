@@ -42,18 +42,12 @@
  * session's stored opt-in, and re-opens it on detach - a closed gate
  * surviving a detach was its own silent-mute bug.
  *
- * Public surface (singleton on window.ThemeAudio):
- *   init()                       - call once on app load
- *   setTheme(audioConfig|null)   - called by the themes registry on every
- *                                  applyTheme(); null fades out to silence
- *   setAppSound(on)/isAppSoundOn() - gate 1, persisted
- *   setSessionEnabled(on)/isSessionEnabled() - gate 2, in-memory
- *   toggleMute()                 - gesture handler, flips gate 1; returns
- *                                  the new EFFECTIVE muted state
- *   isMuted()                    - effective gate, for UI
- *   getLastPlayError()           - name of the last play() rejection, or null
- *   getStatus()                  - full snapshot; see themeAudioStatus.js
- *   getVolume() / setVolume(v)   - master 0..1, persisted; no UI yet
+ * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
+ * driven by the themes registry, the two gate pairs setAppSound/isAppSoundOn
+ * and setSessionEnabled/isSessionEnabled, toggleMute() and isMuted() for the
+ * effective state, getLastPlayError(), getStatus() for diagnosis, and
+ * getVolume()/setVolume() for the master, which still has no UI. Each is
+ * documented at its definition.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
  * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
