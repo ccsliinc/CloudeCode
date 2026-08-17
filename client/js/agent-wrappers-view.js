@@ -141,31 +141,80 @@
     }
 
     /**
-     * Render a family's legacy static command as a collapsed, DISABLED
-     * advanced row inside that family's group.
+     * Config keys the settings PATCH endpoint accepts (see
+     * ``ConfigSettingsUpdateRequest`` in src/models.py). ``shell_command``
+     * is deliberately absent server-side, so its row stays read-only and
+     * SAYS so rather than offering an edit that would 422.
+     */
+    var EDITABLE_COMMAND_FIELDS = [
+        'claude_command', 'codex_command', 'hermes_command', 'openclaw_command',
+    ];
+
+    /**
+     * Whether a family's static command can be edited from this screen.
+     * Inputs: family (object) - one family summary from the API.
+     * Output: boolean.
+     */
+    function legacyIsEditable(family) {
+        return EDITABLE_COMMAND_FIELDS.indexOf(
+            family.command_field || (family.name + '_command')
+        ) !== -1;
+    }
+
+    /**
+     * Render a family's legacy static command as a collapsed advanced row
+     * inside that family's group.
      *
-     * Presentation only — not a form field (no data-settings-key), so it
-     * can never be collected into a PATCH and its stored value is never
-     * touched here. It is shown because a value sitting in config.json
-     * that does nothing is worse than one shown and labelled inert; the
-     * copy states plainly which of the two states it is in. Generalized
-     * per family from the claude-only version this replaces.
+     * WHY THIS IS NOW AN EDIT SURFACE. The settings screen used to carry a
+     * separate "agents" tab holding three editable text fields
+     * (codex/hermes/openclaw command). That tab was the old half of a
+     * split this feature already unified: wrappers cover every family, so
+     * the tab administered a fallback for families whose primary surface
+     * lives here. Deleting it outright would have deleted the only place
+     * those keys could be edited, so the edit moved INTO this row rather
+     * than the row staying a read-only mirror of a field somewhere else.
+     *
+     * It writes IMMEDIATELY through its own button, exactly like every
+     * other action on this screen, and carries no `data-settings-key`.
+     * That preserves the original invariant behind the disabled input:
+     * these keys can never be swept into settings-panel.js's batched
+     * Save. What changes is that they are reachable at all.
+     *
+     * The copy still states plainly which of the two states the value is
+     * in, because a value sitting in config.json that does nothing is
+     * worse than one shown and labelled inert.
      * Inputs: family (object) - one family summary from the API.
      * Output: string - HTML for a collapsed `<details>` block.
      */
     function renderLegacyCommand(family) {
         var name = escapeHtml(family.name);
+        var editable = legacyIsEditable(family);
         var copy = family.in_use
             ? 'in use now. ' + (family.description || '')
             : 'not in use. wrappers above take precedence; this only runs if you delete every wrapper.';
+        if (!editable) {
+            copy += ' read only here: this key has no settings endpoint. edit it in config.json.';
+        }
+        var editorHtml = editable
+            ? (
+                '      <div class="settings-legacy-actions">' +
+                '        <button type="button" class="modal-btn modal-btn-secondary"' +
+                '          data-legacy-save="' + name + '"' +
+                '          data-legacy-field="' + escapeHtml(family.command_field) + '">save command</button>' +
+                '        <span class="settings-legacy-status" data-legacy-status="' + name + '"></span>' +
+                '      </div>'
+            )
+            : '';
         return (
             '  <details class="settings-advanced" data-legacy-family="' + name + '">' +
             '    <summary class="settings-advanced-summary">advanced: legacy ' + escapeHtml(family.label) + ' command</summary>' +
             '    <div class="settings-field">' +
             '      <label class="settings-field-label" for="settings-legacy-' + name + '-command">' + escapeHtml(family.command_field || (family.name + '_command')) + '</label>' +
             '      <input type="text" id="settings-legacy-' + name + '-command" class="modal-input"' +
-            '        value="' + escapeHtml(family.command || '') + '" readonly disabled>' +
+            '        data-legacy-input="' + name + '"' +
+            '        value="' + escapeHtml(family.command || '') + '"' + (editable ? '' : ' readonly disabled') + '>' +
             '      <div class="settings-field-hint">' + escapeHtml(copy) + '</div>' +
+            editorHtml +
             // Only meaningful when this field IS what runs. With wrappers
             // present the resolver answers from the wrapper list, so
             // printing it here would attach a wrapper's command line to an
@@ -315,6 +364,8 @@
     window.AgentWrappersView = {
         escapeHtml: escapeHtml,
         familyOf: familyOf,
+        legacyIsEditable: legacyIsEditable,
+        EDITABLE_COMMAND_FIELDS: EDITABLE_COMMAND_FIELDS,
         groupByFamily: groupByFamily,
         renderRow: renderRow,
         renderLegacyCommand: renderLegacyCommand,

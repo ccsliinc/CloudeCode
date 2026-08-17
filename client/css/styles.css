@@ -3172,6 +3172,30 @@ button[data-tooltip]:hover::after {
     gap: 8px;
 }
 
+/* The save affordance for a family's legacy static command, folded in
+ * from the removed "agents" settings tab. `min-width: 0` on the flex
+ * items is deliberate: a flex child defaults to `min-width: auto`, which
+ * refuses to shrink below its content, and the status line here can carry
+ * a whole server error message. Without it that message pushes the button
+ * off the edge of a 390px modal instead of wrapping. */
+.settings-legacy-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.settings-legacy-actions > * {
+    min-width: 0;
+}
+
+.settings-legacy-status {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
 .settings-wrapper-editor {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);

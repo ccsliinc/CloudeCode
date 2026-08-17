@@ -271,7 +271,12 @@ test('the volume row lives in the general tab, beside appearance', () => {
     assert.ok(general, 'no general tab declared');
     assert.ok(/'audio'/.test(general[0]),
         'the audio slot is not in the general tab');
-    for (const other of ['wrappers', 'agents', 'terminal', 'notifications']) {
+    // 'agents' is absent from this list because that tab no longer
+    // exists: wrappers cover every family, so its four
+    // `<family>_command` keys folded into the wrappers screen. The
+    // assertion below requires each named tab to be FOUND, so leaving a
+    // dead name here would fail for the wrong reason.
+    for (const other of ['wrappers', 'terminal', 'notifications']) {
         const tab = new RegExp(`\\{ id: '${other}'[^}]*\\}`).exec(panel);
         assert.ok(tab && !/'audio'/.test(tab[0]),
             `the audio slot leaked into the ${other} tab`);
