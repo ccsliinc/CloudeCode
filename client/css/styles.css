@@ -171,6 +171,13 @@
      * standalone safe-area inset is added in ios-chrome.css, where the
      * header takes it too. */
     --header-pad-y: 12px;
+    /* The header's side padding, and therefore the gap between the
+     * viewport edge and the first control in the header. Tokenised
+     * because the docked-sidebar rule in session-sidebar.css has to ADD
+     * this gap back on top of the sidebar's width - the toggle sat flush
+     * against the docked bar's border when that rule paid the sidebar
+     * width alone. Restated per breakpoint below, same as --header-pad-y. */
+    --header-pad-x: 20px;
     --header-border: 2px;
     --header-h: calc(var(--control-size) + var(--header-pad-y) * 2
                      + var(--header-border));
@@ -184,6 +191,7 @@
 @media (max-width: 768px) {
     :root {
         --header-pad-y: 10px;
+        --header-pad-x: 15px;
         --control-size: 44px;
     }
 }
@@ -191,6 +199,7 @@
 @media (max-width: 480px) {
     :root {
         --header-pad-y: 8px;
+        --header-pad-x: 12px;
         --control-size: 40px;
     }
 }
@@ -243,7 +252,7 @@ body {
     /* Vertical padding and the border are two of the three parts of
      * --header-h, which the top-right FAB clears itself against. Write
      * the number here and the FAB slides under the header. */
-    padding: var(--header-pad-y) 20px;
+    padding: var(--header-pad-y) var(--header-pad-x);
     border-bottom: var(--header-border) solid var(--color-accent);
     display: flex;
     justify-content: space-between;
@@ -1301,14 +1310,6 @@ button[data-tooltip]:hover::after {
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-    .header {
-        /* Side padding only. The vertical half and the control size come
-         * from the :root overrides at the top of this file so --header-h
-         * tracks them. */
-        padding-left: 15px;
-        padding-right: 15px;
-    }
-
     h1 {
         font-size: 1.1rem;
     }
@@ -1352,11 +1353,6 @@ button[data-tooltip]:hover::after {
 @media (max-width: 480px) {
     h1 {
         font-size: 1rem;
-    }
-
-    .header {
-        padding-left: 12px;
-        padding-right: 12px;
     }
 
     .terminal-container {
