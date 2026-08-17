@@ -44,6 +44,13 @@
     /** localStorage key prefix for the per-session music opt-in. */
     var AUDIO_KEY_PREFIX = 'cloude.audio.session.';
 
+    /**
+     * How long to wait before the confirming playback check. Long enough
+     * for a same-origin file to open and for play() to settle or reject,
+     * short enough that the message still belongs to the tap.
+     */
+    var RECHECK_MS = 900;
+
     /** The open picker element, or null. */
     var pickerEl = null;
 
@@ -337,18 +344,71 @@
         paintAudioButton(btn);
 
         var pill = termWrapper && typeof termWrapper._showStatusPill === 'function'
-            ? function (msg) { termWrapper._showStatusPill(msg, 'info'); }
+            ? function (msg, kind) { termWrapper._showStatusPill(msg, kind || 'info'); }
             : null;
         if (next && pill) {
-            if (!activeThemeHasAudio()) {
-                // Be honest rather than pretend: the plumbing is on, the
-                // theme just has no track to play.
-                pill('music on for this session - this theme has no track yet');
-            } else if (liftedAppSound) {
-                pill('music on - app sound was off for all sessions, turned it on');
-            }
+            reportPlayback(pill, liftedAppSound);
         }
         return next;
+    }
+
+    /**
+     * Say out loud what turning music on actually achieved.
+     *
+     * The control used to report only two of the many ways this can fail,
+     * and stayed silent for the rest - including the one that was actually
+     * happening. Anything short of audible sound now produces a sentence.
+     *
+     * Two passes, because the answer is not knowable synchronously: the
+     * element has to open the file and play() resolves on a later turn. The
+     * first pass catches the gates and a missing track, the second catches
+     * a decode failure or a blocked play. A `settling` verdict is treated
+     * as "ask again", never as success.
+     *
+     * @param {function(string, string=): void} pill - status pill renderer.
+     * @param {boolean} liftedAppSound - whether the master was just lifted.
+     * @returns {void}
+     */
+    function reportPlayback(pill, liftedAppSound) {
+        var Status = window.ThemeAudioStatus;
+        var prefix = liftedAppSound
+            ? 'music on, app sound was off for all sessions so it was turned on'
+            : 'music on for this session';
+
+        /**
+         * Render one verdict.
+         *
+         * @param {{playing: boolean, settling: boolean, reason: string|null}} v
+         * @param {boolean} isFinal - true on the confirming pass.
+         * @returns {void}
+         */
+        function say(v, isFinal) {
+            if (v.playing) {
+                if (!isFinal) pill(prefix);
+                return;
+            }
+            if (v.settling && !isFinal) return;
+            pill(prefix + ' - but no sound: ' + v.reason, 'error');
+        }
+
+        if (!Status || typeof Status.current !== 'function') {
+            // No diagnosis module: fall back to the one fact we can still
+            // establish locally rather than claiming success.
+            pill(activeThemeHasAudio()
+                ? prefix
+                : prefix + ' - but no sound: this theme has no music track',
+                activeThemeHasAudio() ? 'info' : 'error');
+            return;
+        }
+
+        var first = Status.current();
+        say(first, false);
+        if (first.playing) return;
+        setTimeout(function () {
+            var again = Status.current();
+            if (again.playing) return;
+            say(again, true);
+        }, RECHECK_MS);
     }
 
     window.SessionThemeMenu = {

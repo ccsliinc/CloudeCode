@@ -420,6 +420,10 @@
     <script src="/static/js/themeAudioNode.js"></script>
     <script src="/static/js/themeAudioSettings.js"></script>
     <script src="/static/js/themeAudio.js"></script>
+    <!-- themeAudioStatus.js reads window.ThemeAudio.getStatus(), so it loads
+         AFTER themeAudio.js. It is what makes a silent failure speak: the
+         music control asks it why nothing is playing and shows the answer. -->
+    <script src="/static/js/themeAudioStatus.js"></script>
 
     <!-- Per-session theme picker + per-session music opt-in, mounted on
          the terminal screen. Must load AFTER themes/registry.js

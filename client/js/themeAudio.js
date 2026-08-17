@@ -5,13 +5,10 @@
  * block AND the user opts the session in from the session editor FAB
  * menu ("play music"), which is also the user gesture browsers require.
  *
- * Manifest shape (optional, per client/css/themes/<name>/theme.json):
- *   "audio": {
- *     "src":         "/static/assets/audio/<slug>.m4a",
- *     "srcFallback": "/static/assets/audio/<slug>.ogg",
- *     "volume":      0.5,   // 0..1 target gain after fade-in
- *     "fadeMs":      1500   // crossfade duration in ms
- *   }
+ * Manifest shape: the optional `audio` block of
+ * client/css/themes/<name>/theme.json - src, srcFallback, volume, fadeMs.
+ * The authoritative definition is ThemeAudioManifest in src/models.py,
+ * because that model is what decides which fields survive the API.
  *
  * FORMAT ORDER IS FIXED, m4a first: iOS returns "probably" for Ogg Vorbis
  * from canPlayType and then fails to decode it, so the fallback is driven
@@ -19,14 +16,12 @@
  * are in ThemeAudioNode.candidates() in themeAudioNode.js.
  *
  * GAIN BUDGET (read before lowering any of these numbers). The clips are
- * loudnorm'd to about -24 LUFS, already quiet. The master and the
- * per-theme volume MULTIPLY, so two individually sane numbers compound:
- * the original 0.28 x 0.3 gave a linear gain of 0.084, i.e. -21.5 dB on
- * top of -24 LUFS, roughly -45 LUFS at the speaker - inaudible on a phone.
- * The master now defaults to 1.0 and manifests carry 0.45..0.60, landing
- * near -31..-28 LUFS: present, still background. A THIRD multiplier hid
- * here until 2026-08-16: the <audio> element's own `.volume`, which
- * attenuates upstream of the Web Audio graph. See ThemeAudioNode.makeNode().
+ * loudnorm'd to about -24 LUFS. The master and the per-theme volume
+ * MULTIPLY: the original 0.28 x 0.3 was a linear gain of 0.084, roughly
+ * -45 LUFS at the speaker and inaudible on a phone. The master now
+ * defaults to 1.0 and manifests carry 0.45..0.60. A THIRD multiplier, the
+ * element's own `.volume`, attenuates UPSTREAM of the Web Audio graph -
+ * see ThemeAudioNode.makeNode() for the measurement.
  *
  * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
  * falls back to `default-src 'self'` and any remote URL is blocked.
@@ -38,17 +33,14 @@
  *   2. The PER-SESSION music opt-in, owned by session-theme-menu.js and
  *      keyed by tmux session name. Applied on every attach, default OFF.
  *
- * These used to be the SAME boolean, so the header switch did not survive
- * contact with a session: the next attach called syncForSession(), drove
- * that boolean from the per-session opt-in, found the default OFF and
- * re-muted - silently, and without repainting the header button, so the
- * control still showed itself as on. An attach now sets gate 2 and cannot
- * touch gate 1.
+ * These used to be the SAME boolean, so an attach silently overwrote the
+ * header switch with the per-session default of OFF without repainting the
+ * button. An attach now sets gate 2 and cannot touch gate 1.
  *
- * Gate 2 defaults to TRUE so the header switch alone can play the home
- * theme before any session is attached. Once a session IS attached,
- * syncForSession() sets it from that session's stored opt-in, which is
- * where "off by default per session" actually lives.
+ * Gate 2 is OPEN whenever no session is in scope, so the header switch
+ * alone plays the home theme. syncForSession() sets it from the attached
+ * session's stored opt-in, and re-opens it on detach - a closed gate
+ * surviving a detach was its own silent-mute bug.
  *
  * Public surface (singleton on window.ThemeAudio):
  *   init()                       - call once on app load
@@ -60,31 +52,38 @@
  *                                  the new EFFECTIVE muted state
  *   isMuted()                    - effective gate, for UI
  *   getLastPlayError()           - name of the last play() rejection, or null
+ *   getStatus()                  - full snapshot; see themeAudioStatus.js
  *   getVolume() / setVolume(v)   - master 0..1, persisted; no UI yet
  *
- * Persistence lives in themeAudioSettings.js, which also owns the
- * upgrade migration for stale stored values.
+ * Persistence and the upgrade migration live in themeAudioSettings.js. A
+ * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
+ * changes, so the header button repaints when something other than its own
+ * click moved the state.
  *
- * A `cloude:audio-state` CustomEvent is dispatched on `document` whenever
- * either gate changes, so the header button can repaint when something
- * other than its own click moved the state.
- *
- * Engine: MediaElementAudioSourceNode -> GainNode -> destination, which
- * gives clean linearRampToValueAtTime crossfades. Clips are same-origin so
- * createMediaElementSource neither taints nor CORS-fails. The
- * requestAnimationFrame ramp is the fallback for when AudioContext
- * construction itself fails; behaviour matches, only the curve is coarser.
- * Looping uses `el.loop`, which still has an audible gap in every engine in
- * 2026; acceptable for ambience. The upgrade path is AudioBufferSourceNode
- * (fetch -> decodeAudioData), at the cost of a full in-memory load.
+ * Engine: MediaElementAudioSourceNode -> GainNode -> destination, for clean
+ * linearRampToValueAtTime crossfades. The requestAnimationFrame ramp is the
+ * fallback for when AudioContext construction fails; same behaviour, coarser
+ * curve. Looping uses `el.loop`, which still gaps audibly in 2026 and is
+ * acceptable for ambience; the upgrade path is AudioBufferSourceNode.
  *
  * Page Visibility: pause when document.hidden, resume when visible if not
  * muted. Explicit, because browsers do not universally pause backgrounded
  * tabs.
  *
- * Autoplay: the AudioContext is built lazily on the first toggleMute(), so
- * it is always constructed inside a user gesture. setTheme() before that
- * only preloads; it never calls play().
+ * Autoplay: setTheme() only preloads, it never calls play(). The
+ * AudioContext is built by makeNode(), which is NOT inside a gesture, so it
+ * starts suspended; the first unmute resumes it from inside the gesture.
+ *
+ * WHERE THE MANIFEST COMES FROM, and why this module was dead code until
+ * 2026-08-16. setTheme() is fed from GET /api/v1/themes, NOT from
+ * theme.json on disk, and that endpoint's Pydantic response_model dropped
+ * the `audio` block, so this module received null for every theme and
+ * correctly played nothing. If sound disappears again, check the API
+ * payload before anything in here.
+ *
+ * REPORTING FAILURE. Every audio bug this feature has shipped was silent.
+ * getStatus() exposes the raw facts and themeAudioStatus.js turns them into
+ * the sentence the music control shows the user.
  */(function () {
     'use strict';
 
@@ -402,6 +401,37 @@
      * @returns {string|null}
      */
     function getLastPlayError() { return window.ThemeAudioNode.getLastPlayError(); }
+
+    /**
+     * A snapshot of everything that decides whether sound is coming out.
+     *
+     * Facts only, no interpretation: themeAudioStatus.js owns the mapping
+     * from this shape to a sentence. Never throws, because it is called
+     * from paint paths.
+     *
+     * @returns {{appSoundOn: boolean, sessionOn: boolean, muted: boolean,
+     *            masterVolume: number, hidden: boolean, hasTrack: boolean,
+     *            playError: string|null, loadError: string|null,
+     *            node: null|{src: string, loadedSrc: string, paused: boolean,
+     *                        currentTime: number, engine: string|null,
+     *                        effectiveGain: number}}}
+     */
+    function getStatus() {
+        var Node = window.ThemeAudioNode;
+        return {
+            appSoundOn: appSoundOn,
+            sessionOn: sessionOn,
+            muted: muted,
+            masterVolume: globalVolume,
+            hidden: typeof document !== 'undefined' && !!document.hidden,
+            hasTrack: !!(currentConfig && currentConfig.src),
+            playError: Node ? Node.getLastPlayError() : null,
+            loadError: Node && typeof Node.getLastLoadError === 'function'
+                ? Node.getLastLoadError() : null,
+            node: Node && typeof Node.snapshot === 'function'
+                ? Node.snapshot(currentNode) : null
+        };
+    }
     function getVolume() { return globalVolume; }
     function setVolume(v) {
         var clamped = Math.max(0, Math.min(1, v));
@@ -474,6 +504,7 @@
         setSessionEnabled: setSessionEnabled,
         isSessionEnabled: isSessionEnabled,
         getLastPlayError: getLastPlayError,
+        getStatus: getStatus,
         getVolume: getVolume,
         setVolume: setVolume
     };

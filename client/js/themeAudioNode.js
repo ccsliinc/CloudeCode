@@ -36,6 +36,17 @@
     var lastPlayError = null;
 
     /**
+     * Description of the most recent EXHAUSTED load, or null.
+     *
+     * Set only when every declared source for a node has failed, which is
+     * the point at which the node is dropped and the app goes permanently
+     * silent for that theme. Until this existed the only trace was a
+     * console.warn, so a decode failure and a theme with no track were
+     * indistinguishable from the UI.
+     */
+    var lastLoadError = null;
+
+    /**
      * The shared AudioContext, built lazily so construction always happens
      * inside a user gesture, and the engine that decision settled on:
      * 'webaudio' | 'element' | null (undecided). Both are per-session and
@@ -238,6 +249,16 @@
     }
 
     /**
+     * Description of the last exhausted load, or null if none has happened
+     * since the current node was built.
+     *
+     * @returns {string|null}
+     */
+    function getLastLoadError() {
+        return lastLoadError;
+    }
+
+    /**
      * Handle a media load error: advance to the next declared format if
      * there is one, otherwise tear the node down.
      *
@@ -278,8 +299,9 @@
             return;
         }
 
-        console.warn('ThemeAudioNode: no playable source for',
-            node.sources.join(', '), '(last error code ' + code + ')');
+        lastLoadError = 'no playable source (' + node.sources.join(', ') +
+            '), last media error code ' + code;
+        console.warn('ThemeAudioNode: ' + lastLoadError);
         teardown(node);
         host.onDrop(node);
     }
@@ -303,6 +325,9 @@
         if (!cfg || typeof cfg !== 'object' || !cfg.src || typeof cfg.src !== 'string') {
             return null;
         }
+        // A fresh node is a fresh verdict: a previous theme's dead track
+        // must not keep reporting itself as this theme's problem.
+        lastLoadError = null;
         var el = new Audio();
         // crossorigin BEFORE src per spec - WebKit caches the request mode
         // at src-set time.
@@ -385,6 +410,33 @@
      */
     function getEngineKind() { return engineKind; }
 
+    /**
+     * The observable facts about one node, for diagnosis.
+     *
+     * `effectiveGain` is the gain that actually reaches the speaker: the
+     * GainNode's value in webaudio mode, the element's own volume in
+     * element mode. Reading the wrong one of those two is exactly how a
+     * graph multiplied by zero read as healthy, so the choice is made here,
+     * next to the code that decides which engine is in use, rather than in
+     * the policy layer.
+     *
+     * @param {object|null} node - a playback node, or null.
+     * @returns {null|{src: string, loadedSrc: string, paused: boolean,
+     *                 currentTime: number, engine: string|null,
+     *                 effectiveGain: number}}
+     */
+    function snapshot(node) {
+        if (!node || !node.audio) return null;
+        return {
+            src: node.src,
+            loadedSrc: node.loadedSrc,
+            paused: !!node.audio.paused,
+            currentTime: node.audio.currentTime,
+            engine: engineKind,
+            effectiveGain: node.gain ? node.gain.gain.value : node.audio.volume
+        };
+    }
+
     window.ThemeAudioNode = {
         candidates: candidates,
         ramp: ramp,
@@ -395,6 +447,8 @@
         getCtx: getCtx,
         resumeCtx: resumeCtx,
         getEngineKind: getEngineKind,
-        getLastPlayError: getLastPlayError
+        getLastPlayError: getLastPlayError,
+        getLastLoadError: getLastLoadError,
+        snapshot: snapshot
     };
 })();

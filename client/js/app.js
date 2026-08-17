@@ -129,6 +129,14 @@ window.setPageTitle = setPageTitle;
  */
 class AppController {
     /**
+     * Delay before the confirming audio check after the master switch is
+     * turned on. A track needs a moment to open and play() settles on a
+     * later turn, so the first look cannot tell success from failure.
+     * @type {number}
+     */
+    static get AUDIO_RECHECK_MS() { return 900; }
+
+    /**
      * Inline SVG markup for the two states of the header audio toggle.
      * Single source of truth so `_wireAudioToggle()`'s paint() never has
      * more than one place that decides what the icon looks like. 16x16,
@@ -392,11 +400,61 @@ class AppController {
 
         btn.addEventListener('click', () => {
             if (!window.ThemeAudio) return;
-            try { window.ThemeAudio.toggleMute(); } catch (e) {
+            let nowOn = false;
+            try {
+                window.ThemeAudio.toggleMute();
+                nowOn = window.ThemeAudio.isAppSoundOn();
+            } catch (e) {
                 console.warn('App: ThemeAudio.toggleMute threw', e);
             }
             paint();
+            if (nowOn) AppController._reportAudio();
         });
+    }
+
+    /**
+     * Report why turning app sound on did not produce sound, if it did not.
+     *
+     * The master switch had no reporting at all: it flipped its own icon and
+     * that was the entire feedback loop, which is how five different silent
+     * causes each survived a user tapping it. Checked twice because a track
+     * needs a moment to open and play() settles on a later turn; a
+     * `settling` verdict is never treated as success.
+     *
+     * @returns {void}
+     */
+    static _reportAudio() {
+        const Status = window.ThemeAudioStatus;
+        if (!Status || typeof Status.current !== 'function') return;
+
+        /**
+         * Show one message through whichever toast surface exists.
+         *
+         * @param {string} msg - user-facing text.
+         * @param {string} kind - 'info' or 'error'.
+         * @returns {void}
+         */
+        const say = (msg, kind) => {
+            if (window.FabMenu && typeof window.FabMenu.notify === 'function') {
+                window.FabMenu.notify(msg, kind);
+                return;
+            }
+            console.warn('App: no toast surface for audio status:', msg);
+        };
+
+        const first = Status.current();
+        if (first.playing) {
+            say('app sound on', 'info');
+            return;
+        }
+        setTimeout(() => {
+            const again = Status.current();
+            if (again.playing) {
+                say('app sound on', 'info');
+                return;
+            }
+            say('app sound on - but no sound: ' + again.reason, 'error');
+        }, AppController.AUDIO_RECHECK_MS);
     }
 
     /**

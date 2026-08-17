@@ -216,6 +216,23 @@ body:has(#auth-screen.active) .fab-menu-btn {
     color: var(--color-danger, var(--color-fg));
 }
 
+/* A row whose control is ON but is not achieving anything - currently only
+ * "stop music" while no sound is reaching the speaker. The reason lives in
+ * the title/aria-label; this only marks that there IS one to read, because
+ * the row would otherwise look identical to a working one. Warning colour,
+ * not danger: nothing here is destructive. */
+.fab-menu__item--warn,
+.fab-menu__item--warn svg {
+    color: var(--color-warning, var(--color-fg));
+}
+
+.fab-menu__item--warn:hover,
+.fab-menu__item--warn:focus-visible,
+.fab-menu__item--warn:hover svg,
+.fab-menu__item--warn:focus-visible svg {
+    color: var(--color-warning, var(--color-fg));
+}
+
 /* One line per row. A wrapped label turns a 44px row into a 90px one and
  * the menu stops looking like a list. */
 .fab-menu__label {

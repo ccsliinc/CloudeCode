@@ -135,6 +135,24 @@ console.log('[SessionEditorMenu Module] Loading...');
     }
 
     /**
+     * Why the music is not audible right now, or null when it is playing
+     * or the answer is not yet knowable.
+     *
+     * A `settling` verdict deliberately returns null: a track that is still
+     * opening is not a fault, and labelling it as one would make the row
+     * cry wolf on every open.
+     *
+     * @returns {string|null} a lowercase reason, or null.
+     */
+    function notPlayingReason() {
+        var Status = window.ThemeAudioStatus;
+        if (!Status || typeof Status.current !== 'function') return null;
+        var v = Status.current();
+        if (v.playing || v.settling) return null;
+        return v.reason;
+    }
+
+    /**
      * The three rows, in order. Built per open so the music row reports
      * the live per-session opt-in rather than one captured at wire time.
      *
@@ -167,6 +185,15 @@ console.log('[SessionEditorMenu Module] Loading...');
         var label = musicOn
             ? 'turn off music for this session'
             : 'play music for this session';
+        // A row that says "stop music" while nothing is playing is the
+        // exact lie this feature kept shipping. When the opt-in is on but
+        // no sound is reaching the speaker, the row says why, every time
+        // the menu is opened - not only on the tap that turned it on.
+        var reason = musicOn ? notPlayingReason() : null;
+        if (reason) {
+            label = 'no sound: ' + reason;
+            rows[1].classList.add('fab-menu__item--warn');
+        }
         rows[1].setAttribute('aria-label', label);
         rows[1].setAttribute('title', label);
 
