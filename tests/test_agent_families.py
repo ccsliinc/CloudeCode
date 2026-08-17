@@ -219,13 +219,20 @@ def test_claude_last_resort_with_a_model_is_cldor():
     assert "vendor/m-1" in out
 
 
-def test_only_claude_has_a_last_resort():
+def test_every_family_has_a_last_resort():
+    """SUPERSEDES ``test_only_claude_has_a_last_resort``.
+
+    That test asserted the BUG. A ``last_resort`` of ``None`` made
+    ``render_static_command`` return the empty string, and an empty string
+    reaching ``tmux new-session`` starts a pane that exits at once with
+    nothing on screen. The old assertion locked that behaviour in as if it
+    were a contract. Every family now brings a renderer; see
+    ``src/core/agent_last_resort.py`` and
+    ``tests/test_agent_last_resort.py``.
+    """
     for family in AGENT_FAMILIES:
-        if family.name == DEFAULT_FAMILY:
-            assert family.last_resort is not None
-        else:
-            assert family.last_resort is None
-            assert render_static_command(family, "") == ""
+        assert family.last_resort is not None, family.name
+        assert render_static_command(family, "").strip() != "", family.name
 
 
 # ---------------------------------------------------------------------- #

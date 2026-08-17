@@ -71,6 +71,7 @@ from src.core.agent_families import (
     DEFAULT_FAMILY,
     is_valid_family,
 )
+from src.core.agent_last_resort import example_wrapper
 from src.core.shell_init import rc_prefixed
 
 # Filesystem-safe, stable identifier: used both as the wrapper's dict key
@@ -466,5 +467,34 @@ EXAMPLE_WRAPPERS: List[dict] = [
         ),
         "default": False,
         "accepts_model": True,
+    },
+    # One offered example per NON-claude family. Before these existed the
+    # example list was two entries, both claude, so the wrappers screen's
+    # "import example" action had nothing to offer a codex/hermes/openclaw
+    # or shell user at all. Built from the same guarded text as those
+    # families' last resorts (src/core/agent_last_resort.py) so importing
+    # one and editing it starts from a launch that already fails legibly.
+    # These are NOT keychain-backed: the two claude examples above read a
+    # credential at run time because Claude Code needs one, and none of
+    # these tools does.
+    example_wrapper("codex", "codex", "codex", "codex_command", "codex (guarded)"),
+    example_wrapper("hermes", "hermes", "hermes", "hermes_command", "hermes (guarded)"),
+    example_wrapper(
+        "openclaw", "openclaw", "openclaw tui", "openclaw_command", "openclaw (guarded)"
+    ),
+    {
+        "id": "shell-default",
+        "family": "shell",
+        "label": "shell (interactive)",
+        # No probe: there is no third-party binary, and the
+        # ${SHELL:-/bin/sh} default means this can never render empty.
+        "script": 'exec "${SHELL:-/bin/sh}" -i',
+        "entry": None,
+        "description": (
+            "example - a plain interactive login-rc shell, the same thing "
+            "agents.shell_command runs by default."
+        ),
+        "default": False,
+        "accepts_model": False,
     },
 ]

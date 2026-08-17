@@ -204,7 +204,7 @@
      * the user reviews before saving. Never writes on its own.
      * Output: Promise<void>.
      */
-    async function importExample() {
+    async function importExample(familyName) {
         if (!examples) {
             try {
                 var resp = await window.API.listWrapperExamples();
@@ -215,12 +215,22 @@
                 return;
             }
         }
-        if (examples.length === 0) return;
-        var labels = examples.map(function (e, i) { return (i + 1) + '. ' + e.label; }).join('\n');
-        var choice = window.prompt('import which example?\n' + labels + '\n\nenter a number:', '1');
+        // Scoped to the family whose button was pressed. The endpoint
+        // returns every family's examples in one list; offering a codex
+        // user the claude keychain wrapper would be an invitation to
+        // import the wrong thing into the wrong group.
+        var offered = examples.filter(function (e) {
+            return View.familyOf(e) === familyName;
+        });
+        if (offered.length === 0) {
+            window.alert('no example wrappers for ' + familyName + '.');
+            return;
+        }
+        var labels = offered.map(function (e, i) { return (i + 1) + '. ' + e.label; }).join('\n');
+        var choice = window.prompt('import which ' + familyName + ' example?\n' + labels + '\n\nenter a number:', '1');
         var idx = parseInt(choice, 10) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= examples.length) return;
-        var chosen = examples[idx];
+        if (isNaN(idx) || idx < 0 || idx >= offered.length) return;
+        var chosen = offered[idx];
         editingId = '__new__';
         editingFamily = View.familyOf(chosen);
         // Seed through the render path rather than poking the DOM after
@@ -266,8 +276,11 @@
             });
         });
 
-        var importBtn = rootEl.querySelector('#wrapper-import-btn');
-        if (importBtn) importBtn.addEventListener('click', importExample);
+        rootEl.querySelectorAll('[data-wrapper-import-family]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                importExample(btn.getAttribute('data-wrapper-import-family'));
+            });
+        });
 
         var cancelBtn = rootEl.querySelector('#wrapper-editor-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', closeEditor);

@@ -197,9 +197,13 @@
         var addBtn = editorOpen ? '' : (
             '  <div class="settings-wrapper-actions-row">' +
             '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-add-family="' + name + '">+ add ' + escapeHtml(family.label) + ' wrapper</button>' +
-            (family.name === 'claude'
-                ? '    <button type="button" class="modal-btn modal-btn-secondary" id="wrapper-import-btn">import example</button>'
-                : '') +
+            // Every family has an offered example now (see
+            // src/core/agent_wrappers.EXAMPLE_WRAPPERS), so the import
+            // action is no longer claude-only. It used to be, because the
+            // example list held two claude entries and nothing else, and
+            // a button that opened an empty picker would have been worse
+            // than no button.
+            '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-import-family="' + name + '">import example</button>' +
             '  </div>'
         );
         return (
