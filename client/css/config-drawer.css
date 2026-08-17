@@ -177,12 +177,12 @@ body.config-drawer-docked .config-editor-picker-content {
 /* THE FLOATING RIGHT-HAND CONTROLS MOVE IN BY THE DOCK WIDTH.
  *
  * They are `position: fixed` against the viewport edge, so screen padding
- * does not move them: without these three rules the FAB column, the
- * connection light and the d-pad all sit ON TOP of the docked drawer.
- * Each keeps its own slot token and adds the same offset, so the column
- * stays a column. */
-body.config-drawer-docked .fab-menu-btn,
-body.config-drawer-docked .status-rail {
+ * does not move them: without this the FAB column and the d-pad would sit
+ * ON TOP of the docked drawer. The connection light bar is NOT included
+ * here any more - it moved to the bottom-LEFT corner, on the opposite
+ * edge from a drawer that docks on the right, so the drawer never reaches
+ * it. */
+body.config-drawer-docked .fab-menu-btn {
     right: calc(var(--fab-slot-0) + var(--config-drawer-w));
 }
 

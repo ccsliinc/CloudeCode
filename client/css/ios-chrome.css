@@ -110,13 +110,12 @@ html {
     bottom: auto;
 }
 
-/* The connection light sits one slot below the editor on the same rail,
- * so it pays the same top inset. Without this it would keep the browser-
- * mode offset while the button above it moved down, and the two would
- * overlap by exactly the inset. */
-.status-rail {
-    top: calc(var(--fab-top-edge) + var(--fab-size) + var(--fab-gap)
-              + env(safe-area-inset-top));
+/* The connection light bar sits at the bottom-LEFT corner, on the same
+ * edge as the bottom-row FABs above, so it pays the same bottom inset -
+ * without this it would sit under the home indicator in standalone mode
+ * while every other bottom-edge control moved up clear of it. */
+.terminal-status-bar {
+    bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
 }
 
 /* Slide-over panels run the full height of the viewport, so they own both
