@@ -563,8 +563,29 @@ class ServerManager {
 
         return;
       } else {
-        console.error(`Port ${this.port} in use by another process!`);
-        return;
+        // Something that is NOT a Cloude Code server holds the port.
+        //
+        // We deliberately do not kill it. The holder could be anything the
+        // user cares about, and silently killing a stranger's process is not
+        // a decision this app gets to make.
+        //
+        // We also do not fall back to a free port. The port is not a private
+        // detail of this process: setup_auth.py writes PORT=8000 into .env,
+        // stop.sh / reset.sh / nuke.sh find the server with `lsof -ti:8000`,
+        // and the access URL and notification deep links are built from it.
+        // Moving the listener without moving all of those turns one visible
+        // failure into several invisible ones.
+        //
+        // So: report it. This previously logged to a console nobody reads and
+        // returned, leaving the menu bar showing no error at all.
+        const holder = await this.describePortHolder();
+        this.state = 'stopped';
+        throw new Error(
+          `Port ${this.port} is already in use by ${holder}, which is not a ` +
+            `Cloude Code server.\n\n` +
+            `Cloude Code needs port ${this.port}. Quit that process, then choose ` +
+            `Start Server from the Cloude Code menu.`
+        );
       }
     }
 
@@ -704,17 +725,33 @@ class ServerManager {
   }
 
   /**
-   * Kill any process using port 8000
+   * Human-readable description of whatever currently holds `this.port`.
+   *
+   * Exists purely to make the port-in-use error actionable. "Port 8000 is in
+   * use" tells the user nothing they can do; "PID 4312 (node)" tells them
+   * exactly what to quit.
+   *
+   * Never throws: this runs on an error path, and failing to name the holder
+   * must not replace a useful error with a confusing one.
+   *
+   * @returns {Promise<string>} e.g. `PID 4312 (node)`, `PID 4312`, or the
+   *   generic `another process` when lsof and ps both tell us nothing.
    */
-  killByPort() {
+  describePortHolder() {
     return new Promise((resolve) => {
-      exec(`lsof -ti:${this.port} | xargs kill -9`, (error) => {
-        if (error) {
-          console.log('No process found on port', this.port);
-        } else {
-          console.log('Killed process on port', this.port);
+      exec(`lsof -ti:${this.port}`, (err, stdout) => {
+        const pid = parseInt(String(stdout || '').trim().split('\n')[0], 10);
+        if (err || Number.isNaN(pid)) {
+          resolve('another process');
+          return;
         }
-        resolve();
+        exec(`ps -p ${pid} -o comm=`, (psErr, psOut) => {
+          const name = String(psOut || '').trim();
+          // A full path is normal from ps; the basename is what the user sees
+          // in Activity Monitor.
+          const base = name ? name.split('/').pop() : '';
+          resolve(base ? `PID ${pid} (${base})` : `PID ${pid}`);
+        });
       });
     });
   }

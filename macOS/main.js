@@ -1,4 +1,4 @@
-const { app, Tray, Menu, shell, nativeImage, clipboard } = require('electron');
+const { app, Tray, Menu, shell, nativeImage, clipboard, dialog } = require('electron');
 const path = require('path');
 const ServerManager = require('./server-manager');
 const LaunchAgentInstaller = require('./launchagent-installer');
@@ -303,7 +303,16 @@ app.whenReady().then(async () => {
 
   // Start server automatically (ensureServerFiles + ensureVenv inside are
   // idempotent and will short-circuit since bootstrap already did the work).
-  await serverManager.start();
+  // start() throws on a real, user-actionable failure (config invalid, or the
+  // port held by something that is not our server). Show it: an unhandled
+  // rejection here would leave the app running with a menu bar that claims
+  // nothing is wrong. Not fatal, so we do not quit — the user can free the
+  // port and use Start Server.
+  try {
+    await serverManager.start();
+  } catch (err) {
+    dialog.showErrorBox('Cloude Code could not start the server', err.message);
+  }
 
   // Force immediate health check to sync state before first menu update
   const health = await serverManager.getHealth();
@@ -559,10 +568,16 @@ function updateMenu() {
         {
           label: canStart ? 'Start Server' : 'Stop Server',
           click: async () => {
-            if (canStart) {
-              await serverManager.start();
-            } else {
-              await serverManager.stop();
+            try {
+              if (canStart) {
+                await serverManager.start();
+              } else {
+                await serverManager.stop();
+              }
+            } catch (err) {
+              // The user explicitly asked for this, so they get an explicit
+              // answer rather than a menu item that appears to do nothing.
+              dialog.showErrorBox('Cloude Code could not start the server', err.message);
             }
             updateMenu();
             setTimeout(updateMenu, 500);
