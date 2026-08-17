@@ -85,6 +85,21 @@ mutate "gate goes back to the buffer label instead of scrollback" \
 mutate "existing scrollback is hijacked instead of left to scrollLines" \
   "if (baseY > 0) return 'main';||=>||if (baseY < 0) return 'main';"
 
+# --- the ownership gate: claude's chrome PLUS evidence of a full-screen
+# --- paint. Each half is load-bearing in a different direction.
+
+mutate "THE REPORTED BUG: pre-claude scrollback outranks claude again" \
+  "if (owner && (type === 'alternate' || baseY === 0)) return owner;||=>||if (owner && baseY === 0) return owner;"
+
+mutate "claude's chrome alone owns the gesture, hijacking tui: default" \
+  "if (owner && (type === 'alternate' || baseY === 0)) return owner;||=>||if (owner) return owner;"
+
+mutate "an unreadable screen over scrollback invents could-not-evaluate" \
+  "if (!rows.length) return baseY > 0 ? 'main' : 'unknown';||=>||if (!rows.length) return 'unknown';"
+
+mutate "an unreadable screen with nothing to scroll is called main anyway" \
+  "if (!rows.length) return baseY > 0 ? 'main' : 'unknown';||=>||if (!rows.length) return 'main';"
+
 if [ "$survived" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1

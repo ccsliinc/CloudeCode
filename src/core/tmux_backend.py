@@ -1357,12 +1357,34 @@ class TmuxBackend(SessionBackend):
         line to the column where the previous one ended, which is the
         "scrolling back janks the alignment" report. See that module.
 
+        A pane on the ALTERNATE SCREEN captures nothing, deliberately.
+        ``capture-pane -S -N`` reaches back into the pane's history, and a
+        full-screen TUI's history is whatever ran BEFORE it - a shell
+        banner, an motd, a git status, a seeded test run. None of that is
+        on the pane's screen and none of it is reachable inside the TUI,
+        so replaying it into the client's xterm manufactures a scrollback
+        the pane does not have. That phantom history is what made a
+        fullscreen Claude Code session scroll back through pre-claude
+        noise instead of claude's own transcript (reported and reproduced
+        2026-08-17 with 400 lines printed ahead of claude), because the
+        client cannot tell a replayed history apart from a real one.
+        ``ws_startup_paint`` already draws the same line at the same
+        ``#{alternate_on}`` boundary: for an alternate-screen pane the
+        repaint is the TUI's own Ctrl+L redraw, never a capture. An
+        unreadable pane state reports False there and here, which keeps
+        today's replay behaviour rather than silently dropping history.
+
         Returns:
-            Captured pane bytes with CRLF line endings, or ``b""`` when
-            the tmux call fails.
+            Captured pane bytes with CRLF line endings; ``b""`` when the
+            tmux call fails, and ``b""`` when the pane is on the alternate
+            screen.
         """
         if lines <= 0:
             lines = self.scrollback_lines
+
+        if self.pane_in_alternate_screen():
+            logger.debug("capture_scrollback_skipped_alternate_screen")
+            return b""
 
         self.replay_in_progress = True
         try:

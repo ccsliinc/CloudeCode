@@ -163,18 +163,60 @@ function load() {
 
 // ---------------------------------------------------------------- detect
 
-test('a buffer with real scrollback is never claimed', () => {
+test('tui: default is left to scrollLines - the buffer IS claude there', () => {
     const m = load();
-    // baseY > 0 means rows HAVE scrolled off, so scrollLines() works and
-    // this module must stand down - even though the claude prompt frame
-    // is right there on screen, which is exactly the `tui: default` case.
+    // `tui: default` writes the conversation into the terminal as ordinary
+    // output, so baseY > 0 on the NORMAL buffer with claude's prompt frame
+    // on screen means the scrollback already holds exactly the history the
+    // user is asking for. Injecting ctrl+o would replace a working scroll
+    // with a synthesised keystroke for no gain. Verified against a live
+    // `tui: default` session 2026-08-17: alternate_on=0, history_size 891
+    // against 400 lines of pre-claude output, prompt frame identical to
+    // the fullscreen one.
     m.setTerm(fakeTerm('normal', CLAUDE_LIVE, 900));
     assert.equal(m.api.detectState(fakeTerm('normal', CLAUDE_LIVE, 900)), 'main');
     assert.equal(m.api.scrollByRows(-5), false, 'main screen must fall through to scrollLines');
     assert.deepEqual(m.sent, []);
-    m.setTerm(fakeTerm('alternate', CLAUDE_LIVE, 1));
-    assert.equal(m.api.scrollByRows(-5), false, 'scrollback wins over the buffer label too');
-    assert.deepEqual(m.sent, []);
+});
+
+test('REGRESSION: pre-claude output must not outrank claude on the alt screen', () => {
+    // THE REPORTED BUG. A fullscreen claude session started from a shell
+    // that had already printed 400 lines: the gesture scrolled the seed
+    // lines and claude's transcript was unreachable. The old gate asked
+    // "is there anything to scroll" (baseY > 0) when the question is
+    // "whose history does the user want". On the alternate buffer the
+    // answer is always claude's - whatever is underneath belongs to
+    // whatever ran before it.
+    const m = load();
+    assert.equal(m.api.detectState(fakeTerm('alternate', CLAUDE_LIVE, 400)), 'live');
+    assert.equal(m.api.detectState(fakeTerm('alternate', CLAUDE_TRANSCRIPT, 400)), 'transcript');
+    m.setTerm(fakeTerm('alternate', CLAUDE_TRANSCRIPT, 400));
+    assert.equal(m.api.scrollByRows(-4), true, 'claude owns the gesture, not the buffer');
+    assert.deepEqual(m.sent, ['\x1b[A'.repeat(4)]);
+});
+
+test('a non-claude screen over scrollback still goes to the buffer', () => {
+    // The other half of the ownership rule: identity is required, not just
+    // an alternate buffer label. Nothing here is claude, so the buffer -
+    // which can move - keeps the gesture, and nothing is injected.
+    for (const screen of [LESS_SCREEN, HTOP_SCREEN, CLAUDE_DIALOG]) {
+        const m = load();
+        m.setTerm(fakeTerm('alternate', screen, 120));
+        assert.equal(m.api.detectState(fakeTerm('alternate', screen, 120)), 'main');
+        assert.equal(m.api.scrollByRows(-5), false);
+        m.tick();
+        assert.deepEqual(m.sent, []);
+    }
+});
+
+test('an unreadable screen over scrollback is main, not unknown', () => {
+    // Three outcomes, and this one is evidence-backed: we could not read a
+    // row, but baseY says rows HAVE scrolled off, so scrollLines() has
+    // somewhere to go. Only a screen we cannot read AND cannot scroll is
+    // the could-not-evaluate case.
+    const m = load();
+    assert.equal(m.api.detectState(fakeTerm('normal', [], 900)), 'main');
+    assert.equal(m.api.detectState(fakeTerm('normal', [], 0)), 'unknown');
 });
 
 test('REGRESSION: a reconnect leaves the NORMAL buffer with no scrollback', () => {
