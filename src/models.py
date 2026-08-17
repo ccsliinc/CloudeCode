@@ -920,6 +920,59 @@ class WSPTYResizeMessage(BaseModel):
 # manifest with this model: malformed manifests are SKIPPED (logged warning,
 # not 500'd, not silently substituted with claude defaults). The endpoint
 # stamps `source` server-side so the client can distinguish bundled vs user.
+class ThemeAudioManifest(BaseModel):
+    """The optional `audio` block of a theme.json.
+
+    THIS MODEL IS LOAD-BEARING FOR SOUND, and its absence is why the app was
+    silent for four rounds of fixes. `/api/v1/themes` declares
+    `response_model=List[ThemeManifest]`, so FastAPI serialises exactly the
+    fields declared on that model and nothing else. `theme.json` carried a
+    perfectly good `audio` block, Pydantic dropped it as an extra key at
+    parse time, and the client's `Themes.applyTheme()` then called
+    `ThemeAudio.setTheme(m.audio || null)` with `undefined` on every single
+    theme. No node was ever built, so every downstream fix (format order,
+    gain budget, mime type, element volume) was fixing a graph that did not
+    exist. Nothing errored: the UI honestly reported "this theme has no
+    track yet", which is exactly what the API had told it.
+
+    Adding a field to a client-facing manifest means adding it HERE too.
+
+    Values are clamped rather than rejected. A typo in one number must not
+    take the whole theme out of the selector, because `_load_manifest()`
+    drops a manifest that fails validation.
+    """
+    src: str = Field(..., description="Same-origin URL of the primary track")
+    srcFallback: Optional[str] = Field(
+        None, description="Same-origin URL tried when `src` fails to decode"
+    )
+    volume: float = Field(
+        0.5, description="Target gain after fade-in, 0..1; clamped, not rejected"
+    )
+    fadeMs: int = Field(
+        1500, description="Crossfade duration in ms; negatives clamp to 0"
+    )
+
+    @field_validator("volume")
+    @classmethod
+    def _clamp_volume(cls, v: float) -> float:
+        """Clamp the target gain into 0..1.
+
+        :param v: the raw manifest value.
+        :returns: the value constrained to 0..1.
+        """
+        return max(0.0, min(1.0, v))
+
+    @field_validator("fadeMs")
+    @classmethod
+    def _clamp_fade(cls, v: int) -> int:
+        """Clamp the crossfade duration to a non-negative number of ms.
+
+        :param v: the raw manifest value.
+        :returns: the value constrained to >= 0.
+        """
+        return max(0, v)
+
+
 class ThemeManifest(BaseModel):
     """Theme manifest descriptor.
 
@@ -944,6 +997,10 @@ class ThemeManifest(BaseModel):
     effects: Optional[str] = Field(
         None,
         description="Optional filename of an effects.js module relative to the theme dir",
+    )
+    audio: Optional[ThemeAudioManifest] = Field(
+        None,
+        description="Optional background music block; absent means a silent theme",
     )
     source: Literal["builtin", "user"] = Field(
         ..., description="Where the manifest was discovered — server-stamped"
