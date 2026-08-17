@@ -3082,8 +3082,31 @@ button[data-tooltip]:hover::after {
     border-radius: var(--radius-md);
 }
 
+/* THE TITLE LINE WRAPS. Moving the DESCRIPTION onto its own full-width
+ * line (see the comment above) fixed the description and left the LABEL
+ * standing in the same squeezed column, so the defect simply moved up one
+ * line and kept the same numbers. Measured in a 556px modal at 1400px,
+ * before this rule:
+ *     row `claude` (2 buttons, actions 164.9px)  label block 272.1 x 20
+ *     row `cld`    (3 buttons, actions 321.5px)  label block 115.5 x 57
+ *     worst case   (3 buttons, long label)       label block 115.5 x 210
+ * 115.5px at this type size is about fourteen characters, which is why
+ * `cld (keychain-backed)` rendered as a three-line ribbon and a long
+ * label as a ten-line one. The actions group is `flex-shrink: 0`, so
+ * every pixel a third button costs comes out of the label.
+ *
+ * `flex-wrap: wrap` with the label keeping `flex-basis: auto` is what
+ * fixes it for the WORST case rather than for one row: the wrap decision
+ * uses the label's max-content size, so a title line that fits stays on
+ * one line, and one that does not puts the buttons on their own line and
+ * hands the label the row's full width. It needs no width threshold, no
+ * button count and no media query, so it cannot be outgrown by a fourth
+ * button or a longer label. `min-width: 0` on the label block still does
+ * the second job - keeping one unbreakable token from setting a floor
+ * wider than the row. */
 .settings-wrapper-row-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
