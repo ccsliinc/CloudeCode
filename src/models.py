@@ -219,6 +219,34 @@ class SessionInfo(BaseModel):
         default=False,
         description="True if this session has an unread Stop or a manual unread pin",
     )
+    # fix/session-ownership-source — the TMUX/EXTERNAL badge's ONLY source.
+    #
+    # WHAT THE BADGE MEANS: True iff THIS APP CREATED the tmux session (via
+    # POST /sessions); False iff the app merely ADOPTED one that was started
+    # outside it. It is a fact about the session's ORIGIN, so it must not
+    # change when the user opens or closes the session, and it must survive
+    # a server restart.
+    #
+    # WHY IT IS ON THE WIRE AT ALL: GET /sessions/attachable filters out
+    # every tmux name bound to a live backend, so an OPEN session reaches
+    # the client only through the GET /sessions + /sessions/list merge.
+    # Without this field on SessionInfo the client had nothing to read and
+    # invented an answer twice - first a hardcoded True (every open session
+    # badged TMUX), then an ``adopted:``-id-prefix guess (every session
+    # badged EXTERNAL after a restart, because restart re-attaches through
+    # the adopt path and mints ``adopted:`` ids for sessions the server
+    # still correctly owns). Neither guess is derivable client-side. The
+    # server resolves it from the persisted ``owned_tmux_sessions`` set,
+    # which is authoritative, survives restart, and is what
+    # AttachableSession.created_by_cloude already uses - so both payloads
+    # now answer the same question from the same place.
+    created_by_cloude: bool = Field(
+        default=False,
+        description=(
+            "True iff this app CREATED the tmux session (name is in the "
+            "persisted owned_tmux_sessions set); False if it was adopted"
+        ),
+    )
 
 
 # API Request Models

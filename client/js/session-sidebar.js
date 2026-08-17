@@ -259,15 +259,21 @@ class SessionSidebarController {
                     existing.session_id = sessionId;
                     existing.status = status;
                     existing.unread = unread;
+                    existing.created_by_cloude = !!info.created_by_cloude;
                     if (info.pinned_theme) existing.pinned_theme = info.pinned_theme;
                 } else {
                     rows.unshift({
                         name: tmuxName,
-                        // NOT a hardcoded `true` - see the same merge in
-                        // client/js/launchpad.js. An adopted session is
-                        // never in the server's owned set, and its id
-                        // says so: `adopted:<name>`.
-                        created_by_cloude: !String(sessionId || '').startsWith('adopted:'),
+                        // The badge means: did THIS APP CREATE this tmux
+                        // session, or did it merely ADOPT one started
+                        // outside it? Origin, not current state - so it must
+                        // not flip on open/close and must survive a server
+                        // restart. Taken verbatim from the server, which
+                        // resolves it from the persisted
+                        // `owned_tmux_sessions` set. Never derived here -
+                        // see the same merge in client/js/launchpad.js for
+                        // the two local derivations that were both wrong.
+                        created_by_cloude: !!info.created_by_cloude,
                         created_at_epoch: 0,
                         is_active: true,
                         session_id: sessionId,

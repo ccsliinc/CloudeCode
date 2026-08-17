@@ -2543,6 +2543,18 @@ class SessionManager:
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
+            # fix/session-ownership-source — ownership is membership in the
+            # persisted owned set, NOT the shape of ``session_id``. After a
+            # restart the app re-attaches to still-running tmux sessions
+            # through the adopt path, so a session this app created carries
+            # an ``adopted:`` id while its NAME is still in
+            # ``owned_tmux_sessions``. The name is the durable identity; the
+            # id is not. Same source AttachableSession uses, so the two
+            # payloads can never disagree about the same session.
+            created_by_cloude=bool(
+                tmux_session_name
+                and tmux_session_name in self.owned_tmux_sessions
+            ),
         )
 
     async def get_session_info(
