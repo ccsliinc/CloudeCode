@@ -80,11 +80,28 @@ console.log('[ServerStatusPanel Module] Loading...');
         try {
             return await window.API.getReleaseStatus();
         } catch (err) {
-            return {
-                available: false,
-                error: (err && err.message) || 'the version check did not answer'
-            };
+            return { available: false, error: releaseFailureReason(err) };
         }
+    }
+
+    /**
+     * Turn a failed release fetch into lowercase copy the panel can show.
+     *
+     * A raw `err.message` is the server's or the fetch layer's wording,
+     * which is capitalised ("Not Found") and sometimes carries a URL.
+     * Neither belongs in this app's voice, and "Not Found" alone tells the
+     * user nothing about what was not found.
+     *
+     * @param {Error|null} err - the rejection from the API call.
+     * @returns {string} a lowercase reason.
+     */
+    function releaseFailureReason(err) {
+        var raw = (err && err.message) || '';
+        if (/not found|404/i.test(raw)) {
+            return 'this server has no version check yet';
+        }
+        if (!raw) return 'the version check did not answer';
+        return 'the version check did not answer: ' + raw.toLowerCase();
     }
 
     /**

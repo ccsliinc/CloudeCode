@@ -298,6 +298,15 @@ test('release: a check with no timestamp says so rather than looking fresh', () 
     assert.match(html, /cannot determine: no check has been recorded/);
 });
 
+test('a failed release fetch is reworded into this app\'s lowercase voice', () => {
+    // The raw message is the fetch layer's wording - "Not Found" is
+    // capitalised and, on its own, tells the user nothing about what was
+    // not found.
+    assert.match(panelSrc, /function releaseFailureReason/);
+    assert.match(panelSrc, /this server has no version check yet/);
+    assert.doesNotMatch(panelSrc, /error: \(err && err\.message\) \|\| 'the version check did not answer'/);
+});
+
 test('release offers a copyable command, never a one-click upgrade', () => {
     const html = F.renderRelease({
         available: true, current_tag: 'v1', update_available: false,
