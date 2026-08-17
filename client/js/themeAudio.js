@@ -31,16 +31,13 @@
  * There used to be a SECOND gate in front of it: an app sound master
  * switch in the header kebab, persisted and defaulting to OFF, which
  * outranked every per-session control. Two controls each able to veto the
- * other is the reason this feature was silent through five separate
- * fixes, so the master switch was deleted outright and its stored key is
- * dropped by the settings migration (themeAudioSettings.js, v2 -> v3).
- * Do not reintroduce an app-scoped mute.
+ * other is why this feature stayed silent through five fixes, so it was
+ * deleted and its stored key is dropped by the settings migration
+ * (themeAudioSettings.js, v2 -> v3). Do not reintroduce an app-scoped mute.
  *
- * NO AUDIO ON THE HOME SCREEN. With no session in scope the gate cannot
- * open, by construction rather than by a mute: `sessionName` is null and
- * `_gateOpen()` is false regardless of the opt-in flag. Leaving a session
- * therefore does not need to mute anything, and syncForSession() does not
- * try to.
+ * NO AUDIO ON THE HOME SCREEN, by construction rather than by a mute:
+ * with no session in scope `sessionName` is null and `_gateOpen()` is
+ * false whatever the opt-in flag says.
  *
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
  * driven by the themes registry, setSessionAudio(name, on) and
