@@ -23,12 +23,25 @@
  * apply. Nothing is lost: no UI ever set that key deliberately, it was
  * only ever reachable from `ThemeAudio.setVolume()` in a console.
  *
+ * WHY A SECOND VERSION STEP EXISTS. Up to and including the v2 schema
+ * there was a SECOND gate in front of every per-session control: an app
+ * sound master switch in the header kebab, persisted under
+ * `cloude.audio.muted` and defaulting to OFF. Two controls, one silently
+ * vetoing the other, was the whole bug. The switch is gone and audio is
+ * session-only now.
+ *
+ * Deleting the switch without deleting the key would be strictly worse
+ * than leaving it: every browser that ran a v2 build holds
+ * `cloude.audio.muted = 'true'`, so a surviving reader would keep the app
+ * permanently silent with no control left to undo it. v2 -> v3 therefore
+ * DROPS the key, and nothing reads it any more.
+ *
  * Keys owned here:
- *   cloude.audio.muted           'true' | 'false'  - the APP SOUND master
- *                                switch (header kebab). Default 'true',
- *                                i.e. app sound off until asked for.
  *   cloude.audio.volume          float 0..1 as a string - master gain.
  *   cloude.audio.settingsVersion integer as a string - schema stamp.
+ *
+ * Keys RETIRED here (removed by a migration, never read):
+ *   cloude.audio.muted           the old app sound master switch.
  *
  * The per-session music opt-in (`cloude.audio.session.<tmux name>`) is
  * NOT owned here; it belongs to session-theme-menu.js, which is the
@@ -49,7 +62,10 @@
         return;
     }
 
-    /** APP SOUND master switch. Stored inverted, as a mute flag. */
+    /**
+     * RETIRED. The old app sound master switch, stored inverted as a mute
+     * flag. Named only so the migration can delete it; no code reads it.
+     */
     var LS_MUTED = 'cloude.audio.muted';
     /** Master gain, 0..1, as a string. */
     var LS_VOLUME = 'cloude.audio.volume';
@@ -62,8 +78,12 @@
      * 1 (implicit, unstamped) - master volume is an attenuator, default 0.3.
      * 2                       - master volume is unity; the per-theme
      *                           manifest volume is the only attenuation.
+     * 3                       - the app sound master switch is gone; audio
+     *                           is session-only, so the stored mute flag
+     *                           is deleted rather than left as a phantom
+     *                           gate nothing can turn off.
      */
-    var SETTINGS_VERSION = 2;
+    var SETTINGS_VERSION = 3;
 
     /**
      * The master gain when nothing is stored. Unity on purpose: the
@@ -147,51 +167,52 @@
      * v1 -> v2 drops any stored master volume. See the file header: those
      * values were written under a gain budget where the master attenuated,
      * and keeping one silently re-applies the old inaudible gain on top of
-     * the new manifest volumes. The mute flag is NOT touched, because its
-     * meaning did not change.
+     * the new manifest volumes.
+     *
+     * v2 -> v3 drops the retired app sound master switch. A stored 'true'
+     * there was a gate that outranked every per-session control, and the
+     * control that could clear it no longer exists.
+     *
+     * Both steps run on any store below the current version, so a v1 store
+     * upgrades straight to v3 in one pass.
      *
      * @param {object} storage - a localStorage-like object.
-     * @returns {{migrated: boolean, fromVersion: number, clearedVolume: string|null}}
-     *          clearedVolume is the discarded string, for logging, or null.
+     * @returns {{migrated: boolean, fromVersion: number,
+     *            clearedVolume: string|null, clearedMute: string|null}}
+     *          the cleared* fields hold the discarded strings, for logging,
+     *          or null when there was nothing stored to discard.
      */
     function migrate(storage) {
         var from = readVersion(storage);
         if (from >= SETTINGS_VERSION) {
-            return { migrated: false, fromVersion: from, clearedVolume: null };
+            return {
+                migrated: false, fromVersion: from,
+                clearedVolume: null, clearedMute: null
+            };
         }
 
-        var stale = _get(storage, LS_VOLUME);
-        if (stale !== null) {
-            _remove(storage, LS_VOLUME, String(DEFAULT_MASTER_VOLUME));
+        var staleVolume = null;
+        if (from < 2) {
+            staleVolume = _get(storage, LS_VOLUME);
+            if (staleVolume !== null) {
+                _remove(storage, LS_VOLUME, String(DEFAULT_MASTER_VOLUME));
+            }
         }
+
+        var staleMute = null;
+        if (from < 3) {
+            staleMute = _get(storage, LS_MUTED);
+            if (staleMute !== null) {
+                _remove(storage, LS_MUTED, '');
+            }
+        }
+
         _set(storage, LS_VERSION, String(SETTINGS_VERSION));
 
-        return { migrated: true, fromVersion: from, clearedVolume: stale };
-    }
-
-    /**
-     * Is the app sound master switch on?
-     *
-     * Stored as a MUTE flag for backward compatibility, so only an
-     * explicit 'false' counts as on. Default off: nothing makes noise
-     * until the user asks for it.
-     *
-     * @param {object} storage - a localStorage-like object.
-     * @returns {boolean}
-     */
-    function readAppSoundOn(storage) {
-        return _get(storage, LS_MUTED) === 'false';
-    }
-
-    /**
-     * Persist the app sound master switch.
-     *
-     * @param {object} storage - a localStorage-like object.
-     * @param {boolean} on - true to allow sound, false to mute everything.
-     * @returns {void}
-     */
-    function writeAppSoundOn(storage, on) {
-        _set(storage, LS_MUTED, on ? 'false' : 'true');
+        return {
+            migrated: true, fromVersion: from,
+            clearedVolume: staleVolume, clearedMute: staleMute
+        };
     }
 
     /**
@@ -228,8 +249,6 @@
         DEFAULT_MASTER_VOLUME: DEFAULT_MASTER_VOLUME,
         readVersion: readVersion,
         migrate: migrate,
-        readAppSoundOn: readAppSoundOn,
-        writeAppSoundOn: writeAppSoundOn,
         readVolume: readVolume,
         writeVolume: writeVolume
     };
