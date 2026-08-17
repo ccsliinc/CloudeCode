@@ -372,12 +372,14 @@ class Launchpad {
                 // 'dead' | 'unknown'. Never fabricated client-side.
                 const liveStatus = (live && live.activity_status) || 'unknown';
                 const liveUnread = !!(live && live.unread);
+                const liveId = (live.session && live.session.id) || live.id || null;
                 const existing = this.runningSessions.find(s => s.name === tmuxName);
                 if (existing) {
                     existing.is_active = true;
-                    existing.session_id = (live.session && live.session.id) || live.id || existing.session_id;
+                    existing.session_id = liveId || existing.session_id;
                     existing.status = liveStatus;
                     existing.unread = liveUnread;
+                    if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -385,9 +387,10 @@ class Launchpad {
                         created_at_epoch: live.created_at_epoch || 0,
                         window_count: 1,
                         is_active: true,
-                        session_id: (live.session && live.session.id) || live.id || null,
+                        session_id: liveId,
                         status: liveStatus,
                         unread: liveUnread,
+                        pinned_theme: live.pinned_theme || null,
                     });
                 }
             }
@@ -482,8 +485,14 @@ class Launchpad {
             const rowAction = window.SessionRowActions
                 ? window.SessionRowActions.html(s.status, s.name, 'running-session-kill')
                 : '';
+            // Empty string for a session with no theme, an unknown theme,
+            // or a registry that has not loaded yet - all three render as
+            // the row always has. See client/js/session-theme-tint.js.
+            const themeAttrs = window.SessionThemeTint
+                ? window.SessionThemeTint.attrs(s.pinned_theme)
+                : '';
             return `
-                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
+                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}${themeAttrs}>
                   <div class="running-session-top">
                     ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>

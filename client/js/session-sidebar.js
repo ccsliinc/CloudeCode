@@ -259,6 +259,7 @@ class SessionSidebarController {
                     existing.session_id = sessionId;
                     existing.status = status;
                     existing.unread = unread;
+                    if (info.pinned_theme) existing.pinned_theme = info.pinned_theme;
                 } else {
                     rows.unshift({
                         name: tmuxName,
@@ -268,6 +269,7 @@ class SessionSidebarController {
                         session_id: sessionId,
                         status,
                         unread,
+                        pinned_theme: info.pinned_theme || null,
                     });
                 }
             }

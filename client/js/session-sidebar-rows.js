@@ -41,6 +41,11 @@ console.log('[SessionSidebarRows Module] Loading...');
             active: !!r.is_active,
             thisTab: !!r.is_this_tab,
             unread: !!r.unread,
+            // The row is painted in this theme's colours, so a theme
+            // change is a change to what the row SHOWS. Leaving it out
+            // meant re-theming a session left every list stale until
+            // something else happened to move.
+            theme: r.pinned_theme || null,
         })));
     }
 
@@ -71,6 +76,12 @@ console.log('[SessionSidebarRows Module] Loading...');
         const name = esc(r.name);
         const badge = r.created_by_cloude ? 'tmux' : 'external';
         const sidAttr = r.session_id ? ` data-session-id="${esc(r.session_id)}"` : '';
+        // Empty string for a session with no theme, an unknown theme, or
+        // a theme registry that has not loaded yet - all three render as
+        // the row always has. See client/js/session-theme-tint.js.
+        const themeAttrs = window.SessionThemeTint
+            ? window.SessionThemeTint.attrs(r.pinned_theme)
+            : '';
         const markUnread = window.SessionStatusUI
             ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
             : '';
@@ -79,7 +90,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             : '';
         return (
             `<div class="session-sidebar-row" data-name="${name}" ` +
-            `data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}>` +
+            `data-active="${r.is_this_tab ? '1' : '0'}"${sidAttr}${themeAttrs}>` +
             `${dot}` +
             `<span class="session-sidebar-row-name">${name}</span>` +
             `<span class="session-sidebar-row-badge">${badge}</span>` +

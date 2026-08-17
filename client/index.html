@@ -97,6 +97,12 @@
          owns the .settings-field rules this builds on. -->
     <link rel="stylesheet" href="/static/css/settings-audio.css" />
 
+    <!-- Session rows painted in their own session's theme colours. MUST be
+         the last of the app stylesheets: it competes at equal specificity
+         with the row backgrounds in styles.css and session-sidebar.css, so
+         source order is what decides whether the wash survives a hover. -->
+    <link rel="stylesheet" href="/static/css/session-theme-tint.css" />
+
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
     <link rel="stylesheet" id="theme-css" />
@@ -320,6 +326,13 @@
          terminal.js and session-sidebar.js, all of which call
          window.SessionRowActions. -->
     <script src="/static/js/session-row-actions.js"></script>
+    <!-- Per-row session-theme colours. Must load BEFORE launchpad.js and
+         session-sidebar-rows.js, both of which call
+         window.SessionThemeTint. It reads themes/registry.js lazily at
+         paint time rather than at load, so it does not have to come after
+         it, and it degrades to today's plain row while the registry is
+         still fetching. -->
+    <script src="/static/js/session-theme-tint.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

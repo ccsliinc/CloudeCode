@@ -1,0 +1,48 @@
+/* ===========================================================================
+ * Session-theme tint for session rows, in the sidebar and on the home
+ * screen. The three custom properties are written inline per row by
+ * client/js/session-theme-tint.js, which is where the reasoning lives -
+ * including why only ONE of these two surfaces gets the wash.
+ *
+ * MUST LOAD AFTER styles.css AND session-sidebar.css. Both of those
+ * declare row backgrounds at the same specificity as the selectors here
+ * (`.session-sidebar-row:hover`, `.session-sidebar-row[data-active="1"]`,
+ * `.running-session-row:hover`), so source order is what decides, and
+ * this file has to be last for the wash to survive a hover.
+ *
+ * A row with no `data-session-theme` matches nothing in this file, which
+ * is exactly what an unthemed session is meant to look like: untouched.
+ * =========================================================================== */
+
+/* THE EDGES. A 3px inline-start rail and a 1px ring, both inset shadows
+ * rather than borders: they cost no layout box and do not fight
+ * `.running-session-row.owned` / `.external`, which already own the
+ * left border to encode ownership. On the home screen the result is a
+ * two-tone left edge - ownership outside, session identity inside.
+ *
+ * Edges sit behind no text, so neither cue can cost contrast anywhere,
+ * which is why these two are the ones BOTH surfaces get. */
+.session-sidebar-row[data-session-theme],
+.running-session-row[data-session-theme] {
+    box-shadow:
+        inset 3px 0 0 var(--session-theme-accent),
+        inset 0 0 0 1px var(--session-theme-ring);
+}
+
+/* THE WASH, SIDEBAR ONLY. This is the one cue that puts colour behind
+ * text, and only the sidebar can afford it: its name is --color-fg, and
+ * a 0.10 wash drops none of the 529 (host theme, session theme) pairs
+ * below 4.5:1. The home row's name is --color-accent over
+ * --color-accent-bg-soft and several themes already sit barely above
+ * the floor there, so no alpha is safe. See the module docstring.
+ *
+ * A background-IMAGE, not a background-color: the row's own
+ * background-color still carries hover and the active-row highlight, and
+ * this layers over it instead of replacing it. A `background` shorthand
+ * here would silently discard those. */
+.session-sidebar-row[data-session-theme] {
+    background-image: linear-gradient(
+        var(--session-theme-wash),
+        var(--session-theme-wash)
+    );
+}
