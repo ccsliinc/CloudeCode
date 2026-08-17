@@ -255,22 +255,13 @@ class Launchpad {
      * and the WS handshake reshapes shortly after anyway).
      */
     _getTerminalDims() {
-        try {
-            const t = window.TerminalController && window.TerminalController.term;
-            if (t && typeof t.cols === 'number' && typeof t.rows === 'number'
-                    && t.cols > 0 && t.rows > 0) {
-                // Try to fit first so we hand over the dims the xterm.js
-                // renderer will actually use post-connect.
-                try {
-                    if (window.TerminalController.fitAddon) {
-                        window.TerminalController.fitAddon.fit();
-                    }
-                } catch (_) { /* non-fatal */ }
-                return { cols: t.cols, rows: t.rows };
-            }
-        } catch (e) {
-            console.warn('Launchpad: _getTerminalDims failed', e);
+        if (window.TerminalMetrics
+                && typeof window.TerminalMetrics.currentGrid === 'function') {
+            return window.TerminalMetrics.currentGrid();
         }
+        // Module missing (load-order regression). Send nothing rather
+        // than a guess; the server falls back to its own defaults.
+        console.warn('Launchpad: TerminalMetrics unavailable for dims');
         return {};
     }
 

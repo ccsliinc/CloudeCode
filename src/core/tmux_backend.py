@@ -768,20 +768,27 @@ class TmuxBackend(SessionBackend):
                 check=False,
             )
 
-            # 4. Surface window-size divergence. ``show-option -sv``
-            # queries the server-level option; ``resize-window -x -y``
-            # may oscillate when this isn't ``manual``.
-            rc_ws, out_ws, _ = await self._run_tmux(
-                "show-option", "-sv", "window-size", check=False,
+            # 4. Make the adopted session RESIZABLE, rather than logging a
+            # warning that it is not.
+            #
+            # MEASURED 2026-08-17: an adopted session sat at 80x24 (tmux's
+            # birth default) while an app-created one on the same socket
+            # was 163x46. The difference was entirely here. A session
+            # created outside the app keeps ``window-size latest``, which
+            # sizes the window to the most recently attached CLIENT - and
+            # this app never attaches one, it streams with ``pipe-pane``.
+            # With zero clients tmux has nothing to size to, so the window
+            # stays at its birth geometry and every ``resize-window`` we
+            # issue is undone. Adoption is a supported feature, so an
+            # adopted session gets the same three settings a created one
+            # does and the WS resize handshake then sticks.
+            await self._run_tmux(
+                "set-option", "-t", target, "window-size", "manual", check=False,
             )
-            ws_val = out_ws.decode("utf-8", errors="replace").strip() if rc_ws == 0 else ""
-            if ws_val and ws_val != "manual":
-                logger.warning(
-                    "external_session_window_size_not_manual",
-                    session=self.tmux_session,
-                    window_size=ws_val,
-                    note="resize-window -x -y may oscillate with tmux auto-resize",
-                )
+            await self._run_tmux(
+                "set-option", "-t", target, "aggressive-resize", "off", check=False,
+            )
+            await self._apply_history_limit()
 
         # Recompute / re-resolve pipe file path. It was written to by the
         # old Python process; the tmux server kept pipe-pane running, so
