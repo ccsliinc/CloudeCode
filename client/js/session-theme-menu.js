@@ -102,50 +102,25 @@
     }
 
     /**
-     * Apply this session's opt-in to ThemeAudio's SESSION gate.
+     * Apply a session and its opt-in to ThemeAudio's one gate.
      *
-     * This used to drive ThemeAudio's single global mute via toggleMute(),
-     * which meant every session attach overwrote the header's "app sound
-     * (all sessions)" switch with a per-session default of OFF. Turning
-     * app sound on and then entering a session silently re-muted the app,
-     * and the header button did not repaint, so it still looked on. That
-     * is the bug behind "still dont hear audio". The session gate is now
-     * separate and this function cannot touch the master.
+     * There is no app-scoped master switch behind this any more. Audio is
+     * session-only, so the session name is part of the gate: a null name
+     * is the home screen and cannot open it.
      *
-     * @param {boolean} on - true if this session opted into music.
+     * @param {string|null} name - the tmux session in scope, or null.
+     * @param {boolean} on - true if that session opted into music.
      * @returns {void}
      */
-    function applyAudioState(on) {
-        if (!window.ThemeAudio) return;
+    function applyAudioState(name, on) {
+        if (!window.ThemeAudio ||
+            typeof window.ThemeAudio.setSessionAudio !== 'function') {
+            return;
+        }
         try {
-            if (typeof window.ThemeAudio.setSessionEnabled === 'function') {
-                window.ThemeAudio.setSessionEnabled(on);
-                return;
-            }
-            // Older ThemeAudio without the two-gate API: fall back to the
-            // toggle so a version skew degrades rather than throwing.
-            if (on === window.ThemeAudio.isMuted()) {
-                window.ThemeAudio.toggleMute();
-            }
+            window.ThemeAudio.setSessionAudio(name, on);
         } catch (err) {
             console.warn('SessionThemeMenu: ThemeAudio session gate failed', err);
-        }
-    }
-
-    /**
-     * Is the global app sound master switch off?
-     *
-     * @returns {boolean} true only when we can positively confirm it is off.
-     */
-    function appSoundIsOff() {
-        if (!window.ThemeAudio ||
-            typeof window.ThemeAudio.isAppSoundOn !== 'function') {
-            return false;
-        }
-        try {
-            return !window.ThemeAudio.isAppSoundOn();
-        } catch (err) {
-            return false;
         }
     }
 
@@ -288,21 +263,19 @@
      * with them, and so a session never inherits the previous session's
      * unmuted state.
      *
-     * ALSO called on every LEAVE, with no session in scope. That case used
-     * to be unreachable, and the omission was a second silent gate: the
-     * session gate kept the last session's value (OFF by default) after a
-     * detach, so back on the launchpad the header "app sound" switch was
-     * vetoed by a session that was no longer attached. It repainted itself
-     * as ON and produced nothing, with no message. With no session in
-     * scope the session gate is OPEN, which is the documented home-screen
-     * behaviour: gate 1 alone plays the home theme.
+     * ALSO called on every LEAVE, with no session in scope. That case does
+     * not mute anything and does not have to: with no session the gate
+     * cannot open, so the home screen is silent by construction. The old
+     * code OPENED the gate here so that the header master switch alone
+     * could play the home theme; that switch is gone, and "no audio on the
+     * home screen at all" is the requirement it was violating.
      *
      * @param {HTMLElement} [audioBtn] - the button to repaint, if mounted.
      * @returns {void}
      */
     function syncForSession(audioBtn) {
         var name = activeSession();
-        applyAudioState(name ? isAudioOn(name) : true);
+        applyAudioState(name, name ? isAudioOn(name) : false);
         paintAudioButton(audioBtn || document.getElementById('sessionAudioBtn'));
     }
 
@@ -324,30 +297,17 @@
         var next = !isAudioOn(name);
         setAudioOn(name, next);
 
-        // Turning session music on while the global master is off used to
-        // do exactly nothing, with no explanation: two controls, one of
-        // them silently vetoing the other. Turning music on is an explicit
-        // request for sound, so lift the master too and SAY so - one tap,
-        // no dead end, and the user learns the other control exists.
-        var liftedAppSound = false;
-        if (next && appSoundIsOff() &&
-            typeof window.ThemeAudio.setAppSound === 'function') {
-            try {
-                window.ThemeAudio.setAppSound(true);
-                liftedAppSound = true;
-            } catch (err) {
-                console.warn('SessionThemeMenu: could not enable app sound', err);
-            }
-        }
-
-        applyAudioState(next);
+        // No master switch to lift any more. This row IS the control, so
+        // one tap is the whole path from "I want sound" to sound, and
+        // there is nothing left that can silently veto it.
+        applyAudioState(name, next);
         paintAudioButton(btn);
 
         var pill = termWrapper && typeof termWrapper._showStatusPill === 'function'
             ? function (msg, kind) { termWrapper._showStatusPill(msg, kind || 'info'); }
             : null;
         if (next && pill) {
-            reportPlayback(pill, liftedAppSound);
+            reportPlayback(pill);
         }
         return next;
     }
@@ -366,14 +326,11 @@
      * as "ask again", never as success.
      *
      * @param {function(string, string=): void} pill - status pill renderer.
-     * @param {boolean} liftedAppSound - whether the master was just lifted.
      * @returns {void}
      */
-    function reportPlayback(pill, liftedAppSound) {
+    function reportPlayback(pill) {
         var Status = window.ThemeAudioStatus;
-        var prefix = liftedAppSound
-            ? 'music on, app sound was off for all sessions so it was turned on'
-            : 'music on for this session';
+        var prefix = 'music on for this session';
 
         /**
          * Render one verdict.

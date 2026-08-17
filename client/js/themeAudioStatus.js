@@ -9,7 +9,9 @@
  * -45 LUFS, .m4a was served as an unrecognised mime type under nosniff, the
  * element volume zeroed the whole Web Audio graph, and a detached session
  * kept vetoing the master switch. In all five the user tapped "play music",
- * the row said "stop music", and nothing came out.
+ * the row said "stop music", and nothing came out. The sixth was the master
+ * switch itself, a persisted app-scoped gate defaulting to OFF that sat in
+ * front of everything here; it has been deleted, so no reason names it.
  *
  * A control that reports success while producing no sound is the defect,
  * not the symptom. So the rule here is: if the snapshot does not positively
@@ -86,11 +88,15 @@
             };
         }
 
-        if (!status.appSoundOn) {
+        // Audio is session-only. On the home screen there is nothing for a
+        // track to belong to, so say that rather than blaming a control the
+        // user cannot see from here. This branch replaced "app sound is off
+        // for all sessions", whose master switch no longer exists.
+        if (!status.sessionName) {
             return {
                 playing: false,
                 settling: false,
-                reason: 'app sound is off for all sessions'
+                reason: 'music only plays inside a session'
             };
         }
 
