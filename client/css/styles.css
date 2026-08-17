@@ -3119,12 +3119,26 @@ button[data-tooltip]:hover::after {
     flex-shrink: 0;
 }
 
+/* THE DEFAULT MARKER. Was an outlined, rounded chip in --color-accent -
+ * a lozenge, and accent-on-background besides, which is the contrast
+ * problem `.settings-tab--active` was already fixed for (the `calming`
+ * accent is about 2.6:1 on its own background, under the 4.5:1 floor).
+ *
+ * It now carries the SAME cue set the active tab carries, deliberately,
+ * so the settings screen has one flat way of saying "this is the
+ * selected one": --color-fg text, a soft accent tint, an accent
+ * underline, bold weight. Square. Three cues, and the state survives
+ * losing any one of them. The word "default" is unchanged - the shape
+ * went, the information did not. */
 .settings-wrapper-badge {
     display: inline-block;
-    color: var(--color-accent);
-    border: 1px solid var(--color-accent);
-    border-radius: var(--radius-sm, 4px);
+    color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
+    border: none;
+    border-bottom: 2px solid var(--color-accent);
+    border-radius: 0;
     font-size: 0.7rem;
+    font-weight: bold;
     padding: 1px 6px;
     margin-left: 6px;
     text-transform: lowercase;
@@ -3240,6 +3254,19 @@ button[data-tooltip]:hover::after {
      * two overrides every tab collapses to a 36px square and the labels
      * render on top of each other. Do not remove them. */
     width: auto;
+    /* THE OVAL. Same trap, third property. That bare `button` rule also
+     * sets `border-radius: var(--radius-full)`, which is 50% - not a
+     * rounded corner, an ELLIPSE - and a class only beats the element
+     * rule for properties it actually declares. This one did not, so
+     * every tab was a 62.3x44 to 116.2x44 ellipse (measured at 390px);
+     * the active tab's tint painted it and made it visible, which is why
+     * it read as an oval sitting behind the label.
+     *
+     * It also ATE the active tab's underline: `border-bottom: 2px solid`
+     * gets clipped to the ellipse, so the third of the three state cues
+     * was curved away to nothing. Squaring the tab is what puts it back.
+     * Do not remove this either. */
+    border-radius: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3389,30 +3416,47 @@ button[data-tooltip]:hover::after {
     margin-bottom: 14px;
 }
 
+/* The heading now does its own grouping work with a rule under it,
+ * rather than leaning on a bordered chip to look like a heading. */
 .settings-wrapper-family-title {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 8px;
     margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--color-border);
     font-size: 0.85rem;
+    letter-spacing: 0.06em;
     text-transform: lowercase;
     color: var(--color-accent);
 }
 
+/* The count was a bordered, rounded 20.8x15 chip. It is now a plain
+ * muted numeral parked at the end of the heading rule - the table-header
+ * idiom - so the number is still there and the box is not. */
 .settings-wrapper-family-count {
     color: var(--color-fg-muted);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
-    font-size: 0.7rem;
-    padding: 0 6px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-size: 0.72rem;
+    padding: 0;
+    margin-left: auto;
     font-weight: normal;
 }
 
-/* Distinguishes the model-capable badge from the default badge, which
- * already owns the accent colour. */
+/* "takes model" is an ANNOTATION, not a state, so it gets neither the
+ * tint nor the underline the default marker gets. A muted run of text
+ * behind a hairline separator: still legible as its own field, with no
+ * chip around it. */
 .settings-wrapper-badge-model {
     color: var(--color-fg-muted);
-    border-color: var(--color-border);
+    background: none;
+    border: none;
+    border-left: 1px solid var(--color-border);
+    border-radius: 0;
+    font-weight: normal;
+    padding: 0 0 0 6px;
 }
 
 /* Provider picker: a non-selectable family heading between wrapper
