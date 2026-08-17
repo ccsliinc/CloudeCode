@@ -277,6 +277,27 @@ class API {
     }
 
     /**
+     * Config: star or unstar one slash command, replacing the old
+     * hand-picked `common_slash_commands` notion with a user-chosen one.
+     *
+     * The desired state is EXPLICIT rather than a flip: two renders can
+     * disagree about what is currently starred, and a flip would then
+     * produce whichever request arrived last. Explicit is idempotent.
+     *
+     * @param {string} command - e.g. "/clear"; a leading slash is added
+     *   server-side when missing.
+     * @param {boolean} favorite - true to star, false to unstar.
+     * @returns {Promise<{commands: string[], command_details: Array<object>, defaulted: boolean}>}
+     *   the post-write chip row, same shape as getCommonCommands().
+     */
+    async toggleFavoriteCommand(command, favorite) {
+        return await this.call('/config/common-commands/favorite', {
+            method: 'POST',
+            body: { command: command, favorite: !!favorite }
+        });
+    }
+
+    /**
      * Config: Get the full slash-command palette - built-in/skill/workflow
      * commands (scraped at release time) merged with commands and skills
      * discovered on the server at request time (user scope, installed

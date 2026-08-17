@@ -37,10 +37,15 @@ module:
 So ``sources_zshrc`` is a column in the table, not a conditional in the
 resolver.
 
-``claude`` additionally has a LAST-RESORT rendering (the historical
-``cld``/``cldor`` hardcoded fallback) used when it has neither wrappers nor
-a non-empty ``claude_command``. That is one more column
-(``last_resort``), still data.
+Every family has a LAST-RESORT rendering, used when it has neither
+wrappers nor a non-empty static command. That is one more column
+(``last_resort``), still data. ``claude``'s is the historical
+``cld``/``cldor`` hardcoded fallback; the other four are built by
+``src/core/agent_last_resort.py``. The column used to be ``None`` for the
+other four, which meant ``render_static_command`` returned the EMPTY
+STRING and the launch silently produced a pane that exited at once. Read
+that module's docstring before changing any of this: a ``None`` here is
+not a neutral default, it is an empty command.
 
 RESERVED NAMES, and the agent_type disambiguation this module encodes
 --------------------------------------------------------------------
@@ -64,6 +69,10 @@ import shlex
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
+from src.core.agent_last_resort import (
+    make_tool_last_resort,
+    render_shell_last_resort,
+)
 from src.core.shell_init import rc_prefixed
 
 # The default family for any wrapper that does not declare one, and for any
@@ -106,10 +115,14 @@ class AgentFamily:
     - ``description``: one lowercase line describing what the family runs,
       used by the settings screen's advanced legacy-command row.
     - ``last_resort``: renderer used when the family has neither wrappers
-      nor a non-empty static command. ``None`` for every family except
-      ``claude``, whose historical ``cld``/``cldor`` fallback has to be
-      preserved. A column rather than a branch so a future family can bring
-      its own without touching the resolver.
+      nor a non-empty static command. A column rather than a branch so a
+      future family can bring its own without touching the resolver.
+      MUST NOT be ``None`` for a family that ships: ``None`` makes
+      ``render_static_command`` return the empty string, which tmux turns
+      into a pane that exits immediately with nothing on screen. A new
+      family owes a renderer here in the same edit that adds it, and
+      ``tests/test_agent_last_resort.py`` fails the whole table if one is
+      missing.
     """
 
     name: str
@@ -140,6 +153,7 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         sources_zshrc=False,
         reserved=True,
         description="the single command every codex session runs.",
+        last_resort=make_tool_last_resort("codex", "codex", "codex", "codex_command"),
     ),
     AgentFamily(
         name="hermes",
@@ -148,6 +162,7 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         sources_zshrc=False,
         reserved=True,
         description="the single command every hermes session runs.",
+        last_resort=make_tool_last_resort("hermes", "hermes", "hermes", "hermes_command"),
     ),
     AgentFamily(
         name="openclaw",
@@ -156,6 +171,9 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         sources_zshrc=False,
         reserved=True,
         description="the single command every openclaw session runs.",
+        last_resort=make_tool_last_resort(
+            "openclaw", "openclaw tui", "openclaw", "openclaw_command"
+        ),
     ),
     AgentFamily(
         name="shell",
@@ -164,6 +182,7 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         sources_zshrc=False,
         reserved=True,
         description="the single command every plain console session runs.",
+        last_resort=render_shell_last_resort,
     ),
 )
 

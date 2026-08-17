@@ -2,11 +2,14 @@
  * SettingsPanel — gear-icon modal folding in the theme chooser plus the
  * agent/notifications/server config sections.
  *
- * TABBED (feat/settings-tabs-and-commands). Five tabs, declared in TABS
- * below: claude (launch wrappers + the legacy command they supersede),
- * agents (the other agent CLIs), terminal (the runnable command list),
- * notifications, and general (appearance, the global music volume, and
- * the read-only server block). Every pane is built ONCE at open and
+ * TABBED (feat/settings-tabs-and-commands). FOUR tabs, declared in TABS
+ * below: wrappers (every family's launch wrappers, each with its legacy
+ * static command folded in as an editable advanced row), terminal (the
+ * runnable command list), notifications, and general (appearance, the
+ * global music volume, and the read-only server block). The fifth,
+ * "agents", was removed once wrappers covered every family: it
+ * administered the same four `<family>_command` keys from a second
+ * screen. Every pane is built ONCE at open and
  * switching only shows/hides, so a
  * half-typed edit survives moving between tabs and Save still collects
  * from every tab at once. Section MARKUP lives in settings-sections.js
@@ -48,20 +51,23 @@
     // the input starts empty with a placeholder describing current state,
     // and an empty submit means "leave unchanged" (see collectSectionPatch).
 
-    // NOTE: ``claude_command`` is deliberately NOT a field here. It is
-    // legacy storage that wrappers supersede, so it is rendered as a
-    // collapsed, DISABLED advanced row inside the claude family's group on
-    // the wrappers tab (agent-wrappers-view.renderLegacyCommand) —
-    // visible, explained, and impossible to submit. Keeping it out of this
-    // array is what guarantees collectSectionPatch can never include it in
-    // a PATCH. The three fields below stay editable here: they are the
-    // edit surface for a family's fallback, which the wrappers tab only
-    // DISPLAYS.
-    var AGENT_FIELDS = [
-        { key: 'codex_command', type: 'text', label: 'codex command', placeholder: 'codex' },
-        { key: 'hermes_command', type: 'text', label: 'hermes command', placeholder: 'hermes' },
-        { key: 'openclaw_command', type: 'text', label: 'openclaw command', placeholder: 'openclaw tui' },
-    ];
+    // NO AGENT FIELDS HERE, and none of the four ``<family>_command``
+    // keys is collectable by this panel at all. The "agents" tab held
+    // three editable command fields (codex/hermes/openclaw) while
+    // ``claude_command`` sat on the wrappers tab as a disabled row — the
+    // two halves of a split that feat/universal-wrappers had already
+    // unified underneath, since wrappers now cover every family.
+    //
+    // All four keys moved INTO the wrappers screen, as the editable body
+    // of each family's collapsed "advanced: legacy <family> command" row
+    // (agent-wrappers-view.renderLegacyCommand). Nothing was deleted:
+    // the config keys are untouched, still the per-family fallback, and
+    // still editable. What went away is the second place to look.
+    //
+    // They write immediately through their own button rather than through
+    // this panel's batched Save, which is why keeping them out of any
+    // SECTIONS entry still guarantees collectSectionPatch can never
+    // include them in a PATCH built here.
 
     var NOTIFICATION_FIELDS = [
         { key: 'enabled', type: 'checkbox', label: 'notifications enabled' },
@@ -78,12 +84,6 @@
     // read-only with an inline safety warning) and are stitched into the
     // same panel below.
     var SECTIONS = [
-        {
-            id: 'agent', title: 'other agent clis', group: 'agents',
-            restartRequired: false,
-            description: 'the shell command used to launch each non-claude agent cli in a new session.',
-            fields: AGENT_FIELDS,
-        },
         {
             id: 'notifications', title: 'notifications', group: 'notifications',
             restartRequired: true,
@@ -109,8 +109,16 @@
         // wrappers. Each family's legacy static command renders INSIDE its
         // own group (agent-wrappers-view.renderLegacyCommand), so there is
         // no separate claude-only legacy slot any more.
+        // 'agents' was the fifth tab and is GONE. It held the other agent
+        // CLIs' static commands, which are the per-family FALLBACK the
+        // wrappers screen already documents inside each family's group;
+        // administering the same value from two screens meant two places
+        // to look and one of them called the value inert. The keys and
+        // their fallback behaviour are unchanged — see the note above
+        // NOTIFICATION_FIELDS. Four tabs now; measured at 390px the strip
+        // is 393px against a 355px window, so it still scrolls, by 38px
+        // instead of 89px. Shorter drag, not no drag.
         { id: 'wrappers', label: 'wrappers', sectionIds: [], slots: ['wrappers'] },
-        { id: 'agents', label: 'agents', sectionIds: ['agent'], slots: [] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
         { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
         // 'audio' is the global music volume (settings-audio.js). It sits

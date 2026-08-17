@@ -85,12 +85,19 @@
     /**
      * Scroll the strip so one tab is fully inside the visible window.
      *
-     * Five tabs do not fit a phone: measured at a 390px viewport the
-     * strip is 355px wide against a 444px scroll width, and the fifth
-     * tab ("general") starts at x=354.3 - entirely off-screen. Arrowing
+     * Five tabs did not fit a phone: measured at a 390px viewport the
+     * strip was 355px wide against a 444px scroll width, and the fifth
+     * tab ("general") started at x=354.3 - entirely off-screen. Arrowing
      * onto it used to move focus and the active state to a tab the user
      * could not see. This is the fix for that, and it also handles the
      * panel being opened straight onto a later tab.
+     *
+     * The strip is FOUR tabs now (the "agents" tab was removed once
+     * wrappers covered every family). Re-measured at 390px after that
+     * removal: scrollWidth 393 against clientWidth 355, so it STILL
+     * scrolls, by 38px instead of 89px. "general" is reachable by a
+     * shorter drag, not by no drag - do not read the shorter strip as a
+     * reason this function is dead code.
      *
      * A no-op when the strip does not scroll.
      *

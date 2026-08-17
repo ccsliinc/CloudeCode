@@ -204,7 +204,7 @@
      * the user reviews before saving. Never writes on its own.
      * Output: Promise<void>.
      */
-    async function importExample() {
+    async function importExample(familyName) {
         if (!examples) {
             try {
                 var resp = await window.API.listWrapperExamples();
@@ -215,12 +215,22 @@
                 return;
             }
         }
-        if (examples.length === 0) return;
-        var labels = examples.map(function (e, i) { return (i + 1) + '. ' + e.label; }).join('\n');
-        var choice = window.prompt('import which example?\n' + labels + '\n\nenter a number:', '1');
+        // Scoped to the family whose button was pressed. The endpoint
+        // returns every family's examples in one list; offering a codex
+        // user the claude keychain wrapper would be an invitation to
+        // import the wrong thing into the wrong group.
+        var offered = examples.filter(function (e) {
+            return View.familyOf(e) === familyName;
+        });
+        if (offered.length === 0) {
+            window.alert('no example wrappers for ' + familyName + '.');
+            return;
+        }
+        var labels = offered.map(function (e, i) { return (i + 1) + '. ' + e.label; }).join('\n');
+        var choice = window.prompt('import which ' + familyName + ' example?\n' + labels + '\n\nenter a number:', '1');
         var idx = parseInt(choice, 10) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= examples.length) return;
-        var chosen = examples[idx];
+        if (isNaN(idx) || idx < 0 || idx >= offered.length) return;
+        var chosen = offered[idx];
         editingId = '__new__';
         editingFamily = View.familyOf(chosen);
         // Seed through the render path rather than poking the DOM after
@@ -237,6 +247,55 @@
             accepts_model: !!chosen.accepts_model,
         };
         rerender();
+    }
+
+    /**
+     * Persist one family's legacy static command via PATCH /config/settings.
+     *
+     * Description: the fold-in of the removed "agents" settings tab. Those
+     *   three text fields used to ride settings-panel.js's batched Save;
+     *   here each row writes on its own, matching every other action on
+     *   this screen. A re-fetch follows so the group's "in use now" copy
+     *   and its "what runs now" preview reflect the write, which is the
+     *   whole reason the value is worth showing at all.
+     *
+     *   An EMPTY value is sent through deliberately for claude_command
+     *   (the server documents empty as "clear back to the cld/cldor
+     *   fallback"), and refused client-side for the other three, whose
+     *   route handler rejects a blank. Refusing it here turns a 422 into
+     *   a sentence.
+     * Inputs:
+     *   familyName (string) - the family whose row was saved.
+     *   field (string) - its config key, e.g. "codex_command".
+     * Output: Promise<void>.
+     */
+    async function saveLegacyCommand(familyName, field) {
+        var input = rootEl.querySelector('[data-legacy-input="' + familyName + '"]');
+        var statusEl = rootEl.querySelector('[data-legacy-status="' + familyName + '"]');
+        if (!input) return;
+        var value = input.value;
+        if (!value.trim() && field !== 'claude_command') {
+            if (statusEl) statusEl.textContent = 'cannot be blank: nothing would launch.';
+            return;
+        }
+        var patch = { agents: {} };
+        patch.agents[field] = value;
+        if (statusEl) statusEl.textContent = 'saving...';
+        try {
+            await window.API.updateSettings(patch);
+            await refreshFamilies();
+            rerender();
+            var after = rootEl.querySelector('[data-legacy-status="' + familyName + '"]');
+            if (after) after.textContent = 'saved';
+            // Keep the row the user was editing open across the rerender.
+            var details = rootEl.querySelector('[data-legacy-family="' + familyName + '"]');
+            if (details) details.open = true;
+        } catch (err) {
+            console.error('AgentWrappersPanel: legacy command save failed', err);
+            if (statusEl) {
+                statusEl.textContent = 'save failed: ' + (err && err.message ? err.message : 'unknown error');
+            }
+        }
     }
 
     /**
@@ -266,8 +325,20 @@
             });
         });
 
-        var importBtn = rootEl.querySelector('#wrapper-import-btn');
-        if (importBtn) importBtn.addEventListener('click', importExample);
+        rootEl.querySelectorAll('[data-wrapper-import-family]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                importExample(btn.getAttribute('data-wrapper-import-family'));
+            });
+        });
+
+        rootEl.querySelectorAll('[data-legacy-save]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                saveLegacyCommand(
+                    btn.getAttribute('data-legacy-save'),
+                    btn.getAttribute('data-legacy-field')
+                );
+            });
+        });
 
         var cancelBtn = rootEl.querySelector('#wrapper-editor-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', closeEditor);

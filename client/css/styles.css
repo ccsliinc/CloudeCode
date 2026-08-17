@@ -1887,7 +1887,14 @@ button[data-tooltip]:hover::after {
 
 /* The "more"/"less" control that reveals a truncated description in place.
  * A phone has no hover, so the full text has to be reachable by a tap;
- * a title attribute would be a control the user can never see. */
+ * a title attribute would be a control the user can never see.
+ *
+ * SQUARE, not a pill. It was `--radius-pill` (50px), which on a 17px-tall
+ * control is a full oval - the same shape defect the settings tab strip
+ * was fixed for. It also now shares a row with the favorites star, and
+ * two controls on one row should not be told apart by their corner
+ * radius: `more` is a WORD in normal flow at the bottom left, the star is
+ * an ICON pinned to the top right. */
 .command-more {
     width: auto;
     height: auto;
@@ -1896,7 +1903,7 @@ button[data-tooltip]:hover::after {
     padding: 2px 8px;
     background: transparent;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-pill, 999px);
+    border-radius: 0;
     color: var(--color-fg-subtle);
     font-family: var(--font-mono);
     font-size: 0.7rem;
@@ -3172,6 +3179,30 @@ button[data-tooltip]:hover::after {
 .settings-wrapper-actions-row {
     display: flex;
     gap: 8px;
+}
+
+/* The save affordance for a family's legacy static command, folded in
+ * from the removed "agents" settings tab. `min-width: 0` on the flex
+ * items is deliberate: a flex child defaults to `min-width: auto`, which
+ * refuses to shrink below its content, and the status line here can carry
+ * a whole server error message. Without it that message pushes the button
+ * off the edge of a 390px modal instead of wrapping. */
+.settings-legacy-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.settings-legacy-actions > * {
+    min-width: 0;
+}
+
+.settings-legacy-status {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
 }
 
 .settings-wrapper-editor {
