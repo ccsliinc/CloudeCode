@@ -156,6 +156,7 @@ function loadModules(seedStore) {
     const ctx = vm.createContext(win);
     vm.runInContext(clientJs('themeAudioNode.js'), ctx);
     vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
+    vm.runInContext(clientJs('themeAudioVolume.js'), ctx);
     vm.runInContext(clientJs('themeAudio.js'), ctx);
     return { win, els, store };
 }
@@ -438,7 +439,8 @@ test('no code path reads the retired mute key any more', () => {
     // would resurrect the phantom gate for anyone whose storage is
     // unwritable (Safari private mode makes removeItem a no-op).
     for (const f of ['themeAudio.js', 'themeAudioSettings.js',
-        'themeAudioNode.js', 'themeAudioStatus.js', 'session-theme-menu.js']) {
+        'themeAudioNode.js', 'themeAudioStatus.js', 'session-theme-menu.js',
+        'themeAudioVolume.js', 'settings-audio.js']) {
         const src = fs.readFileSync(
             path.join(__dirname, '..', 'client', 'js', f), 'utf8');
         assert.ok(!/getItem\(\s*LS_MUTED/.test(src), `${f} still reads LS_MUTED`);
@@ -570,6 +572,7 @@ function loadModulesWebAudio() {
     const ctx = vm.createContext(win);
     vm.runInContext(clientJs('themeAudioNode.js'), ctx);
     vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
+    vm.runInContext(clientJs('themeAudioVolume.js'), ctx);
     vm.runInContext(clientJs('themeAudio.js'), ctx);
     return { win, els, gains };
 }
@@ -606,6 +609,173 @@ test('the fade reaches the manifest target, not something near zero', () => {
 
     // CFG.volume 0.6 x master 1.0. A stale master would land at 0.168.
     assert.equal(gains[0].gain.value, 0.6);
+});
+
+// ---------------------------------------------------------------------
+// The GLOBAL VOLUME control (settings-audio.js) and the trap it creates.
+//
+// A deliberate master gain has to survive an upgrade, and the v1 -> v2
+// step exists precisely to DROP a stored master gain. Both are correct:
+// at v1 no UI could write that key, so anything under it was a console
+// call from the old attenuating budget. The moment a slider exists, a
+// bare float is ambiguous - so a chosen value is written to a different
+// key, in a different shape, carrying the schema it was chosen under.
+//
+// The other half is the floor. A master of zero is a mute, and a mute in
+// front of the per-session control is the exact defect that was deleted
+// at v3. The slider cannot reach zero and neither can the engine.
+// ---------------------------------------------------------------------
+
+test('a deliberate volume is written to the master key, never the legacy one', () => {
+    const { win, store } = loadModules();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setVolume(0.6);
+
+    assert.ok('cloude.audio.master' in store, 'nothing was persisted');
+    const parsed = JSON.parse(store['cloude.audio.master']);
+    assert.equal(parsed.v, 0.6);
+    assert.equal(
+        parsed.setUnder, win.ThemeAudioSettings.SETTINGS_VERSION,
+        'the stored value must record the schema it was chosen under, or a ' +
+        'future migration has to guess'
+    );
+    assert.ok(
+        !('cloude.audio.volume' in store),
+        'the legacy bare-float key is the one a migration may drop - a ' +
+        'chosen value must never land there'
+    );
+});
+
+test('THE UPGRADE TRAP: a chosen volume survives the v1 -> v3 migration', () => {
+    // The whole point. This store is an UNSTAMPED browser (so the volume
+    // migration runs and drops the legacy key) that also holds a value the
+    // user deliberately set. The stale one goes, the chosen one stays.
+    const { win, store } = loadModules({
+        'cloude.audio.volume': '0.28',
+        'cloude.audio.master': JSON.stringify({ v: 0.55, setUnder: 3 })
+    });
+    win.ThemeAudio.init();
+
+    assert.equal(
+        win.ThemeAudio.getVolume(), 0.55,
+        'the migration discarded a volume the user deliberately set'
+    );
+    assert.ok(!('cloude.audio.volume' in store), 'the stale legacy value must still go');
+    assert.equal(JSON.parse(store['cloude.audio.master']).v, 0.55);
+});
+
+test('a chosen volume round-trips across a reload', () => {
+    const first = loadModules();
+    first.win.ThemeAudio.init();
+    first.win.ThemeAudio.setVolume(0.45);
+
+    const second = loadModules(first.store);
+    second.win.ThemeAudio.init();
+    assert.equal(second.win.ThemeAudio.getVolume(), 0.45);
+});
+
+test('the master key outranks a legacy value that survived', () => {
+    const { win } = loadModules({
+        'cloude.audio.volume': '0.4',
+        'cloude.audio.master': JSON.stringify({ v: 0.9, setUnder: 3 }),
+        'cloude.audio.settingsVersion': '3'
+    });
+    win.ThemeAudio.init();
+    assert.equal(win.ThemeAudio.getVolume(), 0.9);
+});
+
+test('a corrupt master value falls through instead of being trusted', () => {
+    for (const junk of ['', 'null', '{}', '{"v":"loud"}', '{"v":2}', 'not json']) {
+        const { win } = loadModules({
+            'cloude.audio.master': junk,
+            'cloude.audio.settingsVersion': '3'
+        });
+        win.ThemeAudio.init();
+        assert.equal(
+            win.ThemeAudio.getVolume(), 1,
+            `master value ${JSON.stringify(junk)} was trusted rather than ignored`
+        );
+    }
+});
+
+test('THE FLOOR: setVolume cannot reach zero', () => {
+    const min = 0.35;
+    const { win, store } = loadModules();
+    win.ThemeAudio.init();
+
+    assert.equal(win.ThemeAudioSettings.MIN_MASTER_VOLUME, min);
+    assert.equal(win.ThemeAudio.getMinVolume(), min);
+    assert.equal(
+        win.ThemeAudio.setVolume(0), min,
+        'a master of zero is a mute, and the session control is the only on/off'
+    );
+    assert.equal(win.ThemeAudio.getVolume(), min);
+    assert.equal(
+        JSON.parse(store['cloude.audio.master']).v, min,
+        'memory and storage must hold the same number, or a reload surprises'
+    );
+    assert.equal(win.ThemeAudio.setVolume(0.01), min);
+    assert.equal(win.ThemeAudio.setVolume(5), 1, 'clamped at the top too');
+    assert.equal(win.ThemeAudio.setVolume(NaN), 1, 'unparseable falls back, never to 0');
+});
+
+test('a stored gain below the floor heals on the next load', () => {
+    // A console call from an older tab, or a hand-edited store. Reading it
+    // back as silence would be the same failure with extra steps.
+    const { win } = loadModules({
+        'cloude.audio.master': JSON.stringify({ v: 0, setUnder: 3 }),
+        'cloude.audio.settingsVersion': '3'
+    });
+    win.ThemeAudio.init();
+    assert.equal(win.ThemeAudio.getVolume(), 0.35);
+});
+
+test('MEASURED GAIN: the master multiplies the manifest volume', () => {
+    // CFG.volume is 0.6, the same number the shipped manifests carry.
+    // Three slider positions, one multiplication each.
+    const { win, gains } = loadModulesWebAudio();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setSessionAudio('alpha', true);
+    win.ThemeAudio.setTheme(CFG);
+
+    const measured = [];
+    for (const pct of [1, 0.7, 0.35]) {
+        win.ThemeAudio.setVolume(pct);
+        measured.push([pct, gains[0].gain.value]);
+    }
+    assert.deepEqual(measured, [
+        [1, 0.6],
+        [0.7, 0.42],
+        [0.35, 0.21]
+    ], 'effective gain must be manifest volume x master, live');
+
+    // And the status snapshot reports the same number the graph holds,
+    // so a diagnosis can never disagree with the speaker.
+    assert.equal(win.ThemeAudio.getStatus().node.effectiveGain, 0.21);
+    assert.equal(win.ThemeAudio.getStatus().masterVolume, 0.35);
+});
+
+test('THE VOLUME IS NOT A GATE: it cannot un-silence a session', () => {
+    // The control that was deleted at v3 could silence every session from
+    // one place. This one must not be able to do the opposite either:
+    // turning it up on a session that never opted in changes nothing.
+    const { win, gains } = loadModulesWebAudio();
+    win.ThemeAudio.init();
+    win.ThemeAudio.setTheme(CFG);
+    win.ThemeAudio.setSessionAudio('beta', false);
+
+    win.ThemeAudio.setVolume(1);
+    assert.equal(win.ThemeAudio.isMuted(), true, 'the session gate still governs on/off');
+    assert.equal(gains[0].gain.value, 0, 'a full master must not open a closed gate');
+
+    // Same on the home screen, where there is no session to belong to.
+    win.ThemeAudio.setSessionAudio(null, true);
+    win.ThemeAudio.setVolume(1);
+    assert.equal(win.ThemeAudio.isMuted(), true);
+
+    // And the gate alone is sufficient - the volume never has to be touched.
+    win.ThemeAudio.setSessionAudio('beta', true);
+    assert.equal(win.ThemeAudio.isMuted(), false);
 });
 
 // ---------------------------------------------------------------------

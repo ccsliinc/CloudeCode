@@ -36,8 +36,43 @@
  * permanently silent with no control left to undo it. v2 -> v3 therefore
  * DROPS the key, and nothing reads it any more.
  *
+ * WHY A SECOND VOLUME KEY EXISTS. The v1 -> v2 step above DROPS
+ * `cloude.audio.volume`, and it is right to: at v1 no UI could set that
+ * key, so every value under it was written by `ThemeAudio.setVolume()`
+ * from a console under the old attenuating budget, and keeping one
+ * re-applied the inaudible gain. That reasoning stops being true the
+ * moment a settings control exists. A future migration reading a bare
+ * float cannot tell "console value from the bad budget" from "the number
+ * the user deliberately dragged the slider to", and the safe-looking
+ * choice - drop it - silently discards his choice.
+ *
+ * So a deliberate volume is NOT written to that key. It goes to
+ * `cloude.audio.master` as a self-describing JSON object,
+ * `{"v": 0.6, "setUnder": 3}`: a different key, a different shape, and a
+ * record of the schema it was written under. A value there is proof a
+ * build with a volume control wrote it, so no migration has grounds to
+ * call it stale, and `setUnder` lets a future step reason about the
+ * budget it was chosen against instead of guessing. The legacy key is
+ * still READ as a fallback so an existing stamped store is not reset,
+ * but it is never written again.
+ *
+ * THE FLOOR. `MIN_MASTER_VOLUME` is 0.35 and the slider cannot go below
+ * it. A master of zero is silence with no error, which is the exact
+ * failure this feature shipped six times; a floor makes the quietest
+ * setting quiet rather than broken. 0.35 is derived, not picked: the
+ * measured-inaudible case was 0.28 x 0.3 = 0.084 linear, and the quietest
+ * manifest in the tree is 0.45, so the worst case here is 0.45 x 0.35 =
+ * 0.158, about 5.5 dB above the level that was proven inaudible on a
+ * phone. Values read out of storage are clamped up to the floor, so a 0
+ * left behind by a console call heals on the next load instead of
+ * persisting as silence.
+ *
  * Keys owned here:
- *   cloude.audio.volume          float 0..1 as a string - master gain.
+ *   cloude.audio.master          JSON {v: float, setUnder: int} - the
+ *                                deliberate master gain. Never dropped by
+ *                                a migration.
+ *   cloude.audio.volume          float 0..1 as a string - LEGACY master
+ *                                gain. Read as a fallback, never written.
  *   cloude.audio.settingsVersion integer as a string - schema stamp.
  *
  * Keys RETIRED here (removed by a migration, never read):
@@ -67,8 +102,19 @@
      * flag. Named only so the migration can delete it; no code reads it.
      */
     var LS_MUTED = 'cloude.audio.muted';
-    /** Master gain, 0..1, as a string. */
+    /**
+     * LEGACY master gain, 0..1, as a bare string. Read as a fallback for
+     * a store stamped before the volume control existed; never written.
+     */
     var LS_VOLUME = 'cloude.audio.volume';
+    /**
+     * The deliberate master gain, as JSON `{v: float, setUnder: int}`.
+     * Written only by writeVolume(), which only the settings control and
+     * ThemeAudio.setVolume() reach. Distinguishable from LS_VOLUME by key
+     * AND by shape, which is what keeps a future migration from mistaking
+     * a chosen value for a stale one.
+     */
+    var LS_MASTER = 'cloude.audio.master';
     /** Schema stamp, so an upgrade can reinterpret the keys above. */
     var LS_VERSION = 'cloude.audio.settingsVersion';
 
@@ -91,6 +137,15 @@
      * two numbers cannot quietly multiply each other into silence.
      */
     var DEFAULT_MASTER_VOLUME = 1.0;
+
+    /**
+     * The lowest master gain the UI may select, and the floor every
+     * stored value is clamped up to. See the file header for the
+     * derivation: 0.45 (quietest manifest) x 0.35 = 0.158 linear, about
+     * 5.5 dB above the 0.084 that was measured inaudible on a phone.
+     * A slider that reaches zero is a mute in a costume.
+     */
+    var MIN_MASTER_VOLUME = 0.35;
 
     /**
      * Read a key, never throwing.
@@ -216,29 +271,101 @@
     }
 
     /**
-     * The master gain, 0..1. Out-of-range and unparseable values fall
-     * back to the default rather than attenuating by accident.
+     * One log line describing what a migrate() result discarded. Lives
+     * here rather than at the call site because only this module knows
+     * what each cleared key meant.
+     *
+     * @param {object} m - a migrate() result.
+     * @returns {string|null} the line, or null when nothing migrated.
+     */
+    function migrationSummary(m) {
+        if (!m || !m.migrated) return null;
+        return 'ThemeAudio: migrated settings v' + m.fromVersion +
+            ' -> v' + SETTINGS_VERSION +
+            (m.clearedVolume === null
+                ? ''
+                : ' (dropped stale master volume ' + m.clearedVolume + ')') +
+            (m.clearedMute === null
+                ? ''
+                : ' (dropped retired app sound mute ' + m.clearedMute + ')');
+    }
+
+    /**
+     * Clamp a gain into the usable band [MIN_MASTER_VOLUME, 1].
+     *
+     * Clamping UP is the point: a stored 0 is silence with no error, and
+     * healing it on read is cheaper than explaining it later.
+     *
+     * @param {number} n - any number.
+     * @returns {number} MIN_MASTER_VOLUME..1.
+     */
+    function clampVolume(n) {
+        if (!isFinite(n)) return DEFAULT_MASTER_VOLUME;
+        return Math.max(MIN_MASTER_VOLUME, Math.min(1, n));
+    }
+
+    /**
+     * The deliberate master gain, or null when nothing usable is stored.
+     * Rejects anything that is not the `{v: number}` shape this module
+     * writes, so a hand-edited or half-written value falls through to the
+     * legacy key rather than being trusted.
      *
      * @param {object} storage - a localStorage-like object.
-     * @returns {number} 0..1.
+     * @returns {number|null} the raw stored gain, unclamped, or null.
+     */
+    function _readMaster(storage) {
+        var raw = _get(storage, LS_MASTER);
+        if (raw === null) return null;
+        var parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (err) {
+            return null;
+        }
+        if (!parsed || typeof parsed !== 'object') return null;
+        var n = parseFloat(parsed.v);
+        if (!isFinite(n) || n < 0 || n > 1) return null;
+        return n;
+    }
+
+    /**
+     * The master gain, MIN_MASTER_VOLUME..1.
+     *
+     * Precedence: the deliberate value first, then the legacy key for a
+     * store stamped before the control existed, then the default.
+     * Out-of-range and unparseable values fall back rather than
+     * attenuating by accident; in-range ones are clamped to the floor.
+     *
+     * @param {object} storage - a localStorage-like object.
+     * @returns {number} MIN_MASTER_VOLUME..1.
      */
     function readVolume(storage) {
+        var chosen = _readMaster(storage);
+        if (chosen !== null) return clampVolume(chosen);
+
         var raw = _get(storage, LS_VOLUME);
         if (raw === null) return DEFAULT_MASTER_VOLUME;
         var n = parseFloat(raw);
-        if (isFinite(n) && n >= 0 && n <= 1) return n;
+        if (isFinite(n) && n >= 0 && n <= 1) return clampVolume(n);
         return DEFAULT_MASTER_VOLUME;
     }
 
     /**
-     * Persist the master gain.
+     * Persist the master gain as a deliberate choice.
+     *
+     * Writes the new self-describing key ONLY. The legacy bare-float key
+     * is left exactly as it is: it is the one a migration is allowed to
+     * drop, and nothing the user chose may ever live there again.
      *
      * @param {object} storage - a localStorage-like object.
-     * @param {number} v - 0..1.
+     * @param {number} v - 0..1; stored clamped to the usable band.
      * @returns {void}
      */
     function writeVolume(storage, v) {
-        _set(storage, LS_VOLUME, String(v));
+        _set(storage, LS_MASTER, JSON.stringify({
+            v: clampVolume(parseFloat(v)),
+            setUnder: SETTINGS_VERSION
+        }));
     }
 
     window.ThemeAudioSettings = {
@@ -246,9 +373,13 @@
         LS_VOLUME: LS_VOLUME,
         LS_VERSION: LS_VERSION,
         SETTINGS_VERSION: SETTINGS_VERSION,
+        LS_MASTER: LS_MASTER,
         DEFAULT_MASTER_VOLUME: DEFAULT_MASTER_VOLUME,
+        MIN_MASTER_VOLUME: MIN_MASTER_VOLUME,
+        clampVolume: clampVolume,
         readVersion: readVersion,
         migrate: migrate,
+        migrationSummary: migrationSummary,
         readVolume: readVolume,
         writeVolume: writeVolume
     };
