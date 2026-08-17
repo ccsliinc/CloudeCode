@@ -198,11 +198,11 @@
      * THE ONE SCROLL PRIMITIVE. Both the wheel and the touch drag go
      * through it, so the two cannot drift apart.
      *
-     * On the ALTERNATE screen (claude's `tui: fullscreen`) there is no
-     * scrollback to move - `baseY` is pinned at 0 - so the whole gesture
-     * is handed to altscreen-scroll.js, which drives claude's own
-     * transcript view instead. It answers false only for the main screen,
-     * where real scrollback exists and `scrollLines()` is the right tool.
+     * When the buffer has NO scrollback to move (`baseY === 0`, which is
+     * what claude's `tui: fullscreen` leaves behind) the whole gesture is
+     * handed to altscreen-scroll.js, which drives claude's own transcript
+     * view instead. That module answers false only when real scrollback
+     * exists, which is exactly when `scrollLines()` is the right tool.
      *
      * @param {object} term - an xterm.js Terminal instance.
      * @param {number} rows - whole rows to scroll; >0 forward, <0 back.
