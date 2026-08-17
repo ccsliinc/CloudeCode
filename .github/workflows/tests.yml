@@ -40,12 +40,20 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Install tmux
+      - name: Install tmux and zsh
         # tests/test_session_backend.py drives a REAL tmux server. Without the
         # binary those tests fail rather than skip, so the runner must have it.
+        #
+        # zsh: get_agent_command builds `zsh -c 'source ~/.zshrc; ...'`, and
+        # test_get_agent_command_claude_model_shell_injection_defused actually
+        # EXECUTES it to prove a hostile model string cannot break out of the
+        # quoting. ubuntu-latest ships no zsh, so that test failed with
+        # FileNotFoundError on every push from 2026-08-14 to 2026-08-17 while
+        # local runs were green. Installing it is the right fix: skipping
+        # would retire the one test that proves the injection defence works.
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends tmux
+          sudo apt-get install --yes --no-install-recommends tmux zsh
 
       - name: Assert tmux indexes from zero
         # tmux_backend.py addresses panes as "<session>:0.0". A tmux config

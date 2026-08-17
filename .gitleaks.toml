@@ -30,6 +30,14 @@ paths = [
     '''^\.env\.example$''',
     '''^config\.example\.json$''',
     '''^\.gitleaks\.toml$''',
+    # Vendored third-party bundles. These are MINIFIED, so the generic
+    # high-entropy rules match ordinary identifiers: on 2026-08-17 the scan
+    # failed on `t.FourKeyMap=` in xterm.js and xterm-addon-webgl.js, which
+    # are not secrets and never were. We do not author these files; they are
+    # fetched by scripts/xterm-vendor/fetch.sh with pinned sha256s, and that
+    # pinning is what protects them, not this scanner. Scoped to the vendor
+    # directory only so our own client code is still fully scanned.
+    '''^client/vendor/''',
 ]
 
 # Literal placeholder strings that the test suite and the docs use in place of
