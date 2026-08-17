@@ -118,8 +118,9 @@ test('package.json version is not the upstream 0.8.1', () => {
 });
 
 test('the app version reaches the web client from package.json alone', () => {
-    // macOS/package.json -> app.getVersion() -> CLOUDE_APP_VERSION -> src/main.py
-    // -> {{VERSION}} in client/index.html. If any link is renamed the chip
+    // macOS/package.json -> app.getVersion() -> CLOUDE_APP_VERSION ->
+    // src/core/version.py::resolve_version() (imported by src/main.py) ->
+    // {{VERSION}} in client/index.html. If any link is renamed the chip
     // silently renders blank, which looks like a styling bug, not a broken
     // release. Assert the chain by name.
     const sm = fs.readFileSync(path.join(macDir, 'server-manager.js'), 'utf8');
@@ -127,10 +128,18 @@ test('the app version reaches the web client from package.json alone', () => {
         sm.includes('CLOUDE_APP_VERSION') && sm.includes('app.getVersion()'),
         'server-manager.js must inject app.getVersion() as CLOUDE_APP_VERSION'
     );
+    // src/main.py no longer reads the env var itself: it delegates to the
+    // single resolver in src/core/version.py (env-var-first precedence), so
+    // the name is asserted there and main.py is asserted to call it.
+    const versionPy = fs.readFileSync(path.join(repoRoot, 'src', 'core', 'version.py'), 'utf8');
+    assert.ok(
+        versionPy.includes('CLOUDE_APP_VERSION'),
+        'src/core/version.py must read CLOUDE_APP_VERSION'
+    );
     const mainPy = fs.readFileSync(path.join(repoRoot, 'src', 'main.py'), 'utf8');
     assert.ok(
-        mainPy.includes('CLOUDE_APP_VERSION'),
-        'src/main.py must read CLOUDE_APP_VERSION'
+        mainPy.includes('resolve_version'),
+        'src/main.py must delegate to src/core/version.py::resolve_version'
     );
     const html = fs.readFileSync(path.join(repoRoot, 'client', 'index.html'), 'utf8');
     assert.ok(html.includes('{{VERSION}}'), 'client/index.html must keep the {{VERSION}} token');
