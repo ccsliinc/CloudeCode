@@ -28,6 +28,7 @@
 const CONFIG_EDITOR_ROOTS = [
     { id: 'user', label: '~/.claude', defaultExpanded: true },
     { id: 'project', label: 'project .claude', defaultExpanded: true },
+    { id: 'workdir', label: 'project files', defaultExpanded: false },
 ];
 
 /**
@@ -50,7 +51,7 @@ function resolveProjectContext(terminalController) {
     const tc = terminalController;
     if (!tc || !tc._currentSession) return { path: null, reason: 'no-session' };
     const s = tc._currentSession;
-    const unwrapped = s; // MUTATION B: no unwrap
+    const unwrapped = (s.session && typeof s.session === 'object') ? s.session : s;
     const workingDir = unwrapped && unwrapped.working_dir;
     if (!workingDir) return { path: null, reason: 'no-working-dir' };
     return { path: workingDir, reason: 'ok' };
@@ -104,7 +105,10 @@ function planRoots(context) {
             plan.push({ kind: 'root', def });
         }
     }
-    // MUTATION A: silently short plan
+    if (!resolved) {
+        const message = projectRootsNotice(context && context.reason);
+        if (message) plan.push({ kind: 'notice', message });
+    }
     return plan;
 }
 
