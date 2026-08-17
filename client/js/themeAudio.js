@@ -4,11 +4,9 @@
  * Ships dormant: nothing plays until a theme manifest carries an `audio`
  * block AND the user opts the session in from the session editor FAB
  * menu ("play music"), which is also the user gesture browsers require.
- *
- * Manifest shape: the optional `audio` block of
- * client/css/themes/<name>/theme.json - src, srcFallback, volume, fadeMs.
- * The authoritative definition is ThemeAudioManifest in src/models.py,
- * because that model is what decides which fields survive the API.
+ * The manifest block is src, srcFallback, volume and fadeMs; the
+ * authoritative definition is ThemeAudioManifest in src/models.py, because
+ * that model decides which fields survive the API.
  *
  * FORMAT ORDER IS FIXED, m4a first: iOS returns "probably" for Ogg Vorbis
  * from canPlayType and then fails to decode it, so the fallback is driven
