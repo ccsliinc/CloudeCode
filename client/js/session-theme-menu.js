@@ -281,11 +281,21 @@
      * with them, and so a session never inherits the previous session's
      * unmuted state.
      *
+     * ALSO called on every LEAVE, with no session in scope. That case used
+     * to be unreachable, and the omission was a second silent gate: the
+     * session gate kept the last session's value (OFF by default) after a
+     * detach, so back on the launchpad the header "app sound" switch was
+     * vetoed by a session that was no longer attached. It repainted itself
+     * as ON and produced nothing, with no message. With no session in
+     * scope the session gate is OPEN, which is the documented home-screen
+     * behaviour: gate 1 alone plays the home theme.
+     *
      * @param {HTMLElement} [audioBtn] - the button to repaint, if mounted.
      * @returns {void}
      */
     function syncForSession(audioBtn) {
-        applyAudioState(isAudioOn(activeSession()));
+        var name = activeSession();
+        applyAudioState(name ? isAudioOn(name) : true);
         paintAudioButton(audioBtn || document.getElementById('sessionAudioBtn'));
     }
 

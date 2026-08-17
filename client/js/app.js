@@ -591,6 +591,13 @@ class AppController {
                 window.Themes.applyTheme(stored || 'claude', { persist: false });
             }
         }
+        // Leaving session scope re-opens the per-session music gate. Without
+        // this the detached session's opt-in (OFF by default) keeps vetoing
+        // the header "app sound" switch on the home screen, silently. Must
+        // run AFTER setActiveSession(null) - it reads the active session.
+        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
+            window.SessionThemeMenu.syncForSession();
+        }
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 — auth screen has no session context; reset tab title.
         setPageTitle(null);
@@ -629,6 +636,13 @@ class AppController {
                 try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
                 window.Themes.applyTheme(stored || 'claude', { persist: false });
             }
+        }
+        // Leaving session scope re-opens the per-session music gate. Without
+        // this the detached session's opt-in (OFF by default) keeps vetoing
+        // the header "app sound" switch on the home screen, silently. Must
+        // run AFTER setActiveSession(null) - it reads the active session.
+        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
+            window.SessionThemeMenu.syncForSession();
         }
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 — back on the launchpad, no active session; reset tab title.
