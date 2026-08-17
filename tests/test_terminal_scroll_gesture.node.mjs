@@ -283,14 +283,17 @@ function drive(term, startY, moveY, evOpts) {
     const capture = (type) => listeners
         .filter((l) => l.type === type && l.opts.capture === true)
         .map((l) => l.fn);
-    const touch = (y) => ({ touches: [{ pageY: y }] });
+    // The capture event carries the SAME flags as the bubbling one: it is
+    // the same event object in the browser, and the whole regression is
+    // about what the owner does when xterm has already cancelled it.
+    const moveEv = touchEvent(evOpts || {});
+    moveEv.touches = [{ pageY: moveY }];
 
-    capture('touchstart').forEach((fn) => fn(touch(startY)));
-    capture('touchmove').forEach((fn) => fn(touch(moveY)));
+    capture('touchstart').forEach((fn) => fn({ touches: [{ pageY: startY }] }));
+    capture('touchmove').forEach((fn) => fn(moveEv));
 
-    const ev = touchEvent(evOpts || {});
-    api.blockOverscrollEscape(ev);
-    return { term, ev };
+    api.blockOverscrollEscape(moveEv);
+    return { term, ev: moveEv };
 }
 
 test('a drag xterm declined still scrolls the terminal', () => {
