@@ -109,3 +109,12 @@ troubleshooting/
 # ships.
 scripts/codemirror-vendor/node_modules/
 scripts/codemirror-vendor/package-lock.json
+
+# Release self-check cache. Written next to config.json inside whatever source
+# root the server runs from (see src/core/update_check.py CACHE_FILENAME); in a
+# dev checkout that root is this repo. Runtime state, never tracked.
+.update-check.json
+
+# electron-builder output. The .dmg is a release artifact, not source.
+macOS/dist/
+macOS/node_modules/

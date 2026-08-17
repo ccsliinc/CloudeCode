@@ -267,6 +267,7 @@ app.whenReady().then(async () => {
     serverDir,
     bundleResourcesDir,
     isPackaged: app.isPackaged,
+    appVersion: app.getVersion(),
     onStateChange: (state) => {
       const tooltip = BOOTSTRAP_TOOLTIPS[state] || `Cloude Code — ${state}`;
       if (tray) tray.setToolTip(tooltip);

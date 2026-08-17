@@ -73,6 +73,7 @@
     },
     "dmg": {
       "title": "Cloude Code ${version}",
+      "background": "assets/dmg/background.tiff",
       "window": {
         "width": 540,
         "height": 380
