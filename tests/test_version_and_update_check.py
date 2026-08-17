@@ -67,6 +67,35 @@ def test_version_file_used_when_env_absent(tmp_path: Path, monkeypatch: pytest.M
     assert resolve_version(tmp_path) == "1.0.0"
 
 
+def test_version_file_outranks_legacy_package_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The generated stamp beats macOS/package.json, which is the LEGACY source.
+
+    They disagree exactly when it matters: package.json is hand-bumped in the
+    repo, the stamp is written from the tag at release time. If the legacy
+    literal won, a release built from a tag would still report whatever number
+    someone last typed into package.json.
+    """
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    (tmp_path / "macOS").mkdir()
+    (tmp_path / "macOS" / "package.json").write_text(
+        json.dumps({"version": "0.0.1"}), encoding="utf-8"
+    )
+    write_version_file("0.8.1", root=tmp_path)
+    assert resolve_version(tmp_path) == "0.8.1"
+
+
+def test_package_json_is_still_the_fallback_without_a_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no stamp and no git, the legacy literal is better than blank."""
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    (tmp_path / "macOS").mkdir()
+    (tmp_path / "macOS" / "package.json").write_text(
+        json.dumps({"version": "0.0.1"}), encoding="utf-8"
+    )
+    assert resolve_version(tmp_path) == "0.0.1"
+
+
 def test_resolve_returns_empty_when_nothing_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,18 +1,20 @@
 """Single source of version truth for Cloude Code.
 
 THE RULE: a release is a GIT TAG. Everything that displays or compares a
-version derives from that tag - the installer, upgrade.sh, rollback.sh, the
-README and the version chip in the app's home bottom bar. Two version strings
-that can disagree is a stale-doc bug waiting to happen, so there is exactly
-one resolver and it lives here.
+version derives from that tag - the release workflow, the header chip in the
+web client, and the release self check in ``update_check.py``. Two version
+strings that can disagree is a stale-doc bug waiting to happen, so there is
+exactly one resolver and it lives here.
 
 Resolution order, first hit wins:
 
-1. ``CLOUDE_APP_VERSION`` environment variable. The LaunchAgent wrapper and
-   the Electron shell both inject the installed tag this way.
-2. A ``VERSION`` file at the repository root. GENERATED at release time by
-   ``packaging/dmg/build-dmg.sh`` (and by ``upgrade.sh`` after a checkout)
-   from the tag. Never hand-edit it; it carries a header saying so.
+1. ``CLOUDE_APP_VERSION`` environment variable. The Electron shell injects
+   the installed version this way at spawn (``macOS/server-manager.js``).
+2. A ``VERSION`` file at the source root. GENERATED, not hand-written:
+   ``macOS/bootstrap.js`` stamps it into the Application Support copy on
+   every packaged launch. It carries a header saying so. This is the only
+   source that survives on disk in production, where there is no ``.git``
+   and no ``macOS/package.json``.
 3. An EXACT git tag on HEAD (``git describe --tags --exact-match``). Covers
    an install whose VERSION file went missing but whose checkout is still
    parked on the release tag.
