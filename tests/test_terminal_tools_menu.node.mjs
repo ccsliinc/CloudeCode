@@ -459,7 +459,11 @@ test('GEOMETRY: the top-right rail clears the header from the same tokens', () =
     // ...and the header really does read those parts, or the derivation
     // is a fiction that happens to agree today.
     const header = ruleOf(base, '.header');
-    assert.match(header, /padding:\s*var\(--header-pad-y\) 20px;/);
+    // The side half is --header-pad-x now (the docked-sidebar offset in
+    // session-sidebar.css has to add that gap back on top of the sidebar
+    // width, so it could not stay a literal). Only the VERTICAL half feeds
+    // --header-h, and that is what this assertion is really about.
+    assert.match(header, /padding:\s*var\(--header-pad-y\) var\(--header-pad-x\);/);
     assert.match(header, /border-bottom:\s*var\(--header-border\) solid/);
     assert.match(ruleOf(base, 'button'),
         /width:\s*var\(--control-size\);\n\s*height:\s*var\(--control-size\);/);
