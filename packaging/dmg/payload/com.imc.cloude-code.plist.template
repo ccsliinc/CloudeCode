@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. install.sh substitutes the @@TOKENS@@ and writes the result to
+  ~/Library/LaunchAgents/com.imc.cloude-code.plist.
+
+  THIS IS A USER LAUNCHAGENT AND MUST STAY ONE. It is bootstrapped into
+  gui/<uid>, never into system/. The macOS login keychain that holds the
+  claude credentials is unreadable outside a gui session, so a LaunchDaemon
+  cannot work here at all.
+
+  There is deliberately NO SessionCreate key. It reads like it grants a
+  session; it actually creates a brand new security session with no access to
+  the login keychain, which is precisely the failure mode this constraint
+  exists to avoid.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@@RUN@@</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@@WORKDIR@@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd hands a job a minimal PATH; tmux and the claude cli are
+             both absent from it, so their real locations are pinned here. -->
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@@LOGDIR@@/launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>@@LOGDIR@@/launchd.err</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
