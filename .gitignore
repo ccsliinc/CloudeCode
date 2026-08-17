@@ -109,3 +109,5 @@ troubleshooting/
 # ships.
 scripts/codemirror-vendor/node_modules/
 scripts/codemirror-vendor/package-lock.json
+packaging/dmg/dist/
+packaging/dmg/artwork/background.tiff

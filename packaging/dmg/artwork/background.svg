@@ -24,7 +24,7 @@
   <rect width="660" height="420" fill="url(#scan)"/>
 
   <g transform="translate(268, 22) scale(0.62)">
-    <g fill="url(#cloudFill)"><circle cx="38" cy="52" r="20"/><circle cx="64" cy="38" r="28"/><circle cx="94" cy="50" r="22"/><rect x="34" y="50" w="0" height="0"/><rect x="34" y="50" width="62" height="22" rx="11"/></g>
+    <g fill="url(#cloudFill)"><circle cx="38" cy="52" r="20"/><circle cx="64" cy="38" r="28"/><circle cx="94" cy="50" r="22"/><rect x="34" y="50" width="62" height="22" rx="11"/></g>
   </g>
 
   <text x="330.0" y="110" text-anchor="middle" font-family="Menlo, 'SF Mono', Monaco, monospace"
