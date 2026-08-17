@@ -70,15 +70,6 @@
     /** pageY of the previous touchmove, for per-event deltas. */
     var lastTouchY = 0;
 
-    /**
-     * Vertical pixels moved by the touchmove currently being dispatched,
-     * measured in the capture-phase listener so the value is correct no
-     * matter who handles the event afterwards. Positive = finger moved
-     * up = scroll forward through the buffer, matching xterm's own sign
-     * convention in `Viewport#handleTouchMove`.
-     */
-    var pendingDy = 0;
-
     /** Sub-row remainder carried between touchmoves so slow drags move. */
     var pendingRows = 0;
 
@@ -248,46 +239,93 @@
     }
 
     /**
-     * Stop a boundary drag from escaping to the page.
+     * Is a long-press text selection currently driving the finger?
      *
-     * xterm's own touchmove handler scrolls `.xterm-viewport` in JS and
-     * calls preventDefault ONLY while the viewport can still move in
-     * that direction (`_bubbleScroll`); at either boundary it returns
-     * without cancelling, on purpose, so the host page can take over.
-     * On a page whose body is `overflow: hidden` there is nothing for
-     * the page to scroll, so iOS Safari claims the gesture instead and
-     * reloads - the "it tries to refresh" the user reported. The CSS
-     * `overscroll-behavior: contain` on `.terminal-container` is the
-     * declarative half of this fix; this is the half that does not
-     * depend on an engine honouring that property on a non-scrollable
-     * scroll container.
+     * @returns {boolean} false whenever touch-select.js is absent or idle.
+     */
+    function isSelecting() {
+        try {
+            var ts = window.TouchSelect;
+            return !!(ts && typeof ts.isSelecting === 'function' && ts.isSelecting());
+        } catch (err) {
+            console.warn('TerminalScroll: select-state read failed', err);
+            return false;
+        }
+    }
+
+    /**
+     * OWN the one-finger drag and scroll the xterm BUFFER with it.
      *
-     * Deliberately narrow:
-     *   - runs in the BUBBLE phase on #terminal, so xterm (bound on the
-     *     descendant `.xterm`) has already had the event and already
-     *     cancelled it whenever it consumed the scroll;
-     *   - `defaultPrevented` short-circuit means normal in-range
-     *     scrolling is never touched, only the released boundary case;
-     *   - single-touch only, so pinch-zoom over the terminal still
-     *     reaches the browser;
-     *   - touch-select.js calls stopPropagation() while a selection
-     *     drag is live, so this never runs during select mode.
+     * WHY THIS IS THE CAPTURE-PHASE OWNER (measured 2026-08-17 against a
+     * live Claude Code 2.1.199 session, 324 buffer rows, baseY 287,
+     * `.xterm-viewport` scrollHeight 5184 vs clientHeight 592):
      *
-     * It must, however, distinguish the two very different reasons a
-     * touchmove can arrive here uncancelled, because the original version
-     * only knew about the first and swallowed the second:
+     *   - Claude Code 2.1.199 does NOT enable mouse reporting. The pane
+     *     byte stream sets only ?25, ?2004, ?1004 and ?2031, and the live
+     *     client reports `activeProtocol` NONE. The previous fix assumed
+     *     the opposite, so its whole "xterm declined the event" branch was
+     *     unreachable in the case the user was reporting.
+     *   - With reporting off, xterm's own touchmove handler DOES run. It
+     *     scrolls `.xterm-viewport.scrollTop` and then calls
+     *     preventDefault. The old bubble-phase guard read that cancel as
+     *     "xterm scrolled the buffer" and stood down.
+     *   - It had not. `.xterm-viewport` is inert in this app: setting
+     *     scrollTop to 1000 left `buffer.active.viewportY` at 236, fired
+     *     no scroll event, and left xterm's own `_lastScrollTop` at 4592.
+     *     xterm's viewport-to-buffer sync never runs here, so anything
+     *     routed through the DOM scroller moves pixels and no rows.
      *
-     *   ESCAPE  - the terminal is at a scrollback boundary, so there is
-     *             nothing left to show in that direction. Cancel and stop,
-     *             which is the pull-to-refresh block.
-     *   CONSUMABLE - the terminal is NOT at that boundary and simply was
-     *             not offered the event, because mouse reporting is on
-     *             (see consumeDragScroll). Scroll it here, then cancel.
+     * Net: the drag was cancelled by xterm, skipped by our guard, and
+     * moved nothing. That is the reported "does not scroll in the tui".
      *
-     * The test is `canConsumeScroll`: it asks the xterm buffer whether
-     * `viewportY` can still move in the direction of THIS drag. Nothing
-     * else can tell them apart - the event flags are identical in both
-     * cases, which is precisely why the bug was invisible.
+     * The wheel path never had this problem because it already bypasses
+     * the DOM and calls `term.scrollLines()` directly. This makes touch do
+     * exactly the same thing, so the two agree by construction and neither
+     * depends on mouse reporting, on the DOM scroller, or on xterm's
+     * internal gating.
+     *
+     * @param {TouchEvent} ev - the capture-phase touchmove.
+     * @returns {void}
+     */
+    function handleDragScroll(ev) {
+        noteUserScroll();
+        // Multi-touch is pinch-zoom. Leave it entirely to the browser.
+        if (!ev || !ev.touches || ev.touches.length !== 1) return;
+        var y = ev.touches[0].pageY;
+        var dy = lastTouchY - y;
+        // Track the finger even when we are not going to act on it, so
+        // the first move after a selection ends is a delta and not the
+        // whole distance travelled since the finger went down.
+        lastTouchY = y;
+        // The long-press selection drag owns the finger; moving the
+        // viewport under it would tear the selection.
+        if (isSelecting()) return;
+        consumeDragScroll(dy);
+        if (!ev.cancelable) return;
+        // Cancel even at a scrollback boundary: that is the
+        // pull-to-refresh block. stopPropagation keeps xterm from also
+        // moving `.xterm-viewport`, which would only desync the scroller
+        // from the buffer we just moved.
+        ev.preventDefault();
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    }
+
+    /**
+     * Backstop that stops a boundary drag from escaping to the page.
+     *
+     * handleDragScroll normally cancels and stops the touchmove before it
+     * ever gets here. This bubble-phase listener catches the drags that do
+     * not go through it - anything that reached #terminal uncancelled by
+     * some other path - because on a page whose body is `overflow: hidden`
+     * an uncancelled boundary drag is what iOS Safari reads as
+     * pull-to-refresh, and reloads. The CSS `overscroll-behavior: contain`
+     * on `.terminal-container` is the declarative half of the same fix;
+     * this is the half that does not depend on an engine honouring that
+     * property on a non-scrollable scroll container.
+     *
+     * Deliberately narrow: `defaultPrevented` short-circuits so a drag
+     * somebody else already handled is never second-guessed, and
+     * multi-touch is left alone so pinch-zoom still reaches the browser.
      *
      * @param {TouchEvent} ev - the bubbling touchmove.
      * @returns {void}
@@ -296,8 +334,6 @@
         if (ev.defaultPrevented) return;
         if (!ev.cancelable) return;
         if (ev.touches && ev.touches.length !== 1) return;
-        consumeDragScroll(pendingDy);
-        pendingDy = 0;
         ev.preventDefault();
     }
 
@@ -317,30 +353,21 @@
         if (wired || !container) return;
         wired = true;
 
-        // Passive: we never cancel these, we only observe that the user
-        // is driving the viewport. Cancelling would break xterm's own
-        // native touch scrolling, which is what we want to preserve.
+        // Passive: this one only records where the finger went down.
         container.addEventListener('touchstart', function (ev) {
             touchActive = true;
             pendingRows = 0;
-            pendingDy = 0;
             if (ev && ev.touches && ev.touches.length) lastTouchY = ev.touches[0].pageY;
             noteUserScroll();
         }, { capture: true, passive: true });
 
-        // Capture phase on purpose: the per-event delta has to be taken
-        // BEFORE xterm's own handler runs, so the number is right whether
-        // xterm consumes the event or declines it.
-        container.addEventListener('touchmove', function (ev) {
-            if (ev && ev.touches && ev.touches.length === 1) {
-                var y = ev.touches[0].pageY;
-                pendingDy = lastTouchY - y;
-                lastTouchY = y;
-            } else {
-                pendingDy = 0;
-            }
-            noteUserScroll();
-        }, { capture: true, passive: true });
+        // Capture phase AND cancelling: this is the owner of the drag.
+        // It has to run before xterm, because xterm cancels every
+        // in-range touchmove and its scroll goes to a DOM element that
+        // does not drive the buffer. See handleDragScroll().
+        container.addEventListener('touchmove', handleDragScroll, {
+            capture: true, passive: false
+        });
 
         var endGesture = function () {
             touchActive = false;
@@ -353,8 +380,7 @@
             noteUserScroll();
         }, { capture: true, passive: true });
 
-        // The one NON-passive listener here: it has to be able to cancel.
-        // Bubble phase on purpose - see blockOverscrollEscape().
+        // Bubble-phase backstop - see blockOverscrollEscape().
         container.addEventListener('touchmove', blockOverscrollEscape, { passive: false });
     }
 
@@ -364,7 +390,6 @@
         touchActive = false;
         wired = false;
         lastTouchY = 0;
-        pendingDy = 0;
         pendingRows = 0;
         getTerm = function () { return null; };
     }

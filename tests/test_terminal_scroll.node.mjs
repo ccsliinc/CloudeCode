@@ -127,7 +127,7 @@ test('touchstart marks a gesture, so a write during a drag cannot yank', () => {
     assert.equal(api.shouldFollowOutput(fakeTerm(500, 500)), false);
 });
 
-test('touch gestures are observed passively (native scrolling preserved)', () => {
+test('touch observers stay passive; the drag owner cancels', () => {
     // Regression guard: cancelling the OBSERVERS would break xterm's own
     // touch scrolling, which is the thing we are trying to make work.
     //
@@ -152,11 +152,18 @@ test('touch gestures are observed passively (native scrolling preserved)', () =>
         },
     });
     const observers = registered.filter((r) => r.options.capture === true);
-    ['touchstart', 'touchmove', 'touchend', 'wheel'].forEach((type) => {
+    ['touchstart', 'touchend', 'wheel'].forEach((type) => {
         const found = observers.filter((r) => r.type === type);
         assert.equal(found.length, 1, `exactly one capture-phase ${type} observer`);
         assert.equal(found[0].options.passive, true, `${type} must be passive`);
     });
+    // touchmove is the exception and deliberately so: it is the drag
+    // OWNER, not an observer, because xterm cancels every in-range
+    // touchmove and its own scroll goes to a DOM element that does not
+    // drive the buffer. See test_terminal_scroll_gesture.node.mjs.
+    const moves = observers.filter((r) => r.type === 'touchmove');
+    assert.equal(moves.length, 1, 'exactly one capture-phase touchmove owner');
+    assert.equal(moves[0].options.passive, false, 'the owner must be able to cancel');
 });
 
 test('pinToBottom clears the latch and scrolls', () => {
