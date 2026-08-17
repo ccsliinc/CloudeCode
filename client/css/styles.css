@@ -3064,15 +3064,38 @@ button[data-tooltip]:hover::after {
     margin-bottom: 12px;
 }
 
+/* A wrapper row is TWO STACKED LINES: the title line (label, id, badges,
+ * action buttons) and, under it, the description at the row's FULL width.
+ * It used to be a single horizontal row with the description sharing the
+ * left column, which made the description's width a function of the
+ * button count in the right column - 272.1px on a two-button row and
+ * 115.5px on a three-button row, measured in a 556px modal. See the
+ * renderRow docstring in client/js/agent-wrappers-view.js. */
 .settings-wrapper-row {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
     padding: 10px 12px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
+}
+
+.settings-wrapper-row-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+/* Full-width by construction: it is a block child of a column flex
+ * container, so nothing above it can squeeze it. min-width:0 keeps a
+ * single unbreakable token (a long entry name in <code>) from setting a
+ * floor wider than the row. */
+.settings-wrapper-row-desc {
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 /* A flex item defaults to min-width:auto, so a long id/label/description
@@ -3080,6 +3103,7 @@ button[data-tooltip]:hover::after {
  * sideways instead of wrapping. This is what pushed the delete button off
  * the right edge on a phone. */
 .settings-wrapper-row-main {
+    flex: 1 1 auto;
     min-width: 0;
     overflow-wrap: anywhere;
 }
@@ -3381,11 +3405,19 @@ button[data-tooltip]:hover::after {
     /* Widening the action group alone was not enough: the ROW is still a
      * horizontal flex container, so the buttons kept being pushed off the
      * right edge and the modal body scrolled sideways. Stack the row on a
-     * phone so the actions sit under the text they act on. */
-    .settings-wrapper-row,
+     * phone so the actions sit under the text they act on.
+     * `.settings-wrapper-row` is a column at every width now, so what has
+     * to stack here is its TITLE LINE, not the row. */
+    .settings-wrapper-row-head,
     .settings-command-row {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    /* The head is a column here, so its own gap has to supply the space
+     * the horizontal `gap: 12px` used to. */
+    .settings-wrapper-row-head {
+        gap: 8px;
     }
 
     /* A family group's own padding is a meaningful slice of a 375px

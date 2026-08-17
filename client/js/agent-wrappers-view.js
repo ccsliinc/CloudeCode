@@ -86,6 +86,29 @@
 
     /**
      * Render one wrapper's summary row.
+     *
+     * TWO LINES, NOT TWO COLUMNS. The description used to live inside
+     * `.settings-wrapper-row-main`, i.e. in the left column of a
+     * horizontal flex row whose right column (the action buttons) is
+     * `flex-shrink: 0`. The description therefore got whatever width the
+     * buttons left over, and that leftover is a function of HOW MANY
+     * BUTTONS THE ROW HAS: the default wrapper draws two, every other
+     * wrapper draws three. Measured in a 556px settings modal at 1400px:
+     * the two-button row gave its description 272.1px and the
+     * three-button row gave the SAME text 115.5px - a column about
+     * fourteen characters wide, so a one-sentence description rendered as
+     * a five-line ribbon and no two rows agreed on a width. The phone
+     * layout never showed it because the 480px media query already stacks
+     * the row.
+     *
+     * So the description now sits on its OWN full-width line beneath the
+     * title/actions line, where its width is the row's width in every
+     * case and does not depend on the buttons above it.
+     *
+     * It is omitted entirely when there is nothing to say. An empty
+     * `.settings-field-hint` is not free - it carries `margin-top: 4px`
+     * and left a ragged gap under wrappers with no description.
+     *
      * Inputs: w (object) - AgentWrapper-shaped dict.
      * Output: string - HTML.
      */
@@ -96,17 +119,23 @@
             : '';
         var entryNote = w.entry ? (' &middot; entry: <code>' + escapeHtml(w.entry) + '</code>') : '';
         var id = escapeHtml(w.id);
+        var descHtml = (w.description || w.entry)
+            ? ('  <div class="settings-wrapper-row-desc settings-field-hint">' +
+               escapeHtml(w.description || '') + entryNote + '</div>')
+            : '';
         return (
             '<div class="settings-wrapper-row" data-wrapper-id="' + id + '">' +
-            '  <div class="settings-wrapper-row-main">' +
-            '    <strong>' + escapeHtml(w.label) + '</strong> <code>' + id + '</code> ' + badge + modelBadge +
-            '    <div class="settings-field-hint">' + escapeHtml(w.description || '') + entryNote + '</div>' +
+            '  <div class="settings-wrapper-row-head">' +
+            '    <div class="settings-wrapper-row-main">' +
+            '      <strong>' + escapeHtml(w.label) + '</strong> <code>' + id + '</code> ' + badge + modelBadge +
+            '    </div>' +
+            '    <div class="settings-wrapper-row-actions">' +
+            '      <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="edit" data-wrapper-id="' + id + '">edit</button>' +
+            (w.default ? '' : '      <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="default" data-wrapper-id="' + id + '">set default</button>') +
+            '      <button type="button" class="modal-btn modal-btn-danger" data-wrapper-action="delete" data-wrapper-id="' + id + '">delete</button>' +
+            '    </div>' +
             '  </div>' +
-            '  <div class="settings-wrapper-row-actions">' +
-            '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="edit" data-wrapper-id="' + id + '">edit</button>' +
-            (w.default ? '' : '    <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="default" data-wrapper-id="' + id + '">set default</button>') +
-            '    <button type="button" class="modal-btn modal-btn-danger" data-wrapper-action="delete" data-wrapper-id="' + id + '">delete</button>' +
-            '  </div>' +
+            descHtml +
             '</div>'
         );
     }
