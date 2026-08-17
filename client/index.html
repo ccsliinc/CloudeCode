@@ -488,6 +488,10 @@
     <!-- "new file" prompt. Must load BEFORE config-editor-panel.js, whose
          header button calls window.ConfigEditorNewFile.open(). -->
     <script src="/static/js/config-editor-new-file.js"></script>
+    <!-- Root table + working-directory resolver + the "why is this root
+         absent" sentences. Must load BEFORE config-editor-panel.js, which
+         reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
+    <script src="/static/js/config-editor-roots.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
