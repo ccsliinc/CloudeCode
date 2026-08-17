@@ -410,6 +410,11 @@
          row, the renderer writes the shortened one into it. -->
     <script src="/static/js/command-description.js"></script>
     <script src="/static/js/slash-command-filter.js"></script>
+    <!-- The star that decides which commands get a chip. Must load AFTER
+         api.js (window.API) and BEFORE slash-commands.js, which calls
+         window.SlashFavorites while building its markup. Separate file
+         because slash-commands.js is already past the 500-line budget. -->
+    <script src="/static/js/slash-favorites.js"></script>
     <script src="/static/js/slash-commands.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->

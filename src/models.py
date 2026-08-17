@@ -410,6 +410,25 @@ class ReplaceTerminalCommandsRequest(BaseModel):
     commands: List[dict] = Field(default_factory=list)
 
 
+class ToggleFavoriteCommandRequest(BaseModel):
+    """Request body for ``POST /api/v1/config/common-commands/favorite``.
+
+    ONE command per call, with an EXPLICIT desired state rather than a
+    "flip it" verb. Two clients (or one client and a stale render) can
+    disagree about the current state; a flip would then produce whichever
+    result arrived last, while an explicit ``favorite`` is idempotent -
+    starring something already starred is a no-op, not an unstar.
+
+    ``model_config`` forbids extra keys, matching
+    ``ConfigSettingsUpdateRequest``: a typo'd field must 422 rather than
+    be silently ignored while the caller believes it took effect.
+    """
+    model_config = {"extra": "forbid"}
+
+    command: str = Field(..., description="Command to toggle, with or without a leading slash")
+    favorite: bool = Field(..., description="True to star, False to unstar")
+
+
 class AddProviderModelRequest(BaseModel):
     """Request body for ``POST /api/v1/providers/models``.
 

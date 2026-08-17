@@ -25,6 +25,9 @@ class SlashCommandsModal {
         // Parallel to commonCommands: [{command, description}] with the
         // SHORT chip description. See _loadCommonCommands().
         this.commonCommandDetails = [];
+        // True while the row shows the built-in defaults because the user
+        // has never starred anything. See _loadCommonCommands.
+        this.commonDefaulted = false;
         this.groups = [];
         // Flat command -> record lookup built from `this.groups`, used
         // for the common-commands button tooltips and for resolving a
@@ -87,6 +90,13 @@ class SlashCommandsModal {
             this.commonCommandDetails = Array.isArray(response.command_details)
                 ? response.command_details
                 : this.commonCommands.map(c => ({ command: c, description: '' }));
+            // `defaulted` distinguishes "never starred anything, these
+            // are the built-ins" from "these are the user's picks", so
+            // the row can say which it is. A server predating the field
+            // sends neither, which reads as "the user's picks" — the
+            // conservative answer, since it never claims authorship the
+            // user did not have.
+            this.commonDefaulted = response.defaulted === true;
             console.log('[SlashCommands] Fetched', this.commonCommands.length, 'common commands');
         } catch (error) {
             console.error('[SlashCommands] Failed to fetch common commands:', error);
@@ -97,7 +107,35 @@ class SlashCommandsModal {
             this.commonCommandDetails = this.commonCommands.map(
                 c => ({ command: c, description: '' })
             );
+            this.commonDefaulted = true;
         }
+    }
+
+    /**
+     * Apply a post-write favorites payload: repaint the chip row and
+     * every star in the list below, then re-wire both.
+     *
+     * Description: repaints from the AUTHORITATIVE server response rather
+     *   than mutating local state to match what the click intended, so a
+     *   partially-applied write can never leave the UI claiming a star
+     *   that is not on disk. Only the two star-bearing regions are
+     *   rebuilt; the filter's index is untouched because it holds
+     *   references to `.command-item` elements, which are not replaced.
+     * Inputs: payload (object) - `{commands, command_details, defaulted}`.
+     * Output: void.
+     */
+    _applyFavorites(payload) {
+        this.commonCommands = payload.commands || [];
+        this.commonCommandDetails = Array.isArray(payload.command_details)
+            ? payload.command_details
+            : [];
+        this.commonDefaulted = payload.defaulted === true;
+        window.SlashFavorites.repaint(this.modal, {
+            chipHtml: () => this.renderCommonCommands(),
+            details: this.commonCommandDetails,
+            onSelect: (command) => this.selectCommand(command),
+            onChange: (p) => this._applyFavorites(p),
+        });
     }
 
     /**
@@ -268,29 +306,17 @@ class SlashCommandsModal {
     renderCommonCommands() {
         const details = this.commonCommandDetails || [];
         console.log('[SlashCommands] renderCommonCommands() called with', details.length, 'commands');
-
-        if (details.length === 0) {
-            console.warn('[SlashCommands] No common commands to render!');
-            return '<div class="common-commands-empty">no common commands configured</div>';
-        }
-
-        return details.map(entry => {
-            const cmd = entry.command;
-            const short = entry.description || '';
-            // Full description (scraped docs / user command frontmatter)
-            // stays as the hover tooltip; short text is what renders.
-            const cmdInfo = this.commandIndex.get(cmd);
-            const longDescription = (cmdInfo && cmdInfo.description) || short;
-            const shortHtml = short
-                ? `<span class="command-button-desc">${this._escapeHtml(short)}</span>`
-                : '';
-            return `
-                <button class="command-button" data-command="${this._escapeHtml(cmd)}" title="${this._escapeHtml(longDescription)}">
-                    <span class="command-button-name">${this._escapeHtml(cmd)}</span>
-                    ${shortHtml}
-                </button>
-            `;
-        }).join('');
+        // Markup lives in client/js/slash-favorites.js: each chip now
+        // carries its own star, so unstarring happens where the chip is
+        // rather than by hunting the command down in the list below.
+        return window.SlashFavorites.renderChips(
+            details,
+            this.commonDefaulted,
+            (cmd) => {
+                const info = this.commandIndex.get(cmd);
+                return (info && info.description) || '';
+            }
+        );
     }
 
     /**
@@ -311,13 +337,14 @@ class SlashCommandsModal {
             return '<div style="color: #858585; padding: 12px; text-align: center;">no commands available</div>';
         }
 
+        const starred = window.SlashFavorites.favoriteSet(this.commonCommandDetails);
         return this.groups.map(group => {
             const commands = group.commands || [];
             if (commands.length === 0) return '';
             return `
                 <div class="command-category" data-group-id="${this._escapeHtml(group.id)}">
                     <h4 class="category-title">${this._escapeHtml(group.label)}</h4>
-                    ${commands.map(cmd => this._renderCommandItem(cmd)).join('')}
+                    ${commands.map(cmd => this._renderCommandItem(cmd, starred.has(cmd.command))).join('')}
                 </div>
             `;
         }).join('');
@@ -328,15 +355,19 @@ class SlashCommandsModal {
      * Inputs: cmd (object) - {command, args, description} from the server.
      * Output: string - HTML for one row.
      */
-    _renderCommandItem(cmd) {
+    _renderCommandItem(cmd, starred) {
         const display = cmd.args ? `${cmd.command} ${cmd.args}` : cmd.command;
         const full = cmd.description || '';
         const short = window.CommandDescription.shorten(full);
         const more = window.CommandDescription.isShortened(full)
             ? '<button type="button" class="command-more" aria-expanded="false">more</button>'
             : '';
+        // `data-description` still carries the FULL text and is still the
+        // only thing the live filter reads (slash-command-filter.js). The
+        // star is a sibling control and changes nothing about that.
         return `
             <div class="command-item" data-command="${this._escapeHtml(cmd.command)}" data-description="${this._escapeHtml(full)}">
+                ${window.SlashFavorites.starButton(cmd.command, !!starred)}
                 <span class="command-name">${this._escapeHtml(display)}</span>
                 <span class="command-description">${this._escapeHtml(short)}</span>
                 ${more}
@@ -418,6 +449,11 @@ class SlashCommandsModal {
                 this.selectCommand(command);
             });
         });
+
+        // Star toggles, on the chips AND on every list row. Wired after
+        // the row/chip click handlers above precisely so its own
+        // stopPropagation runs first; see slash-favorites.js.
+        window.SlashFavorites.wire(this.modal, (payload) => this._applyFavorites(payload));
 
         // "more" reveals the full description in place. stopPropagation is
         // required: the button sits INSIDE .command-item, whose own click
