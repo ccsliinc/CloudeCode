@@ -1,6 +1,6 @@
 {
   "name": "cloude-code-menubar",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "macOS menu bar app for Cloude Code remote control",
   "main": "main.js",
   "scripts": {
@@ -26,11 +26,13 @@
   "build": {
     "appId": "com.cloudecode.menubar",
     "productName": "Cloude Code",
+    "afterPack": "scripts/adhoc-sign.js",
     "directories": {
       "output": "dist"
     },
     "files": [
-      "**/*"
+      "**/*",
+      "!scripts/**"
     ],
     "extraResources": [
       {
