@@ -993,6 +993,48 @@ class API {
     }
 
     /**
+     * Server: read-only snapshot of the host, this process and tmux.
+     *
+     * Backs the home bar's "server status" panel. Behind the same
+     * `require_auth` as every other /api/v1 route — it hands out memory
+     * figures, disk paths, project working directories and session
+     * names, and this app is reachable from every device on the LAN.
+     *
+     * Every section of the reply carries `available` and `error`, so a
+     * probe that could not run is distinguishable from a healthy zero.
+     * See src/api/status_routes.py.
+     *
+     * @returns {Promise<object>} `{collected_at, server, tmux,
+     *   claude_cli, host, memory, disk, load}`.
+     */
+    async getServerStatus() {
+        return await this.call('/server/status');
+    }
+
+    /**
+     * Server: which release this install is, and whether it is current.
+     *
+     * NOT IMPLEMENTED BY THIS BRANCH. The version and self-check plumbing
+     * is owned by the packaging work; this is the call the status panel
+     * makes, and it is written against the shape that work is expected to
+     * expose:
+     *
+     *   `{available, error, current_tag, latest_tag, update_available,
+     *     checked_at, upgrade_command}`
+     *
+     * with `update_available` strictly three-valued (true / false / null
+     * for "the check could not run") and `checked_at` unix seconds for
+     * when the comparison last actually ran. A 404 or any other failure
+     * surfaces in the panel as "could not check", never as "up to date".
+     * If the endpoint lands at a different path, change it here.
+     *
+     * @returns {Promise<object>} the release payload.
+     */
+    async getReleaseStatus() {
+        return await this.call('/server/release');
+    }
+
+    /**
      * File editor: list the file tree for one root.
      * @param {string} root - "user" or "project".
      * @param {string|null} [projectPath] - required for root === "project".

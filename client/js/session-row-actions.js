@@ -284,16 +284,84 @@ console.log('[SessionRowActions Module] Loading...');
      * Example:
      *   await confirm('close', 'api-work') -> true
      */
-    function confirm(action, displayName) {
+    function confirm(action, displayName, context) {
         const copy = CONFIRM_COPY[action] || CONFIRM_COPY[ACTION_CLOSE];
         const verb = action === ACTION_REMOVE ? 'remove' : 'close';
         return window.App.showConfirmModal(
             copy.title,
             `${verb} "${displayName}"?`,
-            copy.details,
+            attachmentPreamble(context) + copy.details,
             copy.primaryLabel,
             'cancel'
         );
+    }
+
+    /**
+     * Sentences naming what is CURRENTLY ATTACHED to the target session.
+     *
+     * Description: a confirmation that only describes the operation in
+     *   the abstract lets the user destroy something they are looking at
+     *   without being told. These two facts are the ones a list-based
+     *   surface (the status panel) cannot convey from the row alone, so
+     *   they lead the details rather than trail them. Both are omitted
+     *   when absent rather than stated in the negative, so a plain row
+     *   keeps the short copy it has always had - this cannot change the
+     *   text of any existing call site that passes no context.
+     * Inputs:
+     *   context (object|null|undefined) - optional
+     *     `{openInApp: boolean, attachedClients: number}`.
+     * Output:
+     *   string - zero, one or two sentences, each ending in a space.
+     * Example:
+     *   attachmentPreamble({openInApp: true, attachedClients: 1})
+     *     -> 'this session is open in cloudecode right now, and that '
+     *      + 'terminal will disconnect. 1 tmux client is attached to it '
+     *      + 'right now and will be detached. '
+     */
+    function attachmentPreamble(context) {
+        if (!context) return '';
+        let out = '';
+        if (context.openInApp) {
+            out += 'this session is open in cloudecode right now, and that '
+                + 'terminal will disconnect. ';
+        }
+        const attached = Number(context.attachedClients) || 0;
+        if (attached > 0) {
+            out += attached === 1
+                ? '1 tmux client is attached to it right now and will be detached. '
+                : `${attached} tmux clients are attached to it right now and `
+                  + 'will be detached. ';
+        }
+        return out;
+    }
+
+    /**
+     * Run the destructive action against the server.
+     *
+     * Description: THE one place the two destruction endpoints are chosen
+     *   between, so a new surface cannot invent a third way to kill a
+     *   tmux session. The branch is on whether a session id resolved, NOT
+     *   on which glyph was clicked - see the CONFIRM_COPY docblock for
+     *   what each path actually destroys.
+     *
+     *   The launcher (`launchpad.js`) and the sidebar
+     *   (`session-sidebar.js`) still inline this same two-line branch.
+     *   They should call this instead; that is deliberately not done in
+     *   this change because both files are being edited on another branch
+     *   right now, and a merge conflict in a destruction path is a worse
+     *   outcome than a duplicated `if`.
+     * Inputs:
+     *   tmuxName (string) - literal tmux session name.
+     *   sessionId (string|null) - id of the live backend bound to that
+     *     name, when there is one.
+     * Output:
+     *   Promise<object> - the server's SuccessResponse.
+     * Example:
+     *   await perform('cloude_api', null)  // DELETE /sessions/external/...
+     */
+    function perform(tmuxName, sessionId) {
+        if (sessionId) return window.API.destroySession(sessionId);
+        return window.API.destroyExternalSession(tmuxName);
     }
 
     window.SessionRowActions = {
@@ -307,6 +375,8 @@ console.log('[SessionRowActions Module] Loading...');
         iconFor,
         html,
         confirm,
+        attachmentPreamble,
+        perform,
     };
     console.log('[SessionRowActions Module] Exported as window.SessionRowActions');
 })();

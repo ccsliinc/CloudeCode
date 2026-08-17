@@ -9,12 +9,13 @@
  * anything on the home screen. Restarting the web server means the same
  * thing everywhere, and the home screen is where you are when you want it.
  *
- * ONE ROW TODAY. It used to be a full-width "reset server" button sitting
- * in a "server management" section of the launchpad body, which is a lot
- * of vertical real estate for a control pressed roughly never. Obvious
- * future rows - view logs, server health, update claude - are deliberately
- * NOT built here; the point of this file is that adding one is adding an
- * entry to ENTRY_IDS, an icon and a row in buildItems(), and nothing else.
+ * TWO ROWS. "restart server" used to be a full-width button in a "server
+ * management" section of the launchpad body, which is a lot of vertical
+ * real estate for a control pressed roughly never. "server status" was
+ * added second, and it cost exactly what this file's design promised: one
+ * entry in ENTRY_IDS, one icon, one row in buildItems(), and nothing
+ * else. Keep it that way - the rendering, the fetching and the one
+ * destructive control all live in server-status-panel.js, not here.
  *
  * WHY IT ROUTES THROUGH FabMenu. The open/close/outside-dismiss/Escape
  * plumbing lived twice before and the copies drifted, and - the part that
@@ -39,6 +40,7 @@ console.log('[ServerControlsMenu Module] Loading...');
 
     /** Stable ids for the menu rows, in declaration order. Read by tests. */
     var ENTRY_IDS = [
+        'serverStatusRow',
         'serverRestartRow'
     ];
 
@@ -56,6 +58,10 @@ console.log('[ServerControlsMenu Module] Loading...');
      * @type {Object<string, string>}
      */
     var ICONS = {
+        gauge:
+            '<path d="M2.5 12A5.5 5.5 0 0 1 8 3a5.5 5.5 0 0 1 5.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M8 8.5L10.75 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M8 12.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
         restart:
             '<path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
             '<path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
@@ -89,6 +95,25 @@ console.log('[ServerControlsMenu Module] Loading...');
      *   namely the launchpad not being loaded at all.
      * @returns {void}
      */
+    /**
+     * Open the server-status panel. The panel owns the fetch, the render
+     * and its one destructive control; this row only opens it.
+     *
+     * @param {Function} notify - FabMenu.notify, the one feedback channel
+     *   guaranteed to be visible above every overlay in this app.
+     * @returns {void}
+     */
+    function openServerStatus(notify) {
+        var panel = window.ServerStatusPanel;
+        if (panel && typeof panel.open === 'function') {
+            panel.open(menu.trigger());
+            return;
+        }
+        if (typeof notify === 'function') {
+            notify('server status unavailable right now', 'error');
+        }
+    }
+
     function restartServer(notify) {
         var lp = window.Launchpad;
         if (lp && typeof lp.restartServer === 'function') {
@@ -109,7 +134,15 @@ console.log('[ServerControlsMenu Module] Loading...');
      */
     function buildItems(ctl) {
         var c = ctl || menu;
-        var restartRow = c.item(ENTRY_IDS[0], buildIcon('restart'),
+        var statusRow = c.item(ENTRY_IDS[0], buildIcon('gauge'),
+            'server status', openServerStatus);
+        // Read-only apart from one control the panel confirms for itself,
+        // so nothing here is danger-styled.
+        statusRow.setAttribute('aria-label',
+            'server status, sessions and host health');
+        statusRow.setAttribute('title',
+            'server status, sessions and host health');
+        var restartRow = c.item(ENTRY_IDS[1], buildIcon('restart'),
             'restart server', restartServer);
         // Disruptive-adjacent: the web connection drops for a few
         // seconds. Not danger-styled, because nothing is destroyed - the
@@ -119,7 +152,7 @@ console.log('[ServerControlsMenu Module] Loading...');
             'restart server, sessions keep running');
         restartRow.setAttribute('title',
             'restart server, sessions keep running');
-        return [restartRow];
+        return [statusRow, restartRow];
     }
 
     /**

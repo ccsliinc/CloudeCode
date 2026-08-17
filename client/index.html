@@ -97,6 +97,11 @@
          owns the .settings-field rules this builds on. -->
     <link rel="stylesheet" href="/static/css/settings-audio.css" />
 
+    <!-- The home bar's server-status panel. After styles.css, which owns
+         the .modal-overlay / .modal-header / .modal-body chrome it rides
+         on and the bare `button` reset its controls have to escape. -->
+    <link rel="stylesheet" href="/static/css/server-status.css" />
+
     <!-- Session rows painted in their own session's theme colours. MUST be
          the last of the app stylesheets: it competes at equal specificity
          with the row backgrounds in styles.css and session-sidebar.css, so
@@ -532,6 +537,17 @@
          the home screen and the two above do not. Must load after
          fab-menu.js and anchor-popover.js; launchpad.js wires it on
          render, so the order relative to launchpad.js does not matter. -->
+    <!-- The server-status panel behind that menu's first row. Split in
+         two: the format module is pure and testable with no DOM, the
+         panel owns the fetch, the overlay and the one destructive
+         control. Must load BEFORE server-controls-menu.js only in the
+         sense that the row calls window.ServerStatusPanel lazily on
+         click, so strict order is not required - but keeping them
+         adjacent is how the pair stays findable. Both need api.js
+         (loaded far above) and session-row-actions.js, which owns the
+         confirmation copy and the two destruction endpoints. -->
+    <script src="/static/js/server-status-format.js"></script>
+    <script src="/static/js/server-status-panel.js"></script>
     <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
