@@ -8,18 +8,42 @@
  * block - no new tokens introduced here either.
  * ===================================================================== */
 
+/* FULL SCREEN WHEN EDITING. "when editing a file the editor is modal full
+ * screen." It used to be a 900px x 85dvh card floating over the file
+ * picker; editing a config file is the task, not a peek at one, and a
+ * code editor is the surface that most wants the pixels.
+ *
+ * The overlay it sits in is the modal backdrop and stays exactly that, so
+ * every dismissal contract is untouched: the close button, the backdrop
+ * click (now only reachable at the seams, which is fine - Escape and the
+ * two buttons are the real paths), Escape via modal-stack.js, and the
+ * unsaved-changes confirm in front of all three.
+ *
+ * The `vh` line is the fallback for engines with no dynamic viewport
+ * units; `dvh` is what every current engine uses. Order matters - see
+ * tests/test_viewport_units.node.mjs, and the measured 5.7% vh overshoot
+ * on iOS that it exists to catch.
+ *
+ * No border, no radius: a full-screen surface has no edge to draw. Flat,
+ * square, matching the settings screen. */
 .config-editor-modal-content {
     background: var(--color-bg);
-    border: 2px solid var(--color-accent);
-    border-radius: var(--radius-lg);
-    width: 94%;
-    max-width: 900px;
-    height: min(85vh, 780px);
-    height: min(85dvh, 780px);
+    border: none;
+    border-radius: 0;
+    width: 100%;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
     position: relative;
+}
+
+/* The overlay has no padding of its own, but state it: a full-screen
+ * child must not be inset by a rule added to `.modal-overlay` later. */
+.config-editor-modal-overlay {
+    padding: 0;
 }
 
 .config-editor-modal-header {
@@ -32,15 +56,21 @@
     margin-bottom: 0;
 }
 
-/* "back to files" - the way out of the SECOND modal on a phone, where the
- * picker underneath is off screen entirely (see modal-stack.css) and the
- * × alone would leave the user unsure whether it closes the editor or the
- * whole thing. Rendered only when the picker is actually open beneath
- * (config-editor-modal.js checks ModalStack.depth()); shown only on
- * narrow viewports, because on desktop the picker is visible behind and
- * needs no signpost. */
+/* "back to files" - the way out of the SECOND surface, now at EVERY
+ * width. It used to be phone-only, and the reason was sound at the time:
+ * on desktop the picker was visible behind the 900px card, so "back" had
+ * a visible destination and needed no signpost. A FULL-SCREEN editor
+ * removes that: the drawer behind is covered completely on desktop too,
+ * exactly as it is on a phone, and the × alone leaves the user unsure
+ * whether it closes the editor or the whole thing. Same reasoning as
+ * before, applied to the layout that exists now.
+ *
+ * Still rendered only when the picker is actually open beneath
+ * (config-editor-modal.js checks ModalStack.depth()) - with nothing
+ * behind it, back would be a second, differently-worded close button. */
 .config-editor-modal-back {
-    display: none;
+    display: flex;
+    width: fit-content;
     /* Same bare-`button` 36/40px square trap as the mode toggle above.
      * The @media (max-width: 700px) block below sets width: fit-content,
      * which happens to rescue the width on a phone, but height was still
@@ -70,16 +100,13 @@
     outline: none;
 }
 
-@media (max-width: 700px) {
-    /* `flex`, not `inline-flex`: the title sits in the same header block,
-     * and inline-flex let the two share a line and overlap on a 375px
-     * screen (observed). Block-level with a fit-content width puts back
-     * on its own line above the filename, sized to its own label. */
-    .config-editor-modal-back {
-        display: flex;
-        width: fit-content;
-    }
-}
+/* The `flex`/`width: fit-content` pair above used to live in a
+ * `@media (max-width: 700px)` block. Its reasoning was never about the
+ * viewport: `inline-flex` let back and the filename share a line and
+ * overlap on a 375px screen (observed), and block-level with a
+ * fit-content width puts back on its own line above the filename, sized
+ * to its own label. That is right at every width, and now that the
+ * control is shown at every width it is declared unconditionally. */
 
 .config-editor-modal-title {
     color: var(--color-accent);
@@ -361,10 +388,11 @@
     color: var(--color-accent);
 }
 
-@media (max-width: 700px) {
-    .config-editor-modal-content {
-        width: 98%;
-        height: 92vh;
-        height: 92dvh;
-    }
-}
+/* NO MOBILE SIZE OVERRIDE. There used to be a `@media (max-width: 700px)`
+ * block here taking the card to 98% x 92dvh - a near-fullscreen nudge for
+ * a box that was 900px x 85dvh on desktop. The editor is full screen at
+ * EVERY width now, and this block was the only thing standing between it
+ * and the phone: measured at 390x844 with it still in place, the editor
+ * came out 382.2 x 776.5 at (3.9, 33.8) instead of 390 x 844 at (0, 0).
+ * Two rules describing one box is how "full screen" quietly becomes
+ * "nearly full screen" on the only device where the difference is felt. */

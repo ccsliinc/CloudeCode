@@ -173,6 +173,13 @@ console.log('[ConfigEditorModal Module] Loading...');
      * Create the modal DOM shell and append it to document.body. Content
      * is filled in afterward by renderBody() so a loading state shows
      * immediately for a slow read.
+     *
+     * The shell is FULL SCREEN (config-editor-modal.css) - it used to be a
+     * 900px card floating over the file drawer. Nothing about the
+     * dismissal contract changes with it: close, back, backdrop and
+     * Escape all still route through closeGuarded(), which is still gated
+     * behind confirmDiscardIfDirty().
+     *
      * Inputs: rootId (string); relPath (string); projectPath (string|null).
      * Output: void.
      */
@@ -181,6 +188,9 @@ console.log('[ConfigEditorModal Module] Loading...');
         // picker is open beneath it. That is what earns the "back"
         // control - with no picker behind, back would have nowhere to go
         // and would just be a second, differently-worded close button.
+        // Now that the editor is full screen the drawer behind is covered
+        // at EVERY width, not only on a phone, so the control is no longer
+        // hidden by a breakpoint.
         const stacked = window.ModalStack.depth() > 0;
         const backBtn = stacked
             ? '<button type="button" class="config-editor-modal-back" id="config-editor-modal-back" ' +
@@ -189,7 +199,11 @@ console.log('[ConfigEditorModal Module] Loading...');
             : '';
 
         overlayEl = document.createElement('div');
-        overlayEl.className = 'modal-overlay';
+        // The extra class is what config-editor-modal.css hangs the
+        // full-screen treatment off. `.modal-overlay` alone is shared with
+        // the settings panel and the confirm dialogs, which are still
+        // centred cards and must stay that way.
+        overlayEl.className = 'modal-overlay config-editor-modal-overlay';
         overlayEl.setAttribute('data-modal', 'config-editor');
         overlayEl.innerHTML = (
             '<div class="config-editor-modal-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-modal-title">' +
