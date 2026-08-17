@@ -131,31 +131,6 @@
                  recovers this width with no code change. -->
         </h1>
         <div class="controls">
-            <!-- APP-LEVEL SOUND, NOT THE PER-SESSION ONE. This is the
-                 whole app's audio switch: it gates sound everywhere and
-                 is present on the launchpad, where no session exists.
-                 The session editor FAB carries a SEPARATE "play music for
-                 this session" row (session-editor-menu.js). Two controls,
-                 two scopes - the labels here and there both say which,
-                 because a bare speaker icon in two places would read as
-                 one control that failed to stay in sync.
-                 Click is also the required user-gesture that grants the
-                 AudioContext autoplay permission for the page lifetime.
-
-                 Icon is swapped between the muted/unmuted SVG markup by
-                 App._wireAudioToggle()/AUDIO_ICON_SVG (app.js) — never an
-                 emoji. Emoji render in full system color and ignore
-                 currentColor, which broke the monotone header icon family;
-                 this stays inline SVG so it themes and recolors identically
-                 to its neighbours. Starts muted (speaker+X) to match the
-                 real default state. -->
-            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable app sound (all sessions)" title="app sound" data-tooltip="app sound (all sessions)">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M9.5 6.25L13 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M13 6.25L9.5 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-            </button>
             <!-- Logout: door frame (three-sided bracket, open on the right)
                  with an arrow passing all the way THROUGH and past it — the
                  near-universal "log out" glyph. Deliberately different from

@@ -128,39 +128,6 @@ window.setPageTitle = setPageTitle;
  * App Controller - Manages application state and screen transitions
  */
 class AppController {
-    /**
-     * Delay before the confirming audio check after the master switch is
-     * turned on. A track needs a moment to open and play() settles on a
-     * later turn, so the first look cannot tell success from failure.
-     * @type {number}
-     */
-    static get AUDIO_RECHECK_MS() { return 900; }
-
-    /**
-     * Inline SVG markup for the two states of the header audio toggle.
-     * Single source of truth so `_wireAudioToggle()`'s paint() never has
-     * more than one place that decides what the icon looks like. 16x16,
-     * stroke="currentColor", stroke-width 1.5 — same conventions as the
-     * detach/logout/delete icons so the header reads as one icon family.
-     * Speaker shape is shared; unmuted adds two sound-wave arcs, muted
-     * adds an X across the same spot — same silhouette, different
-     * "sound coming out" mark, so the two states are unmistakable at
-     * 16x16 without relying on color alone.
-     * @type {{muted: string, unmuted: string}}
-     */
-    static get AUDIO_ICON_SVG() {
-        return {
-            muted:
-                '<path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
-                '<path d="M9.5 6.25L13 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-                '<path d="M13 6.25L9.5 9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-            unmuted:
-                '<path d="M6.25 5.25L3.5 7.35H2V9.15H3.5L6.25 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
-                '<path d="M9 6.6C9.5 7 9.8 7.45 9.8 8C9.8 8.55 9.5 9 9 9.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-                '<path d="M10.8 5.2C11.7 6 12.2 6.9 12.2 8C12.2 9.1 11.7 10 10.8 10.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-        };
-    }
-
     constructor() {
         this.currentScreen = null;
         this.logoutBtn = null;
@@ -282,13 +249,13 @@ class AppController {
             try { window.Themes.applyStoredThemeIdSync(); } catch (_) { /* no-op */ }
         }
 
-        // v0.7.0+ — initialize per-theme background-music plumbing and wire
-        // the header 🔊 / 🔇 toggle button. Default state is muted; the first
-        // click is the user-gesture that grants AudioContext autoplay.
+        // Initialize per-theme background-music plumbing. There is no
+        // app-level audio control to wire: audio is session-only, gated
+        // solely by the session editor FAB's "play music" row. init() also
+        // runs the settings migration that drops the retired master switch.
         if (window.ThemeAudio && typeof window.ThemeAudio.init === 'function') {
             try { window.ThemeAudio.init(); } catch (_) { /* no-op */ }
         }
-        this._wireAudioToggle();
 
         // Setup event listeners
         this.setupEventListeners();
@@ -340,121 +307,6 @@ class AppController {
         } catch (e) {
             console.warn('App: Themes.init failed — registry will use fallback', e);
         }
-    }
-
-    /**
-     * v0.7.0+ — bind the header audio toggle button to ThemeAudio.toggleMute().
-     * The icon (speaker+waves / speaker+X), `aria-pressed`, and tooltip all
-     * reflect the current mute state. Idempotent — only wires once.
-     *
-     * The icon is inline SVG, not an emoji: emoji render in full system
-     * color from the platform font and ignore `stroke="currentColor"`,
-     * which broke the otherwise-monotone header icon family (detach,
-     * logout, delete all inherit their color from the theme). Swapping
-     * the toggled `<svg>` child to one of AppController.AUDIO_ICON_SVG keeps this
-     * button in the same 16x16 / stroke-1.5 / currentColor family as its
-     * neighbors — there is no code path left that writes an emoji here.
-     */
-    _wireAudioToggle() {
-        const btn = document.getElementById('audioToggleBtn');
-        if (!btn || btn._audioToggleWired) return;
-        btn._audioToggleWired = true;
-        // The <svg> wrapper itself lives in index.html (viewBox, size,
-        // fill="none") — only its <path> children are swapped here, so
-        // we never touch the button's own attributes (title/aria-label
-        // are set separately below) or risk emitting a bare <path> as a
-        // direct button child (invalid outside an <svg> namespace).
-        const svg = btn.querySelector('svg');
-
-        const paint = () => {
-            // Paint from the APP SOUND gate, which is what this button
-            // owns. isMuted() is the effective gate and also reflects the
-            // per-session opt-in, so painting from it made the master
-            // switch show itself as off whenever the attached session had
-            // simply not opted into music.
-            const muted = window.ThemeAudio && typeof window.ThemeAudio.isAppSoundOn === 'function'
-                ? !window.ThemeAudio.isAppSoundOn()
-                : (window.ThemeAudio ? window.ThemeAudio.isMuted() : true);
-            // "app sound", not "theme music". The session editor FAB has
-            // its own per-session music row; two speakers labelled the
-            // same thing read as one control that lost track of itself.
-            const label = muted
-                ? 'Enable app sound (all sessions)'
-                : 'Mute app sound (all sessions)';
-            if (svg) {
-                svg.innerHTML = muted
-                    ? AppController.AUDIO_ICON_SVG.muted
-                    : AppController.AUDIO_ICON_SVG.unmuted;
-            }
-            btn.setAttribute('aria-pressed', muted ? 'false' : 'true');
-            btn.setAttribute('data-tooltip', label);
-            btn.setAttribute('aria-label', label);
-            btn.setAttribute('title', label);
-        };
-        paint();
-
-        // Repaint when something OTHER than this button moves the state -
-        // the session music row can now lift the master switch. Without
-        // this the button keeps its last self-painted icon and lies.
-        document.addEventListener('cloude:audio-state', paint);
-
-        btn.addEventListener('click', () => {
-            if (!window.ThemeAudio) return;
-            let nowOn = false;
-            try {
-                window.ThemeAudio.toggleMute();
-                nowOn = window.ThemeAudio.isAppSoundOn();
-            } catch (e) {
-                console.warn('App: ThemeAudio.toggleMute threw', e);
-            }
-            paint();
-            if (nowOn) AppController._reportAudio();
-        });
-    }
-
-    /**
-     * Report why turning app sound on did not produce sound, if it did not.
-     *
-     * The master switch had no reporting at all: it flipped its own icon and
-     * that was the entire feedback loop, which is how five different silent
-     * causes each survived a user tapping it. Checked twice because a track
-     * needs a moment to open and play() settles on a later turn; a
-     * `settling` verdict is never treated as success.
-     *
-     * @returns {void}
-     */
-    static _reportAudio() {
-        const Status = window.ThemeAudioStatus;
-        if (!Status || typeof Status.current !== 'function') return;
-
-        /**
-         * Show one message through whichever toast surface exists.
-         *
-         * @param {string} msg - user-facing text.
-         * @param {string} kind - 'info' or 'error'.
-         * @returns {void}
-         */
-        const say = (msg, kind) => {
-            if (window.FabMenu && typeof window.FabMenu.notify === 'function') {
-                window.FabMenu.notify(msg, kind);
-                return;
-            }
-            console.warn('App: no toast surface for audio status:', msg);
-        };
-
-        const first = Status.current();
-        if (first.playing) {
-            say('app sound on', 'info');
-            return;
-        }
-        setTimeout(() => {
-            const again = Status.current();
-            if (again.playing) {
-                say('app sound on', 'info');
-                return;
-            }
-            say('app sound on - but no sound: ' + again.reason, 'error');
-        }, AppController.AUDIO_RECHECK_MS);
     }
 
     /**

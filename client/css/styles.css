@@ -494,37 +494,6 @@ h1:hover {
     overflow: visible;
 }
 
-/* v0.7.0+ — header background-music toggle. Click is the required
- * user-gesture that grants AudioContext autoplay for the page lifetime.
- * This button sits in `.header .controls` alongside homeBtn/
- * detachSessionBtn/logoutBtn/settingsBtn, so it must NOT set its own
- * `color`/`font-size` — those buttons take their icon color (accent,
- * 16px via the svg's own width/height) from the shared
- * `.header .controls button > svg` rule below. An earlier version of
- * this rule copied `.header-rename-pencil`'s muted-until-hover pattern,
- * which put the audio icon at 14px/grey while its neighbors rendered at
- * 16px/accent — this only sizes the hit area and hover feedback now. */
-.header-audio-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    border-radius: var(--radius-md);
-    line-height: 1;
-    flex-shrink: 0;
-    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
-}
-
-.header-audio-toggle:hover {
-    transform: scale(1.15);
-    background: var(--color-accent-bg-soft);
-}
-
 /* Header control icons. Inline SVG paths use stroke="currentColor" so a
  * theme override of --color-accent re-skins them automatically. We pin
  * `color` on the <svg> itself (not the <button>) so danger-styled

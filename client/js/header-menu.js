@@ -3,9 +3,9 @@
  *
  * AN OVERFLOW, NOT A RESPONSIVE FOLD ANY MORE. This used to move the
  * whole six-icon cluster into a dropdown below 768px and lay it back out
- * inline above it. It now holds THREE controls at EVERY width - app
- * sound, logout, settings - because those are the rarely-used ones, and
- * a control that is rare on a phone is rare on a desktop too. A layout
+ * inline above it. It now holds TWO controls at EVERY width - logout and
+ * settings - because those are the rarely-used ones, and a control that
+ * is rare on a phone is rare on a desktop too. A layout
  * that changes what is reachable with the window width teaches two
  * different apps.
  *
@@ -21,12 +21,17 @@
  *   - Home and detach, which no longer exist as header buttons: clicking
  *     the title goes home, and detach moved to the session editor FAB.
  *
- * SCOPE BOUNDARY, THE RULE THAT SURVIVED A CORRECTION: this menu is
- * APP-scoped and mounts on every screen including the launchpad, where
- * no session exists. Anything session-scoped belongs to the session
- * editor FAB, which hides itself when nothing is attached. "App sound"
- * lives here; "play music for this session" lives there. They are two
- * controls with two scopes and their labels both say so.
+ * SCOPE BOUNDARY: this menu is APP-scoped and mounts on every screen
+ * including the launchpad, where no session exists. Anything
+ * session-scoped belongs to the session editor FAB, which hides itself
+ * when nothing is attached.
+ *
+ * THERE IS NO AUDIO CONTROL HERE, AND ADDING ONE WOULD BE A REGRESSION.
+ * An "app sound (all sessions)" toggle used to live in this menu. Being
+ * app-scoped, persisted and defaulted OFF, it sat in front of the session
+ * editor's "play music" row and silently vetoed it, which is why the app
+ * produced no sound through five separate fixes. Audio is session-only
+ * now, so the only music control is the session-scoped one in the FAB.
  *
  * WHY MOVE THE NODES INSTEAD OF RENDERING A SECOND COPY: every one of
  * these controls is addressed by id from elsewhere in the app
@@ -47,7 +52,6 @@ console.log('[HeaderMenu Module] Loading...');
 
 /** Ids of the controls the overflow owns, in their canonical order. */
 const HEADER_MENU_CONTROL_IDS = [
-    'audioToggleBtn',
     'logoutBtn',
     'settingsBtn'
 ];
