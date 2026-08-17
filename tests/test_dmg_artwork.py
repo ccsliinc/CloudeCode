@@ -150,6 +150,24 @@ def test_a_missing_theme_manifest_still_renders(art: ModuleType, tmp_path: Path)
     assert art.build_svg(palette, "0.8.1")
 
 
+def test_the_fallback_palette_still_matches_the_theme(art: ModuleType) -> None:
+    """A fallback nobody compares is a copy of the theme that quietly rots.
+
+    Mutation testing found this gap: the fallback literals only take effect
+    when the manifest is unreadable, so every other test passes no matter
+    what they say. The one day they are used is the one day nobody is
+    watching, and by then they would be several themes out of date.
+    """
+    manifest = REPO_ROOT / art.THEME_RELATIVE
+    with manifest.open("r", encoding="utf-8") as handle:
+        css_vars = json.load(handle)["cssVars"]
+    for key, fallback in art.PALETTE_FALLBACK.items():
+        assert fallback == css_vars[key], (
+            f"PALETTE_FALLBACK[{key}] is {fallback}, the theme now says "
+            f"{css_vars[key]}"
+        )
+
+
 def test_no_version_means_no_stamp_not_a_wrong_one(art: ModuleType) -> None:
     palette = art.load_palette(REPO_ROOT)
     assert art.version_stamp("", palette["--color-accent"]) == ""
