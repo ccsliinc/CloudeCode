@@ -32,22 +32,14 @@ html {
      * The same token feeds --header-h, which the top-right FAB below
      * clears itself against. */
     padding-top: calc(var(--header-pad-y) + env(safe-area-inset-top));
-    padding-left: calc(20px + env(safe-area-inset-left));
-    padding-right: calc(20px + env(safe-area-inset-right));
-}
-
-@media (max-width: 768px) {
-    .header {
-        padding-left: calc(15px + env(safe-area-inset-left));
-        padding-right: calc(15px + env(safe-area-inset-right));
-    }
-}
-
-@media (max-width: 480px) {
-    .header {
-        padding-left: calc(12px + env(safe-area-inset-left));
-        padding-right: calc(12px + env(safe-area-inset-right));
-    }
+    /* --header-pad-x carries the per-breakpoint side padding the same way,
+     * so the two media queries that used to restate 15px and 12px here are
+     * gone. That restatement was not just duplication: the docked-sidebar
+     * rule in session-sidebar.css adds --header-pad-x back on top of the
+     * sidebar width, and this file wins over styles.css on load order, so
+     * a literal here would silently drift the docked toggle's gap. */
+    padding-left: calc(var(--header-pad-x) + env(safe-area-inset-left));
+    padding-right: calc(var(--header-pad-x) + env(safe-area-inset-right));
 }
 
 /* Body-level bottom inset so the last line of any screen clears the home

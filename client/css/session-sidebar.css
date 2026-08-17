@@ -4,8 +4,18 @@
  * New CSS file (not appended to the already-oversized styles.css) so
  * this feature's rules stay in one place under the 500-line project
  * convention. Uses the same design tokens defined in styles.css's
- * :root block (colors, radius, font) - no new tokens introduced.
+ * :root block (colors, radius, font). One token is introduced here,
+ * --sidebar-dock-w, because the panel's width and the offset the app
+ * makes for it when docked are the same number in two places and drifted
+ * apart the moment the docked offset needed arithmetic doing to it.
  * ===================================================================== */
+
+:root {
+    /* Width of the sliding panel, and therefore the horizontal space the
+     * app gives up when the panel is DOCKED (pinned). Single source of
+     * truth for both - see .session-sidebar-panel and the pinned block. */
+    --sidebar-dock-w: min(320px, 85vw);
+}
 
 /* ---- Hamburger toggle (top-left of the terminal screen header) ---- */
 
@@ -57,7 +67,7 @@
     top: 0;
     left: 0;
     bottom: 0;
-    width: min(320px, 85vw);
+    width: var(--sidebar-dock-w);
     background: var(--color-bg-elevated);
     border-right: 1px solid var(--color-border);
     box-shadow: 4px 0 24px var(--color-bg-overlay-soft);
@@ -81,9 +91,27 @@
  * own ResizeObserver (terminal.js), so nothing has to be told about this.
  */
 
-body.session-sidebar-pinned .header,
 body.session-sidebar-pinned .screen {
-    padding-left: min(320px, 85vw);
+    padding-left: var(--sidebar-dock-w);
+    transition: padding-left 160ms ease;
+}
+
+/* THE HEADER PAYS THE DOCK WIDTH *PLUS* ITS OWN SIDE PADDING.
+ *
+ * `.screen` can take the bare dock width because everything inside it
+ * (.terminal-container and friends) brings its own padding. The header
+ * cannot: its first child is `#session-sidebar-toggle`, which sits at the
+ * content edge with `margin-right` only. Paying the dock width alone put
+ * the toggle's left edge at exactly the docked panel's right border -
+ * measured 0px of gap at 1280px wide - so the hamburger read as glued to
+ * the bar it opens. Adding --header-pad-x restores the same breathing
+ * room the toggle has when the sidebar is closed, at every breakpoint,
+ * because both halves of the sum are now tokens.
+ *
+ * Only ever active above 700px (session-sidebar-pin.js never applies the
+ * body class below that), so there is no phone case to override. */
+body.session-sidebar-pinned .header {
+    padding-left: calc(var(--sidebar-dock-w) + var(--header-pad-x));
     transition: padding-left 160ms ease;
 }
 
