@@ -120,9 +120,13 @@ html {
 }
 
 /* Slide-over panels run the full height of the viewport, so they own both
- * the top and bottom insets themselves. */
+ * the top and bottom insets themselves. `.config-editor-picker-content`
+ * is the file DRAWER; it used to be `.config-editor-panel`, a class that
+ * stopped existing when the browser became a centred dialog, so this rule
+ * named nothing for a while. It is a full-height right-edge drawer again
+ * now (client/css/config-drawer.css) and the name is correct again. */
 .session-sidebar-panel,
-.config-editor-panel {
+.config-editor-picker-content {
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
 }

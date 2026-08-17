@@ -77,6 +77,10 @@
          style the modals that stack. -->
     <link rel="stylesheet" href="/static/css/modal-stack.css" />
     <link rel="stylesheet" href="/static/css/config-editor.css" />
+    <!-- The file browser's BOX: right-hand drawer geometry, the docked
+         (pinned) layout and the pin control. Must load AFTER
+         config-editor.css, which owns everything inside the drawer. -->
+    <link rel="stylesheet" href="/static/css/config-drawer.css" />
     <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
     <!-- Mobile header dropdown (client/js/header-menu.js) and iOS
          safe-area chrome. Both load after styles.css: the first needs the
@@ -231,14 +235,18 @@
         <div id="session-sidebar-list" class="session-sidebar-list"></div>
     </aside>
 
-    <!-- FILE EDITOR file picker - a real modal now (it used to be a
-         right-hand slide-over panel), so it and the editor that opens
-         over it are the same kind of surface. Both register with
-         client/js/modal-stack.js, which is what makes Escape close only
-         the top one and what takes this one off screen entirely on a
-         phone while the editor sits above it. Scope is the claude config
-         directories plus the active project's working directory, never a general
-         filesystem browser. See client/js/config-editor-panel.js. -->
+    <!-- FILE BROWSER - a right-hand DRAWER, and optionally a docked one.
+         It was a centred dialog covering the terminal it was about; it is
+         back to sliding in from the right edge, full height, and it can be
+         PINNED so the app pays for it in layout and the terminal narrows
+         to what is left rather than being covered (client/js/config-drawer-
+         pin.js, the same mechanism as the session sidebar's pin, docked
+         only above 700px). It still registers with client/js/modal-stack.js,
+         which is what makes Escape close only the top surface and what
+         takes this one off screen while the full-screen editor is up on a
+         phone. Scope is the claude config directories plus the active
+         project's working directory, never a general filesystem browser.
+         See client/js/config-editor-panel.js. -->
     <div class="modal-overlay config-editor-picker-overlay" id="config-editor-overlay" hidden data-modal="config-picker">
         <div class="config-editor-picker-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-title">
             <div class="modal-header config-editor-header">
@@ -250,6 +258,22 @@
                      instead. See client/js/config-editor-new-file.js. -->
                 <button type="button" id="config-editor-new" class="config-editor-new"
                         aria-label="New file" title="new file">+ new file</button>
+                <!-- Pin the DRAWER open (docked, no backdrop, the terminal
+                     narrows to what is left instead of being covered).
+                     aria-pressed carries the real state; the pushpin glyph
+                     is presentational, and is the same glyph the session
+                     sidebar's pin uses because it is the same gesture.
+                     Hidden below 700px by client/js/config-drawer-pin.js -
+                     a docked drawer on a phone leaves no terminal. -->
+                <button type="button" id="config-drawer-pin" class="config-drawer-pin"
+                        aria-pressed="false" aria-label="Pin file drawer open"
+                        title="pin file drawer open">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="12" y1="17" x2="12" y2="22"/>
+                        <path d="M5 17h14l-2-4V4H7v9l-2 4z"/>
+                    </svg>
+                </button>
                 <button type="button" id="config-editor-close" aria-label="Close file editor" title="close">&times;</button>
             </div>
             <div class="modal-body config-editor-body">
@@ -501,7 +525,16 @@
          absent" sentences. Must load BEFORE config-editor-panel.js, which
          reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
     <script src="/static/js/config-editor-roots.js"></script>
+    <!-- Which tree nodes start collapsed, and the localStorage map behind
+         it. Must load BEFORE config-editor-panel.js, which renders against
+         window.ConfigEditorTreeState. -->
+    <script src="/static/js/config-editor-tree-state.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
+    <!-- Docking the file drawer open. Must load AFTER
+         config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and
+         it is the panel's _wire() that calls init(). Same split, same
+         reasons, as session-sidebar-pin.js beside session-sidebar.js. -->
+    <script src="/static/js/config-drawer-pin.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
          (window.DismissGuard). It re-parents the existing header control

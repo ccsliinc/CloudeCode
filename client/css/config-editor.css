@@ -23,18 +23,12 @@
     display: none;
 }
 
-.config-editor-picker-content {
-    background: var(--color-bg);
-    border: 2px solid var(--color-accent);
-    border-radius: var(--radius-lg);
-    width: 94%;
-    max-width: 520px;
-    height: min(85vh, 780px);
-    height: min(85dvh, 780px);
-    display: flex;
-    flex-direction: column;
-    animation: slideUp 0.3s ease;
-}
+/* THE PICKER'S BOX IS NOT DESCRIBED HERE ANY MORE. It stopped being a
+ * centred dialog and became a right-hand DRAWER that can be pinned open,
+ * docking the app to the left of it. Its geometry, the docked layout and
+ * the pin control all live in client/css/config-drawer.css, which loads
+ * after this file. Everything below - the header row, the tree, the rows -
+ * is unchanged and is what the drawer contains. */
 
 .config-editor-header {
     display: flex;
@@ -395,13 +389,9 @@
     color: var(--color-warning);
 }
 
-@media (max-width: 700px) {
-    /* Near-fullscreen on a phone - matches the editor modal's own mobile
-     * rule in config-editor-modal.css so the two stacked surfaces are the
-     * same size and the transition between them does not jump. */
-    .config-editor-picker-content {
-        width: 98%;
-        height: 92vh;
-        height: 92dvh;
-    }
-}
+/* NO MOBILE BOX OVERRIDE HERE ANY MORE. There used to be a
+ * `@media (max-width: 700px)` block widening the picker to 98%/92dvh,
+ * back when it was a centred dialog. The drawer is full height at every
+ * width and narrows via --config-drawer-w, which config-drawer.css
+ * redefines at the same 700px. Two files describing one box is how a
+ * drawer turns back into a dialog by accident. */
