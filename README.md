@@ -223,7 +223,7 @@ Switching projects, closing the tab, losing WiFi, restarting the server — none
 | **Per-project theme pinning** | The theme is stored in a `.cc.theme` dotfile inside the project directory, so every device that opens that project gets the same look — and it survives session renames. |
 | **Drop-in custom themes** | Author a `theme.json` in the user themes directory and it's discovered live on the next `GET /themes`. No rebuild. |
 | **Live theme swap** | Changing themes re-palettes the running terminal instantly. No reconnect, no re-render of the session. |
-| **Ambient theme audio (capability)** | The theme format supports an `audio` block with Web Audio crossfade, muted by default and only initialized on a real user click. It ships **dormant** — no bundled theme uses it. |
+| **Ambient theme music** | Themes carry an `audio` block played through a Web Audio crossfade. It is off until you turn it on: "play music" in a session's editor menu is the only on/off, it is remembered per session, and nothing plays on the home screen. Settings > general has one global **music volume** — an attenuator only, floored at 35% so it can never be a second, silent way to switch sound off. |
 | **Reduced-motion respected** | `prefers-reduced-motion: reduce` is honored. |
 
 ### Native macOS app and ops

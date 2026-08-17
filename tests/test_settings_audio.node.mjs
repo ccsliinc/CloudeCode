@@ -315,6 +315,17 @@ test('TOUCH: the hit area clears 44px and the thumb is thumb-sized', () => {
     }
 });
 
+test('the 500-line budget still holds for every file this touched', () => {
+    // themeAudio.js sat at 499 lines before this feature. Growing it was
+    // what forced the master gain out into themeAudioVolume.js, and the
+    // budget is the thing that keeps forcing that choice.
+    for (const f of ['themeAudio.js', 'themeAudioSettings.js',
+        'themeAudioVolume.js', 'settings-audio.js', 'settings-panel.js']) {
+        const lines = repoFile('client', 'js', f).split('\n').length;
+        assert.ok(lines <= 500, `${f} is ${lines} lines, over the 500 budget`);
+    }
+});
+
 test('both assets are served, in an order that works', () => {
     const html = repoFile('client', 'index.html');
     assert.ok(/css\/settings-audio\.css/.test(html), 'the stylesheet is not linked');
@@ -324,6 +335,9 @@ test('both assets are served, in an order that works', () => {
     const tag = (name) => html.indexOf(`<script src="/static/js/${name}"></script>`);
     const js = tag('settings-audio.js');
     const engine = tag('themeAudio.js');
+    const volume = tag('themeAudioVolume.js');
+    assert.ok(volume > 0 && volume < engine,
+        'themeAudioVolume.js must load before the engine that delegates to it');
     const panel = tag('settings-panel.js');
     assert.ok(js > 0 && engine > 0 && panel > 0, 'a script tag is missing');
     assert.ok(engine < js, 'settings-audio.js reads window.ThemeAudio at render time');

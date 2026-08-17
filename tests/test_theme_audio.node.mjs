@@ -156,6 +156,7 @@ function loadModules(seedStore) {
     const ctx = vm.createContext(win);
     vm.runInContext(clientJs('themeAudioNode.js'), ctx);
     vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
+    vm.runInContext(clientJs('themeAudioVolume.js'), ctx);
     vm.runInContext(clientJs('themeAudio.js'), ctx);
     return { win, els, store };
 }
@@ -439,7 +440,7 @@ test('no code path reads the retired mute key any more', () => {
     // unwritable (Safari private mode makes removeItem a no-op).
     for (const f of ['themeAudio.js', 'themeAudioSettings.js',
         'themeAudioNode.js', 'themeAudioStatus.js', 'session-theme-menu.js',
-        'settings-audio.js']) {
+        'themeAudioVolume.js', 'settings-audio.js']) {
         const src = fs.readFileSync(
             path.join(__dirname, '..', 'client', 'js', f), 'utf8');
         assert.ok(!/getItem\(\s*LS_MUTED/.test(src), `${f} still reads LS_MUTED`);
@@ -571,6 +572,7 @@ function loadModulesWebAudio() {
     const ctx = vm.createContext(win);
     vm.runInContext(clientJs('themeAudioNode.js'), ctx);
     vm.runInContext(clientJs('themeAudioSettings.js'), ctx);
+    vm.runInContext(clientJs('themeAudioVolume.js'), ctx);
     vm.runInContext(clientJs('themeAudio.js'), ctx);
     return { win, els, gains };
 }

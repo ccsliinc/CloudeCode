@@ -42,11 +42,9 @@
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
  * from the themes registry, setSessionAudio(name, on) / isSessionEnabled() /
  * getSessionName() for the gate, isMuted(), getLastPlayError(), getStatus()
- * for diagnosis, getVolume()/setVolume()/getMinVolume() for the master
- * gain, which the settings panel's volume slider drives
- * (client/js/settings-audio.js). That master is an ATTENUATOR ONLY: it is
- * floored above zero and cannot silence anything, because the per-session
- * music control is the only on/off this feature has.
+ * for diagnosis, and getVolume()/setVolume()/getMinVolume(), which the
+ * settings slider (settings-audio.js) drives and themeAudioVolume.js
+ * owns - an ATTENUATOR, floored above zero, never an on/off.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
  * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
@@ -82,12 +80,8 @@
     }
 
     var Settings = window.ThemeAudioSettings;
-
-    // The user's master gain. Defaults to unity: the per-theme volume in
-    // the manifest is the ONLY attenuation in the normal path, so the two
-    // numbers cannot quietly multiply each other into silence.
-    var DEFAULT_MASTER_VOLUME = Settings.DEFAULT_MASTER_VOLUME;
-
+    // The master gain: unity by default, floored, never an on/off.
+    var Volume = window.ThemeAudioVolume;
     // ---- State ----
     var initialized = false;
     // The session in scope, or null on the home screen. In-memory:
@@ -98,7 +92,6 @@
     var sessionOn = false;
     // Derived from the gate below — never assigned directly.
     var muted = true;
-    var globalVolume = DEFAULT_MASTER_VOLUME; // 0..1; multiplied with per-theme volume
     var currentConfig = null;          // last audioConfig passed to setTheme()
 
     // Current playback node. The node shape and the choice of engine
@@ -258,7 +251,7 @@
     // ---- Effective volume helpers ----
     function _effectiveTarget(node) {
         if (!node) return 0;
-        return node.targetVolume * globalVolume;
+        return node.targetVolume * Volume.get();
     }
 
     // ---- Play / pause primitives (respect muted + autoplay grant) ----
@@ -413,7 +406,7 @@
             sessionName: sessionName,
             sessionOn: _gateOpen(),
             muted: muted,
-            masterVolume: globalVolume,
+            masterVolume: Volume.get(),
             hidden: typeof document !== 'undefined' && !!document.hidden,
             hasTrack: !!(currentConfig && currentConfig.src),
             playError: Node ? Node.getLastPlayError() : null,
@@ -423,44 +416,26 @@
                 ? Node.snapshot(currentNode) : null
         };
     }
+    /** @returns {number} the master gain, the floor..1. */
+    function getVolume() { return Volume.get(); }
     /**
-     * The master gain applied on top of every theme's manifest volume.
+     * Set, persist and immediately APPLY the master gain: a volume that
+     * needed a restart to be heard would be this feature's silent-failure
+     * shape all over again. Clamped into the usable band, never to zero.
      *
-     * @returns {number} MIN_MASTER_VOLUME..1.
-     */
-    function getVolume() { return globalVolume; }
-
-    /**
-     * Set the master gain, persist it, and APPLY IT LIVE to whatever is
-     * playing - a volume control that needs a restart to be heard is the
-     * same silent-failure shape as the rest of this feature's history.
-     *
-     * Clamped to [MIN_MASTER_VOLUME, 1], never to zero: a master of zero
-     * is a mute, and the per-session music control is the only on/off in
-     * this app. The stored value and the in-memory one are the same
-     * number by construction, so a reload cannot surprise anyone.
-     *
-     * @param {number} v - requested gain; clamped into the usable band.
+     * @param {number} v - requested gain.
      * @returns {number} the gain actually applied.
      */
     function setVolume(v) {
-        var clamped = Settings.clampVolume(parseFloat(v));
-        globalVolume = clamped;
-        Settings.writeVolume(localStorage, clamped);
-        if (currentNode && !muted && !document.hidden) {
-            window.ThemeAudioNode.ramp(currentNode, _effectiveTarget(currentNode), 200, _ctx());
-        }
-        return clamped;
+        return Volume.set(v, localStorage, function () {
+            if (currentNode && !muted && !document.hidden) {
+                window.ThemeAudioNode.ramp(
+                    currentNode, _effectiveTarget(currentNode), 200, _ctx());
+            }
+        });
     }
-
-    /**
-     * The lowest gain setVolume() will apply. Exposed so the settings
-     * control renders the same floor the engine enforces rather than
-     * hardcoding a second copy of the number.
-     *
-     * @returns {number} 0..1.
-     */
-    function getMinVolume() { return Settings.MIN_MASTER_VOLUME; }
+    /** @returns {number} the lowest gain setVolume() will apply, 0..1. */
+    function getMinVolume() { return Volume.min(); }
 
     // ---- Page Visibility ----
     function _onVisibilityChange() {
@@ -496,25 +471,16 @@
         if (initialized) return;
         initialized = true;
 
-        var m = Settings.migrate(localStorage);
-        if (m.migrated) {
-            console.log('ThemeAudio: migrated settings v' + m.fromVersion +
-                ' -> v' + Settings.SETTINGS_VERSION +
-                (m.clearedVolume === null
-                    ? ''
-                    : ' (dropped stale master volume ' + m.clearedVolume + ')') +
-                (m.clearedMute === null
-                    ? ''
-                    : ' (dropped retired app sound mute ' + m.clearedMute + ')'));
-        }
+        var summary = Settings.migrationSummary(Settings.migrate(localStorage));
+        if (summary) console.log(summary);
 
-        globalVolume = Settings.readVolume(localStorage);
+        Volume.init(localStorage);
         muted = !_gateOpen();
 
         document.addEventListener('visibilitychange', _onVisibilityChange);
         console.log('ThemeAudio: initialized - session=' + sessionName +
             ' sessionOn=' + sessionOn + ' muted=' + muted +
-            ' volume=' + globalVolume);
+            ' volume=' + Volume.get());
     }
 
     window.ThemeAudio = {

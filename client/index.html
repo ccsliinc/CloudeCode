@@ -398,6 +398,10 @@
          calls into window.ThemeAudioNode and window.ThemeAudioSettings. -->
     <script src="/static/js/themeAudioNode.js"></script>
     <script src="/static/js/themeAudioSettings.js"></script>
+    <!-- themeAudioVolume.js owns the master gain, its floor and its
+         live-apply hook. AFTER themeAudioSettings.js (it reads the floor
+         and the persistence contract), BEFORE themeAudio.js. -->
+    <script src="/static/js/themeAudioVolume.js"></script>
     <script src="/static/js/themeAudio.js"></script>
     <!-- themeAudioStatus.js reads window.ThemeAudio.getStatus(), so it loads
          AFTER themeAudio.js. It is what makes a silent failure speak: the

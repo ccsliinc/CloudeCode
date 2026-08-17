@@ -271,6 +271,26 @@
     }
 
     /**
+     * One log line describing what a migrate() result discarded. Lives
+     * here rather than at the call site because only this module knows
+     * what each cleared key meant.
+     *
+     * @param {object} m - a migrate() result.
+     * @returns {string|null} the line, or null when nothing migrated.
+     */
+    function migrationSummary(m) {
+        if (!m || !m.migrated) return null;
+        return 'ThemeAudio: migrated settings v' + m.fromVersion +
+            ' -> v' + SETTINGS_VERSION +
+            (m.clearedVolume === null
+                ? ''
+                : ' (dropped stale master volume ' + m.clearedVolume + ')') +
+            (m.clearedMute === null
+                ? ''
+                : ' (dropped retired app sound mute ' + m.clearedMute + ')');
+    }
+
+    /**
      * Clamp a gain into the usable band [MIN_MASTER_VOLUME, 1].
      *
      * Clamping UP is the point: a stored 0 is silence with no error, and
@@ -359,6 +379,7 @@
         clampVolume: clampVolume,
         readVersion: readVersion,
         migrate: migrate,
+        migrationSummary: migrationSummary,
         readVolume: readVolume,
         writeVolume: writeVolume
     };
