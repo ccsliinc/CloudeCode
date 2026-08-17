@@ -1384,10 +1384,12 @@ class Terminal {
             }
 
             this.updateStatus('Connected', 'connected');
-
-            if (this.term) {
-                this.term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
-            }
+            // NOT a term.writeln. Client-authored status is UI: writing it
+            // into the pane buffer strands it mid-screen on every
+            // reconnect (see handleWebSocketMessage). The status light
+            // above carries the state; the server's own welcome frame
+            // arrives immediately after and raises the notice, so raising
+            // a second one here would only double it.
 
             // v0.7.0 Part 2 — backfill any unacked toasts for THIS session
             // that fired while this browser was disconnected. Fire-and-forget;
@@ -1486,9 +1488,8 @@ class Terminal {
                 return;
             }
 
-            if (this.term) {
-                this.term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
-            }
+            this.updateStatus('Disconnected', 'error');
+            this._showStatusPill('disconnected', 'error');
 
             // Auth-fail close from server (src/api/websocket.py — code 4401
             // is emitted when JWT verification fails on the WS handshake or
@@ -1551,30 +1552,39 @@ class Terminal {
     }
 
     /**
-     * Handle WebSocket messages
+     * Handle WebSocket messages.
+     *
+     * THE XTERM BUFFER CARRIES PANE BYTES ONLY. Every client-authored
+     * status line here used to be a `term.writeln`, which put app chrome
+     * into the same buffer the pane paints into. On the alternate screen
+     * (claude's `tui: fullscreen`) that scrolls claude's layout by a row
+     * and strands the text mid-screen until the next full redraw, which
+     * is what a reconnect looks like on a phone. Status now goes to the
+     * header status affordance (updateStatus) and the shared notice
+     * (_showStatusPill); nothing is dropped, it just stops interleaving.
+     *
+     * @param {{type: string, content?: string, message?: string,
+     *   url?: string, port?: number}} message - a decoded WS frame.
+     * @returns {void}
      */
     handleWebSocketMessage(message) {
         const type = message.type;
 
         if (type === 'log') {
-            if (this.term && message.content) {
-                this.term.writeln(`\x1b[1;33m${message.content}\x1b[0m`);
-            }
+            if (message.content) this._showStatusPill(message.content, 'info');
         } else if (type === 'local_server_detected') {
             // Plan v3.2 — A dev server was detected on the host and
             // confirmed as a live TCP listener. Merge into local state
             // and re-render.
-            if (this.term && message.url) {
-                this.term.writeln(`\x1b[1;36m[Local server detected: ${message.url}]\x1b[0m`);
+            if (message.url) {
+                this._showStatusPill(`local server detected: ${message.url}`, 'info');
             }
             this._mergeLocalServer({ port: message.port, url: message.url });
         } else if (type === 'local_server_lost') {
             // The janitor sweep stopped seeing this listener — drop it.
             this._dropLocalServer(message.port);
         } else if (type === 'error') {
-            if (this.term) {
-                this.term.writeln(`\x1b[1;31m[Error: ${message.message}]\x1b[0m`);
-            }
+            this._showStatusPill(`error: ${message.message}`, 'error');
         } else if (type === 'pong') {
             console.log('Terminal: Received pong');
         } else if (type === 'toast.new') {
@@ -1658,9 +1668,8 @@ class Terminal {
             if (this.reconnectAttempts >= this.maxReconnectAttempts) {
                 console.log('Terminal: Max reconnect attempts reached');
                 this.updateStatus('Connection failed', 'error');
-                if (this.term) {
-                    this.term.writeln('\n\x1b[1;31m[Reconnection failed after ' + this.maxReconnectAttempts + ' attempts]\x1b[0m');
-                }
+                this._showStatusPill(
+                    `reconnection failed after ${this.maxReconnectAttempts} attempts`, 'error');
             }
             this.stopReconnecting();
             return;
@@ -1674,9 +1683,8 @@ class Terminal {
         console.log(`Terminal: Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
         this.updateStatus('Reconnecting...');
 
-        if (this.term) {
-            this.term.writeln(`\n\x1b[1;33m[Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}]\x1b[0m`);
-        }
+        this._showStatusPill(
+            `reconnecting, attempt ${this.reconnectAttempts} of ${this.maxReconnectAttempts}`, 'info');
 
         this.reconnectTimeout = setTimeout(() => {
             this.connectWebSocket();
@@ -1746,9 +1754,7 @@ class Terminal {
 
         this.isReconnecting = true;
         this.updateStatus('Reconnecting...');
-        if (this.term) {
-            this.term.writeln('\n\x1b[1;33m[Connection restored, looking up session by name...]\x1b[0m');
-        }
+        this._showStatusPill('connection restored, looking up session by name', 'info');
 
         let stillAlive = false;
         try {
@@ -1789,9 +1795,8 @@ class Terminal {
             this.sessionActive = false;
             this.stopReconnecting();
             this.updateStatus('Session ended', 'error');
-            if (this.term) {
-                this.term.writeln('\x1b[1;31m[Session no longer exists — start a new one from the launchpad]\x1b[0m');
-            }
+            this._showStatusPill(
+                'session no longer exists, start a new one from the launchpad', 'error');
             window.dispatchEvent(new CustomEvent('session-destroyed'));
             return;
         }
@@ -1943,15 +1948,13 @@ class Terminal {
             if (offlineAtClose) {
                 console.log('Terminal: this client is offline, waiting for the network');
                 this.updateStatus(status.OFFLINE);
-                if (this.term) {
-                    this.term.writeln('\n\x1b[1;33m[no network connection on this device, waiting for it to come back...]\x1b[0m');
-                }
+                this._showStatusPill(
+                    'no network connection on this device, waiting for it to come back', 'info');
             } else {
                 console.log('Terminal: no answer from the server, waiting for it to become reachable');
                 this.updateStatus(status.WAITING);
-                if (this.term) {
-                    this.term.writeln('\n\x1b[1;33m[no answer from the server, it may be restarting or unreachable. waiting...]\x1b[0m');
-                }
+                this._showStatusPill(
+                    'no answer from the server, it may be restarting or unreachable, waiting', 'info');
             }
 
             // Track which banner is showing so a transition (wifi comes
@@ -1965,11 +1968,11 @@ class Terminal {
                         showingOffline = clientOffline;
                         this.updateStatus(clientOffline ? status.OFFLINE : status.WAITING);
                     }
-                    if (attempt > 1 && attempt % 5 === 0 && this.term) {
+                    if (attempt > 1 && attempt % 5 === 0) {
                         const secs = Math.round(elapsedMs / 1000);
-                        this.term.writeln(clientOffline
-                            ? '\x1b[1;33m[still no network connection on this device]\x1b[0m'
-                            : `\x1b[1;33m[still no answer from the server, ${secs}s]\x1b[0m`);
+                        this._showStatusPill(clientOffline
+                            ? 'still no network connection on this device'
+                            : `still no answer from the server, ${secs}s`, 'info');
                     }
                 },
             });
@@ -1991,9 +1994,7 @@ class Terminal {
             console.warn('Terminal: server stayed unreachable through the watch ceiling');
             this.stopReconnecting();
             this.updateStatus(status.UNREACHABLE, 'error');
-            if (this.term) {
-                this.term.writeln('\n\x1b[1;31m[still cannot reach the server, reload once it is back]\x1b[0m');
-            }
+            this._showStatusPill('still cannot reach the server, reload once it is back', 'error');
             return;
         }
 
@@ -2050,9 +2051,7 @@ class Terminal {
         }
         if (refreshed === 'network-error') {
             console.warn('Terminal: refresh network error after 4401, short-delay retry');
-            if (this.term) {
-                this.term.writeln('\x1b[1;33m[Network blip — retrying in 4s]\x1b[0m');
-            }
+            this._showStatusPill('network blip, retrying in 4s', 'info');
             if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = setTimeout(() => {
                 this.reconnectTimeout = null;

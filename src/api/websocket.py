@@ -279,7 +279,10 @@ async def websocket_terminal(websocket: WebSocket):
     try:
         welcome_msg = {
             "type": "log",
-            "content": "[SYSTEM] WebSocket connected - PTY terminal ready",
+            # Lowercase and unbracketed: this is rendered as a UI notice
+            # now, not written into the xterm buffer, so it no longer
+            # needs to look like a terminal banner.
+            "content": "websocket connected, pty terminal ready",
             "timestamp": datetime.utcnow().isoformat()
         }
         await websocket.send_text(json.dumps(welcome_msg))
