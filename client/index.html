@@ -379,6 +379,14 @@
          payload as a request to go back to the live bottom. Under claude's
          `?1003h` any-event tracking, plain pointer motion arrives here. -->
     <script src="/static/js/terminal-input-kind.js"></script>
+    <!-- Forces local selection instead of forwarding a mousedown when the
+         app owns the mouse and the view is scrolled away from the live
+         bottom (a forwarded report cannot mean what the app thinks it
+         means there). Must load BEFORE terminal.js, which wires it from
+         initTerminal() via _applySelectWhileScrolled(), and reads
+         window.TerminalScroll.isPinnedToBottom() so it must load AFTER
+         terminal-scroll.js above. -->
+    <script src="/static/js/terminal-select-scrolled.js"></script>
     <!-- Alternate-screen scrollback (claude's `tui: fullscreen`, where the
          terminal has no scrollback at all). Must load BEFORE terminal.js,
          which wires it in setupScrollListener(), and terminal-scroll.js
