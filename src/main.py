@@ -17,7 +17,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from src.config import settings
+from src.config import settings, StateDirUnavailableError
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
@@ -36,6 +36,54 @@ from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
 from src.api.config_files_routes import router as config_files_router
 from src.api.status_routes import router as status_router
+
+# feat/state-directory - resolve (and, if needed, create) the app's state
+# directory ONCE at module load, before anything that depends on it is
+# constructed. This is deliberately NOT deferred to lifespan(): a server
+# that cannot write its own state must never bind a port and accept
+# traffic that looks live but cannot actually persist a session, a
+# refresh token, or a theme pin. Mirrors the exact fatal-startup-error
+# convention already used by src/config.py's own `Settings()` construction
+# below - a clear banner to stderr (captured by the Electron app's own
+# logs, which is what actually shows the user a startup failure - this
+# app has no server-rendered "error page" route), a copy written to a
+# throwaway diagnostic log for local debugging, then a hard, immediate
+# process exit. This is intentionally NOT a silent fallback to /tmp and
+# NOT an unhandled traceback - it is a named, described failure.
+try:
+    settings.get_state_dir()
+except StateDirUnavailableError as exc:
+    import sys as _sys
+
+    _banner = f"""
+========================================
+CLOUDE CODE - STATE DIRECTORY ERROR
+========================================
+
+{exc}
+
+The server refuses to start rather than write your session data,
+pinned themes, unread flags, or refresh tokens somewhere you did not
+choose (or silently drop them in a temp directory that macOS purges on
+reboot).
+
+To fix:
+1. Make the target directory writable, or
+2. Set CLOUDE_STATE_DIR in .env to a writable path, then restart.
+========================================
+"""
+    print(_banner, file=_sys.stderr)
+    _error_log = Path("/tmp/cloude-code-startup-error.log")
+    try:
+        with open(_error_log, "w") as _f:
+            _f.write(_banner)
+        print(f"\nError details written to: {_error_log}", file=_sys.stderr)
+    except OSError:
+        # Diagnostic-log write is best-effort - never mask the real
+        # error, and never crash differently because /tmp itself is
+        # unwritable too.
+        pass
+    _sys.exit(1)
 
 # Configure structlog
 structlog.configure(
@@ -154,10 +202,15 @@ async def lifespan(app: FastAPI):
     # callback registry is populated before pattern matches start firing).
     await log_monitor.start_monitoring()
 
-    # Item 5: refresh-token revocation store. Lives in the existing state
-    # directory (log_directory) so it rides along with the rest of the
-    # app's persistent state. Must be up BEFORE any request can hit
+    # Item 5: refresh-token revocation store. Lives in the app's state
+    # directory (feat/state-directory - see Settings.get_state_dir(),
+    # ~/Library/Application Support/CloudeCode by default, overridable
+    # via CLOUDE_STATE_DIR) so it rides along with the rest of the app's
+    # persistent state. Must be up BEFORE any request can hit
     # /auth/verify - which in practice means before the yield below.
+    # get_state_dir() has already run once at module load time (see the
+    # top of this file) and would have exited the process on failure, so
+    # this call is expected to succeed - it re-resolves the same path.
     log_dir = settings.get_log_dir()
     db_path = str(log_dir / "refresh_tokens.db")
     refresh_store = RefreshStore(db_path)

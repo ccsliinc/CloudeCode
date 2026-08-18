@@ -21,6 +21,10 @@ from pathlib import Path
 
 os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_dump_wd_"))
 os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_dump_logs_"))
+# feat/state-directory - keep this hermetic. Without it, any code path
+# that reaches Settings.get_state_dir() would create/write into the real
+# ~/Library/Application Support/CloudeCode on the machine running this.
+os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_dump_state_"))
 os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
 os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 

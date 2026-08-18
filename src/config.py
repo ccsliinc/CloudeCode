@@ -294,6 +294,32 @@ class AuthRateLimits(BaseModel):
     trust_proxy_headers: bool = False
 
 
+class StateDirUnavailableError(RuntimeError):
+    """Raised when the resolved state directory cannot be created.
+
+    Description: named, catchable failure for ``Settings.get_state_dir()``.
+      A server that cannot create its own state directory must refuse to
+      start with a clear message, never silently fall back to a temp
+      directory and never surface as an opaque unhandled traceback. See
+      ``src/main.py``'s module-level call to ``get_state_dir()`` for how
+      this is turned into a startup-failure message the user sees.
+    Inputs: path (Path) - the directory ``get_state_dir()`` tried to
+      create. cause (OSError) - the underlying filesystem error.
+    Output: exception instance whose message names both the path and the
+      original OS error.
+    """
+
+    def __init__(self, path: Path, cause: OSError) -> None:
+        self.path = path
+        self.cause = cause
+        super().__init__(
+            f"CloudeCode state directory unavailable: could not create "
+            f"'{path}' ({cause.__class__.__name__}: {cause}). Set "
+            f"CLOUDE_STATE_DIR to a writable path and restart. Refusing "
+            f"to fall back to a temp directory for state you depend on."
+        )
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     # feat/launch-wrappers - schema/migration marker. Absent from every
@@ -376,7 +402,25 @@ class Settings(BaseSettings):
     # Logging Configuration
     log_buffer_size: int = 1000  # lines to keep in memory
     log_file_retention: int = 7  # days
-    log_directory: str  # Required in .env
+    # LEGACY (feat/state-directory) - no longer the write target for
+    # application state. See get_state_dir(). Optional now: a fresh
+    # install never needs to set this. Kept ONLY as the "old location"
+    # fallback for the three name-keyed JSON state files
+    # (session_metadata.json / pinned_themes.json / unread_state.json)
+    # so an existing pre-feat/state-directory install keeps working
+    # without a manual migration step.
+    log_directory: Optional[str] = None
+
+    # State directory override (feat/state-directory). When set, this is
+    # the ONE source of truth for where CloudeCode's durable state lives
+    # (session/pinned-theme/unread JSON, refresh_tokens.db, and the
+    # upcoming cloude.db) - see get_state_dir(). When unset, the default
+    # is the macOS-native ``~/Library/Application Support/CloudeCode``.
+    # Same env var name and identical precedence must be honored by
+    # scripts/upgrade_lib/upgrade_rollback_common.sh's resolve_state_dir()
+    # - see tests/test_state_dir_drift.py, the test that keeps the two
+    # resolvers from drifting apart.
+    state_dir_override: Optional[str] = Field(default=None, alias="CLOUDE_STATE_DIR")
 
     # Security Configuration
     api_key: Optional[str] = None
@@ -481,15 +525,120 @@ class Settings(BaseSettings):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def get_log_dir(self) -> Path:
-        """Get the absolute path for the log directory."""
-        path = Path(self.log_directory).expanduser()
-        path.mkdir(parents=True, exist_ok=True)
+    def get_state_dir(self) -> Path:
+        """Resolve and ensure the application's durable state directory.
+
+        Description: single source of truth for where CloudeCode's
+          durable state lives - session_metadata.json, pinned_themes.json,
+          unread_state.json, refresh_tokens.db, agent_wrapper_scripts/,
+          per-session tmux log files, and the upcoming cloude.db. Replaces
+          the old default of putting state under ``log_directory``, whose
+          ``.env.example`` default was ``/tmp/cloude-code-logs`` - a
+          directory macOS purges on every reboot, which is exactly wrong
+          for data the user depends on.
+
+          Resolution precedence (must match ``resolve_state_dir()`` in
+          ``scripts/upgrade_lib/upgrade_rollback_common.sh``
+          BYTE-FOR-BYTE - see ``tests/test_state_dir_drift.py``, the test
+          that keeps the two resolvers from drifting apart):
+
+            1. ``CLOUDE_STATE_DIR`` env var (or ``.env`` entry) if set to
+               a non-empty value - operator override, trusted verbatim
+               after ``~`` expansion.
+            2. ``~/Library/Application Support/CloudeCode`` - the
+               macOS-native default location for a per-user application's
+               durable state.
+
+          This directory is a DIFFERENT directory from
+          ``~/Library/Application Support/cloude-code-menubar/`` (see
+          ``_resolve_user_themes_dir()`` in ``src/main.py``) - that one
+          belongs to the separate menubar helper app/component and holds
+          only user-authored theme assets. The two must never be merged;
+          they belong to different components with different lifecycles.
+        Inputs: none (reads ``self.state_dir_override``).
+        Output: Path - the resolved, existing, writable state directory.
+        Raises: StateDirUnavailableError - the directory does not exist
+          and could not be created (permission denied, read-only volume,
+          a path component that is a plain file, etc). This method NEVER
+          silently substitutes a temp directory; the caller must treat
+          the exception as fatal and surface it to the user - see
+          ``src/main.py``'s module-level call to this method.
+        """
+        raw = self.state_dir_override
+        if raw:
+            path = Path(raw).expanduser()
+        else:
+            path = Path.home() / "Library" / "Application Support" / "CloudeCode"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StateDirUnavailableError(path, exc) from exc
         return path
 
+    def get_log_dir(self) -> Path:
+        """Get the absolute path for the application's state directory.
+
+        LEGACY name, kept for the many existing callers (RefreshStore db
+        placement, tmux pane log files, wrapper scripts dir). As of
+        feat/state-directory this is simply an alias for
+        ``get_state_dir()`` - see that method for the resolution
+        precedence and the failure contract.
+        """
+        return self.get_state_dir()
+
+    def _resolve_state_file(self, filename: str) -> Path:
+        """Resolve one name-keyed JSON state file, old-location fallback.
+
+        Description: implements the migration contract for the three
+          JSON files that predate ``get_state_dir()`` -
+          session_metadata.json, pinned_themes.json, unread_state.json.
+          Three-outcome precedence:
+
+            1. The file exists in BOTH the new state dir and the old
+               ``log_directory`` location - ambiguous. Logged as a
+               warning naming both paths; the NEW path is preferred and
+               returned; the OLD file is left on disk, NEVER deleted by
+               this method.
+            2. The file exists only in the new location - use it.
+            3. The file exists only in the old location (``log_directory``
+               is set and the file is there) - use it, so an existing
+               pre-feat/state-directory install keeps working without a
+               manual migration step.
+            4. The file exists in neither - return the new-location path
+               (where a caller creating the file for the first time will
+               write it).
+        Inputs: filename (str) - bare filename, e.g. "pinned_themes.json".
+        Output: Path - the file path callers should read from / write to.
+        """
+        new_path = self.get_state_dir() / filename
+        old_dir = self.log_directory
+        if not old_dir:
+            return new_path
+        old_path = Path(old_dir).expanduser() / filename
+        new_exists = new_path.exists()
+        old_exists = old_path.exists()
+        if new_exists and old_exists:
+            import structlog
+            structlog.get_logger().warning(
+                "state_file_present_in_both_locations",
+                filename=filename,
+                using=str(new_path),
+                old_path_retained=str(old_path),
+            )
+            return new_path
+        if new_exists:
+            return new_path
+        if old_exists:
+            return old_path
+        return new_path
+
     def get_session_metadata_path(self) -> Path:
-        """Get the path for session metadata JSON file."""
-        return Path(self.log_directory).expanduser() / "session_metadata.json"
+        """Get the path for session metadata JSON file.
+
+        Reads from the new state dir with a fallback to the old
+        ``log_directory`` location - see ``_resolve_state_file()``.
+        """
+        return self._resolve_state_file("session_metadata.json")
 
     def get_pinned_themes_path(self) -> Path:
         """Path for the per-tmux-session pinned-theme map.
@@ -501,8 +650,11 @@ class Settings(BaseSettings):
         the full detach → swap → re-adopt round-trip; it is pruned only
         when a session is explicitly destroyed (X button) or its tmux
         session disappears at startup-reconciliation time.
+
+        Reads from the new state dir with a fallback to the old
+        ``log_directory`` location - see ``_resolve_state_file()``.
         """
-        return Path(self.log_directory).expanduser() / "pinned_themes.json"
+        return self._resolve_state_file("pinned_themes.json")
 
     def get_unread_state_path(self) -> Path:
         """Path for the per-tmux-session read/unread map.
@@ -518,8 +670,11 @@ class Settings(BaseSettings):
         mark-unread control and is NOT cleared by viewing. Pruned the same
         way as pinned themes: on explicit destroy, or when the tmux session
         is gone at startup-reconciliation time.
+
+        Reads from the new state dir with a fallback to the old
+        ``log_directory`` location - see ``_resolve_state_file()``.
         """
-        return Path(self.log_directory).expanduser() / "unread_state.json"
+        return self._resolve_state_file("unread_state.json")
 
     def get_claude_cli_path(self) -> str:
         """
@@ -649,7 +804,7 @@ class Settings(BaseSettings):
             wrappers_for_family(agents.wrappers, family.name)
         )
         if chosen is not None:
-            scripts_dir = wrapper_scripts_dir(self.log_directory)
+            scripts_dir = wrapper_scripts_dir(str(self.get_state_dir()))
             # A wrapper that does not consume a model id must NEVER be
             # handed one: it forwards "$@" to the CLI, so the model would
             # arrive as a prompt argument and Claude would answer the

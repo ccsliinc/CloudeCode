@@ -25,6 +25,7 @@ import pytest
 # ---- env bootstrap so pydantic Settings doesn't sys.exit(1) -----------
 os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_ios_wd_"))
 os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_ios_logs_"))
+os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_ios_state_"))
 os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
 os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
