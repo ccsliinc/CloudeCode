@@ -110,6 +110,17 @@
          the last of the app stylesheets: it competes at equal specificity
          with the row backgrounds in styles.css and session-sidebar.css, so
          source order is what decides whether the wash survives a hover. -->
+    <!-- Read-only conversation archive viewer. Loads after styles.css for
+         the theme custom properties it reuses; it defines no tokens of its
+         own so the viewer follows whatever theme is active. Order against
+         session-theme-tint.css is irrelevant - the two share no selector.
+         -->
+    <link rel="stylesheet" href="/static/css/history.css" />
+    <!-- The thread layout itself. MUST load after history.css: its rules
+         and that file's desktop media query compete at equal specificity,
+         so source order decides. -->
+    <link rel="stylesheet" href="/static/css/history-thread.css" />
+
     <link rel="stylesheet" href="/static/css/session-theme-tint.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
@@ -437,6 +448,34 @@
          it, and it degrades to today's plain row while the registry is
          still fetching. -->
     <script src="/static/js/session-theme-tint.js"></script>
+    <!-- Read-only conversation archive viewer. Four modules, and the load
+         order between them is a real dependency chain rather than a
+         preference: each captures the previous one's window global at IIFE
+         evaluation time.
+
+           history-model.js   paging arithmetic and formatting. No DOM,
+                              no fetch, depends on nothing.
+           history-nodes.js   what a row IS (bubble, chip, divider, note).
+                              Captures window.HistoryModel.
+           history-api.js     the six GET endpoints and the three-outcome
+                              envelope. Depends on window.API.
+           history-render.js  DOM builders. Captures Model and Nodes.
+           history-thread.js  the thread view. Captures all of the above.
+           history.js         the three-level browser and the entry point.
+                              Captures Render/Api and calls HistoryThread.
+
+         All six must load BEFORE launchpad.js, whose wireHistoryButton()
+         checks for window.HistoryView and disables the home-bar control
+         when it is absent, and before router.js's initRouter() runs at the
+         bottom of this file, which routes /history straight into
+         HistoryView.applyRoute() on a cold load. -->
+    <script src="/static/js/history-model.js"></script>
+    <script src="/static/js/history-nodes.js"></script>
+    <script src="/static/js/history-api.js"></script>
+    <script src="/static/js/history-render.js"></script>
+    <script src="/static/js/history-thread.js"></script>
+    <script src="/static/js/history.js"></script>
+
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

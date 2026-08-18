@@ -1258,6 +1258,20 @@ class Launchpad {
                         <path d="M13 8c0-.38-.04-.75-.12-1.1l1.34-.98-1.5-2.6-1.55.62a5.05 5.05 0 0 0-1.9-1.1L9.05 1h-3l-.22 1.84c-.7.24-1.35.62-1.9 1.1l-1.55-.62-1.5 2.6 1.34.98a5.1 5.1 0 0 0 0 2.2l-1.34.98 1.5 2.6 1.55-.62c.55.48 1.2.86 1.9 1.1L6.05 15h3l.22-1.84c.7-.24 1.35-.62 1.9-1.1l1.55.62 1.5-2.6-1.34-.98c.08-.35.12-.72.12-1.1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                     </svg>
                 </button>
+                <!-- Read-only conversation archive (client/js/history.js).
+                     Sits next to server controls because both are "look at
+                     the state of things" rather than "do something to a
+                     session". It is wired by wireHistoryButton() below and
+                     is DISABLED, with a reason in its title, when the
+                     viewer module did not load - never left as a control
+                     that silently does nothing. -->
+                <button type="button" id="history-btn" class="home-bar__btn"
+                        aria-label="conversation archive" title="conversation archive">
+                    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M2.5 3.5h11v7a1.5 1.5 0 0 1-1.5 1.5H5l-2.5 2v-11Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                        <path d="M5.5 6.5h5M5.5 9h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
                 <!-- Connection light, LEFT group. The dot itself is NOT in
                      this markup on purpose: this is a MOUNT POINT, not a
                      copy. The one #statusText node lives in the header on
@@ -1290,6 +1304,7 @@ class Launchpad {
 
         this.renderHomeBarVersion();
         this.wireServerControls();
+        this.wireHistoryButton();
 
         this.initSectionDisclosures();
 
@@ -1341,6 +1356,27 @@ class Launchpad {
         btn.disabled = true;
         btn.setAttribute('title', 'server controls unavailable');
         console.warn('Launchpad: ServerControlsMenu not loaded; server controls disabled');
+    }
+
+    /**
+     * Wire the home bar's conversation-archive trigger to the viewer.
+     *
+     * Same shape and same idempotence as wireServerControls above: a
+     * re-render mints a fresh button, and a missing module disables the
+     * control with a stated reason rather than leaving a dead one.
+     *
+     * @returns {void}
+     */
+    wireHistoryButton() {
+        const btn = document.getElementById('history-btn');
+        if (!btn) return;
+        if (window.HistoryView && typeof window.HistoryView.open === 'function') {
+            btn.addEventListener('click', () => window.HistoryView.open());
+            return;
+        }
+        btn.disabled = true;
+        btn.setAttribute('title', 'conversation archive unavailable');
+        console.warn('Launchpad: HistoryView not loaded; archive button disabled');
     }
 
     /**

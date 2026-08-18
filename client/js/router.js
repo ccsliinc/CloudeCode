@@ -51,6 +51,14 @@
     // builder (buildSessionPath below) so the two halves can never drift.
     var DEEPLINK_PREFIX = '/session/';
 
+    // Read-only conversation archive viewer (client/js/history.js). Three
+    // levels, three paths: `/history`, `/history/project/<id>` and
+    // `/history/session/<id>`. Ids are database surrogate integers, so the
+    // pattern accepts DIGITS ONLY - anything else is not a route we have,
+    // and falls through to the normal not-a-deep-link handling rather than
+    // being coerced into one.
+    var HISTORY_RX = /^\/history(?:\/(project|session)\/(\d+))?\/?$/;
+
     /**
      * Build the URL path for a session, using the SAME encoding the
      * server's `build_deep_link()` (src/core/notifications/events.py)
@@ -253,7 +261,67 @@
      *   the initial page load or Back/Forward).
      * - invalid deep link → show banner and rewrite URL to `/`.
      */
+    /**
+     * Parse `window.location` as a history-viewer route.
+     *
+     * Inputs: none - reads `window.location.pathname` and `.search`.
+     * Output: object|null - `{view: 'root'|'project'|'session', id, seq}`,
+     *   or null when this is not a viewer path. `seq` is a `seq_in_file`
+     *   to open a thread at, from `?seq=`, and is null when absent or not
+     *   a positive integer - a malformed seq opens the session at its end
+     *   rather than at a position nobody asked for.
+     */
+    function parseHistoryPath() {
+        var m = (window.location.pathname || '/').match(HISTORY_RX);
+        if (!m) return null;
+        var seq = null;
+        try {
+            var raw = new URLSearchParams(window.location.search).get('seq');
+            if (raw && /^\d+$/.test(raw)) seq = parseInt(raw, 10);
+        } catch (e) {
+            // No URLSearchParams (very old engine) - the route still works,
+            // it just cannot carry a jump target.
+        }
+        if (!m[1]) return { view: 'root', id: null, seq: null };
+        return { view: m[1], id: parseInt(m[2], 10), seq: seq };
+    }
+
+    /**
+     * Route the current URL to the history viewer when it is one of its
+     * paths, and close the viewer when navigation has left them.
+     *
+     * Description: called first from `applyCurrentPath` so a viewer path
+     *   never falls through to the `/session/<name>` deep-link parser,
+     *   which would read `/history` as "not a deep link" and, on a
+     *   popstate, bounce the app back to the launcher underneath the open
+     *   overlay.
+     * Inputs: none.
+     * Output: boolean - true when the URL was a viewer path and has been
+     *   handled, false when the caller should carry on with its own
+     *   parsing.
+     */
+    function applyHistoryPath() {
+        var route = parseHistoryPath();
+        if (!route) {
+            // Back/forward navigated OUT of the viewer. Closing it here is
+            // what makes the phone's back gesture leave the overlay.
+            if (window.HistoryView && window.HistoryView.isOpen()) {
+                window.HistoryView.close();
+            }
+            return false;
+        }
+        if (!window.HistoryView) {
+            console.warn('Router: /history requested but the viewer module is not loaded');
+            return false;
+        }
+        clearError();
+        window.HistoryView.applyRoute(route);
+        return true;
+    }
+
     function applyCurrentPath() {
+        if (applyHistoryPath()) return;
+
         var parsed = parseCurrentPath();
 
         if (!parsed.match) {
@@ -334,6 +402,8 @@
         // (project OR session) turns out not to exist.
         rejectTarget: rejectTarget,
         showError: showError,
+        // Read-only conversation archive viewer routes.
+        parseHistoryPath: parseHistoryPath,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
         _SLUG_RX: SLUG_RX,
