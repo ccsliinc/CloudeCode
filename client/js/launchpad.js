@@ -1706,7 +1706,8 @@ class Launchpad {
      * POST /api/v1/server/reset spawns reset.sh, which either asks launchd
      * to kickstart its own managed job (`launchctl kickstart -k`, the
      * macOS menu-bar app's setup) or falls back to stop.sh + start.sh.
-     * stop.sh kills whatever holds port 8000; start.sh brings the FastAPI
+     * stop.sh kills whatever holds the configured port (PORT= in .env,
+     * default 8000); start.sh brings the FastAPI
      * process back. Nothing in that path touches tmux, the config, the
      * project list or anything on disk. It is a process restart, so the
      * control says so. The API route keeps its `/server/reset` path - the

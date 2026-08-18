@@ -12,6 +12,14 @@ const { currentTotp, secondsUntilRollover } = require('./totp');
 // changing there would cause a silent drift.
 const DEFAULT_BIND_HOST = '0.0.0.0';
 
+// Default server port. Matches the pydantic Settings default in
+// src/config.py (Settings.port: int = 8000) - the single documented
+// default for this whole app. Used ONLY when .env has no PORT= override,
+// which is exactly when Settings.port would resolve to this same value on
+// the Python side. Never used as a silent fallback for a malformed PORT=
+// value - see getPort() below.
+const DEFAULT_PORT = 8000;
+
 // macOS pseudo-interfaces that should NEVER appear in the Bind IP submenu.
 // awdl/llw = AirDrop/Apple Wireless Direct Link (link-local IPv6 only).
 // utun = VPN tunnels (link-local IPv6 usually; user-bound VPN, not a LAN
@@ -42,7 +50,12 @@ class ServerManager {
 
     // Auto-detect Python installation
     this.pythonPath = this.findPython();
-    this.port = 8000;
+    // Port is NOT cached on the instance - it is resolved fresh from .env
+    // on every read via getPort(), the same way getBindHost() is fresh
+    // from settings on every read. Caching it here previously meant a
+    // user-edited PORT= in .env was silently ignored by the whole app
+    // (health probes, port-in-use checks, "Open in Browser") while the
+    // Python server itself honored it - see getPort()'s docstring.
     // Use userData/logs for persistent logging
     const logDir = path.join(app.getPath('userData'), 'logs');
     if (!fs.existsSync(logDir)) {
@@ -97,6 +110,57 @@ class ServerManager {
    */
   getBindHost() {
     return this._settings.bind_host || DEFAULT_BIND_HOST;
+  }
+
+  /**
+   * Resolve the configured server port by reading PORT= from the server's
+   * .env - the same file uvicorn/pydantic-settings load (src/config.py's
+   * Settings.port), so this is guaranteed to agree with what the Python
+   * process actually binds to. This is the single place in the Electron
+   * app that knows how to answer "what port is the server on"; every
+   * other method calls this instead of holding its own copy.
+   *
+   * Three-outcome contract (this repo's governing standard - see
+   * CLAUDE.md "THE THREE-OUTCOME RULE"):
+   *   - .env absent, or present with no PORT= line -> DEFAULT_PORT. This
+   *     is a real, fully-determined answer ("no override configured"),
+   *     identical to what Settings.port's own field default resolves to
+   *     inside the server - not a guess.
+   *   - PORT= present and a valid 1-65535 integer -> that value.
+   *   - PORT= present but not a valid integer -> throws. This is the
+   *     "could not determine" outcome. It must never be silently coerced
+   *     to DEFAULT_PORT and reported as success - that is precisely the
+   *     false-green class documented in CLAUDE.md hazard list (a script
+   *     that cannot measure something must say so, not guess).
+   *
+   * @returns {number} the resolved port (1-65535).
+   * @throws {Error} when .env exists and cannot be read, or its PORT=
+   *   value is not a valid port number.
+   */
+  getPort() {
+    const envPath = path.join(this.baseDir, '.env');
+    if (!fs.existsSync(envPath)) {
+      return DEFAULT_PORT;
+    }
+    let envText;
+    try {
+      envText = fs.readFileSync(envPath, 'utf8');
+    } catch (err) {
+      throw new Error(`could not read .env to resolve PORT: ${err.message}`);
+    }
+    const m = envText.match(/^PORT=(.*)$/m);
+    if (!m) {
+      return DEFAULT_PORT;
+    }
+    const raw = m[1].trim().replace(/^['"]|['"]$/g, '').trim();
+    if (raw === '') {
+      return DEFAULT_PORT;
+    }
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+      throw new Error(`PORT in .env is not a valid port number: "${raw}"`);
+    }
+    return parsed;
   }
 
   /**
@@ -167,14 +231,26 @@ class ServerManager {
    * host. Tunnel URL resolution is not done here because the /tunnels
    * endpoint is auth-gated and the Electron app has no JWT — users with
    * tunnels active get the LAN URL as a sensible fallback.
+   *
+   * Returns null (never a URL built from a guessed port) when getPort()
+   * cannot determine the configured port - see getPort()'s three-outcome
+   * docstring. Callers must treat null as "unknown", not retry with
+   * DEFAULT_PORT themselves.
    */
   getPublishedUrl() {
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getPublishedUrl: ${err.message}`);
+      return null;
+    }
     const host = this.getBindHost();
     if (host === '0.0.0.0') {
       const lan = this.getPrimaryLanIp();
-      return `http://${lan || '127.0.0.1'}:${this.port}`;
+      return `http://${lan || '127.0.0.1'}:${port}`;
     }
-    return `http://${host}:${this.port}`;
+    return `http://${host}:${port}`;
   }
 
   /**
@@ -199,10 +275,25 @@ class ServerManager {
   /**
    * Fully-qualified base URL for internal HTTP probes. Replaces the old
    * hardcoded `this.apiUrl = 'http://127.0.0.1:8000'` — that constant broke
-   * the moment the user chose a non-loopback bind host.
+   * the moment the user chose a non-loopback bind host. The port half of
+   * this had the identical bug (a hardcoded `this.port = 8000` that never
+   * read a user's PORT= override) until getPort() replaced it.
+   *
+   * Returns null when getPort() cannot determine the configured port -
+   * see getPort()'s three-outcome docstring. A null-built URL is an
+   * obviously-broken one, which is the correct outcome here: it must
+   * never silently probe DEFAULT_PORT and let a caller believe that
+   * probe result describes the user's actual configuration.
    */
   getLocalApiUrl() {
-    return `http://${this.getLocalProbeHost()}:${this.port}`;
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getLocalApiUrl: ${err.message}`);
+      return null;
+    }
+    return `http://${this.getLocalProbeHost()}:${port}`;
   }
 
   /**
@@ -471,10 +562,14 @@ class ServerManager {
   }
 
   /**
-   * Check if port is in use
+   * Check if the configured port is in use.
+   * @param {number} [port] - port to probe. Defaults to getPort() -
+   *   evaluated lazily so a malformed PORT= in .env throws here rather
+   *   than silently probing DEFAULT_PORT (three-outcome contract, see
+   *   getPort()'s docstring).
    * @returns {Promise<boolean>}
    */
-  async isPortInUse() {
+  async isPortInUse(port = this.getPort()) {
     return new Promise((resolve) => {
       const server = net.createServer();
 
@@ -491,7 +586,7 @@ class ServerManager {
         resolve(false);
       });
 
-      server.listen(this.port, '0.0.0.0');
+      server.listen(port, '0.0.0.0');
     });
   }
 
@@ -535,10 +630,12 @@ class ServerManager {
       throw new Error(errorMsg);
     }
 
-    // Check if port is already in use
-    const portInUse = await this.isPortInUse();
+    // Check if port is already in use. validateEnvFile() above already
+    // confirmed getPort() resolves without throwing, so this call is safe.
+    const port = this.getPort();
+    const portInUse = await this.isPortInUse(port);
     if (portInUse) {
-      console.log(`Port ${this.port} already in use, checking if it's our server...`);
+      console.log(`Port ${port} already in use, checking if it's our server...`);
       const health = await this.getHealth();
       if (health) {
         console.log('Server already running on port, adopting it');
@@ -548,7 +645,7 @@ class ServerManager {
 
         // Try to capture the PID of the existing process (for display only)
         try {
-          exec(`lsof -ti:${this.port}`, (err, stdout) => {
+          exec(`lsof -ti:${port}`, (err, stdout) => {
             if (!err && stdout) {
               const pid = parseInt(stdout.trim());
               if (!isNaN(pid)) {
@@ -570,20 +667,21 @@ class ServerManager {
         // a decision this app gets to make.
         //
         // We also do not fall back to a free port. The port is not a private
-        // detail of this process: setup_auth.py writes PORT=8000 into .env,
-        // stop.sh / reset.sh / nuke.sh find the server with `lsof -ti:8000`,
-        // and the access URL and notification deep links are built from it.
-        // Moving the listener without moving all of those turns one visible
-        // failure into several invisible ones.
+        // detail of this process: it comes from getPort() (PORT= in .env,
+        // or DEFAULT_PORT - see getPort()'s docstring), and stop.sh /
+        // reset.sh / nuke.sh resolve the SAME value the SAME way, so
+        // whatever this app reports here is exactly what those scripts will
+        // go looking for too. Moving the listener without moving all of
+        // those turns one visible failure into several invisible ones.
         //
         // So: report it. This previously logged to a console nobody reads and
         // returned, leaving the menu bar showing no error at all.
         const holder = await this.describePortHolder();
         this.state = 'stopped';
         throw new Error(
-          `Port ${this.port} is already in use by ${holder}, which is not a ` +
+          `Port ${port} is already in use by ${holder}, which is not a ` +
             `Cloude Code server.\n\n` +
-            `Cloude Code needs port ${this.port}. Quit that process, then choose ` +
+            `Cloude Code needs port ${port}. Quit that process, then choose ` +
             `Start Server from the Cloude Code menu.`
         );
       }
@@ -725,21 +823,31 @@ class ServerManager {
   }
 
   /**
-   * Human-readable description of whatever currently holds `this.port`.
+   * Human-readable description of whatever currently holds the configured
+   * port.
    *
    * Exists purely to make the port-in-use error actionable. "Port 8000 is in
    * use" tells the user nothing they can do; "PID 4312 (node)" tells them
    * exactly what to quit.
    *
    * Never throws: this runs on an error path, and failing to name the holder
-   * must not replace a useful error with a confusing one.
+   * must not replace a useful error with a confusing one. If getPort()
+   * itself can't determine the port, that is reported as "another process"
+   * rather than crashing this diagnostic helper - the caller (start()'s
+   * port-in-use branch) already has a port number of its own to report.
    *
    * @returns {Promise<string>} e.g. `PID 4312 (node)`, `PID 4312`, or the
    *   generic `another process` when lsof and ps both tell us nothing.
    */
   describePortHolder() {
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      return Promise.resolve('another process');
+    }
     return new Promise((resolve) => {
-      exec(`lsof -ti:${this.port}`, (err, stdout) => {
+      exec(`lsof -ti:${port}`, (err, stdout) => {
         const pid = parseInt(String(stdout || '').trim().split('\n')[0], 10);
         if (err || Number.isNaN(pid)) {
           resolve('another process');
@@ -959,6 +1067,19 @@ class ServerManager {
     }
     if (result.emptyRequired.length > 0) {
       result.errors.push(`Empty required fields: ${result.emptyRequired.join(', ')}`);
+    }
+
+    // PORT= is optional (DEFAULT_PORT applies when absent), but if present
+    // it must be a valid port number. This is the choke point that makes
+    // the three-outcome contract in getPort()'s docstring bite for the one
+    // path that matters most: refusing to spawn a server whose port we
+    // could not determine, instead of silently trying DEFAULT_PORT and
+    // reporting success.
+    try {
+      this.getPort();
+    } catch (err) {
+      result.isValid = false;
+      result.errors.push(err.message);
     }
 
     return result;
