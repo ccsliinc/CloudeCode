@@ -206,7 +206,17 @@ def is_valid_family(name: str) -> bool:
 
 
 def get_family(name: Optional[str]) -> AgentFamily:
-    """Look up a family, falling back to ``DEFAULT_FAMILY``.
+    """Look up a family for LAUNCHING a session. Never returns "I don't know".
+
+    LAUNCH-TIME RESOLVER - do not use this for display. Something has to
+    actually run when a session is launched, so an unresolvable name MUST
+    fall back to a real, runnable family rather than raising or returning
+    nothing. That fallback is correct here and wrong for a status pill: a
+    pill built from this function's return value cannot be told apart from
+    a pill for a session that was genuinely launched as ``claude``, which
+    is exactly the bug ``resolve_family_for_display`` (below) exists to
+    fix. See that function's docstring, and the two paired tests in
+    ``tests/test_agent_family_display.py`` that pin this split apart.
 
     Description: never raises. An unknown or missing name resolves to the
       claude family, matching the pre-existing resolver behaviour where an
@@ -217,6 +227,14 @@ def get_family(name: Optional[str]) -> AgentFamily:
     Example: get_family("shell").command_field -> "shell_command"
     """
     return AGENT_FAMILY_BY_NAME.get(name or "", AGENT_FAMILY_BY_NAME[DEFAULT_FAMILY])
+
+
+# The DISPLAY-time counterpart, ``resolve_family_for_display``, lives in
+# ``src/core/agent_family_display.py`` - a separate module so this file
+# stays under the repo's 500-line-per-file rule, and so the two resolvers'
+# opposite fallback contracts (always-runnable vs never-guessed) cannot be
+# accidentally merged by editing them side by side in one file. Import it
+# from there; nothing here re-exports it.
 
 
 def wrappers_for_family(wrappers: List, family_name: str) -> List:
@@ -244,6 +262,12 @@ def wrappers_for_family(wrappers: List, family_name: str) -> List:
 
 def resolve_agent_type(agent_type: Optional[str], wrappers: List) -> Tuple[AgentFamily, Optional[object]]:
     """Disambiguate an ``agent_type`` into (family, explicit wrapper or None).
+
+    LAUNCH-TIME RESOLVER - like ``get_family``, this always returns a real,
+    runnable family (never "unknown") because a launch has to run
+    something. Do not use it to decide what a status pill shows; use
+    ``resolve_family_for_display`` for that. The two are intentionally
+    separate functions for separate purposes - do not merge them.
 
     Description: ``Session.agent_type`` stores either a WRAPPER ID or a bare
       FAMILY NAME, and has done since before wrappers were per-family. This

@@ -134,8 +134,23 @@ class API {
             // Mirrors the err.status pattern already used by verifyTOTP().
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
-                const err = new Error(errorData.detail || errorData.message || `HTTP ${response.status}`);
+                // FastAPI's `detail` is a string for most errors but a
+                // STRUCTURED object for the ones that need to say more
+                // than a sentence - `GET /sessions/attachable` answers
+                // 503 with {listing_ok, listing_reason, listing_detail,
+                // message} so the client can render WHY it could not
+                // determine the session list instead of a bare "HTTP
+                // 503". Passing an object to `new Error()` stringifies
+                // it to "[object Object]", so pull the display text out
+                // and keep the structure on `err.detail`.
+                const detail = errorData.detail;
+                const message = (typeof detail === 'string' && detail)
+                    || (detail && typeof detail === 'object' && detail.message)
+                    || errorData.message
+                    || `HTTP ${response.status}`;
+                const err = new Error(message);
                 err.status = response.status;
+                err.detail = detail;
                 throw err;
             }
 

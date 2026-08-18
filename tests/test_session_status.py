@@ -134,9 +134,10 @@ def test_list_pane_status_all_parses_and_resolves_status():
         b"cloude_c|1|zsh|333\n"
     )
     with mock.patch.object(backend, "_run_tmux_sync", return_value=(0, raw, b"")):
-        rows = backend.list_pane_status_all()
+        listing = backend.list_pane_status_all()
 
-    by_name = {r["name"]: r for r in rows}
+    assert listing.ok is True
+    by_name = {r["name"]: r for r in listing.sessions}
     assert by_name["cloude_a"]["status"] == STATUS_RUNNING
     assert by_name["cloude_a"]["pid"] == 111
     assert by_name["cloude_b"]["status"] == STATUS_IDLE
@@ -149,29 +150,44 @@ def test_list_pane_status_all_keeps_first_pane_per_session():
     backend = _backend()
     raw = b"cloude_a|0|claude|111\ncloude_a|0|vim|999\n"
     with mock.patch.object(backend, "_run_tmux_sync", return_value=(0, raw, b"")):
-        rows = backend.list_pane_status_all()
-    assert len(rows) == 1
-    assert rows[0]["pid"] == 111
+        listing = backend.list_pane_status_all()
+    assert listing.ok is True
+    assert len(listing.sessions) == 1
+    assert listing.sessions[0]["pid"] == 111
 
 
 def test_list_pane_status_all_empty_on_nonzero_rc():
+    """rc=1 with "no server running" is a real, complete answer of zero.
+
+    THREE-OUTCOME RULE: this is the pass-with-empty case, not the
+    could-not-evaluate case, so ``ok`` must stay True. See
+    tests/test_tmux_listing.py for the failure half of the split.
+    """
     backend = _backend()
     with mock.patch.object(
         backend, "_run_tmux_sync", return_value=(1, b"", b"no server running")
     ):
-        assert backend.list_pane_status_all() == []
+        listing = backend.list_pane_status_all()
+    assert listing.ok is True
+    assert listing.sessions == []
+    assert listing.reason == "no_server"
 
 
 def test_list_pane_status_all_skips_unparseable_rows():
     backend = _backend()
     raw = b"malformed-row-no-pipes\ncloude_a|0|claude|111\n"
     with mock.patch.object(backend, "_run_tmux_sync", return_value=(0, raw, b"")):
-        rows = backend.list_pane_status_all()
-    assert len(rows) == 1
-    assert rows[0]["name"] == "cloude_a"
+        listing = backend.list_pane_status_all()
+    assert listing.ok is True
+    assert len(listing.sessions) == 1
+    assert listing.sessions[0]["name"] == "cloude_a"
 
 
 def test_list_pane_status_all_returns_empty_when_tmux_missing():
+    """No tmux binary is COULD NOT EVALUATE, never a zero-session answer."""
     backend = _backend()
     with mock.patch("src.core.tmux_backend.shutil.which", return_value=None):
-        assert backend.list_pane_status_all() == []
+        listing = backend.list_pane_status_all()
+    assert listing.ok is False
+    assert listing.sessions == []
+    assert listing.reason == "tmux_missing"

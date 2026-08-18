@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Callable
 import structlog
 
 from src.core.session_backend import SessionBackend
+from src.core.tmux_listing import REASON_NOT_APPLICABLE, TmuxListing
 
 logger = structlog.get_logger()
 
@@ -374,20 +375,36 @@ class PTYBackend(SessionBackend):
             "use a fresh start() instead"
         )
 
-    def discover_existing(self) -> List[str]:
-        """PTYs don't survive restart - always empty."""
-        return []
+    def discover_existing(self) -> TmuxListing:
+        """PTYs don't survive restart - a real, complete answer of zero.
+
+        Inputs: none.
+
+        Output:
+            TmuxListing: ``ok=True, sessions=[],
+            reason='not_applicable'``. ``ok`` is True on purpose: this is
+            knowledge, not a failed probe, so the reconciler is free to
+            act on it.
+        """
+        return TmuxListing.answered([], reason=REASON_NOT_APPLICABLE)
 
     def list_attachable_sessions(
         self, owned_names: Optional[set] = None  # noqa: ARG002
-    ) -> List[Dict[str, Any]]:
+    ) -> TmuxListing:
         """PTYs have no cross-process addressable surface - always empty.
 
         Explicit override (not relying on the ABC default) to document the
         invariant: unlike tmux, a PTY dies with its parent, so there is
         never anything to "adopt" from a previous process.
+
+        Inputs:
+            owned_names: ignored; kept for signature compatibility.
+
+        Output:
+            TmuxListing: ``ok=True, sessions=[],
+            reason='not_applicable'`` - a known zero, not an unknown.
         """
-        return []
+        return TmuxListing.answered([], reason=REASON_NOT_APPLICABLE)
 
     def capture_scrollback(self, lines: int = 3000) -> bytes:  # noqa: ARG002
         """No true scrollback for a raw PTY."""

@@ -88,6 +88,21 @@ class Session(BaseModel):
         None,
         description="Agent CLI type: 'claude' | 'codex' | 'hermes' | 'openclaw' (None = unknown / pre-Phase-6 / not yet fingerprinted)",
     )
+    # feat/agent-family-pills - True iff ``agent_type`` above was produced
+    # by scrollback fingerprinting (src/core/agent_fingerprint.py) at
+    # adopt time rather than an explicit launch/config choice. A
+    # fingerprinted "codex" and a launched "codex" are textually
+    # identical in ``agent_type``; this is the only place that
+    # provenance survives, so ``resolve_family_for_display`` (see
+    # src/core/agent_families.py) can render a guess differently from a
+    # fact. Optional-with-default so legacy ``session_metadata.json``
+    # files (written before this field existed) deserialize cleanly and
+    # correctly read as "not a fingerprint guess" (they predate
+    # fingerprinting entirely).
+    agent_type_via_fingerprint: bool = Field(
+        default=False,
+        description="True iff agent_type came from scrollback fingerprinting, not an explicit choice",
+    )
     # SESSION-IDENTITY-V2 - per-session pinned theme. None = no pin (the
     # global localStorage theme rules). Optional + None default so legacy
     # ``session_metadata.json`` files (written before the field existed)
@@ -171,6 +186,28 @@ class SessionInfo(BaseModel):
     agent_type: Optional[str] = Field(
         default=None,
         description="Agent CLI type label (mirrors Session.agent_type)",
+    )
+    # feat/agent-family-pills - THREE-OUTCOME display of agent_type,
+    # computed by ``resolve_family_for_display`` (src/core/agent_families.py)
+    # at the moment this SessionInfo is built. NOT a mirror of
+    # ``Session.agent_type``: that field is a launch-time value that
+    # always has SOMETHING in it once a session is running; this pair can
+    # legitimately be ``(None, "unknown")`` when agent_type no longer
+    # resolves to any known wrapper or family (e.g. its wrapper was
+    # deleted from config after the session launched). The client must
+    # render "unknown family" for that case, never fall back to
+    # agent_type's raw string.
+    agent_family: Optional[str] = Field(
+        default=None,
+        description="Resolved family name for display ('claude'/'codex'/... ), or None if it could not be determined",
+    )
+    agent_family_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provenance of agent_family: 'wrapper' | 'reserved_name' | "
+            "'fingerprint' | 'derived_deepest' | 'unknown'. See "
+            "src.core.agent_families.resolve_family_for_display."
+        ),
     )
     # SESSION-IDENTITY-V2 - surface the pinned theme at the top level so
     # the UI can paint identity (header icon + title swap) without diving
@@ -586,6 +623,24 @@ class AttachableSession(BaseModel):
         default=None,
         description="Detected agent CLI type for this tmux session (None = not yet fingerprinted)",
     )
+    # feat/agent-family-pills - see SessionInfo.agent_family /
+    # agent_family_source for the full contract. For attachable rows
+    # ``agent_type`` is currently always None (listing never runs the
+    # fingerprint detector - only adopt does), so these presently always
+    # resolve to (None, "unknown"); computed via the same
+    # ``resolve_family_for_display`` rather than duplicated so the two
+    # payload shapes can never disagree about the same session.
+    agent_family: Optional[str] = Field(
+        default=None,
+        description="Resolved family name for display, or None if it could not be determined",
+    )
+    agent_family_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provenance of agent_family: 'wrapper' | 'reserved_name' | "
+            "'fingerprint' | 'derived_deepest' | 'unknown'."
+        ),
+    )
     # SESSION-IDENTITY-V2 - pinned theme for this attachable session. None
     # = no pin. Discovery code populates from the active SessionManager
     # state when the row matches the active backend; otherwise None.
@@ -616,6 +671,61 @@ class AttachableSession(BaseModel):
     unread: bool = Field(
         default=False,
         description="True if this tmux session has an unread Stop or a manual unread pin",
+    )
+    # THREE-OUTCOME RULE - provenance of the listing this row came out of.
+    # A row that EXISTS was always produced by a probe that ran, so these
+    # default to the answered case; they are carried anyway so a client
+    # holding a single row can tell what kind of listing produced it
+    # without threading the envelope alongside. The "could not evaluate"
+    # outcome has no rows at all by construction and is reported by the
+    # route as HTTP 503 with an ``AttachableListingStatus`` body - see
+    # ``GET /sessions/attachable``.
+    listing_ok: bool = Field(
+        default=True,
+        description="True when the tmux probe that produced this row actually ran",
+    )
+    listing_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Why the listing turned out the way it did: null = listed "
+            "normally, 'no_server' = tmux reported no server (a real zero), "
+            "'not_applicable' = non-tmux backend"
+        ),
+    )
+
+
+class AttachableListingStatus(BaseModel):
+    """The body of a "could not determine the session list" response.
+
+    Returned as the ``detail`` of an HTTP 503 from
+    ``GET /sessions/attachable`` when the tmux probe did not produce an
+    answer. It deliberately carries no ``sessions`` array: the whole
+    point is that we do not know what the sessions are, and shipping an
+    empty one alongside a failure flag invites a client to read the
+    array and ignore the flag - which is how this bug shipped the first
+    time.
+
+    ``listing_ok`` is always False here. A successful listing is the
+    plain ``List[AttachableSession]`` 200 response instead.
+    """
+    listing_ok: bool = Field(
+        default=False,
+        description="Always False - this model exists only for the unknown case",
+    )
+    listing_reason: str = Field(
+        ...,
+        description=(
+            "Machine-readable cause: 'tmux_missing' | 'timeout' | "
+            "'probe_error' | 'exit_<returncode>'"
+        ),
+    )
+    listing_detail: Optional[str] = Field(
+        default=None,
+        description="Human-readable detail (trimmed tmux stderr or exception text)",
+    )
+    message: str = Field(
+        default="tmux session listing could not be determined",
+        description="Display string for a client that has no reason mapping",
     )
 
 

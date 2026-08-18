@@ -100,8 +100,12 @@ def test_pty_backend_is_session_backend():
 
 
 def test_pty_backend_discover_existing_is_empty():
+    """A PTY backend has a KNOWN zero, not an unknown - ok must be True."""
     backend = PTYBackend("test", Path.home(), None)
-    assert backend.discover_existing() == []
+    listing = backend.discover_existing()
+    assert listing.ok is True
+    assert listing.sessions == []
+    assert listing.reason == "not_applicable"
 
 
 def test_pty_backend_capture_scrollback_is_empty():
@@ -327,7 +331,9 @@ def test_tmux_backend_discover_existing_finds_created_session(tmux_socket_cleanu
     )
     try:
         asyncio.run(backend.start())
-        names = backend.discover_existing()
+        listing = backend.discover_existing()
+        assert listing.ok is True
+        names = listing.sessions
         assert backend.tmux_session in names, (
             f"expected {backend.tmux_session} in {names}"
         )
@@ -792,7 +798,7 @@ async def test_tmux_backend_attach_existing_flips_running(tmux_socket_cleanup):
             socket_name=tmux_socket_cleanup,
         )
         assert second._running is False, "fresh instance must start with _running=False"
-        assert second.tmux_session in second.discover_existing()
+        assert second.tmux_session in second.discover_existing().sessions
 
         await second.attach_existing()
 
@@ -939,10 +945,13 @@ def test_list_attachable_sessions_flags_ownership_correctly(tmux_socket_cleanup)
         )
 
         # 3. List with explicit owned set (just the cloude-owned name).
-        results = owned_backend.list_attachable_sessions(
+        listing = owned_backend.list_attachable_sessions(
             owned_names={owned_backend.tmux_session}
         )
-        by_name = {r["name"]: r for r in results}
+        assert listing.ok is True, (
+            f"live tmux listing must be evaluable; got {listing!r}"
+        )
+        by_name = {r["name"]: r for r in listing.sessions}
 
         # Both must appear.
         assert owned_backend.tmux_session in by_name, (

@@ -40,6 +40,8 @@ from src.models import (
 )
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
+from src.core.tmux_listing import TmuxListing, coerce_listing
+from src.core.agent_family_display import resolve_family_for_display
 from src.core.session_status import STATUS_UNKNOWN
 from src.core.session_activity import (
     EVENT_STOP,
@@ -545,7 +547,36 @@ class SessionManager:
             working_dir=Path.home(),
             on_output=None,
         )
-        tmux_alive = set(probe.discover_existing())
+        # THREE-OUTCOME GATE. Everything below this line PRUNES persisted
+        # state against ``tmux_alive``: the ownership set, the pinned
+        # themes, the unread store, and (via ``_clear_stale_metadata``)
+        # the session record itself. Under the old bare-list API a probe
+        # that could not run returned ``[]``, which is indistinguishable
+        # from "no sessions exist", so a single transient tmux failure at
+        # startup silently deleted EVERY ownership record the user had.
+        # The comment forty lines below even claimed this was already
+        # guarded ("we only prune when we have a confirmed live tmux
+        # probe") - it was not; nothing measured that.
+        #
+        # ``TmuxListing.ok`` is that measurement. False means the probe
+        # produced no answer, so we change nothing and come up with the
+        # metadata intact. We also do NOT rehydrate: attaching requires
+        # knowing the session is alive, and we do not.
+        listing = coerce_listing(probe.discover_existing())
+        if not listing.ok:
+            logger.warning(
+                "lifespan_tmux_probe_unavailable",
+                reason=listing.reason,
+                detail=listing.detail,
+                owned_count=len(self.owned_tmux_sessions),
+                note=(
+                    "tmux could not be enumerated - skipping ownership, "
+                    "pinned-theme and unread pruning, and skipping "
+                    "rehydrate. No persisted state was changed."
+                ),
+            )
+            return
+        tmux_alive = set(listing.names)
 
         # Reconciler: prune owned-set entries no longer alive on tmux.
         # Persist the pruned set only if we also have an active session
@@ -563,11 +594,12 @@ class SessionManager:
                     self._save_session_metadata()
 
         # SESSION-IDENTITY-V2 - prune pinned-theme entries whose tmux
-        # session is gone. We only prune when we have a confirmed live
-        # tmux probe (non-empty ``tmux_alive`` OR a successful empty
-        # listing - both mean the probe ran). Prevents indefinite
-        # growth from sessions the user destroyed outside our UI
-        # (e.g. ``tmux -L cloude kill-session``).
+        # session is gone. Reaching this line already means the probe
+        # RAN (the ``listing.ok`` gate above returns early otherwise), so
+        # an empty ``tmux_alive`` here is a measured zero rather than an
+        # unanswered question. Prevents indefinite growth from sessions
+        # the user destroyed outside our UI (``tmux -L cloude
+        # kill-session``).
         if self.pinned_themes:
             dead_pins = {
                 name for name in self.pinned_themes if name not in tmux_alive
@@ -1777,11 +1809,32 @@ class SessionManager:
                 working_dir=Path.home(),
                 on_output=None,
             )
+            # A failed probe here is SAFE to treat as an empty
+            # contribution, unlike the reconciler above, because this set
+            # is only ever UNIONed with ``owned_tmux_sessions`` and the
+            # live-backend names to decide whether a name is taken. The
+            # worst case is that we mint a name tmux already holds, and
+            # tmux itself hard-fails "duplicate session" on create - a
+            # loud, immediate, recoverable error, not silent data loss.
+            # It is still logged at WARN so the degraded input is visible.
             try:
-                tmux_existing = set(probe.discover_existing() or [])
-            except Exception as exc:
-                logger.debug("collision_probe_failed", error=str(exc))
-                tmux_existing = set()
+                collision_listing = coerce_listing(probe.discover_existing())
+            except (OSError, RuntimeError, ValueError) as exc:
+                logger.warning("collision_probe_failed", error=str(exc))
+                collision_listing = TmuxListing.unavailable(
+                    "probe_error", detail=str(exc)
+                )
+            if not collision_listing.ok:
+                logger.warning(
+                    "collision_probe_unavailable",
+                    reason=collision_listing.reason,
+                    note=(
+                        "name uniquification is falling back to owned + "
+                        "live-backend names only; tmux will still reject "
+                        "a genuine duplicate at create time"
+                    ),
+                )
+            tmux_existing = set(collision_listing.names)
             taken = tmux_existing | self.active_tmux_names() | self.owned_tmux_sessions
 
             base_name = tmux_session_name
@@ -2458,10 +2511,26 @@ class SessionManager:
             )
             if not hasattr(probe, "list_pane_status_all"):
                 return {}
-            rows = probe.list_pane_status_all()
-            return {row["name"]: row for row in rows if row.get("name")}
-        except Exception as exc:
-            logger.debug("tmux_status_map_build_failed", error=str(exc))
+            listing = coerce_listing(probe.list_pane_status_all())
+            if not listing.ok:
+                # An empty map is the RIGHT degradation here, and it is
+                # not a false green: every consumer resolves a missing
+                # name to ``STATUS_UNKNOWN`` (see ``_session_info_for``
+                # and ``list_attachable_sessions``), which is exactly the
+                # third outcome. Logged at WARN so the reason is not
+                # invisible.
+                logger.warning(
+                    "tmux_status_map_unavailable",
+                    reason=listing.reason,
+                    detail=listing.detail,
+                    note="every session status falls back to unknown",
+                )
+                return {}
+            return {
+                row["name"]: row for row in listing.sessions if row.get("name")
+            }
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            logger.warning("tmux_status_map_build_failed", error=str(exc))
             return {}
 
     def _session_info_for(
@@ -2532,6 +2601,19 @@ class SessionManager:
             update={"pty_pid": live_pid}
         )
 
+        # feat/agent-family-pills - resolved fresh on every read (not
+        # persisted) so a config edit (wrapper deleted/renamed) is
+        # reflected immediately instead of showing a stale answer.
+        # ``sess.agent_type_via_fingerprint`` is the only piece of
+        # provenance that DOES need to survive - see its docstring on
+        # ``Session`` for why fingerprint-derived values are otherwise
+        # textually indistinguishable from launched ones.
+        display_family, display_family_source = resolve_family_for_display(
+            sess.agent_type,
+            getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+            from_fingerprint=sess.agent_type_via_fingerprint,
+        )
+
         return SessionInfo(
             session=sess_out,
             recent_logs=self.get_recent_logs(session_id=session_id),
@@ -2540,6 +2622,8 @@ class SessionManager:
             session_backend=backend_name,
             tmux_session=tmux_session_name,
             agent_type=sess.agent_type,
+            agent_family=display_family.name if display_family else None,
+            agent_family_source=display_family_source,
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
@@ -2614,14 +2698,28 @@ class SessionManager:
                 names.add(n)
         return names
 
-    def list_attachable_sessions(self) -> list[dict]:
+    def list_attachable_sessions(self) -> TmuxListing:
         """Enumerate tmux sessions on our socket, flagged by ownership.
 
-        Thin pass-through to ``backend.list_attachable_sessions``, but we
-        always instantiate a fresh PROBE backend rather than using
-        ``self.backend`` - the user should be able to list external
-        sessions whether or not they currently have an active session
-        (the adopt-UI fetch happens at launchpad render time).
+        Description: Thin pass-through to
+            ``backend.list_attachable_sessions``, but we always
+            instantiate a fresh PROBE backend rather than using
+            ``self.backend`` - the user should be able to list external
+            sessions whether or not they currently have an active session
+            (the adopt-UI fetch happens at launchpad render time).
+
+        Inputs: none (reads ``self.owned_tmux_sessions``).
+
+        Output:
+            TmuxListing: ``ok=True`` with decorated dict rows (each
+                carrying ``pinned_theme``, ``status`` and ``unread`` on
+                top of the backend's fields). ``ok=False`` propagates
+                the probe failure verbatim and carries NO rows, so the
+                route can answer "cannot determine" instead of "zero".
+
+        Example:
+            >>> mgr.list_attachable_sessions().ok
+            True
         """
         probe = build_backend(
             settings,
@@ -2629,19 +2727,47 @@ class SessionManager:
             working_dir=Path.home(),
             on_output=None,
         )
-        rows = probe.list_attachable_sessions(
-            owned_names=set(self.owned_tmux_sessions)
+        listing = coerce_listing(
+            probe.list_attachable_sessions(
+                owned_names=set(self.owned_tmux_sessions)
+            )
         )
+        if not listing.ok:
+            # Propagate the unknown untouched. Decorating rows we do not
+            # have would be inventing them; returning [] with ok=True
+            # would be the original bug.
+            logger.warning(
+                "attachable_listing_unavailable",
+                reason=listing.reason,
+                detail=listing.detail,
+            )
+            return listing
+        rows = listing.sessions
         # Status lights: one extra bulk tmux call (list-panes -a), reused
         # via the same probe backend / socket. This is the ONLY place a
         # dead-but-still-in-tmux session (remain-on-exit) gets its state
         # surfaced - these rows are exactly the ones NOT bound to a live
         # backend, so `_session_info_for`'s status never sees them.
-        status_map = (
-            {row2["name"]: row2 for row2 in probe.list_pane_status_all() if row2.get("name")}
+        # A FAILED status probe here does not invalidate the row set we
+        # already have; it only means each row's activity light falls
+        # back to ``STATUS_UNKNOWN`` below, which is the honest third
+        # outcome for that one field rather than for the whole listing.
+        status_listing = (
+            coerce_listing(probe.list_pane_status_all())
             if hasattr(probe, "list_pane_status_all")
-            else {}
+            else TmuxListing.answered([])
         )
+        if not status_listing.ok:
+            logger.warning(
+                "attachable_status_map_unavailable",
+                reason=status_listing.reason,
+                note="attachable rows fall back to unknown activity status",
+            )
+        status_map = {
+            row2["name"]: row2
+            for row2 in status_listing.sessions
+            if row2.get("name")
+        }
         # SESSION-IDENTITY-V2 - decorate each row with its persisted
         # pinned theme (if any). The launchpad's active-session banner
         # uses this so re-entering a session paints the right theme on
@@ -2664,7 +2790,22 @@ class SessionManager:
                 unread = self._is_unread(name)
                 row["status"] = map_tmux_fallback(raw_tmux_status, unread=unread)
                 row["unread"] = unread
-        return rows
+                # feat/agent-family-pills - listing never fingerprints
+                # (only adopt does, since it needs a full scrollback
+                # capture), so ``row.get("agent_type")`` is presently
+                # always None here and this always resolves to
+                # (None, "unknown"). Computed via the same resolver as
+                # SessionInfo anyway, rather than hardcoding "unknown",
+                # so the day listing DOES gain fingerprinting this line
+                # does not need to change.
+                display_family, display_family_source = resolve_family_for_display(
+                    row.get("agent_type"),
+                    getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+                )
+                row["agent_family"] = display_family.name if display_family else None
+                row["agent_family_source"] = display_family_source
+        return TmuxListing.answered(rows, reason=listing.reason,
+                                    detail=listing.detail)
 
     async def adopt_external_session(
         self,
@@ -2867,6 +3008,13 @@ class SessionManager:
             created_at=datetime.utcnow(),
             last_activity=datetime.utcnow(),
             agent_type=detected_agent_type,
+            # feat/agent-family-pills - this value came from scrollback
+            # fingerprinting above, not a launch/config choice. True
+            # regardless of whether detection actually found a match:
+            # ``resolve_family_for_display`` already renders a None/blank
+            # agent_type as "unknown" independent of this flag; the flag
+            # only changes rendering for a value it DID find.
+            agent_type_via_fingerprint=True,
             pinned_theme=prior_pin,
             # PIN-FIX-EXECUTE - carry the bare tmux name so frontend uses
             # it (not the "adopted:" prefixed id) as the pin-key handle.
