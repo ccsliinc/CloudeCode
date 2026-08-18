@@ -36,6 +36,13 @@ from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
 from src.api.config_files_routes import router as config_files_router
 from src.api.status_routes import router as status_router
+# Read-only conversation-archive viewer. Optional module, default OFF (see
+# HistoryConfig). The import is cheap and unconditional -- the router always
+# mounts so a disabled install gets a structured "disabled" answer rather
+# than a 404 -- while SQLAlchemy and the claude_history package are imported
+# lazily inside src/core/history_db.py only when a request actually needs
+# them, so neither is a startup dependency.
+from src.api.history import router as history_router
 
 # Configure structlog
 structlog.configure(
@@ -361,6 +368,7 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+app.include_router(history_router, prefix="/api/v1")  # Read-only conversation archive viewer (auth required)
 app.include_router(ws_router)                       # WebSocket routes
 
 # Mount static files
