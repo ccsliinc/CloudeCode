@@ -5,7 +5,7 @@ import json
 import mimetypes
 import structlog
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -209,6 +209,36 @@ async def lifespan(app: FastAPI):
     # Item 6: notification router. Wired AFTER log_monitor (which is the
     # signal source for IdleWatcher in Item 7).
     auth_cfg = settings.load_auth_config()
+
+    # feat/projects-table (S3) - shadow AuthConfig.projects into
+    # cloude.db, once per install, guarded by meta.imported_from_json_at
+    # (src/core/project_store.ensure_projects_imported). config.json
+    # stays authoritative for writes; this never modifies it. Only runs
+    # when the datastore resolved writable at boot - a degraded/read-only
+    # datastore is left alone, and the app keeps working from
+    # config.json exactly as it did before this table existed. Best
+    # effort and never blocks boot, same posture as claude_hooks below.
+    if datastore_state.healthy:
+        from src.core.db import connect, db_path_for, transaction
+        from src.core.project_store import ensure_projects_imported
+
+        try:
+            with closing(
+                connect(db_path_for(settings.get_state_dir()))
+            ) as _projects_conn:
+                with transaction(_projects_conn):
+                    _import_result = ensure_projects_imported(
+                        _projects_conn, auth_cfg.projects
+                    )
+                if _import_result is not None:
+                    logger.info(
+                        "projects_imported_from_config",
+                        imported=_import_result.imported,
+                        duplicates_dropped=len(_import_result.dropped),
+                    )
+        except Exception as exc:  # noqa: BLE001 - import must never block boot
+            logger.warning("projects_import_failed", error=str(exc))
+
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
     # v0.7.0 Part 4 - Slack incoming-webhook channel. Empty URL = silently

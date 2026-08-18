@@ -1366,6 +1366,73 @@ body.home-header-active {
     transform: scale(1.1);
 }
 
+/* feat/projects-table (S3) - presence states. MISSING (confirmed gone,
+ * ENOENT) and UNREACHABLE (could not tell - EACCES/ELOOP/timeout/an
+ * unmounted volume) are DELIBERATELY given different colors as well as
+ * different labels: red reads as "this is gone", amber reads as
+ * "uncertain" (matching .project-edit-btn's own amber-for-uncertain use
+ * above). Collapsing the two into one look would recreate, on screen,
+ * the exact bug the four-state model in src/core/project_presence.py
+ * exists to prevent - telling the user his project is gone when the
+ * truth is a sleeping external drive. */
+.project-item.project-presence-disabled {
+    cursor: not-allowed;
+}
+
+.project-item.project-presence-missing {
+    border-left-color: var(--color-danger);
+    background: var(--color-danger-bg);
+    opacity: 0.75;
+}
+
+.project-item.project-presence-missing:hover {
+    background: var(--color-danger-bg);
+    border-color: var(--color-border);
+    box-shadow: none;
+}
+
+.project-item.project-presence-unreachable {
+    border-left-color: var(--color-warning);
+    background: var(--color-warning-bg);
+    opacity: 0.75;
+}
+
+.project-item.project-presence-unreachable:hover {
+    background: var(--color-warning-bg);
+    border-color: var(--color-border);
+    box-shadow: none;
+}
+
+.project-presence-disabled .project-edit-btn,
+.project-presence-disabled .project-delete-btn {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.project-presence-badge {
+    margin-top: 8px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.72rem;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    display: inline-block;
+    word-break: break-word;
+}
+
+.project-presence-badge-missing {
+    color: var(--color-danger);
+    background: var(--color-danger-bg-hover);
+    border: 1px solid var(--color-danger-border);
+}
+
+.project-presence-badge-unreachable {
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+}
+
 /* Touch hit-area bump. `pointer: coarse` covers phones/tablets - no
  * `:hover` involved, since a coarse pointer generally can't hover at
  * all. 44px is the standard minimum touch target (Apple HIG / WCAG

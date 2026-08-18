@@ -325,6 +325,21 @@ class API {
     }
 
     /**
+     * Projects: live-probe every DB-tracked project's filesystem presence.
+     *
+     * feat/projects-table (S3). See GET /projects/presence
+     * (src/api/routes.py) - re-stats every project's root on every call,
+     * never a cached/stale value.
+     *
+     * @returns {Promise<{status: "ok"|"unreachable", projects: Array<{
+     *   raw_path: string, presence: "present"|"missing"|"unreachable"|
+     *   "unchecked", presence_detail: string|null}>, detail: string|null}>}
+     */
+    async getProjectsPresence() {
+        return await this.call('/projects/presence');
+    }
+
+    /**
      * Projects: Create new project
      * @param {object} params - {name: string, path: string, description?: string}
      * @returns {Promise<object>} - Project data
