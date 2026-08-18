@@ -44,6 +44,7 @@
     "brightCyan": "#22d3ee",
     "brightWhite": "#fafafa"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/cyber-city.m4a",
     "srcFallback": "/static/assets/audio/cyber-city.ogg",

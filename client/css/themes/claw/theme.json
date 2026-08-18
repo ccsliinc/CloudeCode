@@ -92,6 +92,7 @@
     "brightWhite": "#ffffff"
   },
   "themeCss": "theme.css",
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
     "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
