@@ -76,7 +76,7 @@ PALETTE_FALLBACK = {
     "--color-bg-page": "#0a0a0a",
     "--color-bg": "#1e1e1e",
     "--color-fg": "#d4d4d4",
-    "--color-fg-muted": "#858585",
+    "--color-fg-muted": "#959595",
     "--color-border": "#3e3e42",
     "--color-accent": "#d77757",
     "--color-accent-strong": "#e88768",

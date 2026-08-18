@@ -1,7 +1,7 @@
 {
   "id": "green_crt",
   "name": "Green CRT",
-  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel \u2014 distinct from Matrix.",
+  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel — distinct from Matrix.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -17,8 +17,8 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.3)",
     "--color-fg": "#33FF33",
     "--color-fg-muted": "#1faa1f",
-    "--color-fg-subtle": "#0e5e0e",
-    "--color-fg-faint": "#0e5e0e",
+    "--color-fg-subtle": "#169116",
+    "--color-fg-faint": "#169116",
     "--color-border": "#0e5e0e",
     "--color-border-subtle": "#062c06",
     "--color-accent": "#33FF33",
@@ -98,9 +98,9 @@
     "brightWhite": "#aaffaa"
   },
   "audio": {
-      "src": "/static/assets/audio/scifi-drone.m4a",
-      "srcFallback": "/static/assets/audio/scifi-drone.ogg",
-      "volume": 0.6,
-      "fadeMs": 2500
-    }
+    "src": "/static/assets/audio/scifi-drone.m4a",
+    "srcFallback": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
+  }
 }

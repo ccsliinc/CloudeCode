@@ -1,7 +1,7 @@
 {
   "id": "cannabis",
   "name": "Cannabis",
-  "description": "Botanical luxury \u2014 deep forest greens, hemp cream, brushed brass. Anti-rasta.",
+  "description": "Botanical luxury — deep forest greens, hemp cream, brushed brass. Anti-rasta.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -17,12 +17,12 @@
     "--color-bg-overlay-faint": "rgba(10, 16, 10, 0.32)",
     "--color-fg": "#E8DEC4",
     "--color-fg-muted": "#a89c80",
-    "--color-fg-subtle": "#6e6448",
-    "--color-fg-faint": "#8a8068",
+    "--color-fg-subtle": "#a29671",
+    "--color-fg-faint": "#9f967f",
     "--color-border": "#3a4a38",
     "--color-border-subtle": "#243028",
     "--color-accent": "#C49C50",
-    "--color-accent-strong": "#A88040",
+    "--color-accent-strong": "#ba8f49",
     "--color-accent-bg-soft": "rgba(196, 156, 80, 0.08)",
     "--color-accent-bg-faint": "rgba(196, 156, 80, 0.10)",
     "--color-accent-bg": "rgba(196, 156, 80, 0.15)",
@@ -38,7 +38,7 @@
     "--color-on-accent": "#101810",
     "--color-success": "#7BAA5E",
     "--color-warning": "#C49C50",
-    "--color-danger": "#C04848",
+    "--color-danger": "#cd6d6d",
     "--color-info": "#88AA88",
     "--color-danger-bg": "rgba(192, 72, 72, 0.10)",
     "--color-danger-bg-hover": "rgba(192, 72, 72, 0.20)",
@@ -58,7 +58,7 @@
     "--color-status-error-glow": "rgba(192, 72, 72, 0.8)",
     "--color-status-pending-glow": "rgba(196, 156, 80, 0.6)",
     "--color-badge-owned-bg": "#2a3a2a",
-    "--color-badge-owned-fg": "#7BAA5E",
+    "--color-badge-owned-fg": "#7dac61",
     "--color-badge-tmux-bg": "#2a3530",
     "--color-badge-tmux-fg": "#88AA88",
     "--color-badge-external-bg": "#3a3220",
@@ -98,9 +98,9 @@
     "brightWhite": "#F4ECD4"
   },
   "audio": {
-      "src": "/static/assets/audio/forest-ambience.m4a",
-      "srcFallback": "/static/assets/audio/forest-ambience.ogg",
-      "volume": 0.55,
-      "fadeMs": 2000
-    }
+    "src": "/static/assets/audio/forest-ambience.m4a",
+    "srcFallback": "/static/assets/audio/forest-ambience.ogg",
+    "volume": 0.55,
+    "fadeMs": 2000
+  }
 }

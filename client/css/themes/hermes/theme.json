@@ -16,8 +16,8 @@
     "--color-header-bg": "#000000",
     "--color-fg": "#ffaa00",
     "--color-fg-muted": "#cc8800",
-    "--color-fg-subtle": "#996600",
-    "--color-fg-faint": "#7a5200",
+    "--color-fg-subtle": "#a36d00",
+    "--color-fg-faint": "#a26d00",
     "--color-border": "#553a00",
     "--color-border-subtle": "#332300",
     "--color-accent": "#ffcc00",
@@ -93,9 +93,9 @@
   },
   "themeCss": "theme.css",
   "audio": {
-      "src": "/static/assets/audio/out-there.m4a",
-      "srcFallback": "/static/assets/audio/out-there.ogg",
-      "volume": 0.5,
-      "fadeMs": 1500
-    }
+    "src": "/static/assets/audio/out-there.m4a",
+    "srcFallback": "/static/assets/audio/out-there.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
+  }
 }

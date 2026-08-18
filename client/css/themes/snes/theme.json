@@ -16,13 +16,13 @@
     "--color-bg-overlay-soft": "rgba(0, 0, 0, 0.5)",
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.3)",
     "--color-fg": "#E8E8F0",
-    "--color-fg-muted": "#a8a8b8",
-    "--color-fg-subtle": "#6a6a78",
-    "--color-fg-faint": "#7a7a88",
+    "--color-fg-muted": "#babac6",
+    "--color-fg-subtle": "#babac2",
+    "--color-fg-faint": "#babac1",
     "--color-border": "#6A3CC4",
     "--color-border-subtle": "#4a2c8c",
-    "--color-accent": "#6A3CC4",
-    "--color-accent-strong": "#8A5CD4",
+    "--color-accent": "#a68adc",
+    "--color-accent-strong": "#c7b1ea",
     "--color-accent-bg-soft": "rgba(106, 60, 196, 0.08)",
     "--color-accent-bg-faint": "rgba(106, 60, 196, 0.10)",
     "--color-accent-bg": "rgba(106, 60, 196, 0.15)",
@@ -35,10 +35,10 @@
     "--color-accent-glow": "rgba(106, 60, 196, 0.40)",
     "--color-accent-glow-strong": "rgba(138, 92, 212, 0.50)",
     "--color-accent-shadow-soft": "rgba(106, 60, 196, 0.30)",
-    "--color-on-accent": "#E8E8F0",
+    "--color-on-accent": "#2e2e47",
     "--color-success": "#5CD065",
     "--color-warning": "#FFD030",
-    "--color-danger": "#E83838",
+    "--color-danger": "#f18686",
     "--color-info": "#5BB5E8",
     "--color-danger-bg": "rgba(232, 56, 56, 0.10)",
     "--color-danger-bg-hover": "rgba(232, 56, 56, 0.20)",
@@ -60,7 +60,7 @@
     "--color-badge-owned-bg": "#2a3a2a",
     "--color-badge-owned-fg": "#5CD065",
     "--color-badge-tmux-bg": "#2a2a4a",
-    "--color-badge-tmux-fg": "#8A5CD4",
+    "--color-badge-tmux-fg": "#a684de",
     "--color-badge-external-bg": "#4a3a2a",
     "--color-badge-external-fg": "#FFD030",
     "--badge-color-claude": "#6A3CC4",
@@ -98,9 +98,9 @@
     "brightWhite": "#FFFFFF"
   },
   "audio": {
-      "src": "/static/assets/audio/dead-ship.m4a",
-      "srcFallback": "/static/assets/audio/dead-ship.ogg",
-      "volume": 0.5,
-      "fadeMs": 1500
-    }
+    "src": "/static/assets/audio/dead-ship.m4a",
+    "srcFallback": "/static/assets/audio/dead-ship.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
+  }
 }
