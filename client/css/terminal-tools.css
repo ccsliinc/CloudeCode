@@ -392,10 +392,37 @@ body:has(#auth-screen.active) .terminal-status-bar {
     cursor: pointer;
 }
 
-.cloude-session-theme__item:hover,
-.cloude-session-theme__item:focus-visible {
+/* Ancestor-qualified on purpose, not `.cloude-session-theme__item:hover`
+ * alone. styles.css's bare `button:hover:not(:disabled)` (specificity
+ * 0,2,1 - element + :hover + the :disabled inside :not()) applies
+ * `transform: scale(1.05)` plus a glow box-shadow to every button on the
+ * page, this row included, and this class never opted out because it
+ * never had to declare `transform` before. A plain `.cloude-session-
+ * theme__item:hover` is only 0,2,0 - LOWER than the button rule - so
+ * even adding `transform: none` there loses the cascade outright, not
+ * just visually; verified by hovering a real row and reading its
+ * computed `transform`, which stayed `matrix(1.05, 0, 0, 1.05, 0, 0)`
+ * with that weaker selector in place. Qualifying with the list ancestor
+ * raises this to 0,3,0, which beats the button rule on specificity alone
+ * with no `!important` and no source-order dependence.
+ *
+ * The scale mattered because a row already sized to the picker's
+ * clamped max-width grows 5% on hover, and CSS gives a transformed
+ * element its own scrollable overflow region - that growth alone pushed
+ * `.cloude-session-theme__list` past its own width and, because the
+ * list is already `overflow-y: auto`, resolved the list's omitted
+ * overflow-x to a genuine horizontal scrollbar. That scrollbar only
+ * ever existed while a row was hovered or focused, which is why the
+ * resting-state measurement in the original overflow investigation came
+ * back clean. Cancelling the scale keeps the background swap - the
+ * actual hover affordance - without growing the row past its box; the
+ * glow box-shadow is left alone since it does not affect layout or
+ * contribute to scrollWidth. */
+.cloude-session-theme__list .cloude-session-theme__item:hover,
+.cloude-session-theme__list .cloude-session-theme__item:focus-visible {
     background: var(--color-bg-hover);
     outline: none;
+    transform: none;
 }
 
 .cloude-session-theme__item.is-active {
