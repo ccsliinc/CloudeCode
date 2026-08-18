@@ -252,9 +252,10 @@
             </button>
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
-                 never a header one - see #terminal-status-bar near the end
-                 of this file, and App._placeStatusLight(). Do not put it
-                 back: the header row is actions, and the light is state. -->
+                 never a header one - see .info near the end of this file
+                 (#terminal-bar-status inside it) and App._placeStatusLight().
+                 Do not put it back: the header row is actions, and the
+                 light is state. -->
         </div>
         </div><!-- /.header-row -->
         <!-- HOME-HEADER-CONSOLIDATION: launchpad-only second header row.
@@ -379,8 +380,23 @@
             <div id="localServersList"></div>
         </div>
 
+        <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always
+             been a real, in-flow bar spanning the full width at the
+             bottom of #terminal-screen (unlike the home screen, which
+             needed restructuring to get one - see home-bar.css). It held
+             only the session id/PID readout; the connection light now
+             lives here too instead of floating in a fixed corner chip.
+             Same visual language as .home-bar: a shrinkable left item, a
+             spacer, a shrinkable status group on the right. See the
+             "CONNECTION-LIGHT BAR" comment in terminal-tools.css for the
+             full reasoning and App._placeStatusLight() for how the one
+             #statusText node gets moved here. -->
         <div class="info">
             <span id="sessionInfo">No active session</span>
+            <span class="terminal-bar__spacer"></span>
+            <span class="terminal-bar__status" id="terminal-bar-status">
+                <span class="terminal-bar__status-text" id="terminal-bar-status-text"></span>
+            </span>
         </div>
     </div>
 
@@ -705,40 +721,21 @@
          targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" hidden />
 
-    <!-- CONNECTION LIGHT BAR - the terminal screen's home for the ONE
-         #statusText node.
-
-         THE RULE THAT PUT IT HERE. The light is out of the top header
-         entirely, and it is out from under the session tools (the FAB
-         column) too. Where a screen has a bottom bar the light lives in
-         that bar; the home screen already does (.home-bar). The TERMINAL
-         screen has no real bottom bar - it fought its vertical pixels back
-         from 720 to 770 of 786 and is not giving them up - so this is a
-         MINIMAL bar of its own: a small `position: fixed` chip pinned to
-         the bottom-LEFT corner, well clear of the FAB column on the right,
-         so it reads as bottom furniture rather than a third icon stacked
-         under the session tools. Fixed positioning means it still costs
-         ZERO vertical layout space from the terminal.
-
-         The AUTH screen has neither a bar nor this chip, so it shows no
-         light, which is the stated rule applied honestly: this container
-         is display:none there and the parked node goes with it. Nothing is
-         lost - the auth screen reports its own server failures inline.
-
-         ONE NODE, NEVER CLONED. app.js and terminal.js both write it by
-         id, so App._placeStatusLight() MOVES it between here and
-         #home-bar-status. A copy would leave one writer updating an
-         invisible node.
-
-         `tabindex="0"` is the non-hover path to its text: the
-         `.status::after` tooltip was hover-only, which on a phone is a
-         coloured circle with no way to learn what it means. A tap focuses
-         it and `.status:focus::after` reveals the same string. On the home
-         screen the bar renders the text outright instead. -->
-    <div class="terminal-status-bar" id="terminal-status-bar">
-        <span class="status" id="statusText" data-status="Ready" tabindex="0"
-              role="status" aria-live="polite" aria-label="Ready"></span>
-    </div>
+    <!-- THE ONE #statusText NODE STARTS HERE AND NEVER STAYS.
+         App._placeStatusLight() moves it into #home-bar-status (home
+         screen) or #terminal-bar-status (terminal screen, inside the
+         real `.info` bar - see index.html and terminal-tools.css) the
+         moment a screen shows. There used to be a `position: fixed`
+         chip parked here as its own floating "bar"; it is gone, because
+         it was not a bar, it was a chip that happened to sit at a
+         fixed screen position. This bare span is just the node's
+         starting point before the first _placeStatusLight() call runs.
+         Auth screen: neither destination is inside its DOM, so the
+         node just sits here, unattached and invisible, until a real
+         screen claims it - the auth screen reports its own server
+         failures inline and was never meant to show a light. -->
+    <span class="status" id="statusText" data-status="Ready" tabindex="0"
+          role="status" aria-live="polite" aria-label="Ready"></span>
 
     <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
     <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"

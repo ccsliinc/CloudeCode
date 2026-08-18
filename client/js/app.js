@@ -280,19 +280,20 @@ class AppController {
      * visible text label - the light is app-scoped state and the bar has
      * the room to say what it means.
      *
-     * TERMINAL SCREEN: into `#terminal-status-bar`, a small fixed chip
-     * pinned to the bottom-left corner - clear of the FAB column on the
-     * right, so it does not read as a third icon stacked under the
-     * session tools. The terminal screen has no full bottom bar by
-     * construction (it is not paying vertical space back for chrome), but
-     * mid-session is exactly when a dropped socket matters most, so the
-     * light gets this minimal bar of its own rather than disappearing.
-     * `position: fixed` means it still costs zero vertical layout space.
+     * TERMINAL SCREEN: into `#terminal-bar-status`, inside `.info` -
+     * the terminal screen's real bottom bar, in flow, spanning the full
+     * width the same way `.home-bar` does on the home screen. `.info`
+     * already existed (it has always shown "Session: ... | PID: ...");
+     * the light moved into it instead of getting a floating chip of its
+     * own. Same reasoning as the home bar: the dot leads a shrinkable
+     * text label, both on the right of a spacer that pushes them away
+     * from the session id on the left. See terminal-tools.css.
      *
-     * AUTH SCREEN: also parked in `#terminal-status-bar`, which
-     * terminal-tools.css hides on that screen. No bar, no light - the
-     * stated rule, applied honestly. The auth screen reports its own
-     * failures inline.
+     * AUTH SCREEN: neither `#home-bar-status` nor `#terminal-bar-status`
+     * exists in the auth screen's DOM, so the node has no target and
+     * stays wherever it last was, unattached and invisible. No bar, no
+     * light - the stated rule, applied honestly. The auth screen reports
+     * its own failures inline.
      *
      * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
      * @returns {void}
@@ -302,19 +303,17 @@ class AppController {
         if (!el) return;
         const target = screen === 'launchpad'
             ? document.getElementById('home-bar-status')
-            : document.getElementById('terminal-status-bar');
+            : document.getElementById('terminal-bar-status');
         if (!target || el.parentElement === target) return;
-        if (screen === 'launchpad') {
-            // Before the label span, so the dot leads the pair.
-            target.insertBefore(el, target.firstChild);
-        } else {
-            target.appendChild(el);
-        }
+        // Before the label span in both bars, so the dot leads the pair.
+        target.insertBefore(el, target.firstChild);
         this._syncStatusLabel();
     }
 
     /**
-     * Copy `#statusText`'s current `data-status` into the home bar label.
+     * Copy `#statusText`'s current `data-status` into whichever bar
+     * label is present - home bar, terminal bar, or (on the auth screen)
+     * neither.
      *
      * The attribute stays the single source of truth; this only renders
      * it somewhere a touch user can read without hovering.
@@ -322,10 +321,12 @@ class AppController {
      * @returns {void}
      */
     _syncStatusLabel() {
-        const label = document.getElementById('home-bar-status-text');
-        if (!label) return;
         const el = document.getElementById('statusText');
-        label.textContent = el ? (el.getAttribute('data-status') || '') : '';
+        const text = el ? (el.getAttribute('data-status') || '') : '';
+        const homeLabel = document.getElementById('home-bar-status-text');
+        if (homeLabel) homeLabel.textContent = text;
+        const terminalLabel = document.getElementById('terminal-bar-status-text');
+        if (terminalLabel) terminalLabel.textContent = text;
     }
 
     /**

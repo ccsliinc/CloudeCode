@@ -84,11 +84,43 @@
     }
 
     /**
-     * Is the terminal scrolled away from the live bottom?
+     * Is the terminal showing something other than the true live output?
      *
-     * Delegates to terminal-scroll.js so the two modules cannot disagree
-     * about what "scrolled up" means. Fails closed (treats an unreadable
-     * state as "at the bottom") so an error here can only skip this
+     * TWO INDEPENDENT WAYS THIS CAN BE TRUE, because they are two
+     * independent ways a terminal can stop tracking its own scrollback:
+     *
+     * 1. REAL SCROLLBACK, MOVED. Delegates to terminal-scroll.js's
+     *    `isPinnedToBottom()` (`viewportY >= baseY`) so the two modules
+     *    cannot disagree about what "scrolled up" means. This is the
+     *    ONLY case xterm's own buffer state can answer, and only on the
+     *    NORMAL screen - see next.
+     *
+     * 2. THE ALTERNATE SCREEN, SHOWING SOMETHING OTHER THAN THE LIVE
+     *    PROMPT. `buffer.active.baseY` is 0 on the alternate screen BY
+     *    CONSTRUCTION - it has no scrollback dimension at all, so
+     *    `isPinnedToBottom()` is tautologically true there NO MATTER
+     *    WHAT is on screen. Measured live 2026-08-17 against a real
+     *    session: forced tmux into copy-mode 10 rows back on an
+     *    alternate-screen pane (`vim`, mouse reporting on) - the browser
+     *    visibly rendered the scrolled-back rows, `getSelection()` after
+     *    a real drag over them came back empty, and `term.buffer.active`
+     *    read `{viewportY: 0, baseY: 0}` throughout, `isPinnedToBottom()`
+     *    true the entire time. Case 1 cannot see this by construction, so
+     *    it needs its own check. altscreen-scroll.js already answers the
+     *    identifiable version of this question for claude specifically -
+     *    `detectState(term) === 'transcript'` is proven (by the
+     *    transcript view's own unique footer text) to mean the alternate
+     *    screen is showing scrolled-back messages, not the live prompt.
+     *    `'live'` and `'unknown'` are deliberately NOT treated as
+     *    scrolled: a fresh non-claude alt-screen program (vim, htop) that
+     *    the user has not scrolled at all is still legitimately owed its
+     *    own mouse clicks (positioning a cursor, opening its own visual
+     *    selection), and forcing local selection there would be a new
+     *    regression, not a fix - see altscreen-scroll.js's own contract
+     *    that 'unknown' means "do nothing", not "assume the worst".
+     *
+     * Fails closed on both paths (an unreadable state counts as "at the
+     * bottom" / "not transcript") so an error here can only skip this
      * module's behaviour, never suppress a legitimate app mouse report.
      *
      * @param {object} term - an xterm.js Terminal instance.
@@ -96,8 +128,20 @@
      */
     function isScrolledUp(term) {
         var ts = window.TerminalScroll;
-        if (!ts || typeof ts.isPinnedToBottom !== 'function') return false;
-        return !ts.isPinnedToBottom(term);
+        var realScrollback = !!(ts && typeof ts.isPinnedToBottom === 'function'
+            && !ts.isPinnedToBottom(term));
+        if (realScrollback) return true;
+
+        var as = window.AltScreenScroll;
+        if (as && typeof as.detectState === 'function') {
+            try {
+                return as.detectState(term) === 'transcript';
+            } catch (err) {
+                console.warn('TerminalSelectScrolled: altscreen state read failed', err);
+                return false;
+            }
+        }
+        return false;
     }
 
     /**

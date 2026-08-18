@@ -64,8 +64,14 @@ class FakeMouseEvent {
 /**
  * Build a fresh module instance plus a fake term/DOM environment.
  *
- * @param {{pinned: boolean, mouseActive: boolean}} state - the two
- *   booleans the whole module's decision is built from.
+ * @param {{pinned: boolean, mouseActive: boolean, altScreenState?: string}} state
+ *   - `pinned`/`mouseActive` are the two booleans the real-scrollback path
+ *   is built from. `altScreenState`, when given, stands in for
+ *   `AltScreenScroll.detectState(term)` - the alternate-screen path,
+ *   which `pinned` cannot represent because `isPinnedToBottom()` is
+ *   tautologically true on the alternate screen (baseY is always 0
+ *   there). Omitted entirely to test the "AltScreenScroll not loaded"
+ *   fallback.
  * @returns {{api: object, term: object, screenEl: object, dispatched: object[]}}
  */
 function loadModule(state) {
@@ -78,10 +84,14 @@ function loadModule(state) {
         _core: { coreMouseService: { areMouseEventsActive: state.mouseActive } },
         element: { querySelector: (sel) => (sel === '.xterm-screen' ? screenEl : null) },
     };
+    const windowObj = {
+        TerminalScroll: { isPinnedToBottom: () => state.pinned },
+    };
+    if (state.altScreenState !== undefined) {
+        windowObj.AltScreenScroll = { detectState: () => state.altScreenState };
+    }
     const sandbox = {
-        window: {
-            TerminalScroll: { isPinnedToBottom: () => state.pinned },
-        },
+        window: windowObj,
         console: { warn() {}, log() {} },
         MouseEvent: FakeMouseEvent,
     };
@@ -130,6 +140,89 @@ test('at the live bottom: nothing is touched, the app stays in control', () => {
     api.handleMouseDown(term, ev);
     assert.equal(ev.defaultPrevented, false, 'a live-bottom click is a legitimate app interaction');
     assert.equal(dispatched.length, 0);
+});
+
+/* ================= 1b. the alternate-screen case (baseY always 0) ================= */
+//
+// `pinned: true` here is not a typo - it is the whole bug. On the
+// alternate screen `isPinnedToBottom()` is tautologically true no matter
+// what is on screen (baseY is always 0 there), so these cases are
+// impossible to construct with `pinned: false`. Measured live 2026-08-17:
+// see terminal-select-scrolled.js's isScrolledUp() doc comment for the
+// real viewportY/baseY values recorded against a real session.
+
+test('alternate screen, claude transcript view open: real mousedown is replaced', () => {
+    const { api, term, dispatched } = loadModule({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    const ev = realMouseDown();
+    api.handleMouseDown(term, ev);
+    assert.equal(ev.defaultPrevented, true,
+        'baseY===0 must not be read as "at the live bottom" once the alt screen is showing scrollback');
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].shiftKey, true);
+});
+
+test('alternate screen, claude at its live prompt: left alone', () => {
+    const { api, term, dispatched } = loadModule({
+        pinned: true, mouseActive: true, altScreenState: 'live',
+    });
+    const ev = realMouseDown();
+    api.handleMouseDown(term, ev);
+    assert.equal(ev.defaultPrevented, false,
+        'a click on claude\'s own live prompt frame is a legitimate app interaction');
+    assert.equal(dispatched.length, 0);
+});
+
+test('alternate screen, unidentified program (vim, htop, ...): left alone', () => {
+    const { api, term, dispatched } = loadModule({
+        pinned: true, mouseActive: true, altScreenState: 'unknown',
+    });
+    const ev = realMouseDown();
+    api.handleMouseDown(term, ev);
+    assert.equal(ev.defaultPrevented, false,
+        'forcing local selection for every unidentified alt-screen program would break its own '
+        + 'mouse handling (cursor placement, visual-mode select) even when it was never scrolled - '
+        + 'altscreen-scroll.js\'s own contract is "unknown means do nothing"');
+    assert.equal(dispatched.length, 0);
+});
+
+test('AltScreenScroll not loaded: fails closed to the pre-fix behaviour', () => {
+    const { api, term, dispatched } = loadModule({ pinned: true, mouseActive: true });
+    const ev = realMouseDown();
+    api.handleMouseDown(term, ev);
+    assert.equal(ev.defaultPrevented, false,
+        'no module to ask means no evidence of scrollback - must not intercept');
+    assert.equal(dispatched.length, 0);
+});
+
+test('AltScreenScroll.detectState throwing: fails closed, does not crash the click', () => {
+    const { api, term, dispatched } = loadModule({ pinned: true, mouseActive: true });
+    term._forceDetectStateThrow = true;
+    // Rebuild with a throwing detectState directly on the term's window,
+    // since loadModule's helper only supports a fixed return value.
+    const sandboxWindow = { TerminalScroll: { isPinnedToBottom: () => true } };
+    sandboxWindow.AltScreenScroll = { detectState() { throw new Error('buffer read failed'); } };
+    const src = fs.readFileSync(path.join(CLIENT_JS, 'terminal-select-scrolled.js'), 'utf8');
+    const dispatched2 = [];
+    const screenEl2 = { dispatchEvent(ev) { dispatched2.push(ev); return true; } };
+    const term2 = {
+        options: { macOptionClickForcesSelection: false },
+        _core: { coreMouseService: { areMouseEventsActive: true } },
+        element: { querySelector: (sel) => (sel === '.xterm-screen' ? screenEl2 : null) },
+    };
+    const sandbox = {
+        window: sandboxWindow,
+        console: { warn() {}, log() {} },
+        MouseEvent: FakeMouseEvent,
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+    const ev = realMouseDown();
+    assert.doesNotThrow(() => sandbox.window.TerminalSelectScrolled.handleMouseDown(term2, ev));
+    assert.equal(ev.defaultPrevented, false, 'a throwing detectState must not intercept the click');
+    assert.equal(dispatched2.length, 0);
 });
 
 test('mouse tracking off: the app never owned this gesture, nothing to fix', () => {
