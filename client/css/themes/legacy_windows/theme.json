@@ -52,6 +52,7 @@
     "brightCyan": "#00FFFF",
     "brightWhite": "#FFFFFF"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/out-there.m4a",
     "srcFallback": "/static/assets/audio/out-there.ogg",
