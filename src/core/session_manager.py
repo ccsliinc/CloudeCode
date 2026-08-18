@@ -67,7 +67,24 @@ _TERMINAL_COMMAND_WRITE_ATTEMPTS = 20
 _TERMINAL_COMMAND_WRITE_DELAY_SECONDS = 0.1
 
 
-_TMUX_FORBIDDEN_CHARS = re.compile(r"[.:]")
+# Characters that must never survive into a tmux session name.
+#
+# '.' and ':' are tmux's own pane and window separators. '|' is legal in a
+# tmux name but is the DELIMITER of the listing format this app parses
+# (src/core/tmux_listing_parse.LISTING_FORMAT), so a project called
+# "api|prod" used to mint a name the app's own parser could not read back
+# - no attacker required. The bounded split in that module makes such a
+# name parseable now, so this is defence in depth rather than the primary
+# guard, and it is kept because a name the app itself minted should never
+# depend on a parser subtlety to be read correctly.
+#
+# Non-whitespace control characters go too. The whitespace ones (tab,
+# newline, carriage return, vertical tab, form feed) are deliberately NOT
+# in this class: rule 2's whitespace collapse already turns them into a
+# single space, which is the pre-existing behaviour and is the friendlier
+# result for a name someone typed with a stray newline. \x09 to \x0d are
+# therefore excluded here so the two rules do not fight over them.
+_TMUX_FORBIDDEN_CHARS = re.compile(r"[.:|\x00-\x08\x0e-\x1f\x7f]")
 _WHITESPACE_RUN = re.compile(r"\s+")
 
 
@@ -113,12 +130,16 @@ def backfill_agent_type(
 def _sanitize_tmux_name(name: str) -> str:
     """Transform a project name into a tmux-safe session name (verbatim where possible).
 
-    tmux forbids only '.' (pane separator) and ':' (window separator) - everything else
-    (spaces, case, unicode, emoji, punctuation) is legal. This helper preserves the
-    original name as closely as possible.
+    tmux itself forbids only '.' (pane separator) and ':' (window separator).
+    This helper additionally rejects '|' and control characters, because those
+    are structural in the listing format the app parses back
+    (src/core/tmux_listing_parse.LISTING_FORMAT): '|' is the field delimiter
+    and a newline would split one session across two rows. Everything else
+    (spaces, case, unicode, emoji, punctuation) is legal and preserved, so the
+    helper still keeps the original name as close to verbatim as it can.
 
     Rules:
-      1. Replace any '.' or ':' with '_'.
+      1. Replace any '.', ':', '|' or control character with '_'.
       2. Collapse runs of whitespace (including newlines/tabs) into a single space.
       3. Strip leading and trailing whitespace.
 
@@ -2793,25 +2814,50 @@ class SessionManager:
             or DEFAULT_TMUX_SOCKET
         )
 
+    def tmux_socket_name(self) -> str:
+        """The tmux socket this manager probes and keys its rows on.
+
+        Description: the public face of :meth:`_tmux_socket_name`, added
+          because src/main.py must hand the first-run import the SAME
+          socket the probe ran against. It previously passed nothing, so
+          imported rows took the module default while this manager read
+          the CONFIGURED value back - and a user with a custom
+          ``session.tmux_socket_name`` got an ownership badge that fell
+          back to the name-only tier for the entire install.
+        Inputs: none.
+        Output: str - the configured socket name, or the schema default.
+        Example: mgr.tmux_socket_name()  # 'cloude'
+        """
+        return self._tmux_socket_name()
+
     def owned_tmux_instances(self) -> Optional[set]:
-        """Owned ``(tmux_name, epoch)`` pairs, DB first, legacy set folded in.
+        """Owned ``(tmux_name, epoch)`` pairs from the datastore, and only those.
 
         Description: the value handed to the attachable listing, which is
           the one path that HAS the epoch for every row and can therefore
-          make the identity-correct decision. Legacy names contribute with
-          a wildcard epoch of None, which the backend treats as
-          name-matching for that name only.
+          make the identity-correct decision.
+
+          THE LEGACY NAME SET IS DELIBERATELY NOT FOLDED IN HERE. It used
+          to be, as ``(name, None)``, and the backend read a None epoch as
+          a NAME-ONLY WILDCARD. That disabled the epoch tier for every
+          session this app had created since the last restart - which is
+          precisely the population the epoch exists to protect - so a dead
+          ``cloude_work`` replaced by the user's own unrelated
+          ``cloude_work`` badged as ours, exactly as it did before the
+          epoch was introduced. The legacy names still reach the backend,
+          but as the SEPARATE ``owned_names`` argument, so they can be
+          resolved at their own, lower, explicitly name-only tier and can
+          never override a stored epoch. See
+          :func:`src.core.tmux_listing_parse.resolve_ownership`.
         Inputs: none.
-        Output: set[tuple[str, int | None]] | None - None when the DB had
-          no opinion AND the legacy set is empty, so the backend keeps its
-          existing name-based behaviour untouched.
+        Output: set[tuple[str, int]] | None - None when the datastore
+          could not answer at all. An EMPTY SET is a real answer ("the DB
+          knows of no owned instance") and is not the same as None.
         """
         from_db = self._owned_instances_from_db()
-        legacy = {(name, None) for name in self.owned_tmux_sessions}
         if from_db is None:
-            return legacy or None
-        combined = set(from_db) | legacy
-        return combined or set()
+            return None
+        return set(from_db)
 
     def is_owned_tmux_name(self, name: Optional[str]) -> bool:
         """Report whether a tmux NAME belongs to a session we own.

@@ -33,11 +33,13 @@ tests/test_db_migration.py"
 FILES=(
   "src/core/session_store.py"
   "src/core/session_identity.py"
+  "src/core/session_reconcile.py"
   "src/core/session_import.py"
   "src/core/session_import_mapping.py"
   "src/core/db_models.py"
   "src/core/project_store.py"
   "src/core/tmux_backend.py"
+  "src/core/tmux_listing_parse.py"
 )
 
 BAKDIR="$(mktemp -d)"
@@ -124,20 +126,25 @@ mutate "instance lookup drops the epoch and matches on the name alone" \
         (socket, name),'
 
 mutate "the same-second collision is merged instead of refused" \
-  "src/core/session_identity.py" \
+  "src/core/session_reconcile.py" \
   '    if existing.get("lifecycle") == SESSION_LIFECYCLE_STOPPED:||=>||    if False:'
 
 mutate "the refusal is silent (log event renamed, nothing else changes)" \
-  "src/core/session_identity.py" \
+  "src/core/session_reconcile.py" \
   '            "session_instance_epoch_collision_refused",||=>||            "session_instance_merged",'
 
 mutate "adopted_at becomes LAST-write-wins" \
   "src/core/session_identity.py" \
   '        "adopted_at = COALESCE(adopted_at, ?)",||=>||        "adopted_at = ?",'
 
+# The instance tier moved out of tmux_backend and into
+# tmux_listing_parse.resolve_ownership, so it could be unit-tested against
+# a hostile tmux row without shelling out. The mutation follows it.
 mutate "the ownership badge ignores the instance tier" \
-  "src/core/tmux_backend.py" \
-  '            if owned_instances is not None:||=>||            if False:'
+  "src/core/tmux_listing_parse.py" \
+  '    if owned_instances is not None:
+        if (name, created_at_epoch) in owned_instances:||=>||    if False:
+        if (name, created_at_epoch) in owned_instances:'
 
 mutate "only 'created' badges as ours, so adoption never sticks" \
   "src/core/db_models.py" \

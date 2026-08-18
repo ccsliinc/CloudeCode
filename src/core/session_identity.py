@@ -16,13 +16,36 @@ THE THREE DECISIONS, AND WHY THERE ARE THREE.
            because origin is written once and never recomputed (design
            4.6) - an ``observed`` sighting must not demote an ``adopted``
            session.
-  REFUSE   a STOPPED row carries it. At ``#{session_created}``'s
-           one-second resolution that means a session died and another
-           took its name inside the same second, so the stored row cannot
-           be the live one in front of us. Overwriting it would hand one
-           session's history, and one session's ownership badge, to a
-           different process. Nothing is written and a warning naming
-           BOTH rows is logged.
+  REFUSE   the stored row cannot be the live instance in front of us.
+           TWO independent reasons, and the first was added because the
+           second alone was not enough:
+
+             the SESSION IDS DISAGREE. tmux's ``#{session_id}`` is
+             unique per server lifetime, so two rows sharing a triple but
+             carrying different ids are provably different sessions -
+             something the one-second creation epoch cannot establish.
+             Fires REGARDLESS of the stored lifecycle.
+
+             the stored row is STOPPED. At ``#{session_created}``'s
+             one-second resolution that means a session died and another
+             took its name inside the same second.
+
+Overwriting in either case would hand one session's history, and one
+session's ownership badge, to a different process. Nothing is written and
+a warning naming BOTH rows is logged.
+
+WHY THE ID CHECK WAS NEEDED. The stopped-only guard covered the RARER
+half. A row is marked stopped only by a successful probe, and probes are
+periodic, so in the window between a session dying and the next probe the
+stored row is still ``running`` - and a same-second name reuse MERGED,
+handing the new process the dead session's ``session_uuid``, its
+``origin='adopted'`` and its ``adopted_at``. That window is the common
+case, not the exotic one.
+
+A NULL id means NOT RECORDED, never "different". Both sides must carry
+one for the mismatch to fire, so an upgraded install whose rows predate
+schema v3 degrades to the stopped-only guard rather than refusing every
+legitimate re-sighting.
 
 The refusal is the entire reason this is three outcomes and not two.
 """
@@ -43,6 +66,13 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_STOPPED,
     SESSION_ORIGIN_ADOPTED,
 )
+from src.core.session_reconcile import (
+    RECORD_MERGED,
+    RECORD_REFUSALS,
+    RECORD_REFUSED_EPOCH_COLLISION,
+    RECORD_REFUSED_INSTANCE_MISMATCH,
+    reconcile_existing,
+)
 from src.core.session_store import get_instance, sessions_table_ready
 from src.core.trail_entry import utc_now
 
@@ -51,9 +81,10 @@ logger = structlog.get_logger()
 
 #: Outcomes of :func:`record_instance`. Three, not two: the third is the
 #: refusal, and it must never be reported as either of the first two.
+#: The only outcome minted here. The other three (``merged`` and the two
+#: refusals) are decided in src/core/session_reconcile.py and re-exported
+#: from this module so callers still have ONE import for the vocabulary.
 RECORD_INSERTED = "inserted"
-RECORD_MERGED = "merged"
-RECORD_REFUSED_EPOCH_COLLISION = "refused_epoch_collision"
 
 #: Columns :func:`record_instance` may fill on INSERT. Anything not here
 #: keeps its schema default; nothing here is ever overwritten on a merge,
@@ -74,6 +105,7 @@ _OPTIONAL_INSERT_COLUMNS: Tuple[str, ...] = (
     "unread_manual",
     "title",
     "adopted_at",
+    "tmux_session_id",
 )
 
 
@@ -104,7 +136,7 @@ class RecordResult:
         Inputs: none.
         Output: bool.
         """
-        return self.outcome == RECORD_REFUSED_EPOCH_COLLISION
+        return self.outcome in RECORD_REFUSALS
 
 
 def new_session_uuid() -> str:
@@ -128,6 +160,7 @@ def record_instance(
     origin: str,
     lifecycle: str = SESSION_LIFECYCLE_RUNNING,
     lifecycle_source: Optional[str] = None,
+    session_id: Optional[str] = None,
     now: Optional[str] = None,
     **fields: Any,
 ) -> RecordResult:
@@ -146,18 +179,23 @@ def record_instance(
         never recomputed (design 4.6), so an ``observed`` sighting of an
         already-``adopted`` session must not demote it.
 
-      REFUSED   a row carries this triple and IS ``stopped``. At
-        one-second epoch resolution that means a session died and another
-        took its name inside the same second, so the stored row cannot be
-        the live one. Overwriting it would hand one session's history -
-        including an adoption the user made - to a different process.
-        Nothing is written, a warning naming BOTH rows is logged, and the
-        caller gets ``RECORD_REFUSED_EPOCH_COLLISION``.
+      REFUSED   the stored row cannot be the live instance. Either the
+        stored and incoming ``#{session_id}`` DISAGREE, which proves two
+        different sessions and fires whatever the stored lifecycle is
+        (``RECORD_REFUSED_INSTANCE_MISMATCH``); or the row IS ``stopped``,
+        which at one-second epoch resolution means a session died and
+        another took its name inside the same second
+        (``RECORD_REFUSED_EPOCH_COLLISION``). Overwriting would hand one
+        session's history - including an adoption the user made - to a
+        different process. Nothing is written and a warning naming BOTH
+        rows is logged.
     Inputs: conn (sqlite3.Connection) - caller owns the transaction.
       socket (str), name (str), epoch (int) - the instance triple.
       origin (str) - one of db_models.SESSION_ORIGINS; applied on INSERT
       only. lifecycle (str) - default ``running``. lifecycle_source
-      (str | None). now (str | None) - ISO-8601 stamp, defaults to
+      (str | None). session_id (str | None) - tmux ``#{session_id}``,
+      the instance discriminator; None means not recorded and can never
+      cause a refusal. now (str | None) - ISO-8601 stamp, defaults to
       ``utc_now()``; exposed for tests with a fixed clock. **fields - any
       of ``_OPTIONAL_INSERT_COLUMNS``, applied on INSERT only.
     Output: RecordResult.
@@ -174,9 +212,12 @@ def record_instance(
             f"record_instance got unknown column(s): {sorted(unknown)}"
         )
 
+    if session_id is not None:
+        fields.setdefault("tmux_session_id", session_id)
+
     existing = get_instance(conn, socket=socket, name=name, epoch=epoch)
     if existing is not None:
-        return _reconcile_existing(
+        return reconcile_existing(
             conn,
             existing=existing,
             socket=socket,
@@ -185,6 +226,7 @@ def record_instance(
             incoming_origin=origin,
             lifecycle=lifecycle,
             lifecycle_source=lifecycle_source,
+            incoming_session_id=session_id,
             stamp=stamp,
         )
 
@@ -239,90 +281,6 @@ def record_instance(
     )
 
 
-def _reconcile_existing(
-    conn: sqlite3.Connection,
-    *,
-    existing: Dict[str, Any],
-    socket: str,
-    name: str,
-    epoch: int,
-    incoming_origin: str,
-    lifecycle: str,
-    lifecycle_source: Optional[str],
-    stamp: str,
-) -> RecordResult:
-    """Refresh a live row's liveness, or refuse a same-epoch collision.
-
-    Description: the branch of :func:`record_instance` taken when the
-      triple already has a row. Split out so the refusal is a named piece
-      of code with its own log line rather than an early return buried in
-      a longer function. The log deliberately names BOTH rows - the
-      stored one by id, uuid, origin and adoption stamp, and the incoming
-      one by its triple and asserted origin - because a collision that
-      only names one of them is not diagnosable.
-    Inputs: conn (sqlite3.Connection). existing (dict) - the stored row.
-      socket (str), name (str), epoch (int) - the triple. incoming_origin
-      (str). lifecycle (str), lifecycle_source (str | None), stamp (str).
-    Output: RecordResult - ``merged`` or ``refused_epoch_collision``.
-    """
-    if existing.get("lifecycle") == SESSION_LIFECYCLE_STOPPED:
-        detail = (
-            f"stored session id={existing.get('id')} "
-            f"uuid={existing.get('session_uuid')} "
-            f"origin={existing.get('origin')} "
-            f"adopted_at={existing.get('adopted_at')} "
-            f"lifecycle=stopped already holds instance "
-            f"({socket}, {name}, {epoch}); incoming live instance "
-            f"({socket}, {name}, {epoch}) origin={incoming_origin} "
-            f"lifecycle={lifecycle} REFUSED, nothing written"
-        )
-        logger.warning(
-            "session_instance_epoch_collision_refused",
-            tmux_socket=socket,
-            tmux_name=name,
-            tmux_created_epoch=int(epoch),
-            stored_session_id=existing.get("id"),
-            stored_session_uuid=existing.get("session_uuid"),
-            stored_origin=existing.get("origin"),
-            stored_adopted_at=existing.get("adopted_at"),
-            stored_lifecycle=existing.get("lifecycle"),
-            incoming_origin=incoming_origin,
-            incoming_lifecycle=lifecycle,
-            note=(
-                "tmux #{session_created} has one-second resolution; a stopped "
-                "row cannot be the live instance, so the merge is refused "
-                "rather than overwriting another session's history"
-            ),
-            detail=detail,
-        )
-        return RecordResult(
-            outcome=RECORD_REFUSED_EPOCH_COLLISION,
-            session_id=int(existing["id"]),
-            session_uuid=existing.get("session_uuid"),
-            detail=detail,
-        )
-
-    sets = [
-        "lifecycle = ?",
-        "lifecycle_checked_at = ?",
-        "lifecycle_source = ?",
-        "updated_at = ?",
-    ]
-    values: List[Any] = [lifecycle, stamp, lifecycle_source, stamp]
-    if lifecycle == SESSION_LIFECYCLE_RUNNING:
-        sets.append("last_seen_running_at = ?")
-        values.append(stamp)
-    values.append(int(existing["id"]))
-    conn.execute(
-        f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", values
-    )
-    return RecordResult(
-        outcome=RECORD_MERGED,
-        session_id=int(existing["id"]),
-        session_uuid=existing.get("session_uuid"),
-    )
-
-
 def adopt_instance(
     conn: sqlite3.Connection,
     *,
@@ -363,10 +321,19 @@ def adopt_instance(
       working_dir (str | None), agent_family_source (str | None) - each
       applied only when not None, so a caller that could not probe a
       value leaves the stored one alone rather than nulling it.
-    Output: bool - True when a row was updated; False when no row carries
-      that triple (nothing was created, and that is the honest answer:
-      adopting a session we have no record of is a caller bug, not a
-      row to invent).
+      LIFECYCLE IS GUARDED. The UPDATE requires the row NOT be
+      ``stopped``. Adoption is a claim on a LIVE session, and the triple
+      alone does not carry liveness - so a client holding a listing from
+      before the session died could POST /sessions/adopt and permanently
+      mark a corpse as adopted, getting ``True`` back for a process that
+      no longer exists. A refused claim is logged with the stored
+      lifecycle named, so the two ways of returning False stay
+      distinguishable in the log.
+    Output: bool - True when a LIVE row was updated. False when no row
+      carries that triple (nothing was created, and that is the honest
+      answer: adopting a session we have no record of is a caller bug,
+      not a row to invent), and False when the row exists but is
+      ``stopped``.
     Example: adopt_instance(conn, socket='cloude', name='a', epoch=1000)
     """
     if not sessions_table_ready(conn):
@@ -387,10 +354,33 @@ def adopt_instance(
         if value is not None:
             sets.append(f"{column} = ?")
             values.append(value)
-    values.extend([socket, name, int(epoch)])
+    values.extend([socket, name, int(epoch), SESSION_LIFECYCLE_STOPPED])
     cursor = conn.execute(
         f"UPDATE sessions SET {', '.join(sets)} WHERE tmux_socket = ? "
-        "AND tmux_name = ? AND tmux_created_epoch = ?",
+        "AND tmux_name = ? AND tmux_created_epoch = ? AND lifecycle != ?",
         values,
     )
-    return cursor.rowcount > 0
+    if cursor.rowcount > 0:
+        return True
+
+    # Nothing was claimed. Say WHICH of the two reasons, because "no such
+    # row" and "that row is a corpse" are different facts and a bare False
+    # collapses them into one unactionable answer.
+    existing = get_instance(conn, socket=socket, name=name, epoch=epoch)
+    if existing is not None:
+        logger.warning(
+            "session_adopt_refused_not_running",
+            tmux_socket=socket,
+            tmux_name=name,
+            tmux_created_epoch=int(epoch),
+            stored_session_id=existing.get("id"),
+            stored_session_uuid=existing.get("session_uuid"),
+            stored_lifecycle=existing.get("lifecycle"),
+            note=(
+                "adoption claims a LIVE session; a stopped row cannot be "
+                "adopted because the process it described is gone, and a "
+                "client holding a listing from before it died would "
+                "otherwise permanently badge a corpse as the user's"
+            ),
+        )
+    return False

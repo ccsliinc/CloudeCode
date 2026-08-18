@@ -176,42 +176,103 @@ def test_a_later_successful_run_completes_the_import(conn):
 def test_NO_CODE_PATH_STAMPS_THE_LATCH_ON_THE_FAILED_PROBE_BRANCH():
     """The structural half: assert the negative directly, in the AST.
 
-    Two facts, both mechanical:
-      1. session_import.py contains EXACTLY ONE call that stamps
-         META_IMPORTED_FROM_JSON_AT.
-      2. That call is textually AFTER the ``if not listing.ok:`` guard,
-         and that guard's body returns - so the stamp is unreachable from
-         the failed-probe branch.
+    THE LATCH IS TWO KEYS AND THIS TEST USED TO CONSTRAIN ONE.
+
+    ``meta.imported_from_json_at`` is what GET /sessions/import-status
+    reports. ``imported_from_json_result[sessions_imported_at]`` is what
+    ``sessions_stage_done()`` actually READS to decide whether to run.
+    The old version of this test proved things only about the first, so
+    an edit that hoisted the SECOND write above the gate latched the
+    import shut forever - while every reader reported it had never
+    completed - and BOTH of the old assertions still passed on that
+    mutant.
+
+    Four facts now, all mechanical:
+      1. Every write of EITHER latch key lives inside
+         ``_latch_sessions_stage``. No other function in the module may
+         write either one.
+      2. ``_latch_sessions_stage`` has exactly ONE call site.
+      3. That call site is textually AFTER the ``if not listing.ok:``
+         guard, whose body returns - so it is unreachable from the
+         failed-probe branch.
+      4. The failed-probe branch writes no session rows.
 
     A behavioural test can only fail on inputs somebody thought to try.
-    This one fails on the EDIT, which is the actual risk: the whole
-    danger is a future change that adds a second stamp or hoists this one
-    above the gate.
+    This one fails on the EDIT, which is the actual risk.
     """
     source = SESSION_IMPORT_PATH.read_text()
     tree = ast.parse(source)
 
-    stamps = []
+    latch_helper = "_latch_sessions_stage"
+
+    def _enclosing_function(target):
+        """Name the function a node sits inside, or None at module level.
+
+        Inputs: target (ast.AST).
+        Output: str | None.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if any(inner is target for inner in ast.walk(node)):
+                    return node.name
+        return None
+
+    # --- fact 1: both latch keys are written ONLY inside the helper ----
+    # Named so a future third key is added to this tuple deliberately
+    # rather than slipping in unconstrained.
+    latch_writes = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         name = getattr(func, "id", None) or getattr(func, "attr", None)
-        if name != "set_meta":
-            continue
-        for arg in node.args:
-            if getattr(arg, "id", None) == "META_IMPORTED_FROM_JSON_AT" or (
-                getattr(arg, "value", None) == "imported_from_json_at"
-            ):
-                stamps.append(node.lineno)
+        if name == "set_meta":
+            for arg in node.args:
+                if getattr(arg, "id", None) == "META_IMPORTED_FROM_JSON_AT" or (
+                    getattr(arg, "value", None) == "imported_from_json_at"
+                ):
+                    latch_writes.append(("imported_from_json_at", node.lineno))
+        if name == "_merge_result_blob":
+            # Any merge that can carry the sessions-stage key is a latch
+            # write. Checked by looking for the constant anywhere in the
+            # call, because the patch dict is built inline.
+            for sub in ast.walk(node):
+                if getattr(sub, "id", None) == "RESULT_KEY_SESSIONS_STAGE" or (
+                    getattr(sub, "value", None) == "sessions_imported_at"
+                ):
+                    latch_writes.append(("sessions_imported_at", node.lineno))
 
-    assert len(stamps) == 1, (
-        f"expected exactly ONE latch stamp in session_import.py, found "
-        f"{len(stamps)} at lines {stamps}. Every extra one is a path that "
-        "can mark the import complete without having done it"
+    assert latch_writes, "found no latch writes at all - has the module moved?"
+    for key, lineno in latch_writes:
+        owner = _enclosing_function(
+            next(
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and n.lineno == lineno
+            )
+        )
+        assert owner == latch_helper, (
+            f"the latch key {key!r} is written at line {lineno} inside "
+            f"{owner!r}, not inside {latch_helper!r}. Every write that "
+            "sessions_stage_done() can observe must live in the one "
+            "helper, or a mutation can latch the import shut from a path "
+            "this test does not constrain"
+        )
+
+    # --- fact 2: the helper has exactly ONE call site ------------------
+    call_sites = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) == latch_helper)
+    ]
+    assert len(call_sites) == 1, (
+        f"expected exactly ONE call to {latch_helper}, found "
+        f"{len(call_sites)} at lines {call_sites}. Every extra one is a "
+        "path that can mark the import complete without having done it"
     )
 
-    # locate the gate: the `if not listing.ok:` whose body returns
+    # --- fact 3: that call site is after the failed-probe gate ---------
     gates = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
@@ -230,16 +291,67 @@ def test_NO_CODE_PATH_STAMPS_THE_LATCH_ON_THE_FAILED_PROBE_BRANCH():
 
     assert len(gates) == 1, f"expected one listing.ok gate, found {gates}"
     gate_start, gate_end = gates[0]
-    assert stamps[0] > gate_end, (
-        f"the latch stamp is at line {stamps[0]}, which is NOT after the "
-        f"failed-probe gate ending at line {gate_end}. It is reachable "
-        "before the probe has been shown to have succeeded"
+    assert call_sites[0] > gate_end, (
+        f"the latch call is at line {call_sites[0]}, which is NOT after "
+        f"the failed-probe gate ending at line {gate_end}. It is "
+        "reachable before the probe has been shown to have succeeded"
     )
 
-    # and nothing inside the gate's body writes a session row either
+    # --- fact 4: nothing inside the gate's body writes a session row ---
     gate_body = "\n".join(source.splitlines()[gate_start - 1:gate_end])
     assert "record_instance" not in gate_body, (
         "the failed-probe branch writes session rows"
+    )
+
+
+def test_the_ast_proof_KILLS_the_hoisted_blob_mutation():
+    """The proof must fail on the mutant that defeated its predecessor.
+
+    Description: the adversary's demonstration, run as a test. It builds
+      the exact mutant that used to pass - ``_merge_result_blob`` with the
+      sessions-stage key hoisted above the failed-probe gate, with
+      ``set_meta(META_IMPORTED_FROM_JSON_AT)`` left exactly where it is -
+      and asserts the structural check now REJECTS it. Without this, the
+      rewritten proof above is only asserted to pass on good code, which
+      is the weaker half of the claim.
+    Inputs: none.
+    Output: None.
+    """
+    source = SESSION_IMPORT_PATH.read_text()
+    marker = (
+        "    # --- step 3: THE GATE ---------------------------------------"
+        "---------\n"
+    )
+    assert marker in source, "the gate marker moved; update this mutation"
+    mutant = source.replace(
+        marker,
+        "    _merge_result_blob(conn, {RESULT_KEY_SESSIONS_STAGE: stamp})\n"
+        + marker,
+        1,
+    )
+    tree = ast.parse(mutant)
+
+    # The same fact-1 scan the real proof runs: every sessions-stage write
+    # must sit inside _latch_sessions_stage.
+    offenders = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if func.name == "_latch_sessions_stage":
+            continue
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "id", None) != "_merge_result_blob":
+                continue
+            for sub in ast.walk(node):
+                if getattr(sub, "id", None) == "RESULT_KEY_SESSIONS_STAGE":
+                    offenders.append((func.name, node.lineno))
+
+    assert offenders, (
+        "the hoisted-blob mutant was NOT detected. This is the exact "
+        "mutation that walked past the previous version of the AST proof "
+        "and latched the import shut permanently"
     )
 
 

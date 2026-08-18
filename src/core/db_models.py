@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 2
+CURRENT_SCHEMA_VERSION: int = 3
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -408,6 +408,58 @@ DDL_V2: Tuple[str, ...] = (
     DDL_SESSIONS_PARENT_INDEX,
 )
 
+# ---- schema v3: the session-id discriminator -------------------------------
+#
+# WHY A NEW VERSION RATHER THAN AN EDIT TO v2. v2 has shipped and has
+# readers. Redefining it in place would leave any file already at v2
+# describing a schema the code no longer expects, with nothing to detect
+# the difference. So this is its own additive step, per this module's
+# additive-only rule.
+#
+# WHAT IT ADDS, AND WHAT IT DELIBERATELY DOES NOT. One nullable column:
+# ``tmux_session_id``, tmux's ``#{session_id}`` (``$0``, ``$1``, ...).
+#
+# THE IDENTITY KEY IS UNCHANGED. ux_sessions_tmux_instance still keys on
+# (tmux_socket, tmux_name, tmux_created_epoch) and this step does not
+# touch it. That is a decision, not an omission, and it cuts against the
+# obvious reading that session_id is "the real identity":
+#
+#   session_id is unique per SERVER LIFETIME and restarts at $0 when the
+#   server does. $3 today and $3 after a reboot are DIFFERENT sessions
+#   with the same id. As a durable key stored on disk it is therefore
+#   strictly WORSE than the creation epoch, which does not repeat.
+#
+#   It is strictly BETTER at separating two sessions that exist at the
+#   same moment, which is the one thing a one-second epoch cannot do.
+#
+# So it is stored as a DISCRIMINATOR, never as a key: it can only ever
+# cause a merge to be REFUSED (the stored row names a different live
+# session than the one in front of us), never cause one to be accepted.
+# A refusal on bad evidence costs one row; an acceptance on bad evidence
+# hands one session's history and ownership badge to a stranger. The
+# asymmetry decides which way an uncertain answer must fall.
+#
+# NULLABLE ON PURPOSE. Every row written before this column existed has
+# NULL here, and NULL means "not recorded", never "different". The
+# refusal fires only when BOTH sides carry an id and they disagree.
+DDL_SESSIONS_ADD_SESSION_ID = (
+    "ALTER TABLE sessions ADD COLUMN tmux_session_id TEXT"
+)
+
+#: Ordered DDL for a v2 -> v3 database. ALTER TABLE ADD COLUMN has no
+#: IF NOT EXISTS in SQLite, so the step in db_steps.py inspects
+#: PRAGMA table_info first; that inspection is what makes this idempotent,
+#: not the statement itself.
+DDL_V3: Tuple[str, ...] = (DDL_SESSIONS_ADD_SESSION_ID,)
+
+#: SQLite cannot drop a column without rebuilding the table, and this
+#: module is additive-only, so a REVERSE of v2 -> v3 is a RESTORE from the
+#: verified backup rather than a statement. Stated as an empty tuple with
+#: this comment rather than omitted, so the absence is a decision on the
+#: record and not a gap someone fills in later with a DROP.
+REVERSAL_SQL_V3: Tuple[str, ...] = ()
+
+
 # What a REVERSE of v1 -> v2 would run. Dropping the table drops its
 # indexes with it; the index drops are listed anyway so the block reads
 # as the exact inverse of DDL_V2 rather than relying on a side effect.
@@ -431,4 +483,5 @@ REVERSAL_DESTROYS: dict = {
         "projects (whole table)",
     ),
     2: ("sessions (whole table)",),
+    3: ("sessions.tmux_session_id",),
 }

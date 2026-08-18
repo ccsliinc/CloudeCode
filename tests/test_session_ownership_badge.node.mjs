@@ -332,10 +332,20 @@ for (const [label, merge] of MERGES) {
 
 const manager = read('src', 'core', 'session_manager.py');
 const backend = read('src', 'core', 'tmux_backend.py');
+// The resolution itself moved out of tmux_backend and into this module
+// so it could be unit-tested against a hostile tmux row without shelling
+// out. The backend must delegate to it rather than keep a second copy.
+const resolver = read('src', 'core', 'tmux_listing_parse.py');
 
 await test('the server answers ownership from the persisted owned set', () => {
-    assert.match(backend, /created_by_cloude = name in owned_names/,
+    assert.match(resolver, /return name in owned_names/,
         '/sessions/attachable must keep sourcing the flag from the owned set');
+    assert.match(backend, /created_by_cloude = resolve_ownership\(/,
+        'the backend must delegate to the shared resolver, not grow a '
+        + 'second copy of the ownership decision');
+    assert.doesNotMatch(backend, /created_by_cloude = name in owned_names/,
+        'the backend kept an inline copy of the owned-name tier; that is '
+        + 'how the badge came to disagree with itself before');
     assert.match(manager, /created_by_cloude=bool\(\s*tmux_session_name/,
         'SessionInfo must carry the same flag from the same set, or the '
         + 'client has nothing to read on the merge path and will invent one');

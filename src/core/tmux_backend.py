@@ -50,6 +50,11 @@ from typing import Any, Callable, Dict, List, Optional
 import structlog
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.tmux_listing_parse import (
+    LISTING_FORMAT,
+    parse_listing_row,
+    resolve_ownership,
+)
 from src.core.tmux_listing import (
     REASON_PROBE_ERROR,
     REASON_TIMEOUT,
@@ -1081,9 +1086,13 @@ class TmuxBackend(SessionBackend):
     ) -> TmuxListing:
         """Enumerate tmux sessions on our socket for the adopt UI.
 
-        Runs ``tmux -L <socket> list-sessions -F
-        '#{session_name}|#{session_created}|#{session_windows}'`` and
-        splits each line on ``|``.
+        Runs ``tmux -L <socket> list-sessions -F LISTING_FORMAT`` and
+        parses each line with
+        :func:`src.core.tmux_listing_parse.parse_listing_row`. The
+        caller-controlled session NAME is the LAST field and the split is
+        bounded, so a name containing the ``|`` delimiter can no longer
+        forge the fields in front of it. A row that does not validate is
+        refused and logged, never half-parsed.
 
         Inputs:
             owned_names (Optional[set]): names this app persisted as its
@@ -1093,9 +1102,10 @@ class TmuxBackend(SessionBackend):
                 S4). PREFERRED over ``owned_names`` when supplied,
                 because it identifies the tmux INSTANCE rather than the
                 name, and the name is not an identity - it is reusable.
-                An entry whose epoch is ``None`` is a legacy in-memory
-                name carrying no creation time; it matches on the name
-                alone, exactly as before. ``None`` for the whole argument
+                Every entry must carry an INTEGER epoch. A ``None``
+                epoch is NOT a wildcard and is ignored - the wildcard
+                form used to defeat the epoch tier for exactly the
+                sessions it protects. ``None`` for the whole argument
                 means "no instance opinion", and resolution falls back to
                 ``owned_names``.
 
@@ -1107,19 +1117,15 @@ class TmuxBackend(SessionBackend):
                 timed out, or failed - the caller must not read that as
                 zero sessions.
 
-        RESOLUTION ORDER for ``created_by_cloude``, most specific
-        first: ``owned_instances`` (identity - name AND epoch), then
-        ``owned_names`` (the SessionManager-persisted name set), then the
-        ``cloude_`` prefix heuristic. When both owned arguments are None
-        we take the heuristic AND log a debug note - callers from the
-        live app path should always pass an owned set so a user's
-        ``cloude_whatever`` external session doesn't masquerade as ours.
-
-        WHY THE EPOCH TIER MATTERS. If a session named ``foo`` that this
-        app owned dies, and the user creates a new unrelated ``foo``, the
-        name still matches the owned set and the new, unowned process
-        would badge as ours. The epoch differs, so the instance does not
-        match, and the new session correctly badges external.
+        RESOLUTION ORDER for ``created_by_cloude`` lives in
+        :func:`src.core.tmux_listing_parse.resolve_ownership`, which
+        documents all four tiers. The one worth repeating here is tier 2:
+        if the datastore holds ANY instance for this NAME under a
+        different epoch, the answer is False and the legacy name set is
+        never consulted. Without that tier, a session named ``foo`` that
+        this app owned could die, the user could create a new unrelated
+        ``foo``, and the new process would badge as ours off the name
+        alone.
 
         If ``owned_names`` contains a name that's NOT in the live tmux
         listing, log a WARN (stale metadata - the reconciler should
@@ -1132,9 +1138,7 @@ class TmuxBackend(SessionBackend):
             True
         """
         failure, stdout_text = self._run_listing(
-            "list-sessions",
-            "-F",
-            "#{session_name}|#{session_created}|#{session_windows}",
+            "list-sessions", "-F", LISTING_FORMAT
         )
         if failure is not None:
             return failure
@@ -1144,47 +1148,40 @@ class TmuxBackend(SessionBackend):
         results: List[Dict[str, Any]] = []
 
         for line in raw_lines:
-            line = line.strip()
-            if not line:
+            row = parse_listing_row(line)
+            if row is None:
+                # A row we cannot fully validate is REFUSED, never
+                # half-trusted. Logged so a format change shows up as
+                # rows going missing WITH a reason, not as a short list.
+                if line.strip():
+                    logger.warning(
+                        "list_attachable_sessions_unparseable_row",
+                        raw=line.strip()[:200],
+                        note=(
+                            "row did not match LISTING_FORMAT; refused "
+                            "rather than parsed on a best-effort basis"
+                        ),
+                    )
                 continue
-            parts = line.split("|")
-            if len(parts) < 3:
-                logger.debug(
-                    "list_attachable_sessions_unparseable_row", raw=line
-                )
-                continue
-            name, created_raw, windows_raw = parts[0], parts[1], parts[2]
+
+            name = row["name"]
+            created_at_epoch = row["created_at_epoch"]
             live_names.add(name)
 
-            try:
-                created_at_epoch = int(created_raw)
-            except ValueError:
-                created_at_epoch = 0
-            try:
-                window_count = int(windows_raw)
-            except ValueError:
-                window_count = 0
-
-            if owned_instances is not None:
-                # Identity tier: match the INSTANCE. A (name, None) entry
-                # is a legacy in-memory name with no creation time and
-                # matches on the name alone.
-                created_by_cloude = (
-                    (name, created_at_epoch) in owned_instances
-                    or (name, None) in owned_instances
-                )
-            elif owned_names is not None:
-                created_by_cloude = name in owned_names
-            else:
-                # Fallback heuristic; caller from live path should pass
-                # the owned set so we're not trusting a spoofable prefix.
-                created_by_cloude = name.startswith(SESSION_PREFIX)
+            created_by_cloude = resolve_ownership(
+                name,
+                created_at_epoch,
+                owned_instances,
+                owned_names,
+                prefix=SESSION_PREFIX,
+            )
 
             results.append({
                 "name": name,
                 "created_by_cloude": created_by_cloude,
                 "created_at_epoch": created_at_epoch,
-                "window_count": window_count,
+                "window_count": row["window_count"],
+                "tmux_session_id": row["session_id"],
             })
 
         if owned_names:

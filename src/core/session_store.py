@@ -21,6 +21,12 @@ separates "the same session" from "a different session that took the
 name", and it is why every lookup in this module keys on the triple and
 never on the name.
 
+The name is also not TRUSTWORTHY input. tmux permits ``|`` inside a
+session name, which is the delimiter of the listing format, so the whole
+triple was once forgeable from a name a caller chose. That is fixed in
+src/core/tmux_listing_parse.py, not here, but it is worth knowing that
+the values arriving at these functions are only as good as that parser.
+
 WHAT THAT BUYS. When a session dies and a new one takes its name, the new
 instance's epoch differs, so it does not match the old row, so NO
 statement in this module touches the old row. The new instance gets its
@@ -36,10 +42,30 @@ because those are the only operations that can get identity wrong.
 
 THE ONE-SECOND COLLISION. ``#{session_created}`` has one-second
 resolution, so a session killed and recreated with the same name inside
-the same second produces a colliding triple. When the stored row for that
-triple is already ``stopped``, it CANNOT be the live session we are
-looking at, and the correct action is to REFUSE THE MERGE AND LOG - never
+the same second produces a colliding triple. Two things resolve it, and
+the second was added because the first covered only the rarer half:
+
+  ``sessions.tmux_session_id`` (schema v3) stores tmux's
+  ``#{session_id}``, which is unique per server lifetime. When the stored
+  and incoming ids DISAGREE the rows are provably different sessions and
+  the merge is refused whatever the stored lifecycle says. It is a
+  DISCRIMINATOR and never a key: the id counter restarts at ``$0`` when
+  the tmux server does, so it is worse than the epoch as a durable
+  identity and better than it at separating two sessions alive right now.
+
+  A stored row already marked ``stopped`` CANNOT be the live session we
+  are looking at, so that merge is refused too.
+
+In both cases the correct action is to REFUSE THE MERGE AND LOG - never
 to overwrite. See :func:`record_instance` and design section 4.6.
+
+THE LEGACY NAME SET IS A SEPARATE, LOWER TIER. It is NOT folded into
+:func:`owned_instances`. It used to be, as ``(tmux_name, None)``, which
+the listing backend read as a name-only WILDCARD - and that disabled the
+epoch tier for every session the app had created since the last restart,
+which is exactly the population the epoch protects. Legacy names now
+travel as their own argument and are resolved after a stored epoch has
+had its say. See :func:`src.core.tmux_listing_parse.resolve_ownership`.
 
 ORIGIN REPLACES ``owned_tmux_sessions``. ``origin`` is a stored column
 anchored on the instance triple, so it survives an app restart, a server

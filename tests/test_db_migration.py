@@ -88,7 +88,13 @@ def test_bootstrap_creates_db_and_writes_the_trail_first(tmp_path) -> None:
     state = ensure_db_migrated(tmp_path, 4, "0.8.2")
     assert state.status == STATUS_OK
     assert state.schema_version == CURRENT_SCHEMA_VERSION
-    assert state.migrations_applied == ["0->1", "1->2"]
+    # Derived from CURRENT_SCHEMA_VERSION rather than hardcoded, so
+    # adding an additive step is not a test edit. A hardcoded list here
+    # is a test that fails for the RIGHT reason and the wrong one at the
+    # same time, which teaches the next person to edit it without reading.
+    assert state.migrations_applied == [
+        f"{v}->{v + 1}" for v in range(CURRENT_SCHEMA_VERSION)
+    ]
     assert db_path_for(tmp_path).exists()
 
     entries = MigrationTrail(tmp_path).read().entries

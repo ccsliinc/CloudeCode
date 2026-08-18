@@ -245,6 +245,16 @@ async def lifespan(app: FastAPI):
                         owned_tmux_names=set(
                             session_manager.owned_tmux_sessions
                         ),
+                        # THE SOCKET THE PROBE ACTUALLY RAN AGAINST.
+                        # Omitting it took the module default while
+                        # SessionManager._tmux_socket_name() reads the
+                        # CONFIGURED value back, so a user with a custom
+                        # session.tmux_socket_name got rows keyed on a
+                        # socket nothing ever queries: owned_instances()
+                        # returned empty for the whole install and the
+                        # ownership badge fell back to the name-only tier
+                        # permanently.
+                        socket=session_manager.tmux_socket_name(),
                     )
                 app.state.session_import_notice = (
                     _import_result.home_screen_notice()

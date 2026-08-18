@@ -27,6 +27,7 @@ from src.core.db import ensure_install_id, set_meta
 from src.core.db_models import (
     DDL_V1,
     DDL_V2,
+    DDL_V3,
     META_CREATED_AT,
     META_SCHEMA_VERSION,
 )
@@ -74,6 +75,38 @@ def _step_v1_to_v2(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.tmux_session_id``, the instance discriminator.
+
+    Description: build step S4 hardening. Purely additive - one nullable
+      column and no index, so a v2 reader that has not been upgraded keeps
+      working against the same file and every existing row simply carries
+      NULL.
+
+      IDEMPOTENT BY INSPECTION, NOT BY THE STATEMENT. SQLite's
+      ``ALTER TABLE ADD COLUMN`` has no ``IF NOT EXISTS``, so re-running
+      this after an interrupted attempt would raise "duplicate column
+      name". PRAGMA table_info is read first and the step no-ops when the
+      column is already present, which is what makes a retry after an
+      INTERRUPTED trail entry safe by construction.
+
+      The column holds tmux's ``#{session_id}``. It is NOT part of the
+      identity key - see the comment above ``DDL_SESSIONS_ADD_SESSION_ID``
+      in db_models for why a per-server-lifetime counter is a worse
+      durable key than the creation epoch and a better live discriminator.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v2_to_v3(conn)  # after _step_v1_to_v2
+    """
+    existing = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(sessions)")
+    }
+    if "tmux_session_id" in existing:
+        return
+    for statement in DDL_V3:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -81,6 +114,7 @@ def _step_v1_to_v2(conn: sqlite3.Connection) -> None:
 STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _step_v0_to_v1,
     1: _step_v1_to_v2,
+    2: _step_v2_to_v3,
 }
 
 

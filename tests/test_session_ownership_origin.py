@@ -57,10 +57,18 @@ class _FakeProbeBackend:
     def _run_listing(self, *_args):
         """Return the canned tmux stdout for the supplied rows.
 
+        Description: emits LISTING_FORMAT's field ORDER - session id,
+          created, windows, then the NAME LAST - because the name is the
+          only caller-controlled field and putting it last is what makes
+          the bounded split unambiguous. A synthetic ``$<n>`` id is
+          assigned per row so the rows validate.
         Inputs: *_args - ignored.
         Output: tuple[None, str] - (no failure, formatted stdout).
         """
-        text = "\n".join(f"{name}|{epoch}|1" for name, epoch in self._rows)
+        text = "\n".join(
+            f"${index}|{epoch}|1|{name}"
+            for index, (name, epoch) in enumerate(self._rows)
+        )
         return None, text
 
     list_attachable_sessions = TmuxBackend.list_attachable_sessions
@@ -105,15 +113,57 @@ def test_the_matching_instance_does_badge_as_ours():
     assert badges["foo"] is True
 
 
-def test_a_legacy_name_with_no_epoch_still_matches_by_name():
-    """(name, None) entries carry the in-memory set through the cutover.
+def test_a_None_epoch_is_NOT_a_wildcard_and_never_badges_a_stranger():
+    """SUPERSEDES the old "(name, None) matches by name" guarantee.
 
-    ``owned_tmux_sessions`` holds names and no creation times, so it
-    cannot be instance-keyed. It contributes with a wildcard epoch, which
-    keeps the badge from regressing while both sources coexist.
+    That guarantee was the defect. ``owned_tmux_instances()`` used to fold
+    the legacy in-memory name set in as ``(name, None)`` and the backend
+    read a None epoch as a NAME-ONLY WILDCARD - which disabled the epoch
+    tier for every session the app had created since the last restart,
+    i.e. exactly the population the epoch was added to protect. A dead
+    ``foo`` replaced by the user's own unrelated ``foo`` badged as ours,
+    which is verbatim the failure the epoch was introduced to close.
+
+    A None epoch is now inert: it matches nothing. Legacy names still
+    reach the backend, but through the separate ``owned_names`` argument
+    and at their own explicitly name-only tier, where they cannot
+    override a stored epoch.
     """
     badges = _badges([("foo", 9999)], owned_instances={("foo", None)})
-    assert badges["foo"] is True
+    assert badges["foo"] is False
+
+
+def test_a_stored_epoch_for_a_name_OVERRIDES_the_legacy_name_tier():
+    """Tier 2: a specific DB opinion beats the lossy name set. THE D3 FIX.
+
+    The datastore holds ``foo`` at epoch 1000. The live ``foo`` is a
+    different instance at 9999, and the legacy in-memory set also holds
+    the bare name ``foo`` because the app created the dead one this boot.
+    The name tier must NOT rescue it: the DB has an epoch-keyed opinion
+    about this name and this instance is not it.
+    """
+    badges = _badges(
+        [("foo", 9999)],
+        owned_instances={("foo", 1000)},
+        owned_names={"foo"},
+    )
+    assert badges["foo"] is False
+
+
+def test_the_legacy_name_tier_applies_when_the_DB_is_SILENT_on_that_name():
+    """Tier 3 survives: no DB opinion at all means fall through to the name.
+
+    A session the app created since the last restart has no row yet. The
+    DB knows nothing about that NAME, so the degraded name-only tier is
+    the best evidence available and is used. This is what keeps the fix
+    from regressing the badge for freshly-created sessions.
+    """
+    badges = _badges(
+        [("fresh", 9999)],
+        owned_instances={("other", 1000)},
+        owned_names={"fresh"},
+    )
+    assert badges["fresh"] is True
 
 
 def test_owned_instances_takes_precedence_over_owned_names():
@@ -234,11 +284,23 @@ def test_the_adopt_route_does_not_persist_origin_yet():
 
 
 def test_the_backend_resolution_order_is_documented_in_code():
-    """The three tiers must be visible where the decision is made."""
-    source = TMUX_BACKEND_PATH.read_text()
-    assert "if owned_instances is not None:" in source
-    assert "created_by_cloude = name in owned_names" in source
-    assert "created_by_cloude = name.startswith(SESSION_PREFIX)" in source
+    """The four tiers must be visible where the decision is made.
+
+    The decision moved out of ``tmux_backend.list_attachable_sessions``
+    and into ``tmux_listing_parse.resolve_ownership`` so it could be
+    unit-tested against a hostile input without shelling out to tmux.
+    This asserts the tiers are spelled there, including the NEGATIVE tier
+    that closes the wildcard hole.
+    """
+    source = (ROOT / "src" / "core" / "tmux_listing_parse.py").read_text()
+    assert "if (name, created_at_epoch) in owned_instances:" in source
+    assert "return name in owned_names" in source
+    assert "return bool(prefix) and name.startswith(prefix)" in source
+    # tier 2: a stored epoch for this name is a specific NEGATIVE opinion
+    assert "owned_name == name and owned_epoch is not None" in source
+    # and the backend must not have grown a second, divergent copy
+    backend = TMUX_BACKEND_PATH.read_text()
+    assert "created_by_cloude = resolve_ownership(" in backend
 
 
 def test_no_em_or_en_dashes_in_the_files_this_step_authored():
@@ -253,6 +315,12 @@ def test_no_em_or_en_dashes_in_the_files_this_step_authored():
         Path(__file__),
         ROOT / "tests" / "test_session_store.py",
         ROOT / "tests" / "test_session_import.py",
+        ROOT / "src" / "core" / "tmux_listing.py",
+        ROOT / "src" / "core" / "tmux_listing_parse.py",
+        ROOT / "src" / "core" / "session_identity.py",
+        ROOT / "tests" / "test_s4_adversarial.py",
+        ROOT / "tests" / "test_tmux_listing_parse.py",
+        ROOT / "tests" / "test_s4_regressions.py",
     ]
     for path in authored:
         text = path.read_text(encoding="utf-8")

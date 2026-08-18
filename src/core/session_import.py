@@ -17,14 +17,23 @@ THE RULE THAT PREVENTS IT, stated once so it can be checked:
 
     THE LATCH IS STAMPED ONLY ON THE ``listing.ok is True`` PATH.
 
-There is exactly ONE ``set_meta(..., META_IMPORTED_FROM_JSON_AT, ...)``
-call in this module, it is the last statement of the success path, and it
-is textually after the ``if not listing.ok`` guard returns. That is not
-just a convention: tests/test_session_import.py walks this module's AST
-and asserts both facts - one stamp site, and no stamp reachable from the
-failed-probe branch - so a future edit that adds a second stamp, or moves
-this one above the guard, fails a test instead of quietly costing a user
-his history.
+THE LATCH IS TWO KEYS, NOT ONE, AND BOTH ARE GUARDED.
+
+``meta.imported_from_json_at`` is what GET /sessions/import-status
+reports. ``meta.imported_from_json_result[sessions_imported_at]`` is what
+:func:`sessions_stage_done` actually READS to decide whether to run. Only
+the first used to be structurally proved, so writing only the SECOND one
+early latched the import shut forever while every reader said it had
+never completed - and both AST assertions passed on that mutant.
+
+Both writes now live in :func:`_latch_sessions_stage`, which is called
+from exactly one place: the last statement of the success path, textually
+after the ``if not listing.ok`` guard returns. tests/test_session_import.py
+walks this module's AST and asserts that neither key is written anywhere
+outside that helper, that the helper has exactly one call site, and that
+the call site is after the gate. A future edit that adds a second latch
+write, or hoists this one above the guard, fails a test instead of
+quietly costing a user his history.
 
 WHAT A FAILED PROBE PRODUCES INSTEAD. Zero session rows, the latch left
 unset, ``meta.session_import_pending_reason`` set to the probe's own
@@ -147,25 +156,72 @@ class FirstRunImportResult:
         )
 
 
+class ImportLatchUnreadable(RuntimeError):
+    """The once-only latch record exists but cannot be read.
+
+    Description: raised rather than returning an empty dict, because
+      "the stage record is corrupt" and "the stage never ran" are
+      different facts and only one of them means it is safe to run the
+      import again. Treating the first as the second re-runs a once-only
+      job AND makes ``_merge_result_blob`` overwrite the blob, discarding
+      every key the unreadable value held - including other stages'
+      records. A caller that genuinely wants to proceed must clear the
+      key deliberately.
+    Inputs (constructor): message (str).
+    Output: an ImportLatchUnreadable instance.
+    """
+
+
 def _load_result_blob(conn: sqlite3.Connection) -> Dict[str, Any]:
     """Read ``meta.imported_from_json_result`` as a dict.
 
     Description: the value is a single JSON object so each import stage
-      owns its own key without overwriting another stage's history. A
-      value that will not parse is treated as absent and logged, never
-      as evidence that a stage ran.
+      owns its own key without overwriting another stage's history.
+
+      AN UNREADABLE VALUE RAISES. It is not absent. Absent means the
+      stage never ran and the import should proceed; unreadable means we
+      CANNOT TELL, which is the third outcome and must never be reported
+      as either neighbour. The old behaviour - log and return {} - made
+      a garbled blob look like proof the stage had not run, re-ran the
+      once-only import, and then clobbered every other stage's key on
+      the way out.
     Inputs: conn (sqlite3.Connection).
-    Output: dict - empty when absent or unparseable.
+    Output: dict - empty ONLY when the key is genuinely absent or empty.
+    Raises: ImportLatchUnreadable - the stored value is present but is
+      not parseable JSON, or parses to something other than an object.
     """
     raw = get_meta(conn, META_IMPORTED_FROM_JSON_RESULT)
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        logger.warning("import_result_blob_unparseable", raw=raw[:200])
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError) as exc:
+        logger.error(
+            "import_result_blob_unparseable",
+            raw=raw[:200],
+            error=str(exc),
+            note=(
+                "the once-only import latch record cannot be read, so "
+                "whether the sessions stage has run CANNOT BE DETERMINED; "
+                "refusing to proceed rather than re-running it and "
+                "discarding the other stages' keys"
+            ),
+        )
+        raise ImportLatchUnreadable(
+            "meta.imported_from_json_result is present but unparseable; "
+            "cannot determine whether the sessions import already ran"
+        ) from exc
+    if not isinstance(parsed, dict):
+        logger.error(
+            "import_result_blob_not_an_object",
+            raw=raw[:200],
+            parsed_type=type(parsed).__name__,
+        )
+        raise ImportLatchUnreadable(
+            "meta.imported_from_json_result parsed to "
+            f"{type(parsed).__name__}, expected a JSON object"
+        )
+    return parsed
 
 
 def _merge_result_blob(conn: sqlite3.Connection, patch: Dict[str, Any]) -> None:
@@ -190,9 +246,51 @@ def sessions_stage_done(conn: sqlite3.Connection) -> bool:
       sessions - locking it out would be the same silent-loss failure
       this module exists to prevent, arriving by a different door.
     Inputs: conn (sqlite3.Connection).
-    Output: bool.
+    Output: bool - True when the stage is recorded as done.
+    Raises: ImportLatchUnreadable - the latch record is present but
+      unreadable, so this question CANNOT BE ANSWERED. Deliberately not
+      collapsed into False, which would re-run a once-only import on the
+      strength of a verdict nobody measured.
     """
     return bool(_load_result_blob(conn).get(RESULT_KEY_SESSIONS_STAGE))
+
+
+def _latch_sessions_stage(
+    conn: sqlite3.Connection, stamp: str, detail: Dict[str, Any]
+) -> None:
+    """Write BOTH latch records for the sessions stage. The only site that may.
+
+    Description: the single, auditable place where this module marks the
+      import complete. Both writes live here for one reason: there are
+      TWO of them and only one used to be guarded.
+
+      ``meta.imported_from_json_at`` is what GET /sessions/import-status
+      reports. ``imported_from_json_result[sessions_imported_at]`` is what
+      :func:`sessions_stage_done` actually reads to decide whether to run.
+      They are not the same key, and the structural proof in
+      tests/test_session_import.py used to constrain only the first - so
+      hoisting the SECOND above the failed-probe gate latched the import
+      shut permanently while every reader reported it had never completed,
+      and both AST assertions still passed.
+
+      Collapsing both writes into one function makes the pair a single
+      thing to locate, and the structural test now asserts that this
+      function has exactly one call site and that the call site is after
+      the gate. Adding a third latch write anywhere else in this module
+      fails that test.
+    Inputs: conn (sqlite3.Connection) - caller owns the transaction.
+      stamp (str) - ISO-8601 completion time, written to both records.
+      detail (dict) - the sessions-stage detail blob.
+    Output: None.
+    """
+    _merge_result_blob(
+        conn,
+        {
+            RESULT_KEY_SESSIONS_STAGE: stamp,
+            RESULT_KEY_SESSIONS_DETAIL: detail,
+        },
+    )
+    set_meta(conn, META_IMPORTED_FROM_JSON_AT, stamp)
 
 
 def run_first_run_import(
@@ -316,6 +414,7 @@ def run_first_run_import(
             origin=observed_origin_for(name, owned),
             lifecycle=SESSION_LIFECYCLE_RUNNING,
             lifecycle_source=SESSION_LIFECYCLE_SOURCE_IMPORT,
+            session_id=row.get("tmux_session_id"),
             now=stamp,
             project_id=project_id,
             project_attribution=attribution,
@@ -340,12 +439,20 @@ def run_first_run_import(
         if name in matched_names:
             continue
         unmatched.append({"tmux_session": name, "reason": "no_live_tmux_row"})
+        # ORIGIN COMES FROM THE SAME RESOLVER STEP 4 USES. This used to
+        # hardcode SESSION_ORIGIN_OBSERVED, which badged the user's own
+        # session EXTERNAL on the very upgrade this import exists to
+        # protect: session_metadata.json holds exactly ONE session, the
+        # most recently active, which for an app user is almost always
+        # one the app created. It is still never ``adopted`` - past
+        # adoptions were persisted nowhere, so importing one would be
+        # inventing a fact.
         result = record_instance(
             conn,
             socket=socket,
             name=name,
             epoch=_stopped_epoch(entry),
-            origin=SESSION_ORIGIN_OBSERVED,
+            origin=observed_origin_for(name, owned),
             lifecycle=SESSION_LIFECYCLE_STOPPED,
             lifecycle_source=SESSION_LIFECYCLE_SOURCE_IMPORT,
             now=stamp,
@@ -357,19 +464,16 @@ def run_first_run_import(
 
     # --- step 8: the latch. THE ONLY STAMP SITE IN THIS MODULE. ----------
     # Reachable only from the listing.ok is True path above.
-    _merge_result_blob(
+    _latch_sessions_stage(
         conn,
+        stamp,
         {
-            RESULT_KEY_SESSIONS_STAGE: stamp,
-            RESULT_KEY_SESSIONS_DETAIL: {
-                "sessions_imported": imported,
-                "epoch_collisions_refused": refusals,
-                "persisted_without_live_tmux": unmatched,
-                "listing_reason": listing.reason,
-            },
+            "sessions_imported": imported,
+            "epoch_collisions_refused": refusals,
+            "persisted_without_live_tmux": unmatched,
+            "listing_reason": listing.reason,
         },
     )
-    set_meta(conn, META_IMPORTED_FROM_JSON_AT, stamp)
     logger.info(
         "session_import_completed",
         sessions_imported=imported,

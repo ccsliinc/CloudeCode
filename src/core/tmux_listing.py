@@ -56,6 +56,7 @@ this type was written to remove.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence
 
@@ -105,52 +106,149 @@ def exit_reason(returncode: int) -> str:
 
 # ---- "no server" detection --------------------------------------------------
 # tmux has no stable exit code for this: every one of these conditions is
-# rc=1. The text is the only signal there is. These are the forms tmux
-# 1.8 through 3.5 emit when the socket has no live server, verified
-# against tmux 3.5a on macOS and 3.3a on Linux:
+# rc=1. The text is the only signal there is.
 #
-#   no server running on /private/tmp/tmux-501/cloude
-#   error connecting to /private/tmp/tmux-501/cloude (No such file or directory)
-#   failed to connect to server
-#   no current server
+# THE ERRNO IS THE WHOLE DECISION, AND IT USED TO BE THROWN AWAY.
 #
-# Matching is substring + case-insensitive so a path or errno appended to
-# any of them still classifies. Anything NOT in this list is a real error
-# and must stay ok=False - that is the half of the split that carries the
-# whole value of this module.
+# tmux emits ``error connecting to <path> (<strerror>)`` for EVERY failure
+# to reach the socket, and only ONE of those errnos means "there is no
+# server". Matching the bare prefix ``error connecting to`` classified all
+# of them as a complete answer of zero sessions. Measured against tmux
+# 3.7b on macOS (and reported identically for 3.5a), rc=1 in every case:
+#
+#   error connecting to <path> (No such file or directory)   <- no server
+#   error connecting to <path> (Permission denied)           <- COULD NOT LOOK
+#   error connecting to <path> (Socket operation on non-socket)  <- COULD NOT LOOK
+#   error connecting to <path> (File name too long)          <- COULD NOT LOOK
+#
+# The last three are the probe failing, not answering. Reporting them as
+# zero sessions walks a caller straight through the first-run import gate
+# and stamps a one-way latch over a user's whole session history.
+#
+# WHY RESTRICTING THIS IS SAFE, MEASURED RATHER THAN ASSUMED. The obvious
+# worry is that the common "server died and left a socket behind" case
+# now reports CANNOT DETERMINE forever, which would be the never-clearing
+# check this repo calls furniture. It does not: tmux handles a stale
+# socket internally (it connects, fails, unlinks) and reports
+# ``no server running on <path>``, NOT a connect error. Verified on tmux
+# 3.7b for both a clean ``kill-server`` and a ``kill -9`` of the server
+# process - both produce ``no server running``. So the ONLY route to
+# ``error connecting to ... (No such file or directory)`` is a socket path
+# that was never there, which is genuinely no server.
+
+#: Messages that unambiguously mean "no server", with no errno to read.
+#: Substring + case-insensitive, so an appended path still classifies.
 _NO_SERVER_MARKERS = (
     "no server running",
-    "error connecting to",
     "failed to connect to server",
     "no current server",
 )
+
+#: The one connect errno that means "no server", rather than "I could not
+#: look". Compared case-insensitively against the parenthesised strerror.
+_NO_SERVER_CONNECT_ERRNOS = frozenset({"no such file or directory"})
+
+#: The prefix tmux uses for every socket-connection failure.
+_CONNECT_ERROR_MARKER = "error connecting to"
+
+#: Pulls the trailing ``(strerror)`` off a connect-error line. Anchored to
+#: the END of the string because a socket PATH may itself contain
+#: parentheses, and the errno is always last.
+_CONNECT_ERRNO_RE = re.compile(r"\(([^()]*)\)\s*$")
+
+# ---- The three outcomes of reading tmux's stderr ---------------------------
+# Named constants rather than a bool, because the whole defect this
+# replaces was a two-valued answer to a three-valued question.
+
+#: stderr says, unambiguously, that no server is running. A COMPLETE
+#: answer of zero sessions. Pairs with ``ok=True``.
+STDERR_NO_SERVER = "no_server"
+
+#: stderr names a failure to reach the socket that is NOT an absent
+#: server (permission, non-socket, name too long). We did not look.
+STDERR_CONNECT_FAILED = "connect_failed"
+
+#: stderr is something else entirely, or a connect error whose errno we
+#: could not parse or do not recognise. We did not look, and we will not
+#: guess. This is the deliberate default.
+STDERR_UNRECOGNISED = "unrecognised"
+
+#: A socket we could not reach. ``ok=False``; distinct from ``exit_<rc>``
+#: so the UI can say WHICH kind of not-looking happened.
+REASON_CONNECT_FAILED = "connect_failed"
+
+
+def classify_tmux_stderr(stderr_text: str) -> str:
+    """Read tmux's stderr as one of three outcomes, never two.
+
+    Description: the single place the no-server / could-not-look split is
+      decided. An ``error connecting to`` line is resolved by its
+      PARENTHESISED ERRNO and by nothing else; only
+      ``No such file or directory`` is an absent server. An errno this
+      function does not recognise, or a connect line with no readable
+      errno at all, is ``STDERR_UNRECOGNISED`` - never ``STDERR_NO_SERVER``.
+      That asymmetry is deliberate and is the entire safety property: a
+      new tmux release inventing new wording degrades to CANNOT DETERMINE,
+      which retries, rather than to a confident zero, which is permanent.
+    Inputs:
+        stderr_text (str): decoded stderr from a failed tmux invocation.
+    Output:
+        str: one of ``STDERR_NO_SERVER``, ``STDERR_CONNECT_FAILED``,
+            ``STDERR_UNRECOGNISED``.
+    Example:
+        >>> classify_tmux_stderr("no server running on /tmp/x")
+        'no_server'
+        >>> classify_tmux_stderr("error connecting to /tmp/x (Permission denied)")
+        'connect_failed'
+    """
+    text = (stderr_text or "").strip()
+    lowered = text.lower()
+    if not lowered:
+        # A non-zero exit that said nothing is precisely the case we must
+        # not guess about.
+        return STDERR_UNRECOGNISED
+    if any(marker in lowered for marker in _NO_SERVER_MARKERS):
+        return STDERR_NO_SERVER
+    if _CONNECT_ERROR_MARKER in lowered:
+        match = _CONNECT_ERRNO_RE.search(text)
+        if match is None:
+            # A connect failure whose cause we cannot read. Not an answer.
+            return STDERR_UNRECOGNISED
+        errno_text = match.group(1).strip().lower()
+        if errno_text in _NO_SERVER_CONNECT_ERRNOS:
+            return STDERR_NO_SERVER
+        return STDERR_CONNECT_FAILED
+    return STDERR_UNRECOGNISED
 
 
 def looks_like_no_server(stderr_text: str) -> bool:
     """Decide whether tmux's stderr means "there is no server", not "I failed".
 
+    Description: the boolean face of :func:`classify_tmux_stderr`, kept
+      for call sites that only need the one bit. True ONLY for
+      ``STDERR_NO_SERVER``; both of the other outcomes are False, because
+      from this function's caller's point of view "I could not look" and
+      "I do not recognise this" have the same consequence - do not treat
+      it as an answer.
     Inputs:
         stderr_text (str): decoded stderr from a failed tmux invocation.
-
     Output:
-        bool: True when the text matches a known no-server message, so
-            the correct listing is a trustworthy EMPTY one. False for
-            every other failure, including an empty stderr - a non-zero
-            exit that said nothing is precisely the case we must not
-            guess about.
-
+        bool: True when the text is a KNOWN no-server message, so the
+            correct listing is a trustworthy EMPTY one. False for every
+            other failure, including an empty stderr and including a
+            connect error whose errno is anything but
+            ``No such file or directory``.
     Example:
         >>> looks_like_no_server("no server running on /tmp/tmux-501/cloude")
         True
-        >>> looks_like_no_server("lost server")
+        >>> looks_like_no_server("error connecting to /x (Permission denied)")
         False
     """
-    lowered = (stderr_text or "").lower()
-    return any(marker in lowered for marker in _NO_SERVER_MARKERS)
+    return classify_tmux_stderr(stderr_text) == STDERR_NO_SERVER
 
 
 def classify_listing_failure(returncode: int, stderr_text: str) -> "TmuxListing":
-    """Turn a non-zero tmux exit into the right one of the two outcomes.
+    """Turn a non-zero tmux exit into the right one of the three outcomes.
 
     The single place the ``no_server`` / real-error split is decided, so
     all three enumeration methods cannot drift apart on it.
@@ -160,22 +258,25 @@ def classify_listing_failure(returncode: int, stderr_text: str) -> "TmuxListing"
         stderr_text (str): decoded stderr.
 
     Output:
-        TmuxListing: ``ok=True, sessions=[], reason='no_server'`` when
-            tmux reported an absent server (a complete answer of zero);
-            otherwise ``ok=False, reason='exit_<rc>'`` (no answer).
+        TmuxListing: ``ok=True, sessions=[], reason='no_server'`` ONLY
+            when tmux reported an absent server (a complete answer of
+            zero). ``ok=False, reason='connect_failed'`` when the socket
+            could not be reached for any other cause, and
+            ``ok=False, reason='exit_<rc>'`` for anything unrecognised.
 
     Example:
         >>> classify_listing_failure(1, "no server running on /tmp/x").ok
         True
-        >>> classify_listing_failure(1, "lost server").ok
+        >>> classify_listing_failure(1, "error connecting to /x (Permission denied)").ok
         False
     """
-    if looks_like_no_server(stderr_text):
-        return TmuxListing.answered([], reason=REASON_NO_SERVER,
-                                    detail=stderr_text.strip() or None)
-    return TmuxListing.unavailable(
-        exit_reason(returncode), detail=stderr_text.strip() or None
-    )
+    verdict = classify_tmux_stderr(stderr_text)
+    detail = (stderr_text or "").strip() or None
+    if verdict == STDERR_NO_SERVER:
+        return TmuxListing.answered([], reason=REASON_NO_SERVER, detail=detail)
+    if verdict == STDERR_CONNECT_FAILED:
+        return TmuxListing.unavailable(REASON_CONNECT_FAILED, detail=detail)
+    return TmuxListing.unavailable(exit_reason(returncode), detail=detail)
 
 
 @dataclass(frozen=True)

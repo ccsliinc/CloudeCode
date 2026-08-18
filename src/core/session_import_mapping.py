@@ -86,7 +86,8 @@ def _row_fields(row: Any) -> Dict[str, Any]:
       care which producer it was handed.
     Inputs: row (Any) - a str name or a dict row.
     Output: dict - always carrying ``name``; ``tmux_created_epoch``
-      defaults to 0 when the producer did not supply one.
+      defaults to 0 when the producer did not supply one, and
+      ``tmux_session_id`` is None when the producer had no id to give.
     """
     if isinstance(row, str):
         return {"name": row, "tmux_created_epoch": 0}
@@ -101,6 +102,11 @@ def _row_fields(row: Any) -> Dict[str, Any]:
             "name": name,
             "tmux_created_epoch": epoch_int,
             "working_dir": row.get("working_dir"),
+            # tmux #{session_id}, the instance discriminator (schema v3).
+            # Absent from a producer that does not supply it, and absent
+            # means NOT RECORDED, never "different" - see
+            # session_identity._reconcile_existing.
+            "tmux_session_id": row.get("tmux_session_id"),
         }
     return {"name": None, "tmux_created_epoch": 0}
 
