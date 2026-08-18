@@ -1,12 +1,20 @@
 // Main app bootstrap — extracted from index.html for CSP compliance (script-src 'self').
 
 // SESSION-IDENTITY-V2 — header identity asset. Single source of truth so the
-// path is editable from one spot (e.g. swap to .png on platforms without SVG).
-// client/index.html's static #header-icon markup embeds this SAME path as a
-// literal <img src> so the mark is correct on first paint, before this
-// script has even run — tests/test_icon_assets.py asserts the two stay in
-// sync. If you change this constant, update that markup too.
-const HEADER_BRAND_ICON_URL = '/static/assets/cloude-icon.svg';
+// path is editable from one spot. Both are raster PNGs derived directly
+// from macOS/assets/AppIcon-1024.png (see scripts/generate-web-icons.sh's
+// sibling header sizes, header-icon.png/header-icon@2x.png) rather than a
+// hand-drawn vector approximation — the real app icon is rendered 3D
+// volumetric artwork (soft shaded cloud, pixel-art face) that primitives
+// cannot reproduce. HEADER_BRAND_ICON_URL is the 1x fallback (64px);
+// HEADER_BRAND_ICON_URL_2X is the 2x/retina source (128px), wired in via
+// srcset so both densities render sharp inside the 1.2em box.
+// client/index.html's static #header-icon markup embeds this SAME pair as a
+// literal <img src/srcset> so the mark is correct on first paint, before
+// this script has even run — tests/test_icon_assets.py asserts the two stay
+// in sync. If you change these constants, update that markup too.
+const HEADER_BRAND_ICON_URL = '/static/assets/icons/header-icon.png';
+const HEADER_BRAND_ICON_URL_2X = '/static/assets/icons/header-icon@2x.png';
 // fix/icon-consistency — the real mark now renders on EVERY screen (see
 // setHeaderIdentity below). This emoji is no longer a per-screen choice; it
 // is only the last-resort fallback if the SVG fails to load (offline cache
@@ -103,9 +111,11 @@ function setHeaderIdentity(opts) {
         // which would also re-arm the error listener needlessly.
         var existingImg = iconEl.querySelector('img[data-brand-icon]');
         if (!existingImg) {
-            // Use an <img> rather than inlining the SVG so the asset can be
-            // swapped without re-editing markup, and so the browser caches it.
-            iconEl.innerHTML = '<img data-brand-icon src="' + HEADER_BRAND_ICON_URL + '" alt="" />';
+            // Use an <img> rather than inlining the artwork so the asset can
+            // be swapped without re-editing markup, and so the browser
+            // caches it. srcset gives the 2x asset to retina displays.
+            iconEl.innerHTML = '<img data-brand-icon src="' + HEADER_BRAND_ICON_URL +
+                '" srcset="' + HEADER_BRAND_ICON_URL + ' 1x, ' + HEADER_BRAND_ICON_URL_2X + ' 2x" alt="" />';
             delete iconEl.dataset.iconFallback;
             existingImg = iconEl.querySelector('img');
         }

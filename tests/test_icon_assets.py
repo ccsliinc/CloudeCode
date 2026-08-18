@@ -338,3 +338,138 @@ def test_every_screen_entry_calls_set_header_identity(screen_function: str) -> N
         "screen's header will silently show whatever the previous "
         "screen left in place"
     )
+
+
+# =============================================================================
+# fix/real-app-icon-art — provenance regression tests.
+#
+# The bug this section guards against is neither a 404 (covered above) nor
+# a wrong-screen branch (covered above): the header asset resolved, was
+# served with a 200, and was even the right shape of thing (an <img>, not
+# an emoji) - it was just the WRONG ARTWORK. client/assets/cloude-icon.svg
+# was a ~1.3K hand-drawn vector approximation (rects, circles, gradients)
+# whose own comment admitted it was "copied verbatim from cloud_mark() in
+# packaging/dmg/artwork/make-background.py" - a DMG-background stand-in,
+# never the real app icon. The real app icon
+# (macOS/assets/AppIcon-1024.png) is rendered 3D artwork: a soft shaded
+# white/pale-blue cloud with a pixel-art terracotta face, which no vector
+# redraw of rects/circles can reproduce. None of the tests above would
+# catch a regression back to that redraw, because they only check that
+# *some* file exists at the declared path and is served - they don't check
+# WHICH picture it is.
+#
+# Two independent checks, so a single narrow fix can't slip past both:
+#   1. The header asset must not be an .svg at all. The only .svg this repo
+#      ever shipped as the header mark was the hand-drawn redraw, so this
+#      alone is a strong, cheap signal.
+#   2. The header asset's actual pixels must be close to a plain resize of
+#      AppIcon-1024.png - not just "some raster file", but one whose
+#      content is provably derived from the real source art. A resize (via
+#      sips or Pillow, both LANCZOS-family resamplers) of the same source
+#      to the same dimensions should differ from the shipped asset by only
+#      the small amount two different resamplers can introduce, not by the
+#      wholesale content change a redraw represents.
+# =============================================================================
+
+
+def test_header_icon_is_not_an_svg_vector_redraw() -> None:
+    """The header brand asset must be a raster derived from the real art.
+
+    Regression guard: the previous header asset was an .svg containing
+    hand-drawn primitives (rects/circles/gradients), not the real rendered
+    app icon. Any .svg reintroduced as HEADER_BRAND_ICON_URL is exactly
+    that bug coming back, regardless of what's drawn inside it - this repo
+    has no tooling that produces a faithful vector trace of the real
+    3D-shaded artwork, so a header .svg can only be a hand-drawn stand-in.
+    """
+    url = _header_brand_icon_url()
+    assert not url.lower().endswith(".svg"), (
+        f"HEADER_BRAND_ICON_URL is an .svg ({url}) - the only .svg this "
+        "repo ever shipped as the header mark was the hand-drawn "
+        "cloud_mark() redraw, not the real app icon"
+    )
+    disk_path = ROOT / "client" / url.lstrip("/").removeprefix("static/")
+    assert disk_path.suffix.lower() != ".svg"
+
+
+def test_deleted_vector_redraw_has_not_come_back() -> None:
+    """client/assets/cloude-icon.svg must not exist on disk.
+
+    fix/real-app-icon-art deleted this file outright rather than leaving a
+    same-named decoy around. If a future change recreates it (e.g. to
+    "restore" a quick vector icon), this is the bug this whole branch
+    fixed, back again.
+    """
+    assert not (CLIENT_DIR / "assets" / "cloude-icon.svg").exists(), (
+        "client/assets/cloude-icon.svg exists again - this was the "
+        "hand-drawn vector redraw deleted by fix/real-app-icon-art; the "
+        "header must derive from macOS/assets/AppIcon-1024.png instead"
+    )
+
+
+def _resized_source_pixels(size: int):
+    """Resize the real source art to size x size, same way sips does.
+
+    Args:
+        size: target width/height in pixels.
+
+    Returns:
+        A PIL Image in RGBA mode.
+    """
+    from PIL import Image
+
+    src = Image.open(ROOT / "macOS" / "assets" / "AppIcon-1024.png").convert("RGBA")
+    return src.resize((size, size), Image.LANCZOS)
+
+
+def _mean_abs_pixel_diff(img_a, img_b) -> float:
+    """Mean absolute per-channel pixel difference between two same-size RGBA images.
+
+    Uses only Pillow (no numpy, which is not a project dependency):
+    ImageChops.difference does the per-pixel absolute subtraction,
+    ImageStat.Stat averages each channel, and the four channel means are
+    averaged into one number.
+
+    Returns:
+        A float in [0, 255]; 0 means pixel-identical.
+    """
+    from PIL import ImageChops, ImageStat
+
+    diff = ImageChops.difference(img_a, img_b)
+    channel_means = ImageStat.Stat(diff).mean
+    return sum(channel_means) / len(channel_means)
+
+
+@pytest.mark.parametrize(
+    "filename,size",
+    [("header-icon.png", 64), ("header-icon@2x.png", 128)],
+)
+def test_header_icon_pixels_are_derived_from_real_app_icon(
+    filename: str, size: int
+) -> None:
+    """The shipped header PNG's pixels must match a resize of the real art.
+
+    Regression guard for the actual bug class, not just the file
+    extension: a redraw could in principle be shipped as a same-sized PNG
+    (e.g. someone rasterises cloude-icon.svg). This compares actual pixel
+    content against a fresh resize of macOS/assets/AppIcon-1024.png done
+    the same way scripts/generate-web-icons.sh does it. A hand-drawn
+    redraw - flat vector cloud, no volumetric shading, no pixel-art face
+    in the same place - differs by a large margin; two different
+    LANCZOS-family resamplers of the SAME source differ only slightly.
+    """
+    from PIL import Image
+
+    shipped_path = CLIENT_DIR / "assets" / "icons" / filename
+    assert shipped_path.is_file(), f"{shipped_path} does not exist"
+    shipped = Image.open(shipped_path).convert("RGBA")
+    assert shipped.size == (size, size)
+
+    expected = _resized_source_pixels(size)
+    diff = _mean_abs_pixel_diff(shipped, expected)
+    assert diff < 5.0, (
+        f"{filename}'s pixels differ from a resize of AppIcon-1024.png by "
+        f"a mean of {diff:.2f}/255 - this is not derived from the real "
+        "app icon art (a different resampler of the SAME source differs "
+        "by a fraction of this; a redraw differs by orders of magnitude)"
+    )

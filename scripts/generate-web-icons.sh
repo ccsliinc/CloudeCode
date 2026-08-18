@@ -16,6 +16,14 @@
 #        transparent: "any" purpose icons are composited by the launcher,
 #        which already handles alpha correctly.
 #   512  web app manifest large / splash. Same transparent treatment as 192.
+#   64/header-icon.png, 128/header-icon@2x.png  in-app header brand mark
+#        (client/index.html #header-icon, client/js/app.js
+#        HEADER_BRAND_ICON_URL / HEADER_BRAND_ICON_URL_2X). Same transparent,
+#        edge-to-edge treatment as 192/512 so it reads correctly on both
+#        light and dark theme headers. 1x/2x pair, not a single size, so the
+#        1.2em header box stays sharp on retina displays. fix/real-app-icon-art
+#        replaced the old client/assets/cloude-icon.svg hand-drawn
+#        approximation with these, cropped straight from the source PNG.
 #   512-maskable  Android adaptive-icon variant, purpose "maskable". Adaptive
 #        icons are cropped to a shape (circle, squircle, rounded square...)
 #        chosen by the OEM launcher, keeping only a centered safe zone
@@ -64,6 +72,14 @@ for size in 192 512; do
         --out "$OUT_DIR/icon-${size}.png" >/dev/null
     echo "generate-web-icons: wrote icon-${size}.png"
 done
+
+# Transparent, edge-to-edge resizes for the in-app header brand mark.
+# 64px (1x) and 128px (2x) cover the header's 1.2em box sharply at every
+# display density.
+sips -s format png -z 64 64 "$SRC" --out "$OUT_DIR/header-icon.png" >/dev/null
+echo "generate-web-icons: wrote header-icon.png"
+sips -s format png -z 128 128 "$SRC" --out "$OUT_DIR/header-icon@2x.png" >/dev/null
+echo "generate-web-icons: wrote header-icon@2x.png"
 
 # apple-touch-icon (180, flattened) and the maskable 512 (flattened + safe
 # zone) both need real alpha compositing, not just a resize, so they go
