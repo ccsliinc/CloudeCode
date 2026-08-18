@@ -155,15 +155,32 @@ const styleRules = rules(styles);
 //    a trap that no longer exists rather than passing by accident.
 // ---------------------------------------------------------------------
 
-test('the bare button rule is still the source of the 50% radius', () => {
-    const bare = baseRule(styleRules, 'button');
-    assert.equal(decl(bare, 'border-radius'), 'var(--radius-full)',
+test('.btn-icon is now the source of the 50% radius, and .settings-tab never carries it', () => {
+    // SCOPING FIX. The 50% radius used to come from a bare `button` rule
+    // reaching every <button>, .settings-tab included - that was THE bug
+    // (settings tabs rendering as ellipses). It is `.btn-icon` now, and
+    // .settings-tab (a static class in client/index.html /
+    // settings-tabs.js) must never carry it.
+    const iconBtn = baseRule(styleRules, '.btn-icon');
+    assert.equal(decl(iconBtn, 'border-radius'), 'var(--radius-full)',
         'the header icon buttons are round on purpose; if this ever changes, '
         + 'revisit every class that now has to opt out of it');
     const root = styleRules.find((r) => r.selector === ':root');
     assert.ok(root, ':root block not found');
     assert.match(root.body, /--radius-full:\s*50%\s*;/,
         '50% is an ellipse on a non-square box, which is what a tab is');
+
+    const bare = styleRules.find((r) => r.selector === 'button');
+    assert.equal(bare, undefined, 'expected zero bare `button` element rules in styles.css');
+
+    const settingsTabsJs = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'settings-tabs.js'), 'utf8');
+    const classAttr = settingsTabsJs.match(/class="[^"]*\bsettings-tab\b[^"]*"|className\s*=\s*[`'"][^`'"]*\bsettings-tab\b[^`'"]*[`'"]/);
+    if (classAttr) {
+        assert.ok(!classAttr[0].includes('btn-icon'),
+            '.settings-tab must never also carry btn-icon, or the ellipse '
+            + 'bug returns');
+    }
 });
 
 // ---------------------------------------------------------------------

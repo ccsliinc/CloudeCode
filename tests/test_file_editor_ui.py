@@ -9,15 +9,23 @@ Two regressions this pins:
    break wiring silently; a future edit that reintroduces "claude config"
    in a label would undo the rename silently. Both are checked here.
 
-2. THE BARE-BUTTON SQUARE. ``client/css/styles.css`` carries a bare
-   ``button { width: 36px; height: 36px }`` reset for the header icon row,
-   and ``@media (max-width: 480px)`` raises it to 40x40. A class only beats
-   that rule for the properties it actually DECLARES, so any labelled
-   button whose rule omits width/height silently becomes a 40px square on a
-   phone with its label rendering over the border. Measured before the fix
-   at 375px: the "preview" tab's box was 40x40 with a 10px content box
-   against 44.1px of text - a 34.1px spill. Every labelled button rule in
-   the file-editor stylesheets must therefore declare both.
+2. THE BARE-BUTTON SQUARE. ``client/css/styles.css`` used to carry a bare
+   ``button { width: 36px; height: 36px }`` reset reaching every <button>
+   in the app, and ``@media (max-width: 480px)`` raised it to 40x40. A
+   class only beat that rule for the properties it actually DECLARED, so
+   any labelled button whose rule omitted width/height silently became a
+   40px square on a phone with its label rendering over the border.
+   Measured before the fix at 375px: the "preview" tab's box was 40x40
+   with a 10px content box against 44.1px of text - a 34.1px spill. Every
+   labelled button rule in the file-editor stylesheets must therefore
+   declare both.
+
+   The button-selector scoping pass retired the bare element rule; it is
+   ``.btn-icon`` now, applied only to ``#configEditorBtn`` and
+   ``.header-menu-toggle``. None of the labelled buttons below ever
+   carried that class, so the square they had to escape is smaller in
+   scope but the guard is unchanged in spirit: declare your own box or
+   inherit one meant for someone else.
 
 Run with:
     python3 -m pytest tests/test_file_editor_ui.py -v
@@ -102,19 +110,28 @@ def test_internal_identifiers_were_deliberately_left_alone():
 # ---- 2. the bare-button square ----------------------------------------
 
 def test_bare_button_reset_still_exists_so_this_guard_is_not_vacuous():
-    """If the bare reset is ever removed, these tests stop protecting
-    anything and should be revisited rather than left as decoration.
+    """If the (now scoped) reset is ever removed, these tests stop
+    protecting anything and should be revisited rather than left as
+    decoration.
 
-    The reset is still a hard square; it is now written through
+    The reset is still a hard square; it is written through
     ``--control-size`` because the header's height (and therefore the
     top-right FAB's clearance below it) is derived from the same number.
     Assert the RESET and the RESOLVED VALUES, not the literal that used
     to spell them, or this guard breaks on every refactor that keeps its
     meaning intact.
+
+    The rule itself is ``.btn-icon`` now, not a bare ``button`` element -
+    see the button-selector scoping pass. It no longer reaches the
+    labelled buttons this file's other test guards, which is the fix;
+    this test only confirms the square those buttons had to escape from
+    still exists somewhere, on the two controls that actually want it.
     """
     css = (CSS_DIR / "styles.css").read_text(encoding="utf-8")
-    assert re.search(r"\nbutton \{[^}]*width: var\(--control-size\)", css), \
-        "the bare `button` width reset is gone - re-evaluate the rules below"
+    assert not re.search(r"\nbutton \{", css), \
+        "a bare `button {` element rule reappeared - it should be scoped, e.g. to .btn-icon"
+    assert re.search(r"\n\.btn-icon \{[^}]*width: var\(--control-size\)", css), \
+        "the .btn-icon width reset is gone - re-evaluate the rules below"
     # The token still resolves to the same three sizes it used to state
     # inline, so every rule below still fights the same square.
     assert re.search(r"--control-size:\s*36px;", css), "base square changed"

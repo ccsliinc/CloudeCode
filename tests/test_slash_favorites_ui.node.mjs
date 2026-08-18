@@ -4,14 +4,16 @@
 // config.json. It is now whatever the user has starred. Three things had
 // to be true at once and each has its own failure mode:
 //
-//   1. THE STAR IS TAPPABLE ON A PHONE. It is an icon-only control, and
-//      the bare `button { width: 36px; height: 36px;
-//      border-radius: 50% }` rule near the top of styles.css reaches
-//      every button that does not opt out property by property. That rule
-//      has caused nine user-visible bugs here, including a settings tab
-//      strip of ellipses. So the star must declare width, height,
-//      border-radius, padding, background, border and display itself, and
-//      the box must clear 44px.
+//   1. THE STAR IS TAPPABLE ON A PHONE. It is an icon-only control. Before
+//      the button-selector scoping pass, a bare `button { width: 36px;
+//      height: 36px; border-radius: 50% }` rule near the top of
+//      styles.css reached every button that did not opt out property by
+//      property, and caused nine user-visible bugs here, including a
+//      settings tab strip of ellipses. That rule is `.btn-icon` now,
+//      applied only to the two header controls that actually want it -
+//      the star was never one of them, so it must still declare width,
+//      height, border-radius, padding, background, border and display
+//      itself, and the box must clear 44px.
 //
 //   2. THE STAR IS NOT THE `more` CONTROL. Both sit on a `.command-item`.
 //      They are told apart by SHAPE and PLACE - `more` is a word in

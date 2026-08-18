@@ -266,9 +266,12 @@ test('the pin control is hidden, not disabled, below the breakpoint', () => {
 });
 
 test('the pin button declares both width and height', () => {
-    // styles.css carries a bare `button { width; height }` reset and a
-    // class only beats it for the properties the class states. Nine
-    // user-visible bugs in this app have come from a class that named one.
+    // Before the button-selector scoping pass, styles.css carried a bare
+    // `button { width; height }` reset and a class only beat it for the
+    // properties the class stated. Nine user-visible bugs in this app came
+    // from a class that named one. The reset is `.btn-icon` now, a class
+    // `.config-drawer-pin` never carries - but this class must keep
+    // declaring its own box regardless of what reaches it or does not.
     const body = ruleBody(drawer, '.config-drawer-pin');
     assert.match(body, /width:\s*28px/);
     assert.match(body, /height:\s*28px/);

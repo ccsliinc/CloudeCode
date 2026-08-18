@@ -471,7 +471,10 @@ test('GEOMETRY: the top-right rail clears the header from the same tokens', () =
     // --header-h, and that is what this assertion is really about.
     assert.match(header, /padding:\s*var\(--header-pad-y\) var\(--header-pad-x\);/);
     assert.match(header, /border-bottom:\s*var\(--header-border\) solid/);
-    assert.match(ruleOf(base, 'button'),
+    // The header's own three control-size icon buttons (configEditorBtn,
+    // header-menu-toggle, and their kin) are `.btn-icon` now, not a bare
+    // `button` reset - see the button-selector scoping pass.
+    assert.match(ruleOf(base, '.btn-icon'),
         /width:\s*var\(--control-size\);\n\s*height:\s*var\(--control-size\);/);
 
     // Resolve the three breakpoints the way the browser will and check
