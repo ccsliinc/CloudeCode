@@ -52,7 +52,7 @@ _MESSAGE_COLUMNS = (
     "tool_use_id, timestamp, text_content, has_tool_use, has_tool_result, "
     "is_compact_boundary, compact_subtype, raw_stored, model, "
     "usage_input_tokens, usage_output_tokens, usage_cache_read_tokens, "
-    "usage_cache_creation_tokens, tool_use_ids_json"
+    "usage_cache_creation_tokens, tool_use_ids_json, tool_result_id"
 )
 
 def _as_str(value: Any) -> Optional[str]:
@@ -119,6 +119,14 @@ def _row_to_message(row: Any) -> dict:
         "raw_stored": bool(row.raw_stored),
         "model": row.model,
         "tool_use_ids": _parse_tool_use_ids(row.tool_use_ids_json),
+        # The id of the tool_use this row is the RESULT of, present on the
+        # ``user`` rows that carry ``has_tool_result``. It is the only key
+        # that pairs a result back to the call that produced it, and
+        # without it a client cannot time a tool call or attach its output
+        # to the right chip -- it would have to infer the pairing from row
+        # ORDER, which is a guess dressed as a measurement. A scalar
+        # already on the table; no raw_json is read to produce it.
+        "tool_result_id": row.tool_result_id,
         "folded_progress_count": 0,
         "turn_cost": {
             "input_tokens": row.usage_input_tokens,

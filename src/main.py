@@ -560,6 +560,38 @@ async def session_deep_link(project: str):
     )
 
 
+@app.get("/history")
+@app.get("/history/{view}/{item_id}")
+async def history_viewer_shell(view: str = "", item_id: str = "") -> HTMLResponse:
+    """Serve the SPA shell for the conversation-archive viewer's URLs.
+
+    The viewer has three levels and each has a path (``/history``,
+    ``/history/project/<id>``, ``/history/session/<id>``) so that back,
+    forward and a pasted link all work. Those paths only ever exist in the
+    browser, but a HARD REFRESH on one is a real request to this server,
+    and without these routes it would 404 -- which is the one moment a
+    reader is most likely to reload.
+
+    Neither parameter is inspected here. ``client/js/router.js`` parses the
+    path after the SPA boots and rejects anything that is not a known view
+    with a numeric id, exactly as it already does for ``/session/{project}``
+    above. Validating here as well would put the rule in two places and
+    let them drift.
+
+    Args:
+        view: unused; ``project`` or ``session`` in practice.
+        item_id: unused; the row id the client router reads.
+
+    Returns:
+        HTMLResponse: the SPA shell, no-cache for the same reason as
+        ``root()``.
+    """
+    return HTMLResponse(
+        content=_render_index_html(),
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
 # Web app manifest + apple-touch-icon, served from the ORIGIN ROOT.
 #
 # Both files physically live under client/ and are therefore already
