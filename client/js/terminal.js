@@ -300,6 +300,7 @@ class Terminal {
         // desktop is untouched. Listeners ride on #terminal / document,
         // so term.reset() during session swap does not wipe them.
         this._applyTouchSelection();
+        this._applySelectWhileScrolled(); // see terminal-select-scrolled.js
 
         // The two session-scoped FAB menus: tools (copy sheet, paste,
         // attach image) and session editor (theme, music). Same
@@ -519,6 +520,9 @@ class Terminal {
             window.TouchSelect.init(this);
         }
     }
+
+    // SELECT-WHILE-SCROLLED hook - see terminal-select-scrolled.js.
+    _applySelectWhileScrolled() { if (window.TerminalSelectScrolled) window.TerminalSelectScrolled.init(this.term && this.term.element && this.term.element.parentElement, () => this.term); }
 
     /**
      * Wire the two session-scoped FAB menus, split by JOB not by corner.
