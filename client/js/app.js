@@ -2,15 +2,51 @@
 
 // SESSION-IDENTITY-V2 — header identity asset. Single source of truth so the
 // path is editable from one spot (e.g. swap to .png on platforms without SVG).
+// client/index.html's static #header-icon markup embeds this SAME path as a
+// literal <img src> so the mark is correct on first paint, before this
+// script has even run — tests/test_icon_assets.py asserts the two stay in
+// sync. If you change this constant, update that markup too.
 const HEADER_BRAND_ICON_URL = '/static/assets/cloude-icon.svg';
+// fix/icon-consistency — the real mark now renders on EVERY screen (see
+// setHeaderIdentity below). This emoji is no longer a per-screen choice; it
+// is only the last-resort fallback if the SVG fails to load (offline cache
+// miss, asset renamed out from under the constant above, etc). Kept
+// visually distinct from silent failure: _onHeaderIconLoadError logs to the
+// console and stamps data-icon-fallback="emoji" on #header-icon so the
+// fallback is detectable rather than looking like an intentional design.
 const HEADER_BRAND_EMOJI = '☁️'; // ☁️ cloud emoji
+
+/**
+ * fix/icon-consistency — if the brand SVG 404s or otherwise fails to load,
+ * fall back to the emoji rather than an empty box, but make the fallback
+ * detectable (console.error + a data attribute) instead of silently
+ * looking like a deliberate choice. This exact silence — an emoji fallback
+ * that was indistinguishable from a real design decision — is how the
+ * launchpad/auth screens went months showing the wrong mark unnoticed.
+ *
+ * @param {Event} _event - the <img> error event (unused, kept for the
+ *   addEventListener signature).
+ */
+function _onHeaderIconLoadError(_event) {
+    console.error('Header brand icon failed to load: ' + HEADER_BRAND_ICON_URL);
+    var iconEl = document.getElementById('header-icon');
+    if (iconEl) {
+        iconEl.innerHTML = '';
+        iconEl.textContent = HEADER_BRAND_EMOJI;
+        iconEl.dataset.iconFallback = 'emoji';
+    }
+}
 
 /**
  * SESSION-IDENTITY-V2 — swap the header icon + title in one DOM operation.
  *
  * @param {{ icon: 'brand' | 'cloude', title: string, subheader?: string|null }} opts
- *   icon='brand' → cloud emoji (launchpad / auth)
- *   icon='cloude' → CloudeCode brand SVG (terminal)
+ *   icon → fix/icon-consistency: no longer selects between an emoji and
+ *     the SVG (the SVG now renders on every screen, see below). Only
+ *     decides whether the title span is wired for inline rename —
+ *     'cloude' means "this is a live session", so only the terminal
+ *     screen passes it. Kept as a named value rather than a bool so a
+ *     future third screen state doesn't have to be shoehorned into true/false.
  *   title → text content of the title span (alongside the .version chip)
  *   subheader → HOME-HEADER-CONSOLIDATION: when present, the header grows a
  *     second row under `.header-row` carrying this text, and `.header-row`
@@ -57,13 +93,30 @@ function setHeaderIdentity(opts) {
         }
     }
     if (iconEl) {
-        if (opts.icon === 'cloude') {
+        // fix/icon-consistency — the brand mark is identical on every
+        // screen now (auth, launchpad, terminal all identify as the same
+        // app), so this no longer branches on opts.icon. Idempotent: if
+        // the real image is already in place (the common case — the
+        // static markup in index.html ships it by default, see
+        // HEADER_BRAND_ICON_URL's comment) this is a no-op rather than
+        // tearing down and reloading the asset on every screen swap,
+        // which would also re-arm the error listener needlessly.
+        var existingImg = iconEl.querySelector('img[data-brand-icon]');
+        if (!existingImg) {
             // Use an <img> rather than inlining the SVG so the asset can be
             // swapped without re-editing markup, and so the browser caches it.
-            iconEl.innerHTML = '<img src="' + HEADER_BRAND_ICON_URL + '" alt="" />';
-        } else {
-            iconEl.innerHTML = '';
-            iconEl.textContent = HEADER_BRAND_EMOJI;
+            iconEl.innerHTML = '<img data-brand-icon src="' + HEADER_BRAND_ICON_URL + '" alt="" />';
+            delete iconEl.dataset.iconFallback;
+            existingImg = iconEl.querySelector('img');
+        }
+        // Covers BOTH paths: the freshly-created <img> above, and the one
+        // index.html ships statically (present on the very first call,
+        // before this function has ever run) — that static <img> has no
+        // error listener yet until this line, so a load failure on first
+        // paint would otherwise go undetected.
+        if (existingImg && !existingImg.dataset.errorWired) {
+            existingImg.dataset.errorWired = 'true';
+            existingImg.addEventListener('error', _onHeaderIconLoadError, { once: true });
         }
     }
     if (textEl) {

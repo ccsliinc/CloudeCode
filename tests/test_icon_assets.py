@@ -172,3 +172,169 @@ def test_maskable_icon_declared_and_distinct_from_any_purpose() -> None:
             f"maskable icon {src} reuses an 'any'-purpose file; "
             "it will not respect the adaptive-icon safe zone"
         )
+
+
+# =============================================================================
+# fix/icon-consistency — regression tests for the header-icon-as-emoji bug.
+#
+# The bug this section guards against was never a missing/404 asset (the
+# section above already covers that class). The SVG was correct and served
+# with a 200 the entire time. The bug was that client/js/app.js only wrote
+# the real <img> into #header-icon when called with opts.icon === 'cloude'
+# (the terminal/session screen); every other screen — auth, launchpad/home —
+# got a literal cloud EMOJI written over the top instead, because the static
+# HTML in client/index.html shipped that emoji as the element's initial
+# content and setHeaderIdentity() re-asserted it on every non-'cloude' call.
+#
+# A test that only checks the asset resolves (as every test above does)
+# cannot catch this class: the asset was always fine. These tests instead
+# assert on the SOURCE that decides which one gets drawn:
+#   1. the static markup's initial content is the real <img>, not the emoji
+#   2. that <img>'s src matches HEADER_BRAND_ICON_URL (single source of truth)
+#   3. setHeaderIdentity()'s body no longer branches the emoji in based on
+#      opts.icon — HEADER_BRAND_EMOJI must not appear inside it at all
+#   4. every screen-entry function that owns the header calls
+#      setHeaderIdentity() at all (a screen that never calls it is invisible
+#      to every other check here)
+# =============================================================================
+
+
+def _header_icon_span_html() -> str:
+    """Return the raw `<span id="header-icon" ...>...</span>` markup.
+
+    Returns:
+        The full span tag including its initial children, exactly as
+        shipped in client/index.html before any JS has run.
+
+    Raises:
+        AssertionError: if the span cannot be found at all.
+    """
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    match = re.search(r'<span id="header-icon"[^>]*>.*?</span>', html, re.DOTALL)
+    assert match, "expected a #header-icon span in client/index.html"
+    return match.group(0)
+
+
+def _set_header_identity_body() -> str:
+    """Return the source of the setHeaderIdentity() function body.
+
+    Returns:
+        The text between the function's outermost braces.
+
+    Raises:
+        AssertionError: if the function cannot be found (renamed/removed).
+    """
+    js = APP_JS.read_text(encoding="utf-8")
+    start_match = re.search(r"function setHeaderIdentity\(opts\)\s*\{", js)
+    assert start_match, "setHeaderIdentity(opts) not found in client/js/app.js"
+    # Brace-count from the opening '{' to find the matching close - the
+    # function is long enough (subheader handling, icon, title, rename
+    # wiring) that a naive non-greedy regex would stop at the first inner
+    # '}' instead of the function's own end.
+    depth = 0
+    i = start_match.end() - 1
+    for i in range(start_match.end() - 1, len(js)):
+        if js[i] == "{":
+            depth += 1
+        elif js[i] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    return js[start_match.end():i]
+
+
+def test_header_icon_ships_the_real_mark_by_default() -> None:
+    """The static markup's initial #header-icon content is the real <img>.
+
+    Regression guard: index.html used to ship a literal cloud emoji as the
+    span's only content, and only a call with opts.icon === 'cloude' ever
+    replaced it. On any screen that passed anything else — which was every
+    screen except the terminal — the emoji was what actually rendered.
+    """
+    span_html = _header_icon_span_html()
+    assert "<img" in span_html, (
+        "#header-icon's static content must be an <img>, not a bare emoji - "
+        "an emoji default is exactly how the launchpad/auth screens ended "
+        "up showing the wrong mark"
+    )
+    assert "☁" not in span_html, (
+        "the cloud emoji must not be the static content of #header-icon"
+    )
+
+
+def test_header_icon_static_src_matches_the_single_source_of_truth() -> None:
+    """The static <img src> and HEADER_BRAND_ICON_URL never drift apart.
+
+    Two literal copies of the same path exist on purpose (see the comment
+    on HEADER_BRAND_ICON_URL in app.js) so the mark is correct on first
+    paint before app.js has run. This is the guard that keeps them in sync.
+    """
+    span_html = _header_icon_span_html()
+    src_match = re.search(r'<img[^>]*\bsrc="([^"]+)"', span_html)
+    assert src_match, "#header-icon's <img> must declare a src"
+    assert src_match.group(1) == _header_brand_icon_url(), (
+        "client/index.html's static #header-icon src has drifted from "
+        "HEADER_BRAND_ICON_URL in client/js/app.js - update both together"
+    )
+
+
+def test_set_header_identity_does_not_branch_the_emoji_back_in() -> None:
+    """setHeaderIdentity() must not reference the emoji at all.
+
+    Regression guard for the root cause, not just its symptom: the old
+    function body branched on `opts.icon === 'cloude'` and wrote the emoji
+    in the else. This test does not care how the function is shaped as
+    long as it never mentions HEADER_BRAND_EMOJI - the constant is only
+    allowed to appear in the error-fallback path (_onHeaderIconLoadError),
+    which is outside this function's body by construction.
+    """
+    body = _set_header_identity_body()
+    assert "HEADER_BRAND_EMOJI" not in body, (
+        "setHeaderIdentity() must not write the emoji for any opts.icon "
+        "value - the real mark renders on every screen; a per-screen "
+        "emoji branch is the exact bug this test exists to catch"
+    )
+    assert "HEADER_BRAND_ICON_URL" in body, (
+        "setHeaderIdentity() must still reference the real mark's URL "
+        "somewhere in its body"
+    )
+
+
+@pytest.mark.parametrize(
+    "screen_function",
+    [
+        "showAuth",
+        "showLaunchpad",
+        "showTerminal",
+        "returnToExistingTerminal",
+    ],
+)
+def test_every_screen_entry_calls_set_header_identity(screen_function: str) -> None:
+    """Every function that switches to a screen owning the header calls it.
+
+    A screen that forgets to call setHeaderIdentity() is invisible to
+    every other test in this file - the header would simply retain
+    whatever the previous screen left behind. This is a coarse regression
+    guard: it does not prove correctness of what gets passed, only that
+    the call exists at all for each of the four known screen-entry points.
+    """
+    js = APP_JS.read_text(encoding="utf-8")
+    func_match = re.search(
+        rf"(?:async\s+)?{screen_function}\s*\([^)]*\)\s*\{{", js
+    )
+    assert func_match, f"{screen_function}() not found in client/js/app.js"
+    depth = 0
+    end = func_match.end() - 1
+    for end in range(func_match.end() - 1, len(js)):
+        if js[end] == "{":
+            depth += 1
+        elif js[end] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    body = js[func_match.end():end]
+    assert "setHeaderIdentity(" in body, (
+        f"{screen_function}() never calls setHeaderIdentity() - this "
+        "screen's header will silently show whatever the previous "
+        "screen left in place"
+    )
