@@ -1,4 +1,4 @@
-/* Green CRT theme — P1 phosphor on warm CRT black.
+/* Green CRT theme - P1 phosphor on warm CRT black.
  * Pure CSS (no canvas). Scanlines via repeating-linear-gradient overlay,
  * 60Hz pulse via @keyframes (gated on prefers-reduced-motion),
  * phosphor bloom via text-shadow.

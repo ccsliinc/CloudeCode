@@ -5,14 +5,14 @@
  * (toast.new / toast.ack frames) AND backfilled via the REST endpoint
  * on session attach. Per-toast accent color is sourced from the server's
  * project-theme resolution and applied as `style="--toast-accent: <hex>"`
- * on the toast element — the CSS picks it up as a left border.
+ * on the toast element - the CSS picks it up as a left border.
  *
  * Dismiss flow:
  *   - User clicks ×  → fade-out animation → DELETE-equivalent POST to
  *     /api/v1/toasts/<id>/ack → server broadcasts toast.ack → other tabs
  *     dismiss in lockstep (with syncToServer=false to skip the round-trip).
  *   - Server-driven ack (from another browser) → dismiss(id, {syncToServer:
- *     false}) — no echo back to the server.
+ *     false}) - no echo back to the server.
  *
  * No localStorage cross-tab sync; the WS broadcast is the source of truth
  * for ack propagation.
@@ -29,7 +29,7 @@ class ToastManager {
 
   /**
    * Resolve the container element. Late-bound so the class can be
-   * constructed before DOMContentLoaded — we look it up at first use.
+   * constructed before DOMContentLoaded - we look it up at first use.
    * Returns null if absent (e.g. on a page that doesn't include the
    * container markup); callers MUST guard for null.
    */
@@ -44,7 +44,7 @@ class ToastManager {
    */
   add(toast) {
     if (!toast || !toast.id) return;
-    if (this._byId.has(toast.id)) return; // dedupe — backfill + WS race
+    if (this._byId.has(toast.id)) return; // dedupe - backfill + WS race
     if (toast.acknowledged) return; // server says already done; don't show
     const container = this._container();
     if (!container) return;
@@ -54,7 +54,7 @@ class ToastManager {
     el.dataset.toastId = toast.id;
     el.dataset.kind = toast.kind || '';
     if (toast.color) {
-      // Inline custom property — CSS picks it up via var(--toast-accent).
+      // Inline custom property - CSS picks it up via var(--toast-accent).
       el.style.setProperty('--toast-accent', toast.color);
     }
     el.setAttribute('role', 'status');
@@ -118,7 +118,7 @@ class ToastManager {
       // server's response.
       if (window.API && typeof window.API.ackToast === 'function') {
         window.API.ackToast(toastId, toast.session_id).catch((err) => {
-          // 404 / 500: log only — the local UI is already updated; a
+          // 404 / 500: log only - the local UI is already updated; a
           // failed server ack will simply re-deliver the toast on the
           // next attach backfill, which is acceptable degraded behavior.
           console.warn('[Toast] ack failed', err && err.message);
@@ -130,7 +130,7 @@ class ToastManager {
   /**
    * Bulk dismiss every tracked toast for a given session id. Called
    * when a session is destroyed so the user doesn't see ghost toasts
-   * referencing a dead session. Does NOT sync to the server — the
+   * referencing a dead session. Does NOT sync to the server - the
    * session is gone, the toasts are gone with it server-side.
    */
   dismissBySession(sessionId) {
@@ -154,7 +154,7 @@ class ToastManager {
 
   /**
    * Backfill from a list of server-shape toasts (e.g. on session attach).
-   * Each is fed through ``add`` which dedupes by id — safe to call twice.
+   * Each is fed through ``add`` which dedupes by id - safe to call twice.
    */
   backfill(toasts) {
     if (!Array.isArray(toasts)) return;
@@ -166,6 +166,6 @@ class ToastManager {
   }
 }
 
-// Singleton export — matches the pattern used by API, TerminalController.
+// Singleton export - matches the pattern used by API, TerminalController.
 window.ToastManager = new ToastManager();
 console.log('[Toast Module] Exported as window.ToastManager:', window.ToastManager);

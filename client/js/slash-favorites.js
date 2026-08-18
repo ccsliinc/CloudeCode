@@ -1,5 +1,5 @@
 /**
- * SlashFavorites — the star affordance that decides which slash commands
+ * SlashFavorites - the star affordance that decides which slash commands
  * get a chip.
  *
  * WHAT CHANGED. `common_slash_commands` in config.json used to be a
@@ -7,7 +7,7 @@
  * user who wanted a different set had to edit JSON. The same key is now
  * written by a star the user toggles on any command in the palette. Same
  * key, same two entry forms, same migration chain (see
- * src/core/slash_favorites.py) — only the author changed.
+ * src/core/slash_favorites.py) - only the author changed.
  *
  * THREE STATES, NOT TWO. A user who has never starred anything gets the
  * built-in defaults, and the row SAYS they are defaults rather than
@@ -103,7 +103,7 @@ console.log('[SlashFavorites Module] Loading...');
      * Render the chip row from the user's favorites.
      *
      * Description: each chip is a command button plus its own star, so the
-     *   row is self-editing — unstarring is done where the chip is, not by
+     *   row is self-editing - unstarring is done where the chip is, not by
      *   hunting the command down in the list below. The empty and
      *   defaulted states are DISTINCT and both say what they are; an
      *   empty row with no explanation reads as a failed fetch.

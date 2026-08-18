@@ -1,4 +1,4 @@
-/* Hermes theme — amber CRT glow.
+/* Hermes theme - amber CRT glow.
    Scoped under :root[data-theme="hermes"] (global) and
    #terminal-screen[data-session-theme="hermes"] (terminal). */
 
@@ -12,7 +12,7 @@
   letter-spacing: 0.04em;
 }
 
-/* Subtle phosphor glow on accent buttons — read like amber CRT phosphors. */
+/* Subtle phosphor glow on accent buttons - read like amber CRT phosphors. */
 :root[data-theme="hermes"] button.primary,
 :root[data-theme="hermes"] .btn-primary {
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
@@ -21,7 +21,7 @@
     0 0 12px rgba(255, 204, 0, 0.25);
 }
 
-/* Faint horizontal scanline overlay — kept very low opacity so it never harms readability. */
+/* Faint horizontal scanline overlay - kept very low opacity so it never harms readability. */
 :root[data-theme="hermes"] body::after {
   content: "";
   position: fixed;

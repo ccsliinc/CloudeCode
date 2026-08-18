@@ -1,7 +1,7 @@
 {
   "id": "alien",
   "name": "Alien",
-  "description": "Nostromo MOTHER 6000 — phosphor green on ink black, hazard yellow on industrial grey.",
+  "description": "Nostromo MOTHER 6000 - phosphor green on ink black, hazard yellow on industrial grey.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

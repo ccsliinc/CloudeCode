@@ -15,12 +15,12 @@ class SessionStatus(str, Enum):
     ERROR = "error"
 
 
-# Provider-selector modal (v3.1) — model id validation shared by
+# Provider-selector modal (v3.1) - model id validation shared by
 # ``CreateSessionRequest.model`` and ``POST /api/v1/providers/models``.
 # This IS the shell-injection guard: ``Settings.get_agent_command()``
 # interpolates the model into a ``zsh -c '...'`` command string handed to
 # tmux (double shlex-quoted there as defense-in-depth), but this regex is
-# the primary gate — anything outside this charset is rejected before it
+# the primary gate - anything outside this charset is rejected before it
 # ever reaches a shell. Keep in sync with the TODO.md contract regex.
 #
 # The ``(?!-)`` negative lookahead blocks a leading ``-``: without it, a
@@ -37,7 +37,7 @@ def is_valid_model_id(v: str) -> bool:
 
     Used by both ``CreateSessionRequest.model`` (field_validator below) and
     the ``POST /api/v1/providers/models`` route handler
-    (``src/api/routes.py``) — every call site MUST go through this
+    (``src/api/routes.py``) - every call site MUST go through this
     function rather than calling ``_MODEL_ID_RE`` directly, so the
     validation rule only ever lives in one place.
 
@@ -49,7 +49,7 @@ def is_valid_model_id(v: str) -> bool:
     return bool(_MODEL_ID_RE.fullmatch(v))
 
 
-# Plan v3.2 — replaces the old ``Tunnel`` model. Pure detection record:
+# Plan v3.2 - replaces the old ``Tunnel`` model. Pure detection record:
 # the server discovers a dev port by sniffing pane output, validates that
 # something is actually listening, and surfaces the URL to the client.
 # No process state, no public URL, no tunnel lifecycle.
@@ -69,7 +69,7 @@ class LocalServerInfo(BaseModel):
 class Session(BaseModel):
     """Session model for Claude Code instance.
 
-    Phase 6 — ``agent_type`` labels which agent CLI was launched in this
+    Phase 6 - ``agent_type`` labels which agent CLI was launched in this
     session ("claude" / "codex" / "hermes" / "openclaw"). Optional + None
     default so legacy ``session_metadata.json`` files (written before the
     field existed) deserialize cleanly. The lifespan startup backfill in
@@ -88,7 +88,7 @@ class Session(BaseModel):
         None,
         description="Agent CLI type: 'claude' | 'codex' | 'hermes' | 'openclaw' (None = unknown / pre-Phase-6 / not yet fingerprinted)",
     )
-    # SESSION-IDENTITY-V2 — per-session pinned theme. None = no pin (the
+    # SESSION-IDENTITY-V2 - per-session pinned theme. None = no pin (the
     # global localStorage theme rules). Optional + None default so legacy
     # ``session_metadata.json`` files (written before the field existed)
     # deserialize cleanly. Set by PATCH /sessions/{name}/pinned-theme.
@@ -96,7 +96,7 @@ class Session(BaseModel):
         None,
         description="Theme id pinned to this session; None = follow global theme",
     )
-    # PIN-FIX-EXECUTE — the bare tmux session name (e.g. "CoudeCode" — NOT
+    # PIN-FIX-EXECUTE - the bare tmux session name (e.g. "CoudeCode" - NOT
     # "adopted:CoudeCode" or "cloude_CoudeCode"). Carried on the inner
     # Session so WS event payloads and create-path responses give the
     # frontend a usable handle for the PATCH pinned-theme URL without
@@ -157,14 +157,14 @@ class SessionInfo(BaseModel):
     )
     # Tmux session name (when backend is tmux). Surfaced to the web UI so
     # the active-session banner on the launchpad can display a human-
-    # readable handle — especially useful for adopted sessions whose
+    # readable handle - especially useful for adopted sessions whose
     # ``session.id`` is prefixed with ``adopted:`` and thus not a clean
     # display string on its own. None when backend is non-tmux.
     tmux_session: Optional[str] = Field(
         default=None,
         description="tmux session name (tmux backend only; None otherwise)",
     )
-    # Phase 6 — surface the active session's agent_type to the client so the
+    # Phase 6 - surface the active session's agent_type to the client so the
     # launchpad / banner can show the right label and theme. Mirrors the
     # ``Session.agent_type`` value; redundant on the wire but keeps the UI
     # one .session_backend-style top-level field away.
@@ -172,17 +172,17 @@ class SessionInfo(BaseModel):
         default=None,
         description="Agent CLI type label (mirrors Session.agent_type)",
     )
-    # SESSION-IDENTITY-V2 — surface the pinned theme at the top level so
+    # SESSION-IDENTITY-V2 - surface the pinned theme at the top level so
     # the UI can paint identity (header icon + title swap) without diving
     # into ``.session``. Mirrors Session.pinned_theme.
     pinned_theme: Optional[str] = Field(
         default=None,
         description="Theme id pinned to this session (mirrors Session.pinned_theme)",
     )
-    # v0.7.0 — launchpad rejoin scrollback replay. Populated ONLY when
+    # v0.7.0 - launchpad rejoin scrollback replay. Populated ONLY when
     # ``GET /sessions?session_id=<id>&include_scrollback=1`` is requested
     # by the launchpad's "return to running session" path. Mirrors the
-    # adopt-path's ``AdoptSessionResponse.initial_scrollback_b64`` — the
+    # adopt-path's ``AdoptSessionResponse.initial_scrollback_b64`` - the
     # client base64-decodes and paints these bytes into xterm BEFORE the
     # WS opens so the rejoined terminal shows the same pre-existing
     # history the adopt path shows. None for every other caller (default-
@@ -199,7 +199,7 @@ class SessionInfo(BaseModel):
     # single bulk tmux pane query (src.core.session_status). Surfaced at
     # the top level (mirrors the .session-nested Session.status) so the
     # client never has to dig into ``.session`` to paint the dot.
-    # feat/hook-driven-status — activity_status now carries the UNIFIED
+    # feat/hook-driven-status - activity_status now carries the UNIFIED
     # hook + tmux vocabulary (src.core.session_status.ALL_ACTIVITY_STATUSES):
     # 'dead' | 'question' | 'working' | 'working_subagent' |
     # 'finished_unread' | 'idle' | 'unknown'. Resolved by
@@ -211,7 +211,7 @@ class SessionInfo(BaseModel):
             "'working_subagent' | 'finished_unread' | 'idle' | 'unknown'"
         ),
     )
-    # feat/hook-driven-status — raw unread flag (auto-from-Stop OR manual
+    # feat/hook-driven-status - raw unread flag (auto-from-Stop OR manual
     # pin), surfaced alongside activity_status so the client can render an
     # unread badge even in a state that isn't literally 'finished_unread'
     # (e.g. a manually-pinned session that is currently 'working' again).
@@ -219,7 +219,7 @@ class SessionInfo(BaseModel):
         default=False,
         description="True if this session has an unread Stop or a manual unread pin",
     )
-    # fix/session-ownership-source — the TMUX/EXTERNAL badge's ONLY source.
+    # fix/session-ownership-source - the TMUX/EXTERNAL badge's ONLY source.
     #
     # WHAT THE BADGE MEANS: True iff THIS APP CREATED the tmux session (via
     # POST /sessions); False iff the app merely ADOPTED one that was started
@@ -271,7 +271,7 @@ class CreateSessionRequest(BaseModel):
     )
     # Optional client-measured terminal dims. When supplied, the backend
     # births the pane at these dims instead of the INITIAL_COLS/INITIAL_ROWS
-    # defaults — closing the "80x24 or 132x40 birth" gap before the first
+    # defaults - closing the "80x24 or 132x40 birth" gap before the first
     # WS resize frame arrives. Omitted by clients that don't know their
     # dims at creation time; the WS resize handshake still reshapes later.
     cols: Optional[int] = Field(
@@ -282,11 +282,11 @@ class CreateSessionRequest(BaseModel):
         None,
         description="Client-measured terminal rows (xterm cell grid height)"
     )
-    # Phase 6 — explicit per-request agent override. When omitted, the
+    # Phase 6 - explicit per-request agent override. When omitted, the
     # session inherits the project's configured ``agent_type`` (from
     # ProjectConfig); when supplied, it wins outright. None / missing
     # is the common case for pre-Phase-6 clients.
-    # feat/launch-wrappers — also accepts the ``id`` of a configured
+    # feat/launch-wrappers - also accepts the ``id`` of a configured
     # launch wrapper (e.g. "cld", "cldor", or any custom wrapper id) to
     # launch through that specific wrapper. See
     # ``Settings.get_agent_command``'s resolution order. No format
@@ -305,7 +305,7 @@ class CreateSessionRequest(BaseModel):
         None,
         description="OpenRouter model id; None launches Claude directly via 'cld'",
     )
-    # feat/settings-tabs-and-commands — id of a configured terminal
+    # feat/settings-tabs-and-commands - id of a configured terminal
     # command (config.json ``terminal_commands``) to type into the new
     # console pane once it is up. Only meaningful with
     # ``agent_type="shell"``.
@@ -313,7 +313,7 @@ class CreateSessionRequest(BaseModel):
     # SECURITY: this is an ID, never a command string. The server looks
     # the id up in the user's own config and writes the stored text into
     # the visible tmux pane via the existing SessionBackend.write()
-    # (send-keys). A client cannot supply arbitrary text to run — see
+    # (send-keys). A client cannot supply arbitrary text to run - see
     # src/core/terminal_commands.py's module docstring. An unknown id is
     # silently ignored (plain console), never an error.
     terminal_command_id: Optional[str] = Field(
@@ -324,7 +324,7 @@ class CreateSessionRequest(BaseModel):
     @field_validator("model")
     @classmethod
     def _validate_model_id(cls, v: Optional[str]) -> Optional[str]:
-        """Shell-injection guard — enforced regardless of client-side checks.
+        """Shell-injection guard - enforced regardless of client-side checks.
 
         ``Settings.get_agent_command()`` interpolates this value into a
         shell command string; anything outside the allowed charset is
@@ -343,8 +343,8 @@ class CommandRequest(BaseModel):
     command: str = Field(..., description="Command to execute in the session")
 
 
-# Provider-selector modal (v3.1) — GET/POST/DELETE /api/v1/providers*.
-# "Claude" is implicit and never included in ``models`` — it's the
+# Provider-selector modal (v3.1) - GET/POST/DELETE /api/v1/providers*.
+# "Claude" is implicit and never included in ``models`` - it's the
 # client's always-present first option, never stored/removable.
 
 
@@ -361,12 +361,12 @@ class ProviderModelsResponse(BaseModel):
 class WrapperListResponse(BaseModel):
     """Response for every launch-wrapper endpoint (feat/launch-wrappers).
 
-    Full wrapper objects (script included — never a secret, see
+    Full wrapper objects (script included - never a secret, see
     ``AgentWrapper``'s docstring). The client always re-renders from this
     authoritative list rather than optimistically patching its own state,
     matching the ``ProviderModelsResponse`` convention.
 
-    feat/universal-wrappers — ``families`` carries the serialized family
+    feat/universal-wrappers - ``families`` carries the serialized family
     registry (see ``src.core.agent_families``) alongside the list, so the
     settings screen can render one group per family, and the launch picker
     can label its groups, WITHOUT hardcoding a family list client-side.
@@ -381,7 +381,7 @@ class WrapperListResponse(BaseModel):
 class WrapperExamplesResponse(BaseModel):
     """Response for ``GET /api/v1/agents/wrappers/examples``.
 
-    Offered, never auto-installed — see
+    Offered, never auto-installed - see
     ``src.core.agent_wrappers.EXAMPLE_WRAPPERS``.
     """
     wrappers: List[dict] = Field(default_factory=list)
@@ -401,7 +401,7 @@ class ReplaceTerminalCommandsRequest(BaseModel):
     """Request body for ``PUT /api/v1/terminal/commands``.
 
     Whole-list replace, because add / edit / delete / REORDER are all the
-    same operation on an ordered list — a per-entry endpoint plus a
+    same operation on an ordered list - a per-entry endpoint plus a
     separate reorder endpoint would give two ways for the stored order to
     disagree with itself. Entries are validated in
     ``src.core.terminal_commands.validate_command_list`` (schema, id
@@ -434,8 +434,8 @@ class AddProviderModelRequest(BaseModel):
 
     ``model`` format is validated in the route handler (not a pydantic
     field_validator here) so a malformed id returns a precise 400 with a
-    clear message — matching the explicit REST contract (400 invalid
-    format, 409 duplicate) — rather than FastAPI's generic 422 body.
+    clear message - matching the explicit REST contract (400 invalid
+    format, 409 duplicate) - rather than FastAPI's generic 422 body.
     """
     model: str = Field(
         ..., description="OpenRouter model id to add, e.g. 'openai/gpt-5.6-sol'"
@@ -483,7 +483,7 @@ class UpdateThemeRequest(BaseModel):
 class SetUnreadRequest(BaseModel):
     """Request body for ``PATCH /sessions/{session_name}/unread``.
 
-    feat/hook-driven-status — the manual "mark unread for followup"
+    feat/hook-driven-status - the manual "mark unread for followup"
     control. ``session_name`` in the URL is the literal tmux session name
     (same convention as ``/sessions/{session_name}/theme``), not a
     session_id, so it works for attachable-but-not-live sessions too.
@@ -510,8 +510,8 @@ class ProjectResponse(BaseModel):
 class UpdateProjectRequest(BaseModel):
     """Request model for updating a project's display name and/or description.
 
-    Both fields are optional — clients send only what they want to change.
-    Display name only — the folder on disk is never touched.
+    Both fields are optional - clients send only what they want to change.
+    Display name only - the folder on disk is never touched.
     """
     new_name: Optional[str] = Field(None, description="New display name (omit to keep current)")
     description: Optional[str] = Field(None, description="New description (omit to keep current; empty string clears)")
@@ -529,7 +529,7 @@ class CloneProjectRequest(BaseModel):
     repo_url: str = Field(
         ...,
         description=(
-            "GitHub repo URL — accepts https://github.com/owner/repo, "
+            "GitHub repo URL - accepts https://github.com/owner/repo, "
             "https://github.com/owner/repo.git, git@github.com:owner/repo.git, "
             "github.com/owner/repo, or owner/repo (gh CLI shorthand)."
         ),
@@ -551,13 +551,13 @@ class DirectoryEntry(BaseModel):
     path: str = Field(..., description="Absolute directory path")
 
 
-# Track 1 — Adopt-external-session models.
+# Track 1 - Adopt-external-session models.
 #
 # ``AttachableSession`` is the shape of each row in the launchpad "Adopt an
 # external session" list. ``AdoptSessionRequest`` is the POST body for the
 # adopt endpoint; ``confirm_detach`` is the explicit consent flag required
 # when an active session already exists (409-on-false semantics). The prior
-# session is DETACHED — tmux keeps running, the user can re-adopt it from
+# session is DETACHED - tmux keeps running, the user can re-adopt it from
 # the launchpad list later. Destruction only happens via the explicit
 # destroy button, never as a side effect of switching sessions. The
 # response embeds the existing ``Session`` model plus a base64-encoded
@@ -568,7 +568,7 @@ class AttachableSession(BaseModel):
     """A tmux session on our socket that the UI may adopt.
 
     ``created_by_cloude`` is True iff the name is in the server's persisted
-    ``owned_tmux_sessions`` set — i.e. we birthed it via ``POST /sessions``.
+    ``owned_tmux_sessions`` set - i.e. we birthed it via ``POST /sessions``.
     False means the user started it externally (the intended adopt target).
     """
     name: str = Field(..., description="Literal tmux session name")
@@ -579,14 +579,14 @@ class AttachableSession(BaseModel):
         ..., description="tmux session creation time (Unix epoch seconds)"
     )
     window_count: int = Field(..., description="Number of windows in the session")
-    # Phase 6 — agent label for adopt-list rows. None until Phase 7 wires
+    # Phase 6 - agent label for adopt-list rows. None until Phase 7 wires
     # the fingerprint detector. The launchpad treats None as "unknown"
     # and shows a neutral chip.
     agent_type: Optional[str] = Field(
         default=None,
         description="Detected agent CLI type for this tmux session (None = not yet fingerprinted)",
     )
-    # SESSION-IDENTITY-V2 — pinned theme for this attachable session. None
+    # SESSION-IDENTITY-V2 - pinned theme for this attachable session. None
     # = no pin. Discovery code populates from the active SessionManager
     # state when the row matches the active backend; otherwise None.
     pinned_theme: Optional[str] = Field(
@@ -598,12 +598,12 @@ class AttachableSession(BaseModel):
     # ``tmux list-panes -a`` query. One of "running" | "idle" | "dead" |
     # "unknown". Defaults to "unknown" for any legacy caller that doesn't
     # thread a status map through (never fabricated).
-    # feat/hook-driven-status — attachable rows have no live session_id, so
+    # feat/hook-driven-status - attachable rows have no live session_id, so
     # no hook signal is ever possible for them (see
     # SessionManager.list_attachable_sessions); this is the tmux-fallback
     # subset of the unified vocabulary: 'dead' | 'working' |
     # 'finished_unread' | 'idle' | 'unknown' (never 'question' or
-    # 'working_subagent' — those require a live hook stream).
+    # 'working_subagent' - those require a live hook stream).
     status: str = Field(
         default="unknown",
         description=(
@@ -611,7 +611,7 @@ class AttachableSession(BaseModel):
             "'finished_unread' | 'idle' | 'unknown'"
         ),
     )
-    # feat/hook-driven-status — persisted unread flag (name-keyed, survives
+    # feat/hook-driven-status - persisted unread flag (name-keyed, survives
     # detach/re-adopt). See SessionInfo.unread for the live-session twin.
     unread: bool = Field(
         default=False,
@@ -657,7 +657,7 @@ class AdoptSessionResponse(BaseModel):
     """Response body for ``POST /sessions/adopt``.
 
     ``initial_scrollback_b64`` is base64-encoded raw pane bytes captured at
-    adopt time — the client decodes and paints into xterm BEFORE opening
+    adopt time - the client decodes and paints into xterm BEFORE opening
     the WebSocket. ``fifo_start_offset`` is the byte offset the server's
     WS tailer seeks to on first read, so post-adopt live bytes resume
     exactly where the painted scrollback ended (no duplicate, no gap).
@@ -739,7 +739,7 @@ class AuthTokenResponse(BaseModel):
     ~15 min) and a refresh token (long-lived, ~7d) so the client can
     silently rotate access tokens without prompting for TOTP.
 
-    ``token`` is a deprecated alias for ``access_token`` — populated for
+    ``token`` is a deprecated alias for ``access_token`` - populated for
     one release (v3.1) so pre-Item-5 clients keep working, and will be
     removed in v3.2. New clients should read ``access_token``.
     """
@@ -753,7 +753,7 @@ class AuthTokenResponse(BaseModel):
     expires_in: Optional[int] = Field(
         None, description="Seconds until access token expires"
     )
-    # DEPRECATED: alias for access_token — remove in v3.2.
+    # DEPRECATED: alias for access_token - remove in v3.2.
     token: Optional[str] = Field(
         None,
         description="Deprecated alias for access_token (will be removed in v3.2)",
@@ -776,7 +776,7 @@ class HealthResponse(BaseModel):
 class WSMessageType(str, Enum):
     """WebSocket message types."""
     LOG = "log"
-    # Plan v3.2 — replaces TUNNEL_CREATED / TUNNEL_STOPPED. Detection-only:
+    # Plan v3.2 - replaces TUNNEL_CREATED / TUNNEL_STOPPED. Detection-only:
     # when a port shows up in pane output and a TCP listener is confirmed,
     # the tracker emits ``local_server_detected``; the periodic janitor
     # emits ``local_server_lost`` when the listener stops responding.
@@ -796,25 +796,25 @@ class WSMessageType(str, Enum):
     # the backend, waits briefly for SIGWINCH to propagate, and sends
     # Ctrl+L so the foreground app redraws at the new size. This replaces
     # the historical-scrollback replay that used to ship frozen bytes
-    # drawn at the PREVIOUS size — causing visible corruption whenever
+    # drawn at the PREVIOUS size - causing visible corruption whenever
     # the reconnecting client had different dims than the stored session.
     REQUEST_DIMS = "request_dims"
-    # v0.7.0 Part 2 — toast notifications. Server -> client when a toast is
+    # v0.7.0 Part 2 - toast notifications. Server -> client when a toast is
     # recorded (via the synthetic POST endpoint in v0.7.0 Part 2; via the
     # Claude Code hook endpoint in Part 3). Server -> client when a toast is
     # acked so OTHER browsers attached to the same session dismiss in sync.
     # Dot notation matches the convention used by ``local_server_*``
-    # (underscore) — we use a dot here intentionally so the namespace is
+    # (underscore) - we use a dot here intentionally so the namespace is
     # visually distinct in client switch statements and log greps.
     TOAST_NEW = "toast.new"
     TOAST_ACK = "toast.ack"
-    # Session rename — server -> client. Broadcast to every WS bound to a
+    # Session rename - server -> client. Broadcast to every WS bound to a
     # session id after a successful ``PATCH /sessions/{id}/name``. The client
     # uses it to update the in-session header text, the launchpad row label,
     # and ``document.title``. Dot notation matches ``toast.*`` for namespace
     # consistency in client switch statements.
     SESSION_RENAMED = "session.renamed"
-    # fix/multiclient-tmux-size — server -> client, sent after the server
+    # fix/multiclient-tmux-size - server -> client, sent after the server
     # applies a negotiated (possibly smaller-than-requested) terminal size
     # to a session with more than one attached client. Lets a client tell
     # that it is being letterboxed for another client's benefit, rather
@@ -976,9 +976,9 @@ class WSPTYResizeMessage(BaseModel):
     rows: int
 
 
-# Theme system models (Phase 2 — see plan section "Architecture B" / "F").
+# Theme system models (Phase 2 - see plan section "Architecture B" / "F").
 #
-# A ThemeManifest is the JSON shape of `theme.json` — one per bundled theme
+# A ThemeManifest is the JSON shape of `theme.json` - one per bundled theme
 # directory under `client/css/themes/<id>/` and one per user theme directory
 # under `<user_themes_dir>/<id>/`. The /api/v1/themes endpoint validates each
 # manifest with this model: malformed manifests are SKIPPED (logged warning,
@@ -1040,7 +1040,7 @@ class ThemeAudioManifest(BaseModel):
 class ThemeManifest(BaseModel):
     """Theme manifest descriptor.
 
-    `id` MUST match the directory name on disk — the discovery code uses the
+    `id` MUST match the directory name on disk - the discovery code uses the
     dir name as the canonical id and rejects manifests whose `id` field
     disagrees, since otherwise two themes could collide on the same id while
     living in different folders.
@@ -1067,12 +1067,12 @@ class ThemeManifest(BaseModel):
         description="Optional background music block; absent means a silent theme",
     )
     source: Literal["builtin", "user"] = Field(
-        ..., description="Where the manifest was discovered — server-stamped"
+        ..., description="Where the manifest was discovered - server-stamped"
     )
 
 
 # --------------------------------------------------------------------------- #
-# Settings screen (feat/settings-screen) — GET/PATCH /config/settings.
+# Settings screen (feat/settings-screen) - GET/PATCH /config/settings.
 #
 # Two update sub-models (AgentCommandsUpdate, NotificationSecretsUpdate)
 # mirror the PATCH-semantics already established by UpdateProjectRequest:
@@ -1083,7 +1083,7 @@ class ThemeManifest(BaseModel):
 # values for some of these fields (e.g. clearing ``claude_command`` back
 # to the cld/cldor fallback is an explicit empty-string write).
 #
-# ``extra="forbid"`` on every one of these — a payload with an unknown
+# ``extra="forbid"`` on every one of these - a payload with an unknown
 # key is a 422, not a silent no-op merge. This is the "strict payload,
 # reject unknown keys" requirement from the settings-screen spec.
 # --------------------------------------------------------------------------- #
@@ -1095,7 +1095,7 @@ class AgentCommandsUpdate(BaseModel):
     All four fields are optional and independently settable; omit a
     field to leave it unchanged. ``claude_command`` MAY be sent as an
     empty string to explicitly clear it back to the cld/cldor fallback
-    (see ``Settings.get_agent_command``) — that is a legitimate, common
+    (see ``Settings.get_agent_command``) - that is a legitimate, common
     settings-screen action, not an error. The other three commands have
     no such fallback (an empty command would just fail to launch), so
     the route handler rejects a blank value for them.
@@ -1115,14 +1115,14 @@ class NotificationSecretsUpdate(BaseModel):
 
     Secret-shaped fields (``ntfy_topic``, ``slack_webhook_url``,
     ``pushover_token``, ``pushover_user_key``) are write-only from the
-    client's perspective — the GET side of this endpoint never echoes
+    client's perspective - the GET side of this endpoint never echoes
     them back in plain text (see ``Settings.get_settings_summary``'s
     masking). "Leave unchanged" is expressed by omitting the field
     entirely; sending an empty string is an explicit clear (disables
     that channel). Applies live to config.json on write, but the
     running ``NotificationRouter`` was constructed once at process
     startup with a snapshot of this block (see ``src/main.py`` lifespan)
-    and does not hot-reload it — a restart is required, surfaced in the
+    and does not hot-reload it - a restart is required, surfaced in the
     settings UI next to this section.
     """
     model_config = {"extra": "forbid"}
@@ -1139,7 +1139,7 @@ class ConfigSettingsUpdateRequest(BaseModel):
     """Request body for ``PATCH /api/v1/config/settings``.
 
     Top-level keys are the only two writable blocks the settings screen
-    exposes (``agents``, ``notifications``) — HOST/server bind is
+    exposes (``agents``, ``notifications``) - HOST/server bind is
     deliberately absent: it lives in ``.env``, not ``config.json``, has
     no atomic-write convention in this codebase, and a bad value can
     strand the server (the launchd wrapper refuses to boot on a

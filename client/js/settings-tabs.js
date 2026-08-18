@@ -1,12 +1,12 @@
 /**
- * SettingsTabs — the tab strip for the settings modal
+ * SettingsTabs - the tab strip for the settings modal
  * (client/js/settings-panel.js).
  *
  * ONE design rule, and it is the whole reason this is a separate module
  * rather than three lines inside the panel: every pane is rendered into
  * the DOM ONCE, at open, and switching tabs only toggles a class. Nothing
  * is re-rendered, nothing is destroyed. That is what makes half-typed
- * edits survive a tab switch — the inputs holding them are never removed
+ * edits survive a tab switch - the inputs holding them are never removed
  * from the document, so the panel's existing "collect from the DOM at
  * save time" contract (settings-panel.js collectSectionPatch) keeps
  * working across every tab at once, unchanged, including panes the user

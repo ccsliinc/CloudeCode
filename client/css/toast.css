@@ -52,13 +52,13 @@
   transition: transform 200ms ease-out, opacity 200ms ease-out;
 }
 
-/* Entry animation — start off-screen right, slide to rest. */
+/* Entry animation - start off-screen right, slide to rest. */
 .toast--entering {
   transform: translateX(110%);
   opacity: 0;
 }
 
-/* Exit animation — fade + slide. */
+/* Exit animation - fade + slide. */
 .toast--dismissing {
   transform: translateX(20%);
   opacity: 0;

@@ -89,7 +89,7 @@ def socket_drift_warnings(session_manager: Any) -> List[Dict[str, str]]:
     """Detect a live backend sitting on a socket the CURRENT config disagrees with.
 
     ``build_backend`` resolves ``session.tmux_socket_name`` at construction
-    time and each backend keeps that value for its lifetime — correct,
+    time and each backend keeps that value for its lifetime - correct,
     since a session's tmux server does not move. But if the config file is
     edited while sessions are open, the app is then reading a socket name
     that no longer matches where a live session actually lives: exactly

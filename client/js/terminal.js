@@ -5,7 +5,7 @@
 console.log('[Terminal Module] Loading...');
 
 /**
- * Default xterm palette — used if window.Themes hasn't initialized yet
+ * Default xterm palette - used if window.Themes hasn't initialized yet
  * (e.g. /api/v1/themes failed AND no synchronous fallback ran). Phase 4-5:
  * the actual theme assigned to xterm comes from
  *   Themes.getActiveGlobal()?.xterm ?? DEFAULT_XTERM_THEME
@@ -71,7 +71,7 @@ class Terminal {
         this.lastSentRows = null;
 
         // UI elements. Delete is no longer reachable from the session
-        // header (moved to the conversation sidebar + launcher — see
+        // header (moved to the conversation sidebar + launcher - see
         // session-sidebar.js) so there is no destroySessionBtn to track
         // here. detachSessionBtn stays: Detach is the safe exit and
         // remains the only session-exit control in the header.
@@ -109,7 +109,7 @@ class Terminal {
         this.statusEl = document.getElementById('statusText');
         this.sessionInfoEl = document.getElementById('sessionInfo');
 
-        // Add detach session handler — the non-destructive exit. Wired
+        // Add detach session handler - the non-destructive exit. Wired
         // purely via addEventListener (no inline onclick) so this button
         // never risks the double-invoke class of bug an onclick + a
         // listener on the same element can produce.
@@ -224,7 +224,7 @@ class Terminal {
         // viewport silently goes black and stays that way for the rest of
         // the session. The recovery path is documented by the xterm.js
         // maintainers since 2021:
-        //   1. dispose() the addon — it cannot recover the lost context
+        //   1. dispose() the addon - it cannot recover the lost context
         //   2. xterm transparently falls back to its built-in DOM renderer
         //      (the renderer in use when no canvas/webgl addon is loaded)
         //
@@ -237,12 +237,12 @@ class Terminal {
             this._webglAddon = new WebglAddon.WebglAddon();
             this.term.loadAddon(this._webglAddon);
             this._webglAddon.onContextLoss(() => {
-                console.warn('Terminal: WebGL context lost — disposing addon, falling back to DOM renderer');
+                console.warn('Terminal: WebGL context lost - disposing addon, falling back to DOM renderer');
                 try { this._webglAddon.dispose(); } catch (_) { /* idempotent */ }
                 this._webglAddon = null;
             });
         } catch (e) {
-            console.warn('Terminal: WebGL addon unavailable — using DOM renderer', e);
+            console.warn('Terminal: WebGL addon unavailable - using DOM renderer', e);
             this._webglAddon = null;
         }
 
@@ -261,7 +261,7 @@ class Terminal {
         // applyGlobal() / applySession() / clearSession() all funnel through
         // here. xterm.js (with WebglAddon since 2021) listens to its own
         // optionsChanged event and re-uploads the glyph atlas automatically
-        // — we do NOT need to call term.refresh() preemptively. If stale
+        // - we do NOT need to call term.refresh() preemptively. If stale
         // paint is observed empirically we add an explicit refresh here,
         // but the spec calls out the YAGNI on this and current xterm
         // versions handle it cleanly.
@@ -286,15 +286,15 @@ class Terminal {
         // which now owns wheel and touch through one primitive so they
         // cannot diverge. setupScrollListener() wires it.
 
-        // IMG-PASTE — wire image-paste pipeline. Both the paste listener
+        // IMG-PASTE - wire image-paste pipeline. Both the paste listener
         // (DOM event on #terminal container) and the mobile attach button
         // are attached to the document/container, NOT to xterm's custom
         // handler slot, so term.reset() during session swap does not wipe
-        // them — single attachment in initTerminal() is sufficient.
+        // them - single attachment in initTerminal() is sufficient.
         this._applyPasteHandler();
         this._applyImageAttachButton();
 
-        // TOUCH-SELECT — long-press drag selection + floating copy button
+        // TOUCH-SELECT - long-press drag selection + floating copy button
         // on coarse-pointer devices. Implementation lives in touch-select.js
         // (loaded after clipboard.js); it no-ops on fine pointers so
         // desktop is untouched. Listeners ride on #terminal / document,
@@ -375,12 +375,12 @@ class Terminal {
     /**
      * Attach the Shift+Enter custom key handler to the current xterm
      * instance. Called from initTerminal() on first boot and from every
-     * term.reset() site on session swap — xterm's core reset wipes the
+     * term.reset() site on session swap - xterm's core reset wipes the
      * custom key event handler slot, so without re-attachment Shift+Enter
      * silently goes back to default (submit) behavior for the rest of
      * the session's life.
      *
-     * Payload: 2-byte ESC+CR (`\x1b\r`) — the VSCode / Alacritty
+     * Payload: 2-byte ESC+CR (`\x1b\r`) - the VSCode / Alacritty
      * convention documented by Claude Code's /terminal-setup guide for
      * "insert newline without submitting". Claude Code's Ink input
      * parser recognizes ESC+CR as Meta+Enter without requiring kitty
@@ -390,10 +390,10 @@ class Terminal {
     _applyKeyHandlers() {
         if (!this.term) return;
         this.term.attachCustomKeyEventHandler((ev) => {
-            // CLIPBOARD — copy chord (Cmd+C / Ctrl+Shift+C with an active
+            // CLIPBOARD - copy chord (Cmd+C / Ctrl+Shift+C with an active
             // selection → system clipboard). Logic lives in clipboard.js
             // (loaded after this file; guard covers a failed static fetch).
-            // Returns true only when it consumed the event — bare Ctrl+C
+            // Returns true only when it consumed the event - bare Ctrl+C
             // (SIGINT) always falls through untouched.
             if (window.ClipboardTools && window.ClipboardTools.handleCopyChord(ev, this)) {
                 return false;
@@ -403,7 +403,7 @@ class Terminal {
                 ev.preventDefault();
                 ev.stopPropagation();
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r — VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
+                    const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r - VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
                     console.log('[SHIFT-ENTER] sending ESC+CR (\\x1b\\r), bytes:', bytes);
                     this.ws.send(bytes);
                 }
@@ -431,7 +431,7 @@ class Terminal {
     }
 
     /**
-     * FILE-PASTE — desktop clipboard paste interceptor.
+     * FILE-PASTE - desktop clipboard paste interceptor.
      *
      * Listens on the #terminal container in capture phase so we see the
      * paste BEFORE xterm's internal handler. Iterates clipboardData.items
@@ -506,7 +506,7 @@ class Terminal {
     }
 
     /**
-     * TOUCH-SELECT — long-press selection hook point.
+     * TOUCH-SELECT - long-press selection hook point.
      *
      * Hands the Terminal wrapper to touch-select.js, which wires the
      * long-press → drag → floating-copy flow on coarse-pointer devices.
@@ -554,7 +554,7 @@ class Terminal {
     }
 
     /**
-     * FILE-PASTE — upload + path-injection hook point.
+     * FILE-PASTE - upload + path-injection hook point.
      *
      * A THIN DELEGATE. The flow lives in ClipboardTools.uploadAndInject,
      * next to the other things that move content across the terminal
@@ -575,7 +575,7 @@ class Terminal {
     }
 
     /**
-     * IMG-PASTE — inline status pill.
+     * IMG-PASTE - inline status pill.
      *
      * NOW A THIN DELEGATE, and the element it used to build is gone.
      * That element was `z-index: 70`, and the sticky header is 1000 and
@@ -623,7 +623,7 @@ class Terminal {
             merged.set(c, o);
             o += c.length;
         }
-        // SCROLLBACK — sample the viewport position BEFORE the write. See
+        // SCROLLBACK - sample the viewport position BEFORE the write. See
         // terminal-scroll.js for why this cannot be a flag mutated by a
         // debounced scroll listener: the write always won that race, so
         // the view snapped back to the bottom while output was streaming
@@ -644,7 +644,7 @@ class Terminal {
     }
 
     /**
-     * SCROLLBACK — hand the #terminal container to terminal-scroll.js,
+     * SCROLLBACK - hand the #terminal container to terminal-scroll.js,
      * which observes touch/wheel gestures so a write cannot yank the
      * viewport out from under a drag.
      *
@@ -671,7 +671,7 @@ class Terminal {
         if (!this.term) return;
         this._programmaticScrollLock++;
         this.autoScrollEnabled = true;
-        // Reconnect/replay repaint is an explicit "back to live" intent —
+        // Reconnect/replay repaint is an explicit "back to live" intent -
         // drop any gesture latch so the pins below are not suppressed.
         if (window.TerminalScroll) window.TerminalScroll.pinToBottom(this.term);
         const pin = () => {
@@ -711,7 +711,7 @@ class Terminal {
         // On the alternate screen "back to live" means closing claude's
         // transcript view, not pinning a viewport that cannot move.
         if (window.AltScreenScroll && window.AltScreenScroll.exitTranscript()) return;
-        // Clears the gesture latch too — this is an explicit "back to
+        // Clears the gesture latch too - this is an explicit "back to
         // live" intent and must beat a latch left by the user's last
         // drag, which would otherwise suppress the next few writes.
         if (window.TerminalScroll) {
@@ -785,7 +785,7 @@ class Terminal {
      * @param {number} [opts.fifoStartOffset] - Byte offset into the
      *   pipe-pane fifo that the server's tailer should begin streaming
      *   from. Client doesn't consume this directly; it's the server's
-     *   contract — we accept it for symmetry and logging only.
+     *   contract - we accept it for symmetry and logging only.
      */
     async connectToSession(session, opts = {}) {
         const { initialScrollbackB64 = '', fifoStartOffset = null } = opts;
@@ -838,14 +838,14 @@ class Terminal {
             `Session: ${inner.id || 'unknown'} | PID: ${inner.pty_pid || '?'}`;
 
         // Enable detach button (delete lives in the sidebar/launcher now,
-        // not the header — nothing to enable here for it).
+        // not the header - nothing to enable here for it).
         if (this.detachSessionBtn) this.detachSessionBtn.disabled = false;
 
         // Adopt path: paint server-captured scrollback into xterm BEFORE
         // the WS opens. Must be synchronous relative to the WS connect so
         // the VT parser state is correct when the first streamed byte
         // arrives at fifoStartOffset. atob() decodes to a binary string
-        // whose charCodeAt values are the raw bytes — we MUST NOT run
+        // whose charCodeAt values are the raw bytes - we MUST NOT run
         // these through TextDecoder, which would mangle non-UTF8 ANSI
         // escape bytes. xterm.write() accepts Uint8Array directly and
         // feeds the parser without re-encoding.
@@ -860,7 +860,7 @@ class Terminal {
             // doesn't reflow already-buffered content on resize, so painting
             // at the default 80-col geometry leaves the scrollback wrong
             // even after a later fit. If the container isn't visible yet,
-            // fit() may throw or compute zeros — we swallow and continue;
+            // fit() may throw or compute zeros - we swallow and continue;
             // the resize pipeline / handshake fit will still recover the
             // live screen, just not the already-painted scrollback rows.
             try {
@@ -880,7 +880,7 @@ class Terminal {
                 // Exit any alt-screen state + clear + home cursor so the captured bytes
                 // paint into a known-clean screen instead of on top of stale parser
                 // state (the bytes carry escape sequences relative to the tmux pane's
-                // screen state at capture time — we have none of that here).
+                // screen state at capture time - we have none of that here).
                 this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
                 this.term.write(bytes, () => {
                     this._forceScrollToBottom();
@@ -890,7 +890,7 @@ class Terminal {
                 this._needsReplayCtrlL = true;
                 this._pendingPostConnectScroll = true;
             } catch (e) {
-                // Non-fatal — if the b64 is malformed we still want the
+                // Non-fatal - if the b64 is malformed we still want the
                 // session to come up. The user will just miss the pre-
                 // adopt scrollback, not the live stream.
                 console.warn('Terminal: scrollback paint failed, continuing without it:', e);
@@ -911,7 +911,7 @@ class Terminal {
      *
      * Used when the user returns to the launchpad while a session is
      * running and clicks "return to terminal". The backend is already
-     * alive — we must NOT POST /sessions (would try to create) or
+     * alive - we must NOT POST /sessions (would try to create) or
      * POST /sessions/adopt (would re-pipe-pane the tmux session). We
      * just re-open the WebSocket against the existing backend.
      *
@@ -922,7 +922,7 @@ class Terminal {
      * Safe to call multiple times. If a live WS is already open, we
      * do nothing beyond re-painting the status (the server stream is
      * unaffected). If xterm already holds state from the previous
-     * session view, we leave it alone — returning to an existing
+     * session view, we leave it alone - returning to an existing
      * session should feel seamless, not like a reload.
      *
      * @param {object} session - Session object (shape matches what
@@ -971,7 +971,7 @@ class Terminal {
             // callers (App.returnToExistingTerminal, fed from
             // window.API.getSession() by the launchpad's "return to
             // running session" flow and the conversation sidebar's row
-            // click) — `.id`/`.pty_pid` live on `.session`, not on this
+            // click) - `.id`/`.pty_pid` live on `.session`, not on this
             // object directly. Reading them unwrapped is exactly the bug
             // that produced "Session: undefined | PID: ?" in the status
             // bar; _unwrapSession() is the fix.
@@ -983,7 +983,7 @@ class Terminal {
             this.detachSessionBtn.disabled = false;
         }
 
-        // Launchpad-rejoin scrollback replay — same treatment as the adopt
+        // Launchpad-rejoin scrollback replay - same treatment as the adopt
         // path in connectToSession(). The launchpad asks the server for
         // ``initial_scrollback_b64`` on the SessionInfo (via
         // ``getSession(..., { includeScrollback: true })``); when present we
@@ -1004,7 +1004,7 @@ class Terminal {
             // doesn't reflow already-buffered content on resize, so painting
             // at the default 80-col geometry leaves the scrollback wrong
             // even after a later fit. If the container isn't visible yet,
-            // fit() may throw or compute zeros — we swallow and continue;
+            // fit() may throw or compute zeros - we swallow and continue;
             // the resize pipeline / handshake fit will still recover the
             // live screen, just not the already-painted scrollback rows.
             try {
@@ -1112,10 +1112,10 @@ class Terminal {
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
 
         // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
-        // the Sec-WebSocket-Protocol header, NOT in the URL — so no token
+        // the Sec-WebSocket-Protocol header, NOT in the URL - so no token
         // redaction is needed when logging the URL. Multi-session: the
         // session id goes in the ``?session_id=`` query param so the
-        // server scopes this stream to OUR session — another tab on a
+        // server scopes this stream to OUR session - another tab on a
         // different session keeps its own WS undisturbed. ``_currentSession``
         // may be a bare Session ({id}) or a SessionInfo ({session:{id}}).
         const sessionId = this._sessionId();
@@ -1130,22 +1130,22 @@ class Terminal {
     /**
      * Normalize a session-shaped API payload down to the INNER Session
      * object ({id, pty_pid, working_dir, status, tmux_session, model,
-     * ...}). Single normalization point for this file — every reader of
+     * ...}). Single normalization point for this file - every reader of
      * `.id` / `.pty_pid` / `.working_dir` etc. on a session-shaped value
      * goes through here instead of re-deriving its own `s.session || s`
      * fallback, which is how `connectToSession`'s status-bar line and
      * `reconnectToExistingSession`'s status-bar line ended up reading
-     * `undefined` / `?` — they read those fields straight off whatever
+     * `undefined` / `?` - they read those fields straight off whatever
      * was passed in without checking which shape it was.
      *
      * The two shapes in play, both real:
-     *   - Bare `Session` — what `POST /sessions` (create) and
+     *   - Bare `Session` - what `POST /sessions` (create) and
      *     `POST /sessions/adopt` resolve to on their own top level
      *     (callers like `App.showTerminal` already unwrap
      *     `response.session || response` before handing off, so a bare
      *     Session is what usually reaches `connectToSession`).
      *   - `SessionInfo` wrapper (`{session, tmux_session, activity_status,
-     *     unread, pinned_theme, ...}`) — what `GET /sessions` and
+     *     unread, pinned_theme, ...}`) - what `GET /sessions` and
      *     `GET /sessions/list` return. `App.returnToExistingTerminal` /
      *     `reconnectToExistingSession` are fed this wrapper directly by
      *     the launchpad's "return to running session" flow and the
@@ -1153,12 +1153,12 @@ class Terminal {
      *     `window.API.getSession(...)` and pass the result straight
      *     through).
      *
-     * IMPORTANT: fields that live on the WRAPPER itself — `tmux_session`,
+     * IMPORTANT: fields that live on the WRAPPER itself - `tmux_session`,
      * `activity_status`, `unread`, `pinned_theme`,
-     * `initial_scrollback_b64` — are NOT part of the inner Session and
+     * `initial_scrollback_b64` - are NOT part of the inner Session and
      * are NOT what this helper returns. A caller that needs one of those
      * reads it from the original (possibly-wrapper) value, not from this
-     * unwrapped result — see `_currentTmuxName()` below, which checks
+     * unwrapped result - see `_currentTmuxName()` below, which checks
      * the wrapper's own `tmux_session` first for exactly that reason.
      *
      * Inputs: s (object|null|undefined) - bare Session or SessionInfo.
@@ -1184,7 +1184,7 @@ class Terminal {
      * Resolve the current tmux session name from ``_currentSession``
      * (bare Session or SessionInfo shape). `tmux_session` lives on BOTH
      * shapes (the SessionInfo wrapper carries its own top-level copy, the
-     * inner Session carries the canonical one) — check the raw value
+     * inner Session carries the canonical one) - check the raw value
      * first since it's cheaper and identical either way, then fall back
      * to the unwrapped inner Session's copy.
      */
@@ -1196,7 +1196,7 @@ class Terminal {
     }
 
     /**
-     * v0.7.1 — swap the in-session header title span for an inline input
+     * v0.7.1 - swap the in-session header title span for an inline input
      * so the user can edit the session name. Triggered by the pencil
      * button next to #header-title-text. Enter/blur saves; Esc cancels.
      *
@@ -1319,7 +1319,7 @@ class Terminal {
         input.addEventListener('blur', () => {
             // A blur immediately after a successful save would no-op
             // (settled=true short-circuits both branches), so we just
-            // call save() — if the user blurred with an unchanged value
+            // call save() - if the user blurred with an unchanged value
             // it cancels; otherwise we attempt the rename.
             save();
         });
@@ -1372,11 +1372,11 @@ class Terminal {
             // Reset reconnect state
             this.reconnectAttempts = 0;
             this.isReconnecting = false;
-            // Clear intentional-close flag now that a fresh WS is open —
+            // Clear intentional-close flag now that a fresh WS is open -
             // any FUTURE close is a natural disconnect and should reconnect.
             this._intentionalClose = false;
             // A fresh open means whatever session_id this WS is bound to
-            // (possibly a NEW one from a 4404 re-adopt) is known-good —
+            // (possibly a NEW one from a 4404 re-adopt) is known-good -
             // re-arm the by-name fallback for the next disconnect episode.
             this._reconnectByNameAttempted = false;
             if (this.reconnectTimeout) {
@@ -1392,7 +1392,7 @@ class Terminal {
             // arrives immediately after and raises the notice, so raising
             // a second one here would only double it.
 
-            // v0.7.0 Part 2 — backfill any unacked toasts for THIS session
+            // v0.7.0 Part 2 - backfill any unacked toasts for THIS session
             // that fired while this browser was disconnected. Fire-and-forget;
             // failure here is logged but doesn't block the terminal coming up.
             const sidForToasts = this._sessionId();
@@ -1409,14 +1409,14 @@ class Terminal {
                     });
             }
 
-            // Send initial resize (legacy fallback path — the server's
+            // Send initial resize (legacy fallback path - the server's
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
             this.sendResize('ws.onopen');
 
             // DO NOT send Ctrl+L (0x0c) from the client here. The server's
             // resize handshake already writes a single 0x0c to the PTY after
-            // SIGWINCH settles (src/api/websocket.py — success path ~:363,
+            // SIGWINCH settles (src/api/websocket.py - success path ~:363,
             // degraded fallback ~:381), and that is the authoritative redraw
             // that repaints the live screen on top of our replayed scrollback
             // at the correct post-resize geometry.
@@ -1425,7 +1425,7 @@ class Terminal {
             // redraw, but TWO within ~2s (in fullscreen/alt-screen rendering)
             // are interpreted as the `/clear` chord gesture and WIPE THE
             // CONTEXT. A client 0x0c here lands ~+50ms after WS open while the
-            // server's lands ~+200ms (post dims + 150ms SIGWINCH sleep) — two
+            // server's lands ~+200ms (post dims + 150ms SIGWINCH sleep) - two
             // 0x0c <2s apart → accidental /clear on every launchpad rejoin.
             // The viewport snap-to-bottom is a purely LOCAL xterm op handled
             // below via _pendingPostConnectScroll/_forceScrollToBottom and
@@ -1481,7 +1481,7 @@ class Terminal {
             }
 
             // If the close was triggered by a deliberate session swap,
-            // skip the disconnect banner + reconnect loop — the new
+            // skip the disconnect banner + reconnect loop - the new
             // session's connect flow will paint its own state.
             if (this._intentionalClose) {
                 console.log('Terminal: intentional close, skipping reconnect');
@@ -1492,10 +1492,10 @@ class Terminal {
             this.updateStatus('Disconnected', 'error');
             this._showStatusPill('disconnected', 'error');
 
-            // Auth-fail close from server (src/api/websocket.py — code 4401
+            // Auth-fail close from server (src/api/websocket.py - code 4401
             // is emitted when JWT verification fails on the WS handshake or
             // when the access token expires mid-stream). Don't reconnect
-            // with the same stale token — that would spin the close/4401
+            // with the same stale token - that would spin the close/4401
             // loop until we exhaust maxReconnectAttempts. Instead, proactively
             // refresh first so the next openWebSocket() picks up a fresh
             // token via getToken().
@@ -1504,7 +1504,7 @@ class Terminal {
                 return;
             }
 
-            // Server-forgot-session close (src/api/websocket.py — code 4404
+            // Server-forgot-session close (src/api/websocket.py - code 4404
             // is emitted when ``?session_id=`` doesn't resolve against the
             // server's in-memory session map, e.g. right after a server
             // restart: the tmux session survives on its socket, but the
@@ -1512,7 +1512,7 @@ class Terminal {
             // was scoped to). Retrying with the SAME id via the normal
             // attemptReconnect() below would just hit 4404 again on every
             // attempt until maxReconnectAttempts. Try re-resolving by the
-            // stable tmux NAME once instead — see _attemptReconnectByName().
+            // stable tmux NAME once instead - see _attemptReconnectByName().
             // Guarded so this fires at most once per disconnect episode
             // (flag clears on the next successful ws.onopen).
             if (closeCode === 4404 && this.sessionActive && !this.isReconnecting
@@ -1574,7 +1574,7 @@ class Terminal {
         if (type === 'log') {
             if (message.content) this._showStatusPill(message.content, 'info');
         } else if (type === 'local_server_detected') {
-            // Plan v3.2 — A dev server was detected on the host and
+            // Plan v3.2 - A dev server was detected on the host and
             // confirmed as a live TCP listener. Merge into local state
             // and re-render.
             if (message.url) {
@@ -1582,14 +1582,14 @@ class Terminal {
             }
             this._mergeLocalServer({ port: message.port, url: message.url });
         } else if (type === 'local_server_lost') {
-            // The janitor sweep stopped seeing this listener — drop it.
+            // The janitor sweep stopped seeing this listener - drop it.
             this._dropLocalServer(message.port);
         } else if (type === 'error') {
             this._showStatusPill(`error: ${message.message}`, 'error');
         } else if (type === 'pong') {
             console.log('Terminal: Received pong');
         } else if (type === 'toast.new') {
-            // v0.7.0 Part 2 — new toast fired for this session. Hand to
+            // v0.7.0 Part 2 - new toast fired for this session. Hand to
             // ToastManager which dedupes by id, animates entry, and
             // applies the per-session accent color from message.toast.color.
             if (window.ToastManager && message && message.toast) {
@@ -1602,7 +1602,7 @@ class Terminal {
                 window.ToastManager.dismiss(message.toast_id, { syncToServer: false });
             }
         } else if (type === 'session.renamed') {
-            // v0.7.1 — server broadcast: this session was renamed (could be
+            // v0.7.1 - server broadcast: this session was renamed (could be
             // us OR another browser tab that initiated the PATCH). Update
             // local copies + the in-session header + the browser tab title
             // when the rename targets THIS attached session. We always
@@ -1645,7 +1645,7 @@ class Terminal {
                 console.warn('Terminal: session.renamed handling failed:', err);
             }
         } else if (type === 'request_dims') {
-            // Server-driven resize handshake. Fit and reply IMMEDIATELY —
+            // Server-driven resize handshake. Fit and reply IMMEDIATELY -
             // bypass the 100ms debounce because the server is waiting in
             // a bounded timeout window (2s). Any debounce here would eat
             // into that budget and risk the server proceeding with stale
@@ -1715,12 +1715,12 @@ class Terminal {
      * session with our name still exists.
      *   - Found -> genuinely "server forgot, tmux remembers": re-adopt it
      *     (``POST /sessions/adopt``, which never 409s in the multi-session
-     *     model) and resume via reconnectToExistingSession() — same
+     *     model) and resume via reconnectToExistingSession() - same
      *     scrollback-repaint + WS-reopen path the launchpad's manual
      *     rejoin uses.
      *   - Not found -> genuinely gone (destroyed by another client, tmux
      *     process died, etc). Do NOT retry and do NOT synthesize a new
-     *     session — mark the session ended and let the user start fresh
+     *     session - mark the session ended and let the user start fresh
      *     from the launchpad, exactly like a normal destroy.
      *
      * Runs at most once per disconnect episode (call site in
@@ -1747,7 +1747,7 @@ class Terminal {
     async _attemptReconnectByName(boundTmuxName = null) {
         const tmuxName = boundTmuxName || this._currentTmuxName();
         if (!tmuxName || !window.API || typeof window.API.listAttachableSessions !== 'function') {
-            // Can't resolve by name — degrade to the pre-existing bounded
+            // Can't resolve by name - degrade to the pre-existing bounded
             // id-based retry loop rather than doing nothing.
             this.attemptReconnect();
             return;
@@ -1763,7 +1763,7 @@ class Terminal {
             stillAlive = Array.isArray(attachable) && attachable.some(s => s && s.name === tmuxName);
         } catch (err) {
             console.warn('Terminal: attachable lookup failed during 4404 recovery:', err);
-            // Transient failure (network, auth) — not proof the session is
+            // Transient failure (network, auth) - not proof the session is
             // gone. Fall back to the bounded id-based loop.
             this.isReconnecting = false;
             this.attemptReconnect();
@@ -1821,7 +1821,7 @@ class Terminal {
         } catch (err) {
             console.error('Terminal: re-adopt after 4404 failed:', err);
             // Adopt failed for a reason other than "doesn't exist" (tmux
-            // busy, transient 500, etc) — fall back to the bounded
+            // busy, transient 500, etc) - fall back to the bounded
             // id-based loop rather than silently giving up.
             this.attemptReconnect();
         }
@@ -2019,7 +2019,7 @@ class Terminal {
     /**
      * Handle a WS close caused by server-side auth failure (code 4401).
      * Refresh the access token BEFORE the next reconnect attempt so the
-     * fresh WS handshake carries a valid JWT — otherwise reconnects would
+     * fresh WS handshake carries a valid JWT - otherwise reconnects would
      * loop on 4401 until maxReconnectAttempts and force a TOTP re-prompt.
      *
      * Uses API._singleFlightRefresh when available so a concurrent HTTP
@@ -2162,7 +2162,7 @@ class Terminal {
      * close-session copy; Detach (detachSession(), below) is
      * intentionally NOT gated by a confirmation because it is safe and
      * reversible. NOT wired to the session header (deleting is no longer
-     * reachable while inside a session) — callers are App.logout() and
+     * reachable while inside a session) - callers are App.logout() and
      * the conversation sidebar's delete-this-session row
      * (session-sidebar.js), plus the launcher's own kill path for other
      * sessions.
@@ -2200,12 +2200,12 @@ class Terminal {
         try {
             this.updateStatus('Destroying session...');
 
-            // Multi-session: destroy THIS tab's session only — other tabs'
+            // Multi-session: destroy THIS tab's session only - other tabs'
             // sessions are untouched.
             const sessionId = this._sessionId();
             await window.API.destroySession(sessionId);
 
-            // v0.7.0 Part 2 — drop any ghost toasts for the destroyed
+            // v0.7.0 Part 2 - drop any ghost toasts for the destroyed
             // session. Server-side state is already gone with the session,
             // so we don't sync; just clear our local UI.
             if (sessionId && window.ToastManager &&
@@ -2241,7 +2241,7 @@ class Terminal {
     /**
      * Detach from the current session WITHOUT killing tmux.
      *
-     * Description: the non-destructive counterpart to destroySession() —
+     * Description: the non-destructive counterpart to destroySession() -
      * calls API.detachSession() so the server tears down its Python-side
      * handles (reader task, idle watcher, pipe-pane) for THIS tab's
      * session while leaving the tmux session running. The user can later
@@ -2264,7 +2264,7 @@ class Terminal {
 
             // Mark false BEFORE closing the socket so onclose's reconnect
             // (and the 4404 name-based fallback) both see sessionActive
-            // === false and do nothing — an intentionally detached
+            // === false and do nothing - an intentionally detached
             // session must never be silently re-adopted.
             this.sessionActive = false;
             this.stopReconnecting();
@@ -2281,10 +2281,10 @@ class Terminal {
 
             if (this.term) {
                 this.term.clear();
-                this.term.writeln('\x1b[1;33mSession detached — still running, re-adopt it from the launchpad\x1b[0m\n');
+                this.term.writeln('\x1b[1;33mSession detached - still running, re-adopt it from the launchpad\x1b[0m\n');
             }
 
-            // Reuse the same event destroySession() fires — both mean
+            // Reuse the same event destroySession() fires - both mean
             // "this tab no longer owns an active session"; the launchpad
             // doesn't need to distinguish detach from delete to react.
             window.dispatchEvent(new CustomEvent('session-destroyed'));
@@ -2305,13 +2305,13 @@ class Terminal {
      *   using the SAME `_intentionalClose` flag connectToSession() /
      *   reconnectToExistingSession() already set when swapping sessions,
      *   so onclose skips the "[Disconnected]" banner and the reconnect
-     *   loop. `sessionActive` is deliberately left untouched (true) —
+     *   loop. `sessionActive` is deliberately left untouched (true) -
      *   unlike detach/destroy this is not an exit, it is a screen change,
      *   and the code path that runs on return (reconnectToExistingSession(),
      *   used by both the launchpad's running-session row click and
      *   App.returnToExistingTerminal()) already force-closes any stale WS
      *   and repaints fresh scrollback from the server, so leaving the
-     *   socket open would cost nothing functionally — closing it here only
+     *   socket open would cost nothing functionally - closing it here only
      *   saves battery/data while the tab sits on the launcher.
      * Inputs: none.
      * Output: void.

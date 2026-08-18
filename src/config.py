@@ -2,7 +2,7 @@
 
 Sub-blocks on ``AuthConfig`` mirror the JSON top-level keys 1:1:
 ``session``, ``tunnel``, ``auth_rate_limits``, ``notifications``,
-``agents``, ``uploads``. Each block is optional in ``config.json`` —
+``agents``, ``uploads``. Each block is optional in ``config.json`` -
 missing keys deserialize as defaults so existing installs keep working.
 The ``uploads`` block governs the browser-paste image upload feature
 (endpoint, sweeper cadence, TTL, per-upload size cap).
@@ -44,7 +44,7 @@ from src.core.terminal_commands import (
 class ProjectConfig(BaseModel):
     """Configuration for a predefined project.
 
-    Phase 6 — agent-type labeling. ``agent_type`` is the default agent CLI
+    Phase 6 - agent-type labeling. ``agent_type`` is the default agent CLI
     used when sessions for this project are created without an explicit
     override. Defaults to ``"claude"`` so existing config.json files (which
     have no agent_type field) continue to deserialize and behave exactly
@@ -60,10 +60,10 @@ class ProjectConfig(BaseModel):
 class AgentsConfig(BaseModel):
     """Per-agent shell command strings used to launch each agent CLI.
 
-    Phase 6 — agent-type labeling. Each command is a single shell-string
+    Phase 6 - agent-type labeling. Each command is a single shell-string
     that the tmux backend passes verbatim as ``new-session ... <command>``;
     tmux itself parses the string as a shell command (no shlex.split on
-    our side — see ``TmuxBackend.start`` and the existing claude path
+    our side - see ``TmuxBackend.start`` and the existing claude path
     which builds the exact same shape: ``f"{claude_cli} --flag"``).
 
     Defaults match the corrected CLI invocations:
@@ -75,7 +75,7 @@ class AgentsConfig(BaseModel):
     # Optional override for ``agent_type == "claude"``, consulted by
     # ``Settings.get_agent_command()`` BEFORE the built-in ``cld`` / ``cldor``
     # zsh-function fallback (see get_agent_command's docstring for the full
-    # precedence). Empty string (the default) means "not configured" — the
+    # precedence). Empty string (the default) means "not configured" - the
     # command falls back to ``cld`` / ``cldor``, which is what the author's
     # own ``~/.zshrc``-based setup relies on and must keep working with zero
     # config change. Set this to a plain CLI invocation (e.g.
@@ -86,13 +86,13 @@ class AgentsConfig(BaseModel):
     codex_command: str = "codex"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
-    # Plain interactive shell — no agent CLI. Used by the "New console"
+    # Plain interactive shell - no agent CLI. Used by the "New console"
     # FAB action so users can spawn a bare tmux session in ~/ for quick
     # shell work. ``$SHELL -i`` ensures rc files (.zshrc/.bashrc) load.
     shell_command: str = "$SHELL -i"
-    # feat/launch-wrappers — user-defined named launch wrappers for the
+    # feat/launch-wrappers - user-defined named launch wrappers for the
     # "claude" agent family (see src/core/agent_wrappers.py). Empty list
-    # (the default) means "not configured" — get_agent_command falls
+    # (the default) means "not configured" - get_agent_command falls
     # through to claude_command, then the hardcoded cld/cldor fallback,
     # EXACTLY as before this feature existed. A wrapper's own ``id`` can
     # also be passed as ``agent_type`` on session create to launch through
@@ -100,7 +100,7 @@ class AgentsConfig(BaseModel):
     wrappers: List[AgentWrapper] = Field(default_factory=list)
 
 
-# Provider-selector modal (v3.1) default catalog — shown alongside the
+# Provider-selector modal (v3.1) default catalog - shown alongside the
 # implicit "Claude" option. Module-level so both ``ProvidersConfig``'s
 # pydantic default AND the raw-JSON add/remove methods below (which must
 # seed from the same defaults when config.json has no "providers" block
@@ -116,7 +116,7 @@ class ProvidersConfig(BaseModel):
     """OpenRouter model catalog for the provider-selector modal.
 
     ``models`` is the add/remove-able list shown alongside the implicit
-    "Claude" option (never stored here, never removable — the client
+    "Claude" option (never stored here, never removable - the client
     always prepends it). A missing/absent "providers" block in
     config.json deserializes to the curated default trio via
     ``_DEFAULT_PROVIDER_MODELS``.
@@ -138,7 +138,7 @@ class ProvidersConfig(BaseModel):
         Drop-with-a-warning-log rather than raise: this mirrors the
         fail-soft philosophy ``load_auth_config`` already applies to each
         malformed sub-block (session, auth_rate_limits, notifications,
-        agents, uploads) — one bad entry should not hard-brick the whole
+        agents, uploads) - one bad entry should not hard-brick the whole
         app on startup or wipe out the rest of an otherwise-valid list.
         """
         valid: List[str] = []
@@ -190,27 +190,27 @@ class NotificationsConfig(BaseModel):
       ``emit()`` is a no-op. No background traffic, no warnings.
     - ``ntfy_base_url``: the ntfy server. Default is the public
       sh.ntfy.sh; self-hosted users override.
-    - ``ntfy_topic``: the secret topic name. EMPTY by default —
+    - ``ntfy_topic``: the secret topic name. EMPTY by default -
       ``setup_auth.py`` generates a 32-hex value on first run. Treat
       as a credential: anyone with the topic name can read your
       notifications.
     - ``public_base_url``: e.g. ``"http://mac.lan:8000"``. When set,
       notifications include a Click deep link back to the session.
       When unset, notifications fire without a Click header.
-    - ``idle_threshold_seconds``: Item 7 — seconds of PTY silence after
+    - ``idle_threshold_seconds``: Item 7 - seconds of PTY silence after
       which an IdleWatcher fires TASK_COMPLETE, provided the tail ends
       on a Claude Code prompt frame. 30s is the plan v3.1 default;
       operators may tune downward if false-positive rate is acceptable.
     - ``pushover_token`` / ``pushover_user_key``: Pushover push backend.
       Both are EMPTY by default and both must be set for the channel to
-      activate — see ``NotificationRouter.emit``'s ``has_pushover`` gate.
+      activate - see ``NotificationRouter.emit``'s ``has_pushover`` gate.
     """
     enabled: bool = False
     ntfy_base_url: str = Field(default="https://ntfy.sh")
     ntfy_topic: str = Field(default="")
     public_base_url: str = Field(default="")
     idle_threshold_seconds: float = Field(default=30.0, ge=1.0)
-    # Plan v3.1 Item 8 — rate limiter knobs (single global bucket + per-kind dedup).
+    # Plan v3.1 Item 8 - rate limiter knobs (single global bucket + per-kind dedup).
     # ``rate_limit_global_cap`` / ``rate_limit_window_seconds``: rolling-window
     # cap on total notifications dispatched (default 10 per 60s). Guards against
     # pattern-match storms.
@@ -220,20 +220,20 @@ class NotificationsConfig(BaseModel):
     rate_limit_global_cap: int = Field(default=10, ge=1)
     rate_limit_window_seconds: float = Field(default=60.0, ge=1.0)
     rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
-    # v0.7.0 Part 3 — opt out of the Claude Code lifecycle hook merger.
+    # v0.7.0 Part 3 - opt out of the Claude Code lifecycle hook merger.
     # When True, ``ensure_hook_settings()`` is a no-op and ~/.claude/settings.json
     # is left entirely alone (no Stop/Notification/PermissionRequest hooks
     # are injected). Users who curate their own hook block can set this to
     # avoid surprise merges. Default False = hooks managed.
     disable_claude_hooks: bool = False
-    # v0.7.0 Part 4 — Slack incoming-webhook fanout. When non-empty, every
+    # v0.7.0 Part 4 - Slack incoming-webhook fanout. When non-empty, every
     # NotificationEvent dispatched by the router also POSTs a chat message
     # to this webhook URL. Single-channel, no OAuth. Empty default = the
     # Slack channel is silently disabled.
-    # Format: ``https://hooks.slack.com/services/T.../B.../...`` — treat
+    # Format: ``https://hooks.slack.com/services/T.../B.../...`` - treat
     # as a credential.
     slack_webhook_url: str = Field(default="")
-    # Pushover push backend. Both fields are required together — the
+    # Pushover push backend. Both fields are required together - the
     # router's ``has_pushover`` guard treats a partial config (only one
     # of the two set) as unconfigured. Empty defaults = the Pushover
     # channel is silently disabled.
@@ -296,14 +296,14 @@ class AuthRateLimits(BaseModel):
 
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
-    # feat/launch-wrappers — schema/migration marker. Absent from every
+    # feat/launch-wrappers - schema/migration marker. Absent from every
     # config.json written before this feature; treated as 0 (see
     # src/core/config_migration.py). Not itself consulted by
-    # get_agent_command — purely a migration bookkeeping field.
+    # get_agent_command - purely a migration bookkeeping field.
     config_version: int = 0
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
     jwt_secret: Optional[str] = None   # Populated from Settings (.env)
-    jwt_expiry_minutes: int = 30       # Legacy — used only if access TTL unset.
+    jwt_expiry_minutes: int = 30       # Legacy - used only if access TTL unset.
     # Item 5: access/refresh token pair. Access is short-lived (15m default)
     # so a leaked token has a tight blast radius; refresh is long-lived
     # (7d default) but stored server-side with rotation + reuse detection.
@@ -328,7 +328,7 @@ class AuthConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
-    # feat/settings-tabs-and-commands — user-editable common shell
+    # feat/settings-tabs-and-commands - user-editable common shell
     # commands, each runnable in a console session (see
     # src/core/terminal_commands.py, especially its security model: these
     # are NEVER executed server-side). Top-level, not under ``agents``:
@@ -345,12 +345,12 @@ class AuthConfig(BaseModel):
 # a wrapper id, so a wrapper can never shadow one. Derived from the family
 # registry (src/core/agent_families.py) rather than restated here, so the
 # two can no longer drift; membership is unchanged from when this was a
-# literal frozenset (codex, hermes, openclaw, shell — deliberately NOT
+# literal frozenset (codex, hermes, openclaw, shell - deliberately NOT
 # claude, see resolve_agent_type's docstring). Re-exported under the old
 # name because it is the established import for this concept.
 # Module-level (not a class attribute) because Settings is a pydantic
 # BaseSettings and an underscore-prefixed class attribute there becomes a
-# ModelPrivateAttr descriptor, not a plain frozenset — see
+# ModelPrivateAttr descriptor, not a plain frozenset - see
 # Settings.get_agent_command / Settings.add_wrapper for the two call sites.
 RESERVED_AGENT_TYPES = RESERVED_FAMILY_NAMES
 
@@ -386,7 +386,7 @@ class Settings(BaseSettings):
     # ``allow_credentials=True`` and the wildcard-with-credentials combo is
     # a well-known footgun that lets any LAN neighbor fire credentialed
     # XHRs at the API. To override (e.g. to add a tunnel hostname), set
-    # the ``ALLOWED_ORIGINS`` env var to a comma-separated list — that
+    # the ``ALLOWED_ORIGINS`` env var to a comma-separated list - that
     # value is used verbatim and takes precedence over the computed
     # default (see ``allowed_origins`` property below).
     allowed_origins_override: Optional[str] = Field(
@@ -407,7 +407,7 @@ class Settings(BaseSettings):
     auth_config_file: str = "./config.json"
 
     # Claude CLI Configuration
-    # LEGACY (v3.1) — no longer consulted for agent_type == "claude" (see
+    # LEGACY (v3.1) - no longer consulted for agent_type == "claude" (see
     # get_agent_command / AgentsConfig.claude_command). Kept for .env
     # back-compat; setting CLAUDE_CLI_PATH is now a silent no-op.
     claude_cli_path: Optional[str] = None
@@ -420,7 +420,7 @@ class Settings(BaseSettings):
 
         Precedence:
         1. If ``ALLOWED_ORIGINS`` env var is set, split on ``,`` and return
-           verbatim (trimmed). Operator override — trust the operator.
+           verbatim (trimmed). Operator override - trust the operator.
         2. Otherwise, build a safe allowlist from ``HOST`` + ``PORT`` plus
            loopback + mDNS hostname variants. NEVER includes ``"*"``,
            because CORS middleware is wired with ``allow_credentials=True``
@@ -428,10 +428,10 @@ class Settings(BaseSettings):
            fire credentialed XHRs at the API.
 
         The computed list covers the three ways a user can hit the server:
-        - ``http://<HOST>:<PORT>`` — literal bind address
-        - ``http://localhost:<PORT>`` / ``http://127.0.0.1:<PORT>`` — loopback
+        - ``http://<HOST>:<PORT>`` - literal bind address
+        - ``http://localhost:<PORT>`` / ``http://127.0.0.1:<PORT>`` - loopback
         - ``http://<hostname>:<PORT>`` / ``http://<hostname>.local:<PORT>``
-          — mDNS / Bonjour hostname (e.g. ``adoom`` → ``adoom.local``)
+          - mDNS / Bonjour hostname (e.g. ``adoom`` → ``adoom.local``)
 
         When ``HOST == "0.0.0.0"`` (bind-all), we substitute localhost +
         127.0.0.1 + hostname + hostname.local instead of literally
@@ -494,7 +494,7 @@ class Settings(BaseSettings):
     def get_pinned_themes_path(self) -> Path:
         """Path for the per-tmux-session pinned-theme map.
 
-        SESSION-IDENTITY-V2 — kept in its OWN file, distinct from
+        SESSION-IDENTITY-V2 - kept in its OWN file, distinct from
         ``session_metadata.json``. The active-session metadata file is
         unlinked on detach and overwritten on swap, so we cannot use it
         as durable per-name storage. This file is name-keyed and survives
@@ -507,7 +507,7 @@ class Settings(BaseSettings):
     def get_unread_state_path(self) -> Path:
         """Path for the per-tmux-session read/unread map.
 
-        Hook-driven status (feat/hook-driven-status) — mirrors
+        Hook-driven status (feat/hook-driven-status) - mirrors
         ``get_pinned_themes_path()``'s pattern exactly: name-keyed (not
         session-id-keyed) so the flag survives detach -> swap -> re-adopt,
         and follows the user across browsers/devices since it lives on the
@@ -523,7 +523,7 @@ class Settings(BaseSettings):
 
     def get_claude_cli_path(self) -> str:
         """
-        LEGACY (v3.1) — no longer called by ``get_agent_command()`` for
+        LEGACY (v3.1) - no longer called by ``get_agent_command()`` for
         ``agent_type == "claude"`` (the provider-selector modal always
         launches via the ``cld`` / ``cldor`` zsh functions instead). Kept
         for any external callers / back-compat; ``CLAUDE_CLI_PATH`` is now
@@ -565,32 +565,32 @@ class Settings(BaseSettings):
     ) -> str:
         """Resolve the shell command string for a given agent_type.
 
-        Phase 6 — agent-type labeling. Returns the shell-string command
+        Phase 6 - agent-type labeling. Returns the shell-string command
         registered under ``AuthConfig.agents`` for the requested agent.
         Falls back to the AgentsConfig defaults if the auth config can't
         be loaded (e.g. unit-test paths that bypass setup_auth.py).
 
-        ``codex`` / ``hermes`` / ``openclaw`` / ``shell`` are RESERVED —
+        ``codex`` / ``hermes`` / ``openclaw`` / ``shell`` are RESERVED -
         always their fixed single command, unaffected by anything below.
 
         Everything else (``"claude"``, ``None``/empty, or a custom string)
         is the "claude family" and resolves in this order:
           1. ``agent_type`` matches the ``id`` of a configured wrapper
-             (``agents.wrappers``) — launch through THAT wrapper
+             (``agents.wrappers``) - launch through THAT wrapper
              specifically (see ``src/core/agent_wrappers.py``). This is
-             how a caller picks a non-default wrapper explicitly — the
+             how a caller picks a non-default wrapper explicitly - the
              wrapper's own id doubles as its agent_type value. The
              resolved ``Session.agent_type`` ends up being that wrapper
              id, so which wrapper launched a session is recorded the same
-             way agent_type always has been — no second field.
+             way agent_type always has been - no second field.
           2. ``agent_type`` is exactly ``"claude"``, ``None``/empty, or
              any string that ISN'T a configured wrapper id (unknown type
              → safe fallback to the claude family, unchanged from
-             pre-wrappers behavior) — AND at least one wrapper is
+             pre-wrappers behavior) - AND at least one wrapper is
              configured: use the DEFAULT wrapper
              (``agent_wrappers.default_wrapper``).
           3. No wrappers configured at all (the common case for every
-             config.json written before this feature — wrappers defaults
+             config.json written before this feature - wrappers defaults
              to ``[]``): ``agents.claude_command`` if explicitly set to a
              non-empty string, run verbatim through the same
              ``~/.zshrc``-sourcing wrapper.
@@ -598,22 +598,22 @@ class Settings(BaseSettings):
              ORIGINAL hardcoded ``cld`` / ``cldor <model>`` zsh-function
              fallback, byte-for-byte unchanged from every prior release.
         Steps 3-4 are UNREACHABLE the moment any wrapper exists in config
-        (step 2 always finds at least the default wrapper first) — this is
+        (step 2 always finds at least the default wrapper first) - this is
         intentional: a wrapper list is a strictly additive, opt-in
         superset of the old two-step fallback, never a partial mix of the
         two for the same launch.
-        ``CLAUDE_CLI_PATH`` remains LEGACY / a no-op for this type — see its
+        ``CLAUDE_CLI_PATH`` remains LEGACY / a no-op for this type - see its
         field comment on ``Settings.claude_cli_path``.
 
         Why the ``~/.zshrc``-sourcing wrapper (steps 3-4, and internally
         inside wrapper resolution too): tmux's spawned pane shell does NOT
-        source ``~/.zshrc`` (non-interactive, non-login — see
+        source ``~/.zshrc`` (non-interactive, non-login - see
         TmuxBackend.start / tmux's own ``$SHELL -c <command>``
         invocation), so a bare ``cld`` would be "command not found".
         Empirically verified (real detached tmux session on a scratch
         ``-L`` socket, ``tmux capture-pane``) against two candidate
         wrappers; ``zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; <cmd>'`` was
-        chosen over ``zsh -ic`` — see git history for the full comparison
+        chosen over ``zsh -ic`` - see git history for the full comparison
         this docstring used to carry.
         The model, when present, is shlex-quoted at every quoting
         boundary it crosses so it can never break out of or be
@@ -621,14 +621,14 @@ class Settings(BaseSettings):
         backticks, ``$(...)``, and a leading ``~``).
         ``CreateSessionRequest.model`` / the provider-add endpoint already
         restrict model ids to ``^[A-Za-z0-9._~/-]{1,120}$`` before this is
-        ever called — this quoting is defense-in-depth, not the only guard.
+        ever called - this quoting is defense-in-depth, not the only guard.
 
         Returned shape: a single shell string, which the tmux backend
         hands directly to ``new-session ... <cmd>`` (tmux itself execs it
-        via the pane's default shell, ``-c <string>`` — one level of shell
+        via the pane's default shell, ``-c <string>`` - one level of shell
         parsing on our returned string, hence the quoting above).
         """
-        # Resolve AgentsConfig — tolerate auth-config load failure so the
+        # Resolve AgentsConfig - tolerate auth-config load failure so the
         # caller (create_session) doesn't blow up if config.json is missing
         # in a degraded environment.
         try:
@@ -637,7 +637,7 @@ class Settings(BaseSettings):
             agents = AgentsConfig()
 
         # Disambiguate agent_type into (family, explicitly-named wrapper).
-        # ALL of the ordering subtlety lives in resolve_agent_type — read
+        # ALL of the ordering subtlety lives in resolve_agent_type - read
         # its docstring before changing anything here, especially the
         # reason 'shell' resolves as a family while 'claude' does not.
         family, explicit = resolve_agent_type(agent_type, agents.wrappers)
@@ -709,7 +709,7 @@ class Settings(BaseSettings):
             try:
                 session_config = SessionConfig(**session_data)
             except Exception:
-                # Malformed session block — log + use defaults rather than
+                # Malformed session block - log + use defaults rather than
                 # killing the whole config load.
                 import structlog
                 structlog.get_logger().warning(
@@ -818,7 +818,7 @@ class Settings(BaseSettings):
                 totp_secret=self.totp_secret,  # From .env via Settings
                 jwt_secret=self.jwt_secret,    # From .env via Settings
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
-                # Item 5 — optional JSON overrides for token lifetimes.
+                # Item 5 - optional JSON overrides for token lifetimes.
                 # Defaults (900s / 604800s / 10s) are sensible for the
                 # single-user LAN MVP; expose them so operators can tune
                 # without editing source.
@@ -978,7 +978,7 @@ class Settings(BaseSettings):
         """
         Update a project's display name and/or description.
 
-        Display name only — the folder on disk is never touched.
+        Display name only - the folder on disk is never touched.
 
         Args:
             old_name: Current display name (used as the lookup key)
@@ -1131,7 +1131,7 @@ class Settings(BaseSettings):
     def get_provider_models(self) -> List[str]:
         """Return the persisted list of add/remove-able OpenRouter model ids.
 
-        "Claude" is implicit and never included — callers that need the
+        "Claude" is implicit and never included - callers that need the
         full picker list prepend it themselves. Missing "providers" block
         in config.json yields ``_DEFAULT_PROVIDER_MODELS`` (via
         ``ProvidersConfig``'s pydantic default).
@@ -1143,7 +1143,7 @@ class Settings(BaseSettings):
         Add an OpenRouter model id to config.json's ``providers.models`` list.
 
         Format validation (the shell-injection guard) is the CALLER's
-        responsibility — see ``MODEL_ID_PATTERN`` in ``src/models.py`` and
+        responsibility - see ``MODEL_ID_PATTERN`` in ``src/models.py`` and
         the route handler for ``POST /api/v1/providers/models``, which
         validates before calling this. This method only enforces
         uniqueness, matching ``save_project``'s duplicate-name guard.
@@ -1254,7 +1254,7 @@ class Settings(BaseSettings):
     def _mask_secret(value: str) -> dict:
         """Reduce a secret string to a UI-safe presence flag.
 
-        Description: never returns any fragment of ``value`` — the
+        Description: never returns any fragment of ``value`` - the
           settings screen's contract is "never render an existing value
           in plain text", and a partial reveal (e.g. last 4 chars) is
           still a plain-text leak of real secret material. A boolean is
@@ -1284,7 +1284,7 @@ class Settings(BaseSettings):
         Description: assembles the three settings-screen sections from
           the currently loaded auth config plus the live server bind
           address. Secret-shaped notification fields are masked (see
-          ``_mask_secret``) — this method is the ONLY place that reads
+          ``_mask_secret``) - this method is the ONLY place that reads
           those fields for the settings screen, so the masking can't be
           skipped by a call site forgetting to apply it.
         Inputs: none.
@@ -1309,12 +1309,12 @@ class Settings(BaseSettings):
                 "hermes_command": agents.hermes_command,
                 "openclaw_command": agents.openclaw_command,
                 "effective_claude_command": self.get_agent_command("claude"),
-                # feat/launch-wrappers — full wrapper objects (script
+                # feat/launch-wrappers - full wrapper objects (script
                 # included; never a secret, see AgentWrapper's docstring)
                 # so the settings-panel editor can list/edit/reload them
                 # in one round trip.
                 "wrappers": [w.model_dump() for w in agents.wrappers],
-                # feat/universal-wrappers — the family registry, serialized
+                # feat/universal-wrappers - the family registry, serialized
                 # so the settings screen can render one group per family
                 # (and its collapsed legacy-command row) WITHOUT hardcoding
                 # a family list client-side. Adding a family to
@@ -1336,7 +1336,7 @@ class Settings(BaseSettings):
                 "wildcard_bind": wildcard_bind,
                 "editable": False,
             },
-            # feat/settings-tabs-and-commands — the terminal tab's list,
+            # feat/settings-tabs-and-commands - the terminal tab's list,
             # included here so opening settings is one round trip.
             "terminal_commands": [c.model_dump() for c in cfg.terminal_commands],
         }
@@ -1350,14 +1350,14 @@ class Settings(BaseSettings):
         Merge partial ``agents`` / ``notifications`` updates into config.json.
 
         Description: reads config.json, backs up the pre-write bytes to
-          ``config.json.bak`` (overwritten each call — one generation of
+          ``config.json.bak`` (overwritten each call - one generation of
           history, matching the granularity of the atomic writes already
           used elsewhere in this file), applies ONLY the keys present in
-          the given dicts (an absent key is left untouched — "leave
+          the given dicts (an absent key is left untouched - "leave
           unchanged" semantics), re-validates the merged sub-blocks
           through their pydantic models so a bad merge can't reach disk,
           then writes via the same tmp-file + fsync + os.replace pattern
-          as ``update_project`` (atomic on the same filesystem — no
+          as ``update_project`` (atomic on the same filesystem - no
           crash-mid-write can corrupt config.json).
         Inputs:
           agents_update (dict|None) - keys already filtered by the route
@@ -1374,7 +1374,7 @@ class Settings(BaseSettings):
             validation (caller already did field-level checks; this is
             defense-in-depth against a hand-edited config.json having
             put the file in a state a valid partial update can't fix).
-        Security: never logs a value from ``notifications_update`` — only
+        Security: never logs a value from ``notifications_update`` - only
           the list of changed key names, at the call site in the route
           handler.
         """
@@ -1399,7 +1399,7 @@ class Settings(BaseSettings):
         if agents_update:
             agents_data = dict(data.get("agents") or {})
             agents_data.update(agents_update)
-            # Re-validate the merged block — raises on garbage before
+            # Re-validate the merged block - raises on garbage before
             # anything touches disk.
             AgentsConfig(**agents_data)
             data["agents"] = agents_data
@@ -1512,7 +1512,7 @@ class Settings(BaseSettings):
 
         Description: rejects a duplicate id, and an id colliding with a
           RESERVED agent type (``codex``/``hermes``/``openclaw``/``shell``)
-          — those resolve as bare FAMILY names before any wrapper lookup,
+          - those resolve as bare FAMILY names before any wrapper lookup,
           so such a wrapper could never launch. If the wrapper is marked
           default, the flag is cleared only across ITS OWN family.
         Inputs: wrapper (AgentWrapper) - already field-validated by
@@ -1531,7 +1531,7 @@ class Settings(BaseSettings):
         Inputs:
           wrapper_id (str) - id of the wrapper to replace.
           wrapper (AgentWrapper) - new field values. ``wrapper.id`` MUST
-            equal ``wrapper_id`` — renaming a wrapper id is delete+add
+            equal ``wrapper_id`` - renaming a wrapper id is delete+add
             (its id is also its script filename and the value stored in
             ``Session.agent_type``; changing it out from under a caller
             already in flight is worse than requiring an explicit rename).
@@ -1559,7 +1559,7 @@ class Settings(BaseSettings):
     def set_default_wrapper(self, wrapper_id: str) -> List[dict]:
         """Make one wrapper its FAMILY's default, clearing that family only.
 
-        Description: default is a per-family flag — clearing it list-wide
+        Description: default is a per-family flag - clearing it list-wide
           would strip claude's default the moment a codex wrapper was made
           default, dropping claude back to its legacy claude_command.
         Inputs: wrapper_id (str).
@@ -1593,7 +1593,7 @@ class Settings(BaseSettings):
           execution. The caller supplies an id, never a command string, so
           nothing a client invents can reach a shell. An unknown id
           resolves to None, which callers must treat as "launch a plain
-          console and run nothing" — a launch is never failed over a
+          console and run nothing" - a launch is never failed over a
           stale id (e.g. the user deleted the entry in another tab).
         Inputs: command_id (str | None) - id from the launch request.
         Output: TerminalCommand | None.

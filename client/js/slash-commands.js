@@ -3,7 +3,7 @@
  *
  * Handles the slash command quick-access modal. The command LIST is no
  * longer hand-written here (see git history for the retired
- * `ALL_SLASH_COMMANDS` array) — it comes from the server's
+ * `ALL_SLASH_COMMANDS` array) - it comes from the server's
  * `GET /config/slash-commands`, which merges the release-time scraped
  * official command list with runtime discovery of this user's own
  * commands/skills, installed plugins, and (when a project is open) that
@@ -39,7 +39,7 @@ class SlashCommandsModal {
         this.onCommandSelect = null;
         this.projectPath = null;
 
-        // Live-filter + keyboard-nav state (Task 4) — see
+        // Live-filter + keyboard-nav state (Task 4) - see
         // client/js/slash-command-filter.js. Owns the DOM indexing,
         // filtering, and arrow-key bookkeeping over the rendered list.
         this.filter = new window.SlashCommandFilter();
@@ -50,7 +50,7 @@ class SlashCommandsModal {
      *
      * Description: fetches the common-commands "favorites" row and the
      *   full grouped command palette from the server, then creates the
-     *   floating button. Does NOT create the modal itself — that still
+     *   floating button. Does NOT create the modal itself - that still
      *   happens lazily on first open() (unchanged from before).
      * Inputs:
      *   onCommandSelect (function(string): void) - called with the bare
@@ -93,7 +93,7 @@ class SlashCommandsModal {
             // `defaulted` distinguishes "never starred anything, these
             // are the built-ins" from "these are the user's picks", so
             // the row can say which it is. A server predating the field
-            // sends neither, which reads as "the user's picks" — the
+            // sends neither, which reads as "the user's picks" - the
             // conservative answer, since it never claims authorship the
             // user did not have.
             this.commonDefaulted = response.defaulted === true;
@@ -141,7 +141,7 @@ class SlashCommandsModal {
     /**
      * Fetch the full grouped command palette and rebuild the flat lookup
      * index used for tooltips and filtering. Falls back to an empty group
-     * list on failure — the modal still opens, just with an explanatory
+     * list on failure - the modal still opens, just with an explanatory
      * empty state (see renderAllCommands).
      * Inputs: none. Output: Promise<void> (sets this.groups, this.commandIndex).
      */
@@ -395,7 +395,7 @@ class SlashCommandsModal {
     }
 
     /**
-     * HTML-escape helper — command descriptions/labels come from scraped
+     * HTML-escape helper - command descriptions/labels come from scraped
      * docs and user-authored files, both effectively untrusted input for
      * innerHTML purposes.
      */
@@ -441,7 +441,7 @@ class SlashCommandsModal {
             });
         });
 
-        // All commands items — click-to-select path, unchanged.
+        // All commands items - click-to-select path, unchanged.
         const commandItems = this.modal.querySelectorAll('.command-item');
         commandItems.forEach(item => {
             item.addEventListener('click', () => {
@@ -466,9 +466,9 @@ class SlashCommandsModal {
             });
         });
 
-        // Live filter (Task 4) — typing filters the list; arrow keys and
+        // Live filter (Task 4) - typing filters the list; arrow keys and
         // Enter navigate/select the visible results. Escape is NOT
-        // handled here — it bubbles to the document-level listener below,
+        // handled here - it bubbles to the document-level listener below,
         // which already closes the modal regardless of focus.
         const filterInput = this.modal.querySelector('#slash-command-filter');
         if (filterInput) {

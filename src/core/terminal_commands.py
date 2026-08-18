@@ -1,6 +1,6 @@
 """User-editable list of common shell commands for the console tab.
 
-feat/settings-tabs-and-commands — a small, ordered, named list stored in
+feat/settings-tabs-and-commands - a small, ordered, named list stored in
 ``config.json`` under the TOP-LEVEL ``terminal_commands`` key. Each entry is
 one shell command line the user can run in one click from the settings
 panel's "terminal" tab.
@@ -62,13 +62,13 @@ logger = structlog.get_logger()
 TERMINAL_COMMANDS_KEY = "terminal_commands"
 
 #: Stable identifier charset. Same shape/rationale as
-#: ``agent_wrappers.WRAPPER_ID_PATTERN`` — filesystem- and URL-safe, and
+#: ``agent_wrappers.WRAPPER_ID_PATTERN`` - filesystem- and URL-safe, and
 #: unambiguous as a path segment in ``PUT /terminal/commands``.
 TERMINAL_COMMAND_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
 _TERMINAL_COMMAND_ID_RE = re.compile(TERMINAL_COMMAND_ID_PATTERN)
 
 #: Upper bound on how many entries are accepted in one replace call. Not a
-#: security control (nothing here executes) — a guard against a runaway
+#: security control (nothing here executes) - a guard against a runaway
 #: client writing an unbounded list into config.json.
 MAX_TERMINAL_COMMANDS = 100
 
@@ -91,7 +91,7 @@ class TerminalCommand(BaseModel):
     - ``label``: human-readable name shown on the button.
     - ``command``: the shell line, typed verbatim into a console pane.
 
-    Order in the stored list IS the display order — reordering is a
+    Order in the stored list IS the display order - reordering is a
     whole-list replace, not a per-entry index field, so the persisted
     order can never disagree with itself.
     """
@@ -136,10 +136,10 @@ def default_terminal_commands() -> List[Dict[str, str]]:
       data: the pydantic default on ``AuthConfig`` and the v1->v2 config
       migration, which writes them straight to disk.
       Notes on the specific choices:
-        * ``brew upgrade --cask claude-code`` — Claude Code is installed
+        * ``brew upgrade --cask claude-code`` - Claude Code is installed
           as a Homebrew CASK on the deploy host, NOT via npm. An npm
           command here would silently do nothing.
-        * ``tmux -L cloude ls`` — the app runs every session on its own
+        * ``tmux -L cloude ls`` - the app runs every session on its own
           ``-L cloude`` socket (``SessionConfig.tmux_socket_name``). A
           bare ``tmux ls`` would report the user's unrelated default
           server instead.
@@ -214,7 +214,7 @@ def replace_terminal_commands(config_path: Path, raw: List[dict]) -> List[dict]:
 
     Description: validates first (nothing malformed ever reaches disk),
       backs the pre-write bytes up to ``config.json.bak`` and writes via
-      tmp-file + fsync + os.replace — the same one-generation backup and
+      tmp-file + fsync + os.replace - the same one-generation backup and
       atomic-write convention ``Settings.update_settings_config`` and
       ``Settings._write_wrappers`` already use. Whole-list replace covers
       add, edit, delete AND reorder with one code path.

@@ -7,41 +7,41 @@ needs and stamps ``config_version`` once at the end. See
 ADDITIVE: no key is ever renamed or removed, because live installs are
 migrated in place with no coordination.
 
-feat/launch-wrappers — introduces ``config_version`` (absent from every
+feat/launch-wrappers - introduces ``config_version`` (absent from every
 prior config.json; treated as ``0``) and migrates a pre-wrappers config to
 the wrapper shape described in ``src/core/agent_wrappers.py``, WITHOUT ever
 touching or removing the legacy ``agents.claude_command`` /
-``codex_command`` / ``hermes_command`` / ``openclaw_command`` keys — those
+``codex_command`` / ``hermes_command`` / ``openclaw_command`` keys - those
 remain permanently supported by ``Settings.get_agent_command`` as the
 fallback path for anyone who never adopts wrappers.
 
-Design constraints (all load-bearing — see CLAUDE.md's doc-protocol and the
+Design constraints (all load-bearing - see CLAUDE.md's doc-protocol and the
 task brief this module was written against):
 
 1. NEVER destructive. ``migrate_config_file`` backs up the pre-write bytes
    to ``config.json.bak`` (reusing the exact tmp-file + fsync + os.replace
-   convention ``Settings.update_settings_config`` already uses — no second
+   convention ``Settings.update_settings_config`` already uses - no second
    atomic-write convention introduced) before writing anything.
 2. Idempotent. A config already at ``config_version >= CURRENT_CONFIG_VERSION``
    is returned completely unchanged (``changed=False``); running the
    migration twice in a row is a no-op the second time.
 3. Environment-aware. ``probe_shell_function`` shells out to ``zsh -ic
    'type <name>'`` to check whether ``cld`` / ``cldor`` actually resolve in
-   THIS user's interactive shell — mirrors exactly the resolution tmux's
+   THIS user's interactive shell - mirrors exactly the resolution tmux's
    spawned pane needs (see ``Settings.get_agent_command``'s docstring on
    why ``zsh -c 'source ~/.zshrc; ...'`` is required at all). Only seeds a
    wrapper for a function that was actually detected; never guesses.
 4. Fail-safe. ``migrate_config_dict`` is a pure function: any input it
    can't confidently interpret (malformed ``agents`` block, unexpected
    type) makes it return the ORIGINAL data completely unchanged with
-   ``changed=False`` and, critically, ``config_version`` NOT stamped — so
+   ``changed=False`` and, critically, ``config_version`` NOT stamped - so
    a future run (e.g. after the user fixes their config.json by hand) can
    still retry the migration instead of being permanently skipped by a
    half-written version marker.
 
 Rollback: restore ``config.json`` from ``config.json.bak`` (see
 ``migrate_config_file``'s docstring for the exact command). The code-level
-rollback point is git tag ``baseline/adoom-2026-08-14`` (commit 6392124) —
+rollback point is git tag ``baseline/adoom-2026-08-14`` (commit 6392124) -
 `git checkout baseline/adoom-2026-08-14 -- src/` restores the pre-wrappers
 resolver entirely if a config-level rollback isn't enough. See also the
 README section "rolling back the launch-wrappers migration".
@@ -79,11 +79,11 @@ logger = structlog.get_logger()
 #           top-level ``terminal_commands`` list (see ``_step_v1_to_v2``).
 #           Renames nothing: ``agents.wrappers`` keeps its key and every
 #           wrapper keeps its ``id``, because ``Session.agent_type`` stores
-#           that id — renaming one would orphan every existing session.
+#           that id - renaming one would orphan every existing session.
 #   2 -> 3  feat/universal-wrappers: ADDITIVE ONLY. Adds ``family`` to each
 #           existing wrapper, always ``"claude"`` (see ``_step_v2_to_v3``),
 #           because every wrapper that could exist at v2 was claude-only by
-#           construction — wrappers had no family concept and
+#           construction - wrappers had no family concept and
 #           ``get_agent_command`` only ever consulted them for the claude
 #           path. Adds no key to ``agents`` and removes nothing: the
 #           ``*_command`` strings all stay, and every wrapper keeps its
@@ -98,7 +98,7 @@ CURRENT_CONFIG_VERSION = 4
 
 # Thin, migration-seeded wrapper scripts. Deliberately NOT the real
 # multi-line cld/cldor function bodies (those live only in the user's own
-# ~/.zshrc, which we don't read or copy) — each one-liner simply forwards
+# ~/.zshrc, which we don't read or copy) - each one-liner simply forwards
 # to the already-defined shell function, exactly matching what the old
 # hardcoded ``zsh -ic 'cld'`` / ``zsh -ic 'cldor <model>'`` fallback did.
 # `entry` is left unset: the line IS the runnable command (see
@@ -108,7 +108,7 @@ def migrate_config_dict(
 ) -> Tuple[Dict, bool]:
     """Pure migration: run every version step the config still needs.
 
-    Description: fail-safe by construction — a step that can't confidently
+    Description: fail-safe by construction - a step that can't confidently
       proceed makes this return ``(data, False)`` with the input
       completely untouched (no partial mutation, no config_version
       stamped), never raises. Steps run in order and only for versions the
@@ -125,7 +125,7 @@ def migrate_config_dict(
       input ``data`` is never mutated in place), so a caller holding a
       reference to the original can still inspect the pre-migration
       state.
-    Raises: never — logs a warning and returns (data, False) instead.
+    Raises: never - logs a warning and returns (data, False) instead.
     Example: migrate_config_dict({"agents": {}}, True, False) ->
       ({..., "agents": {..., "wrappers": [claude, cld]},
         "terminal_commands": [...], "config_version": 4}, True)
@@ -140,7 +140,7 @@ def migrate_config_dict(
             return data, False
 
         if existing_version >= CURRENT_CONFIG_VERSION:
-            return data, False  # already migrated — idempotent no-op
+            return data, False  # already migrated - idempotent no-op
 
         working = data
         if existing_version < 1:
@@ -175,7 +175,7 @@ def migrate_config_file(config_path: Path) -> Dict:
     """Run the migration against a real config.json on disk, idempotently.
 
     Description: reads, probes the environment, calls
-      ``migrate_config_dict``, and — only if it reports a change — backs
+      ``migrate_config_dict``, and - only if it reports a change - backs
       up the pre-write bytes to ``config.json.bak`` (overwritten each
       call, same one-generation-of-history convention as
       ``Settings.update_settings_config``) then writes atomically via
@@ -242,7 +242,7 @@ def ensure_config_migrated(config_path: Path) -> None:
 
     Description: wraps ``migrate_config_file`` so a migration failure of
       any kind (missing file, bad JSON, unexpected exception) NEVER
-      blocks server startup — same fail-soft posture as
+      blocks server startup - same fail-soft posture as
       ``claude_hooks.ensure_hook_settings()`` in ``src/main.py``'s
       lifespan. Errors are logged, not raised.
     Inputs: config_path (Path).
@@ -256,6 +256,6 @@ def ensure_config_migrated(config_path: Path) -> None:
                 wrapper_ids=result["wrapper_ids"],
             )
     except FileNotFoundError:
-        pass  # setup_auth.py hasn't run yet — nothing to migrate
+        pass  # setup_auth.py hasn't run yet - nothing to migrate
     except Exception as e:
         logger.warning("config_migration_startup_failed", error=str(e))

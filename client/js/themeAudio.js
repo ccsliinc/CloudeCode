@@ -75,7 +75,7 @@
     'use strict';
 
     if (window.ThemeAudio) {
-        // Idempotent — never re-init on hot reload or double-script-tag.
+        // Idempotent - never re-init on hot reload or double-script-tag.
         return;
     }
 
@@ -90,7 +90,7 @@
     // The in-scope session's music opt-in. In-memory; session-theme-menu.js
     // owns the persisted per-session key.
     var sessionOn = false;
-    // Derived from the gate below — never assigned directly.
+    // Derived from the gate below - never assigned directly.
     var muted = true;
     var currentConfig = null;          // last audioConfig passed to setTheme()
 
@@ -271,7 +271,7 @@
      * Apply a new audio configuration. Pass null to fade out the current track
      * without starting a replacement (e.g. when the active theme has no audio).
      *
-     * Called by Themes.applyTheme() on every theme switch — must be cheap and
+     * Called by Themes.applyTheme() on every theme switch - must be cheap and
      * idempotent when the same config is passed twice.
      */
     function setTheme(audioConfig) {
@@ -316,7 +316,7 @@
             currentNode = null;
         }
 
-        // No new track requested — just silence.
+        // No new track requested - just silence.
         if (!audioConfig) return;
 
         var node = _makeNode(audioConfig);

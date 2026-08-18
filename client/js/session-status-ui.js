@@ -232,7 +232,7 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     /**
-     * Envelope glyph, "not flagged unread" state — a plain outline, same
+     * Envelope glyph, "not flagged unread" state - a plain outline, same
      * family as trashIconSvg (16x16 viewBox, stroke="currentColor",
      * fill="none", stroke-width 1.5). No `stroke` color set on the paths
      * themselves; the caller's CSS `color` drives the stroke via
@@ -253,7 +253,7 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     /**
-     * Envelope glyph, "flagged unread" state — the same envelope outline
+     * Envelope glyph, "flagged unread" state - the same envelope outline
      * plus a solid notification dot in the top-right corner, so the two
      * states are distinguishable by shape (not color alone).
      * Inputs: none.
@@ -325,7 +325,7 @@ console.log('[SessionStatusUI Module] Loading...');
      * Shared pencil (edit) glyph for every inline-rename/edit control in
      * the app (launcher project rows, running-session rename). Same
      * family as trashIconSvg: 16x16 viewBox, stroke="currentColor",
-     * fill="none", stroke-width 1.5, no color set on the paths — the
+     * fill="none", stroke-width 1.5, no color set on the paths - the
      * caller's CSS `color` drives it via currentColor.
      * Inputs: none.
      * Output: string - a self-contained `<svg>` element, 16x16 viewBox.

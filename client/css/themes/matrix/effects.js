@@ -1,4 +1,4 @@
-// Matrix theme — falling katakana background.
+// Matrix theme - falling katakana background.
 // Mounts a fixed full-viewport <canvas> at z-index: -1.
 // Throttled to ~30fps desktop / ~15fps mobile.
 // Pauses on document.visibilitychange (hidden → suspend RAF).
@@ -17,7 +17,7 @@ let colCount = 0;
 
 const GLYPHS = (() => {
   const out = [];
-  // Katakana block (U+30A0 - U+30FF) — pull the visually dense ones.
+  // Katakana block (U+30A0 - U+30FF) - pull the visually dense ones.
   for (let cp = 0x30a0; cp <= 0x30ff; cp++) out.push(String.fromCharCode(cp));
   // Digits + a few latin letters for variety (the original film mixes them in).
   for (let i = 0; i < 10; i++) out.push(String(i));

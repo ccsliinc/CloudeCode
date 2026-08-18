@@ -44,7 +44,7 @@ def _totp_paired_sentinel_path() -> Path:
     Anchored to the same directory as ``config.json`` so it follows the
     user's actual config location (``~/.config/cloudecode/`` when launched
     from the Electron bundle, ``./`` in dev) instead of inventing a new
-    convention. The sentinel is a marker only — its presence (not contents)
+    convention. The sentinel is a marker only - its presence (not contents)
     signals that TOTP has been paired at least once, gating ``/auth/qr``
     from re-serving the secret.
     """
@@ -61,13 +61,13 @@ def _rate_limit_key(request: Request) -> str:
     Resolve the client identity used for rate-limit bucketing.
 
     When ``auth_rate_limits.trust_proxy_headers`` is True we honor the first
-    value of ``X-Forwarded-For`` (standard reverse-proxy convention — the
+    value of ``X-Forwarded-For`` (standard reverse-proxy convention - the
     left-most entry is the original client). When False we fall back to the
     direct peer address via ``get_remote_address``, which defends against
     spoofed XFF headers when the app is reachable directly.
 
     A misconfigured auth layer (can't load settings) must not bypass the
-    limiter — in that case we fall back to the direct peer address rather
+    limiter - in that case we fall back to the direct peer address rather
     than raising, which would otherwise 500 every auth request.
     """
     try:
@@ -79,7 +79,7 @@ def _rate_limit_key(request: Request) -> str:
         xff = request.headers.get("x-forwarded-for")
         if xff:
             # Take the leftmost (original client) IP. Strip surrounding
-            # whitespace — some proxies emit ", " separators.
+            # whitespace - some proxies emit ", " separators.
             first = xff.split(",")[0].strip()
             if first:
                 return first
@@ -93,7 +93,7 @@ def _rate_limit_key(request: Request) -> str:
 #
 # headers_enabled=True makes slowapi inject X-RateLimit-Limit/Remaining/Reset
 # AND the canonical Retry-After header on 429 responses. Retry-After is the
-# signal clients (and compliant bots) use to back off cleanly — without it
+# signal clients (and compliant bots) use to back off cleanly - without it
 # the 429 is just a wall with no hint when to try again.
 limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
 
@@ -101,7 +101,7 @@ limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
 def _totp_rate_limit() -> str:
     """
     Build the slowapi limit string from config so operators can tune the
-    window without editing decorators. Evaluated on every request — the
+    window without editing decorators. Evaluated on every request - the
     config is cached inside ``Settings``, so this is a dict lookup.
 
     slowapi accepts semicolon-separated limits where ALL must hold. A
@@ -165,7 +165,7 @@ def _extract_repo_name(url: str) -> Optional[str]:
     Returns the final path segment (the repo name) or ``None`` if the URL
     can't be parsed into at least ``owner/repo`` shape. The returned name
     is what gh will use as the cloned-folder basename when no explicit
-    target directory is supplied — we match that behavior here.
+    target directory is supplied - we match that behavior here.
     """
     if not url:
         return None
@@ -248,7 +248,7 @@ def create_refresh_token(
 
 
 def create_jwt_token(expiry_minutes: Optional[int] = None) -> tuple[str, int]:
-    """Legacy — delegates to ``create_access_token``.
+    """Legacy - delegates to ``create_access_token``.
 
     The ``expiry_minutes`` arg is ignored (access TTL now comes from config).
     Preserved only so pre-Item-5 call sites keep compiling.
@@ -258,7 +258,7 @@ def create_jwt_token(expiry_minutes: Optional[int] = None) -> tuple[str, int]:
 
 
 def verify_jwt_token(token: str) -> bool:
-    """Legacy — prefer ``decode_access_token``.
+    """Legacy - prefer ``decode_access_token``.
 
     Returns True if the token is a valid access token. Unlike
     ``decode_access_token`` this swallows all errors and returns a bool so
@@ -280,7 +280,7 @@ def _decode_with_typ(token: str, expected_typ: str) -> dict:
 
     Why a private helper:
       - Keeps the ``algorithms=["HS256"]`` guard in one place so a future
-        refactor can't accidentally drop it (RFC 8725 §3.1 — the #1
+        refactor can't accidentally drop it (RFC 8725 §3.1 - the #1
         JWT footgun).
       - Centralizes the ``typ`` enforcement so an access token can't be
         used as a refresh token and vice versa (token-substitution attack).
@@ -297,7 +297,7 @@ def _decode_with_typ(token: str, expected_typ: str) -> dict:
         )
 
     try:
-        # EXPLICIT algorithms list — do NOT remove. Passing algorithms=None
+        # EXPLICIT algorithms list - do NOT remove. Passing algorithms=None
         # (or omitting the arg) allows "alg": "none" tokens, which is a
         # well-known JWT bypass (RFC 8725 §3.2). Also pins to HS256 so a
         # future key rotation to RS256 is an intentional, reviewed change.
@@ -381,12 +381,12 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
     Verify TOTP code and return JWT token.
 
     Defense layers, outermost first:
-      1. slowapi rate limit (5/min;20/hour by default) — caps brute-force
+      1. slowapi rate limit (5/min;20/hour by default) - caps brute-force
          attempts per client IP. Returns 429 with Retry-After.
-      2. Replay dedup (TTLCache keyed on code, 90s TTL) — a single captured
+      2. Replay dedup (TTLCache keyed on code, 90s TTL) - a single captured
          valid code cannot be replayed within pyotp's ±1-step window.
          Returns 401 with ``reason: code_reused``.
-      3. ``pyotp.TOTP.verify`` with valid_window=1 — the actual OTP check.
+      3. ``pyotp.TOTP.verify`` with valid_window=1 - the actual OTP check.
 
     Args:
         request: Required by slowapi to extract the rate-limit key.
@@ -414,7 +414,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
                 # this branch) within the TTL window. Reject without re-running
                 # the TOTP check. Same 401 shape as invalid code to keep the
                 # enumeration signal minimal, but with a distinct reason for
-                # client-side UX ("that code was already used — wait for the
+                # client-side UX ("that code was already used - wait for the
                 # next 30-second tick").
                 logger.warning("totp_code_reused", code=body.code[:2] + "****")
                 raise HTTPException(
@@ -430,7 +430,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
                     detail="Invalid authentication code"
                 )
 
-            # Valid — mark the code as consumed. Even if downstream JWT
+            # Valid - mark the code as consumed. Even if downstream JWT
             # creation blows up, we still want to ban replay of this code.
             _totp_seen_cache[body.code] = time.monotonic()
 
@@ -458,7 +458,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
 
         logger.info("totp_verification_success")
 
-        # Fix 4b — mark TOTP as paired. Idempotent: touch() with exist_ok=True
+        # Fix 4b - mark TOTP as paired. Idempotent: touch() with exist_ok=True
         # is safe if the sentinel already exists (all subsequent verifies).
         # Best-effort: a filesystem hiccup here must NOT fail the auth flow,
         # but we log loudly because a persistently unwritable config dir
@@ -477,7 +477,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
             success=True,
             access_token=access_token,
             refresh_token=refresh_token,
-            token=access_token,  # deprecated alias — remove in v3.2
+            token=access_token,  # deprecated alias - remove in v3.2
             expires_in=expires_in,
         )
 
@@ -510,7 +510,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
 
     Security properties:
       * JWT is decoded with ``algorithms=["HS256"]`` and ``typ == "refresh"``
-        enforced — no access-token smuggling into this endpoint.
+        enforced - no access-token smuggling into this endpoint.
       * The jti must be present in the RefreshStore AND pass ``is_valid``
         (not revoked, not expired, either not superseded OR within the
         grace window).
@@ -520,7 +520,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
         descendant. Both parties (legitimate user + attacker) must
         re-authenticate via TOTP.
       * Rotation itself is atomic inside ``RefreshStore.rotate``.
-      * Rate-limited at 10/minute to cap abusive retry storms — legitimate
+      * Rate-limited at 10/minute to cap abusive retry storms - legitimate
         clients refresh roughly once per ~14min (15min access TTL minus a
         safety margin), so 10/min is ample headroom while throttling
         brute-force campaigns hard.
@@ -545,7 +545,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
     # 2. Confirm the jti is still acceptable (includes grace window).
     if not await store.is_valid(old_jti, grace_seconds=grace):
         # Distinguish "just unknown/revoked" from "already superseded past
-        # grace" — the latter is reuse detection and triggers chain
+        # grace" - the latter is reuse detection and triggers chain
         # revocation as the defensive hammer.
         if await store.is_superseded(old_jti):
             logger.warning("refresh_reuse_detected", jti=old_jti[:8] + "…")
@@ -558,14 +558,14 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
 
     # 4. Atomically rotate. If rotate() returns False here there are two
     #    scenarios:
-    #      (a) near-simultaneous refresh from the same client — the row was
+    #      (a) near-simultaneous refresh from the same client - the row was
     #          JUST superseded while we were minting the new pair. is_valid
     #          above still returned True because we're inside the grace
     #          window. This is benign: the other in-flight request already
     #          got a new pair for this client. We 401 WITHOUT burning the
     #          chain so the client simply retries with its freshly-stored
     #          descendant token.
-    #      (b) true reuse-after-grace — is_valid should have caught it at
+    #      (b) true reuse-after-grace - is_valid should have caught it at
     #          step 2, so reaching here means something sketchier (clock
     #          skew, race with a purge, etc.). Still safer not to burn the
     #          chain here; the post-grace path at step 2 covers real theft.
@@ -593,7 +593,7 @@ async def logout(request: Request, body: RefreshTokenRequest):
     """
     Revoke a refresh token.
 
-    The access token is left alone — it expires on its own TTL (default
+    The access token is left alone - it expires on its own TTL (default
     15m) so a true logout requires either waiting out that window or
     telling the client to drop its access token too (which we do from
     the browser side by clearing localStorage).
@@ -640,7 +640,7 @@ async def get_totp_qr():
         HTTPException: 403 if already paired (and re-pair not enabled),
         500 if generation fails.
     """
-    # Fix 4b — refuse to serve the secret once pairing is complete,
+    # Fix 4b - refuse to serve the secret once pairing is complete,
     # unless the operator has explicitly opened the re-pair window.
     if (
         _totp_paired_sentinel_path().exists()
@@ -839,7 +839,7 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
     """
     Update a project's display name and/or description.
 
-    Display name only — the folder on disk is never touched. After a rename,
+    Display name only - the folder on disk is never touched. After a rename,
     subsequent calls must use the NEW name (the URL path identifier changes).
 
     Args:
@@ -922,7 +922,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
       3. Resolve target = ``<parent_dir>/<repo_name>``; refuse if it exists (409).
       4. Refuse if a project with the same display name already exists (409).
       5. Run ``gh repo clone <url> <target>`` with a 5-minute bounded timeout.
-         No shell — args are passed as a vector to ``create_subprocess_exec``.
+         No shell - args are passed as a vector to ``create_subprocess_exec``.
       6. Translate gh's exit/stderr into typed HTTP errors:
             auth/network → 401, not-found → 404, other → 500.
       7. Persist the new project (display name = body.project_name or repo basename).
@@ -994,7 +994,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
             detail=f"Failed to create parent directory {parent}: {e}",
         )
 
-    # 7. Run gh clone — bounded timeout, no shell interpolation.
+    # 7. Run gh clone - bounded timeout, no shell interpolation.
     try:
         proc = await asyncio.create_subprocess_exec(
             "gh", "repo", "clone", body.repo_url, str(target),
@@ -1024,7 +1024,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
             returncode=proc.returncode,
             stderr=err[:500],
         )
-        # Auth / network classes — gh exits non-zero with these messages.
+        # Auth / network classes - gh exits non-zero with these messages.
         if (
             "authentication" in lower
             or "permission denied" in lower
@@ -1047,7 +1047,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
         )
 
     # 8. Register as a project. The cloned dir stays on disk even if the
-    # config write fails — user can retry via "open project from folder".
+    # config write fails - user can retry via "open project from folder".
     project_cfg = ProjectConfig(
         name=project_name,
         path=str(target),
@@ -1056,7 +1056,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
     try:
         settings.save_project(project_cfg)
     except ValueError as e:
-        # Defensive — step 5 already checked, but a race could squeeze in.
+        # Defensive - step 5 already checked, but a race could squeeze in.
         logger.warning("project_save_collision_after_clone", name=project_name, error=str(e))
         raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
@@ -1215,7 +1215,7 @@ async def get_slash_commands(project_path: Optional[str] = None):
     Get the full slash-command palette: built-in/skill/workflow commands
     scraped from the official docs at release time, merged with commands
     and skills discovered on THIS machine at request time (user scope,
-    installed plugins, and — when `project_path` is given — that
+    installed plugins, and - when `project_path` is given - that
     project's own `.claude/commands` and `.claude/skills`).
 
     A separate endpoint from `/config/common-commands` (Task 2's decision,
@@ -1223,7 +1223,7 @@ async def get_slash_commands(project_path: Optional[str] = None):
     row shown at the top of the palette and its response shape (a bare
     list of command strings) stays exactly as-is for existing consumers.
     This endpoint serves the full palette body underneath it, grouped for
-    direct rendering — a different shape for a different purpose, not a
+    direct rendering - a different shape for a different purpose, not a
     breaking change to the old one.
 
     Args:
@@ -1234,12 +1234,12 @@ async def get_slash_commands(project_path: Optional[str] = None):
     Returns:
         {"groups": [{"id", "label", "commands": [{"command", "args",
         "description", "type", "alias_of"}, ...]}, ...]} in a fixed
-        group order — see `build_command_groups()`.
+        group order - see `build_command_groups()`.
 
     Raises:
         HTTPException: on unexpected discovery failure. Missing/partial
             data sources (no plugins installed, no project scope, a
-            stale/absent scraped JSON) are NOT errors — they just yield
+            stale/absent scraped JSON) are NOT errors - they just yield
             fewer groups.
     """
     try:
@@ -1261,12 +1261,12 @@ async def get_slash_commands(project_path: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Settings screen (feat/settings-screen) — the config write path.
+# Settings screen (feat/settings-screen) - the config write path.
 #
 # No config WRITE endpoint existed before this: every prior config.json
 # mutation (add_provider_model, update_project, ...) had its own narrow
 # route. This is the first general settings surface, so it gets its own
-# strict validation instead of accepting an arbitrary merge — see
+# strict validation instead of accepting an arbitrary merge - see
 # ConfigSettingsUpdateRequest's docstring for the "extra=forbid" reasoning.
 # ---------------------------------------------------------------------------
 
@@ -1278,7 +1278,7 @@ async def get_settings():
     """
     Get the settings-screen payload: agent launch commands, notification
     channel config (secrets masked), and the server bind address
-    (read-only — see ``Settings.get_settings_summary``).
+    (read-only - see ``Settings.get_settings_summary``).
 
     Returns:
         dict with keys ``agents``, ``notifications``, ``server``.
@@ -1309,7 +1309,7 @@ async def update_settings(body: ConfigSettingsUpdateRequest):
     blocks of config.json.
 
     Only the fields the client actually SET are written (Pydantic's
-    ``model_fields_set``, not "is not None") — this is what makes
+    ``model_fields_set``, not "is not None") - this is what makes
     omitting a secret field mean "leave unchanged" while still allowing
     an explicit empty-string write to clear it. Unknown top-level or
     nested keys are already rejected by ``ConfigSettingsUpdateRequest``'s
@@ -1325,7 +1325,7 @@ async def update_settings(body: ConfigSettingsUpdateRequest):
 
     Raises:
         HTTPException: 400 on a value that fails validation (e.g. a
-            blank codex/hermes/openclaw command — those have no
+            blank codex/hermes/openclaw command - those have no
             fallback, unlike claude_command), 500 on a config.json I/O
             or JSON error.
     """
@@ -1343,7 +1343,7 @@ async def update_settings(body: ConfigSettingsUpdateRequest):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"{', '.join(blank_required)} cannot be blank — only "
+                    f"{', '.join(blank_required)} cannot be blank - only "
                     "claude_command has a built-in fallback"
                 ),
             )
@@ -1357,7 +1357,7 @@ async def update_settings(body: ConfigSettingsUpdateRequest):
     logger.info(
         "settings_update_requested",
         agents_fields=sorted(agents_update.keys()),
-        # Never log notification VALUES (several are secrets) — only
+        # Never log notification VALUES (several are secrets) - only
         # which field names changed.
         notifications_fields=sorted(notifications_update.keys()),
     )

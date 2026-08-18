@@ -1,4 +1,4 @@
-/* Blade Runner theme — smog-orange neon over rain-slick cobalt night.
+/* Blade Runner theme - smog-orange neon over rain-slick cobalt night.
    The <canvas id="blade-runner-rain"> is mounted by effects.js at z-index: -1 behind everything.
    Cronenweth (1982) tungsten + Deakins (2049) cobalt-shadow palette. Readability comes first. */
 
@@ -15,7 +15,7 @@
   position: relative;
 }
 
-/* Tungsten phosphor on important text — keep tiny so it's a tint, not a halo. */
+/* Tungsten phosphor on important text - keep tiny so it's a tint, not a halo. */
 :root[data-theme="blade_runner"] .header h1,
 :root[data-theme="blade_runner"] .header .title {
   text-shadow:
@@ -31,7 +31,7 @@
   text-shadow: 0 0 4px rgba(255, 122, 0, 0.35);
 }
 
-/* Glowing bottom border on inputs — neon-strip-on-wet-asphalt look. */
+/* Glowing bottom border on inputs - neon-strip-on-wet-asphalt look. */
 :root[data-theme="blade_runner"] input,
 :root[data-theme="blade_runner"] textarea,
 :root[data-theme="blade_runner"] select {
@@ -66,7 +66,7 @@
   backdrop-filter: blur(3px);
 }
 
-/* prefers-reduced-motion fallback — effects.js refuses to mount,
+/* prefers-reduced-motion fallback - effects.js refuses to mount,
    keep the static cobalt-to-black wash so the bg still feels rain-slick. */
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="blade_runner"] body {

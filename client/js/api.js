@@ -17,7 +17,7 @@ class API {
         //
         // When N requests race and all see 401 at roughly the same time,
         // they must NOT each fire their own /auth/refresh. The server
-        // enforces reuse detection on the refresh token — so if two
+        // enforces reuse detection on the refresh token - so if two
         // refresh calls land on the same refresh_token, the second is
         // treated as a theft event and BOTH get revoked (chain burn).
         //
@@ -29,7 +29,7 @@ class API {
         // through to the re-auth path.
         //
         // A boolean flag would race (flag-then-set is two operations);
-        // the Promise IS the primitive — storing it atomically captures
+        // the Promise IS the primitive - storing it atomically captures
         // both the "in flight" and "eventual result" states.
         this._refreshPromise = null;
     }
@@ -85,7 +85,7 @@ class API {
 
             // Handle 401 Unauthorized.
             //
-            // First 401: try to rotate the refresh token (single-flight —
+            // First 401: try to rotate the refresh token (single-flight -
             // see constructor comment). If refresh wins, replay the
             // original request once with the new access token.
             //
@@ -94,7 +94,7 @@ class API {
             //   'network-error' -> refresh request itself failed at the
             //                      network layer (post-wake Wi-Fi blip,
             //                      offline, etc.). Refresh token MIGHT
-            //                      still be valid — preserve it, drop
+            //                      still be valid - preserve it, drop
             //                      only the access token, surface a
             //                      recoverable NetworkUnavailable error
             //                      to the caller. The NEXT user action
@@ -113,7 +113,7 @@ class API {
                         return this.call(endpoint, options, { _retrying: true });
                     }
                     if (refreshed === 'network-error') {
-                        console.warn('API: 401 + refresh hit network error — preserving refresh token');
+                        console.warn('API: 401 + refresh hit network error - preserving refresh token');
                         if (window.Auth) {
                             window.Auth.clearToken({ accessOnly: true });
                         }
@@ -211,7 +211,7 @@ class API {
             //   - malformed / empty       → {}
             // Prefer `error` (slowapi), fall back to `detail` (FastAPI),
             // then a generic message. NEVER fall through to a hardcoded
-            // client-side message — that would silently overwrite the
+            // client-side message - that would silently overwrite the
             // server's actual signal (e.g. hide a 429 behind "Invalid TOTP
             // code").
             const errorData = await response.json().catch(() => ({}));
@@ -219,7 +219,7 @@ class API {
 
             // RFC 7231: Retry-After is either integer seconds or an HTTP-date.
             // For rate-limit 429s slowapi emits integer seconds. Parse
-            // defensively — if unparseable, skip the suffix rather than
+            // defensively - if unparseable, skip the suffix rather than
             // showing "NaN".
             if (response.status === 429) {
                 const retryAfterRaw = response.headers.get('Retry-After');
@@ -257,7 +257,7 @@ class API {
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             // Attach HTTP status so callers can discriminate semantic
-            // outcomes — e.g. 403 here means "qr endpoint locked because
+            // outcomes - e.g. 403 here means "qr endpoint locked because
             // pairing is already complete", which is success state for the
             // login screen, NOT a setup-required failure. Mirrors the
             // err.status pattern used in verifyTOTP() above.
@@ -348,7 +348,7 @@ class API {
     }
 
     /**
-     * Projects: Rename / update description (display name only — never
+     * Projects: Rename / update description (display name only - never
      * touches the folder on disk). Pass only the fields you want to change.
      *
      * @param {string} currentName - Current display name (URL identifier).
@@ -415,7 +415,7 @@ class API {
 
     /**
      * Providers: list configured OpenRouter models (Claude is implicit and
-     * never included here — the provider selector modal pins it as the
+     * never included here - the provider selector modal pins it as the
      * first, non-removable option client-side).
      * @returns {Promise<{models: Array<string>}>}
      */
@@ -426,7 +426,7 @@ class API {
     /**
      * Providers: add a model id to the OpenRouter model list.
      * @param {string} model - e.g. "openai/gpt-5.6-sol". Server validates
-     *   against ^[A-Za-z0-9._~/-]{1,120}$ — throws (err.status 400) on a
+     *   against ^[A-Za-z0-9._~/-]{1,120}$ - throws (err.status 400) on a
      *   malformed id, (err.status 409) on a duplicate.
      * @returns {Promise<{models: Array<string>}>}
      */
@@ -452,7 +452,7 @@ class API {
     /**
      * Settings screen: fetch the effective agents/notifications/server
      * config. Notification secrets come back masked as
-     * {configured: boolean} — never in plain text.
+     * {configured: boolean} - never in plain text.
      * @returns {Promise<{agents: object, notifications: object, server: object}>}
      */
     async getSettings() {
@@ -462,7 +462,7 @@ class API {
     /**
      * Settings screen: apply a partial update. Only include a top-level
      * section (agents / notifications) if it has fields to change; only
-     * include a field within it if the user actually edited it — an
+     * include a field within it if the user actually edited it - an
      * omitted field means "leave unchanged" server-side. Never send a
      * masked "configured" placeholder back as a value.
      * @param {{agents?: object, notifications?: object}} patch
@@ -486,7 +486,7 @@ class API {
 
     /**
      * Launch wrappers: offered example wrappers (the author's real
-     * cld/cldor functions) — never auto-installed, only shown for a user
+     * cld/cldor functions) - never auto-installed, only shown for a user
      * to explicitly import.
      * @returns {Promise<{wrappers: Array<object>}>}
      */
@@ -545,7 +545,7 @@ class API {
 
     /**
      * Terminal commands: replace the whole list. Add, edit, delete and
-     * reorder are all this one call — the list IS the order, so there is
+     * reorder are all this one call - the list IS the order, so there is
      * no separate reorder endpoint to disagree with it.
      * @param {Array<{id: string, label: string, command: string}>} commands
      * @returns {Promise<{commands: Array<object>}>} - throws (err.status 400)
@@ -586,7 +586,7 @@ class API {
      *   it. Without this, a width-mismatched rejoin (e.g. mobile rejoining
      *   a desktop-width session) gets scrollback bytes emitted at the
      *   pane's last-attached width and xterm renders them at the mobile
-     *   width — older history reflows into garbled rows.
+     *   width - older history reflows into garbled rows.
      * @param {number|null} [opts.rows=null] - client's current xterm rows;
      *   paired with ``cols`` for the pre-capture resize. Both must be
      *   positive ints for the server to act.
@@ -634,7 +634,7 @@ class API {
         } catch (error) {
             // Our ``call`` wrapper throws Error with a message that starts
             // with the backend's detail string. "No active session" is what
-            // ``GET /sessions`` returns when none exists — treat it as null.
+            // ``GET /sessions`` returns when none exists - treat it as null.
             const msg = (error && error.message) || '';
             if (/No active session|HTTP 404|404/i.test(msg)) {
                 return null;
@@ -661,14 +661,14 @@ class API {
      *
      * Why this lives outside ``call()``: ``call()`` unconditionally
      * ``JSON.stringify``s any ``typeof body === 'object'`` payload (line
-     * 79–81 above). ``FormData`` IS a typeof-object, so routing through
+     * 79-81 above). ``FormData`` IS a typeof-object, so routing through
      * ``call()`` would mangle the multipart body to "[object FormData]".
      * Beyond that, the browser MUST set the multipart Content-Type with
-     * its own boundary token — explicitly setting Content-Type would
+     * its own boundary token - explicitly setting Content-Type would
      * destroy the boundary and the server would 422 the request.
      *
      * Auth + 401 retry mirrors ``call()`` exactly (single-flight refresh,
-     * one replay, then handleUnauthorized) — no behavior drift.
+     * one replay, then handleUnauthorized) - no behavior drift.
      *
      * @param {Blob} blob - Bytes from the clipboard / file picker. A File
      *   carries its own name; a raw clipboard Blob does not.
@@ -716,7 +716,7 @@ class API {
                         return this.uploadFile(blob, declared, sessionId, { _retrying: true });
                     }
                     if (refreshed === 'network-error') {
-                        console.warn('API: 401 + refresh hit network error on uploadFile — preserving refresh token');
+                        console.warn('API: 401 + refresh hit network error on uploadFile - preserving refresh token');
                         if (window.Auth) {
                             window.Auth.clearToken({ accessOnly: true });
                         }
@@ -748,7 +748,7 @@ class API {
      *
      * Direct kill via the server's `DELETE /sessions/external/{name}`
      * endpoint. Used by the launchpad "X" button when the target row
-     * is NOT the currently-active backend — bypasses the old
+     * is NOT the currently-active backend - bypasses the old
      * adopt-then-destroy flow which 500'd on dead panes (foreground
      * process exited, e.g. user Ctrl-D'd `claude`).
      *
@@ -771,7 +771,7 @@ class API {
      * PATCH /api/v1/sessions/{id}/name. Server validates the name against
      * ``^[A-Za-z0-9_-]{1,64}$`` and uniqueness against every live + owned
      * tmux name. On success the server broadcasts ``session.renamed`` over
-     * every WS bound to this session id — the caller does NOT need to
+     * every WS bound to this session id - the caller does NOT need to
      * manually mutate displayed state, just await success and rely on the
      * WS handler in terminal.js to update header text + document.title.
      *
@@ -795,8 +795,8 @@ class API {
     /**
      * Sessions: Manually mark (or clear) a session unread for followup.
      *
-     * feat/hook-driven-status — PATCH /api/v1/sessions/{name}/unread.
-     * ``tmuxName`` (NOT session_id — same convention as the deprecated
+     * feat/hook-driven-status - PATCH /api/v1/sessions/{name}/unread.
+     * ``tmuxName`` (NOT session_id - same convention as the deprecated
      * pinned-theme route) so this works whether the session is currently
      * attached to or only attachable. Persisted server-side, so the flag
      * follows the user across browsers/devices (never localStorage).
@@ -818,7 +818,7 @@ class API {
     /**
      * Sessions: Detach from the current session WITHOUT killing tmux.
      *
-     * Soft counterpart to ``destroySession`` — the server tears down its
+     * Soft counterpart to ``destroySession`` - the server tears down its
      * Python-side handles (reader task, idle watcher, pipe-pane) but
      * leaves the tmux session alive so it can be re-adopted later from
      * the Adopt list. Used by the "switch to a different project" flow
@@ -860,7 +860,7 @@ class API {
      * the tailer's seek-to-offset doesn't cause a tear.
      *
      * If the user has an active session and `confirmDetach` is false,
-     * the server returns 409 — caller should show a confirmation modal
+     * the server returns 409 - caller should show a confirmation modal
      * and retry with `confirmDetach=true`. The prior session is detached
      * (tmux keeps running), never killed. Destruction is only via the
      * explicit destroy button.
@@ -901,7 +901,7 @@ class API {
 
     /**
      * Local servers: list dev servers detected on the host for a given
-     * tmux session. Pure read — never triggers detection.
+     * tmux session. Pure read - never triggers detection.
      *
      * @param {string} sessionName - tmux session name (the value the
      *   server tracks entries under).
@@ -916,12 +916,12 @@ class API {
 
     /**
      * Get plain WebSocket base URL for the terminal endpoint.
-     * Does NOT append a token — JWT auth is carried in the
+     * Does NOT append a token - JWT auth is carried in the
      * Sec-WebSocket-Protocol header via openWebSocket() below.
      *
      * @param {string|null} sessionId - the session this WS is for. When
      *   given, appended as ``?session_id=<id>`` so the server scopes the
-     *   stream to that session — two browser tabs can each be on a
+     *   stream to that session - two browser tabs can each be on a
      *   different session. Omitted → server falls back to the current one.
      * @param {string} path - WebSocket path (default '/ws/terminal')
      * @returns {string} - WebSocket URL (no token; session_id in query)
@@ -939,7 +939,7 @@ class API {
      * an array of subprotocol tokens as its second argument and serializes
      * them into a comma-separated `Sec-WebSocket-Protocol` request header.
      * The server validates the JWT, then echoes back the `cloude.jwt.v1`
-     * marker via the handshake response — required by RFC 6455 or the
+     * marker via the handshake response - required by RFC 6455 or the
      * browser drops the connection.
      *
      * Why this instead of `?token=<jwt>`:
@@ -961,7 +961,7 @@ class API {
         const url = `${this.wsBaseURL}${path}${q}`;
         // Two-element subprotocol array: marker + token. The server parses
         // these out of the Sec-WebSocket-Protocol header and verifies the
-        // JWT before accepting. Do NOT collapse into a single string —
+        // JWT before accepting. Do NOT collapse into a single string -
         // the two-element form is what the server expects.
         return new WebSocket(url, ['cloude.jwt.v1', token]);
     }
@@ -1000,7 +1000,7 @@ class API {
     }
 
     /**
-     * Toasts: synthetic creation — record a toast on the server and
+     * Toasts: synthetic creation - record a toast on the server and
      * fan it out to every browser bound to the session. INTENTIONALLY
      * temporary for v0.7.0 Part 2; Part 3 will add a hook-driven
      * endpoint. Kept as an explicit method so devs can curl-trigger
@@ -1034,7 +1034,7 @@ class API {
      * Server: read-only snapshot of the host, this process and tmux.
      *
      * Backs the home bar's "server status" panel. Behind the same
-     * `require_auth` as every other /api/v1 route — it hands out memory
+     * `require_auth` as every other /api/v1 route - it hands out memory
      * figures, disk paths, project working directories and session
      * names, and this app is reachable from every device on the LAN.
      *

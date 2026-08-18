@@ -1,5 +1,5 @@
 /**
- * ProviderGroups — pure grouping helpers for the launch picker's wrapper
+ * ProviderGroups - pure grouping helpers for the launch picker's wrapper
  * step (feat/universal-wrappers).
  *
  * Split out of client/js/providers.js to keep that file inside the repo's
@@ -9,7 +9,7 @@
  *
  * Loaded as a plain script (window.ProviderGroups) and also importable by
  * the node test suite, which reads the file and evaluates it against a
- * stub window — the same pattern the other node suites in tests/ use.
+ * stub window - the same pattern the other node suites in tests/ use.
  */
 (function (root) {
     'use strict';
@@ -27,7 +27,7 @@
     /**
      * Family names in registry order, with any family present in the
      * wrapper data but absent from the registry appended rather than
-     * dropped — a wrapper must never become unreachable because the
+     * dropped - a wrapper must never become unreachable because the
      * server did not name its family.
      * @param {Array} wrappers configured wrappers
      * @param {Array} families family summaries from the API

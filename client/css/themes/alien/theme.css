@@ -1,8 +1,8 @@
-/* Alien theme — Nostromo MOTHER 6000.
+/* Alien theme - Nostromo MOTHER 6000.
    Diegetic 1979-era CRT: P1 phosphor green on coal-black, hazard yellow
    for caution, claxon red for terminal states, blue-grey for telemetry.
 
-   Pure CSS — no effects.js. Scanlines are a body-level
+   Pure CSS - no effects.js. Scanlines are a body-level
    repeating-linear-gradient overlay; phosphor bloom is text-shadow.
    Header glow is amplified to mimic CRT brightness blowout on heading rows. */
 
@@ -10,8 +10,8 @@
   color-scheme: dark;
 }
 
-/* Body — coal-black with green undertone, NOT pure #000.
-   Scanlines: 3px period, ~15% darkness — period matches a real ~480-line
+/* Body - coal-black with green undertone, NOT pure #000.
+   Scanlines: 3px period, ~15% darkness - period matches a real ~480-line
    interlaced CRT scaled to web pixels. Stronger than that reads as venetian
    blinds; weaker disappears. */
 :root[data-theme="alien"] body {
@@ -27,7 +27,7 @@
   position: relative;
 }
 
-/* Subtle phosphor bloom on every text-bearing surface. 1px not 4px —
+/* Subtle phosphor bloom on every text-bearing surface. 1px not 4px -
    real P1 phosphor halates close, not nuclear. currentColor means greens
    bloom green, hazards bloom yellow, claxons bloom red. Semantic glow. */
 :root[data-theme="alien"] body,
@@ -42,7 +42,7 @@
   text-shadow: 0 0 1px currentColor;
 }
 
-/* Header — CRT brightness blowout on heading rows (period-correct artifact
+/* Header - CRT brightness blowout on heading rows (period-correct artifact
    of unregulated tube brightness controls). Mother-green tinted halation. */
 :root[data-theme="alien"] .header h1,
 :root[data-theme="alien"] .header .title,
@@ -53,7 +53,7 @@
   letter-spacing: 0.06em;
 }
 
-/* Inputs — Cobb industrial detailing. Green base, accent-bottom, hazard
+/* Inputs - Cobb industrial detailing. Green base, accent-bottom, hazard
    yellow on focus = "operator attention" (Nostromo console grammar). */
 :root[data-theme="alien"] input,
 :root[data-theme="alien"] textarea,
@@ -71,7 +71,7 @@
   box-shadow: 0 0 8px rgba(255, 215, 0, 0.55);
 }
 
-/* Cards / modals / launchpad — slight scrim so scanlines don't bleed
+/* Cards / modals / launchpad - slight scrim so scanlines don't bleed
    through and shred the readable surfaces. Same play matrix runs. */
 :root[data-theme="alien"] .session-card,
 :root[data-theme="alien"] .modal,
@@ -91,7 +91,7 @@
 }
 
 /* ==========================================================================
-   Terminal scope — when a session is themed Alien, paint inside the xterm
+   Terminal scope - when a session is themed Alien, paint inside the xterm
    too. Scanlines + bloom on the terminal itself for full diegetic immersion.
    ========================================================================== */
 
@@ -115,7 +115,7 @@
   text-shadow: 0 0 3px rgba(124, 252, 168, 0.65);
 }
 
-/* xterm.js own container — let scanlines from the parent show through
+/* xterm.js own container - let scanlines from the parent show through
    instead of opaquing them out. xterm paints its own background unless we
    force transparency on its viewport. */
 #terminal-screen[data-session-theme="alien"] .xterm,

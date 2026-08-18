@@ -1,30 +1,30 @@
 """
-Claude-config + project file tree / editor — server-side business logic.
+Claude-config + project file tree / editor - server-side business logic.
 
 Three roots:
 
     - "user"    ``~/.claude``               (CLAUDE_HOME, reused from
-                                              ``slash_command_discovery`` —
+                                              ``slash_command_discovery`` -
                                               single source of truth for that
                                               path rather than a second
                                               hardcoded ``Path.home()``)
     - "project" ``<working_dir>/.claude``    (the active session's config,
                                               same allow-list model as "user")
     - "workdir" ``<working_dir>``            (the active session's WORKING
-                                              DIRECTORY itself — general
+                                              DIRECTORY itself - general
                                               project file browsing, added
                                               2026-08. No allow-list: any
                                               non-hidden entry is browsable.)
 
 ``project`` and ``workdir`` are both derived from the same client-supplied
-``project_path`` (the session's working directory) — there is no server-side
+``project_path`` (the session's working directory) - there is no server-side
 "current project" state; the caller must have gotten this path from a real
 session, never trust it as arbitrary free text.
 
 ALLOWED_TOP_LEVEL_FILES / ALLOWED_TOP_LEVEL_DIRS / HIDE_NAMES /
 HIDE_PREFIXES / SENSITIVE_NAMES / SENSITIVE_PREFIXES / SENSITIVE_SUFFIXES
 below are the single source of truth for what this feature shows and how.
-Every list/read/write call re-derives its answer from these constants —
+Every list/read/write call re-derives its answer from these constants -
 nothing is duplicated in the routes layer.
 
 Security posture (the client is assumed hostile, per the API layer):
@@ -32,17 +32,17 @@ Security posture (the client is assumed hostile, per the API layer):
       for containment inside the resolved root before any filesystem call
       touches it (blocks ``../`` traversal AND symlink escapes, since
       resolve() follows symlinks). This applies identically to all three
-      roots, including "workdir" — dropping the allow-list for general
+      roots, including "workdir" - dropping the allow-list for general
       project browsing does NOT relax the containment check.
     - "user" and "project" additionally enforce an allow-list of top-level
       names (this app's own config surface, not a general browser).
-      "workdir" has no allow-list — it is a real project directory — but
+      "workdir" has no allow-list - it is a real project directory - but
       the hide-list (HIDE_NAMES / HIDE_PREFIXES) still applies, and applies
       MORE, not less: ``.git`` internals, and known-huge dependency/build
       directories (node_modules, venv, .venv, dist, build, __pycache__) are
       never listed and never resolvable by a guessed path either.
     - files matching SENSITIVE_* (``.env*``, ``.credentials.json``,
-      ``id_rsa``, ``id_ed25519``, ``*.pem``, ``*.key``) are NOT refused —
+      ``id_rsa``, ``id_ed25519``, ``*.pem``, ``*.key``) are NOT refused -
       this app already grants a full remote shell, so a hard refusal here
       would be inconsistent theater, not real access control. They ARE
       flagged ``is_sensitive`` in every tree/read/write response so the
@@ -52,7 +52,7 @@ Security posture (the client is assumed hostile, per the API layer):
       Content is never logged for any file, sensitive or not.
     - every write is backed up first (``<name>.bak``, one generation,
       same convention as ``Settings.update_settings_config()``), and a
-      ``.json`` write is parsed before it touches disk — a parse failure
+      ``.json`` write is parsed before it touches disk - a parse failure
       raises and nothing is written.
 """
 from __future__ import annotations
@@ -86,25 +86,25 @@ logger = structlog.get_logger()
 class ConfigFileError(ValueError):
     """Raised for any client-caused failure: bad root, disallowed path,
     traversal attempt, hidden file, or oversized read. Routes layer maps
-    this to HTTP 400/403 — never a 500, since these are all "the request
+    this to HTTP 400/403 - never a 500, since these are all "the request
     was invalid", not server faults."""
 
 
 class ConfigFileUnreadableError(ConfigFileError):
     """Raised when a ROOT exists but its own contents could not be
-    enumerated (``OSError`` from ``iterdir()`` — typically a permissions
+    enumerated (``OSError`` from ``iterdir()`` - typically a permissions
     problem, not a bad request). This is the THREE-OUTCOME RULE's third
     state for this endpoint: distinct from "listed, zero entries" (a
     genuinely empty/absent directory) and from an ordinary
     ``ConfigFileError`` (client sent something invalid). Routes layer
     maps this to HTTP 503 rather than 400, so the client can render "I
     could not check this" instead of silently treating it as "there is
-    nothing here" — see config_files.py's module docstring and
+    nothing here" - see config_files.py's module docstring and
     CLAUDE.md's THREE-OUTCOME RULE section for why that conflation is a
     named, recurring bug class in this project.
 
     A subdirectory (not the root itself) hitting the same OSError does
-    NOT raise this — it would abort the whole tree over one bad
+    NOT raise this - it would abort the whole tree over one bad
     subdirectory. That case sets ``TreeNode.list_error`` instead, so the
     rest of the tree still renders and only that one node says it
     could not be evaluated.
@@ -163,7 +163,7 @@ def resolve_roots(project_path: Optional[str]) -> dict:
       session always has one).
     Inputs: project_path (str|None) - absolute path to a project's
       working directory, as tracked by the session (not client-supplied
-      free text used directly — callers must have gotten this from a
+      free text used directly - callers must have gotten this from a
       real session, never trust it as arbitrary).
     Output: dict[str, Path] - keyed "user" (always present), "project"
       and/or "workdir" (present only when applicable).
@@ -183,7 +183,7 @@ def resolve_safe_path(root_id: str, rel_path: str, project_path: Optional[str]) 
     """
     Description: turn a client-supplied (root_id, rel_path) pair into a
       verified-contained absolute Path. This is the ONE function every
-      read/write call must go through — the security boundary for path
+      read/write call must go through - the security boundary for path
       traversal and the hide-list both live here, not just in what
       list_tree() chooses to enumerate. The allow-list check is skipped
       for BLOCKLIST_ONLY_ROOTS ("workdir"); containment + hide-list are
@@ -307,7 +307,7 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
     Inputs:
       root_id (str) - "user", "project", or "workdir".
       project_path (str|None) - required for "project"/"workdir".
-      max_depth (int) - recursion cap (default 6 — deep enough for
+      max_depth (int) - recursion cap (default 6 - deep enough for
         skills/<name>/SKILL.md, shallow enough to bound one request).
     Output: list[dict] - top-level TreeNode entries, JSON-serializable
       (dataclasses.asdict shape). For allow-listed roots the order is
@@ -361,7 +361,7 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
 def read_file(root_id: str, rel_path: str, project_path: Optional[str]) -> dict:
     """
     Description: read one browsable file's contents. Sensitive files
-      (see SENSITIVE_*) are NOT refused — the caller (routes/client) is
+      (see SENSITIVE_*) are NOT refused - the caller (routes/client) is
       responsible for masking them on screen until the user explicitly
       reveals; this function only flags `is_sensitive` in the response.
     Inputs: root_id, rel_path, project_path - see resolve_safe_path().

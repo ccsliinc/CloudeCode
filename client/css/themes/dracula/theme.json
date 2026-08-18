@@ -1,7 +1,7 @@
 {
   "id": "dracula",
   "name": "Dracula",
-  "description": "The canonical dev theme by Zeno Rocha — high-contrast saturated accents on flat dark.",
+  "description": "The canonical dev theme by Zeno Rocha - high-contrast saturated accents on flat dark.",
   "author": "Cloude Code (palette by Zeno Rocha)",
   "version": "1.0.0",
   "cssVars": {

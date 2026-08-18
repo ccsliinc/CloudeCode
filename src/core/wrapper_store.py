@@ -1,4 +1,4 @@
-"""Pure list operations for ``agents.wrappers`` — no I/O, no Settings.
+"""Pure list operations for ``agents.wrappers`` - no I/O, no Settings.
 
 Extracted from ``src/config.py`` (feat/universal-wrappers), which was over
 the repo's 500-line budget before this feature added to it. Every function
@@ -10,8 +10,8 @@ or constructing a ``Settings``.
 DEFAULT IS A PER-FAMILY FLAG. Each family resolves its own default
 independently (see ``src/core/agent_families.resolve_agent_type`` and
 ``Settings.get_agent_command``), so every mutation below scopes its
-default handling to one family. Clearing the flag list-wide — which is what
-this code did when wrappers were claude-only — would strip claude's default
+default handling to one family. Clearing the flag list-wide - which is what
+this code did when wrappers were claude-only - would strip claude's default
 the moment a codex wrapper was made default, silently dropping claude back
 to its legacy ``claude_command``.
 
@@ -85,7 +85,7 @@ def add(wrappers: List[Dict], new_wrapper: Dict, reserved_ids) -> List[Dict]:
 
     Description: a reserved id (a family name like ``shell``) is refused
       because ``resolve_agent_type`` checks reserved names BEFORE any
-      wrapper lookup, so such a wrapper could never launch — accepting it
+      wrapper lookup, so such a wrapper could never launch - accepting it
       would silently create dead config.
     Inputs:
       wrappers (list[dict]) - existing list (not mutated).
@@ -136,7 +136,7 @@ def delete(wrappers: List[Dict], wrapper_id: str) -> List[Dict]:
     """Remove a wrapper, promoting a same-family sibling if it was default.
 
     Description: promotes the first REMAINING wrapper of the SAME family,
-      not simply the first in the whole list — promoting across families
+      not simply the first in the whole list - promoting across families
       would give one family a default while leaving another with none,
       which then silently falls through to that family's static command.
     Inputs: wrappers (list[dict]); wrapper_id (str).

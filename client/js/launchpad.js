@@ -9,7 +9,7 @@ class Launchpad {
         this.launchpadScreen = null;
         this.projects = [];
         // Running tmux sessions on the `cloude` socket. Populated by
-        // loadRunningSessions() — a merged view of:
+        // loadRunningSessions() - a merged view of:
         //   (a) the currently-active backend (from GET /sessions), and
         //   (b) attachable/external sessions (from GET /sessions/attachable).
         // Each row carries an is_active flag so the render pass can style
@@ -17,7 +17,7 @@ class Launchpad {
         this.runningSessions = [];
         // GUARD (deep-link duplicate-session regression fix): set true
         // for the duration of openProjectByName()'s resolution. selectProject()
-        // checks this flag and refuses to create a session while it's set —
+        // checks this flag and refuses to create a session while it's set -
         // see openProjectByName()'s docstring and selectProject()'s guard
         // clause. This makes "deep-link resolution never creates" an
         // enforced invariant rather than an implicit property of call
@@ -47,11 +47,11 @@ class Launchpad {
      * Markup is injected by renderLaunchpadUI() into the right side of
      * the "running sessions" section heading row (#new-fab). Six
      * sub-actions route into the same handlers the old inline "new
-     * project" section used — no logic duplicated. Idempotent: safe to
+     * project" section used - no logic duplicated. Idempotent: safe to
      * call multiple times (guarded by a flag).
      *
      * Because the FAB lives inside #launchpad-screen, it shows/hides
-     * naturally with the screen — no separate visibility plumbing
+     * naturally with the screen - no separate visibility plumbing
      * required from app.js.
      *
      * Behaviors:
@@ -65,7 +65,7 @@ class Launchpad {
         const trigger = document.getElementById('new-fab-trigger');
         const backdrop = document.getElementById('new-fab-backdrop');
         if (!fab || !trigger || !backdrop) {
-            console.warn('Launchpad: new-fab markup missing — skipping wire');
+            console.warn('Launchpad: new-fab markup missing - skipping wire');
             return;
         }
 
@@ -85,7 +85,7 @@ class Launchpad {
             this.toggleNewFab();
         });
 
-        // Item dispatch via delegation — survives any future re-render
+        // Item dispatch via delegation - survives any future re-render
         fab.querySelectorAll('.new-fab__item').forEach(item => {
             item.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -196,7 +196,7 @@ class Launchpad {
     }
 
     /**
-     * Close the FAB menu (idempotent — also called from app.js when
+     * Close the FAB menu (idempotent - also called from app.js when
      * the launchpad screen is being torn down).
      */
     closeNewFab() {
@@ -225,13 +225,13 @@ class Launchpad {
     /**
      * Kick off a 5s interval that re-fetches the running-sessions list.
      *
-     * Idempotent — guarded by ``this._runningPollInterval`` so repeated
+     * Idempotent - guarded by ``this._runningPollInterval`` so repeated
      * calls (e.g. re-entering the launchpad after a session swap) don't
      * stack multiple intervals. Auth-gated per tick: skips the fetch
      * entirely when the user isn't logged in, so we don't hammer /sessions
      * with anonymous requests before the OTP flow completes.
      *
-     * Runs forever; does not pause on tab hide — external tmux sessions
+     * Runs forever; does not pause on tab hide - external tmux sessions
      * born while the tab is backgrounded should still surface the moment
      * the user returns.
      */
@@ -267,7 +267,7 @@ class Launchpad {
 
     /**
      * Load and display projects, then refresh the running-sessions list.
-     * Both fetches are non-fatal — the projects error path shows a UI
+     * Both fetches are non-fatal - the projects error path shows a UI
      * error, the sessions path is logged and silently renders empty.
      */
     async loadProjects() {
@@ -287,10 +287,10 @@ class Launchpad {
      * Fetch the unified "running sessions" list and repaint the section.
      *
      * Combines two server endpoints:
-     *   - ``GET /sessions/attachable`` — external tmux sessions on the
+     *   - ``GET /sessions/attachable`` - external tmux sessions on the
      *     cloude socket, plus cloude-owned sessions NOT currently bound
      *     to an active backend (detached-but-alive).
-     *   - ``GET /sessions`` — the currently-active backend, if any. The
+     *   - ``GET /sessions`` - the currently-active backend, if any. The
      *     server's /attachable filter drops this row to prevent a
      *     self-adopt footgun, so we refetch and merge it in here.
      *
@@ -304,7 +304,7 @@ class Launchpad {
             this.runningSessions = Array.isArray(list) ? list : [];
         } catch (err) {
             // Surface the failure loud + observable in DevTools instead of
-            // swallowing it — a silent catch here was masking 401s / CORS /
+            // swallowing it - a silent catch here was masking 401s / CORS /
             // stale-cache bugs where mobile browsers would render an empty
             // section with zero diagnostic trail. Keep the [] fallback so
             // the rest of the render pipeline stays stable.
@@ -330,7 +330,7 @@ class Launchpad {
             // NOTE: api.js:call() already dispatches `auth-required` on 401
             // after refresh fails, so this is defense-in-depth only. If
             // Auth.js doesn't listen for `cloude:reauth-needed` that's fine
-            // — `auth-required` remains the primary signal.
+            // - `auth-required` remains the primary signal.
             if (status === 401) {
                 try {
                     window.dispatchEvent(new CustomEvent('cloude:reauth-needed', {
@@ -359,7 +359,7 @@ class Launchpad {
                 const tmuxName = live && live.tmux_session;
                 if (!tmuxName) continue;
                 // activity_status comes from the server's bulk tmux pane
-                // query (src/core/session_status.py) — 'running' | 'idle' |
+                // query (src/core/session_status.py) - 'running' | 'idle' |
                 // 'dead' | 'unknown'. Never fabricated client-side.
                 const liveStatus = (live && live.activity_status) || 'unknown';
                 const liveUnread = !!(live && live.unread);
@@ -422,7 +422,7 @@ class Launchpad {
 
     /**
      * Paint (or hide) the Running Sessions section. Hides via display:none
-     * when empty — opacity:0 would still capture clicks, which we don't want.
+     * when empty - opacity:0 would still capture clicks, which we don't want.
      *
      * Click handlers (row → return/adopt, X → kill) land in Task 10; this
      * pass only builds the DOM. ``data-name`` / ``data-active`` attributes
@@ -433,7 +433,7 @@ class Launchpad {
         if (!container) return;
         const section = document.getElementById('running-sessions-section');
         if (!this.runningSessions || this.runningSessions.length === 0) {
-            // Only rewrite the DOM when transitioning into the empty state —
+            // Only rewrite the DOM when transitioning into the empty state -
             // repeated renders while already empty would thrash the
             // section's display flip for no reason.
             if (this._lastRunningSig !== 'empty') {
@@ -470,11 +470,11 @@ class Launchpad {
             const escapedName = this._escapeHtml(s.name);
             const escapedDisplay = this._escapeHtml(displayName);
             const sidAttr = s.session_id ? ` data-session-id="${this._escapeHtml(s.session_id)}"` : '';
-            // Pencil rename button — only for sessions whose id we know
+            // Pencil rename button - only for sessions whose id we know
             // (rename PATCH requires session_id, not the tmux name).
             // Detached-but-known rows qualify since their id is in
             // ``session_id``. External adopt-target rows (no session_id
-            // until adopted) get no pencil — the user can adopt first,
+            // until adopted) get no pencil - the user can adopt first,
             // then rename from the in-session header.
             const renamePencil = s.session_id
                 ? `<span class="running-session-rename" role="button" aria-label="rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename session">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</span>`
@@ -519,21 +519,21 @@ class Launchpad {
                 </div>
             `;
         }).join('');
-        // Idempotent — re-calling after subsequent renders is a no-op
+        // Idempotent - re-calling after subsequent renders is a no-op
         // because the listener is bound to the (stable) container element,
         // not the (re-painted) row children, and the flag gates re-bind.
         this._bindRunningSessionClicks();
     }
 
     /**
-     * Text-only age refresh — walks existing rows and rewrites just the
+     * Text-only age refresh - walks existing rows and rewrites just the
      * ``.running-session-age`` textContent. Used on poll ticks when the
      * row set is unchanged so we avoid the innerHTML rewrite that would
      * restart the pulse-glow CSS animations.
      *
      * Guarded for all the obvious missing-data cases: row without a
      * data-name, session no longer in the list, session without an
-     * epoch, row without an age element. Any miss is a silent skip —
+     * epoch, row without an age element. Any miss is a silent skip -
      * the next full render will reconcile.
      */
     _updateRunningSessionAges() {
@@ -578,7 +578,7 @@ class Launchpad {
 
     /**
      * HTML-escape helper. Session names come from the tmux daemon and are
-     * technically user-controlled — any embedded `<`, `>`, `"`, `'`, `&`
+     * technically user-controlled - any embedded `<`, `>`, `"`, `'`, `&`
      * in a name would break innerHTML.
      */
     _escapeHtml(s) {
@@ -609,7 +609,7 @@ class Launchpad {
      * Description: extracted from the running-sessions row click handler
      *   (Task 5 / deep-link fix) so the SAME pre-fit + scrollback-capture
      *   dance is reachable from both a mouse click and a resolved
-     *   `/session/<name>` deep link — the two paths must not drift apart.
+     *   `/session/<name>` deep link - the two paths must not drift apart.
      *   Pre-shows the terminal screen, measures THIS client's true
      *   cols/rows via a fit BEFORE the capture (a mismatch garbles
      *   older scrollback on a differently-sized client), then fetches
@@ -644,7 +644,7 @@ class Launchpad {
             await new Promise((r) =>
                 requestAnimationFrame(() => requestAnimationFrame(r))
             );
-            // 4. Fit + read measured geometry. Wrap in try/catch —
+            // 4. Fit + read measured geometry. Wrap in try/catch -
             //    fit can throw if the container isn't laid out yet;
             //    we tolerate and fall back to 0 (server treats 0 as
             //    "skip pre-resize").
@@ -669,7 +669,7 @@ class Launchpad {
                         window.TerminalController.term.rows) ||
                     0;
             } catch (fitErr) {
-                // Tolerated — fall through with 0/0; server skips
+                // Tolerated - fall through with 0/0; server skips
                 // the pre-resize and behavior is identical to the
                 // pre-fix path for THIS request (same-width clients
                 // are unaffected anyway).
@@ -694,7 +694,7 @@ class Launchpad {
      *
      * Event delegation over per-row listeners: avoids re-binding on every
      * render and survives DOM swaps. The `__boundRunningClicks` flag is
-     * a one-shot idempotence guard — re-calling from renderRunningSessions
+     * a one-shot idempotence guard - re-calling from renderRunningSessions
      * is a no-op after the first paint.
      *
      * Click target disambiguation:
@@ -727,7 +727,7 @@ class Launchpad {
 
             // Envelope icon path: manual mark/clear unread. Stop
             // propagation so the row click handler (return/adopt) never
-            // also fires — this is a status toggle, not a navigation.
+            // also fires - this is a status toggle, not a navigation.
             if (markUnreadEl) {
                 e.stopPropagation();
                 await this._handleMarkUnread(markUnreadEl);
@@ -754,7 +754,7 @@ class Launchpad {
             // propagation so the row click handler (return/adopt) doesn't
             // also fire and race the edit. Only pencil buttons with a
             // ``data-rename-sid`` appear in rows with a known session_id.
-            // External adopt-target rows have no pencil — the user can
+            // External adopt-target rows have no pencil - the user can
             // adopt first, then rename from the in-session header.
             if (renameEl) {
                 e.stopPropagation();
@@ -766,7 +766,7 @@ class Launchpad {
                 return;
             }
 
-            // Row click — return or attach
+            // Row click - return or attach
             const name = rowEl.dataset.name;
             const isActive = rowEl.dataset.active === '1';
             const rowSessionId = rowEl.dataset.sessionId || null;
@@ -794,7 +794,7 @@ class Launchpad {
     /**
      * Toggle the manual unread flag for one running-session row.
      *
-     * Description: Optimistic-ish — awaits the PATCH, then forces a
+     * Description: Optimistic-ish - awaits the PATCH, then forces a
      *   re-render by invalidating the signature cache and re-fetching, so
      *   the toggle's visual state (and the finished_unread dot it may
      *   flip on/off) updates immediately rather than waiting for the next
@@ -840,14 +840,14 @@ class Launchpad {
      *      (direct `tmux kill-session`, no adoption). This used to be
      *      adopt-then-destroy, but adoption refuses dead panes (raised
      *      `RuntimeError("pane already dead")` in tmux_backend.attach_existing,
-     *      surfacing as HTTP 500 from POST /sessions/adopt) — leaving any
+     *      surfacing as HTTP 500 from POST /sessions/adopt) - leaving any
      *      session whose foreground process exited permanently un-killable
      *      from the UI. The dedicated external-destroy endpoint sidesteps
      *      adoption entirely and is also idempotent if the session is
      *      already gone server-side.
      */
     /**
-     * v0.7.1 — Inline-edit a running session's name from the launchpad row.
+     * v0.7.1 - Inline-edit a running session's name from the launchpad row.
      *
      * Replaces the row's name span with a text input pre-filled with the
      * current tmux name. Enter saves (calls PATCH /sessions/{id}/name);
@@ -863,7 +863,7 @@ class Launchpad {
     _handleRenameRunningSession(rowEl, sessionId, currentName) {
         const nameEl = rowEl.querySelector('.running-session-name');
         if (!nameEl) return;
-        // Idempotent — bail if an input is already showing in this row.
+        // Idempotent - bail if an input is already showing in this row.
         if (rowEl.querySelector('.running-session-rename-input')) return;
 
         // Build the input + inline error label.
@@ -919,7 +919,7 @@ class Launchpad {
                 cleanup();
                 // Immediate refresh so the row paints the new name without
                 // waiting on the 5s poller. The WS broadcast (received by
-                // the terminal controller) ALSO triggers a refresh —
+                // the terminal controller) ALSO triggers a refresh -
                 // duplicate calls are idempotent; the load itself is
                 // signature-diffed inside renderRunningSessions.
                 await this.loadRunningSessions();
@@ -1005,7 +1005,7 @@ class Launchpad {
     /**
      * Adopt flow for a not-yet-attached running tmux session (row click).
      *
-     * Multi-session: this is purely additive — adopting this tmux session
+     * Multi-session: this is purely additive - adopting this tmux session
      * does NOT detach or kill any other session. On adopt success, dispatch
      * `session-created` with the adopt-specific detail payload
      * (initialScrollbackB64, fifoStartOffset, adopted:true) so
@@ -1027,7 +1027,7 @@ class Launchpad {
             if (session && session.working_dir) {
                 try {
                     // Strip the `cloude_` tmux-namespace prefix that
-                    // session_manager.py adds when minting the tmux name —
+                    // session_manager.py adds when minting the tmux name -
                     // otherwise Recent Projects ends up storing
                     // `cloude_<name>`, and the next launch double-prefixes
                     // it to `cloude_cloude_<name>`. The display name in
@@ -1077,7 +1077,7 @@ class Launchpad {
                      in the top header itself (App.showLaunchpad() ->
                      setHeaderIdentity(), client/js/app.js), centred, with
                      the prompt as the header's second row. Do not re-add
-                     them here — that would restore the standalone block's
+                     them here - that would restore the standalone block's
                      vertical cost this change removed. -->
 
                 <!-- LAUNCHPAD HELP. Lives at the TOP of the pane, under the
@@ -1285,7 +1285,7 @@ class Launchpad {
         // Event listeners
         // Note: the 6 speed-dial actions (create / open-folder /
         // clone-github / openclaw / hermes / console) are wired in
-        // setupNewFab() — the inline speed-dial sits to the right of the
+        // setupNewFab() - the inline speed-dial sits to the right of the
         // "running sessions" section heading on the launchpad screen.
 
         this.renderHomeBarVersion();
@@ -1536,7 +1536,7 @@ class Launchpad {
     /**
      * Open the edit-project modal for ``project`` and persist any changes.
      *
-     * Display name only — the folder on disk is never touched.
+     * Display name only - the folder on disk is never touched.
      */
     async editProject(project) {
         try {
@@ -1579,7 +1579,7 @@ class Launchpad {
      * ``null`` on cancel/escape/click-outside.
      *
      * Inline 409 conflicts are reported via ``API.updateProject`` rejecting
-     * with an error whose ``message`` contains "already exists" — handled
+     * with an error whose ``message`` contains "already exists" - handled
      * by ``editProject`` via ``showError``.
      */
     showEditProjectModal(project) {
@@ -1602,7 +1602,7 @@ class Launchpad {
                             <div class="modal-label">folder</div>
                             <div class="folder-picker-path">${escapeHtml(project.path)}</div>
                             <div class="modal-description">
-                                the folder on disk is never renamed — only the launcher label changes.
+                                the folder on disk is never renamed - only the launcher label changes.
                             </div>
                         </div>
                         <div class="modal-input-group">
@@ -1755,7 +1755,7 @@ class Launchpad {
     /**
      * Show confirmation modal.
      *
-     * Thin delegate to `App.showConfirmModal()` — that is the ONE
+     * Thin delegate to `App.showConfirmModal()` - that is the ONE
      * confirmation-modal implementation in the app (title/message
      * escaping, Escape/cancel/click-outside handling, focus management
      * all live there). Kept as a same-named method here purely so the
@@ -1767,7 +1767,7 @@ class Launchpad {
      * @param {string} [details] - Additional details (optional)
      * @param {string} [primaryLabel='confirm'] - Label for the primary (destructive / intent) button
      * @param {string} [secondaryLabel='cancel'] - Label for the safe no-op button
-     * @returns {Promise<boolean>} - True if confirmed, false if cancelled. Cancel is ALWAYS a no-op — callers must never map cancel to a destructive action.
+     * @returns {Promise<boolean>} - True if confirmed, false if cancelled. Cancel is ALWAYS a no-op - callers must never map cancel to a destructive action.
      */
     showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
         return window.App.showConfirmModal(title, message, details, primaryLabel, secondaryLabel);
@@ -1775,7 +1775,7 @@ class Launchpad {
 
     /**
      * Create new project with auto-generated workspace.
-     * Default behavior — server falls back to ProjectConfig.agent_type
+     * Default behavior - server falls back to ProjectConfig.agent_type
      * or "claude". Does NOT send agent_type in the payload.
      */
     async createNewSession() {
@@ -1792,11 +1792,11 @@ class Launchpad {
     }
 
     /**
-     * Create a plain "console" tmux session in ~/ running $SHELL — no
+     * Create a plain "console" tmux session in ~/ running $SHELL - no
      * Claude/codex/hermes/openclaw. For quick shell work straight from the
      * launchpad.
      *
-     * Auto-generates a name (console-<base36 ts>) — no modal prompt, since
+     * Auto-generates a name (console-<base36 ts>) - no modal prompt, since
      * a bare shell isn't a "project" in the conventional sense. Still
      * registers a Recent Projects entry so a killed pane can be relaunched
      * the same way every other create path works.
@@ -1871,7 +1871,7 @@ class Launchpad {
 
         try {
             // Gate: pick claude vs an OpenRouter model BEFORE asking for a
-            // project name. Keyboard-first, defaults to the last choice —
+            // project name. Keyboard-first, defaults to the last choice -
             // this is the hot path of every launch so it must be
             // dismissable in one keystroke. null = user cancelled the
             // whole launch.
@@ -1914,10 +1914,10 @@ class Launchpad {
             // Only include agent_type when explicitly set, so the server's
             // existing fallback chain (ProjectConfig.agent_type → "claude")
             // continues to work for the default "new-project" button.
-            // feat/launch-wrappers — a wrapper choice from the provider
+            // feat/launch-wrappers - a wrapper choice from the provider
             // modal (providerChoice.wrapperId) ONLY applies when no
             // explicit agentType was already forced by the caller (e.g.
-            // the openclaw/hermes/codex quick-connect buttons) — those
+            // the openclaw/hermes/codex quick-connect buttons) - those
             // win outright, matching the pre-wrappers precedence for
             // agent_type.
             if (agentType) {
@@ -1957,7 +1957,7 @@ class Launchpad {
             console.error('Launchpad: Failed to create session:', error);
 
             // If a session already exists, the user's stated intent was
-            // "create a new project" — carry it out immediately. The prior
+            // "create a new project" - carry it out immediately. The prior
             // tmux session is detached (not killed) and stays available in
             // the running-sessions list / banner for rejoin.
             if (error.message.includes('already running')) {
@@ -2119,7 +2119,7 @@ class Launchpad {
     }
 
     /**
-     * Show the "clone from github" modal — collects URL + parent dir +
+     * Show the "clone from github" modal - collects URL + parent dir +
      * description, calls the backend ``POST /projects/clone`` endpoint
      * (which runs ``gh repo clone``), then refreshes the project list and
      * lands the user in a session pointed at the freshly cloned folder.
@@ -2136,7 +2136,7 @@ class Launchpad {
         // Gate: pick claude vs an OpenRouter model BEFORE showing the clone
         // form. The backend's POST /projects/clone both clones the repo to
         // disk AND persists the project entry in one shot, so that request
-        // must never fire before the user has committed to launching —
+        // must never fire before the user has committed to launching -
         // null = cancelled, back to the launchpad, nothing touched.
         const providerChoice = await this.showProviderModal();
         if (!providerChoice) {
@@ -2169,7 +2169,7 @@ class Launchpad {
                             spellcheck="false"
                         />
                         <div class="modal-description">
-                            paste the full url or use gh shorthand (owner/repo). server runs <code>gh repo clone</code> — gh must be authenticated.
+                            paste the full url or use gh shorthand (owner/repo). server runs <code>gh repo clone</code> - gh must be authenticated.
                         </div>
                     </div>
                     <div class="modal-input-group">
@@ -2279,11 +2279,11 @@ class Launchpad {
                     parentDir,
                     description: description || undefined,
                 });
-                // Success — refresh project list, close modal, open session
+                // Success - refresh project list, close modal, open session
                 // in the cloned dir. selectProject does the heavy lifting.
                 await this.loadProjects();
                 closeModal();
-                // Provider already chosen above — pass it through so
+                // Provider already chosen above - pass it through so
                 // selectProject doesn't prompt a second time.
                 await this.selectProject({
                     name: project.name,
@@ -2364,7 +2364,7 @@ class Launchpad {
     /**
      * Detach from the existing session (tmux keeps running) and create a
      * fresh one. Mirror of ``detachAndOpenProject`` for the "new project"
-     * path — prior session lingers and can be re-adopted later.
+     * path - prior session lingers and can be re-adopted later.
      */
     async detachAndCreateNew(agentType = null) {
         try {
@@ -2388,7 +2388,7 @@ class Launchpad {
     }
 
     /**
-     * Canonical tmux-name <-> URL-slug matcher — the ONE place that decides
+     * Canonical tmux-name <-> URL-slug matcher - the ONE place that decides
      * whether a decoded deep-link slug refers to a given running session.
      *
      * Description: used by BOTH directions of the deep-link feature so
@@ -2399,12 +2399,12 @@ class Launchpad {
      *       URL slug (`claude-config-sync-2`).
      *     - INBOUND (resolve): this method calls the SAME
      *       `_deriveRunningSessionDisplayName()` on every candidate row
-     *       and compares against the decoded slug — exact match first,
+     *       and compares against the decoded slug - exact match first,
      *       then case-insensitive fallback.
      *   Previously these two directions used the same helper already, so
      *   a prefix-stripping mismatch was ruled out as the root cause of
      *   the duplicate-session regression (see openProjectByName()'s
-     *   docstring) — but keeping the comparison here, in one function,
+     *   docstring) - but keeping the comparison here, in one function,
      *   means that stays true by construction instead of by coincidence.
      * Inputs:
      *   slug (string) - decoded, regex-validated name from the URL.
@@ -2424,29 +2424,29 @@ class Launchpad {
      *
      * ROOT CAUSE of the duplicate-session regression: this method used to
      * check `this.projects` (launcher entries) FIRST and, on a match, call
-     * `selectProject()` — which unconditionally calls
+     * `selectProject()` - which unconditionally calls
      * `window.API.createSession()`. `create_session()` server-side
      * (src/core/session_manager.py) deliberately NEVER attaches to an
-     * existing tmux session for a project click — "a project click must
+     * existing tmux session for a project click - "a project click must
      * ALWAYS spawn a NEW session... the user runs multiple concurrent
-     * sessions per directory" — so on a name collision it silently mints
+     * sessions per directory" - so on a name collision it silently mints
      * `<name>-2`, `<name>-3`, etc. and returns THAT. A deep link to a
      * project that already had a live tmux session therefore always
      * created a fresh duplicate rather than reattaching, and the browser
      * ended up on the newly-created session's URL. The name<->slug
      * mapping itself (`_deriveRunningSessionDisplayName`, see
      * `_findRunningSessionBySlug()` above) was already shared correctly
-     * between build and resolve — it was never reached, because the
+     * between build and resolve - it was never reached, because the
      * launcher-project branch returned first.
      *
      * FIX: live sessions are now resolved FIRST, and a launcher-project
      * match is no longer used to justify creating a session for a deep
-     * link at all — see the GUARD note below.
+     * link at all - see the GUARD note below.
      *
      * Resolution order:
      *   1. `GET /sessions/list` / `GET /sessions/attachable` (via
      *      `loadRunningSessions()`) for a LIVE session whose slug
-     *      matches (`_findRunningSessionBySlug()`) — this covers both an
+     *      matches (`_findRunningSessionBySlug()`) - this covers both an
      *      already-adopted session (jump straight to its terminal) and
      *      an un-adopted but running tmux session (adopt it via the same
      *      path as a running-sessions row click). NEITHER branch creates
@@ -2457,7 +2457,7 @@ class Launchpad {
      *
      * GUARD: this method deliberately does NOT fall back to
      * `this.projects` / `selectProject()` on a miss, even though a
-     * launcher project with that name may exist — doing so would call
+     * launcher project with that name may exist - doing so would call
      * `createSession()`, which is exactly the regression above. Deep-link
      * resolution must never create a session; a launcher-project name
      * match with no corresponding live tmux session is indistinguishable
@@ -2475,7 +2475,7 @@ class Launchpad {
         this._resolvingDeepLink = true;
         try {
             // Refresh the running-sessions list so we aren't racing the 5s
-            // poller — a deep link can arrive well before the first poll
+            // poller - a deep link can arrive well before the first poll
             // tick, and can also be a session with no launcher project
             // entry at all (external/adopted).
             try {
@@ -2496,7 +2496,7 @@ class Launchpad {
                 return;
             }
 
-            // No live session anywhere — GUARD (see docstring above): do
+            // No live session anywhere - GUARD (see docstring above): do
             // NOT consult this.projects to create one. Show the actual
             // banner, not a silent bounce to `/` and not a browser
             // alert() (Task 5 / deep-link fix).
@@ -2541,7 +2541,7 @@ class Launchpad {
             }
 
             // Gate: pick claude vs an OpenRouter model BEFORE persisting
-            // anything. null = user cancelled the whole launch — abort
+            // anything. null = user cancelled the whole launch - abort
             // cleanly with no project entry written to config.json (avoids
             // orphaning a project row for a session that was never created).
             const providerChoice = await this.showProviderModal();
@@ -2563,7 +2563,7 @@ class Launchpad {
             // Refresh project list so the new entry shows up at the top
             await this.loadProjects();
 
-            // Open the project (provider already chosen above — pass it
+            // Open the project (provider already chosen above - pass it
             // through so selectProject doesn't prompt a second time).
             await this.selectProject({
                 name: savedName,
@@ -2622,7 +2622,7 @@ class Launchpad {
                         <input type="text" class="folder-picker-path modal-input" id="folder-picker-path"
                                spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"
                                aria-label="directory path"
-                               placeholder="type a path then Enter — created if it doesn't exist">
+                               placeholder="type a path then Enter - created if it doesn't exist">
                         <div class="folder-picker-status" id="folder-picker-status" role="status" aria-live="polite"></div>
                         <div class="folder-picker-toolbar">
                             <button class="folder-picker-toolbar-btn" id="folder-picker-up" title="go to parent directory">⬆ up</button>
@@ -2761,7 +2761,7 @@ class Launchpad {
             });
 
             // Modal-wide key handling (capture phase so it works no matter
-            // which child holds focus). Removed on close — no listener leak.
+            // which child holds focus). Removed on close - no listener leak.
             const onKeyDown = (e) => {
                 if (e.key === 'Escape') {
                     e.preventDefault();
@@ -2842,7 +2842,7 @@ class Launchpad {
      * @param {{model: string|null}|undefined} [providerChoice] - Pass a
      *   already-resolved choice when the caller gated its own pre-session
      *   side effect (e.g. persisting a new project entry) on the provider
-     *   modal first — avoids prompting the user twice. Omit to have this
+     *   modal first - avoids prompting the user twice. Omit to have this
      *   function show the modal itself (existing-project paths).
      */
     async selectProject(project, providerChoice = undefined) {
@@ -2852,7 +2852,7 @@ class Launchpad {
         // the `_resolvingDeepLink` docstring in the constructor and
         // `openProjectByName()`'s docstring). This is what makes the
         // "deep-link resolution must never create" invariant explicit in
-        // code rather than an accident of call order — openProjectByName()
+        // code rather than an accident of call order - openProjectByName()
         // no longer calls this method at all, but this clause exists so a
         // future refactor that re-wires them together fails loudly (a
         // thrown error surfaced to the deep-link error banner) instead of
@@ -2870,7 +2870,7 @@ class Launchpad {
 
         try {
             // Gate: pick claude vs an OpenRouter model BEFORE opening the
-            // project. null = user cancelled the whole launch — abort
+            // project. null = user cancelled the whole launch - abort
             // cleanly, no session created, no error toast.
             if (providerChoice === undefined) {
                 providerChoice = await this.showProviderModal();
@@ -2885,7 +2885,7 @@ class Launchpad {
 
             // Create session with project path (no template copying for existing projects).
             // Include current xterm cell grid dims so the tmux pane is birthed
-            // at the right size — see the "new project" path for rationale.
+            // at the right size - see the "new project" path for rationale.
             const _dims = this._getTerminalDims();
             const payload = {
                 working_dir: project.path,
@@ -2898,7 +2898,7 @@ class Launchpad {
             if (providerChoice.model) {
                 payload.model = providerChoice.model;
             }
-            // feat/launch-wrappers — see _createNewSessionInner's identical
+            // feat/launch-wrappers - see _createNewSessionInner's identical
             // comment; this path has no explicit agentType to defer to.
             if (providerChoice.wrapperId) {
                 payload.agent_type = providerChoice.wrapperId;
@@ -2940,7 +2940,7 @@ class Launchpad {
 
             // Wait a moment, then open project. The brief delay lets the
             // server finish clearing its backend handles before the new
-            // create-session call lands — avoids a race where we try to
+            // create-session call lands - avoids a race where we try to
             // create while the old backend is still tearing down.
             setTimeout(() => this.selectProject(project), 500);
         } catch (error) {

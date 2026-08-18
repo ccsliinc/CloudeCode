@@ -1,5 +1,5 @@
 /**
- * AgentWrappersView — pure render functions for the wrappers settings
+ * AgentWrappersView - pure render functions for the wrappers settings
  * screen (feat/universal-wrappers). No state, no fetching, no event
  * wiring: every function takes data and returns an HTML string, so the
  * grouping rules are readable in one place and testable without a DOM.
@@ -11,7 +11,7 @@
  * ONE SCREEN, EVERY FAMILY
  * ------------------------
  * Wrappers used to be claude-only. A wrapper now declares a `family`
- * (claude, codex, hermes, openclaw, shell — see src/core/agent_families.py)
+ * (claude, codex, hermes, openclaw, shell - see src/core/agent_families.py)
  * and this screen renders ONE GROUP PER FAMILY: its wrappers, an add
  * button scoped to that family, and the family's legacy static command as
  * a collapsed advanced row.
@@ -19,7 +19,7 @@
  * The family list is NEVER hardcoded here. It arrives with every wrapper
  * API response (`families`, built from the server-side registry), so
  * adding a family server-side reaches this screen with no JS edit at all
- * — which is the whole point of the registry.
+ * - which is the whole point of the registry.
  *
  * Each family group renders even when EMPTY, because an empty group is
  * how a user discovers they can wrap codex at all. An empty group is

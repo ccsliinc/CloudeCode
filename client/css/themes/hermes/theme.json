@@ -1,7 +1,7 @@
 {
   "id": "hermes",
   "name": "Hermes",
-  "description": "8-bit amber-on-black retro terminal — gold accents, CRT glow.",
+  "description": "8-bit amber-on-black retro terminal - gold accents, CRT glow.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

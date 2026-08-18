@@ -1,4 +1,4 @@
-/* Claw theme — cosmic dark + coral red.
+/* Claw theme - cosmic dark + coral red.
    Starfield is rendered with two stacked radial-gradient patterns on body::before
    so the CPU cost is zero (rasterized once, never animates). */
 
@@ -40,7 +40,7 @@
   z-index: 1;
 }
 
-/* Subtle red glow on the destroy button — coral signature. */
+/* Subtle red glow on the destroy button - coral signature. */
 :root[data-theme="claw"] .btn-destroy:hover {
   box-shadow: 0 0 16px rgba(255, 91, 91, 0.40);
 }
