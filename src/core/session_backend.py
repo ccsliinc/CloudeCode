@@ -26,6 +26,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core.tmux_listing import TmuxListing
+
 logger = structlog.get_logger()
 
 
@@ -141,13 +143,16 @@ class SessionBackend(ABC):
         raise NotImplementedError("This backend does not support rehydration")
 
     @abstractmethod
-    def discover_existing(self) -> List[str]:
+    def discover_existing(self) -> TmuxListing:
         """Enumerate backend-owned sessions that survived a server restart.
 
         Returns:
-            List of session names/ids. For tmux, names are the full tmux
-            session names (``cloude_<slug>``). For PTY, always empty - PTYs
-            die with the parent.
+            TmuxListing: ``.sessions`` holds session names/ids (for tmux,
+            the full ``cloude_<slug>`` names; for PTY, always empty - PTYs
+            die with the parent). ``.ok`` is False when the backend could
+            not enumerate at all, and an ``ok=False`` result carries no
+            rows and must never drive a prune or a state transition. See
+            :mod:`src.core.tmux_listing`.
 
         Callers (i.e. `SessionManager.lifespan_startup`) MUST treat the return
         value as advisory: at most ONE session is re-registered as the active
@@ -157,8 +162,13 @@ class SessionBackend(ABC):
 
     def list_attachable_sessions(
         self, owned_names: Optional[set] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> TmuxListing:
         """Return all sessions on this backend's addressable surface.
+
+        The result is a :class:`~src.core.tmux_listing.TmuxListing`, not a
+        bare list: an empty ``sessions`` with ``ok=True`` means genuinely
+        no sessions, while ``ok=False`` means the probe could not answer
+        and the caller must render "cannot determine", never zero.
 
         Intended for the "Adopt an external session" UI flow (Track 1): list
         every tmux session reachable on our dedicated socket and flag which

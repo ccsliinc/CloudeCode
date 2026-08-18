@@ -27,6 +27,7 @@ from src.models import (
     DirectoryEntry,
     MkdirRequest,
     AttachableSession,
+    AttachableListingStatus,
     AdoptSessionRequest,
     AdoptSessionResponse,
     ThemeManifest,
@@ -49,6 +50,7 @@ from src.models import (
     WrapperListResponse,
     WrapperExamplesResponse,
 )
+from src.core.tmux_listing import coerce_listing
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
@@ -345,10 +347,44 @@ async def list_attachable_sessions(request: Request):
     offers self-adopt as a valid action (the client also filters defensively).
     Each row carries ``created_by_cloude`` sourced from the SessionManager's
     persisted ``owned_tmux_sessions`` set - not a spoofable prefix match.
+
+    THREE OUTCOMES, NOT TWO. A 200 with ``[]`` means tmux was asked and
+    genuinely has no adoptable sessions. When the probe could not run at
+    all this returns **503** with an ``AttachableListingStatus`` detail
+    rather than an empty 200, because an empty 200 is a claim we have no
+    evidence for and the client cannot tell the two apart. Every existing
+    JS consumer already treats a thrown call as "not proof the session is
+    gone" (see ``terminal.js::_attemptReconnectByName``), so the failure
+    is honest at the wire and safe at the callers.
+
+    Inputs:
+        request: the incoming request, for ``app.state.session_manager``.
+
+    Output:
+        List[AttachableSession]: adoptable rows, self-adopt filtered out.
+
+    Raises:
+        HTTPException: 503 when the tmux listing could not be determined.
     """
     session_manager = request.app.state.session_manager
 
-    sessions = session_manager.list_attachable_sessions()
+    listing = coerce_listing(session_manager.list_attachable_sessions())
+    if not listing.ok:
+        logger.warning(
+            "attachable_route_listing_unavailable",
+            reason=listing.reason,
+            detail=listing.detail,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=AttachableListingStatus(
+                listing_reason=listing.reason or "probe_error",
+                listing_detail=listing.detail,
+            ).model_dump(),
+        )
+    sessions = [
+        {**row, **listing.row_status_payload()} for row in listing.sessions
+    ]
 
     # Filter out EVERY tmux name currently bound to a live backend so the
     # UI never offers self-adopt for any open session (the client also
@@ -484,12 +520,19 @@ async def _apply_session_theme(
         active_name = getattr(session_manager.backend, "tmux_session", None)
         if active_name:
             known_names.add(active_name)
+    # A failed probe only SHRINKS ``known_names`` here, and the union
+    # already contains the owned set and every live backend, so the worst
+    # case is a 404 on a name we could not confirm - a refusal, never a
+    # silent wrong write. Logged so the degraded input is visible.
     try:
-        for row in session_manager.list_attachable_sessions():
-            n = row.get("name")
-            if n:
-                known_names.add(n)
-    except Exception as exc:
+        theme_listing = coerce_listing(session_manager.list_attachable_sessions())
+        if not theme_listing.ok:
+            logger.warning(
+                "session_theme_attachable_probe_unavailable",
+                reason=theme_listing.reason,
+            )
+        known_names |= set(theme_listing.names)
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.warning("session_theme_attachable_probe_failed", error=str(exc))
 
     if session_name not in known_names:

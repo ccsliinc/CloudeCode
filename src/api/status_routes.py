@@ -39,6 +39,7 @@ from src.api.auth import require_auth
 from src.config import settings
 from src.core import server_status
 from src.core.tmux_backend import DEFAULT_SOCKET_NAME
+from src.core.tmux_listing import coerce_listing
 
 logger = structlog.get_logger()
 
@@ -150,18 +151,31 @@ def ownership_by_name(session_manager: Any) -> Dict[str, bool]:
 
     Returns:
         tmux name -> bool. A name absent from the mapping is reported to
-        the client as unknown, never as False.
+        the client as unknown, never as False. An EMPTY map is therefore
+        already the third outcome for this section: every row renders
+        "ownership unknown" rather than "external". That is why an
+        unavailable listing returns ``{}`` here instead of raising - the
+        snapshot's other sections are still measurable and each tmux row
+        keeps its own honest unknown.
     """
     lister = getattr(session_manager, "list_attachable_sessions", None)
     if not callable(lister):
         return {}
     try:
-        rows: List[Dict[str, Any]] = lister()
+        listing = coerce_listing(lister())
     except (OSError, ValueError, RuntimeError) as exc:
         logger.warning("server_status_ownership_unavailable", error=str(exc))
         return {}
+    if not listing.ok:
+        logger.warning(
+            "server_status_ownership_unavailable",
+            reason=listing.reason,
+            detail=listing.detail,
+            note="every tmux row will report ownership as unknown",
+        )
+        return {}
     out: Dict[str, bool] = {}
-    for row in rows or []:
+    for row in listing.sessions:
         name = row.get("name")
         if name and "created_by_cloude" in row:
             out[name] = bool(row["created_by_cloude"])

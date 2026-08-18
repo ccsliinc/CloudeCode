@@ -50,6 +50,13 @@ from typing import Any, Callable, Dict, List, Optional
 import structlog
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.tmux_listing import (
+    REASON_PROBE_ERROR,
+    REASON_TIMEOUT,
+    REASON_TMUX_MISSING,
+    TmuxListing,
+    classify_listing_failure,
+)
 from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
 
@@ -59,6 +66,15 @@ logger = structlog.get_logger()
 # Module-scope constants (not in config.json) so they're easy to find in code.
 # If we ever want to expose these, wire through `AuthConfig.session` - for now
 # the values below are battle-tested defaults.
+
+#: Wall-clock budget for a one-shot ENUMERATION call (list-sessions /
+#: list-panes). These three run on the request path - the launchpad polls
+#: them every few seconds - so a tmux server wedged on a stuck socket must
+#: not hold an HTTP worker open indefinitely. On expiry the probe reports
+#: ``ok=False, reason='timeout'`` rather than an empty list, per the
+#: THREE-OUTCOME RULE. Only the listing calls take it; write/attach paths
+#: are deliberately left unbounded because they are not poll-driven.
+LIST_TIMEOUT_SECONDS: float = 5.0
 
 #: Rotate the pipe-pane log once it passes 10 MiB.
 MAX_LOG_BYTES: int = 10 * 1024 * 1024
@@ -340,8 +356,27 @@ class TmuxBackend(SessionBackend):
         *args: str,
         stdin_bytes: Optional[bytes] = None,
         check: bool = True,
+        timeout: Optional[float] = None,
     ) -> tuple[int, bytes, bytes]:
-        """Sync variant for use in `is_alive`, `discover_existing`, etc."""
+        """Sync variant for use in `is_alive`, `discover_existing`, etc.
+
+        Inputs:
+            *args: tmux arguments appended to ``self._tmux_base()``.
+            stdin_bytes: optional bytes to pipe to the process.
+            check: log a debug line on a non-zero exit.
+            timeout: wall-clock budget in seconds, or None for unbounded.
+                The three enumeration methods pass
+                ``LIST_TIMEOUT_SECONDS`` because they run on the polled
+                request path.
+
+        Output:
+            tuple[int, bytes, bytes]: returncode, stdout, stderr.
+
+        Raises:
+            subprocess.TimeoutExpired: when ``timeout`` elapses. Callers
+                on the listing path catch this and report
+                ``ok=False, reason='timeout'`` - never an empty list.
+        """
         import subprocess
 
         argv = self._tmux_base() + list(args)
@@ -350,6 +385,7 @@ class TmuxBackend(SessionBackend):
             input=stdin_bytes,
             capture_output=True,
             check=False,
+            timeout=timeout,
         )
         if check and proc.returncode != 0:
             logger.debug(
@@ -952,14 +988,112 @@ class TmuxBackend(SessionBackend):
         inst._is_external = True
         return inst
 
+    def _run_listing(self, *args: str) -> tuple[Optional[TmuxListing], str]:
+        """Run one ENUMERATION tmux command and split the two outcomes apart.
+
+        Description: The single gate every listing method goes through, so
+            the "tmux is absent / timed out / errored" branches cannot
+            drift apart between the three of them. Returns a ready-made
+            failure ``TmuxListing`` OR decoded stdout, never both. A
+            ``no_server`` exit is NOT a failure and comes back as a
+            successful empty listing (see
+            :func:`src.core.tmux_listing.classify_listing_failure`).
+
+        Inputs:
+            *args (str): tmux arguments appended to ``self._tmux_base()``.
+
+        Output:
+            tuple[Optional[TmuxListing], str]: when the first element is
+                not None it is the FINAL result and the caller must return
+                it verbatim (it may be a legitimate empty answer with
+                ``ok=True, reason='no_server'``). When it is None, the
+                second element is tmux's decoded stdout, ready to parse.
+
+        Example:
+            >>> failure, text = backend._run_listing("list-sessions", "-F", "#S")
+            >>> failure is None
+            True
+        """
+        import subprocess
+
+        if not shutil.which("tmux"):
+            # Not "zero sessions" - we have no way to ask the question.
+            return (
+                TmuxListing.unavailable(
+                    REASON_TMUX_MISSING, detail="tmux not found on PATH"
+                ),
+                "",
+            )
+
+        try:
+            rc, out, err = self._run_tmux_sync(
+                *args, check=False, timeout=LIST_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "tmux_listing_timeout",
+                argv=args,
+                socket=self.socket_name,
+                timeout_seconds=LIST_TIMEOUT_SECONDS,
+            )
+            return (
+                TmuxListing.unavailable(
+                    REASON_TIMEOUT,
+                    detail=f"tmux did not answer within {LIST_TIMEOUT_SECONDS}s",
+                ),
+                "",
+            )
+        except OSError as exc:
+            logger.warning(
+                "tmux_listing_probe_error",
+                argv=args,
+                socket=self.socket_name,
+                error=str(exc),
+            )
+            return (
+                TmuxListing.unavailable(REASON_PROBE_ERROR, detail=str(exc)),
+                "",
+            )
+
+        if rc != 0:
+            stderr_text = err.decode("utf-8", errors="replace")
+            listing = classify_listing_failure(rc, stderr_text)
+            if not listing.ok:
+                # A non-zero exit we could NOT read as "no server" is a
+                # real error. Warn, because the alternative history of
+                # this code silently called it zero sessions.
+                logger.warning(
+                    "tmux_listing_unavailable",
+                    argv=args,
+                    socket=self.socket_name,
+                    returncode=rc,
+                    reason=listing.reason,
+                    stderr=stderr_text.strip()[:200],
+                )
+            return listing, ""
+
+        return None, out.decode("utf-8", errors="replace")
+
     def list_attachable_sessions(
         self, owned_names: Optional[set] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> TmuxListing:
         """Enumerate tmux sessions on our socket for the adopt UI.
 
         Runs ``tmux -L <socket> list-sessions -F
         '#{session_name}|#{session_created}|#{session_windows}'`` and
-        splits each line on ``|``. No server running / no sessions → [].
+        splits each line on ``|``.
+
+        Inputs:
+            owned_names (Optional[set]): names this app persisted as its
+                own, used to resolve ``created_by_cloude``.
+
+        Output:
+            TmuxListing: ``ok=True`` with one dict row per session when
+                the probe ran (``sessions=[]`` with
+                ``reason='no_server'`` is a real answer of zero);
+                ``ok=False`` with ``sessions=[]`` when tmux is missing,
+                timed out, or failed - the caller must not read that as
+                zero sessions.
 
         ``created_by_cloude`` is set by cross-referencing each name
         against ``owned_names`` (the SessionManager-persisted set of
@@ -971,22 +1105,23 @@ class TmuxBackend(SessionBackend):
 
         If ``owned_names`` contains a name that's NOT in the live tmux
         listing, log a WARN (stale metadata - the reconciler should
-        prune, but we surface it here too for observability).
-        """
-        if not shutil.which("tmux"):
-            return []
+        prune, but we surface it here too for observability). That WARN
+        is only meaningful on a listing that ran, so it is skipped
+        entirely on the unavailable path.
 
-        rc, out, _ = self._run_tmux_sync(
+        Example:
+            >>> backend.list_attachable_sessions(owned_names=set()).ok
+            True
+        """
+        failure, stdout_text = self._run_listing(
             "list-sessions",
             "-F",
             "#{session_name}|#{session_created}|#{session_windows}",
-            check=False,
         )
-        if rc != 0:
-            # Exit 1 w/ "no server running" - expected when no sessions yet.
-            return []
+        if failure is not None:
+            return failure
 
-        raw_lines = out.decode("utf-8", errors="replace").splitlines()
+        raw_lines = stdout_text.splitlines()
         live_names: set = set()
         results: List[Dict[str, Any]] = []
 
@@ -1035,7 +1170,7 @@ class TmuxBackend(SessionBackend):
                     note="reconciler should prune these on next startup",
                 )
 
-        return results
+        return TmuxListing.answered(results)
 
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""
@@ -1254,7 +1389,7 @@ class TmuxBackend(SessionBackend):
         except ValueError:
             return None
 
-    def list_pane_status_all(self) -> List[Dict[str, Any]]:
+    def list_pane_status_all(self) -> TmuxListing:
         """Bulk-query activity status for every pane on this tmux server.
 
         Description: One ``list-panes -a`` call across the WHOLE dedicated
@@ -1268,16 +1403,19 @@ class TmuxBackend(SessionBackend):
         Inputs: none (reads ``self.socket_name``).
 
         Output:
-            List[Dict[str, Any]]: One row per LIVE tmux session on the
-                socket, each ``{"name": str, "pane_dead": str,
+            TmuxListing: ``ok=True`` with one row per LIVE tmux session on
+                the socket, each ``{"name": str, "pane_dead": str,
                 "pane_current_command": str, "pid": Optional[int],
                 "status": str}``. ``status`` is pre-resolved via
                 ``resolve_pane_status()`` so callers never touch the raw
-                fields unless they want to. Empty list when no server /
-                no sessions is running (not an error case).
+                fields unless they want to. ``ok=True, sessions=[],
+                reason='no_server'`` when no server is running (a real
+                answer of zero). ``ok=False`` when the probe could not
+                run at all, in which case callers must fall back to
+                ``STATUS_UNKNOWN`` rather than to "no panes".
 
         Example:
-            >>> backend.list_pane_status_all()
+            >>> backend.list_pane_status_all().sessions
             [{'name': 'cloude_myproj', 'pane_dead': '0',
               'pane_current_command': 'claude', 'pid': 4821,
               'status': 'running'}]
@@ -1288,23 +1426,18 @@ class TmuxBackend(SessionBackend):
         # for settings (see _resolve_pipe_path).
         from src.core.session_status import resolve_pane_status
 
-        if not shutil.which("tmux"):
-            return []
-
-        rc, out, _ = self._run_tmux_sync(
+        failure, stdout_text = self._run_listing(
             "list-panes",
             "-a",
             "-F",
             "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}",
-            check=False,
         )
-        if rc != 0:
-            # "no server running" - expected when no sessions exist yet.
-            return []
+        if failure is not None:
+            return failure
 
         seen: set = set()
         results: List[Dict[str, Any]] = []
-        for line in out.decode("utf-8", errors="replace").splitlines():
+        for line in stdout_text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -1330,7 +1463,7 @@ class TmuxBackend(SessionBackend):
                 "pid": pid_val,
                 "status": resolve_pane_status(pane_dead, current_command),
             })
-        return results
+        return TmuxListing.answered(results)
 
     async def rename_session(self, new_name: str) -> None:
         """Rename this tmux session in-place via ``rename-session``.
@@ -1386,22 +1519,39 @@ class TmuxBackend(SessionBackend):
         )
         self.tmux_session = new_name
 
-    def discover_existing(self) -> List[str]:
-        """List all ``cloude_*`` sessions on our dedicated socket."""
-        if not shutil.which("tmux"):
-            return []
-        rc, out, _ = self._run_tmux_sync(
+    def discover_existing(self) -> TmuxListing:
+        """List all ``cloude_*`` sessions on our dedicated socket.
+
+        Description: The startup reconciler's only view of live tmux
+            state. It PRUNES persisted ownership against this answer, so
+            a wrong empty here is not a display bug - it silently
+            destroys the user's ownership records. That is why the
+            unavailable case must stay distinguishable from zero.
+
+        Inputs: none (reads ``self.socket_name``).
+
+        Output:
+            TmuxListing: ``ok=True`` with ``sessions`` a list of
+                ``cloude_``-prefixed session names (empty list plus
+                ``reason='no_server'`` means genuinely none);
+                ``ok=False`` when the probe could not run, in which case
+                the caller MUST NOT prune or clear anything.
+
+        Example:
+            >>> backend.discover_existing().sessions
+            ['cloude_myproj']
+        """
+        failure, stdout_text = self._run_listing(
             "list-sessions",
             "-F",
             "#{session_name}",
-            check=False,
         )
-        if rc != 0:
-            # Exit code 1 with "no server running" is expected when no
-            # sessions exist yet.
-            return []
-        names = out.decode("utf-8", errors="replace").splitlines()
-        return [n.strip() for n in names if n.strip().startswith(SESSION_PREFIX)]
+        if failure is not None:
+            return failure
+        names = stdout_text.splitlines()
+        return TmuxListing.answered(
+            [n.strip() for n in names if n.strip().startswith(SESSION_PREFIX)]
+        )
 
     def capture_scrollback(self, lines: int = 3000) -> bytes:
         """Capture the pane's recent scrollback as raw bytes (UTF-8).

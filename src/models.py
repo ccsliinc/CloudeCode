@@ -617,6 +617,61 @@ class AttachableSession(BaseModel):
         default=False,
         description="True if this tmux session has an unread Stop or a manual unread pin",
     )
+    # THREE-OUTCOME RULE - provenance of the listing this row came out of.
+    # A row that EXISTS was always produced by a probe that ran, so these
+    # default to the answered case; they are carried anyway so a client
+    # holding a single row can tell what kind of listing produced it
+    # without threading the envelope alongside. The "could not evaluate"
+    # outcome has no rows at all by construction and is reported by the
+    # route as HTTP 503 with an ``AttachableListingStatus`` body - see
+    # ``GET /sessions/attachable``.
+    listing_ok: bool = Field(
+        default=True,
+        description="True when the tmux probe that produced this row actually ran",
+    )
+    listing_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Why the listing turned out the way it did: null = listed "
+            "normally, 'no_server' = tmux reported no server (a real zero), "
+            "'not_applicable' = non-tmux backend"
+        ),
+    )
+
+
+class AttachableListingStatus(BaseModel):
+    """The body of a "could not determine the session list" response.
+
+    Returned as the ``detail`` of an HTTP 503 from
+    ``GET /sessions/attachable`` when the tmux probe did not produce an
+    answer. It deliberately carries no ``sessions`` array: the whole
+    point is that we do not know what the sessions are, and shipping an
+    empty one alongside a failure flag invites a client to read the
+    array and ignore the flag - which is how this bug shipped the first
+    time.
+
+    ``listing_ok`` is always False here. A successful listing is the
+    plain ``List[AttachableSession]`` 200 response instead.
+    """
+    listing_ok: bool = Field(
+        default=False,
+        description="Always False - this model exists only for the unknown case",
+    )
+    listing_reason: str = Field(
+        ...,
+        description=(
+            "Machine-readable cause: 'tmux_missing' | 'timeout' | "
+            "'probe_error' | 'exit_<returncode>'"
+        ),
+    )
+    listing_detail: Optional[str] = Field(
+        default=None,
+        description="Human-readable detail (trimmed tmux stderr or exception text)",
+    )
+    message: str = Field(
+        default="tmux session listing could not be determined",
+        description="Display string for a client that has no reason mapping",
+    )
 
 
 class AdoptSessionRequest(BaseModel):

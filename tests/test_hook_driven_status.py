@@ -421,7 +421,9 @@ def test_list_attachable_sessions_maps_tmux_status_with_unread(monkeypatch, tmp_
     monkeypatch.setattr(
         "src.core.session_manager.build_backend", lambda *a, **k: _FakeProbe()
     )
-    rows = mgr.list_attachable_sessions()
+    listing = mgr.list_attachable_sessions()
+    assert listing.ok is True
+    rows = listing.sessions
     assert len(rows) == 1
     # No hook can ever fire for a session with no live backend - honest
     # tmux-fallback mapping, decorated with the persisted unread flag.

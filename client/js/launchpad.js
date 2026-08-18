@@ -299,15 +299,30 @@ class Launchpad {
      * each bucket, newest first by ``created_at_epoch``.
      */
     async loadRunningSessions() {
+        // Reset the verdict for this poll tick. It is set to "not ok" by
+        // either fetch below and consumed by renderRunningSessions().
+        this.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
         try {
             const list = await window.API.listAttachableSessions();
-            this.runningSessions = Array.isArray(list) ? list : [];
+            if (Array.isArray(list)) {
+                this.runningSessions = list;
+            } else {
+                // A 200 whose body is not an array is not an empty list,
+                // it is an unparseable one. Saying zero here would be
+                // the same invented verdict as the catch below.
+                this.runningSessions = [];
+                this._noteListingUnknown('attachable', 'malformed_response',
+                    'the server did not return a session array');
+            }
         } catch (err) {
-            // Surface the failure loud + observable in DevTools instead of
-            // swallowing it - a silent catch here was masking 401s / CORS /
-            // stale-cache bugs where mobile browsers would render an empty
-            // section with zero diagnostic trail. Keep the [] fallback so
-            // the rest of the render pipeline stays stable.
+            // THIS IS THE THIRD OUTCOME, NOT A LOG LINE. The previous
+            // version of this catch logged loudly and then fell back to
+            // `[]`, which is worse than a silent catch: the console tells
+            // the truth while the screen renders a dead tmux server as a
+            // healthy machine with zero sessions, and the loud log made
+            // the problem LOOK solved. A failed probe is the absence of
+            // an answer, so the row set stays empty AND the section is
+            // marked not-evaluated so the user sees "cannot determine".
             //
             // Status extraction: the `call()` wrapper in api.js throws
             // Error("HTTP <code>") for non-401s and Error("Authentication
@@ -339,6 +354,9 @@ class Launchpad {
                 } catch (_) { /* non-fatal */ }
             }
             this.runningSessions = [];
+            this._noteListingUnknown('attachable',
+                this._listingReasonFromError(err, status),
+                this._listingDetailFromError(err, status));
         }
         // Augment with EVERY currently-live session, which the server
         // filters out of /sessions/attachable to prevent self-adopt.
@@ -407,7 +425,21 @@ class Launchpad {
                 }
             }
         } catch (err) {
-            // 404 = no active session, fine
+            // A 404 from GET /sessions IS an answer: there is no active
+            // session. Anything else is not - it is a merge that did not
+            // run, so the row set below is INCOMPLETE and may be missing
+            // every currently-open session. The old bare
+            // `// 404 = no active session, fine` treated both the same
+            // and let a failed merge render as "these are all your
+            // sessions".
+            const status = (err && typeof err.status === 'number') ? err.status : null;
+            if (status !== 404) {
+                console.error('[launchpad] live-session merge failed:',
+                    status !== null ? `status=${status}` : '(no status)', err);
+                this._noteListingUnknown('live',
+                    this._listingReasonFromError(err, status),
+                    this._listingDetailFromError(err, status));
+            }
         }
         // Sort: active first, then owned, then external; within each, newest first
         this.runningSessions.sort((a, b) => {
@@ -418,6 +450,139 @@ class Launchpad {
             return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
         });
         this.renderRunningSessions();
+    }
+
+    /**
+     * Record that one of the two session probes did not produce an answer.
+     *
+     * Description: Latches ``runningSessionsListing.ok`` to false for this
+     *   poll tick. Once false it never flips back within the tick - a
+     *   second probe succeeding does not un-break the first, because the
+     *   row set is still incomplete.
+     * Inputs: source (string) - 'attachable' | 'live', which fetch failed.
+     *   reason (string) - short machine token, mirrors the server's
+     *   TmuxListing reason vocabulary where one is available.
+     *   detail (string|null) - human text for the row's second line.
+     * Output: undefined. Mutates ``this.runningSessionsListing``.
+     * Example: this._noteListingUnknown('attachable', 'timeout', '...');
+     */
+    _noteListingUnknown(source, reason, detail) {
+        if (!this.runningSessionsListing) {
+            this.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
+        }
+        const st = this.runningSessionsListing;
+        st.ok = false;
+        if (!st.reason) st.reason = reason || 'probe_error';
+        if (!st.detail) st.detail = detail || null;
+        if (st.sources.indexOf(source) === -1) st.sources.push(source);
+    }
+
+    /**
+     * Derive a machine-readable reason token from a rejected API call.
+     *
+     * Description: Prefers the server's own ``listing_reason`` (shipped in
+     *   the structured 503 detail from GET /sessions/attachable, preserved
+     *   on ``err.detail`` by api.js) so the client repeats the server's
+     *   verdict rather than inventing a parallel one. Falls back to the
+     *   transport-level facts we do have.
+     * Inputs: err (Error) - the rejection. status (number|null) - HTTP
+     *   status already parsed by the caller.
+     * Output: string - e.g. 'tmux_missing', 'timeout', 'exit_2',
+     *   'unauthorized', 'http_500', 'network_error'.
+     * Example: this._listingReasonFromError(err, 503) // 'timeout'
+     */
+    _listingReasonFromError(err, status) {
+        const d = err && err.detail;
+        if (d && typeof d === 'object' && typeof d.listing_reason === 'string' && d.listing_reason) {
+            return d.listing_reason;
+        }
+        if (status === 401) return 'unauthorized';
+        if (typeof status === 'number' && status > 0) return `http_${status}`;
+        return 'network_error';
+    }
+
+    /**
+     * Derive the human explanation shown under a CANNOT DETERMINE row.
+     *
+     * Description: Same precedence as ``_listingReasonFromError`` - the
+     *   server's own ``listing_detail`` or ``message`` wins, because it
+     *   knows things the browser cannot (which tmux command failed, what
+     *   stderr said). Never returns an empty string; a blank cell is not
+     *   an explanation.
+     * Inputs: err (Error) - the rejection. status (number|null) - HTTP
+     *   status already parsed by the caller.
+     * Output: string - one short sentence.
+     * Example: this._listingDetailFromError(err, 0) // 'the server could not be reached'
+     */
+    _listingDetailFromError(err, status) {
+        const d = err && err.detail;
+        if (d && typeof d === 'object') {
+            if (typeof d.listing_detail === 'string' && d.listing_detail) return d.listing_detail;
+            if (typeof d.message === 'string' && d.message) return d.message;
+        }
+        if (status === 401) return 'sign in again to see your sessions';
+        if (status === 503) return 'the server could not read the tmux session list';
+        if (typeof status === 'number' && status > 0) return `the server answered HTTP ${status}`;
+        if (err && typeof err.message === 'string' && err.message) return err.message;
+        return 'the server could not be reached';
+    }
+
+    /**
+     * Build the NEEDS ATTENTION block shown when a probe did not answer.
+     *
+     * Description: The visible half of the three-outcome rule. It is a
+     *   plain informational row and deliberately carries NO action
+     *   controls - no close, no remove, no restart. An action against a
+     *   session whose existence we cannot confirm either does nothing or
+     *   does something to the wrong thing, and offering it would tell the
+     *   user we know more than we do.
+     * Inputs: none (reads ``this.runningSessionsListing``).
+     * Output: string - HTML, or '' when the listing is fine.
+     * Example: lp._renderListingAttentionHtml()
+     */
+    _renderListingAttentionHtml() {
+        const st = this.runningSessionsListing;
+        if (!st || st.ok) return '';
+        const reason = this._escapeHtml(st.reason || 'probe_error');
+        const detail = this._escapeHtml(
+            st.detail || 'the server could not be reached');
+        const which = st.sources && st.sources.length
+            ? this._escapeHtml(st.sources.join(' + '))
+            : 'session';
+        return `
+                <div class="running-sessions-attention" role="status" data-listing-ok="0" data-listing-reason="${reason}">
+                  <div class="running-sessions-attention__head">NEEDS ATTENTION</div>
+                  <div class="running-sessions-attention__title">CANNOT DETERMINE which sessions are running</div>
+                  <div class="running-sessions-attention__detail">${detail} (${which} probe, ${reason})</div>
+                  <div class="running-sessions-attention__note">any sessions listed below may be incomplete, and none are shown as stopped</div>
+                </div>
+            `;
+    }
+
+    /**
+     * Paint the count line beside the "running sessions" heading.
+     *
+     * Description: The heading must never assert a number the app did not
+     *   measure. When a probe failed it says so in words instead, which
+     *   is the difference between "you have no sessions" and "I could not
+     *   find out".
+     * Inputs: none (reads ``this.runningSessions`` and
+     *   ``this.runningSessionsListing``).
+     * Output: undefined. Writes ``#running-sessions-count`` textContent.
+     * Example: lp._updateRunningSessionsCount()
+     */
+    _updateRunningSessionsCount() {
+        const el = document.getElementById('running-sessions-count');
+        if (!el) return;
+        const st = this.runningSessionsListing;
+        if (st && !st.ok) {
+            el.textContent = 'count could not be determined';
+            el.setAttribute('data-listing-ok', '0');
+            return;
+        }
+        const n = (this.runningSessions || []).length;
+        el.textContent = n === 1 ? '1 running' : `${n} running`;
+        el.setAttribute('data-listing-ok', '1');
     }
 
     /**
@@ -432,7 +597,26 @@ class Launchpad {
         const container = document.getElementById('running-sessions-list');
         if (!container) return;
         const section = document.getElementById('running-sessions-section');
+        const listing = this.runningSessionsListing || { ok: true, reason: null };
+        const attentionHtml = this._renderListingAttentionHtml();
         if (!this.runningSessions || this.runningSessions.length === 0) {
+            // ZERO ROWS IS TWO DIFFERENT SITUATIONS. With a listing that
+            // ran, it means the user has no sessions and the section
+            // hides, as it always has. With a listing that did NOT run it
+            // means we do not know, and hiding the section would render
+            // "cannot determine" as "nothing to see" - the exact false
+            // green this whole change exists to remove. So the unknown
+            // case SHOWS the section carrying only the attention block.
+            if (!listing.ok) {
+                const unknownSig = `unknown:${listing.reason || ''}:${listing.detail || ''}`;
+                if (this._lastRunningSig !== unknownSig) {
+                    this._lastRunningSig = unknownSig;
+                    if (section) section.style.display = '';
+                    container.innerHTML = attentionHtml;
+                }
+                this._updateRunningSessionsCount();
+                return;
+            }
             // Only rewrite the DOM when transitioning into the empty state -
             // repeated renders while already empty would thrash the
             // section's display flip for no reason.
@@ -441,6 +625,7 @@ class Launchpad {
                 if (section) section.style.display = 'none';
                 container.innerHTML = '';
             }
+            this._updateRunningSessionsCount();
             return;
         }
         // Signature-diff: skip the innerHTML rewrite when the set of rows
@@ -449,21 +634,25 @@ class Launchpad {
         // CSS animations every tick, which visibly flickered. Age labels
         // still need updating each tick, so we punt those through a
         // cheap text-only DOM update instead.
-        const sig = JSON.stringify(this.runningSessions.map(s => ({
-            name: s.name,
-            owned: !!s.created_by_cloude,
-            active: !!s.is_active,
-            sid: s.session_id || null,
-            status: s.status || 'unknown',
-            unread: !!s.unread,
-        })));
+        const sig = JSON.stringify({
+            listing: [listing.ok, listing.reason || '', listing.detail || ''],
+            rows: this.runningSessions.map(s => ({
+                name: s.name,
+                owned: !!s.created_by_cloude,
+                active: !!s.is_active,
+                sid: s.session_id || null,
+                status: s.status || 'unknown',
+                unread: !!s.unread,
+            })),
+        });
         if (sig === this._lastRunningSig) {
             this._updateRunningSessionAges();
+            this._updateRunningSessionsCount();
             return;
         }
         this._lastRunningSig = sig;
         if (section) section.style.display = '';
-        container.innerHTML = this.runningSessions.map(s => {
+        container.innerHTML = attentionHtml + this.runningSessions.map(s => {
             const owned = !!s.created_by_cloude;
             const displayName = this._deriveRunningSessionDisplayName(s.name);
             const ageStr = s.created_at_epoch ? this._formatRelativeTime(s.created_at_epoch) : '';
@@ -519,6 +708,7 @@ class Launchpad {
                 </div>
             `;
         }).join('');
+        this._updateRunningSessionsCount();
         // Idempotent - re-calling after subsequent renders is a no-op
         // because the listener is bound to the (stable) container element,
         // not the (re-painted) row children, and the flag gates re-bind.
@@ -1145,6 +1335,7 @@ class Launchpad {
                         <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
                             <span class="launchpad-section-chevron" aria-hidden="true">►</span>
                             <span class="launchpad-section-title__text">running sessions</span>
+                            <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
                         </button>
                         <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" title="New" aria-haspopup="menu" aria-expanded="false">

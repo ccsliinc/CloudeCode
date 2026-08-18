@@ -2437,6 +2437,58 @@ body.home-header-active {
     margin-bottom: 1.5rem;
 }
 
+/* Count / state line beside the "running sessions" heading. It renders a
+ * measured number, or the words "count could not be determined" when a
+ * probe did not answer - never a fabricated zero. The [data-listing-ok]
+ * attribute is what the not-determined styling keys off, so the state is
+ * never colour-only. */
+.launchpad-section-count {
+    flex: 0 0 auto;
+    margin-left: 8px;
+    font-size: 0.78rem;
+    opacity: 0.66;
+    white-space: nowrap;
+}
+
+.launchpad-section-count[data-listing-ok="0"] {
+    color: var(--color-warning, #d79921);
+    opacity: 1;
+}
+
+/* NEEDS ATTENTION block: the visible form of "could not evaluate". It sits
+ * at the top of the list, carries no action controls on purpose (see
+ * _renderListingAttentionHtml in launchpad.js), and is styled as a notice
+ * rather than a session row so it is never mistaken for one. */
+.running-sessions-attention {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning, #d79921);
+    background: var(--color-accent-bg-soft);
+    cursor: default;
+}
+
+.running-sessions-attention__head {
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: var(--color-warning, #d79921);
+}
+
+.running-sessions-attention__title {
+    margin-top: 3px;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.running-sessions-attention__detail,
+.running-sessions-attention__note {
+    margin-top: 3px;
+    font-size: 0.74rem;
+    opacity: 0.75;
+    word-break: break-word;
+}
+
 .running-session-row {
     display: flex;
     flex-direction: column;
