@@ -1,7 +1,7 @@
 {
   "id": "alien",
   "name": "Alien",
-  "description": "Nostromo MOTHER 6000 — phosphor green on ink black, hazard yellow on industrial grey.",
+  "description": "Nostromo MOTHER 6000 \u2014 phosphor green on ink black, hazard yellow on industrial grey.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -92,6 +92,7 @@
     "brightWhite": "#ccffd0"
   },
   "themeCss": "theme.css",
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/scifi-drone.m4a",
     "srcFallback": "/static/assets/audio/scifi-drone.ogg",

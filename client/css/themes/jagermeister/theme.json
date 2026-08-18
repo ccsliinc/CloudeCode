@@ -1,6 +1,6 @@
 {
   "id": "jagermeister",
-  "name": "Jägermeister",
+  "name": "J\u00e4germeister",
   "description": "Forest-bottle green + heritage orange. 1878 ritual gravitas.",
   "author": "Cloude Code",
   "version": "1.0.0",
@@ -97,6 +97,7 @@
     "brightCyan": "#7aaa9a",
     "brightWhite": "#ffffff"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/dungeon-ambience.m4a",
     "srcFallback": "/static/assets/audio/dungeon-ambience.ogg",
