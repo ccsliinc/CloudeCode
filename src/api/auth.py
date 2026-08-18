@@ -22,6 +22,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
+from src.api import projects_service
 from src.models import (
     VerifyTOTPRequest,
     AuthTokenResponse,
@@ -703,131 +704,189 @@ async def get_totp_qr():
 @router.get("/projects", response_model=list[ProjectResponse], dependencies=[Depends(require_auth)])
 async def get_projects():
     """
-    Get list of configured projects.
+    Get the project list from the AUTHORITATIVE source.
+
+    feat/db-is-authoritative. This route used to read config.json. It now
+    reads the ``projects`` table, which is keyed ``UNIQUE(root)`` and
+    therefore returns ONE entry per unique folder - the fix for the
+    launcher drawing three nodes for
+    ``/Users/jsugamele/Development/ses_ec5bf2a3`` and expanding the same
+    two child sessions under each of them.
+
+    Each row now carries its ``id``, so the launcher attaches child
+    sessions by row id straight from this response instead of looking the
+    id up in a second request keyed by raw path - the lookup that made
+    duplicate-path entries share children in the first place.
+
+    THREE OUTCOMES, and this route never collapses them:
+      - the database answered: rows served, authoritative;
+      - the database is unreachable: config.json's entries are served,
+        deduplicated by root, and GET /projects/authority reports
+        ``mode: config_fallback`` with writes refused;
+      - the database is readable but empty while config.json is not:
+        config.json's entries are served and the mode says
+        ``db_empty_config_has``, never an empty list that would render as
+        "you have no projects".
+
+    A client that needs to know WHICH of those it is calls
+    GET /projects/authority. This route always returns a list, because a
+    launcher that cannot draw anything is a worse failure than one that
+    draws the user's projects with a banner over them.
 
     Returns:
-        List of projects from config
-
-    Raises:
-        HTTPException: If config loading fails
+        list[ProjectResponse] - never raises for a datastore fault.
     """
-    try:
-        auth_config = settings.load_auth_config()
+    view = projects_service.current_view(settings)
 
-        projects = [
-            ProjectResponse(
-                name=p.name,
-                path=p.path,
-                description=p.description
-            )
-            for p in auth_config.projects
-        ]
-
-        logger.debug("projects_retrieved", count=len(projects))
-
-        return projects
-
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
+    if view.degraded:
+        logger.warning(
+            "projects_served_degraded",
+            mode=view.mode,
+            detail=view.detail,
+            count=len(view.projects),
         )
-    except Exception as e:
-        logger.error("projects_retrieval_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve projects: {str(e)}"
-        )
+    else:
+        logger.debug("projects_retrieved", count=len(view.projects))
+
+    return projects_service.views_to_responses(view, ProjectResponse)
+
+
+@router.get("/projects/authority", dependencies=[Depends(require_auth)])
+async def get_projects_authority() -> dict:
+    """
+    Report which source is authoritative right now, and any disagreement.
+
+    feat/db-is-authoritative. Two questions, one answer, because they are
+    only useful together:
+
+    1. WHERE IS THE LIST COMING FROM. ``mode`` is one of ``db`` (the
+       normal case, writes allowed), ``config_fallback`` (cloude.db is
+       unreachable, the list is config.json's, writes refused) or
+       ``db_empty_config_has`` (the database is fine but holds no
+       projects while config.json does - not a claim that you have none).
+
+    2. DO THE TWO SOURCES AGREE. ``diff`` names every project present in
+       only one of them and every field that differs between them.
+       Disagreement is REPORTED, never resolved silently by picking a
+       winner: the database stays authoritative, and this route says so
+       in ``diff.authoritative`` while still naming what config.json
+       holds that the database does not.
+
+       ``diff`` is ``null`` - and ``diff_state`` is ``cannot_determine``
+       - whenever the database could not be read. An empty diff object
+       would render as "the two agree", which is a verdict nobody
+       measured.
+
+       ``duplicate_config_roots`` is reported separately from
+       ``only_in_config``, because a config entry sharing a root with
+       another is EXPECTED to have no row: the import kept the first and
+       recorded the rest in ``meta.imported_from_json_result``. Listing
+       an expected absence as a discrepancy trains the reader to ignore
+       the report.
+
+    Returns:
+        dict - ``{"mode", "writable", "degraded", "message", "detail",
+        "project_count", "diff", "diff_state", "config_path"}``.
+    """
+    return projects_service.authority_payload(settings)
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=201, dependencies=[Depends(require_auth)])
 async def create_project(body: CreateProjectRequest):
     """
-    Add a new project to the configuration.
+    Add a new project.
+
+    feat/db-is-authoritative. Writes the ``projects`` table, then
+    refreshes config.json as a rollback snapshot. In that order: the
+    snapshot describes a committed transaction, never a pending one.
 
     Args:
-        body: Project creation parameters
+        body: Project creation parameters.
 
     Returns:
-        Created project object
+        Created project object.
 
     Raises:
-        HTTPException: If project creation fails
+        HTTPException 400: a project with that display name already exists.
+        HTTPException 409: a project already exists at that folder. This
+            is the refusal that keeps the launcher showing one node per
+            folder; it is 409 rather than 400 because the request is
+            well-formed and the conflict is with existing state.
+        HTTPException 503: cloude.db is unreachable, so the write is
+            refused rather than being applied to config.json alone.
     """
+    from contextlib import closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict,
+        ProjectRootConflict,
+        create_project as db_create_project,
+    )
+
+    projects_service.guard_writable(settings)
+
     try:
-        # Create ProjectConfig object
-        project = ProjectConfig(
-            name=body.name,
-            path=body.path,
-            description=body.description
-        )
-
-        # Save to config file
-        settings.save_project(project)
-
-        logger.info("project_created", name=project.name, path=project.path)
-
-        return ProjectResponse(
-            name=project.name,
-            path=project.path,
-            description=project.description
-        )
-
-    except ValueError as e:
+        with closing(projects_service.open_db_or_503(settings)) as conn:
+            row = db_create_project(
+                conn,
+                name=body.name,
+                path=body.path,
+                description=body.description,
+            )
+    except ProjectRootConflict as e:
+        logger.warning("project_creation_root_conflict", path=body.path, error=str(e))
+        raise HTTPException(status_code=409, detail=str(e))
+    except ProjectNameConflict as e:
         logger.warning("project_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
-        )
-    except Exception as e:
-        logger.error("project_creation_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create project: {str(e)}"
-        )
+
+    projects_service.finish_write(settings)
+    logger.info("project_created", name=row["display_name"], path=row["raw_path"])
+
+    return ProjectResponse(
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
+    )
 
 
 @router.delete("/projects/{project_name}", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def delete_project(project_name: str):
     """
-    Delete a project from the configuration.
+    Remove a project from the launcher.
+
+    feat/db-is-authoritative. Deletes the ``projects`` row, then
+    refreshes config.json. The folder on disk is never touched.
 
     Args:
-        project_name: Name of the project to delete
+        project_name: Display name of the project to remove.
 
     Returns:
-        Success response
+        Success response.
 
     Raises:
-        HTTPException: If project deletion fails
+        HTTPException 404: no project carries that display name.
+        HTTPException 409: more than one does, so the name does not
+            identify a single project. Never resolved by deleting the
+            first match.
+        HTTPException 503: cloude.db is unreachable.
     """
-    try:
-        # Delete from config file
-        settings.delete_project(project_name)
+    from contextlib import closing
 
-        logger.info("project_deleted", name=project_name)
+    from src.core.project_writes import delete_project as db_delete_project
 
-        return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
+    projects_service.guard_writable(settings)
 
-    except ValueError as e:
-        logger.warning("project_deletion_failed_validation", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
-        )
-    except Exception as e:
-        logger.error("project_deletion_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete project: {str(e)}"
-        )
+    with closing(projects_service.open_db_or_503(settings)) as conn:
+        target = projects_service.resolve_target(conn, project_name)
+        db_delete_project(conn, target["id"])
+
+    projects_service.finish_write(settings)
+    logger.info("project_deleted", name=project_name, root=target["root"])
+
+    return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
 
 
 @router.patch(
@@ -839,8 +898,11 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
     """
     Update a project's display name and/or description.
 
-    Display name only - the folder on disk is never touched. After a rename,
-    subsequent calls must use the NEW name (the URL path identifier changes).
+    feat/db-is-authoritative. Writes the ``projects`` row, then refreshes
+    config.json. Display name only - the folder on disk is never touched,
+    and ``projects.root`` is never rewritten, so a rename cannot move a
+    project onto another project's identity. After a rename, subsequent
+    calls must use the NEW name (the URL path identifier changes).
 
     Args:
         project_name: Current display name (URL path).
@@ -853,58 +915,57 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
     Raises:
         HTTPException 400: if no fields are supplied.
         HTTPException 404: if no project named ``project_name`` exists.
-        HTTPException 409: if ``new_name`` collides with another project.
+        HTTPException 409: if ``new_name`` collides with another project,
+            or if ``project_name`` matches more than one project.
+        HTTPException 503: cloude.db is unreachable.
     """
+    from contextlib import closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict,
+        update_project as db_update_project,
+    )
+
     if body.new_name is None and body.description is None:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    projects_service.guard_writable(settings)
+
     try:
-        updated = settings.update_project(project_name, body.new_name, body.description)
-
-        logger.info(
-            "project_updated",
-            old_name=project_name,
-            new_name=updated.name,
-            description_changed=body.description is not None,
-        )
-
-        return ProjectResponse(
-            name=updated.name,
-            path=updated.path,
-            description=updated.description,
-        )
-
-    except KeyError:
-        logger.warning("project_update_not_found", name=project_name)
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{project_name}' not found",
-        )
-    except ValueError as e:
-        if "name conflict" in str(e):
-            logger.warning(
-                "project_update_name_conflict",
-                old_name=project_name,
+        with closing(projects_service.open_db_or_503(settings)) as conn:
+            target = projects_service.resolve_target(conn, project_name)
+            row = db_update_project(
+                conn,
+                target["id"],
                 new_name=body.new_name,
+                description=body.description,
             )
-            raise HTTPException(
-                status_code=409,
-                detail=f"A project named '{body.new_name}' already exists",
-            )
-        logger.warning("project_update_failed_validation", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first.",
+    except ProjectNameConflict:
+        logger.warning(
+            "project_update_name_conflict",
+            old_name=project_name,
+            new_name=body.new_name,
         )
-    except Exception as e:
-        logger.error("project_update_error", error=str(e))
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update project: {str(e)}",
+            status_code=409,
+            detail=f"A project named '{body.new_name}' already exists",
         )
+
+    projects_service.finish_write(settings)
+    logger.info(
+        "project_updated",
+        old_name=project_name,
+        new_name=row["display_name"],
+        description_changed=body.description is not None,
+    )
+
+    return ProjectResponse(
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
+    )
 
 
 @router.post(
@@ -979,7 +1040,13 @@ async def clone_project_from_github(body: CloneProjectRequest):
         )
 
     # 5. Refuse if a project with the same display name already exists.
-    if settings.get_project(project_name) is not None:
+    #    feat/db-is-authoritative: asks the authoritative source, not
+    #    config.json. A name that exists only in a stale config.json is
+    #    not a conflict, and a name that exists only in the database
+    #    would have been missed by the old check and then failed at the
+    #    write with a 500 instead of this 409.
+    _clone_view = projects_service.guard_writable(settings)
+    if any(p["name"] == project_name for p in _clone_view.projects):
         raise HTTPException(
             status_code=409,
             detail=f"A project named '{project_name}' already exists",
@@ -1046,37 +1113,49 @@ async def clone_project_from_github(body: CloneProjectRequest):
             detail=f"gh clone failed: {err[:500]}",
         )
 
-    # 8. Register as a project. The cloned dir stays on disk even if the
-    # config write fails - user can retry via "open project from folder".
-    project_cfg = ProjectConfig(
-        name=project_name,
-        path=str(target),
-        description=body.description,
+    # 8. Register as a project in the AUTHORITATIVE table, then refresh
+    # the config.json rollback snapshot. The cloned dir stays on disk
+    # even if registration fails - the user can retry via "open project
+    # from folder".
+    from contextlib import closing as _closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict as _NameConflict,
+        ProjectRootConflict as _RootConflict,
+        create_project as _db_create_project,
     )
+
     try:
-        settings.save_project(project_cfg)
-    except ValueError as e:
-        # Defensive - step 5 already checked, but a race could squeeze in.
-        logger.warning("project_save_collision_after_clone", name=project_name, error=str(e))
-        raise HTTPException(status_code=409, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first.",
+        with _closing(projects_service.open_db_or_503(settings)) as _conn:
+            row = _db_create_project(
+                _conn,
+                name=project_name,
+                path=str(target),
+                description=body.description,
+            )
+    except (_NameConflict, _RootConflict) as e:
+        # Defensive - step 5 already checked the name, but a race could
+        # squeeze in, and only the database can catch a ROOT collision.
+        logger.warning(
+            "project_save_collision_after_clone", name=project_name, error=str(e)
         )
+        raise HTTPException(status_code=409, detail=str(e))
+
+    projects_service.finish_write(settings)
 
     logger.info(
         "project_cloned_from_github",
-        name=project_cfg.name,
-        path=project_cfg.path,
+        name=row["display_name"],
+        path=row["raw_path"],
         repo_url=body.repo_url,
     )
 
     return ProjectResponse(
-        name=project_cfg.name,
-        path=project_cfg.path,
-        description=project_cfg.description,
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
     )
 
 

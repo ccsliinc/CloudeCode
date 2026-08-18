@@ -28,6 +28,7 @@ from src.core.db_models import (
     DDL_V1,
     DDL_V2,
     DDL_V3,
+    DDL_V4,
     META_CREATED_AT,
     META_SCHEMA_VERSION,
 )
@@ -107,6 +108,39 @@ def _step_v2_to_v3(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Add ``projects.last_opened_at``, the launcher's ordering key.
+
+    Description: feat/db-is-authoritative. Purely additive - one nullable
+      column on ``projects``, no index - so a v3 reader that has not been
+      upgraded keeps working against the same file and every existing row
+      simply carries NULL.
+
+      IDEMPOTENT BY INSPECTION, NOT BY THE STATEMENT, exactly as v2 -> v3
+      is: SQLite's ``ALTER TABLE ADD COLUMN`` has no ``IF NOT EXISTS``, so
+      PRAGMA table_info is read first and the step no-ops when the column
+      is already there. That is what makes a retry after an INTERRUPTED
+      trail entry safe by construction.
+
+      A database that has never reached v3 has no ``projects`` table at
+      all, which cannot happen here - the chain runs in order and v0 -> v1
+      creates it - but the PRAGMA on a missing table returns no rows
+      rather than raising, so the guard degrades to attempting the ALTER
+      and surfacing SQLite's own error inside the caller's transaction
+      rather than corrupting anything.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v3_to_v4(conn)  # after _step_v2_to_v3
+    """
+    existing = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(projects)")
+    }
+    if "last_opened_at" in existing:
+        return
+    for statement in DDL_V4:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -115,6 +149,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _step_v0_to_v1,
     1: _step_v1_to_v2,
     2: _step_v2_to_v3,
+    3: _step_v3_to_v4,
 }
 
 

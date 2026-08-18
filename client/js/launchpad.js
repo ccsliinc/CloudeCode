@@ -8,6 +8,11 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // feat/db-is-authoritative - the provenance report for the list
+        // above: which source answered, and whether cloude.db and
+        // config.json agree. null means the check has not answered, which
+        // the banner renders as CANNOT DETERMINE, never as healthy.
+        this.projectAuthority = null;
         // feat/projects-table (S3) - presence for each DB-tracked project,
         // keyed by the project's raw config path (matches config.json's
         // ProjectConfig.path, which is also what the DB import stored
@@ -309,11 +314,15 @@ class Launchpad {
     async loadProjects() {
         try {
             this.projects = await window.API.getProjects();
-            // Presence is fetched (and merged) BEFORE the first paint so
-            // a missing/unreachable project never flashes as normal for
-            // one frame - renderProjectList() reads this.projectPresence
-            // synchronously, so it has to be populated first.
-            await this.loadProjectPresence();
+            // Presence and authority are BOTH fetched before the first
+            // paint so neither a missing project nor a degraded datastore
+            // flashes as normal for one frame - renderProjectList() reads
+            // this.projectPresence and this.projectAuthority
+            // synchronously, so both have to be populated first.
+            await Promise.all([
+                this.loadProjectPresence(),
+                this.loadProjectAuthority(),
+            ]);
             this.renderProjectList();
         } catch (error) {
             console.error('Launchpad: Failed to load projects:', error);
@@ -341,6 +350,78 @@ class Launchpad {
      * mirrored here: failing to LOAD presence is not evidence anything
      * is missing or unreachable.
      */
+    /**
+     * Fetch which source the project list came from, and any DB/config
+     * disagreement, for the banner renderProjectList() draws.
+     *
+     * feat/db-is-authoritative. Non-fatal, and its failure is its OWN
+     * state rather than an assumption of health: a failed fetch sets
+     * `projectAuthority` to null, which the banner renders as "could not
+     * determine which source is authoritative" - never as the healthy
+     * `db` mode. Assuming health here would reintroduce the exact false
+     * green the authority endpoint exists to expose.
+     *
+     * @returns {Promise<void>}
+     */
+    async loadProjectAuthority() {
+        try {
+            this.projectAuthority = await window.API.getProjectsAuthority();
+        } catch (error) {
+            console.warn('Launchpad: failed to load project authority:', error);
+            this.projectAuthority = null;
+        }
+    }
+
+    /**
+     * Build the banner that names the project list's provenance.
+     *
+     * Draws nothing in the healthy case - `mode: "db"` with the two
+     * sources agreeing is the steady state and does not need a badge.
+     * Draws in three other cases, each visually distinct:
+     *
+     *   - authority unknown (fetch failed): says so, claims nothing.
+     *   - degraded mode: names the mode, says writes are refused in
+     *     `config_fallback`, and carries the server's own message.
+     *   - sources disagree: lists what each side has that the other does
+     *     not, and states that the database is authoritative. Reporting
+     *     the disagreement and naming the winner are two separate
+     *     sentences on purpose - "the DB won" is not the same claim as
+     *     "there was nothing to win".
+     *
+     * @returns {string} - HTML, empty string when there is nothing to say.
+     */
+    _renderProjectAuthorityBannerHtml() {
+        const a = this.projectAuthority;
+        if (a === null || a === undefined) {
+            return `<div class="project-authority-banner project-authority-banner-unknown" data-authority-state="unknown">CANNOT DETERMINE which source these projects came from - the authority check did not answer. This is not a claim that anything is wrong, and not a claim that it is fine.</div>`;
+        }
+
+        let html = '';
+        if (a.degraded) {
+            const cls = a.mode === 'config_fallback'
+                ? 'project-authority-banner-fallback'
+                : 'project-authority-banner-empty';
+            html += `<div class="project-authority-banner ${cls}" data-authority-state="${this._escapeHtml(a.mode)}" data-writable="${a.writable ? 'true' : 'false'}">${this._escapeHtml(a.message || a.mode)}</div>`;
+        }
+
+        const d = a.diff;
+        if (d && !d.agree) {
+            const parts = [];
+            if (d.only_in_db && d.only_in_db.length) {
+                parts.push(`${d.only_in_db.length} only in the database (${d.only_in_db.map(x => x.display_name).join(', ')})`);
+            }
+            if (d.only_in_config && d.only_in_config.length) {
+                parts.push(`${d.only_in_config.length} only in config.json (${d.only_in_config.map(x => x.name).join(', ')})`);
+            }
+            if (d.field_mismatches && d.field_mismatches.length) {
+                parts.push(`${d.field_mismatches.length} field(s) differ`);
+            }
+            html += `<div class="project-authority-banner project-authority-banner-disagree" data-authority-state="disagree" data-difference-count="${d.difference_count}">cloude.db and config.json DISAGREE: ${this._escapeHtml(parts.join('; '))}. cloude.db is authoritative and is what you are seeing; config.json is the rollback snapshot and is currently out of step.</div>`;
+        }
+
+        return html;
+    }
+
     async loadProjectPresence() {
         this.projectPresence = new Map();
         try {
@@ -348,6 +429,13 @@ class Launchpad {
             if (result && result.status === 'ok' && Array.isArray(result.projects)) {
                 for (const row of result.projects) {
                     this.projectPresence.set(row.raw_path, row);
+                    // feat/db-is-authoritative - also index by normalised
+                    // root, which is what GET /projects now returns as a
+                    // project's identity. Indexing by raw_path alone made
+                    // the badge miss whenever the two spellings differed.
+                    if (row.root) {
+                        this.projectPresence.set(row.root, row);
+                    }
                 }
             }
         } catch (error) {
@@ -2230,11 +2318,18 @@ class Launchpad {
         const projectListEl = document.getElementById('project-list');
         if (!projectListEl) return;
 
+        // feat/db-is-authoritative - the provenance banner is drawn in
+        // BOTH the empty and populated cases. An empty list is exactly
+        // when the user most needs to know whether the datastore
+        // answered, because "no projects" and "could not read your
+        // projects" look identical without it.
+        const authorityHtml = this._renderProjectAuthorityBannerHtml();
+
         if (this.projects.length === 0) {
-            projectListEl.innerHTML = `
+            projectListEl.innerHTML = authorityHtml + `
                 <div class="launchpad-empty">
-                    no projects configured yet<br>
-                    <small style="color: #666;">edit config.json to add projects</small>
+                    no projects yet<br>
+                    <small style="color: #666;">use + new to add one</small>
                 </div>
             `;
             return;
@@ -2259,7 +2354,12 @@ class Launchpad {
             // states. The two states are never rendered the same way:
             // collapsing "your project is gone" and "I could not check"
             // into one look is the exact bug this table exists to kill.
-            const presenceRow = this.projectPresence.get(project.path);
+            // Presence is indexed by BOTH raw path and normalised root
+            // (see loadProjectPresence). Root is tried first because the
+            // authoritative project list is keyed by root, and two
+            // spellings of the same folder must resolve to one badge.
+            const presenceRow = (project.root && this.projectPresence.get(project.root))
+                || this.projectPresence.get(project.path);
             const presenceState = presenceRow ? presenceRow.presence : 'unchecked';
             const isDisabled = presenceState === 'missing' || presenceState === 'unreachable';
             let presenceBadge = '';
@@ -2275,14 +2375,27 @@ class Launchpad {
                 ? `project-item project-presence-disabled project-presence-${presenceState}`
                 : 'project-item';
 
-            // S8 - a project only has children when the datastore has
-            // assigned it an id (via GET /projects/presence, keyed by
-            // this same raw path) AND at least one running session
-            // resolved to that id. A project the DB has never seen
-            // (presenceRow undefined) cannot have children by
-            // construction, matching the "not yet probed" treatment
-            // above.
-            const projectId = presenceRow ? presenceRow.id : null;
+            // S8, revised by feat/db-is-authoritative - a project's row
+            // id now arrives ON THE PROJECT ITSELF, from GET /projects,
+            // which reads the authoritative `projects` table.
+            //
+            // It used to be looked up here in the PRESENCE map, keyed by
+            // raw config path. That is what produced the triplication:
+            // config.json carried three entries ("test pause",
+            // "ses_ec5bf2a3", "qqwe") all pointing at
+            // /Users/jsugamele/Development/ses_ec5bf2a3, all three found
+            // the SAME presence row, and all three therefore drew the
+            // same two child sessions. The list is now one entry per
+            // unique root by construction, so that cannot recur.
+            //
+            // `project.id` is null in the degraded config.json fallback -
+            // a config entry has no row - and null means "no children we
+            // can prove", never row 0. The presence map is still
+            // consulted as a fallback so a project the boot import has
+            // not reached yet still resolves.
+            const projectId = (project.id !== null && project.id !== undefined)
+                ? project.id
+                : (presenceRow ? presenceRow.id : null);
             const children = (projectId !== null && projectId !== undefined)
                 ? (groups.byProjectId.get(projectId) || [])
                 : [];
@@ -2317,7 +2430,7 @@ class Launchpad {
         const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
         const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
 
-        projectListEl.innerHTML = projectNodesHtml + noProjectHtml + attentionHtml;
+        projectListEl.innerHTML = authorityHtml + projectNodesHtml + noProjectHtml + attentionHtml;
 
         this._bindProjectNodeToggles();
         this._bindProjectSessionRowClicks();

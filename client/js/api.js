@@ -355,6 +355,31 @@ class API {
     }
 
     /**
+     * Projects: report which source is authoritative, and any disagreement.
+     *
+     * feat/db-is-authoritative. See GET /projects/authority
+     * (src/api/auth.py).
+     *
+     * `mode` is one of "db" (normal, writes allowed), "config_fallback"
+     * (cloude.db unreachable, list served from config.json, writes
+     * refused) or "db_empty_config_has" (database readable but holding
+     * no projects while config.json holds some - explicitly NOT a claim
+     * that the user has no projects).
+     *
+     * `diff` is null - and `diff_state` is "cannot_determine" - whenever
+     * the database could not be read. An empty diff object would render
+     * as "the two agree", which is a verdict nobody measured.
+     *
+     * @returns {Promise<{mode: string, writable: boolean,
+     *   degraded: boolean, message: string, detail: string|null,
+     *   project_count: number, diff: object|null,
+     *   diff_state: "known"|"cannot_determine", config_path: string}>}
+     */
+    async getProjectsAuthority() {
+        return await this.call('/projects/authority');
+    }
+
+    /**
      * Projects: Create new project
      * @param {object} params - {name: string, path: string, description?: string}
      * @returns {Promise<object>} - Project data

@@ -4236,3 +4236,45 @@ body.home-header-active {
     font-size: 0.74rem;
     opacity: 0.75;
 }
+
+/* feat/db-is-authoritative - the project list's provenance banner.
+ *
+ * Four states, four visibly distinct looks, because the whole point of
+ * the banner is that they must not be mistaken for each other:
+ *   unknown   the authority check did not answer. Neutral, not green.
+ *   fallback  cloude.db unreachable, list served from config.json,
+ *             writes refused. Danger - the app is degraded.
+ *   empty     database readable but holding no projects while
+ *             config.json holds some. Warning, not danger: nothing is
+ *             broken, but "no projects" is not what is being claimed.
+ *   disagree  both sources readable and they differ. Warning.
+ *
+ * The healthy case draws NOTHING. A banner that is always present is
+ * furniture and stops being read. */
+.project-authority-banner {
+    padding: 8px 10px;
+    margin: 0 0 10px 0;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.project-authority-banner-unknown {
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+}
+
+.project-authority-banner-fallback {
+    color: var(--color-danger);
+    background: var(--color-danger-bg-hover);
+    border: 1px solid var(--color-danger-border);
+}
+
+.project-authority-banner-empty,
+.project-authority-banner-disagree {
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+}

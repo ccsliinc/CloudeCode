@@ -348,14 +348,20 @@ def test_get_schema_version_is_documented_as_report_only() -> None:
 
 
 def test_real_v1_database_still_migrates_cleanly(tmp_path: Path) -> None:
-    """The production path must not regress. v1 populated -> v3 with backup."""
+    """The production path must not regress. v1 populated -> current, with backup."""
     _make_v1_populated(tmp_path, "1")
 
     state = ensure_db_migrated(tmp_path, config_version=4, app_version="0.0.0")
 
     assert state.status == STATUS_OK
     assert state.schema_version == CURRENT_SCHEMA_VERSION
-    assert state.migrations_applied == ["1->2", "2->3"]
+    # Derived from CURRENT_SCHEMA_VERSION rather than hardcoded, for the
+    # same reason tests/test_db_migration.py derives it: a hardcoded
+    # chain makes every additive step a test edit, which teaches the next
+    # person to edit the expectation without reading what it asserts.
+    assert state.migrations_applied == [
+        f"{v}->{v + 1}" for v in range(1, CURRENT_SCHEMA_VERSION)
+    ]
     assert state.backup_path, "a populated migration must take a backup"
     backups = list(tmp_path.glob("*.bak-*"))
     assert len(backups) == 1

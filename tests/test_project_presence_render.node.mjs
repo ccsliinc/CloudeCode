@@ -148,7 +148,28 @@ function makeLaunchpad() {
     };
     vm.createContext(context);
     vm.runInContext(read('client', 'js', 'launchpad.js'), context, { filename: 'launchpad.js' });
-    return { lp: context.window.Launchpad, getHtml };
+    const lp = context.window.Launchpad;
+    // feat/db-is-authoritative - renderProjectList() now also draws a
+    // provenance banner from `projectAuthority`, which a real page always
+    // has because loadProjects() awaits loadProjectAuthority() before the
+    // first paint. Leaving it null here would model a DIFFERENT scenario
+    // (the authority check itself failed), which is covered by
+    // tests/test_project_authority_render.node.mjs. These tests are about
+    // presence badges, so they arrange the healthy authority state and
+    // keep asserting over the whole rendered string.
+    lp.projectAuthority = {
+        mode: 'db',
+        writable: true,
+        degraded: false,
+        message: 'projects are served from cloude.db, which is authoritative.',
+        detail: null,
+        project_count: 1,
+        diff: { agree: true, authoritative: 'db', difference_count: 0,
+                only_in_db: [], only_in_config: [], field_mismatches: [],
+                duplicate_config_roots: [] },
+        diff_state: 'known',
+    };
+    return { lp, getHtml };
 }
 
 // ---------------------------------------------------------------------

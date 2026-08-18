@@ -346,6 +346,22 @@ shasum -a 256 Cloude.Code-0.8.1-arm64.dmg
 
 The DMG is code-signed but **not notarized**, so Gatekeeper will warn on first open.
 
+**Two files, two jobs, and neither one has a default.** `config.json` holds
+projects, agents, notifications and slash commands; `.env` holds the machine
+paths and the secrets. Skipping either is a hard startup failure with a
+specific message, not a silent degrade:
+
+| Missing | What you get |
+|---|---|
+| `config.json` | `FileNotFoundError: Auth config file not found: config.json`, and 26 test errors/failures if you run the suite |
+| `DEFAULT_WORKING_DIR` in `.env` | a `CONFIGURATION ERROR` banner naming the field, before the server binds |
+
+`DEFAULT_WORKING_DIR` is deliberately NOT in `config.example.json`. `Settings`
+reads it from the environment only (`src/config.py`), so a copy of it in
+`config.json` would be inert - a value that looks authoritative, is read by
+nothing, and disagrees with the real one the moment either changes. One home
+per setting.
+
 ### Path B — From source
 
 ```bash
@@ -355,6 +371,9 @@ cd cloudecode
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+cp config.example.json config.json   # projects, agents, notifications
+cp .env.example .env                 # then set DEFAULT_WORKING_DIR and LOG_DIRECTORY
 
 python3 setup_auth.py     # generates TOTP + JWT secrets, prints a QR, optional push setup
 ./start.sh                # python3 -m src.main, binds 0.0.0.0:8000

@@ -543,10 +543,25 @@ class CreateProjectRequest(BaseModel):
 
 
 class ProjectResponse(BaseModel):
-    """Response model for a project."""
+    """Response model for a project.
+
+    ``id`` and ``root`` were added by feat/db-is-authoritative. ``id`` is
+    the ``projects`` table row id, which the launcher uses to attach a
+    project's child sessions - previously it had to look that id up in a
+    SECOND request (GET /projects/presence) keyed by raw path, and two
+    config entries sharing a path therefore resolved to the same id and
+    drew the same children twice.
+
+    Both are Optional because the degraded config.json fallback has
+    neither: a config entry has no row and therefore no id. ``None`` there
+    is the honest answer and is rendered as "this project has no children
+    we can prove", never as row 0.
+    """
+    id: Optional[int] = Field(None, description="projects table row id, null in config fallback")
     name: str = Field(..., description="Project display name")
     path: str = Field(..., description="Project directory path")
     description: Optional[str] = Field(None, description="Project description")
+    root: Optional[str] = Field(None, description="Normalised project root, the identity key")
 
 
 class UpdateProjectRequest(BaseModel):

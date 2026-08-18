@@ -315,9 +315,15 @@ mutate "the v3 step is not idempotent, so an interrupted retry can never finish"
         return||=>||    if False:
         return'
 
+# Retargeted by feat/db-is-authoritative, which added the v3 -> v4 step
+# for projects.last_opened_at. The mutant's INTENT is unchanged - bump the
+# constant WITHOUT adding a matching step, and prove the suite notices -
+# so it now bumps past the current version rather than onto it. Left as a
+# literal pair rather than computed, because a mutant that derived the
+# number from the source it is mutating could never disagree with it.
 mutate "the schema version is bumped without a step to reach it" \
   "src/core/db_models.py" \
-  'CURRENT_SCHEMA_VERSION: int = 3||=>||CURRENT_SCHEMA_VERSION: int = 4'
+  'CURRENT_SCHEMA_VERSION: int = 4||=>||CURRENT_SCHEMA_VERSION: int = 5'
 
 mutate "the identity index absorbs the session id, making it a durable key" \
   "src/core/db_models.py" \

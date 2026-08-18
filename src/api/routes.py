@@ -125,9 +125,21 @@ async def create_session(request: Request, body: CreateSessionRequest):
             terminal_command_id=body.terminal_command_id,
         )
 
-        # Move this project to the top of the list (most recently used)
+        # Mark this project most-recently-used so it sorts to the top of
+        # the launcher. feat/db-is-authoritative: this writes
+        # projects.last_opened_at in the AUTHORITATIVE table and then
+        # refreshes the config.json rollback snapshot, replacing the old
+        # config-array reorder. Best-effort, exactly as before - a
+        # session must never fail to start because the launcher's
+        # ordering could not be updated - but a datastore that could not
+        # be reached is now logged as its own case rather than being
+        # swallowed with a genuine "no project at this path" miss.
         if session.working_dir:
-            settings.move_project_to_top(session.working_dir)
+            from src.api import projects_service
+
+            projects_service.touch_project_best_effort(
+                settings, session.working_dir
+            )
 
         return session
 

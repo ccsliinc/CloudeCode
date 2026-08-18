@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 3
+CURRENT_SCHEMA_VERSION: int = 4
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -458,6 +458,37 @@ DDL_V3: Tuple[str, ...] = (DDL_SESSIONS_ADD_SESSION_ID,)
 #: this comment rather than omitted, so the absence is a decision on the
 #: record and not a gap someone fills in later with a DROP.
 REVERSAL_SQL_V3: Tuple[str, ...] = ()
+
+# --- v3 -> v4: projects.last_opened_at ------------------------------------
+#
+# WHY A COLUMN AND NOT A REUSE OF updated_at. feat/db-is-authoritative
+# makes the projects table the source of truth for the launcher's project
+# list, and that list is ordered most-recently-used first - the behaviour
+# config.json got from its array order plus the old
+# ``move_project_to_top``. The table had no field that could carry it.
+#
+# ``updated_at`` cannot: GET /projects/presence re-stats every root on
+# every call and writes the result back, so updated_at is touched on a
+# plain page load and would sort the list by "last probed" while claiming
+# to sort it by "last opened".
+#
+# NULLABLE ON PURPOSE, and NULL means "never opened in this build", never
+# "opened at the epoch". Rows imported from config.json carry NULL and
+# fall back to their insert order, which IS the config array order, which
+# was the user's MRU order - so the very first render after this
+# migration shows exactly the order the old code showed.
+DDL_PROJECTS_ADD_LAST_OPENED_AT = (
+    "ALTER TABLE projects ADD COLUMN last_opened_at TEXT"
+)
+
+#: Ordered DDL for a v3 -> v4 database. Purely additive, one nullable
+#: column, no index. As with v3, ALTER TABLE ADD COLUMN has no
+#: IF NOT EXISTS, so the step inspects PRAGMA table_info first.
+DDL_V4: Tuple[str, ...] = (DDL_PROJECTS_ADD_LAST_OPENED_AT,)
+
+#: Same reasoning as REVERSAL_SQL_V3: additive-only forward, RESTORE
+#: backward. Stated explicitly so the absence is a decision, not a gap.
+REVERSAL_SQL_V4: Tuple[str, ...] = ()
 
 
 # What a REVERSE of v1 -> v2 would run. Dropping the table drops its

@@ -1831,11 +1831,16 @@ class SessionManager:
         resolved_agent_type: Optional[str] = agent_type
         if not resolved_agent_type and project_name:
             try:
-                proj = settings.get_project(project_name)
-                if proj is not None:
-                    resolved_agent_type = proj.agent_type
+                # feat/db-is-authoritative: the projects table, with a
+                # config.json fallback when the datastore is unreachable,
+                # rather than reading config.json directly.
+                from src.api import projects_service
+
+                resolved_agent_type = projects_service.agent_type_for(
+                    settings, project_name
+                )
             except Exception:
-                # Don't fail session create if config lookup misbehaves.
+                # Don't fail session create if the lookup misbehaves.
                 resolved_agent_type = None
         if not resolved_agent_type:
             resolved_agent_type = "claude"
