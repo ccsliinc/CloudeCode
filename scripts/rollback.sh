@@ -187,6 +187,14 @@ else
 fi
 
 # --- 7. restore the backup ----------------------------------------------------
+#
+# No ordering fix needed here (checked as part of the SQLite backup-
+# ordering fix in upgrade_rollback_common.sh): stop_service already ran
+# at step 4, above, before this. restore_backup copies from a static
+# backup directory into an install_dir whose server is stopped, so
+# neither side of that copy has a live writer - see restore_backup's
+# docstring for why it correctly still uses plain cp -p rather than the
+# VACUUM INTO path take_backup uses.
 
 log_step "restoring user state from ${BACKUP_DIR}"
 RESTORED="$(restore_backup "${INSTALL_DIR}" "${BACKUP_DIR}")" || exit 1

@@ -33,16 +33,20 @@
 #      published release tag.
 #   3. If current == target: report and exit 0. Idempotent — no stop, no
 #      restart, no backup on a no-op run.
-#   4. Take a backup of user state (.env, config.json, session/auth state)
-#      into a fresh timestamped directory BEFORE anything destructive, and
-#      print that path prominently.
+#   4. Compute where the backup will land (deterministic; no copying yet).
 #   5. State the plan and require confirmation (unless --yes).
 #   6. Stop the server.
+#   6a. Take the backup of user state (.env, config.json, session/auth
+#      state, including refresh_tokens.db) into the directory from step 4,
+#      now that the server is stopped, and print that path prominently.
+#      SQLite files are copied via VACUUM INTO + integrity_check, not a
+#      raw file copy - see upgrade_rollback_common.sh's SQLite-safe-copying
+#      note. Still runs before anything destructive to the CODE.
 #   7. `git fetch --tags` then `git checkout tags/<target>` (detached HEAD).
 #   8. `pip install -r requirements.txt` for the new tag's dependencies.
 #   9. Run the config migration (src/core/config_migration.py) — additive,
 #      idempotent, takes its OWN config.json.bak on top of the backup from
-#      step 4.
+#      step 6a.
 #  10. Restart the server.
 #  11. Verify: the server answers on /health AND reports the target version.
 #      A failure here is a FAILURE, not a warning — see verify_upgrade in
@@ -128,20 +132,19 @@ if [ "${CURRENT}" = "${TAG}" ]; then
     exit 0
 fi
 
-# --- 4. backup FIRST, before anything destructive ----------------------------
+# --- 4. compute the backup destination (deterministic, no copying yet) ------
+#
+# BACKUP_DIR's path is fully determined right here from TIMESTAMP/CURRENT/
+# TAG - it does not depend on take_backup having run. That means it can be
+# shown to the operator in the plan below BEFORE the backup is actually
+# taken, so moving the actual copy to step 6a (after the server is
+# stopped, see the note there) costs nothing in the confirmation UX: the
+# path printed at confirm time is the exact path the backup lands at.
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_ROOT="${INSTALL_DIR}/.upgrade-backups"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}_from-${CURRENT}_to-${TAG}"
 mkdir -p "${BACKUP_ROOT}"
-BACKUP_PATH="$(take_backup "${INSTALL_DIR}" "${BACKUP_DIR}")" || exit 1
-log_ok "backup written to: ${BACKUP_PATH}"
-echo ""
-echo "=================================================================="
-echo " BACKUP LOCATION (needed for rollback):"
-echo "   ${BACKUP_PATH}"
-echo "=================================================================="
-echo ""
 
 # --- 5. state the plan, confirm ----------------------------------------------
 
@@ -149,8 +152,8 @@ echo "About to upgrade CloudeCode in:"
 echo "  ${INSTALL_DIR}"
 echo "From version:  ${CURRENT}"
 echo "To version:    ${TAG}"
-echo "Backup at:     ${BACKUP_PATH}"
-echo "Steps: stop server -> git checkout tags/${TAG} -> pip install -> config migration -> restart -> verify"
+echo "Backup will be written to (after the server is stopped): ${BACKUP_DIR}"
+echo "Steps: stop server -> back up user state -> git checkout tags/${TAG} -> pip install -> config migration -> restart -> verify"
 echo ""
 confirm_or_die "Proceed with this upgrade?"
 
@@ -160,6 +163,30 @@ require_clean_tree "${INSTALL_DIR}"
 
 log_step "stopping the server"
 stop_service "${INSTALL_DIR}"
+
+# --- 6a. backup, now that the server is stopped ------------------------------
+#
+# Moved here from before confirm/stop (see prior revision) because
+# take_backup copies refresh_tokens.db, a live WAL-mode SQLite database
+# that RefreshStore holds open with an active purge loop while the server
+# runs - a plain file copy against that is not a safe read, and the same
+# will be true of the cloude.db datastore once it exists (see
+# upgrade_rollback_common.sh's SQLite-safe-copying note; take_backup now
+# routes every SQLite file through VACUUM INTO instead of cp regardless of
+# when it is called, but a quiesced writer is still simpler and faster to
+# reason about, so we call it here rather than relying on that alone).
+# Still runs BEFORE git checkout / pip install / config migration - the
+# ordering promise that matters ("nothing destructive to the CODE happens
+# before a backup exists") is unchanged, only the ordering relative to
+# stop_service moved.
+BACKUP_PATH="$(take_backup "${INSTALL_DIR}" "${BACKUP_DIR}")" || exit 1
+log_ok "backup written to: ${BACKUP_PATH}"
+echo ""
+echo "=================================================================="
+echo " BACKUP LOCATION (needed for rollback):"
+echo "   ${BACKUP_PATH}"
+echo "=================================================================="
+echo ""
 
 # --- 7. checkout the tag ------------------------------------------------------
 

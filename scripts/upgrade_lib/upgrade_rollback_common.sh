@@ -261,10 +261,138 @@ _manifest_record() {
     printf '%s\t%s\t%s\n' "$2" "$3" "$4" >> "$1/.manifest"
 }
 
+# --- SQLite-safe copying ------------------------------------------------------
+#
+# A plain `cp -p` of a live SQLite database is not a safe read. WAL-mode
+# SQLite (what this project uses - see src/main.py's RefreshStore) keeps
+# committed-but-not-yet-checkpointed pages in a separate `-wal` file and
+# reconciles them with the main `.db` file only through SQLite's own
+# engine. `cp` has no idea any of that exists: it can copy the main file
+# mid-checkpoint, or copy it without its `-wal` sibling at all, and the
+# result is a file that passes a plain `[ -f ... ]` existence check while
+# being torn or missing committed transactions. This was already a live
+# risk for refresh_tokens.db (RefreshStore holds it open with an active
+# purge loop) and becomes a correctness bug for the cloude.db datastore
+# once that exists.
+#
+# The fix used throughout this file: `sqlite3 <src> "VACUUM INTO '<dst>'"`.
+# VACUUM INTO reads through SQLite's own transactional/WAL-aware engine,
+# so it always produces a copy of the last COMMITTED state - never a
+# torn mix of pages - with no separate `-wal`/`-shm` file to lose track
+# of. The copy is then verified with PRAGMA integrity_check before it is
+# ever recorded BACKED_UP; see _copy_sqlite's docstring for why a bare
+# `sqlite3` exit 0 is not itself proof of a usable backup.
+
+# Description: detect whether a file is a SQLite database by its file
+#   header magic ("SQLite format 3", the fixed ASCII prefix every valid
+#   SQLite database file starts with) rather than by filename. Chosen
+#   over an explicit filename list specifically so a future database
+#   file - the cloude.db datastore named in this fix's motivating defect,
+#   or anything added after it - is routed through the safe copy path
+#   automatically, with nothing to remember to update here. An explicit
+#   list is exactly the enumeration trap this repo's CLAUDE.md hazards
+#   30/32/34 describe: a check that only knows about the names it was
+#   told about silently stops covering anything renamed or added later.
+# Inputs: $1 - path to a file (existence is checked here, callers do not
+#   need to pre-check).
+# Output: return 0 if the file exists, is non-empty, and its first 15
+#   bytes are exactly "SQLite format 3". Return 1 otherwise (absent,
+#   empty, or not a SQLite file) - all "not sqlite" for this check's
+#   purpose; a plain cp -p is correct for those.
+_is_sqlite_file() {
+    local f="$1"
+    [ -f "${f}" ] && [ -s "${f}" ] || return 1
+    local header
+    header="$(head -c 15 "${f}" 2>/dev/null)"
+    [ "${header}" = "SQLite format 3" ]
+}
+
+# Description: copy a SQLite database file the way that is actually safe
+#   under a concurrent writer - `sqlite3 <src> "VACUUM INTO '<dst>'"`,
+#   never `cp`. Immediately verifies the result with PRAGMA
+#   integrity_check before returning success, because an sqlite3 exit
+#   code of 0 is evidence that VACUUM INTO ran, not evidence that the
+#   resulting file opens cleanly.
+#   THREE-OUTCOME, enforced by construction: every failure path calls
+#   die() itself, naming exactly which of the three things could not be
+#   done (no sqlite3 binary / VACUUM INTO failed / integrity_check
+#   failed), and none of them fall through to a plain `cp`. A silent
+#   fallback would convert a genuine COULD-NOT-EVALUATE into a false
+#   BACKED_UP - the exact defect class this project's three-outcome rule
+#   (CLAUDE.md) exists to prevent, and worse here than most instances of
+#   it because the thing being backed up is the one place a restore
+#   would be reached for.
+# Inputs: $1 - source db path (must exist and be a real SQLite file).
+#   $2 - destination path (must not already exist).
+# Output: exit 0 with the destination written and verified (PRAGMA
+#   integrity_check returned exactly "ok"). Calls die() and never returns
+#   otherwise: `sqlite3` missing from PATH, VACUUM INTO exiting non-zero,
+#   or integrity_check reporting anything other than "ok" (the partial
+#   destination file is deleted first in that last case, so it can never
+#   be mistaken for a usable backup by a later restore).
+_copy_sqlite() {
+    local src="$1" dst="$2"
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        die "sqlite3 is not on PATH - cannot take a verified backup of ${src}. Refusing to fall back to a raw file copy of a live SQLite database: see this file's SQLite-safe-copying note for why a plain cp of a WAL-mode database can capture a torn snapshot. Install sqlite3 (it ships with macOS and every Linux distro this fleet runs) and re-run."
+    fi
+
+    # Escape single quotes for the SQL string literal ('' inside a
+    # single-quoted SQLite string literal is a literal single quote).
+    local dst_escaped="${dst//\'/\'\'}"
+    local vacuum_err vacuum_rc
+    vacuum_err="$(sqlite3 "${src}" "VACUUM INTO '${dst_escaped}';" 2>&1 1>/dev/null)"
+    vacuum_rc=$?
+    if [ "${vacuum_rc}" -ne 0 ]; then
+        die "VACUUM INTO failed backing up ${src} to ${dst} (sqlite3 exit ${vacuum_rc}): ${vacuum_err}"
+    fi
+
+    local integrity integrity_rc
+    integrity="$(sqlite3 "${dst}" "PRAGMA integrity_check;" 2>&1)"
+    integrity_rc=$?
+    if [ "${integrity_rc}" -ne 0 ] || [ "${integrity}" != "ok" ]; then
+        rm -f "${dst}"
+        die "backup of ${src} failed PRAGMA integrity_check (sqlite3 exit ${integrity_rc}, output: '${integrity}') - deleted the unverified copy at ${dst} rather than leaving it behind to be mistaken for a real backup. A VACUUM INTO that completes without erroring is not by itself proof the result is usable."
+    fi
+}
+
+# Description: copy one backed-up file using the method its content
+#   actually needs - _copy_sqlite (VACUUM INTO + integrity_check) for
+#   anything that is a SQLite database by header magic (_is_sqlite_file),
+#   plain cp -p for everything else. The non-SQLite files this project
+#   backs up (.env, config.json, config.json.bak, .update-check.json,
+#   session_metadata.json, pinned_themes.json, unread_state.json) are
+#   whole-file text/JSON writes with no WAL, no page cache, and no
+#   partial-write hazard analogous to SQLite's, so cp -p remains correct
+#   for them. Single dispatch point so take_backup's call sites make one
+#   decision instead of repeating an `if _is_sqlite_file` check six times.
+# Inputs: $1 - src path (must exist). $2 - dst path (must not exist).
+# Output: return 0 on a successful copy. For the plain-cp path, returns
+#   cp's own exit status so the caller's existing
+#   `|| die "failed to back up ${f}"` pattern still fires. For the SQLite
+#   path this never returns non-zero - _copy_sqlite calls die() itself
+#   with a specific reason before that could happen; see its docstring.
+_copy_backup_file() {
+    local src="$1" dst="$2"
+    if _is_sqlite_file "${src}"; then
+        _copy_sqlite "${src}" "${dst}"
+        return 0
+    fi
+    cp -p "${src}" "${dst}"
+}
+
 # Description: back up every piece of user state this install has, split
 #   correctly between the install dir and LOG_DIRECTORY (see the array
-#   comments above resolve_log_dir). Safe to call while the server is
-#   still running - every copy is a plain read of the source file.
+#   comments above resolve_log_dir). SQLite databases (refresh_tokens.db
+#   today, cloude.db once it exists) are routed through _copy_sqlite
+#   (VACUUM INTO + integrity_check), never a raw file copy - see the
+#   "SQLite-safe copying" note above this function for why. Everything
+#   else is copied with cp -p, which is a genuinely safe plain read for
+#   whole-file text/JSON writers. Correct to call whether or not the
+#   server is still running, but scripts/upgrade.sh and
+#   scripts/rollback.sh both call it AFTER stop_service anyway: a copy
+#   against a quiesced writer is simpler to reason about and faster
+#   (VACUUM INTO against an idle database has nothing to reconcile),
+#   even though it is not the thing that makes the copy correct.
 # Inputs: $1 - install_dir. $2 - backup_dir (must not already exist).
 # Output: prints the backup_dir on stdout for the caller to surface
 #   prominently. Exits via die() if: backup_dir already exists; it cannot
@@ -297,7 +425,7 @@ take_backup() {
         configured=1
         local f
         for f in "${INSTALL_REQUIRED_PAIR[@]}"; do
-            cp -p "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
+            _copy_backup_file "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
             _manifest_record "${backup_dir}" BACKED_UP install "${f}"
         done
     else
@@ -307,7 +435,7 @@ take_backup() {
     local f
     for f in "${INSTALL_OPTIONAL_FILES[@]}"; do
         if [ -f "${install_dir}/${f}" ]; then
-            cp -p "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
+            _copy_backup_file "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
             _manifest_record "${backup_dir}" BACKED_UP install "${f}"
         else
             _manifest_record "${backup_dir}" NOT_PRESENT install "${f}"
@@ -324,7 +452,7 @@ take_backup() {
 
         for f in "${STATE_DIR_REQUIRED_FILES[@]}"; do
             if [ -f "${log_dir}/${f}" ]; then
-                cp -p "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
+                _copy_backup_file "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
                 _manifest_record "${backup_dir}" BACKED_UP state "${f}"
             else
                 die "expected ${log_dir}/${f} (created by every server startup) but it is missing - either the server never started successfully on this install, or state has already been lost. Refusing to take a partial backup and proceed with a destructive upgrade. If this install genuinely never ran, there is nothing to upgrade yet."
@@ -332,7 +460,7 @@ take_backup() {
         done
         for f in "${STATE_DIR_OPTIONAL_FILES[@]}"; do
             if [ -f "${log_dir}/${f}" ]; then
-                cp -p "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
+                _copy_backup_file "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
                 _manifest_record "${backup_dir}" BACKED_UP state "${f}"
             else
                 _manifest_record "${backup_dir}" NOT_PRESENT state "${f}"
@@ -357,6 +485,13 @@ take_backup() {
 #   Does NOT run config migration afterward - the whole point of a
 #   rollback is that the restored config matches the OLDER code being
 #   checked out alongside it.
+#   Uses plain cp -p, unlike take_backup's _copy_backup_file - and that is
+#   correct here, not an oversight: scripts/rollback.sh (the only caller)
+#   invokes this after stop_service, so the destination has no writer, and
+#   the source is a static file inside an already-closed backup directory
+#   that nothing is writing to either. Neither side of this copy has the
+#   live-writer hazard _copy_sqlite exists to close, so there is nothing
+#   for VACUUM INTO to buy here.
 # Inputs: $1 - install_dir. $2 - backup_dir (must exist and have a
 #   .manifest produced by take_backup).
 # Output: prints the number of files restored on stdout. Exits via die()
