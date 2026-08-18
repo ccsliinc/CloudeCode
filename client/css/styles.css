@@ -179,8 +179,15 @@
      * width alone. Restated per breakpoint below, same as --header-pad-y. */
     --header-pad-x: 20px;
     --header-border: 2px;
+    /* HOME-HEADER-CONSOLIDATION: the launchpad's second header row
+     * (`.home-subheader`) adds real height that fixed-position consumers
+     * of --header-h (e.g. .fab-menu-notice) must clear too, or they land
+     * under the subheader text instead of below the header. Zero on every
+     * screen except the launchpad, which stamps `.header--home` on
+     * <body> (app.js setHeaderIdentity) alongside the header itself. */
+    --home-subheader-extra: 0px;
     --header-h: calc(var(--control-size) + var(--header-pad-y) * 2
-                     + var(--header-border));
+                     + var(--header-border) + var(--home-subheader-extra));
     --fab-top-edge: calc(var(--header-h) + var(--fab-gap));
 
     /* The app's default round control, and therefore what sets the
@@ -254,6 +261,21 @@ body {
      * the number here and the FAB slides under the header. */
     padding: var(--header-pad-y) var(--header-pad-x);
     border-bottom: var(--header-border) solid var(--color-accent);
+}
+
+/* HOME-HEADER-CONSOLIDATION: the actual flex row (toggle / title /
+ * controls) used to be `.header` itself. It is now `.header-row`, a
+ * dedicated wrapper, so `#home-subheader` (launchpad only, second row of
+ * `.header`) is never a SIBLING of `h1` inside the same flex/grid parent
+ * — header-title-fit.js's slotWidth() computes the title's shrink budget
+ * from `h1`'s parent's children on the documented assumption that they
+ * are all fixed-size, single-row content. A full-width second row in
+ * that same parent broke that assumption and starved the budget to
+ * negative, which its own fallback silently read as "always fits" and
+ * left CSS `text-overflow: ellipsis` to truncate mid-word instead. See
+ * `.header--home` below for why the wrapper's own layout still changes
+ * on the launchpad. */
+.header-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -357,6 +379,129 @@ h1:hover {
     color: var(--color-fg-faint);
     font-weight: normal;
     flex-shrink: 0;
+}
+
+/* HOME-HEADER-CONSOLIDATION — launchpad-only header-row layout.
+ *
+ * Toggled on/off by setHeaderIdentity() in app.js (only showLaunchpad()
+ * passes a `subheader`), never applied on auth or terminal. Applies to
+ * `.header-row` (the wrapper around spacer/toggle/title/controls — see
+ * its own comment above for why it exists as a separate element from
+ * `.header`).
+ *
+ * STAYS FLEXBOX. A first version switched `.header-row` to a 3-column
+ * CSS Grid (`minmax(flank, 1fr) auto minmax(flank, 1fr)`) to reserve
+ * equal space on both sides of the title. It centred correctly
+ * (0.008px off at 1280px, 0px at 390px) but broke the title's own text
+ * fit: header-title-fit.js's slotWidth() (client/js/header-title-fit.js)
+ * computes the title's shrink budget by walking `.header-row`'s actual
+ * DOM children and summing their RENDERED widths — an empty grid track
+ * with no element in it (the reserved-but-content-less left column,
+ * since `#session-sidebar-toggle` is `display: none` here) is invisible
+ * to that walk. The JS concluded the full "Cloude Code Launcher" fit
+ * (its math never subtracted the reserved column it couldn't see) and
+ * left the untruncated string in the DOM, while the grid actually
+ * rendered the title only 160px of room — so plain CSS
+ * `text-overflow: ellipsis` silently clipped it to "Cloude Code L…" with
+ * nothing in the DOM saying so. Confirmed by comparing the DOM
+ * `textContent` (full) against the rendered box in a screenshot
+ * (truncated) — a genuine "the two disagree" case, not a JS bug.
+ *
+ * `#header-home-spacer` (a real, `visibility: hidden` element, not a grid
+ * track) fixes this at the root: it is an actual DOM sibling of `h1`
+ * with a real rendered width, so it is counted correctly by both the
+ * BROWSER's flex layout and header-title-fit.js's DOM walk — the two can
+ * no longer disagree, because they are now reading the same geometry.
+ * `#appTitle` gets `flex: 1 1 auto` (grows AND shrinks) with
+ * `justify-content: center` on itself so the icon+text pair centres
+ * within whatever room is actually left, and shrinks through
+ * header-title-fit.js's normal, correct middle-elision path if that room
+ * ever gets tighter than the full string — the SAME mechanism session
+ * titles already use, not a new one.
+ *
+ * `--home-header-flank-w` mirrors `.controls`' own real width (TWO
+ * buttons, not three — header-menu.js permanently re-parents logoutBtn
+ * and settingsBtn into its overflow panel at every width, so only
+ * `#configEditorBtn` and its kebab `#header-menu-toggle` stay inline).
+ * Verified after the fix, both widths, full "Cloude Code Launcher" text
+ * renders untruncated, 0px / 0.008px off-centre.
+ */
+/* Hidden by default — never touches the terminal/auth header layout.
+ * Only `.header--home` (below) turns it into a real, invisible, but
+ * SIZED sibling. */
+.header-home-spacer {
+    display: none;
+}
+
+.header--home {
+    --home-header-flank-w: calc(var(--control-size) * 2 + 8px);
+}
+
+.header--home .header-home-spacer {
+    display: block;
+    visibility: hidden;
+    flex-shrink: 0;
+    width: var(--home-header-flank-w);
+}
+
+/* Stamped on <body> as `.home-header-active` — DELIBERATELY NOT the same
+ * class as `.header--home`. `.header--home` is a bare class selector, so
+ * reusing it on <body> would make it match here too and put the WHOLE
+ * PAGE in `display: grid` (caught in the browser: bodyDisplay flipped to
+ * 'grid', header collapsed to grid-content width instead of the
+ * viewport). --home-subheader-extra has to reach .fab-menu-notice, which
+ * is not a descendant of .header, hence the separate body class, toggled
+ * in lockstep with `.header--home` by app.js (setHeaderIdentity's doc
+ * comment). Value = subheader line box (0.8rem * 1.2 line-height =
+ * 15.36px) + its 4px top margin, rounded up. */
+body.home-header-active {
+    --home-subheader-extra: 20px;
+}
+
+@media (max-width: 480px) {
+    body.home-header-active {
+        /* .home-subheader drops to 0.72rem under 480px (see media query
+         * below) — its line box shrinks with it. */
+        --home-subheader-extra: 18px;
+    }
+}
+
+/* #session-sidebar-toggle stays `display: none` here (app.js never shows
+ * it on the launchpad) — no rule needed, it contributes nothing to the
+ * flex row either way. */
+
+.header--home #appTitle {
+    /* Grows to fill the room the spacer/controls leave AND shrinks
+     * through header-title-fit.js's normal middle-elision path if that
+     * room gets tight — same budget mechanism the terminal's session
+     * title already uses, just with a short fixed string here instead of
+     * a long session name. */
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: center;
+}
+
+.header--home .controls {
+    flex-shrink: 0;
+}
+
+/* Second row of `.header`, a sibling of `.header-row` (NOT a grid cell of
+ * it — see the `.header-row` comment above for why h1's actual parent
+ * must stay exactly the original three children). Centred by plain
+ * `text-align`, which is real centring against the header's own width at
+ * every viewport, not a fixed margin. */
+.home-subheader {
+    margin-top: 4px;
+    text-align: center;
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    /* Truncate rather than wrap: a second wrapped line on a phone would
+     * make the header taller than the block it replaced, which is exactly
+     * what this change must not do (see .header--home comment above). */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
 }
 
 /* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
@@ -954,19 +1099,6 @@ button[data-tooltip]:hover::after {
     margin: 0 auto;
 }
 
-.launchpad-header {
-    color: var(--color-accent);
-    font-size: 1.3rem;
-    margin-bottom: 10px;
-    font-weight: bold;
-}
-
-.launchpad-prompt {
-    color: var(--color-fg-muted);
-    font-size: 0.95rem;
-    margin-bottom: 30px;
-}
-
 .launchpad-section {
     margin-bottom: 30px;
 }
@@ -1352,8 +1484,8 @@ button[data-tooltip]:hover::after {
         font-size: 1.1rem;
     }
 
-    .launchpad-header {
-        font-size: 1.1rem;
+    .home-subheader {
+        font-size: 0.72rem;
     }
 }
 

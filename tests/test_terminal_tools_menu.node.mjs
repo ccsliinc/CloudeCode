@@ -452,9 +452,15 @@ test('GEOMETRY: the top-right rail clears the header from the same tokens', () =
 
     // --header-h is DERIVED from the header's own three parts, so a
     // restyle of the header moves the FAB with it instead of sliding it
-    // under the header.
+    // under the header. HOME-HEADER-CONSOLIDATION added a fourth part,
+    // --home-subheader-extra, which is 0px on every screen except the
+    // launchpad (see styles.css) - the FAB itself never renders on the
+    // launchpad (client/js/app.js hides it there), so this does not move
+    // it anywhere it is actually seen; it exists so .fab-menu-notice,
+    // which DOES render on the launchpad, clears the header's new second
+    // row instead of landing under the subheader text.
     assert.match(base,
-        /--header-h:\s*calc\(var\(--control-size\) \+ var\(--header-pad-y\) \* 2\s*\n?\s*\+ var\(--header-border\)\);/);
+        /--header-h:\s*calc\(var\(--control-size\) \+ var\(--header-pad-y\) \* 2\s*\n?\s*\+ var\(--header-border\) \+ var\(--home-subheader-extra\)\);/);
     assert.match(base, /--fab-top-edge:\s*calc\(var\(--header-h\) \+ var\(--fab-gap\)\);/);
     // ...and the header really does read those parts, or the derivation
     // is a fiction that happens to agree today.

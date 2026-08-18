@@ -1070,8 +1070,15 @@ class Launchpad {
         this.launchpadScreen.innerHTML = `
             <div class="launchpad-scroll">
             <div class="launchpad-container">
-                <div class="launchpad-header">☁️ Cloude Code Launcher</div>
-                <div class="launchpad-prompt">select a project or create a new project</div>
+                <!-- HOME-HEADER-CONSOLIDATION: the "Cloude Code Launcher"
+                     title + "select a project or create a new project"
+                     prompt used to render here as their own block
+                     (.launchpad-header / .launchpad-prompt). They now live
+                     in the top header itself (App.showLaunchpad() ->
+                     setHeaderIdentity(), client/js/app.js), centred, with
+                     the prompt as the header's second row. Do not re-add
+                     them here — that would restore the standalone block's
+                     vertical cost this change removed. -->
 
                 <!-- LAUNCHPAD HELP. Lives at the TOP of the pane, under the
                      launcher title and its subtitle - NOT in the running-sessions
