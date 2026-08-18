@@ -50,6 +50,7 @@ if str(ROOT) not in sys.path:
 # ruff: noqa: E402
 from src.core.session_manager import SessionManager
 from src.models import AdoptSessionResponse
+from tests.socket_guard import TEST_SOCKET_NAME
 
 
 @pytest.mark.asyncio
@@ -83,7 +84,7 @@ async def test_adopt_response_payload_carries_real_pty_pid():
         "src.core.session_manager.settings"
     ) as mock_settings:
         auth_cfg = MagicMock()
-        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.tmux_socket_name = TEST_SOCKET_NAME
         auth_cfg.session.scrollback_lines = 3000
         auth_cfg.notifications.idle_threshold_seconds = 30.0
         mock_settings.load_auth_config.return_value = auth_cfg
@@ -132,7 +133,7 @@ async def test_adopt_response_falls_back_to_none_when_backend_has_no_pid():
         "src.core.session_manager.settings"
     ) as mock_settings:
         auth_cfg = MagicMock()
-        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.tmux_socket_name = TEST_SOCKET_NAME
         auth_cfg.session.scrollback_lines = 3000
         auth_cfg.notifications.idle_threshold_seconds = 30.0
         mock_settings.load_auth_config.return_value = auth_cfg

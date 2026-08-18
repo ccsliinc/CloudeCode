@@ -37,6 +37,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 # ruff: noqa: E402
 from src.core.shell_init import RC_SOURCE, rc_prefixed
+from tests.socket_guard import derive_test_socket
 
 
 # --- the redirection itself ----------------------------------------------
@@ -164,7 +165,7 @@ def _run_pane(inner: str, socket: str, rc_path: Path) -> str:
 
 @pytest.fixture
 def tmux_socket():
-    name = f"cc-shellinit-{uuid.uuid4().hex[:8]}"
+    name = derive_test_socket("shellinit")
     yield name
     tmux = shutil.which("tmux")
     if tmux:

@@ -248,6 +248,7 @@ import uuid  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from src.core.tmux_backend import TmuxBackend  # noqa: E402
+from tests.socket_guard import derive_test_socket
 
 requires_tmux = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="tmux not on PATH"
@@ -291,7 +292,7 @@ def _paint_against_pane(command: str, socket: str) -> tuple:
 
 @pytest.fixture
 def tmux_socket():
-    name = f"cc-paint-{uuid.uuid4().hex[:8]}"
+    name = derive_test_socket("paint")
     yield name
     tmux = shutil.which("tmux")
     if tmux:
