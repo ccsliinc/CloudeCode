@@ -51,6 +51,7 @@ from src.models import (
     WrapperExamplesResponse,
     SessionRecord,
     SessionImportStatus,
+    RecentSessionsResponse,
 )
 from src.core.tmux_listing import coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -2205,6 +2206,98 @@ async def list_session_records(request: Request):
     except DatastoreUnreadableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return [_session_record_payload(row) for row in rows]
+
+
+@router.get(
+    "/sessions/recent",
+    response_model=RecentSessionsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def list_recent_sessions(request: Request):
+    """RECENT (S9): stored ``stopped`` sessions, datastore-backed.
+
+    Description: the query is exactly ``lifecycle='stopped' AND
+      archived_at IS NULL`` via ``session_store.list_sessions`` - no
+      timer, no retention window, the first launcher surface backed by
+      the datastore rather than a live probe.
+
+      THREE-OUTCOME GATE ON PROBE HEALTH. The stored rows are only
+      returned when ``session_manager.last_probe_health().ok`` is
+      True - i.e. the most recent tmux listing (normally the home
+      screen's own ``GET /sessions/attachable`` poll) succeeded. A
+      failed or never-run probe returns ``state != 'ok'`` and an EMPTY
+      ``sessions`` list instead of the stored rows: RESTART safety
+      depends on a 'stopped' row being trustworthy right now, and a
+      probe we could not just confirm cannot make that promise. This
+      never re-probes tmux itself - it reads whatever health the last
+      probe (run by any caller) left behind, so viewing RECENT adds no
+      tmux load beyond what the launcher already pays.
+
+      DEFENSE IN DEPTH: even though the SQL already filters to
+      ``lifecycle='stopped'``, any row that somehow is not exactly
+      'stopped' is dropped again here before it reaches the wire. A
+      guarantee is only as good as the layer that enforces it, and this
+      route is closer to the wire than the query.
+    Inputs: request (Request) - unused beyond auth; carries
+      ``request.app.state.session_manager``.
+    Output: RecentSessionsResponse.
+    Raises: HTTPException 503 - the datastore exists but is unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+    from src.core.db_models import SESSION_LIFECYCLE_STOPPED
+
+    session_manager = request.app.state.session_manager
+    health = session_manager.last_probe_health()
+
+    if health.ok is not True:
+        state = "never_probed" if health.ok is None else "probe_unavailable"
+        notice = (
+            "Recent sessions CANNOT BE DETERMINED: no tmux probe has "
+            "run yet this session."
+            if state == "never_probed"
+            else "Recent sessions CANNOT BE DETERMINED: the last tmux "
+            f"probe failed (reason: {health.reason or 'unknown'}). "
+            "Stored history is not shown as fact until a probe succeeds."
+        )
+        return RecentSessionsResponse(state=state, sessions=[], notice=notice)
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return RecentSessionsResponse(state="ok", sessions=[])
+
+    def _read() -> list:
+        """Open, read and close on ONE pooled thread.
+
+        Inputs: none (closes over db_path).
+        Output: list[dict] - raw session rows already filtered to
+          ``lifecycle='stopped', archived_at IS NULL``.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.list_sessions(
+                conn,
+                lifecycle=SESSION_LIFECYCLE_STOPPED,
+                include_archived=False,
+            )
+
+    try:
+        rows = await run_in_threadpool(_read)
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    # Defense in depth - see docstring. Never trust the SQL filter alone
+    # to be the only place this invariant is enforced.
+    stopped_rows = [
+        row for row in rows if row.get("lifecycle") == SESSION_LIFECYCLE_STOPPED
+    ]
+    return RecentSessionsResponse(
+        state="ok",
+        sessions=[_session_record_payload(row) for row in stopped_rows],
+    )
 
 
 @router.get(

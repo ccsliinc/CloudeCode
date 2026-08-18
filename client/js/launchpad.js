@@ -295,6 +295,10 @@ class Launchpad {
         // Refresh running sessions in parallel with the projects view.
         // Failure is non-fatal and handled inside loadRunningSessions.
         this.loadRunningSessions();
+        // S9 - RECENT is datastore-backed, not a live probe, so it does
+        // not need the 5s running-sessions poller; refreshed here (home
+        // screen load) and after any restart action.
+        this.loadRecentSessions();
     }
 
     /**
@@ -771,6 +775,167 @@ class Launchpad {
         // because the listener is bound to the (stable) container element,
         // not the (re-painted) row children, and the flag gates re-bind.
         this._bindRunningSessionClicks();
+    }
+
+    /**
+     * Fetch the RECENT group (S9) from ``GET /sessions/recent`` and render it.
+     *
+     * Description: datastore-backed, NOT a live tmux probe - this is the
+     *   first launcher surface that reads stored history rather than
+     *   re-asking tmux. Failure is non-fatal: logged and rendered as the
+     *   'probe_unavailable'-shaped attention block via
+     *   ``renderRecentSessions()``, never silently dropped.
+     * Inputs: none.
+     * Output: Promise<void>. Sets ``this.recentSessionsState`` /
+     *   ``this.recentSessions`` and calls ``renderRecentSessions()``.
+     */
+    async loadRecentSessions() {
+        try {
+            const payload = await window.API.listRecentSessions();
+            this.recentSessionsState = payload && payload.state || 'probe_unavailable';
+            this.recentSessions = (payload && payload.sessions) || [];
+            this.recentSessionsNotice = (payload && payload.notice) || null;
+        } catch (error) {
+            console.warn('Launchpad: failed to load recent sessions:', error);
+            this.recentSessionsState = 'probe_unavailable';
+            this.recentSessions = [];
+            this.recentSessionsNotice = 'recent sessions could not be loaded: '
+                + (error && error.message ? error.message : 'the server could not be reached');
+        }
+        this.renderRecentSessions();
+    }
+
+    /**
+     * Build one RECENT row's HTML.
+     *
+     * THREE-OUTCOME RESTART GATE, enforced HERE, not only by the server
+     * query that populated ``row``. ``GET /sessions/recent`` only ever
+     * returns ``lifecycle='stopped'`` rows, but this function checks
+     * ``row.lifecycle`` itself and refuses to emit a RESTART control for
+     * anything else - a row whose lifecycle is 'unknown' (or any value
+     * other than 'stopped') must never offer to restart it: restarting a
+     * session whose state could not be confirmed is how you get two of
+     * the same session running at once. Belt-and-suspenders on purpose -
+     * see this file's CLAUDE.md "assert every guarantee at the layer
+     * that enforces it".
+     * Inputs: row (object) - one ``SessionRecord`` from the wire.
+     * Output: string - HTML for one ``.recent-session-row``.
+     */
+    _renderRecentSessionRowHtml(row) {
+        const uuid = this._escapeHtml(row.session_uuid || '');
+        const displayName = this._escapeHtml(
+            (row.tmux_name && this._deriveRunningSessionDisplayName(row.tmux_name))
+                || row.title || row.working_dir || 'session'
+        );
+        const lifecycle = row.lifecycle || 'unknown';
+        const canRestart = lifecycle === 'stopped';
+        const restartBtn = canRestart
+            ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
+            : '';
+        const lifecycleLabel = canRestart ? 'stopped' : this._escapeHtml(lifecycle);
+        return `
+                <div class="recent-session-row" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}">
+                  <span class="recent-session-name">${displayName}</span>
+                  <span class="recent-session-lifecycle">${lifecycleLabel}</span>
+                  ${restartBtn}
+                </div>
+            `;
+    }
+
+    /**
+     * Paint (or hide) the RECENT section.
+     *
+     * THREE-OUTCOME RULE applied to the whole group. ``state !== 'ok'``
+     * (probe never ran, or the last one failed) renders an explicit
+     * "cannot determine" block and ZERO rows - never the stored rows
+     * shown as if they were freshly confirmed, and never a silent empty
+     * section indistinguishable from "no history". ``state === 'ok'``
+     * with zero rows is the ordinary "nothing stopped" case and hides
+     * the section, matching the running-sessions convention.
+     * Inputs: none (reads ``this.recentSessionsState`` /
+     *   ``this.recentSessions`` / ``this.recentSessionsNotice``).
+     * Output: undefined. Writes ``#recent-sessions-list`` innerHTML.
+     */
+    renderRecentSessions() {
+        const container = document.getElementById('recent-sessions-list');
+        if (!container) return;
+        const section = document.getElementById('recent-sessions-section');
+        const countEl = document.getElementById('recent-sessions-count');
+        const state = this.recentSessionsState || 'never_probed';
+        const rows = this.recentSessions || [];
+
+        if (state !== 'ok') {
+            const notice = this._escapeHtml(
+                this.recentSessionsNotice || 'recent sessions CANNOT BE DETERMINED'
+            );
+            if (section) section.style.display = '';
+            if (countEl) {
+                countEl.textContent = 'cannot determine';
+                countEl.setAttribute('data-state', state);
+            }
+            container.innerHTML = `
+                <div class="recent-sessions-attention" role="status" data-state="${this._escapeHtml(state)}">
+                  <div class="recent-sessions-attention__title">CANNOT DETERMINE recent sessions</div>
+                  <div class="recent-sessions-attention__detail">${notice}</div>
+                </div>
+            `;
+            return;
+        }
+
+        if (countEl) {
+            countEl.textContent = rows.length === 1 ? '1 recent' : `${rows.length} recent`;
+            countEl.setAttribute('data-state', 'ok');
+        }
+        if (rows.length === 0) {
+            if (section) section.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+        if (section) section.style.display = '';
+        container.innerHTML = rows.map(row => this._renderRecentSessionRowHtml(row)).join('');
+        this._bindRecentSessionClicks();
+    }
+
+    /**
+     * Wire RESTART clicks on RECENT rows, via event delegation on the
+     * (stable) list container - same pattern as running-sessions clicks.
+     * Guarded by a flag so repeated renders don't stack listeners.
+     */
+    _bindRecentSessionClicks() {
+        const container = document.getElementById('recent-sessions-list');
+        if (!container || container.dataset.recentClickBound === '1') return;
+        container.dataset.recentClickBound = '1';
+        container.addEventListener('click', (ev) => {
+            const btn = ev.target.closest && ev.target.closest('.recent-session-restart');
+            if (!btn) return;
+            this._restartRecentSession(
+                btn.getAttribute('data-working-dir'),
+                btn.getAttribute('data-agent-type')
+            );
+        });
+    }
+
+    /**
+     * RESTART a stopped RECENT session: launch a fresh session in the
+     * same working directory (and agent type, when known). This is
+     * deliberately NOT a resurrection of the dead tmux instance (that
+     * process and its pane are gone) - it is a new session, the same
+     * action the "new console" FAB performs, seeded from the stopped
+     * row's own metadata.
+     * Inputs: workingDir (string), agentType (string|'').
+     * Output: Promise<void>.
+     */
+    async _restartRecentSession(workingDir, agentType) {
+        try {
+            const payload = { working_dir: workingDir || undefined };
+            if (agentType) payload.agent_type = agentType;
+            await window.API.createSession(payload);
+            await this.loadRunningSessions();
+            await this.loadRecentSessions();
+        } catch (error) {
+            console.error('Launchpad: restart of recent session failed:', error);
+            this.showError('failed to restart session: ' + (error && error.message ? error.message : 'unknown error'));
+        }
     }
 
     /**
@@ -1506,6 +1671,23 @@ class Launchpad {
                         </div>
                     </div>
                     <div id="running-sessions-list"></div>
+                </div>
+
+                <!-- RECENT (S9) - datastore-backed, NOT a live tmux probe.
+                     Every row here is lifecycle='stopped' read straight
+                     from the sessions table. See Launchpad.loadRecentSessions /
+                     renderRecentSessions in launchpad.js. Hidden via
+                     display:none when empty, same convention as the running
+                     sessions section above. -->
+                <div id="recent-sessions-section" class="launchpad-section recent-sessions-section" style="display:none;">
+                    <div class="launchpad-section-title">
+                        <button type="button" class="launchpad-section-toggle" id="recent-sessions-toggle" aria-expanded="true" aria-controls="recent-sessions-list">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            <span class="launchpad-section-title__text">recent</span>
+                            <span class="launchpad-section-count" id="recent-sessions-count" data-state="ok"></span>
+                        </button>
+                    </div>
+                    <div id="recent-sessions-list"></div>
                 </div>
 
                 <!-- "new project" actions live in the inline speed-dial FAB

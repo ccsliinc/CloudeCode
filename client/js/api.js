@@ -881,6 +881,29 @@ class API {
     }
 
     /**
+     * Sessions: the RECENT group (S9) - stored ``stopped`` sessions,
+     * read from the datastore rather than a live tmux probe.
+     *
+     * THREE-OUTCOME RESPONSE. ``state`` is one of:
+     *   'ok'                 - ``sessions`` reflects the stored rows.
+     *   'probe_unavailable'  - the last tmux probe failed, so the server
+     *     refuses to present possibly-stale stopped rows as fact.
+     *     ``sessions`` is always ``[]`` on this state.
+     *   'never_probed'       - no probe has run yet this process
+     *     lifetime, so probe health is itself unknown. ``sessions`` is
+     *     always ``[]``.
+     * A caller must render ``notice`` (or an equivalent "cannot
+     * determine" message) whenever ``state !== 'ok'``, never silently
+     * fall back to an empty-history rendering.
+     *
+     * @returns {Promise<{state: string, sessions: Array<object>,
+     *   notice: string|null}>}
+     */
+    async listRecentSessions() {
+        return await this.call('/sessions/recent');
+    }
+
+    /**
      * Sessions: Adopt an externally-started tmux session.
      *
      * Server-side this sets up `pipe-pane` on the target, captures the

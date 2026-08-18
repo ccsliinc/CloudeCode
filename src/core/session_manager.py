@@ -24,6 +24,7 @@ import base64
 import secrets
 import shutil
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime
 from fastapi import HTTPException
@@ -152,6 +153,31 @@ def _sanitize_tmux_name(name: str) -> str:
     return collapsed.strip()
 
 
+@dataclass(frozen=True)
+class ProbeHealth:
+    """Outcome of the most recent tmux listing probe (S9).
+
+    THREE OUTCOMES, not two. ``ok=None`` ("never probed") must never be
+    read the same as ``ok=True`` ("probed and healthy") - a caller that
+    treats "no answer yet" as "healthy" is exactly the false-green class
+    this repo's CLAUDE.md names as the recurring defect. See
+    ``SessionManager.last_probe_health``.
+
+    Attributes:
+        ok: None - no probe has run yet this process's lifetime.
+            True - the most recent probe succeeded (regardless of how
+            many rows it returned). False - the most recent probe
+            failed.
+        reason: short machine token for the failure (mirrors
+            ``TmuxListing.reason``), or None when ``ok`` is not False.
+        detail: human-readable detail for the same failure, or None.
+    """
+
+    ok: Optional[bool]
+    reason: Optional[str] = None
+    detail: Optional[str] = None
+
+
 class SessionManager:
     """Manages Claude Code sessions via a pluggable SessionBackend."""
 
@@ -260,6 +286,48 @@ class SessionManager:
         # (own file, name-keyed, survives detach/swap/re-adopt) without
         # growing this already-large file further.
         self._unread_store = UnreadStore(settings.get_unread_state_path())
+
+        # S9 - listing-time fingerprint cache, keyed on the INSTANCE
+        # TRIPLE (tmux_socket, tmux_name, tmux_created_epoch), never on
+        # the name alone (a name is reusable; the triple is not - same
+        # identity rule as ``sessions.tmux_created_epoch`` throughout
+        # this module). ``GET /sessions/attachable`` runs on every home
+        # screen load/poll, so probing scrollback per row on every call
+        # would make the launcher slow in proportion to session count.
+        # Caching in memory, keyed on the triple, means each distinct
+        # tmux instance is fingerprinted AT MOST ONCE per process
+        # lifetime: a cache hit costs one dict lookup, a miss costs one
+        # ``tmux capture-pane`` call (no pipe-pane, no FIFO - see
+        # ``_fingerprint_agent_type_for_listing``). Not persisted to the
+        # ``sessions`` table on purpose: writes to that table are
+        # deliberately restricted to ``src/core/session_identity.py``
+        # (see session_store.py's module docstring, "WHERE THE WRITES
+        # LIVE") and an unadopted external session may have no row there
+        # at all. The tradeoff this accepts: a bare shell that later
+        # execs an agent CLI keeps reading as "unknown family" until the
+        # process restarts. That is the same staleness window the
+        # instance-triple identity model accepts everywhere else in this
+        # file, not a new one.
+        self._listing_fingerprint_cache: dict[
+            tuple[str, str, int], Optional[str]
+        ] = {}
+
+        # S9 - health of the MOST RECENT tmux listing probe, whichever
+        # caller ran it (``list_attachable_sessions`` is the common
+        # path, called on every home-screen poll). ``None`` until the
+        # first probe of this process's lifetime - genuinely different
+        # from both True and False, because "never checked" is its own
+        # answer and must not be read as "checked and healthy". The
+        # RECENT group (``GET /sessions/recent``) reads this rather than
+        # triggering its own extra probe: RESTART safety depends on the
+        # stored ``stopped`` rows being trustworthy RIGHT NOW, and a
+        # currently-failing probe means we cannot currently confirm
+        # that - a row that looks stopped in a stale read could in fact
+        # be running, and offering RESTART against it is how you get two
+        # of the same session.
+        self._last_probe_ok: Optional[bool] = None
+        self._last_probe_reason: Optional[str] = None
+        self._last_probe_detail: Optional[str] = None
 
         # Load persisted session if it exists
         self._load_session_metadata()
@@ -2943,6 +3011,29 @@ class SessionManager:
             or DEFAULT_TMUX_SOCKET
         )
 
+    def last_probe_health(self) -> "ProbeHealth":
+        """Report whether the most recent tmux listing probe succeeded.
+
+        Description: read by ``GET /sessions/recent`` (S9) to decide
+          whether the stored RECENT rows may be shown as fact. Reuses
+          whichever call to :meth:`list_attachable_sessions` most
+          recently ran - normally the home screen's own poll - rather
+          than triggering a fresh probe of its own, so viewing RECENT
+          never adds tmux load on top of what the launcher already pays.
+        Inputs: none.
+        Output: ProbeHealth - ``ok`` is None when no probe has run yet
+          this process's lifetime (a real third state, distinct from
+          both True and False - see the field's docstring in
+          ``__init__``), True/False otherwise, with ``reason``/``detail``
+          populated only on a known failure.
+        Example: mgr.last_probe_health().ok
+        """
+        return ProbeHealth(
+            ok=self._last_probe_ok,
+            reason=self._last_probe_reason,
+            detail=self._last_probe_detail,
+        )
+
     def tmux_socket_name(self) -> str:
         """The tmux socket this manager probes and keys its rows on.
 
@@ -3009,6 +3100,86 @@ class SessionManager:
         if from_db is None:
             return False
         return any(owned_name == name for owned_name, _epoch in from_db)
+
+    def _fingerprint_agent_type_for_listing(
+        self, *, socket: str, name: str, epoch: Optional[int]
+    ) -> Optional[str]:
+        """Detect which agent CLI a listed tmux instance is running.
+
+        Description: the LISTING-TIME counterpart to the fingerprint scan
+          ``adopt_external_session`` already runs. That path captures
+          scrollback through a fully attached backend (pipe-pane, FIFO,
+          resize) because it needs the bytes for first-paint replay too;
+          this one only needs to know which agent is running, so it uses
+          a bare ``TmuxBackend.for_external`` (no attach, no pipe-pane -
+          one ``tmux capture-pane`` subprocess call and nothing else) and
+          throws the bytes away after scanning them.
+
+          Cached per instance triple in ``self._listing_fingerprint_cache``
+          so a listing poll after the first never re-probes tmux for a
+          session it has already seen - see that field's docstring for
+          why this is safe and what it trades away. A ``None`` epoch
+          cannot be cached (no stable key), so it is fingerprinted fresh
+          every call - this only happens for a row tmux itself could not
+          date, which S5's listing parser already treats as a refused
+          row in the common path.
+        Inputs: socket (str) - tmux socket the row was listed on.
+          name (str) - tmux session name. epoch (int | None) -
+          ``#{session_created}``, the instance discriminator.
+        Output: str | None - a value from
+          ``agent_fingerprint.AGENT_FINGERPRINTS`` (e.g. ``"codex"``), or
+          None when nothing matched or the probe failed. None is cached
+          exactly like a hit: "fingerprinted, found nothing" is itself an
+          answer worth not re-asking for.
+        Example:
+          mgr._fingerprint_agent_type_for_listing(
+              socket='cloude', name='cloude_a', epoch=1723999999)
+        """
+        if epoch is None:
+            return self._detect_agent_type_from_pane(socket=socket, name=name)
+
+        key = (socket, name, int(epoch))
+        if key in self._listing_fingerprint_cache:
+            return self._listing_fingerprint_cache[key]
+
+        detected = self._detect_agent_type_from_pane(socket=socket, name=name)
+        self._listing_fingerprint_cache[key] = detected
+        return detected
+
+    def _detect_agent_type_from_pane(
+        self, *, socket: str, name: str
+    ) -> Optional[str]:
+        """Run one uncached ``capture-pane`` + fingerprint scan.
+
+        Description: split out of
+          :meth:`_fingerprint_agent_type_for_listing` so the cache
+          decision and the actual probe are two separately testable
+          units. Never raises - a probe failure (dead pane, tmux gone,
+          unsafe name) is not a reason to fail the whole listing, it is
+          just one more row that stays "unknown family".
+        Inputs: socket (str), name (str).
+        Output: str | None.
+        """
+        from src.core.agent_fingerprint import detect_agent_type
+        from src.core.tmux_backend import TmuxBackend
+
+        try:
+            probe_backend = TmuxBackend.for_external(
+                session_name=name,
+                working_dir=Path.home(),
+                socket_name=socket,
+            )
+            scrollback = probe_backend.capture_scrollback(lines=2000)
+            scrollback_text = scrollback.decode("utf-8", errors="replace")
+            return detect_agent_type(scrollback_text)
+        except Exception as exc:  # noqa: BLE001 - a probe must never crash listing
+            logger.debug(
+                "listing_fingerprint_probe_failed",
+                session=name,
+                socket=socket,
+                error=str(exc),
+            )
+            return None
 
     def list_attachable_sessions_with_socket(self):
         """Enumerate attachable sessions AND name the socket they came from.
@@ -3079,7 +3250,21 @@ class SessionManager:
                 reason=listing.reason,
                 detail=listing.detail,
             )
+            # S9 - record the failure for GET /sessions/recent. Nothing
+            # about the stored ``sessions`` table is touched here (no
+            # write on a failed probe, same rule ``reconcile_existing``
+            # already enforces for lifecycle) - only the in-memory health
+            # flag other readers consult moves.
+            self._last_probe_ok = False
+            self._last_probe_reason = listing.reason
+            self._last_probe_detail = listing.detail
             return listing
+        # S9 - a successful listing is this process's evidence that tmux
+        # answered just now, independent of what rows it returned (an
+        # empty tmux server is still a successful probe).
+        self._last_probe_ok = True
+        self._last_probe_reason = None
+        self._last_probe_detail = None
         rows = listing.sessions
         # Status lights: one extra bulk tmux call (list-panes -a), reused
         # via the same probe backend / socket. This is the ONLY place a
@@ -3128,17 +3313,26 @@ class SessionManager:
                 unread = self._is_unread(name)
                 row["status"] = map_tmux_fallback(raw_tmux_status, unread=unread)
                 row["unread"] = unread
-                # feat/agent-family-pills - listing never fingerprints
-                # (only adopt does, since it needs a full scrollback
-                # capture), so ``row.get("agent_type")`` is presently
-                # always None here and this always resolves to
-                # (None, "unknown"). Computed via the same resolver as
-                # SessionInfo anyway, rather than hardcoding "unknown",
-                # so the day listing DOES gain fingerprinting this line
-                # does not need to change.
+                # S9 - listing NOW fingerprints (cached per instance
+                # triple, see ``_fingerprint_agent_type_for_listing``),
+                # so a row's family pill says what the session is
+                # actually running instead of a uniform "unknown family"
+                # for every external session. ``from_fingerprint=True``
+                # unconditionally: every value this branch can produce
+                # came from the scrollback scan, never from a stored
+                # launch choice, so the pill must always render as a
+                # GUESS (dashed) rather than a fact - even when the scan
+                # found nothing and the result is still "unknown".
+                fingerprinted_agent_type = self._fingerprint_agent_type_for_listing(
+                    socket=self._last_probe_socket or self._tmux_socket_name(),
+                    name=name,
+                    epoch=row.get("created_at_epoch"),
+                )
+                row["agent_type"] = fingerprinted_agent_type
                 display_family, display_family_source = resolve_family_for_display(
-                    row.get("agent_type"),
+                    fingerprinted_agent_type,
                     getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+                    from_fingerprint=True,
                 )
                 row["agent_family"] = display_family.name if display_family else None
                 row["agent_family_source"] = display_family_source

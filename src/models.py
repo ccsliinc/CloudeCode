@@ -1378,3 +1378,42 @@ class SessionImportStatus(BaseModel):
         default=None,
         description="Rows in the sessions table. None when unavailable",
     )
+
+
+class RecentSessionsResponse(BaseModel):
+    """``GET /sessions/recent`` (S9) - the RECENT group, datastore-backed.
+
+    RECENT is every stored row with ``lifecycle='stopped'`` and
+    ``archived_at IS NULL`` - no timer, no retention window. Unlike
+    every other launcher surface, this one reads the ``sessions`` table
+    rather than a live tmux probe.
+
+    THREE OUTCOMES, carried in ``state``, not folded into ``sessions``:
+      'ok'                - ``sessions`` reflects the stored rows as of
+        this read.
+      'probe_unavailable' - the most recent tmux listing probe failed.
+        The stored rows are NOT read as stale-but-still-true here:
+        RESTART safety depends on trusting that a 'stopped' row really
+        is stopped right now, and a currently-broken probe means that
+        cannot be confirmed. ``sessions`` is always ``[]``.
+      'never_probed'      - no tmux listing probe has run yet this
+        process's lifetime, so probe health is itself an unmeasured
+        fact. ``sessions`` is always ``[]``, for the same reason as
+        'probe_unavailable'.
+
+    Every row in ``sessions`` (state 'ok') carries ``lifecycle='stopped'``
+    by construction of the query; a client must still gate any RESTART
+    control on that field itself rather than trusting group membership -
+    see ``client/js/launchpad.js``'s RECENT renderer.
+    """
+
+    state: str = Field(
+        ..., description="'ok' | 'probe_unavailable' | 'never_probed'"
+    )
+    sessions: List[SessionRecord] = Field(default_factory=list)
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sentence for the home screen, present whenever state != 'ok'"
+        ),
+    )
