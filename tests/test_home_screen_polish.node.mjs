@@ -279,13 +279,21 @@ test('the adopt-help marker is a summary, not a button', () => {
 });
 
 test('the adopt disclosure sits at the top of the pane, not in running sessions', () => {
-    const promptIdx = launchpad.indexOf('class="launchpad-prompt"');
+    // HOME-HEADER-CONSOLIDATION: the launcher title + "select a project..."
+    // subtitle (formerly .launchpad-header / .launchpad-prompt, rendered
+    // here as the pane's own first block) moved into the top header itself
+    // (App.showLaunchpad() -> setHeaderIdentity(), client/js/app.js) so the
+    // adopt-disclosure is now the FIRST thing in .launchpad-container, not
+    // something that renders below a title block that no longer exists
+    // here. See tests/test_home_header_consolidation.node.mjs for the
+    // header-side assertions.
+    const containerIdx = launchpad.indexOf('class="launchpad-container"');
     const disclosureIdx = launchpad.indexOf('<details class="adopt-disclosure">');
     const runningIdx = launchpad.indexOf('id="running-sessions-section"');
-    assert.ok(promptIdx !== -1 && disclosureIdx !== -1 && runningIdx !== -1);
+    assert.ok(containerIdx !== -1 && disclosureIdx !== -1 && runningIdx !== -1);
     assert.ok(
-        disclosureIdx > promptIdx,
-        'the marker must render below the launcher title and its subtitle'
+        disclosureIdx > containerIdx,
+        'the marker must render inside .launchpad-container'
     );
     assert.ok(
         disclosureIdx < runningIdx,

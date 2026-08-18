@@ -8,14 +8,54 @@ const HEADER_BRAND_EMOJI = '☁️'; // ☁️ cloud emoji
 /**
  * SESSION-IDENTITY-V2 — swap the header icon + title in one DOM operation.
  *
- * @param {{ icon: 'brand' | 'cloude', title: string }} opts
+ * @param {{ icon: 'brand' | 'cloude', title: string, subheader?: string|null }} opts
  *   icon='brand' → cloud emoji (launchpad / auth)
  *   icon='cloude' → CloudeCode brand SVG (terminal)
  *   title → text content of the title span (alongside the .version chip)
+ *   subheader → HOME-HEADER-CONSOLIDATION: when present, the header grows a
+ *     second row under `.header-row` carrying this text, and `.header-row`
+ *     (the wrapper around toggle/title/controls — see its CSS comment)
+ *     switches to the `.header--home` grid layout so the title is
+ *     genuinely centred regardless of `.controls` width. Omitted/null on
+ *     every other screen, which removes the row and reverts to the plain
+ *     flex layout. Only the launchpad screen passes this — see
+ *     showLaunchpad() below.
  */
 function setHeaderIdentity(opts) {
     var iconEl = document.getElementById('header-icon');
     var textEl = document.getElementById('header-title-text');
+    // `.header--home` is applied to `.header-row`, NOT `.header` itself —
+    // `#home-subheader` must stay OUTSIDE the element h1's own
+    // header-title-fit.js measures its siblings against, or its
+    // full-width second row gets subtracted from the title's shrink
+    // budget and silently truncates it mid-word. See `.header-row`'s CSS
+    // comment for the incident this fixed.
+    var headerRowEl = document.querySelector('.header-row');
+    var subheaderEl = document.getElementById('home-subheader');
+    if (headerRowEl && subheaderEl) {
+        if (opts.subheader) {
+            headerRowEl.classList.add('header--home');
+            // DELIBERATELY A DIFFERENT CLASS NAME from the one on
+            // .header-row, not a duplicate. `.header--home { display: grid }`
+            // in styles.css is a bare class selector — it matches ANY
+            // element carrying that class. Reusing the exact same name on
+            // <body> once made the whole page body a grid container
+            // instead of a flex column (bodyDisplay: 'grid', header
+            // collapsed to grid-content width ~517px instead of 1280px —
+            // caught by the Playwright measurement harness).
+            // `home-header-active` exists purely so
+            // --home-subheader-extra (styles.css) reaches --header-h
+            // consumers outside .header, e.g. .fab-menu-notice. Keep this
+            // toggle in lockstep with the .header-row one above.
+            document.body.classList.add('home-header-active');
+            subheaderEl.textContent = opts.subheader;
+            subheaderEl.hidden = false;
+        } else {
+            headerRowEl.classList.remove('header--home');
+            document.body.classList.remove('home-header-active');
+            subheaderEl.hidden = true;
+        }
+    }
     if (iconEl) {
         if (opts.icon === 'cloude') {
             // Use an <img> rather than inlining the SVG so the asset can be
@@ -564,7 +604,16 @@ class AppController {
         if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
             window.SessionThemeMenu.syncForSession();
         }
-        setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
+        // HOME-HEADER-CONSOLIDATION: the launchpad title + prompt used to be
+        // a standalone block at the top of .launchpad-container (see
+        // launchpad.js renderLaunchpadUI). It now lives in the header
+        // itself, centred, with the prompt as a second row underneath —
+        // reclaims the vertical space the standalone block used to cost.
+        setHeaderIdentity({
+            icon: 'brand',
+            title: 'Cloude Code Launcher',
+            subheader: 'select a project or create a new project'
+        });
         // v0.7.1 — back on the launchpad, no active session; reset tab title.
         setPageTitle(null);
         // Outbound URL sync: leaving a session (detach/delete) or just

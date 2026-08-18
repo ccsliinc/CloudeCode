@@ -122,6 +122,45 @@
     <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
 
     <div class="header">
+        <!-- HOME-HEADER-CONSOLIDATION: `.header-row` wraps the original
+             three header children (toggle / title / controls) so
+             `#home-subheader` below can be a second row of `.header`
+             WITHOUT becoming a sibling h1 has to measure itself against.
+             header-title-fit.js's slotWidth() walks h1's actual parent's
+             children to compute the title's shrink budget, on the
+             documented assumption that every sibling there is
+             fixed-size and in the same row (see its doc comment). Before
+             this wrapper existed, `#home-subheader` WAS that parent's
+             child too, and its outerWidth (a full-width second row) was
+             being subtracted from the budget, driving it negative — the
+             function's `avail > 0` guard then silently fell back to
+             "assume it fits" and CSS `text-overflow: ellipsis` alone was
+             left to truncate mid-word ("Cloude Code L…" at 390px,
+             confirmed by screenshot, not caught by the numeric centring
+             check because a 2-character remainder still centres at 0px
+             offset). The wrapper keeps h1's actual parent to exactly the
+             three original elements, restoring the function's own stated
+             invariant instead of teaching it a second layout mode. -->
+        <div class="header-row">
+        <!-- HOME-HEADER-CONSOLIDATION: real, visible (but
+             visibility:hidden — takes layout space, invisible to the eye
+             AND to a screen reader) spacer, exactly mirroring `.controls`'
+             width. `display:none` outside `.header--home` so it never
+             touches the terminal/auth layout.
+             WHY A REAL ELEMENT INSTEAD OF A CSS GRID COLUMN: CSS Grid's
+             `minmax(X, 1fr)` reserves X of track space with NO element
+             sitting in it, which header-title-fit.js's slotWidth() cannot
+             see — it walks `.header-row`'s actual DOM children and sums
+             their rendered widths, so an empty grid track is invisible to
+             it. That mismatch once let the JS module conclude the full
+             title fit (its math never subtracted the reserved-but-empty
+             column) while the grid rendered it only 160px of room —
+             CSS `text-overflow: ellipsis` silently clipped the DOM's
+             correct, untruncated text to "Cloude Code L…" and nothing
+             in the DOM said so. A real sibling element is not just seen
+             by the browser's layout, it is seen by this exact code path,
+             so the two can never disagree. -->
+        <div class="header-home-spacer" aria-hidden="true"></div>
         <!-- Session sidebar hamburger - top-left of the terminal screen
              header. Hidden on auth/launchpad (toggled by app.js exactly
              like logoutBtn/destroyBtn). A real <button> with
@@ -202,6 +241,20 @@
                  put it back: the header row is actions, and the light is
                  state. -->
         </div>
+        </div><!-- /.header-row -->
+        <!-- HOME-HEADER-CONSOLIDATION: launchpad-only second header row.
+             Replaces the standalone `.launchpad-header` / `.launchpad-prompt`
+             block that used to sit at the top of `.launchpad-container` —
+             the title moved into the header itself (see #appTitle above,
+             painted "Cloude Code Launcher" by App.showLaunchpad()) and this
+             is its subheading, directly below. Hidden and un-classed
+             (`.header--home` off) on every other screen by
+             setHeaderIdentity() in app.js — see its doc comment. Spans the
+             full header width and is centred by `.header--home` grid rules
+             in styles.css, not by a fixed margin, so it stays centred at
+             every viewport width including under the FAB/controls cluster
+             at 390px. -->
+        <div id="home-subheader" class="home-subheader" hidden></div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
          launchpad's "running sessions" section heading by launchpad.js
