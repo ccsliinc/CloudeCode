@@ -364,6 +364,18 @@ class ConfigEditorPanelController {
             const buildChildren = () => {
                 if (built) return;
                 built = true;
+                // THREE-OUTCOME RULE: node.list_error means this
+                // directory's own contents could not be enumerated
+                // (server-side OSError, see config_files.py) - render
+                // that explicitly instead of leaving an empty <ul> that
+                // is visually identical to a directory that really has
+                // nothing in it.
+                if (node.list_error) {
+                    childList.appendChild(this._noticeLi(
+                        window.ConfigEditorRoots.listErrorNotice(node.list_error),
+                    ));
+                    return;
+                }
                 (node.children || []).forEach(
                     (child) => childList.appendChild(this._buildNodeEl(rootId, child, depth + 1)),
                 );

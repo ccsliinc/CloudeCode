@@ -102,6 +102,25 @@ function missingRootNotice(label, reason, projectPath) {
 }
 
 /**
+ * The user-facing sentence for ONE directory node whose own contents
+ * could not be enumerated (server set TreeNode.list_error - see
+ * config_files.py's THREE-OUTCOME RULE handling of OSError from
+ * iterdir()). Distinct from missingRootNotice: this is a node partway
+ * INSIDE an otherwise-successful tree, not a whole root. Kept as a pure
+ * function (like every other notice-builder in this module) so the
+ * exact wording is asserted in tests/test_config_editor_roots.node.mjs
+ * rather than only visible by opening the picker.
+ * @param {string} listError  The server-supplied reason (e.g. a
+ *   Permission denied strerror), never null/undefined when called - the
+ *   caller only invokes this when node.list_error is truthy.
+ * @returns {string}  One lowercase sentence, never conflated with "this
+ *   directory is empty".
+ */
+function listErrorNotice(listError) {
+    return `could not list contents: ${listError}`;
+}
+
+/**
  * Turn a project context into the ordered list of things the tree must
  * render. Every root is either fetched or explained - nothing is dropped
  * silently, which is the whole point of this function existing.
@@ -127,6 +146,7 @@ window.ConfigEditorRoots = {
     ROOTS: CONFIG_EDITOR_ROOTS,
     resolveProjectContext,
     projectRootsNotice,
+    listErrorNotice,
     missingRootNotice,
     planRoots,
 };
