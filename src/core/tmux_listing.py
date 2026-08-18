@@ -176,12 +176,16 @@ class TmuxListing:
         reason: short token explaining the outcome, or None for a plain
             successful listing.
         detail: optional human-readable text for logs and tooltips.
+        refused_rows: how many raw tmux rows the parser REFUSED. See
+            :attr:`complete` - a listing can be ``ok=True`` and still not
+            be a complete enumeration.
     """
 
     ok: bool
     sessions: List[Any] = field(default_factory=list)
     reason: Optional[str] = None
     detail: Optional[str] = None
+    refused_rows: int = 0
 
     @classmethod
     def answered(
@@ -189,6 +193,7 @@ class TmuxListing:
         sessions: Sequence[Any],
         reason: Optional[str] = REASON_LISTED,
         detail: Optional[str] = None,
+        refused_rows: int = 0,
     ) -> "TmuxListing":
         """Build a trustworthy answer, possibly an empty one.
 
@@ -197,6 +202,8 @@ class TmuxListing:
                 real answer of zero, which is the point).
             reason: optional explanation token, e.g. ``no_server``.
             detail: optional human-readable text.
+            refused_rows (int): how many raw rows the parser refused, so
+                the caller can tell a COMPLETE answer from a partial one.
 
         Output:
             TmuxListing: with ``ok=True``.
@@ -205,7 +212,37 @@ class TmuxListing:
             >>> TmuxListing.answered(["cloude_a"]).ok
             True
         """
-        return cls(ok=True, sessions=list(sessions), reason=reason, detail=detail)
+        return cls(
+            ok=True,
+            sessions=list(sessions),
+            reason=reason,
+            detail=detail,
+            refused_rows=int(refused_rows),
+        )
+
+    @property
+    def complete(self) -> bool:
+        """Whether the rows are the WHOLE answer, not merely a valid one.
+
+        Description: ``ok`` and ``complete`` are different questions and
+          conflating them is a data-loss bug, not a cosmetic one.
+          ``list_attachable_sessions`` REFUSES any tmux row it cannot
+          fully validate and continues with the rest, so a single
+          malformed row yields ``ok=True`` with a session silently
+          missing from ``sessions``. Presence-based logic is fine with
+          that. ABSENCE-based logic is not: anything that concludes "this
+          instance is gone because it is not in the list" would conclude
+          it about a session that is alive and merely unparseable, and
+          then write that conclusion to disk. Such callers must read this
+          property, not just ``ok``.
+        Inputs: none.
+        Output: bool - True when the probe answered AND every row it saw
+            made it into ``sessions``.
+        Example:
+            >>> TmuxListing.answered([], refused_rows=1).complete
+            False
+        """
+        return self.ok and self.refused_rows == 0
 
     @classmethod
     def unavailable(cls, reason: str, detail: Optional[str] = None) -> "TmuxListing":
