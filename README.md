@@ -37,6 +37,7 @@ The session never restarted, never lost context, and never needed an SSH client.
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Install](#install)
+- [Upgrading and rolling back](#upgrading-and-rolling-back)
 - [Configuration](#configuration)
 - [Security model](#security-model)
 - [Honest limits](#honest-limits)
@@ -383,6 +384,66 @@ Docker mode cannot use a Claude Pro/Max subscription — the macOS Keychain isn'
 ### Getting to it from outside your LAN
 
 Cloude Code binds to the interface you pick and stops there. It ships no tunnel. For off-LAN access, put it behind Tailscale, UniFi Teleport, a VPN, or your own reverse proxy.
+
+---
+
+## Upgrading and rolling back
+
+Two scripts, `scripts/upgrade.sh` and `scripts/rollback.sh`, move a Path B (from-source) install between release tags. This section is in the root README rather than a separate `docs/` file because upgrading is something you do to the same checkout Install/Configuration/Security already describe, and every fact those scripts depend on (`.env`, `config.json`, `LOG_DIRECTORY`, `config_version`, port 8000) is defined a few sections up. Splitting it out would mean either duplicating that context or forcing you to jump between two files mid-upgrade.
+
+**This covers Path B only.** The packaged `.app` has no in-place upgrader (see Honest limits) - a new version means downloading a new DMG and dragging it over the old one in `/Applications`. What these scripts DO share with the packaged app is everything under the hood: the same version resolver (`src/core/version.py`), the same config migration (`src/core/config_migration.py`), and the same release-tag self-check the app itself runs in the background and reports at `GET /api/v1/version` (TOTP-gated; the home bottom bar's version chip and the server-status panel both read it). If that self-check reports `update_available`, it names the tag and prints the exact command to run.
+
+### Everything is pinned to a release tag
+
+There is no "upgrade to whatever's newest on the branch." `scripts/upgrade.sh` only moves to a tag that is a real, published release tag on the remote (checked with `git ls-remote`, the same call the in-app self-check makes), and it refuses a tag that does not exist there. Given no tag, it resolves the newest one itself. This is the "idiot-proof" requirement: you cannot typo your way onto an untagged commit, and you cannot silently drift onto whatever HEAD happens to be.
+
+### Upgrading
+
+```bash
+cd cloudecode                 # your Path B checkout
+./scripts/upgrade.sh          # upgrades to the latest release tag
+./scripts/upgrade.sh 0.9.0    # upgrades to a specific tag
+./scripts/upgrade.sh 0.9.0 --yes    # non-interactive (no confirmation prompt)
+```
+
+What it does, in order: resolves the version you are currently on and refuses to continue if it cannot (see "when it refuses" below); resolves the target tag and confirms it is a real release tag; if you are already on that tag, it stops there and changes nothing; otherwise it takes a full backup of your user state and prints the backup's path before touching anything; shows you exactly what it is about to do and asks you to confirm (unless `--yes`); stops the server; runs `git fetch --tags` then `git checkout tags/<tag>`; installs that tag's `requirements.txt`; runs the config migration; restarts the server; and then verifies the server actually answers on `/health` and reports the version you just asked for. A verification failure is reported as a failure, with the exact rollback command to run - never as a quiet warning.
+
+Running the same command twice in a row is safe: the second run sees you are already on the target tag and does nothing further (no second backup, no restart).
+
+### Rolling back
+
+```bash
+./scripts/rollback.sh 0.8.1               # go back to a specific version
+./scripts/rollback.sh 0.8.1 --yes          # non-interactive
+```
+
+Rollback checks out the older code AND restores the backup that was captured right before you left that version, because config migrations only ever move forward. Older code reading a config.json that a newer migration wrote is not a state anyone tested. The rollback target must have a matching backup or the script refuses outright - see below.
+
+### Where backups live
+
+Every upgrade writes a fresh, timestamped backup into `.upgrade-backups/` inside the checkout, before it changes anything. The directory name records both versions, for example `.upgrade-backups/20260817T235913Z_from-0.8.1_to-0.9.0`. Inside it, `install/` holds `.env` and `config.json` (and `config.json.bak` / `.update-check.json` when present), and `state/` holds whatever was found under `LOG_DIRECTORY` at the time: `refresh_tokens.db`, `session_metadata.json`, and, when they have been created yet, `pinned_themes.json` and `unread_state.json`. A file `.manifest` inside the backup records, for every one of those names, exactly one of three outcomes: backed up, legitimately not present yet (a feature you have not used yet, like pinning a theme), or - if that ever happens - refuses to finish rather than pretend the backup is complete. `LOG_DIRECTORY`'s default in `.env.example` is `/tmp/cloude-code-logs`, which macOS clears on reboot; if you have not changed it, that is where your session/auth state actually lives, not the checkout - the backup follows it there rather than the install directory alone.
+
+Nothing is ever deleted from `.upgrade-backups/`. Prune it by hand if it grows large; the scripts only ever add to it.
+
+### When it refuses
+
+Both scripts follow one rule: if a check cannot be completed, they say so and stop, rather than guessing. Concretely:
+
+- **"could not determine the current version"** - `upgrade.sh` will not move a version it cannot name. This can happen on a checkout with no `.git`, or one that is not itself a git work tree root (see `src/core/version.py`'s resolution order). Fix the checkout, or if this is a brand-new `git clone` that has never been run, there is nothing installed to upgrade yet.
+- **"no backup found for version X"** - `rollback.sh` refuses rather than checking out old code next to a config it was never tested against. If you genuinely have a backup somewhere else, pass `--backup-dir`.
+- **"the server did not answer .../health"** or **"reports version X, expected Y"** - the upgrade or rollback ran, but the server did not come back the way it should have. This is reported as a failure with a non-zero exit, and for an upgrade it prints the exact `./scripts/rollback.sh <previous version>` command to recover with.
+- **"could not reach \<remote\> to verify the tag exists"** - this is a third, separate outcome from "the tag does not exist." A network problem or an unreachable remote is not the same as a bad tag, and the script says which one happened rather than guessing.
+- **"tracked files have local modifications"** - both scripts refuse to run `git checkout` over a dirty tree. Commit or discard the changes first.
+
+None of these leave the install half-changed silently. If a step fails partway (for example, a copy during restore), the message says exactly that and tells you which command to run to inspect or finish the job by hand.
+
+### The unidentified-developer prompt (packaged app only)
+
+The DMG is code-signed but not notarized (see Honest limits and `.github/workflows/release.yml`), so the first time you open a new version of the app, macOS Gatekeeper shows "Cloude Code cannot be opened because it is from an unidentified developer." **Right-click the app and choose Open** - that one-time step clears it, and you will not see it again for that build. `xattr -dr com.apple.quarantine` also works from Terminal if you prefer. This is expected and is not a sign anything is broken.
+
+### Future: a state database, not yet built
+
+A single SQLite database at `~/Library/Application Support/CloudeCode/cloude.db` is planned to eventually hold projects, sessions, adoption state, pinned themes, and unread state in one place instead of the scattered JSON files described above. **This is a note for whoever adds it, not a description of anything that exists today.** When it lands, `scripts/upgrade.sh`'s backup step must be extended to include it, and it must be copied with SQLite's own backup API or `VACUUM INTO`, never a plain file copy (`cp`) - a WAL-mode database copied mid-write with `cp` can produce a file that opens without error and is silently missing the most recent transactions. That failure mode looks identical to a clean backup until someone tries to restore it.
 
 ---
 
