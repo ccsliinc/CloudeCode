@@ -1165,6 +1165,12 @@ class TmuxBackend(SessionBackend):
         raw_lines = split_listing_rows(stdout_text)
         live_names: set = set()
         results: List[Dict[str, Any]] = []
+        # Counted, not just logged. A refused row makes this listing a
+        # VALID answer that is not a COMPLETE one, and any caller
+        # reasoning from ABSENCE (the lifecycle reconciler) must be able
+        # to tell those apart before it writes a verdict to disk. See
+        # TmuxListing.complete.
+        refused_rows = 0
 
         for line in raw_lines:
             row = parse_listing_row(line)
@@ -1172,6 +1178,7 @@ class TmuxBackend(SessionBackend):
                 # A row we cannot fully validate is REFUSED, never
                 # half-trusted. Logged so a format change shows up as
                 # rows going missing WITH a reason, not as a short list.
+                refused_rows += 1
                 if line.strip():
                     logger.warning(
                         "list_attachable_sessions_unparseable_row",
@@ -1212,7 +1219,7 @@ class TmuxBackend(SessionBackend):
                     note="reconciler should prune these on next startup",
                 )
 
-        return TmuxListing.answered(results)
+        return TmuxListing.answered(results, refused_rows=refused_rows)
 
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""

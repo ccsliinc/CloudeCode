@@ -23,6 +23,7 @@ import re
 import base64
 import secrets
 import shutil
+import sqlite3
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -3181,6 +3182,98 @@ class SessionManager:
             )
             return None
 
+    def reconcile_lifecycle(self, listing: TmuxListing) -> "ReconcileOutcome":
+        """Fold one tmux listing into the stored ``lifecycle`` column.
+
+        Description: the bridge between the live probe and the datastore,
+          and the ONLY place this class writes ``lifecycle``. It is called
+          from :meth:`list_attachable_sessions` on the branch where the
+          probe ANSWERED, because that listing is already a complete
+          enumeration of the socket, the home screen pays for it on every
+          load anyway, and a second scheduled probe would only add a
+          second way to be wrong.
+
+          It hands the socket the probe was ACTUALLY bound to, never the
+          configured one - the two can disagree under a pinned test
+          backend, and reconciling socket A's rows against socket B's
+          listing would reap every one of them.
+
+          NEVER RAISES. A datastore that is absent, locked or unreadable
+          is a reason to leave every stored row exactly as it is, not a
+          reason to fail the launcher's session list. The failure is
+          logged and the outcome says it was not evaluated.
+
+          The transaction is owned here, not in
+          :func:`~src.core.session_lifecycle.reconcile_from_listing`,
+          which matches ``session_identity.record_instance``. The commit
+          is skipped entirely when nothing was reaped, so the common case
+          - a poll where every session is still alive - opens the file,
+          runs one SELECT and writes nothing at all.
+        Inputs: listing (TmuxListing) - the probe result; its ``ok`` and
+          ``complete`` are re-read inside the reconciler, which is where
+          the gate lives.
+        Output: ReconcileOutcome - ``evaluated=False`` whenever the probe
+          could not answer, the listing was partial, or the datastore
+          could not be opened. Those are three different reasons and none
+          of them is "nothing died".
+        Example: mgr.reconcile_lifecycle(listing).changed
+        """
+        from src.core.session_lifecycle import (
+            RECONCILE_NO_TABLE,
+            ReconcileOutcome,
+            reconcile_from_listing,
+        )
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            return ReconcileOutcome(
+                outcome=RECONCILE_NO_TABLE,
+                evaluated=False,
+                detail="datastore not available for writing",
+            )
+        try:
+            outcome = reconcile_from_listing(
+                conn,
+                listing=listing,
+                socket=self._last_probe_socket or self._tmux_socket_name(),
+            )
+            if outcome.changed:
+                # PROVABLY REDUNDANT TODAY, KEPT ANYWAY. src.core.db.connect
+                # opens with isolation_level=None, so the UPDATE is already
+                # durable the moment it executes and this commit is a no-op
+                # (pinned by test_the_datastore_connection_is_autocommit).
+                # It stays because it costs nothing and is the only line
+                # that would keep this correct if that ever changes, and a
+                # reap that silently vanished on close would look exactly
+                # like a machine where nothing had died.
+                conn.commit()
+                logger.info(
+                    "session_lifecycle_reconciled",
+                    stopped=len(outcome.stopped_uuids),
+                    examined=outcome.examined,
+                    session_uuids=list(outcome.stopped_uuids),
+                )
+            return outcome
+        except sqlite3.Error as exc:
+            # A datastore problem is not a verdict about any session, so
+            # the rows keep whatever they already said. Never re-raised:
+            # the launcher's session list does not depend on this.
+            logger.warning(
+                "session_lifecycle_reconcile_failed",
+                error=str(exc),
+                note="stored lifecycles left untouched",
+            )
+            return ReconcileOutcome(
+                outcome=RECONCILE_NO_TABLE,
+                evaluated=False,
+                detail=f"datastore error: {exc}",
+            )
+        finally:
+            try:
+                conn.close()
+            except sqlite3.Error:  # pragma: no cover - close failure is not a verdict
+                pass
+
     def list_attachable_sessions_with_socket(self):
         """Enumerate attachable sessions AND name the socket they came from.
 
@@ -3265,6 +3358,14 @@ class SessionManager:
         self._last_probe_ok = True
         self._last_probe_reason = None
         self._last_probe_detail = None
+        # THE REAPER. This listing is a complete enumeration of the
+        # socket, so it is the one moment the app can tell that a stored
+        # 'running' row's tmux instance is gone. Runs here rather than on
+        # a timer because the home screen already pays for this probe;
+        # writes only when something actually died. The ok / complete
+        # gate lives inside reconcile_from_listing, not here, so no
+        # caller can bypass it. Never raises.
+        self.reconcile_lifecycle(listing)
         rows = listing.sessions
         # Status lights: one extra bulk tmux call (list-panes -a), reused
         # via the same probe backend / socket. This is the ONLY place a
@@ -3336,8 +3437,13 @@ class SessionManager:
                 )
                 row["agent_family"] = display_family.name if display_family else None
                 row["agent_family_source"] = display_family_source
+        # refused_rows is carried through: this method REWRAPS the
+        # backend's listing, and dropping the count here would hand every
+        # downstream absence-based caller a partial list that claims to
+        # be complete.
         return TmuxListing.answered(rows, reason=listing.reason,
-                                    detail=listing.detail)
+                                    detail=listing.detail,
+                                    refused_rows=listing.refused_rows)
 
     async def adopt_external_session(
         self,
