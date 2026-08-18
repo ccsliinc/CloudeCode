@@ -1,7 +1,7 @@
 {
   "id": "hermes",
   "name": "Hermes",
-  "description": "8-bit amber-on-black retro terminal — gold accents, CRT glow.",
+  "description": "8-bit amber-on-black retro terminal \u2014 gold accents, CRT glow.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -92,6 +92,7 @@
     "brightWhite": "#ffe699"
   },
   "themeCss": "theme.css",
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/out-there.m4a",
     "srcFallback": "/static/assets/audio/out-there.ogg",

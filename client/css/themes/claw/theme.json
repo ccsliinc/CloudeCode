@@ -1,7 +1,7 @@
 {
   "id": "claw",
   "name": "Claw",
-  "description": "OpenClaw cosmic dark — deep purple-black with a coral red accent and starfield wash.",
+  "description": "OpenClaw cosmic dark \u2014 deep purple-black with a coral red accent and starfield wash.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -92,6 +92,7 @@
     "brightWhite": "#ffffff"
   },
   "themeCss": "theme.css",
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
     "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
