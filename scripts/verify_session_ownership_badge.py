@@ -5,14 +5,32 @@ Runs the REAL FastAPI app in-process against a DEDICATED tmux socket
 (``cloudeverify``, pinned in-process below) so it cannot see or touch any
 session on the app's normal ``cloude`` socket. No port is bound.
 
+WHAT CHANGED AT S7, AND WHY THE OLD ASSERTION WAS RETIRED RATHER THAN
+RELAXED. Until S7 an adoption was recorded NOWHERE - the name was
+deliberately kept out of ``owned_tmux_sessions``, so an adopted session
+was permanently EXTERNAL and this script asserted exactly that. S7 makes
+adoption durable in ``sessions.origin``, and the product decision it
+implements is that ADOPTING A SESSION MAKES IT OURS, PERMANENTLY. So the
+five "adopted session badges external" checks below are now
+"adopted session badges OURS". That is a change of TRUTH, not a
+weakening of the test: every one of them still asserts an exact value,
+and the script now proves MORE than it did, because the pre-adopt
+external state is asserted separately from the post-adopt owned state.
+The one thing that must never regress - a badge that FLIPS when the user
+merely opens, closes or reloads a session - is still checked at every
+step, and is now checked in both directions.
+
 What it proves, in order:
   1. a session CREATED through POST /sessions badges owned;
-  2. a session made directly in tmux and then ADOPTED badges external;
-  3. opening and closing either one does not flip its badge;
-  4. RESTARTING the server (a full lifespan shutdown + startup, which
+  2. a session made directly in tmux badges EXTERNAL before adoption;
+  3. ADOPTING it flips it to OURS, once, at the moment of the claim;
+  4. opening and closing either one does not flip its badge;
+  5. RESTARTING the server (a full lifespan shutdown + startup, which
      rebuilds SessionManager from disk and re-attaches through the adopt
      path) leaves both badges unchanged. That is the whole point: the
-     restart is what re-mints ``adopted:`` ids for sessions we still own.
+     restart is what re-mints ``adopted:`` ids for sessions we still own,
+     and after S7 it is also what proves the adoption is on DISK rather
+     than in a set that dies with the process.
 
 Usage:
     venv/bin/python3 scripts/verify_session_ownership_badge.py
@@ -192,8 +210,12 @@ async def phase_one() -> tuple[str, dict[str, bool]]:
             b = await badges(client)
             check("created session still owned (external now OPEN)",
                   b.get(created_name), True)
-            check("adopted session still external once OPEN",
-                  b.get(EXTERNAL_NAME), False)
+            # S7: the claim is the moment ownership changes, and it
+            # changes exactly once. Before the POST above this same
+            # session asserted False; it must now be True and stay True
+            # through every open, close and restart below.
+            check("adopted session badges OURS once ADOPTED",
+                  b.get(EXTERNAL_NAME), True)
 
             live_ids = await ids(client)
             print(f"ids while open: {live_ids}")
@@ -204,8 +226,8 @@ async def phase_one() -> tuple[str, dict[str, bool]]:
             b = await badges(client)
             check("created session still owned once CLOSED",
                   b.get(created_name), True)
-            check("adopted session still external once CLOSED",
-                  b.get(EXTERNAL_NAME), False)
+            check("adopted session still OURS once CLOSED",
+                  b.get(EXTERNAL_NAME), True)
 
             # RE-OPEN both through the adopt path (what the UI does).
             for name in (created_name, EXTERNAL_NAME):
@@ -217,14 +239,20 @@ async def phase_one() -> tuple[str, dict[str, bool]]:
             b = await badges(client)
             check("created session still owned once RE-OPENED",
                   b.get(created_name), True)
-            check("adopted session still external once RE-OPENED",
-                  b.get(EXTERNAL_NAME), False)
+            check("adopted session still OURS once RE-OPENED",
+                  b.get(EXTERNAL_NAME), True)
 
             return created_name, b
 
 
 async def phase_two(created_name: str, before: dict[str, bool]) -> None:
     """Second server run: the RESTART. Badges must be identical.
+
+    After S7 this is the load-bearing phase: the adopted badge is only
+    True here because the claim was written to the datastore. A restart
+    rebuilds SessionManager from disk and the legacy in-memory owned set
+    starts empty, so an adoption that lived only in memory would read
+    External here and fail.
 
     Args:
         created_name: tmux name of the session made via POST /sessions.
@@ -253,11 +281,15 @@ async def phase_two(created_name: str, before: dict[str, bool]) -> None:
             after = await badges(client)
             check("created session STILL owned after restart",
                   after.get(created_name), before.get(created_name))
-            check("adopted session STILL external after restart",
+            check("adopted session STILL ours after restart",
                   after.get(EXTERNAL_NAME), before.get(EXTERNAL_NAME))
             check("owned badge value after restart", after.get(created_name), True)
-            check("external badge value after restart",
-                  after.get(EXTERNAL_NAME), False)
+            # THE POINT OF S7. An in-memory set cannot survive this. The
+            # only way this reads True after a full lifespan restart is
+            # if origin='adopted' is a row on disk keyed on the tmux
+            # instance triple.
+            check("adopted badge value after restart",
+                  after.get(EXTERNAL_NAME), True)
 
 
 async def main() -> int:

@@ -16,14 +16,9 @@ that means "read it, and the answer was nothing". ``none`` and
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-from src.core.db_models import (
-    SESSION_ATTRIBUTION_DERIVED_DEEPEST,
-    SESSION_ATTRIBUTION_NONE,
-    SESSION_ATTRIBUTION_UNKNOWN,
-)
+from src.core.project_attribution import attribute
 
 
 def attribute_working_dir(
@@ -31,37 +26,25 @@ def attribute_working_dir(
 ) -> tuple[Optional[int], str]:
     """Resolve one session's working directory to a project, deepest match wins.
 
-    Description: design section 5.3 step 7. THREE outcomes, and the
-      difference between the last two is load-bearing: ``none`` means we
-      READ the working directory and it belongs to no known project;
-      ``unknown`` means we could not read it at all. Only ``unknown``
-      lands the row in NEEDS ATTENTION, and a row is NEVER guessed to the
-      nearest project.
+    Description: design section 5.3 step 7. THE RULE ITSELF NOW LIVES IN
+      src/core/project_attribution.py and this is a thin delegate, kept
+      because the import is not the only caller any more - the adopt path
+      asks the same question - and a rule with two callers must not have
+      two copies. See that module for why ``resolve()`` is forbidden and
+      why ``none`` and ``unknown`` are different answers.
 
-      Matching is on path components, not string prefix, so ``/a/bc``
-      does not match a project rooted at ``/a/b``.
+      What changed underneath, and it is the whole of the live-data bug:
+      the old body compared RAW strings, so a ``~``-form path could never
+      match an expanded root, and it ranked the deepest match by string
+      LENGTH rather than by path depth.
     Inputs: working_dir (str | None) - the probed cwd; None means the
       probe did not answer. roots (dict[str, int]) - project root ->
-      project id, roots already normalised by project_store.
+      project id.
     Output: tuple[int | None, str] - (project_id, attribution), where
       attribution is one of ``derived_deepest``, ``none``, ``unknown``.
     Example: attribute_working_dir('/a/b/c', {'/a/b': 7})  # (7, 'derived_deepest')
     """
-    if not working_dir:
-        return None, SESSION_ATTRIBUTION_UNKNOWN
-    try:
-        candidate = Path(working_dir)
-        parts = [str(candidate), *(str(p) for p in candidate.parents)]
-    except (TypeError, ValueError):
-        return None, SESSION_ATTRIBUTION_UNKNOWN
-    best_id: Optional[int] = None
-    best_len = -1
-    for root, project_id in roots.items():
-        if root in parts and len(root) > best_len:
-            best_id, best_len = project_id, len(root)
-    if best_id is None:
-        return None, SESSION_ATTRIBUTION_NONE
-    return best_id, SESSION_ATTRIBUTION_DERIVED_DEEPEST
+    return attribute(working_dir, roots)
 
 
 def _project_roots(conn: sqlite3.Connection) -> Dict[str, int]:

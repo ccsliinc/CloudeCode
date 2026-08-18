@@ -266,21 +266,56 @@ def test_owned_tmux_sessions_is_still_alive_this_commit():
     assert 'payload["owned_tmux_sessions"] = sorted(self.owned_tmux_sessions)' in source
 
 
-def test_the_adopt_route_does_not_persist_origin_yet():
-    """Persisting adoption is S7. Doing it here breaks the shipped verifier.
+def test_the_adopt_path_now_persists_origin():
+    """S7 INVERTS the S4 guard that used to live here. Read this before editing.
 
-    session_store.adopt_instance exists and is tested, but nothing in
-    session_manager may call it yet: the badge for an adopted session
-    would flip to owned and
-    scripts/verify_session_ownership_badge.py - which must pass unchanged
-    across this commit - asserts it stays external.
+    The retired assertion was ``"adopt_instance" not in source`` - S4
+    built the UPDATE and deliberately left it unwired, because wiring it
+    flips the badge for adopted sessions and the shipped verifier
+    asserted it stayed external. S7 is that wiring, and
+    scripts/verify_session_ownership_badge.py moved with it.
+
+    WHY THIS IS NOT A SOURCE GREP. The old form would have passed
+    unchanged against the real S7 code, because session_manager reaches
+    adoption through ``persist_adoption`` and never types the string
+    ``adopt_instance`` at all. A guard that a change satisfies by
+    accident is not a guard. Two rounds of adversarial review on S4 found
+    the same shape twice: a proof constraining one module while the hole
+    sat one layer up in the caller. So this asserts BEHAVIOUR at the
+    layer that enforces it - the manager method the route calls - against
+    a real database.
     """
-    source = SESSION_MANAGER_PATH.read_text()
-    assert "adopt_instance" not in source, (
-        "session_manager calls adopt_instance, which persists origin. That "
-        "is build step S7 and it flips the ownership badge for adopted "
-        "sessions; the shipped badge verifier asserts the opposite"
+    from contextlib import closing
+
+    from src.core.db_models import SESSION_ORIGIN_ADOPTED
+    from src.core.session_adopt_persist import persist_adoption
+    from src.core.session_manager import SessionManager
+    from tests.s7_helpers import (
+        TEST_SOCKET,
+        listing_of,
+        listing_row,
+        migrated_connection,
+        session_row,
     )
+
+    assert hasattr(SessionManager, "persist_adoption"), (
+        "SessionManager.persist_adoption is the S7 wire between "
+        "POST /sessions/adopt and sessions.origin. Without it an "
+        "adoption is recorded nowhere and does not survive a restart"
+    )
+    # And the write it reaches must be the one that flips origin.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as state_dir:
+        with closing(migrated_connection(Path(state_dir))) as conn:
+            listing = listing_of([listing_row("ext", 4242)])
+            result = persist_adoption(
+                conn, socket=TEST_SOCKET, name="ext", listing=listing
+            )
+            assert result.persisted, result.detail
+            stored = session_row(conn, "ext")
+            assert stored["origin"] == SESSION_ORIGIN_ADOPTED
+            assert stored["adopted_at"] is not None
 
 
 def test_the_backend_resolution_order_is_documented_in_code():

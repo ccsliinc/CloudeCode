@@ -430,6 +430,12 @@
          terminal.js and session-sidebar.js, all of which call
          window.SessionRowActions. -->
     <script src="/static/js/session-row-actions.js"></script>
+    <!-- Session detail: renders HOW a session became yours (origin) and
+         which project it belongs to. The row badge shows only ours vs
+         external; created-vs-adopted lives here. Pure string rendering,
+         no state, no events - load order is irrelevant beyond being
+         before any consumer. -->
+    <script src="/static/js/session-detail.js"></script>
     <!-- Per-row session-theme colours. Must load BEFORE launchpad.js and
          session-sidebar-rows.js, both of which call
          window.SessionThemeTint. It reads themes/registry.js lazily at

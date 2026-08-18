@@ -193,6 +193,13 @@ class SessionManager:
         # is skipped and no notification events fire.
         self._notification_router = None
 
+        # The tmux socket the most recent attachable probe was bound to.
+        # None until the first probe runs. Read by
+        # ``list_attachable_sessions_with_socket`` so the adopt path keys
+        # its rows on the socket the listing came from rather than on the
+        # one settings claims.
+        self._last_probe_socket: Optional[str] = None
+
         # Track 1 - adopt-external-session support.
         #
         # ``owned_tmux_sessions`` holds the full tmux session names that
@@ -2797,16 +2804,138 @@ class SessionManager:
             except Exception:  # noqa: BLE001 - close failure is not a verdict
                 pass
 
+    def _writable_datastore_connection(self):
+        """Open the datastore for WRITING, or return None.
+
+        Description: the sibling of :meth:`_datastore_connection`, which
+          is deliberately ``create=False`` because it serves the RENDER
+          path and must never bring a database into existence as a side
+          effect of drawing a badge. This one is used by the adopt path,
+          which is an explicit user action on an app that has already
+          booted, so the file is expected to be there; it still declines
+          to create one, because an adoption that silently births a fresh
+          empty datastore would lose the install's history rather than
+          record a claim into it.
+        Inputs: none (reads ``settings.get_state_dir()``).
+        Output: sqlite3.Connection | None - None when the datastore
+          cannot be opened at all, which the caller must report as
+          COULD NOT EVALUATE and never as a failed adoption.
+        """
+        try:
+            from src.core.db import connect, db_path_for
+
+            path = db_path_for(settings.get_state_dir())
+            if not Path(path).exists():
+                return None
+            return connect(path, create=False)
+        except Exception as exc:  # noqa: BLE001 - adoption must not crash
+            logger.warning("adopt_datastore_unavailable", error=str(exc))
+            return None
+
+    def persist_adoption(self, name: str):
+        """Write ``origin='adopted'`` for one tmux session, durably.
+
+        Description: build step S7. Adoption used to be recorded NOWHERE:
+          the name was deliberately kept out of ``owned_tmux_sessions``
+          (an in-memory set rebuilt from a live listing anyway), so an
+          adopted session was permanently external and the claim did not
+          survive so much as a page reload. It is now a stored column on
+          a row keyed by the tmux INSTANCE triple, so it survives an app
+          restart, a server restart and a reboot.
+
+          THE DECISION: an adopted session is OURS, for good. ``created``
+          and ``adopted`` both badge as ours because
+          ``session_store.owned_instances`` selects
+          ``SESSION_OWNED_ORIGINS``, which holds both. ``observed`` is the
+          only external value. Which of the two it was stays in the
+          column and is shown on the session detail surface.
+
+          Takes a FRESH listing rather than trusting the client's, so an
+          instance that died between the client's list and its click is
+          caught here and reported as gone instead of being claimed.
+        Inputs: name (str) - the tmux session name being adopted.
+        Output: AdoptPersistResult - ``persisted`` is True only when a
+          row now carries ``origin='adopted'``. Every failure is a named
+          outcome, never an exception and never a silent success.
+        Example: mgr.persist_adoption('cloude_a').persisted
+        """
+        from src.core.session_adopt_persist import (
+            PERSIST_LISTING_UNAVAILABLE,
+            AdoptPersistResult,
+            persist_adoption,
+        )
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            return AdoptPersistResult(
+                outcome=PERSIST_LISTING_UNAVAILABLE,
+                detail="the datastore could not be opened to record the claim",
+            )
+        try:
+            from src.core.db import transaction
+            from src.core.tmux_session_cwd import make_working_dir_probe
+
+            # THE SOCKET THE LISTING ACTUALLY RAN AGAINST, not the one
+            # settings says it should have. Same lesson main.py already
+            # carries for the first-run import: a row keyed on one socket
+            # and a probe run against another produce a consistent-looking
+            # result that is wrong, because the writer and the reader
+            # agree with each other and neither agrees with tmux. Reading
+            # it off the probe backend also keeps the cwd probe on that
+            # same socket, so a test or verification harness that pins a
+            # dedicated socket cannot leak a probe onto the real one.
+            probe_socket, listing = self.list_attachable_sessions_with_socket()
+            socket = probe_socket or self._tmux_socket_name()
+            with transaction(conn):
+                return persist_adoption(
+                    conn,
+                    socket=socket,
+                    name=name,
+                    listing=listing,
+                    working_dir_probe=make_working_dir_probe(socket),
+                )
+        except Exception as exc:  # noqa: BLE001 - adoption must not crash
+            logger.warning(
+                "adopt_persist_failed", session=name, error=str(exc)
+            )
+            return AdoptPersistResult(
+                outcome=PERSIST_LISTING_UNAVAILABLE,
+                detail=f"could not record the claim: {exc}",
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
     def _tmux_socket_name(self) -> str:
         """The tmux socket the stored instance triples are keyed on.
 
         Description: read from settings with the schema default as the
           fallback, so a row written by the import and a row read by the
           badge cannot disagree about which socket they describe.
+        THE PROBE WINS OVER SETTINGS WHEN THE TWO DISAGREE, and that is
+          the whole point of this method rather than a raw settings read.
+          A row is WRITTEN keyed on the socket the adopt path saw and is
+          READ back by ``owned_instances`` keyed on whatever this
+          returns; if those two ever differ, the badge is answered from a
+          socket nothing was written to and every adopted session reads
+          as external. Following the socket the probe was ACTUALLY bound
+          to keeps writer and reader on the same key AND keeps that key
+          equal to reality - the failure main.py's ``socket=`` argument
+          already documents, where the two sides agreed with each other
+          and neither agreed with tmux. In production the values are
+          identical; they diverge only where a harness pins a backend to
+          a dedicated socket, and there following the pin is exactly
+          right.
         Inputs: none.
         Output: str.
         """
         from src.core.db_models import DEFAULT_TMUX_SOCKET
+
+        probed = getattr(self, "_last_probe_socket", None)
+        if probed:
+            return str(probed)
 
         session_cfg = getattr(settings, "session", None)
         return (
@@ -2881,6 +3010,27 @@ class SessionManager:
             return False
         return any(owned_name == name for owned_name, _epoch in from_db)
 
+    def list_attachable_sessions_with_socket(self):
+        """Enumerate attachable sessions AND name the socket they came from.
+
+        Description: :meth:`list_attachable_sessions` throws away one
+          fact its caller sometimes needs - WHICH socket the probe ran
+          against. That is normally the configured value, but it is read
+          off the probe backend rather than off settings, because the two
+          can disagree (a harness may pin a backend to a dedicated
+          socket) and a row keyed on one socket while the listing came
+          from another is the exact defect main.py's ``socket=`` argument
+          was added to fix: writer and reader agree with each other and
+          neither agrees with tmux.
+        Inputs: none.
+        Output: tuple[str | None, TmuxListing] - the socket the probe
+          used (None when the backend does not expose one), and the
+          listing itself, ``ok=False`` propagated verbatim.
+        Example: mgr.list_attachable_sessions_with_socket()[0]  # 'cloude'
+        """
+        listing = self.list_attachable_sessions()
+        return self._last_probe_socket, listing
+
     def list_attachable_sessions(self) -> TmuxListing:
         """Enumerate tmux sessions on our socket, flagged by ownership.
 
@@ -2910,6 +3060,10 @@ class SessionManager:
             working_dir=Path.home(),
             on_output=None,
         )
+        # Record the socket the probe is ACTUALLY bound to, for
+        # list_attachable_sessions_with_socket. See that method for why
+        # settings is not a trustworthy answer to this question.
+        self._last_probe_socket = getattr(probe, "socket_name", None)
         listing = coerce_listing(
             probe.list_attachable_sessions(
                 owned_names=set(self.owned_tmux_sessions),
@@ -3070,6 +3224,39 @@ class SessionManager:
                     except Exception:
                         pass
             self._wipe_session_state(adopted_id)
+
+        # S7 - PERSIST THE CLAIM BEFORE ATTACHING, so the liveness gate
+        # runs before anything is torn down or built. ``origin`` is
+        # written once and never recomputed, which is what makes an
+        # adopted session stay ours across a restart. A session that
+        # died between the client's listing and this click is caught
+        # here and raised as a NAMED gone error - the route answers
+        # "that session is no longer there" with a refresh, and NO ROW
+        # IS MARKED ADOPTED. Every other persistence failure is logged
+        # and the adoption continues: the user gets his session, and the
+        # badge falls back to the legacy name tier rather than the whole
+        # request failing over a bookkeeping write.
+        from src.core.session_adopt_persist import (
+            PERSIST_SESSION_GONE,
+            AdoptTargetGoneError,
+        )
+
+        adopt_persist = self.persist_adoption(name)
+        if adopt_persist.outcome == PERSIST_SESSION_GONE:
+            raise AdoptTargetGoneError(
+                adopt_persist.detail or "that session is no longer there"
+            )
+        if not adopt_persist.persisted:
+            logger.warning(
+                "adopt_not_persisted",
+                session=name,
+                outcome=adopt_persist.outcome,
+                detail=adopt_persist.detail,
+                note=(
+                    "the session is being adopted but the claim was not "
+                    "recorded, so its badge is not durable yet"
+                ),
+            )
 
         # Resolve the adopted pane's cwd via a one-shot tmux probe. We
         # use this for metadata display only - we never chdir.

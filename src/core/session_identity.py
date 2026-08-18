@@ -303,6 +303,89 @@ def record_instance(
     )
 
 
+#: Outcomes of :func:`claim_instance`. FOUR names covering the three
+#: classes the three-outcome rule demands: one success, two DEFINITE
+#: negatives that a user can act on, and one could-not-evaluate. They are
+#: kept apart because a bare False collapses four different situations
+#: into one unactionable answer, and the UI has to say something
+#: different for each.
+ADOPT_CLAIMED = "claimed"
+
+#: DEFINITE NEGATIVE. No row carries this instance triple. Adoption
+#: updates; it does not invent. The session the client was looking at is
+#: not one we have a record of - typically because it died between the
+#: listing and the click and the row was never written, or because the
+#: client is holding a listing from another socket.
+ADOPT_NO_SUCH_INSTANCE = "no_such_instance"
+
+#: DEFINITE NEGATIVE. The row exists and is ``stopped``, so the process
+#: it described is gone. Claiming it would permanently badge a corpse as
+#: the user's.
+ADOPT_NOT_RUNNING = "not_running"
+
+#: COULD NOT EVALUATE. The datastore has not reached schema v2, so there
+#: is no sessions table to update. Nothing is wrong with the session; we
+#: simply cannot record anything about it. NEVER report this as either
+#: of the negatives above.
+ADOPT_NO_DATASTORE = "no_datastore"
+
+#: The outcomes that mean the row was NOT claimed. Spelled once so a
+#: caller cannot test three of the four and quietly treat the fourth as
+#: success.
+ADOPT_FAILURES: Tuple[str, ...] = (
+    ADOPT_NO_SUCH_INSTANCE,
+    ADOPT_NOT_RUNNING,
+    ADOPT_NO_DATASTORE,
+)
+
+
+@dataclass(frozen=True)
+class AdoptResult:
+    """What one :func:`claim_instance` call did, and why if it did nothing.
+
+    Description: the reason a bare bool was not enough. Adoption can
+      fail three distinguishable ways and the caller must render each
+      differently: "that session is no longer there, refresh" for a
+      missing row, "that session has stopped" for a corpse, and "we
+      could not record it" for an unavailable datastore. Collapsing them
+      gives the user one message that is wrong two thirds of the time.
+    Inputs (constructor): outcome (str) - one of ``ADOPT_CLAIMED`` or a
+      member of ``ADOPT_FAILURES``. session_id (int | None) - the row id
+      when one was found, including on the ``not_running`` refusal.
+      session_uuid (str | None) - the row's external identity when
+      found. stored_lifecycle (str | None) - the lifecycle that caused a
+      ``not_running`` refusal. detail (str | None) - human-readable
+      reason.
+    Output: an AdoptResult instance.
+    """
+
+    outcome: str
+    session_id: Optional[int] = None
+    session_uuid: Optional[str] = None
+    stored_lifecycle: Optional[str] = None
+    detail: Optional[str] = None
+
+    @property
+    def claimed(self) -> bool:
+        """True only when a live row was actually marked adopted.
+
+        Inputs: none.
+        Output: bool.
+        """
+        return self.outcome == ADOPT_CLAIMED
+
+    @property
+    def determined(self) -> bool:
+        """True when we could evaluate the claim at all.
+
+        Description: False ONLY for ``no_datastore``. The two negatives
+          are measurements; the datastore being absent is not.
+        Inputs: none.
+        Output: bool.
+        """
+        return self.outcome != ADOPT_NO_DATASTORE
+
+
 def adopt_instance(
     conn: sqlite3.Connection,
     *,
@@ -356,10 +439,107 @@ def adopt_instance(
       answer: adopting a session we have no record of is a caller bug,
       not a row to invent), and False when the row exists but is
       ``stopped``.
+      THIS IS NOW A THIN WRAPPER over :func:`claim_instance`, which
+      returns WHICH of the outcomes happened. The bool form is kept
+      because every existing caller and test only needs "did it stick",
+      and because one function deciding and another reporting is how two
+      copies of a rule start. There is exactly one implementation.
+    Output: bool - True when a LIVE row was updated. False for all three
+      failure modes; call :func:`claim_instance` when the difference
+      matters, which it does at any surface a user reads.
     Example: adopt_instance(conn, socket='cloude', name='a', epoch=1000)
     """
+    return claim_instance(
+        conn,
+        socket=socket,
+        name=name,
+        epoch=epoch,
+        now=now,
+        project_id=project_id,
+        project_attribution=project_attribution,
+        working_dir=working_dir,
+        agent_family_source=agent_family_source,
+    ).claimed
+
+
+def claim_instance(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: int,
+    now: Optional[str] = None,
+    project_id: Optional[int] = None,
+    project_attribution: Optional[str] = None,
+    working_dir: Optional[str] = None,
+    agent_family_source: Optional[str] = None,
+) -> AdoptResult:
+    """Claim one tmux instance as ours, reporting WHICH outcome happened.
+
+    Description: design section 4.6's adoption statement - one UPDATE,
+      keyed on the instance triple so name reuse cannot redirect it onto
+      a different process. The caller owns the transaction.
+
+      FOUR NAMED OUTCOMES, THREE CLASSES. ``claimed`` is the success.
+      ``no_such_instance`` and ``not_running`` are DEFINITE NEGATIVES the
+      user can act on - refresh the list, or the session has stopped -
+      and neither is an error to raise. ``no_datastore`` is the
+      could-not-evaluate: nothing is known to be wrong with the session,
+      we simply have nowhere to record the claim, and reporting it as
+      either negative would tell the user his session is gone when it is
+      sitting right there.
+
+      ZERO ROWS UPDATED IS NEVER SUCCESS. The old bool made
+      "I updated nothing" indistinguishable from "the datastore is not
+      ready", so the route could report an adoption that persisted
+      nowhere. The row is not marked adopted on any failure path, and
+      the caller is told which one it hit.
+
+      ADOPTED_AT IS FIRST-WRITE-WINS. ``adopted_at`` answers "when did
+      this session become ours", and that moment is the FIRST claim.
+      The UI re-opens sessions through the adopt path routinely, so a
+      re-entry must not slide the timestamp forward over history that
+      already happened. Implemented as ``COALESCE(adopted_at, :now)``,
+      so the second call is a genuine no-op on that column. The rest of
+      the statement IS idempotent-by-overwrite (re-probing a working
+      directory should update it); only the moment of the claim is
+      immutable.
+
+      ``origin`` moves to ``adopted`` and never moves again: this is the
+      only writer of that value, and it has no path back to
+      ``observed``. A later ``observed`` sighting through
+      :func:`record_instance` MERGES and leaves ``origin`` untouched,
+      which is what makes the badge survive a restart.
+
+      LIFECYCLE IS GUARDED. The UPDATE requires the row NOT be
+      ``stopped``. Adoption is a claim on a LIVE session, and the triple
+      alone does not carry liveness - so a client holding a listing from
+      before the session died could otherwise permanently mark a corpse
+      as adopted.
+    Inputs: conn (sqlite3.Connection) - caller owns the transaction.
+      socket (str), name (str), epoch (int) - the instance triple.
+      now (str | None) - ISO-8601 stamp, defaults to ``utc_now()``.
+      project_id (int | None), project_attribution (str | None),
+      working_dir (str | None), agent_family_source (str | None) - each
+      applied only when not None, so a caller that could not probe a
+      value leaves the stored one alone rather than nulling it.
+    Output: AdoptResult.
+    Example: claim_instance(conn, socket='cloude', name='a', epoch=1000).outcome
+    """
     if not sessions_table_ready(conn):
-        return False
+        logger.warning(
+            "session_adopt_no_datastore",
+            tmux_socket=socket,
+            tmux_name=name,
+            note=(
+                "no sessions table, so the claim COULD NOT BE EVALUATED. "
+                "This is not the same as the session being absent"
+            ),
+        )
+        return AdoptResult(
+            outcome=ADOPT_NO_DATASTORE,
+            detail="the datastore has no sessions table yet",
+        )
     stamp = now or utc_now()
     sets = [
         "origin = ?",
@@ -383,26 +563,55 @@ def adopt_instance(
         values,
     )
     if cursor.rowcount > 0:
-        return True
+        claimed = get_instance(conn, socket=socket, name=name, epoch=epoch)
+        return AdoptResult(
+            outcome=ADOPT_CLAIMED,
+            session_id=(claimed or {}).get("id"),
+            session_uuid=(claimed or {}).get("session_uuid"),
+        )
 
-    # Nothing was claimed. Say WHICH of the two reasons, because "no such
-    # row" and "that row is a corpse" are different facts and a bare False
-    # collapses them into one unactionable answer.
+    # ZERO ROWS UPDATED. Say WHICH of the two reasons, because "no such
+    # row" and "that row is a corpse" are different facts and a bare
+    # False collapses them into one unactionable answer. Neither is
+    # success and neither is a crash.
     existing = get_instance(conn, socket=socket, name=name, epoch=epoch)
-    if existing is not None:
+    if existing is None:
         logger.warning(
-            "session_adopt_refused_not_running",
+            "session_adopt_no_such_instance",
             tmux_socket=socket,
             tmux_name=name,
             tmux_created_epoch=int(epoch),
-            stored_session_id=existing.get("id"),
-            stored_session_uuid=existing.get("session_uuid"),
-            stored_lifecycle=existing.get("lifecycle"),
             note=(
-                "adoption claims a LIVE session; a stopped row cannot be "
-                "adopted because the process it described is gone, and a "
-                "client holding a listing from before it died would "
-                "otherwise permanently badge a corpse as the user's"
+                "no row carries this instance triple, so nothing was "
+                "claimed. Adoption UPDATES; it never invents a row, "
+                "because a row invented here would carry an origin we "
+                "have no evidence for"
             ),
         )
-    return False
+        return AdoptResult(
+            outcome=ADOPT_NO_SUCH_INSTANCE,
+            detail="no session row carries that tmux instance",
+        )
+
+    logger.warning(
+        "session_adopt_refused_not_running",
+        tmux_socket=socket,
+        tmux_name=name,
+        tmux_created_epoch=int(epoch),
+        stored_session_id=existing.get("id"),
+        stored_session_uuid=existing.get("session_uuid"),
+        stored_lifecycle=existing.get("lifecycle"),
+        note=(
+            "adoption claims a LIVE session; a stopped row cannot be "
+            "adopted because the process it described is gone, and a "
+            "client holding a listing from before it died would "
+            "otherwise permanently badge a corpse as the user's"
+        ),
+    )
+    return AdoptResult(
+        outcome=ADOPT_NOT_RUNNING,
+        session_id=existing.get("id"),
+        session_uuid=existing.get("session_uuid"),
+        stored_lifecycle=existing.get("lifecycle"),
+        detail="that session has stopped",
+    )

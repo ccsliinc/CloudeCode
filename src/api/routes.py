@@ -414,12 +414,35 @@ async def list_attachable_sessions(request: Request):
 async def adopt_session(request: Request, body: AdoptSessionRequest):
     """Adopt an externally-started tmux session as a new concurrent session.
 
-    Multi-session: this NEVER detaches another session and NEVER returns 409
-    - multiple adopted/owned sessions coexist. ``confirm_detach`` in the body
-    is accepted for API back-compat and ignored. Other failures (pane dead,
-    tmux not running, unsafe session name) propagate as 500 via the app's
-    error middleware; we deliberately do NOT wrap them here.
+    Multi-session: this never detaches another session, and it does not
+    return 409 for a concurrency conflict - multiple adopted/owned sessions
+    coexist. ``confirm_detach`` in the body is accepted for API back-compat
+    and ignored.
+
+    S7 - THIS ROUTE NOW PERSISTS THE ADOPTION. ``sessions.origin`` moves to
+    ``adopted`` on the row keyed by the tmux instance triple, so the claim
+    survives an app restart, a server restart and a reboot. Both ``created``
+    and ``adopted`` badge as OURS; ``observed`` is the only external value,
+    and which of the two a session was stays visible in the detail view.
+
+    THREE OUTCOMES, NOT TWO. A session that DIED between the client's
+    listing and this call matches zero rows. That is neither success nor a
+    server fault, so it is neither a 200 nor a 500: it returns **409** with
+    ``error='session_gone'`` and ``refresh=True``, and NO ROW IS MARKED
+    ADOPTED. An empty 200 would badge a corpse as the user's, and a 500
+    would blame the server for a normal, expected race. A probe that could
+    not run at all is a different answer again and never renders as gone -
+    the adoption proceeds and the failure to record it is logged.
+
+    Other failures (pane dead, tmux not running, unsafe session name)
+    propagate as 500 via the app's error middleware; we deliberately do NOT
+    wrap them here.
+
+    Raises:
+        HTTPException: 409 when the target session is no longer there.
     """
+    from src.core.session_adopt_persist import AdoptTargetGoneError
+
     session_manager = request.app.state.session_manager
 
     logger.info(
@@ -430,12 +453,28 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
 
     # ``adopt_external_session`` returns a dict shaped exactly like
     # AdoptSessionResponse, so ``**result`` wires straight through pydantic.
-    result = await session_manager.adopt_external_session(
-        name=body.session_name,
-        confirm_detach=body.confirm_detach,
-        initial_cols=body.cols,
-        initial_rows=body.rows,
-    )
+    try:
+        result = await session_manager.adopt_external_session(
+            name=body.session_name,
+            confirm_detach=body.confirm_detach,
+            initial_cols=body.cols,
+            initial_rows=body.rows,
+        )
+    except AdoptTargetGoneError as exc:
+        logger.warning(
+            "api_adopt_session_gone",
+            session_name=body.session_name,
+            detail=str(exc),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "session_gone",
+                "session_name": body.session_name,
+                "message": str(exc),
+                "refresh": True,
+            },
+        )
 
     return AdoptSessionResponse(**result)
 

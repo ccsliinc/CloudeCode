@@ -229,8 +229,10 @@ async def lifespan(app: FastAPI):
     app.state.session_import_notice = None
     if datastore_state.healthy:
         from src.core.db import connect, db_path_for, transaction
+        from src.core.session_attribution import backfill_attribution
         from src.core.session_import import run_first_run_import
         from src.core.tmux_listing import coerce_listing
+        from src.core.tmux_session_cwd import make_working_dir_probe
 
         try:
             _listing = coerce_listing(session_manager.list_attachable_sessions())
@@ -255,6 +257,21 @@ async def lifespan(app: FastAPI):
                         # ownership badge fell back to the name-only tier
                         # permanently.
                         socket=session_manager.tmux_socket_name(),
+                        # THE INPUT PROJECT ATTRIBUTION NEEDS, WHICH WAS
+                        # NEVER SUPPLIED. Omitting it left every row's
+                        # working_dir NULL, so attribute_working_dir was
+                        # handed None, correctly answered "could not
+                        # read it", and all nine sessions on the live
+                        # install imported as project_attribution
+                        # 'unknown' with project_id NULL - which is why
+                        # the home screen's project tree had nothing to
+                        # hang them under. The listing format carries no
+                        # path field and deliberately cannot grow one
+                        # (see src/core/tmux_session_cwd.py), so the
+                        # directory is read per session here.
+                        working_dir_probe=make_working_dir_probe(
+                            session_manager.tmux_socket_name()
+                        ),
                     )
                 app.state.session_import_notice = (
                     _import_result.home_screen_notice()
@@ -265,6 +282,33 @@ async def lifespan(app: FastAPI):
                     sessions_imported=_import_result.sessions_imported,
                     listing_ok=_listing.ok,
                     listing_reason=_listing.reason,
+                )
+                # THE REPAIR PATH FOR ROWS THE IMPORT ALREADY FROZE.
+                # The import is a one-way latch, so the nine sessions
+                # imported before the probe existed keep
+                # project_attribution='unknown' forever unless something
+                # re-derives it. This is that something, and it is safe
+                # to run every boot: it only ever touches rows whose
+                # attribution is 'unknown', never overwrites a measured
+                # answer, and never writes 'unknown' over anything - a
+                # row that is still unprobeable is left completely alone
+                # rather than having its updated_at churned.
+                with closing(
+                    connect(db_path_for(settings.get_state_dir()))
+                ) as _attr_conn:
+                    with transaction(_attr_conn):
+                        _attr_result = backfill_attribution(
+                            _attr_conn,
+                            working_dir_probe=make_working_dir_probe(
+                                session_manager.tmux_socket_name()
+                            ),
+                        )
+                logger.info(
+                    "session_attribution_backfill_boot",
+                    considered=_attr_result.considered,
+                    attributed_project=_attr_result.attributed_project,
+                    attributed_none=_attr_result.attributed_none,
+                    still_unknown=_attr_result.still_unknown,
                 )
         except Exception as exc:  # noqa: BLE001 - import must never block boot
             logger.warning("first_run_import_failed", error=str(exc))

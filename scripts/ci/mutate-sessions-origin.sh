@@ -36,6 +36,11 @@ FILES=(
   "src/core/session_reconcile.py"
   "src/core/session_import.py"
   "src/core/session_import_mapping.py"
+  # S7: the attribution rule moved here out of session_import_mapping.py,
+  # and a mutated file that is not in this list is never restored - the
+  # mutation leaks onto disk and the NEXT run backs the mutant up as if
+  # it were the source. Anything mutate() targets MUST be listed.
+  "src/core/project_attribution.py"
   "src/core/db_models.py"
   "src/core/project_store.py"
   "src/core/tmux_backend.py"
@@ -163,10 +168,19 @@ mutate "the import invents an adoption it has no evidence for" \
 
 echo "--- THREE-OUTCOME COLLAPSES ---"
 
+# TARGET MOVED AT S7, MUTANT PRESERVED. The rule left
+# session_import_mapping.py for src/core/project_attribution.py when the
+# adopt path became a second caller. The mutant below is the SAME
+# semantic collapse - could-not-read reported as belongs-to-nothing - at
+# the line that now decides it. Re-pointing it rather than deleting it
+# keeps the count honest: a mutant whose target moves is SURVIVED, not
+# skipped, and the fix is to aim it at the code that took over the job.
 mutate "an unprobeable working dir is reported as 'no project'" \
-  "src/core/session_import_mapping.py" \
-  '    if not working_dir:
-        return None, SESSION_ATTRIBUTION_UNKNOWN||=>||    if not working_dir:
+  "src/core/project_attribution.py" \
+  '    normalized = normalize_path_for_match(working_dir)
+    if normalized is None:
+        return None, SESSION_ATTRIBUTION_UNKNOWN||=>||    normalized = normalize_path_for_match(working_dir)
+    if normalized is None:
         return None, SESSION_ATTRIBUTION_NONE'
 
 mutate "NEEDS ATTENTION requires BOTH failures, so single ones vanish" \
