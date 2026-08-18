@@ -394,6 +394,14 @@ class Settings(BaseSettings):
     # Server Configuration
     host: str = "0.0.0.0"
     port: int = 8000
+    # Dev-only opt-in for uvicorn's file-watching auto-reload. MUST default
+    # False: a file-watching reloader has no business running against a
+    # deployed instance, since it re-execs the whole server on every write
+    # under its watch root - including the writes a `git pull` makes. Set
+    # CLOUDE_DEV_RELOAD=1 in .env for local development only. See
+    # tests/test_no_reload_in_production.py, which fails the build if this
+    # is ever wired to a hardcoded True instead of this setting again.
+    dev_reload: bool = Field(default=False, alias="CLOUDE_DEV_RELOAD")
 
     # Session Configuration
     default_working_dir: str  # Required in .env
