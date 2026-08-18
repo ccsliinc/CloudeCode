@@ -5,13 +5,18 @@
 // bottom furniture carries the light there. The home screen's `.home-bar`
 // already does. The terminal screen's `.info` bar - a REAL, in-flow bar
 // that has always spanned the terminal screen's full width holding the
-// session id/PID readout - now carries it too. `.info` used to be
+// session id/PID readout - carries it too, on desktop. `.info` used to be
 // `display: none` below 768px and the light lived in a `position: fixed`
-// chip pinned to the bottom-left corner instead; both are gone. The auth
-// screen has no bar (its `#terminal-screen` sibling is not `.active`, so
-// `.info` is hidden by the shared `.screen` display rule) and therefore
-// shows no light, which is the rule applied honestly rather than an
-// oversight.
+// chip pinned to the bottom-left corner instead (both gone as of
+// 449afe3); it is `display: none` below 768px AGAIN as of
+// fix/hide-status-bar-mobile - the user does not want the status light
+// costing the phone any vertical space, and `#sessionInfo` (the bar's
+// only other content) was never shown below that breakpoint either, so
+// hiding the whole bar loses nothing that was previously visible on a
+// phone. The auth screen has no bar (its `#terminal-screen` sibling is
+// not `.active`, so `.info` is hidden by the shared `.screen` display
+// rule) and therefore shows no light, which is the rule applied honestly
+// rather than an oversight.
 //
 // WHAT THESE TESTS HOLD DOWN:
 //   (a) the light is not in `.header .controls`, and app.js does not
@@ -222,7 +227,7 @@ test('.info is a flex row so the session id and the status group can share the w
     assert.match(body, /display\s*:\s*flex/);
 });
 
-test('.info is no longer display:none below 768px - the light needs it visible on a phone', () => {
+test('.info is display:none below 768px - the bar must not cost the phone any space', () => {
     // styles.css has more than one `@media (max-width: 768px)` block (one
     // sets root vars, another holds the terminal/.info rules) - find the
     // one that actually declares `.info` rather than assuming it is the
@@ -231,9 +236,22 @@ test('.info is no longer display:none below 768px - the light needs it visible o
     const block = blocks.find((b) => /\.info\s*\{/.test(b));
     assert.ok(block, 'expected a 768px breakpoint block that declares .info');
     const infoRuleInBlock = block.match(/\.info\s*\{([^}]*)\}/);
-    assert.ok(infoRuleInBlock, 'expected a compact .info rule inside the 768px block');
-    assert.doesNotMatch(infoRuleInBlock[1], /display\s*:\s*none/,
-        'the light lives here now - hiding it below 768px hides the light on every phone');
+    assert.ok(infoRuleInBlock, 'expected an .info rule inside the 768px block');
+    assert.match(infoRuleInBlock[1], /display\s*:\s*none/,
+        'the whole bar - light included - must not eat vertical space on a phone');
+});
+
+test('the 480px breakpoint carries no stale .info padding now that the bar is hidden by 768px', () => {
+    // The 768px block already sets `.info { display: none }`, which wins
+    // at every width <=480px too. A leftover `.info` padding/gap rule in
+    // the 480px block would be dead weight - if the 768px hide is ever
+    // relaxed, a forgotten override here would silently make the bar
+    // visible-but-mispadded again instead of failing loudly.
+    const blocks = styles.match(/@media \(max-width: 480px\) \{[\s\S]*?\n\}/g) || [];
+    const block = blocks.find((b) => /\.terminal-container\s*\{/.test(b) && /padding/.test(b));
+    assert.ok(block, 'expected the 480px block that resizes .terminal-container');
+    assert.doesNotMatch(block, /\.info\s*\{/,
+        '.info should not be re-declared in the 480px block once it is display:none at 768px');
 });
 
 test('the terminal-bar status group and label exist and are wired for shrink-to-fit', () => {
