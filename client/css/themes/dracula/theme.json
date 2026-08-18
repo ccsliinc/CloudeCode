@@ -97,6 +97,7 @@
     "brightCyan": "#a4ffff",
     "brightWhite": "#ffffff"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/dead-ship.m4a",
     "srcFallback": "/static/assets/audio/dead-ship.ogg",

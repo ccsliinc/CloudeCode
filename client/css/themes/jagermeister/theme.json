@@ -97,6 +97,7 @@
     "brightCyan": "#7aaa9a",
     "brightWhite": "#ffffff"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/dungeon-ambience.m4a",
     "srcFallback": "/static/assets/audio/dungeon-ambience.ogg",
