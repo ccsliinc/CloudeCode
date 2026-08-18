@@ -177,16 +177,19 @@ class AppController {
      * visible text label - the light is app-scoped state and the bar has
      * the room to say what it means.
      *
-     * TERMINAL SCREEN: into `#status-rail`, a fixed-position slot on the
-     * right-hand FAB column under #sessionEditorBtn. The terminal screen
-     * has no bottom bar by construction and is not getting one, but
+     * TERMINAL SCREEN: into `#terminal-status-bar`, a small fixed chip
+     * pinned to the bottom-left corner - clear of the FAB column on the
+     * right, so it does not read as a third icon stacked under the
+     * session tools. The terminal screen has no full bottom bar by
+     * construction (it is not paying vertical space back for chrome), but
      * mid-session is exactly when a dropped socket matters most, so the
-     * light goes somewhere that costs no vertical layout space at all
-     * rather than disappearing.
+     * light gets this minimal bar of its own rather than disappearing.
+     * `position: fixed` means it still costs zero vertical layout space.
      *
-     * AUTH SCREEN: also parked in `#status-rail`, which terminal-tools.css
-     * hides on that screen. No bar, no rail, no light - the stated rule,
-     * applied honestly. The auth screen reports its own failures inline.
+     * AUTH SCREEN: also parked in `#terminal-status-bar`, which
+     * terminal-tools.css hides on that screen. No bar, no light - the
+     * stated rule, applied honestly. The auth screen reports its own
+     * failures inline.
      *
      * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
      * @returns {void}
@@ -196,7 +199,7 @@ class AppController {
         if (!el) return;
         const target = screen === 'launchpad'
             ? document.getElementById('home-bar-status')
-            : document.getElementById('status-rail');
+            : document.getElementById('terminal-status-bar');
         if (!target || el.parentElement === target) return;
         if (screen === 'launchpad') {
             // Before the label span, so the dot leads the pair.

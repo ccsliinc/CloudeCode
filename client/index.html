@@ -196,11 +196,10 @@
                 </svg>
             </button>
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
-                 the last child here. It is now a bar-or-rail control,
-                 never a header one - see #status-rail near the FABs at the
-                 bottom of this file, and App._placeStatusLight(). Do not
-                 put it back: the header row is actions, and the light is
-                 state. -->
+                 the last child here. It is now a bottom-bar control,
+                 never a header one - see #terminal-status-bar near the end
+                 of this file, and App._placeStatusLight(). Do not put it
+                 back: the header row is actions, and the light is state. -->
         </div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
@@ -629,22 +628,22 @@
          targets the svg, so the value has to be right here. -->
     <input type="file" id="cloude-image-attach-input" hidden />
 
-    <!-- CONNECTION LIGHT RAIL - the terminal screen's home for the ONE
+    <!-- CONNECTION LIGHT BAR - the terminal screen's home for the ONE
          #statusText node.
 
          THE RULE THAT PUT IT HERE. The light is out of the top header
-         entirely. Where a screen has a bottom bar the light lives in that
-         bar; the home screen already does (.home-bar). The TERMINAL screen
-         deliberately has no bottom bar - it fought its vertical pixels back
-         from 720 to 770 of 786 and is not giving them up - and a running
-         session with no indicator is exactly the case where a dropped
-         socket matters most. So the terminal gets the light as a rail
-         item instead of a bar item: `position: fixed` on the same
-         right-hand column as #sessionEditorBtn, directly under it, so it
-         costs ZERO vertical layout space. It is not a second bar and must
-         not grow into one - one 12px dot, nothing else.
+         entirely, and it is out from under the session tools (the FAB
+         column) too. Where a screen has a bottom bar the light lives in
+         that bar; the home screen already does (.home-bar). The TERMINAL
+         screen has no real bottom bar - it fought its vertical pixels back
+         from 720 to 770 of 786 and is not giving them up - so this is a
+         MINIMAL bar of its own: a small `position: fixed` chip pinned to
+         the bottom-LEFT corner, well clear of the FAB column on the right,
+         so it reads as bottom furniture rather than a third icon stacked
+         under the session tools. Fixed positioning means it still costs
+         ZERO vertical layout space from the terminal.
 
-         The AUTH screen has neither a bar nor a rail, so it shows no
+         The AUTH screen has neither a bar nor this chip, so it shows no
          light, which is the stated rule applied honestly: this container
          is display:none there and the parked node goes with it. Nothing is
          lost - the auth screen reports its own server failures inline.
@@ -659,7 +658,7 @@
          coloured circle with no way to learn what it means. A tap focuses
          it and `.status:focus::after` reveals the same string. On the home
          screen the bar renders the text outright instead. -->
-    <div class="status-rail" id="status-rail">
+    <div class="terminal-status-bar" id="terminal-status-bar">
         <span class="status" id="statusText" data-status="Ready" tabindex="0"
               role="status" aria-live="polite" aria-label="Ready"></span>
     </div>

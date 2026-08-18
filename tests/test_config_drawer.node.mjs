@@ -188,11 +188,11 @@ test('a docked drawer has no backdrop and does not swallow clicks', () => {
 });
 
 test('the fixed right-hand controls move in by the dock width', () => {
-    // Screen padding does not move a position:fixed box. Without these
-    // the FAB column, the connection light and the d-pad sit on top of
-    // the docked drawer.
-    const fabs = ruleBody(
-        drawer, 'body.config-drawer-docked .fab-menu-btn,\nbody.config-drawer-docked .status-rail');
+    // Screen padding does not move a position:fixed box. Without this the
+    // FAB column and the d-pad sit on top of the docked drawer. The
+    // connection light bar is not part of this group - it lives at the
+    // bottom-LEFT corner now, opposite the drawer's right-side dock.
+    const fabs = ruleBody(drawer, 'body.config-drawer-docked .fab-menu-btn');
     assert.match(fabs, /right:\s*calc\(var\(--fab-slot-0\) \+ var\(--config-drawer-w\)\)/);
     assert.match(
         ruleBody(drawer, 'body.config-drawer-docked .dpad-float-button'),

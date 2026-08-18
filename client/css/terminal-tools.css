@@ -121,63 +121,67 @@ body:has(#auth-screen.active) .fab-menu-btn {
 }
 
 /* ---------------------------------------------------------------------
- * THE CONNECTION-LIGHT RAIL.
+ * THE CONNECTION-LIGHT BAR.
  *
- * The status light is out of the top header for good. On a screen with
- * bottom furniture it lives there (the home screen's .home-bar). The
- * terminal screen has none and is not getting one, so it gets this: the
- * same right-hand column as .session-editor-fab, one slot below it,
- * `position: fixed` so it spends NO vertical layout space. One 12px dot.
- * It is not a bar and must not become one - anything else that wants to
- * live on the terminal screen goes in a FAB menu, not here.
+ * The status light is out of the top header for good, and it is out from
+ * under the session tools too - it used to sit one slot below
+ * .session-editor-fab on the same right-hand rail, which read as a third
+ * FAB stacked under the other two rather than as state. On a screen with
+ * bottom furniture the light lives there (the home screen's .home-bar).
+ * The terminal screen has no full bottom bar - it is not paying its
+ * vertical pixels back for chrome - so this is a minimal bar of its own:
+ * one small chip pinned to the BOTTOM-LEFT corner, well clear of the FAB
+ * column, `position: fixed` so it spends NO vertical layout space. One
+ * 12px dot in a small elevated box, nothing else - anything more belongs
+ * in a FAB menu, not here.
  *
  * Not a flex row with a label like the home bar's: there is no width to
  * spend over live output. The `.status:focus::after` tooltip is the text,
- * and it is right-anchored below.
+ * anchored above the chip so it cannot run off the bottom of the
+ * viewport.
  * ------------------------------------------------------------------- */
-.status-rail {
+.terminal-status-bar {
     position: fixed;
-    top: calc(var(--fab-top-edge) + var(--fab-size) + var(--fab-gap));
-    right: var(--fab-slot-0);
-    width: var(--fab-size);
+    left: var(--fab-edge);
+    bottom: var(--fab-edge);
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 8px;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
     z-index: 60;
-    /* The rail is a positioning shell, not a target. Only the dot inside
-     * it takes pointer events, so the empty width either side of a 12px
-     * circle never eats a click meant for the terminal underneath. */
-    pointer-events: none;
-}
-
-.status-rail > .status {
-    pointer-events: auto;
 }
 
 /* When the light is mounted in the home bar this container is empty, so
  * it collapses rather than sitting invisible over the launchpad. Belt and
  * braces with the screen-scoped rule below, which is the one that also
  * covers the auth screen. */
-.status-rail:empty {
+.terminal-status-bar:empty {
     display: none;
 }
 
-/* Same screen scoping as .fab-menu-btn above: no session, no rail. On the
+/* Same screen scoping as .fab-menu-btn above: no session, no bar. On the
  * home screen the light is in the bar; on the auth screen there is no bar
  * and therefore no light, which is the rule rather than an oversight. */
-body:has(#launchpad-screen.active) .status-rail,
-body:has(#auth-screen.active) .status-rail {
+body:has(#launchpad-screen.active) .terminal-status-bar,
+body:has(#auth-screen.active) .terminal-status-bar {
     display: none;
 }
 
-/* The tooltip is centred under the dot everywhere else. On this rail the
- * dot is ~26px from the right edge and the string can be long ("server
- * unreachable - Failed to fetch"), so a centred nowrap box runs off
- * screen. Anchor its RIGHT edge to the dot instead and let it grow
- * leftwards, capped at the viewport. */
-.status-rail .status::after {
-    left: auto;
-    right: 0;
+/* The tooltip is centred under the dot everywhere else, and BELOW it by
+ * default (`.status::after` in styles.css: `bottom: -30px`). This chip
+ * sits at the bottom edge of the viewport, so a tooltip growing downward
+ * would run off screen - it has to grow UPWARD instead. It also anchors
+ * to the LEFT edge of the dot and grows rightward: the chip sits close to
+ * the left edge of the viewport, so a centred nowrap box would clip on
+ * that side first for a long string ("server unreachable - Failed to
+ * fetch"), capped at the viewport either way. */
+.terminal-status-bar .status::after {
+    bottom: auto;
+    top: -34px;
+    left: 0;
     transform: none;
     max-width: calc(100vw - var(--fab-edge) * 2);
     overflow: hidden;
