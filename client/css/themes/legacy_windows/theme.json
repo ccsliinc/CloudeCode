@@ -1,7 +1,7 @@
 {
   "id": "legacy_windows",
   "name": "Legacy Windows",
-  "description": "Win 95/98 — the iconic gray, navy title bar, 3D bevels, IBM CGA console.",
+  "description": "Win 95/98 \u2014 the iconic gray, navy title bar, 3D bevels, IBM CGA console.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -52,6 +52,7 @@
     "brightCyan": "#00FFFF",
     "brightWhite": "#FFFFFF"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/out-there.m4a",
     "srcFallback": "/static/assets/audio/out-there.ogg",

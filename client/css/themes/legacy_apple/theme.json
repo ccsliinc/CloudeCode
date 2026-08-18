@@ -1,7 +1,7 @@
 {
   "id": "legacy_apple",
   "name": "Legacy Apple",
-  "description": "Mac OS Classic / Platinum — cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
+  "description": "Mac OS Classic / Platinum \u2014 cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -97,6 +97,7 @@
     "brightCyan": "#F0A028",
     "brightWhite": "#FFFFFF"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/out-there.m4a",
     "srcFallback": "/static/assets/audio/out-there.ogg",
