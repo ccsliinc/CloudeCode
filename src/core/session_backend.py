@@ -258,19 +258,30 @@ def build_backend(
             sanitized the name and included the ``cloude_`` prefix —
             ``SessionManager.create_session`` is the canonical source.
 
+    When the selected backend is tmux, the socket name is resolved from
+    ``AuthConfig.session.tmux_socket_name`` via ``settings_obj`` (falling
+    back to ``TmuxBackend.DEFAULT_SOCKET_NAME`` when ``settings_obj`` is
+    None or the config lookup fails) — the same source of truth the adopt
+    path (``SessionManager._adopt_external_session``) already uses, so
+    create and adopt cannot disagree on which socket a session lives on.
+
     Returns:
         A concrete `SessionBackend` instance. Never raises on missing tmux.
     """
     # Late import — these modules import `SessionBackend` from us, so eager
     # import would be circular.
-    from src.core.tmux_backend import TmuxBackend
+    from src.core.tmux_backend import DEFAULT_SOCKET_NAME, TmuxBackend
     from src.utils.pty_session import PTYBackend
 
     requested = "auto"
+    socket_name = DEFAULT_SOCKET_NAME
     if settings_obj is not None:
         try:
             auth_config = settings_obj.load_auth_config()
             requested = getattr(auth_config.session, "backend", "auto")
+            socket_name = getattr(
+                auth_config.session, "tmux_socket_name", DEFAULT_SOCKET_NAME
+            )
         except Exception as exc:
             logger.warning(
                 "backend_selection_config_load_failed",
@@ -294,9 +305,18 @@ def build_backend(
 
     # auto, or explicit tmux with binary present
     if tmux_available:
-        logger.info("session_backend_selected", backend="tmux", reason=requested)
+        logger.info(
+            "session_backend_selected",
+            backend="tmux",
+            reason=requested,
+            socket_name=socket_name,
+        )
         return TmuxBackend(
-            session_id, working_dir, on_output, session_name=session_name
+            session_id,
+            working_dir,
+            on_output,
+            socket_name=socket_name,
+            session_name=session_name,
         )
 
     logger.warning(

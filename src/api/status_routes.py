@@ -85,6 +85,58 @@ def open_ids_by_name(session_manager: Any) -> Dict[str, str]:
     return mapping
 
 
+def socket_drift_warnings(session_manager: Any) -> List[Dict[str, str]]:
+    """Detect a live backend sitting on a socket the CURRENT config disagrees with.
+
+    ``build_backend`` resolves ``session.tmux_socket_name`` at construction
+    time and each backend keeps that value for its lifetime — correct,
+    since a session's tmux server does not move. But if the config file is
+    edited while sessions are open, the app is then reading a socket name
+    that no longer matches where a live session actually lives: exactly
+    the read-one-write-another split that used to be silent (this backend
+    used to hardcode ``cloude`` unconditionally; see
+    ``src/core/session_backend.py::build_backend``). Rather than let that
+    recur invisibly, we compare each live backend's own ``socket_name``
+    against a fresh config read every time status is collected and name
+    both sockets when they differ.
+
+    Args:
+        session_manager: the app's SessionManager.
+
+    Returns:
+        One dict per drifted session: ``{"session_id", "tmux_session",
+        "backend_socket", "configured_socket"}``. Empty when nothing has
+        drifted (the overwhelmingly common case).
+    """
+    backends = getattr(session_manager, "backends", None)
+    if not isinstance(backends, dict) or not backends:
+        return []
+    configured = resolve_socket_name()
+    drifted: List[Dict[str, str]] = []
+    for session_id, backend in backends.items():
+        backend_socket = getattr(backend, "socket_name", None)
+        if not backend_socket or backend_socket == configured:
+            continue
+        drifted.append(
+            {
+                "session_id": session_id,
+                "tmux_session": getattr(backend, "tmux_session", "") or "",
+                "backend_socket": backend_socket,
+                "configured_socket": configured,
+            }
+        )
+    if drifted:
+        logger.warning(
+            "tmux_socket_drift_detected",
+            drifted=drifted,
+            hint=(
+                "a live session's backend socket no longer matches "
+                "session.tmux_socket_name in config.json"
+            ),
+        )
+    return drifted
+
+
 def ownership_by_name(session_manager: Any) -> Dict[str, bool]:
     """Map each tmux session name to the server's ``created_by_cloude``.
 
@@ -153,9 +205,11 @@ async def get_server_status(request: Request) -> Dict[str, Any]:
         ownership_by_name=ownership_by_name(session_manager),
         open_ids_by_name=open_ids_by_name(session_manager),
     )
+    snapshot["socket_drift"] = socket_drift_warnings(session_manager)
     logger.info(
         "server_status_collected",
         tmux_running=snapshot["tmux"]["server_running"],
         session_count=len(snapshot["tmux"]["sessions"]),
+        socket_drift_count=len(snapshot["socket_drift"]),
     )
     return snapshot
