@@ -33,6 +33,33 @@ class Launchpad {
         // order, so a future edit that re-wires openProjectByName() into
         // selectProject() fails loudly instead of silently regressing.
         this._resolvingDeepLink = false;
+        // feat/project-session-tree (S8) - per-running-session project
+        // attribution, keyed by tmux name. Sourced from
+        // GET /sessions/records (the datastore, S7's backfilled
+        // project_id / project_attribution columns), NOT from the live
+        // tmux probe - neither SessionInfo nor AttachableSession carry
+        // these fields, only the stored sessions row does. Populated by
+        // loadSessionAttribution(), consumed by
+        // _buildProjectSessionGroups() to decide which project (or "no
+        // project", or NEEDS ATTENTION) each running session belongs
+        // under in the home-screen tree.
+        this.sessionAttribution = new Map();
+        // Three-outcome latch for the WHOLE attribution fetch, mirrored
+        // on `runningSessionsListing` above: true only when the last
+        // GET /sessions/records call actually returned rows to read. A
+        // false value means every running session renders into NEEDS
+        // ATTENTION, because "we could not read the attribution table"
+        // must never be silently mistaken for "these sessions belong to
+        // no project" - see _buildProjectSessionGroups().
+        this.sessionAttributionListingOk = true;
+        this.sessionAttributionListingDetail = null;
+        // In-memory only (not persisted across reload, unlike the
+        // section-level collapse state in localStorage below) - per-
+        // project expand/collapse state for the tree's child-session
+        // rows, keyed by a stable node key ("project:<name>" or the
+        // literal "__no_project__"). Survives re-renders because it
+        // lives on the instance, not in the DOM.
+        this._collapsedProjectNodes = new Set();
     }
 
     /**
@@ -509,6 +536,60 @@ class Launchpad {
             return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
         });
         this.renderRunningSessions();
+        // feat/project-session-tree (S8) - the tree needs to know which
+        // project (if any) each of the rows just sorted above belongs
+        // to, so re-fetch attribution and repaint the tree every time
+        // the running-session set changes (poller tick included). Both
+        // calls are non-fatal; a failure here degrades the tree to NEEDS
+        // ATTENTION, it never throws out of loadRunningSessions().
+        await this.loadSessionAttribution();
+        this.renderProjectList();
+    }
+
+    /**
+     * Fetch per-session project attribution (S8) from the datastore and
+     * index it by tmux name for _buildProjectSessionGroups() to consult.
+     *
+     * Description: THREE-OUTCOME, latched on
+     *   ``this.sessionAttributionListingOk``. A successful fetch
+     *   populates the map and every row's ``project_attribution`` is
+     *   trusted as read (including the literal strings ``'none'`` and
+     *   ``'unknown'``, which mean different things - see
+     *   ``_buildProjectSessionGroups``). A failed fetch clears the map
+     *   AND sets the flag false, which is what forces every running
+     *   session into NEEDS ATTENTION rather than rendering "no project"
+     *   for a question that was never asked.
+     * Inputs: none.
+     * Output: Promise<void>. Mutates ``this.sessionAttribution``,
+     *   ``this.sessionAttributionListingOk``,
+     *   ``this.sessionAttributionListingDetail``.
+     */
+    async loadSessionAttribution() {
+        try {
+            const rows = await window.API.listSessionRecords();
+            if (!Array.isArray(rows)) {
+                this.sessionAttribution = new Map();
+                this.sessionAttributionListingOk = false;
+                this.sessionAttributionListingDetail =
+                    'the server did not return a session record array';
+                return;
+            }
+            const map = new Map();
+            for (const row of rows) {
+                if (row && row.tmux_name) {
+                    map.set(row.tmux_name, row);
+                }
+            }
+            this.sessionAttribution = map;
+            this.sessionAttributionListingOk = true;
+            this.sessionAttributionListingDetail = null;
+        } catch (error) {
+            console.warn('Launchpad: failed to load session attribution:', error);
+            this.sessionAttribution = new Map();
+            this.sessionAttributionListingOk = false;
+            this.sessionAttributionListingDetail =
+                (error && error.message) || 'the server could not be reached';
+        }
     }
 
     /**
@@ -1901,10 +1982,253 @@ class Launchpad {
     }
 
     /**
-     * Render project list
+     * Group running sessions by project for the home-screen tree (S8).
+     *
+     * Description: cross-references ``this.runningSessions`` (live tmux
+     *   probe) against ``this.sessionAttribution`` (datastore-backed
+     *   ``project_id`` / ``project_attribution`` per tmux name, from
+     *   GET /sessions/records) to decide which project owns each running
+     *   session. THREE-OUTCOME RULE: a session with a resolved
+     *   ``project_id`` becomes that project's child; ``project_attribution
+     *   === 'none'`` (working directory WAS read and sits inside no known
+     *   project - a complete, actionable answer) becomes a child of the
+     *   synthetic "no project" group; ``project_attribution === 'unknown'``
+     *   (the working directory could not be read - NOT an answer), a
+     *   session absent from the attribution map, or a wholesale fetch
+     *   failure (``sessionAttributionListingOk === false``) all land in
+     *   ``needsAttention`` instead - excluded from every project's
+     *   children and from "no project", because an unproven answer must
+     *   never render as if it were measured.
+     * Inputs: none (reads ``this.runningSessions``,
+     *   ``this.sessionAttribution``, ``this.sessionAttributionListingOk``).
+     * Output: {byProjectId: Map<number, object[]>, noProject: object[],
+     *   needsAttention: Array<{session: object, reason: string}>}
+     * Example: const {byProjectId} = lp._buildProjectSessionGroups();
+     */
+    _buildProjectSessionGroups() {
+        const byProjectId = new Map();
+        const noProject = [];
+        const needsAttention = [];
+        const sessions = this.runningSessions || [];
+        for (const s of sessions) {
+            if (!this.sessionAttributionListingOk) {
+                needsAttention.push({
+                    session: s,
+                    reason: this.sessionAttributionListingDetail
+                        || 'project attribution could not be read',
+                });
+                continue;
+            }
+            const rec = this.sessionAttribution.get(s.name);
+            if (!rec) {
+                needsAttention.push({
+                    session: s,
+                    reason: 'no stored attribution for this session',
+                });
+                continue;
+            }
+            const attribution = rec.project_attribution;
+            if (attribution === 'unknown') {
+                needsAttention.push({
+                    session: s,
+                    reason: 'working directory could not be read',
+                });
+            } else if (attribution === 'none') {
+                noProject.push(s);
+            } else if (rec.project_id !== null && rec.project_id !== undefined) {
+                const list = byProjectId.get(rec.project_id) || [];
+                list.push(s);
+                byProjectId.set(rec.project_id, list);
+            } else {
+                // Defensive: an attribution string that isn't 'none' or
+                // 'unknown' but carries no id is not a shape this build
+                // should trust - never guess which project it meant.
+                needsAttention.push({
+                    session: s,
+                    reason: 'project attribution missing an id',
+                });
+            }
+        }
+        return { byProjectId, noProject, needsAttention };
+    }
+
+    /**
+     * Build one child session row for the project tree (S8).
+     *
+     * Description: a read-only summary row (status dot, name, EXTERNAL/
+     *   TMUX ownership badge, agent-family pill) reusing the exact same
+     *   per-session helpers the flat "running sessions" list uses
+     *   (``_renderFamilyPillHtml``, ``SessionStatusUI.dotHtml``), so a
+     *   session never looks different depending on which surface drew
+     *   it. Clicking the row opens/adopts the session via
+     *   ``_bindProjectSessionRowClicks`` - kill/rename/mark-unread stay
+     *   exclusively on the flat list above, this row does not duplicate
+     *   those controls.
+     * Inputs: s (object) - one running-session row (same shape as
+     *   ``this.runningSessions`` entries).
+     * Output: string - HTML for one ``.project-session-row``.
+     */
+    _renderTreeSessionRowHtml(s) {
+        const owned = !!s.created_by_cloude;
+        const displayName = this._deriveRunningSessionDisplayName(s.name);
+        const escapedName = this._escapeHtml(s.name);
+        const escapedDisplay = this._escapeHtml(displayName);
+        const statusDot = window.SessionStatusUI
+            ? window.SessionStatusUI.dotHtml(s.status)
+            : '';
+        return `
+                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}" role="button" tabindex="0">
+                  ${statusDot}
+                  <span class="project-session-row__name">${escapedDisplay}</span>
+                  <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
+                  ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
+                </div>
+            `;
+    }
+
+    /**
+     * Build the synthetic "no project" group (S8).
+     *
+     * Description: the home for every RUNNING session whose working
+     *   directory WAS read and sits inside no known project
+     *   (``project_attribution === 'none'``). It is a real, measured
+     *   answer - distinct from NEEDS ATTENTION, which is reserved for
+     *   sessions that could NOT be evaluated - so it renders as an
+     *   ordinary (collapsible) group, never as a warning. Omitted
+     *   entirely when empty, matching every other optional group on this
+     *   screen.
+     * Inputs: sessions (object[]) - rows attributed 'none'.
+     * Output: string - HTML for one ``.project-node--virtual``, or ''.
+     */
+    _renderNoProjectGroupHtml(sessions) {
+        if (!sessions || sessions.length === 0) return '';
+        const nodeKey = '__no_project__';
+        const collapsed = this._collapsedProjectNodes.has(nodeKey);
+        const rows = sessions.map(s => this._renderTreeSessionRowHtml(s)).join('');
+        return `
+                <div class="project-node project-node--virtual" data-project-node="no-project">
+                  <button type="button" class="project-node__header project-node__toggle" data-node-key="${nodeKey}" aria-expanded="${!collapsed}" aria-controls="project-node-sessions-${nodeKey}">
+                    <span class="project-node__chevron" aria-hidden="true">►</span>
+                    <span class="project-node__title">no project</span>
+                    <span class="project-node__count">${sessions.length} session${sessions.length === 1 ? '' : 's'}</span>
+                  </button>
+                  <div class="project-node__sessions" id="project-node-sessions-${nodeKey}" style="${collapsed ? 'display:none;' : ''}">${rows}</div>
+                </div>
+            `;
+    }
+
+    /**
+     * Build the NEEDS ATTENTION group for un-attributable running
+     * sessions (S8) - the session-level counterpart to S3's project
+     * presence badges and this file's ``_renderListingAttentionHtml``
+     * for the running-sessions probe. Reuses the same "NEEDS ATTENTION"
+     * visual language (see client/css/styles.css) rather than inventing
+     * a new one.
+     *
+     * Description: never collapsible and never offers any action - the
+     *   row exists so an unattributed session is visible and named, not
+     *   silently dropped from the tree and not guessed into a project.
+     * Inputs: items (Array<{session: object, reason: string}>).
+     * Output: string - HTML, or '' when there is nothing to report.
+     */
+    _renderProjectAttentionGroupHtml(items) {
+        if (!items || items.length === 0) return '';
+        const rows = items.map(({ session, reason }) => {
+            const displayName = this._escapeHtml(
+                this._deriveRunningSessionDisplayName(session.name)
+            );
+            return `
+                <div class="project-session-row project-session-row--attention" data-name="${this._escapeHtml(session.name)}">
+                  <span class="project-session-row__name">${displayName}</span>
+                  <span class="project-session-row__attention-reason">${this._escapeHtml(reason)}</span>
+                </div>
+            `;
+        }).join('');
+        return `
+                <div class="project-node project-node--attention" data-project-node="needs-attention" role="status">
+                  <div class="project-node__header project-node__header--attention">
+                    <span class="project-node__attention-head">NEEDS ATTENTION</span>
+                    <span class="project-node__title">${items.length} session${items.length === 1 ? '' : 's'} could not be attributed to a project</span>
+                  </div>
+                  <div class="project-node__sessions">${rows}</div>
+                </div>
+            `;
+    }
+
+    /**
+     * Wire click-to-expand/collapse on every ``.project-node__toggle`` in
+     * the tree, via event delegation on the (stable) ``#project-list``
+     * container so re-renders never need to re-bind. State is kept in
+     * ``this._collapsedProjectNodes`` (a Set of node keys) so it survives
+     * the next ``renderProjectList()`` call - e.g. the 5s running-
+     * sessions poller repainting the tree does not snap a collapsed
+     * project back open.
+     */
+    _bindProjectNodeToggles() {
+        const container = document.getElementById('project-list');
+        if (!container || container.__boundNodeToggles) return;
+        container.__boundNodeToggles = true;
+        container.addEventListener('click', (e) => {
+            const toggle = e.target.closest('.project-node__toggle');
+            if (!toggle) return;
+            e.stopPropagation();
+            const key = toggle.getAttribute('data-node-key');
+            if (!key) return;
+            const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+            toggle.setAttribute('aria-expanded', String(nowExpanded));
+            const sessionsEl = toggle.nextElementSibling;
+            if (sessionsEl && sessionsEl.classList.contains('project-node__sessions')) {
+                sessionsEl.style.display = nowExpanded ? '' : 'none';
+            }
+            if (nowExpanded) {
+                this._collapsedProjectNodes.delete(key);
+            } else {
+                this._collapsedProjectNodes.add(key);
+            }
+        });
+    }
+
+    /**
+     * Wire click-to-open on every child ``.project-session-row`` in the
+     * tree (excluding the inert ``--attention`` variant, which carries
+     * no ``data-active`` and offers no action). Delegated the same way
+     * as ``_bindProjectNodeToggles``. Routes into the exact same
+     * open/adopt methods the flat running-sessions list uses, so a
+     * session behaves identically whichever surface it was clicked from.
+     */
+    _bindProjectSessionRowClicks() {
+        const container = document.getElementById('project-list');
+        if (!container || container.__boundSessionRowClicks) return;
+        container.__boundSessionRowClicks = true;
+        container.addEventListener('click', async (e) => {
+            const row = e.target.closest('.project-session-row');
+            if (!row || row.classList.contains('project-session-row--attention')) return;
+            e.stopPropagation();
+            const name = row.dataset.name;
+            const isActive = row.dataset.active === '1';
+            if (isActive) {
+                const live = (this.runningSessions || []).find(s => s.name === name);
+                await this._returnToActiveRunningSession(live ? live.session_id : null);
+                return;
+            }
+            await this._handleAttachRunningSession(name);
+        });
+    }
+
+    /**
+     * Render the project list as a two-level project-to-session tree
+     * (S8, design section 4.2). Projects are the parents; their RUNNING
+     * sessions (from ``this.runningSessions``, matched via
+     * ``this.sessionAttribution``) are the children, via
+     * ``_buildProjectSessionGroups``. A project whose ``presence`` is
+     * ``missing`` or ``unreachable`` still renders here with S3's badge
+     * and every action on its row refused - it is never dropped from
+     * the list, matching the three-outcome rule this whole screen
+     * follows.
      */
     renderProjectList() {
         const projectListEl = document.getElementById('project-list');
+        if (!projectListEl) return;
 
         if (this.projects.length === 0) {
             projectListEl.innerHTML = `
@@ -1916,8 +2240,10 @@ class Launchpad {
             return;
         }
 
+        const groups = this._buildProjectSessionGroups();
+
         // Render projects
-        projectListEl.innerHTML = this.projects.map((project, index) => {
+        const projectNodesHtml = this.projects.map((project, index) => {
             const description = project.description || 'no description';
             // feat/projects-table (S3) - presence badge. `presenceRow` is
             // undefined for a project the DB import has not seen yet
@@ -1948,17 +2274,53 @@ class Launchpad {
             const itemClasses = isDisabled
                 ? `project-item project-presence-disabled project-presence-${presenceState}`
                 : 'project-item';
+
+            // S8 - a project only has children when the datastore has
+            // assigned it an id (via GET /projects/presence, keyed by
+            // this same raw path) AND at least one running session
+            // resolved to that id. A project the DB has never seen
+            // (presenceRow undefined) cannot have children by
+            // construction, matching the "not yet probed" treatment
+            // above.
+            const projectId = presenceRow ? presenceRow.id : null;
+            const children = (projectId !== null && projectId !== undefined)
+                ? (groups.byProjectId.get(projectId) || [])
+                : [];
+            const nodeKey = `project:${project.name}`;
+            const collapsed = this._collapsedProjectNodes.has(nodeKey);
+            const hasChildren = children.length > 0;
+            const chevronHtml = hasChildren
+                ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle running sessions for ${this._escapeHtml(project.name)}" aria-controls="project-node-sessions-${this._escapeHtml(nodeKey)}"><span class="project-node__chevron" aria-hidden="true">►</span><span class="project-node__count">${children.length}</span></button>`
+                : '';
+            const sessionsHtml = hasChildren
+                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${children.map(s => this._renderTreeSessionRowHtml(s)).join('')}</div>`
+                : '';
+
             return `
-                <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
-                    <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                    <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
-                    <div class="project-name">» ${project.name}</div>
-                    <div class="project-path">${project.path}</div>
-                    <div class="project-description">${description}</div>
-                    ${presenceBadge}
+                <div class="project-node" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}">
+                  <div class="project-node__row">
+                    ${chevronHtml}
+                    <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
+                        <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
+                        <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
+                        <div class="project-name">» ${project.name}</div>
+                        <div class="project-path">${project.path}</div>
+                        <div class="project-description">${description}</div>
+                        ${presenceBadge}
+                    </div>
+                  </div>
+                  ${sessionsHtml}
                 </div>
             `;
         }).join('');
+
+        const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
+        const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
+
+        projectListEl.innerHTML = projectNodesHtml + noProjectHtml + attentionHtml;
+
+        this._bindProjectNodeToggles();
+        this._bindProjectSessionRowClicks();
 
         // Add click handlers for project selection
         const projectItems = projectListEl.querySelectorAll('.project-item');

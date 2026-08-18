@@ -74,6 +74,13 @@ function makeProjectListElement() {
             if (selector === '.project-edit-btn') return parseButtons(html, 'project-edit-btn');
             return [];
         },
+        // feat/project-session-tree (S8) - renderProjectList() now also
+        // wires _bindProjectNodeToggles() / _bindProjectSessionRowClicks()
+        // via addEventListener on this same #project-list container. A
+        // no-op is enough here: this file asserts presence badges and
+        // disabled actions, not tree click behavior (see
+        // tests/test_project_session_tree.node.mjs for that).
+        addEventListener() {},
     };
     return { el, getHtml: () => html };
 }
