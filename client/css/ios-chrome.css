@@ -16,11 +16,21 @@
  * theme custom properties it references already exist.
  */
 
-/* Paint the page background out into the inset areas, so the notch and
- * the home-indicator strip match the app instead of showing white. */
-html {
-    background: var(--color-bg-page, #0a0a0a);
-}
+/* Painting the page background out into the inset areas, so the notch and
+ * the home-indicator strip match the app instead of showing white, is now
+ * done by the `html { background: var(--color-bg) }` rule in styles.css.
+ * That rule exists because the effects canvas has to paint between the root
+ * background and body (see styles.css, "PAGE BACKGROUND LIVES ON html"), and
+ * it covers the insets for free, so a second rule here would only be a
+ * competing declaration.
+ *
+ * It is deliberately NOT re-declared with --color-bg-page. That variable is
+ * the darker header/chrome colour, not the page colour: it differs from
+ * --color-bg in 18 of the 23 shipped themes, and it is unset entirely in
+ * corporate_v2 and legacy_windows. The old rule here read
+ * `var(--color-bg-page, #0a0a0a)`, which painted the root near-black under
+ * light themes and grey-less under legacy_windows. Body's opaque background
+ * hid that for as long as body had one. */
 
 /* The header is `position: sticky; top: 0` - in cover mode that puts it
  * flush under the status bar. Pad the top inset in and widen the side

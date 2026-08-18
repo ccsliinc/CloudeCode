@@ -16,8 +16,13 @@
 }
 
 /* -- Page chrome --------------------------------------------- */
-:root[data-theme="legacy_windows"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="legacy_windows"] {
   background: #C0C0C0;
+}
+
+:root[data-theme="legacy_windows"] body {
   color: #000000;
 }
 

@@ -5,8 +5,13 @@
   color-scheme: dark;
 }
 
-:root[data-theme="matrix"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="matrix"] {
   background: #000000;
+}
+
+:root[data-theme="matrix"] body {
   position: relative;
 }
 
@@ -77,7 +82,7 @@
 /* prefers-reduced-motion fallback - effects.js refuses to mount,
    add a faint static green wash here so the bg isn't pure black. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme="matrix"] body {
+  :root[data-theme="matrix"] {
     background:
       radial-gradient(ellipse at 50% 50%, rgba(0, 255, 65, 0.04), transparent 70%),
       #000000;

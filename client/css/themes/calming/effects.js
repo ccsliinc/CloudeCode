@@ -45,9 +45,12 @@ function makePatch(i, tints) {
         phx: Math.random() * Math.PI * 2,
         phy: Math.random() * Math.PI * 2,
         r: 0.34 + Math.random() * 0.16,
-        // Half the usual effect ceiling: this theme asks to be the faintest
-        // thing in the app.
-        alpha: 0.02 + Math.random() * 0.015,
+        // This theme asks to be the faintest thing in the app, but it is a
+        // LIGHT theme (#F5F1E8): a dark tint has far less headroom against
+        // cream than a bright tint has against black, so the same alpha buys
+        // less delta here. At 0.02-0.035 the banks composited a maximum RGB
+        // delta of 7/255. Still the faintest in the app, now measurably so.
+        alpha: 0.05 + Math.random() * 0.03,
         tint: tints[i % tints.length],
     };
 }

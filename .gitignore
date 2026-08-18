@@ -118,3 +118,6 @@ scripts/codemirror-vendor/package-lock.json
 # electron-builder output. The .dmg is a release artifact, not source.
 macOS/dist/
 macOS/node_modules/
+
+# Screenshots from scripts/verify/measure-theme-effect-visibility.py
+scripts/verify/.theme-effect-shots/

@@ -6,12 +6,17 @@
   color-scheme: dark;
 }
 
-:root[data-theme="blade_runner"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="blade_runner"] {
   background:
     radial-gradient(ellipse at 50% 0%, rgba(255, 122, 0, 0.05), transparent 60%),
     radial-gradient(ellipse at 80% 100%, rgba(0, 60, 120, 0.18), transparent 65%),
     radial-gradient(ellipse at 20% 90%, rgba(0, 30, 60, 0.22), transparent 70%),
     #0a0e1a;
+}
+
+:root[data-theme="blade_runner"] body {
   position: relative;
 }
 
@@ -69,7 +74,7 @@
 /* prefers-reduced-motion fallback - effects.js refuses to mount,
    keep the static cobalt-to-black wash so the bg still feels rain-slick. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme="blade_runner"] body {
+  :root[data-theme="blade_runner"] {
     background:
       radial-gradient(ellipse at 50% 0%, rgba(255, 122, 0, 0.06), transparent 55%),
       radial-gradient(ellipse at 50% 100%, rgba(0, 60, 120, 0.22), transparent 70%),

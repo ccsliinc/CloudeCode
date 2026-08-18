@@ -2,7 +2,9 @@
    Scoped under :root[data-theme="hermes"] (global) and
    #terminal-screen[data-session-theme="hermes"] (terminal). */
 
-:root[data-theme="hermes"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="hermes"] {
   background: #000000;
 }
 

@@ -19,8 +19,16 @@ const SWEEP_PERIOD_MS = 75000;
 /** Band half-width along the sweep axis, as a fraction of the diagonal. */
 const BAND_FRACTION = 0.22;
 
-/** Peak opacity at the band's centre. The ceiling for this theme. */
-const ALPHA_PEAK = 0.025;
+/** Peak opacity at the band's centre. The ceiling for this theme.
+ *
+ * TUNED AGAINST MEASURED PIXELS, not against taste. At the original 0.025
+ * this band composited a maximum RGB delta of 2/255 over the #0A0A0B page,
+ * across 0.24% of the viewport - present in the DOM, absent to the eye. The
+ * tint is a desaturated slate, so the delta is roughly ALPHA_PEAK x 80 rather
+ * than x 245; reaching a perceptible floor needs a number that looks large
+ * next to the other themes and is not. See tests/test_theme_effects_
+ * visibility.node.mjs for the floor this has to clear. */
+const ALPHA_PEAK = 0.12;
 
 /**
  * Resolve the palette. Runs on init and on every resize.

@@ -2,8 +2,13 @@
    Starfield is rendered with two stacked radial-gradient patterns on body::before
    so the CPU cost is zero (rasterized once, never animates). */
 
-:root[data-theme="claw"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="claw"] {
   background: #0a0810;
+}
+
+:root[data-theme="claw"] body {
   position: relative;
 }
 

@@ -22,8 +22,11 @@ const SCANLINE_ALPHA = 0.26;
 /** Seconds for the refresh band to travel the full viewport height. */
 const ROLL_PERIOD_MS = 26000;
 
-/** Peak opacity of the refresh band. This is the whole animation; keep it faint. */
-const ROLL_ALPHA = 0.035;
+/** Peak opacity of the refresh band. This is the whole animation, so it has to
+ * clear the perception floor even though the instinct is to keep it faint: at
+ * the original 0.035 it composited a maximum RGB delta of 6/255 over the
+ * #020a04 page. Faint is the goal; invisible is the bug. */
+const ROLL_ALPHA = 0.075;
 
 /** Refresh band height as a fraction of viewport height. */
 const ROLL_BAND_FRACTION = 0.3;

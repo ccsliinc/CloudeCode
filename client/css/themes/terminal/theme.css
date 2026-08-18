@@ -31,9 +31,13 @@
   color: var(--color-fg);
 }
 
-:root[data-theme="terminal"] body,
-:root[data-theme="terminal"] html {
+/* Background on the ROOT only, never body: body's background box paints over
+   the effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="terminal"] {
   background-color: var(--color-bg);
+}
+
+:root[data-theme="terminal"] body {
   color: var(--color-fg);
   font-family: var(--font-mono);
 }

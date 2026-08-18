@@ -14,7 +14,9 @@
    Scanlines: 3px period, ~15% darkness - period matches a real ~480-line
    interlaced CRT scaled to web pixels. Stronger than that reads as venetian
    blinds; weaker disappears. */
-:root[data-theme="alien"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="alien"] {
   background:
     repeating-linear-gradient(
       0deg,
@@ -24,6 +26,9 @@
       rgba(0, 0, 0, 0.15) 3px
     ),
     #04110a;
+}
+
+:root[data-theme="alien"] body {
   position: relative;
 }
 
@@ -83,7 +88,7 @@
 /* Reduced-motion: drop the scanlines entirely (some users get headaches
    from interlace patterns even when static). Keep phosphor wash. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme="alien"] body {
+  :root[data-theme="alien"] {
     background:
       radial-gradient(ellipse at 50% 30%, rgba(124, 252, 168, 0.05), transparent 70%),
       #04110a;

@@ -2,7 +2,9 @@
    Scoped under :root[data-theme="codex"] for global rules and
    #terminal-screen[data-session-theme="codex"] for terminal scope. */
 
-:root[data-theme="codex"] body {
+/* Background on the ROOT, not body: body's background box paints over the
+   effects canvas. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="codex"] {
   background: linear-gradient(180deg, #f7f7fa 0%, #efecff 100%);
   background-attachment: fixed;
 }

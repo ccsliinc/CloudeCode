@@ -238,9 +238,36 @@
  * shell is the consequence of a fixed height - each `.screen` is its own
  * scroll container (see `.screen` below), so nothing loses scrollability.
  */
+/* PAGE BACKGROUND LIVES ON `html`, NEVER ON `body`.
+ *
+ * Theme effects mount a `position: fixed; z-index: -1` canvas as a child of
+ * body. CSS 2.1 Appendix E paints, within the root stacking context, in this
+ * order: (1) the root element's own background, (2) child stacking contexts
+ * with NEGATIVE z-index, (3) the backgrounds of in-flow non-positioned
+ * block-level descendants. The effects canvas is step 2; `body`'s background
+ * box is step 3. So ANY opaque background on body paints straight over the
+ * canvas and the effect becomes invisible while still running perfectly.
+ *
+ * This is not hypothetical - it is the defect this rule was written to fix.
+ * Every one of the 23 themes measured a maximum composited RGB delta of 0
+ * against a canvas-hidden plate, including matrix, whose canvas contained
+ * pixels spanning the full 0-255 green range.
+ *
+ * `body` background propagation would normally rescue this (a transparent
+ * root adopts body's background and paints it at step 1, below the canvas),
+ * but ios-chrome.css gives `html` its own background to paint the notch and
+ * home-indicator insets, and a non-transparent root cancels propagation.
+ *
+ * Invariant, enforced by tests/test_theme_effects_visibility.node.mjs:
+ *   html paints the page colour; body's background stays transparent.
+ */
+html {
+    background: var(--color-bg);
+}
+
 body {
     font-family: var(--font-mono);
-    background: var(--color-bg);
+    background: transparent;
     color: var(--color-fg);
     height: 100vh;
     height: 100dvh;

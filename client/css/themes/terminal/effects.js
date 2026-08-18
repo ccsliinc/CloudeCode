@@ -22,8 +22,13 @@ import { createEffect, readVar, rgbTriple } from '../_shared/effects-base.js';
 /** Full breath cycle: fade up, fade down. Slow enough to never be "noticed". */
 const BREATH_PERIOD_MS = 34000;
 
-/** Peak opacity at the brightest point of the breath. Barely visible. */
-const PEAK_ALPHA = 0.025;
+/** Peak opacity at the brightest point of the breath.
+ *
+ * The breath multiplies this by (0.25 + 0.75 x phase), so the effective peak
+ * is what matters, not this constant. At the original 0.025 that came to
+ * 0.0177 and composited a maximum RGB delta of 5/255 over pure black -
+ * subliminal rather than subtle. */
+const PEAK_ALPHA = 0.065;
 
 /** Glow radius as a fraction of the viewport's larger edge. */
 const RADIUS_FRACTION = 0.55;

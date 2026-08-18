@@ -6,7 +6,10 @@
   50%      { background-color: #F0EBDF; }
 }
 
-:root[data-theme="calming"] body {
+/* The breath animates the ROOT background, not body's: body's background box
+   paints over the effects canvas, and an animated occluder is still an
+   occluder. See styles.css, "PAGE BACKGROUND LIVES ON html". */
+:root[data-theme="calming"] {
   background-color: var(--color-bg);
   animation: calmingBreath 30s ease-in-out infinite;
 }
