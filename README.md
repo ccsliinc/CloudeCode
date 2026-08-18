@@ -434,9 +434,20 @@ Running the same command twice in a row is safe: the second run sees you are alr
 ```bash
 ./scripts/rollback.sh 0.8.1               # go back to a specific version
 ./scripts/rollback.sh 0.8.1 --yes          # non-interactive
+./scripts/rollback.sh 0.8.1 --code-only    # move CODE only, accept the mismatch
 ```
 
-Rollback checks out the older code AND restores the backup that was captured right before you left that version, because config migrations only ever move forward. Older code reading a config.json that a newer migration wrote is not a state anyone tested. The rollback target must have a matching backup or the script refuses outright - see below.
+**Rollback moves CODE and DATA together, and that is the default.** Rolling back only the code leaves the old app looking at a newer `cloude.db`: it refuses to write and drops to degraded read-only, which is the safe failure rather than data loss, but it is not a working install. So `rollback.sh` reads `migration_trail.jsonl`, works out which schema and config versions were in force when this install was at the target release, and restores `cloude.db` and `config.json` to that point from the backups the trail names.
+
+The version is read off the last data entry that STARTED before the target release's `code` entry. The BACKUP is a different entry: backups are taken before a step runs, so the snapshot of version N hangs off the step that moved AWAY from N. Restoring the backup attached to the entry that named the version would put you one version too far back.
+
+It always RESTORES (copy back the backup taken at that version) and never REVERSEs (apply a step's own recorded undo). REVERSE keeps rows RESTORE discards, but its correctness depends on a human having written a complete reversal for that step, and an unattended script must not take the path that rests on a hand-maintained claim.
+
+Before it overwrites anything it prints exactly what it is about to restore, from which backup, taken when, generated from the trail entry itself rather than from a fixed sentence, and says that it cannot be undone. It does still write a `<artifact>.prerestore-<timestamp>` snapshot of what is about to be destroyed. The script will never read that snapshot back; it is there so you can.
+
+`--code-only` skips the data half. It is the opt-out, not the default, and it prints the resulting code/schema mismatch loudly, naming both numbers, because that mismatch is the whole failure this behaviour exists to prevent.
+
+Rollback also checks out the older code AND restores the install-directory backup that was captured right before you left that version, because config migrations only ever move forward. Older code reading a config.json that a newer migration wrote is not a state anyone tested. The rollback target must have a matching backup or the script refuses outright - see below.
 
 ### Where backups live
 
@@ -450,6 +461,10 @@ Both scripts follow one rule: if a check cannot be completed, they say so and st
 
 - **"could not determine the current version"** - `upgrade.sh` will not move a version it cannot name. This can happen on a checkout with no `.git`, or one that is not itself a git work tree root (see `src/core/version.py`'s resolution order). Fix the checkout, or if this is a brand-new `git clone` that has never been run, there is nothing installed to upgrade yet.
 - **"no backup found for version X"** - `rollback.sh` refuses rather than checking out old code next to a config it was never tested against. If you genuinely have a backup somewhere else, pass `--backup-dir`.
+- **"the upgrade trail could not be read"** - `migration_trail.jsonl` has a bad line somewhere other than the very last one. `rollback.sh` stops before stopping the server, before checking anything out, and before copying anything. It will NOT fall back to the newest backup: a rollback that guesses which backup to write over your live database is worse than no rollback. Repair or move the trail file and re-run, or pass `--code-only` to move code alone and accept the mismatch.
+- **"no backup was ever taken AT vN"** - the trail knows which version belonged to the target release, but that version only ever existed inside a multi-step migration run, which takes one backup at its start. There is no snapshot of the version you are asking for, so it refuses rather than restoring a neighbouring one.
+- **"the trail records no code entry arriving at X"** - only `upgrade.sh` and `rollback.sh` write `kind='code'` entries, and only since this feature landed. An install whose trail predates them has no anchor for the data question, so the data half refuses. The code half is still available with `--code-only`.
+- **an unverified backup** - `backup_verified` is 0 or missing on the entry that names the backup. A backup that could not be verified is treated as a backup that does not exist, so it refuses rather than restoring bytes nobody checked.
 - **"the server did not answer .../health"** or **"reports version X, expected Y"** - the upgrade or rollback ran, but the server did not come back the way it should have. This is reported as a failure with a non-zero exit, and for an upgrade it prints the exact `./scripts/rollback.sh <previous version>` command to recover with.
 - **"could not reach \<remote\> to verify the tag exists"** - this is a third, separate outcome from "the tag does not exist." A network problem or an unreachable remote is not the same as a bad tag, and the script says which one happened rather than guessing.
 - **"tracked files have local modifications"** - both scripts refuse to run `git checkout` over a dirty tree. Commit or discard the changes first.

@@ -63,6 +63,8 @@ PROBE="${SCRIPT_DIR}/upgrade_lib/version_probe.py"
 
 # shellcheck source=upgrade_lib/upgrade_rollback_common.sh
 source "${SCRIPT_DIR}/upgrade_lib/upgrade_rollback_common.sh"
+# shellcheck source=upgrade_lib/trail_code_entry.sh
+source "${SCRIPT_DIR}/upgrade_lib/trail_code_entry.sh"
 
 TAG=""
 ASSUME_YES="${ASSUME_YES:-0}"
@@ -159,6 +161,45 @@ confirm_or_die "Proceed with this upgrade?"
 
 require_clean_tree "${INSTALL_DIR}"
 
+# --- 5b. open the code trail entry, two-phase --------------------------------
+#
+# design 9.3, and the reason the trail is UNIFIED rather than two systems
+# in one directory: the app writes the schema and config entries, and
+# until now nothing wrote the code entries, so reading the trail showed
+# data moves with no code moves to interleave them against.
+# scripts/upgrade_lib/trail_select.py cannot answer "which data version
+# was in force at release X" without this line existing.
+#
+# Appended and fsynced BEFORE anything is mutated. A process killed after
+# this point leaves an unclosed `started` line, which the app detects at
+# startup and closes as `interrupted`.
+
+TRAIL_OPENED=0
+TRAIL_UUID=""
+TRAIL_STARTED=""
+TRAIL_HANDLE="$(trail_code_open "${INSTALL_DIR}" "${CURRENT}" "${TAG}" \
+    "${CURRENT}" "upgrade.sh: backup at ${BACKUP_DIR}")"
+if [ -n "${TRAIL_HANDLE}" ]; then
+    TRAIL_UUID="${TRAIL_HANDLE%% *}"
+    TRAIL_STARTED="${TRAIL_HANDLE#* }"
+    TRAIL_OPENED=1
+    log_ok "migration trail: opened code entry ${TRAIL_UUID}"
+else
+    log_unknown "could not open a code entry in the migration trail. Proceeding with the upgrade; the trail will not record this code move, which means a later rollback to ${CURRENT} cannot anchor to it and will refuse rather than guess."
+fi
+
+# Description: close the code trail entry, if one was opened.
+# Inputs: $1 - status (completed|failed). $2 - error text, empty when
+#   completed.
+# Output: returns 0 always; a trail write failure is logged by
+#   trail_code_close and never masks the upgrade's own outcome.
+close_trail() {
+    [ "${TRAIL_OPENED}" = "1" ] || return 0
+    trail_code_close "${INSTALL_DIR}" "${TRAIL_UUID}" "${TRAIL_STARTED}" \
+        "${CURRENT}" "${TAG}" "$1" "${TAG}" "${2:-}"
+    return 0
+}
+
 # --- 6. stop --------------------------------------------------------------
 
 log_step "stopping the server"
@@ -243,15 +284,18 @@ verify_upgrade "${INSTALL_DIR}" "${PORT}" "${TAG}" "${PROBE}"
 VERIFY_RC=$?
 case "${VERIFY_RC}" in
     0)
+        close_trail completed ""
         log_ok "upgrade to ${TAG} complete and verified"
         exit 0
         ;;
     2)
+        close_trail failed "server did not confirm ${TAG} after the upgrade"
         log_fail "upgrade to ${TAG} FAILED verification — code and config were changed, server did not confirm the new version"
         log_fail "roll back with: ./scripts/rollback.sh ${CURRENT} --install-dir ${INSTALL_DIR}"
         exit 1
         ;;
     *)
+        close_trail failed "upgrade completed but could not be verified"
         log_unknown "upgrade to ${TAG} completed but could NOT be verified (see reason above) — do not assume success. Check manually: curl http://127.0.0.1:${PORT}/health"
         exit 1
         ;;

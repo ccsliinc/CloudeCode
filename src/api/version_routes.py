@@ -58,13 +58,26 @@ how old code ends up reading a newer schema.
       "code_schema_version": 1,
       "config_version": 4,
       "config_version_state": "known",
-      "trail_status": "ok",        # ok | absent | interrupted | unreadable
+      "trail_status": "ok",        # ok | absent | interrupted |
+                                   # unreadable | paused
+      "trail_status_measured": "ok",  # what was read off the file alone
       "trail_corrupt_line": null,
       "last_migration_at": "2026-08-17T09:00:03Z",
       "message": "...",            # one sentence, for the user
       "detail": null,
       "failed_entry_uuid": null
     }
+
+``trail_status`` ANSWERS "IS THIS HISTORY INTACT AND STILL LIVE", which is
+two facts, so it has two fields. ``trail_status_measured`` is what reading
+migration_trail.jsonl alone established. ``trail_status`` is what to show a
+user, and it reads ``paused`` when the file is intact but this install will
+never add another line to it because migration is halted for a reason the
+trail is innocent of - a schema ahead of this code, a database that will
+not open, an unverified backup, a step that raised. Publishing ``ok`` there
+would tell a client the history is current and will stay current. See
+src/core/db_state.py for the full five-value rationale, including why
+``absent`` exists and the design lists four values rather than five.
 
 ``schema_version`` IS NEVER null. When it cannot be read it carries the
 string "CANNOT_DETERMINE". A null renders as a blank cell, and a blank cell

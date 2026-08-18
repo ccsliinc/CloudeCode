@@ -80,10 +80,32 @@ READONLY_STATUSES = (
 )
 
 # trail_status as exposed on GET /api/v1/version's data block.
+#
+# FIVE VALUES, AND THE DESIGN NAMES FOUR. Design 9.7 lists
+# ``ok | interrupted | unreadable | paused``. Two deliberate differences,
+# both stated here so nobody has to diff prose against code:
+#
+#   ``absent`` is ADDED. A genuine fresh install has no trail file at
+#   all, and reporting that as ``ok`` claims a clean history was read
+#   when nothing was read. It is the third outcome applied to the trail's
+#   own existence.
+#
+#   ``paused`` is KEPT, and it is measured rather than being a synonym
+#   for ``unreadable``. A corrupt trail pauses migration, and that case
+#   reports ``unreadable`` because that is the more specific fact. But
+#   migration is ALSO paused whenever the app is read-only for a reason
+#   the trail is innocent of: the schema is ahead of this code, the
+#   database will not open, a backup could not be verified, a step
+#   raised. In every one of those the trail file itself is perfectly
+#   readable, and reporting ``ok`` tells a client "this history is
+#   current and will stay current" while no further entry will ever be
+#   written to it. ``paused`` says the trail is intact and frozen, which
+#   is neither of the other two answers.
 TRAIL_STATUS_OK = "ok"
 TRAIL_STATUS_ABSENT = "absent"
 TRAIL_STATUS_INTERRUPTED = "interrupted"
 TRAIL_STATUS_UNREADABLE = "unreadable"
+TRAIL_STATUS_PAUSED = "paused"
 
 
 @dataclass
@@ -162,6 +184,27 @@ class DatastoreState:
         """
         return self.trail_status != TRAIL_STATUS_UNREADABLE
 
+    @property
+    def reported_trail_status(self) -> str:
+        """The trail status to publish, distinguishing intact-but-frozen.
+
+        Description: returns the measured ``trail_status`` unchanged when
+          it already names a trail-specific fact (UNREADABLE is more
+          specific than PAUSED and always wins). Otherwise, when this
+          install will write no further data-migration entries because
+          migration is paused for a reason outside the trail, reports
+          TRAIL_STATUS_PAUSED. A readable trail that can never gain
+          another line is not ``ok``: that word would tell a client the
+          history is current and will stay current.
+        Inputs: none.
+        Output: str - one of the TRAIL_STATUS_* constants.
+        """
+        if self.trail_status == TRAIL_STATUS_UNREADABLE:
+            return TRAIL_STATUS_UNREADABLE
+        if self.migrations_paused:
+            return TRAIL_STATUS_PAUSED
+        return self.trail_status
+
     def to_dict(self) -> Dict[str, Any]:
         """Render the additive ``data`` block for GET /api/v1/version.
 
@@ -186,7 +229,8 @@ class DatastoreState:
             "code_schema_version": self.code_schema_version,
             "config_version": self.config_version,
             "config_version_state": _version_state(self.config_version),
-            "trail_status": self.trail_status,
+            "trail_status": self.reported_trail_status,
+            "trail_status_measured": self.trail_status,
             "trail_corrupt_line": self.trail_corrupt_line,
             "last_migration_at": self.last_migration_at,
             "message": self.message,
