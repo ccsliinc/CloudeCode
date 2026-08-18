@@ -28,6 +28,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 # ruff: noqa: E402
 from src.core.pane_locale import is_utf8_locale
 from src.core.tmux_backend import TmuxBackend
+from tests.socket_guard import derive_test_socket
 
 requires_tmux = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="tmux not on PATH"
@@ -44,7 +45,7 @@ def locale_free_environ(monkeypatch):
 @pytest.fixture
 def tmux_socket():
     """Private tmux socket, torn down with every session on it."""
-    name = f"cc-locale-{uuid.uuid4().hex[:8]}"
+    name = derive_test_socket("locale")
     yield name
     subprocess_kill = shutil.which("tmux")
     if subprocess_kill:

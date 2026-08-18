@@ -39,6 +39,7 @@ from src.core.tmux_backend import (
     _slugify,
 )
 from src.utils.pty_session import PTYBackend
+from tests.socket_guard import TEST_SOCKET_NAME
 
 
 TMUX_AVAILABLE = shutil.which("tmux") is not None
@@ -147,7 +148,7 @@ def test_build_backend_force_pty_even_when_tmux_present():
             class AC:
                 class session:
                     backend = "pty"
-                    tmux_socket_name = "cloude"
+                    tmux_socket_name = _TEST_SOCKET
                     scrollback_lines = 3000
             return AC()
 
@@ -218,6 +219,7 @@ def test_build_backend_defaults_to_cloude_socket_with_no_settings():
     on; a regression here would strand them.
     """
     from src.core.tmux_backend import DEFAULT_SOCKET_NAME
+    from tests.socket_guard import shipped_default_socket_name
 
     backend = build_backend(
         settings_obj=None,
@@ -226,7 +228,14 @@ def test_build_backend_defaults_to_cloude_socket_with_no_settings():
         on_output=None,
     )
     assert isinstance(backend, TmuxBackend)
-    assert backend.socket_name == DEFAULT_SOCKET_NAME == "cloude"
+    # Behaviour: with no settings, the backend takes the module default.
+    assert backend.socket_name == DEFAULT_SOCKET_NAME
+
+    # Shipped value: read from source, because the in-process constant is
+    # deliberately redirected to a throwaway socket while tests run. This
+    # keeps the "the app ships 'cloude'" assertion honest without letting
+    # the suite execute anything against that socket.
+    assert shipped_default_socket_name() == "cloude"
 
 
 @requires_tmux
@@ -287,8 +296,9 @@ def test_build_backend_create_and_adopt_agree_on_socket(tmux_socket_cleanup):
 # ---- TmuxBackend integration (requires tmux) ----------------------------
 
 
-# Use a unique socket per test run so CI parallelism + local dev don't clash.
-_TEST_SOCKET = f"cloude_test_{uuid.uuid4().hex[:8]}"
+# The one socket this suite may touch. Owned by tests/socket_guard.py, which
+# also blocks, at the subprocess layer, any tmux invocation aimed elsewhere.
+_TEST_SOCKET = TEST_SOCKET_NAME
 
 
 @pytest.fixture
@@ -1174,7 +1184,7 @@ async def test_adopt_external_session_no_409_when_other_session_active():
         "src.core.session_manager.settings"
     ) as mock_settings:
         auth_cfg = MagicMock()
-        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.tmux_socket_name = _TEST_SOCKET
         auth_cfg.session.scrollback_lines = 3000
         auth_cfg.notifications.idle_threshold_seconds = 30.0
         mock_settings.load_auth_config.return_value = auth_cfg
@@ -1240,7 +1250,7 @@ async def test_adopt_external_session_does_not_detach_or_destroy_prior():
         "src.core.session_manager.settings"
     ) as mock_settings:
         auth_cfg = MagicMock()
-        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.tmux_socket_name = _TEST_SOCKET
         auth_cfg.session.scrollback_lines = 3000
         auth_cfg.notifications.idle_threshold_seconds = 30.0
         mock_settings.load_auth_config.return_value = auth_cfg
@@ -1376,7 +1386,7 @@ async def test_adopt_external_session_refuses_dead_pane():
         "src.core.session_manager.settings"
     ) as mock_settings:
         auth_cfg = MagicMock()
-        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.tmux_socket_name = _TEST_SOCKET
         auth_cfg.session.scrollback_lines = 3000
         mock_settings.load_auth_config.return_value = auth_cfg
 
@@ -1531,7 +1541,7 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
 
     # Create the external session and inject a deterministic marker.
     subprocess.run(
-        ["tmux", "-L", "cloude", "new-session", "-d", "-s", name],
+        ["tmux", "-L", _TEST_SOCKET, "new-session", "-d", "-s", name],
         check=True,
         capture_output=True,
     )
@@ -1542,7 +1552,7 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
 
     try:
         subprocess.run(
-            ["tmux", "-L", "cloude", "send-keys", "-t",
+            ["tmux", "-L", _TEST_SOCKET, "send-keys", "-t",
              name, f"echo {marker}", "Enter"],
             check=True,
             capture_output=True,
@@ -1588,7 +1598,7 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
     finally:
         # Clean up tmux session.
         subprocess.run(
-            ["tmux", "-L", "cloude", "kill-session", "-t", name],
+            ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t", name],
             check=False,
             capture_output=True,
         )
@@ -1640,7 +1650,7 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
 
         # Sanity: tmux says the session is alive BEFORE detach.
         alive_before = subprocess.run(
-            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name],
+            ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name],
             capture_output=True,
         )
         assert alive_before.returncode == 0, (
@@ -1666,7 +1676,7 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
         # The tmux session must still be alive on the server — the whole
         # point of detach-vs-destroy.
         alive_after = subprocess.run(
-            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name],
+            ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name],
             capture_output=True,
         )
         assert alive_after.returncode == 0, (
@@ -1682,7 +1692,7 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
         # passed or failed. Use the real cloude socket since that's where
         # we created it.
         subprocess.run(
-            ["tmux", "-L", "cloude", "kill-session", "-t",
+            ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t",
              f"cloude_{session_id}"],
             check=False,
             capture_output=True,
@@ -1733,7 +1743,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
         assert tmux_name_a in sm.owned_tmux_sessions
 
         alive_a_before = subprocess.run(
-            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name_a],
+            ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name_a],
             capture_output=True,
         )
         assert alive_a_before.returncode == 0, (
@@ -1742,7 +1752,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
 
         # --- Step 2: spawn external session B (the target of the adopt).
         subprocess.run(
-            ["tmux", "-L", "cloude", "new-session", "-d", "-s", name_b],
+            ["tmux", "-L", _TEST_SOCKET, "new-session", "-d", "-s", name_b],
             check=True,
             capture_output=True,
         )
@@ -1758,7 +1768,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
 
         # --- Step 4: the INVARIANT — A's tmux session is STILL ALIVE.
         alive_a_after = subprocess.run(
-            ["tmux", "-L", "cloude", "has-session", "-t", tmux_name_a],
+            ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name_a],
             capture_output=True,
         )
         assert alive_a_after.returncode == 0, (
@@ -1778,7 +1788,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
         # Clean up both sessions; ignore failures (e.g. already gone).
         for tname in filter(None, [tmux_name_a, name_b]):
             subprocess.run(
-                ["tmux", "-L", "cloude", "kill-session", "-t", tname],
+                ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t", tname],
                 check=False,
                 capture_output=True,
             )
@@ -1915,7 +1925,7 @@ async def test_session_manager_create_session_verbatim_name(tmp_path, monkeypatc
                 # Belt-and-suspenders: kill by literal name in case
                 # destroy_session fails mid-teardown.
                 subprocess.run(
-                    ["tmux", "-L", "cloude", "kill-session",
+                    ["tmux", "-L", _TEST_SOCKET, "kill-session",
                      "-t", "cloude_T4 Verbatim Test"],
                     check=False,
                     capture_output=True,
@@ -1981,7 +1991,7 @@ async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monke
 
     # Pre-create the tmux session on our socket so the collision fires.
     subprocess.run(
-        ["tmux", "-L", "cloude", "new-session", "-d", "-s", target_tmux],
+        ["tmux", "-L", _TEST_SOCKET, "new-session", "-d", "-s", target_tmux],
         check=True,
     )
     try:
@@ -2003,12 +2013,12 @@ async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monke
             )
             # Both the pre-existing session AND the new one must be alive.
             assert subprocess.call(
-                ["tmux", "-L", "cloude", "has-session", "-t", target_tmux],
+                ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", target_tmux],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ) == 0, "pre-existing tmux session was unexpectedly touched"
             assert subprocess.call(
-                ["tmux", "-L", "cloude", "has-session", "-t", expected_new_tmux],
+                ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", expected_new_tmux],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ) == 0, "new uniquified tmux session was not created"
@@ -2020,12 +2030,12 @@ async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monke
                     pass
     finally:
         subprocess.run(
-            ["tmux", "-L", "cloude", "kill-session", "-t", target_tmux],
+            ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t", target_tmux],
             check=False,
             capture_output=True,
         )
         subprocess.run(
-            ["tmux", "-L", "cloude", "kill-session", "-t", expected_new_tmux],
+            ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t", expected_new_tmux],
             check=False,
             capture_output=True,
         )
@@ -2049,11 +2059,11 @@ async def test_create_session_uniquifies_third_collision(tmp_path, monkeypatch):
 
     # Pre-create BOTH the base name and the "-2" name on our socket.
     subprocess.run(
-        ["tmux", "-L", "cloude", "new-session", "-d", "-s", target_tmux],
+        ["tmux", "-L", _TEST_SOCKET, "new-session", "-d", "-s", target_tmux],
         check=True,
     )
     subprocess.run(
-        ["tmux", "-L", "cloude", "new-session", "-d", "-s", second_tmux],
+        ["tmux", "-L", _TEST_SOCKET, "new-session", "-d", "-s", second_tmux],
         check=True,
     )
     try:
@@ -2082,7 +2092,7 @@ async def test_create_session_uniquifies_third_collision(tmp_path, monkeypatch):
     finally:
         for name in (target_tmux, second_tmux, expected_third_tmux):
             subprocess.run(
-                ["tmux", "-L", "cloude", "kill-session", "-t", name],
+                ["tmux", "-L", _TEST_SOCKET, "kill-session", "-t", name],
                 check=False,
                 capture_output=True,
             )

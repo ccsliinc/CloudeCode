@@ -53,9 +53,10 @@ if str(ROOT) not in sys.path:
 # ruff: noqa: E402
 from src.api.ws_startup_paint import paint_on_attach
 from src.core.tmux_backend import TmuxBackend
+from tests.socket_guard import derive_test_socket
 
 TMUX = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
-SOCKET = "ccwt_paint"
+SOCKET = derive_test_socket("attachpaint")
 
 #: Marker printed by both fixtures so a capture can be checked for content
 #: rather than merely for a non-zero length.

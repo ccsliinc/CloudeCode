@@ -42,6 +42,7 @@ if str(ROOT) not in sys.path:
 
 # ruff: noqa: E402
 from src.core import host_metrics, server_status
+from tests.socket_guard import derive_test_socket
 
 SEP = server_status._TMUX_FIELD_SEP
 
@@ -278,9 +279,15 @@ def test_unavailable_helper_never_claims_a_reading():
     assert out == {"available": False, "error": "because"}
 
 
+# A socket name this run owns but never creates a server on. Exercises
+# the "no server" branch without naming a socket the guard cannot vouch
+# for.
+_ABSENT_SOCKET = derive_test_socket("absent")
+
+
 def test_collect_returns_every_section():
     snap = server_status.collect(
-        host="127.0.0.1", port=8001, socket_name="cc-no-such-socket",
+        host="127.0.0.1", port=8001, socket_name=_ABSENT_SOCKET,
         ownership_by_name={}, open_ids_by_name={},
     )
     for section in ("server", "tmux", "claude_cli", "host", "memory", "disk", "load"):
@@ -291,7 +298,7 @@ def test_collect_returns_every_section():
 
 def test_collect_flags_a_wildcard_bind_as_lan_reachable():
     snap = server_status.collect(
-        host="0.0.0.0", port=8000, socket_name="cc-no-such-socket",
+        host="0.0.0.0", port=8000, socket_name=_ABSENT_SOCKET,
         ownership_by_name={}, open_ids_by_name={},
     )
     assert snap["server"]["lan_reachable"] is True

@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
 # ruff: noqa: E402
 from src.core.session_manager import SessionManager
 from src.models import AdoptSessionRequest
+from tests.socket_guard import TEST_SOCKET_NAME
 
 
 def _auth_cfg() -> MagicMock:
@@ -46,7 +47,7 @@ def _auth_cfg() -> MagicMock:
         MagicMock: shaped like the real config's session/notification tree.
     """
     cfg = MagicMock()
-    cfg.session.tmux_socket_name = "cloude"
+    cfg.session.tmux_socket_name = TEST_SOCKET_NAME
     cfg.session.scrollback_lines = 3000
     cfg.notifications.idle_threshold_seconds = 30.0
     return cfg

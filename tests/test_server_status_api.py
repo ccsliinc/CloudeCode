@@ -38,6 +38,7 @@ from fastapi.testclient import TestClient
 from src.api import status_routes
 from src.api.auth import require_auth
 from src.api.status_routes import router as status_router
+from tests.socket_guard import shipped_default_socket_name
 
 
 class FakeBackend:
@@ -192,4 +193,8 @@ def test_socket_name_falls_back_when_config_is_unreadable(monkeypatch):
             raise OSError("config gone")
 
     monkeypatch.setattr(status_routes, "settings", BadSettings())
-    assert status_routes.resolve_socket_name() == "cloude"
+    # Behaviour: an unreadable config falls back to the module default.
+    assert status_routes.resolve_socket_name() == status_routes.DEFAULT_SOCKET_NAME
+    # Shipped value: read from source, because the live constant is
+    # redirected to a throwaway socket while tests run.
+    assert shipped_default_socket_name() == "cloude"
