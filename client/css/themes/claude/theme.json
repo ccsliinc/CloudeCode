@@ -16,9 +16,9 @@
     "--color-bg-overlay-soft": "rgba(0, 0, 0, 0.5)",
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.3)",
     "--color-fg": "#d4d4d4",
-    "--color-fg-muted": "#858585",
-    "--color-fg-subtle": "#666",
-    "--color-fg-faint": "#888",
+    "--color-fg-muted": "#959595",
+    "--color-fg-subtle": "#959595",
+    "--color-fg-faint": "#959595",
     "--color-border": "#3e3e42",
     "--color-border-subtle": "#2d2d30",
     "--color-accent": "#d77757",
@@ -98,9 +98,9 @@
     "brightWhite": "#ffffff"
   },
   "audio": {
-      "src": "/static/assets/audio/dead-ship.m4a",
-      "srcFallback": "/static/assets/audio/dead-ship.ogg",
-      "volume": 0.5,
-      "fadeMs": 1500
-    }
+    "src": "/static/assets/audio/dead-ship.m4a",
+    "srcFallback": "/static/assets/audio/dead-ship.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
+  }
 }
