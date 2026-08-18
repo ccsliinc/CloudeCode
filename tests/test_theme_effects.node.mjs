@@ -29,6 +29,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createFakeCtx } from './helpers/fake-canvas-2d.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
@@ -75,23 +76,11 @@ function installEnv(opts = {}) {
     const mqlListeners = [];
     const body = { children: [] };
 
-    /**
-     * Build a stub 2D context recording nothing but answering every call the
-     * harness and the shipped effects make.
-     * @returns {object} Fake CanvasRenderingContext2D
-     */
-    function makeCtx() {
-        const grad = { addColorStop() {} };
-        return {
-            drawCalls: 0,
-            setTransform() {}, scale() {}, fillRect() { this.drawCalls++; },
-            fillText() {}, drawImage() { this.drawCalls++; },
-            createLinearGradient: () => grad,
-            createRadialGradient: () => grad,
-            createPattern: () => ({}),
-            font: '', textBaseline: '', fillStyle: '',
-        };
-    }
+    // The 2D context double lives in tests/helpers/fake-canvas-2d.mjs. It
+    // implements the full 2D surface with real save/restore and transform
+    // semantics, so an effect is never forced to avoid a method the double
+    // happens to lack. See that file's header for what it approximates and
+    // what it refuses to answer.
 
     const doc = {
         hidden: !!opts.hidden,
@@ -108,7 +97,7 @@ function installEnv(opts = {}) {
                 setAttribute(k, v) { this[k] = v; },
                 getContext() {
                     if (opts.contextFails) return null;
-                    if (!this._ctx) this._ctx = makeCtx();
+                    if (!this._ctx) this._ctx = createFakeCtx(this);
                     return this._ctx;
                 },
             };
