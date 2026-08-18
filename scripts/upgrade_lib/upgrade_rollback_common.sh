@@ -48,10 +48,15 @@ INSTALL_OPTIONAL_FILES=("config.json.bak" ".update-check.json")  # app-created l
 STATE_DIR_REQUIRED_FILES=("refresh_tokens.db")          # RefreshStore.init() runs on EVERY server startup - if the server was running, this exists
 STATE_DIR_OPTIONAL_FILES=("session_metadata.json" "pinned_themes.json" "unread_state.json")  # created lazily on first session / theme pin / unread event - legitimately absent on a never-used feature
 
-# Default port. Matches CLAUDE.md hazard: "the server runs on port 8000"
-# and setup_auth.py / stop.sh's hardcoded assumption. Overridden by reading
-# PORT= from the install's .env when present (see resolve_port below).
-DEFAULT_PORT=8000
+# DEFAULT_PORT and resolve_port() live in scripts/resolve-port.sh - the
+# single shared shell-side port resolver every port-aware script in this
+# repo sources, instead of each one carrying its own copy of the "8000"
+# literal. See that file's docstring for the three-outcome contract
+# (resolve_port returns 1 with a stderr reason on an unparseable PORT= -
+# it never silently substitutes DEFAULT_PORT for a value it could not
+# parse).
+_URC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${_URC_DIR}/../resolve-port.sh"
 
 # --- logging: three outcomes, named, never collapsed ------------------------
 
@@ -113,23 +118,8 @@ resolve_python() {
     die "no venv at ${install_dir}/venv and no python3 on PATH - cannot run any check"
 }
 
-# Description: read PORT= out of the install's .env, falling back to
-#   DEFAULT_PORT when .env is absent or sets nothing.
-# Inputs: $1 - install_dir.
-# Output: prints the port number on stdout.
-resolve_port() {
-    local install_dir="$1"
-    local env_file="${install_dir}/.env"
-    if [ -f "${env_file}" ]; then
-        local port
-        port="$(grep -E '^PORT=' "${env_file}" | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
-        if [ -n "${port}" ]; then
-            printf '%s\n' "${port}"
-            return 0
-        fi
-    fi
-    printf '%s\n' "${DEFAULT_PORT}"
-}
+# resolve_port() is sourced from scripts/resolve-port.sh (see the source
+# line near the top of this file) rather than defined here.
 
 # Description: resolve LOG_DIRECTORY the SAME WAY the app does -
 #   src/config.py's get_log_dir() is ``Path(self.log_directory).expanduser()``

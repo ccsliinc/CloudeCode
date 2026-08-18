@@ -9,6 +9,10 @@
 
 set -e
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$SCRIPT_DIR"
+source "${SCRIPT_DIR}/scripts/resolve-port.sh"
+
 echo "☁️💥 Cloude Code - Nuke it from Orbit!"
 echo "========================================"
 echo ""
@@ -75,13 +79,23 @@ log_skip() {
 echo "Stopping running processes..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Stop server (find by port 8000 or python process)
-SERVER_PID=$(lsof -ti:8000 2>/dev/null || echo "")
-if [ -n "$SERVER_PID" ]; then
-    kill -9 $SERVER_PID 2>/dev/null || true
-    log_cleanup "Stopped server process (PID: $SERVER_PID)"
+# Stop server (find by configured port, or fall through to the menubar
+# process kill below). A malformed PORT= in .env must not silently be
+# treated as "8000" here - that would kill the wrong process (or none)
+# while claiming this step succeeded. It also must not abort the rest of
+# nuke.sh (venv, log dirs, LaunchAgent, etc. are unaffected by not being
+# able to resolve a port), so this reports and continues rather than
+# dying under `set -e`.
+if PORT="$(resolve_port "${PROJECT_ROOT}")"; then
+    SERVER_PID=$(lsof -ti:"${PORT}" 2>/dev/null || echo "")
+    if [ -n "$SERVER_PID" ]; then
+        kill -9 $SERVER_PID 2>/dev/null || true
+        log_cleanup "Stopped server process on port ${PORT} (PID: $SERVER_PID)"
+    else
+        log_skip "Server process not running on port ${PORT}"
+    fi
 else
-    log_skip "Server process not running"
+    echo -e "${YELLOW}⚠${NC}  could not determine port (see reason above) - skipping port-based server kill. If the server is still running, stop it manually."
 fi
 
 # Stop macOS menubar app
@@ -104,9 +118,8 @@ fi
 echo "Removing local files..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Project root files (use script directory)
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$SCRIPT_DIR"
+# Project root files (SCRIPT_DIR / PROJECT_ROOT resolved near the top,
+# before the port-based server kill above needed them).
 cd "$PROJECT_ROOT"
 
 FILES_TO_DELETE=(

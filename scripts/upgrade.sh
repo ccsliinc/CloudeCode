@@ -210,7 +210,7 @@ start_service "${INSTALL_DIR}"
 
 # --- 11. verify --------------------------------------------------------------------
 
-PORT="$(resolve_port "${INSTALL_DIR}")"
+PORT="$(resolve_port "${INSTALL_DIR}")" || die "could not determine port for ${INSTALL_DIR} - see reason above. Fix PORT= in ${INSTALL_DIR}/.env and re-run verification, or verify manually."
 log_step "verifying the server on port ${PORT} reports ${TAG}"
 verify_upgrade "${INSTALL_DIR}" "${PORT}" "${TAG}" "${PROBE}"
 VERIFY_RC=$?

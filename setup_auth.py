@@ -239,8 +239,13 @@ def setup_env_file(env_path):
         with open(env_template_path) as f:
             content = f.read()
     else:
-        # Minimal template if .env.example doesn't exist.
+        # Minimal template if .env.example doesn't exist (rare - .env.example
+        # is a tracked file, so this branch only fires if it was deleted).
         # Plan v3.2: no Cloudflare/tunnel keys — the tunnel system is gone.
+        # HOST/PORT literals below must match src/config.py's Settings
+        # field defaults (Settings.host = "0.0.0.0", Settings.port = 8000) -
+        # that class is the single configuration root; this is a fallback
+        # copy of its documented defaults, not an independent decision.
         content = (
             "# Server Configuration\n"
             "HOST=0.0.0.0\n"

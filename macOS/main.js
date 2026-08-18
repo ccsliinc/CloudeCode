@@ -547,8 +547,18 @@ function updateMenu() {
       click: () => {
         // Use the published URL so remote LAN bindings work from the
         // user's browser — 'localhost' is dead when uvicorn binds to
-        // a specific LAN interface.
-        shell.openExternal(serverManager.getPublishedUrl());
+        // a specific LAN interface. getPublishedUrl() returns null when
+        // the configured port could not be determined (bad PORT= in
+        // .env). Never open a guessed-port URL in that case.
+        const url = serverManager.getPublishedUrl();
+        if (!url) {
+          dialog.showErrorBox(
+            'Cloude Code: unknown server port',
+            'Could not determine the configured port from .env (PORT= is set but not a valid port number). Fix .env and restart Cloude Code.'
+          );
+          return;
+        }
+        shell.openExternal(url);
       },
       enabled: isRunning
     },
