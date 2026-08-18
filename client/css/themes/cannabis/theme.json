@@ -97,6 +97,7 @@
     "brightCyan": "#A8C4A8",
     "brightWhite": "#F4ECD4"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/forest-ambience.m4a",
     "srcFallback": "/static/assets/audio/forest-ambience.ogg",
