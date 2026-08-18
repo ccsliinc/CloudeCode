@@ -1,5 +1,5 @@
 /* ============================================================
- * Legacy Windows theme — Win 95 / 98 chrome, faithfully ported
+ * Legacy Windows theme - Win 95 / 98 chrome, faithfully ported
  * ------------------------------------------------------------
  * BTNFACE gray (#C0C0C0) page, ACTIVECAPTION navy (#000080)
  * title bar, BTNHIGHLIGHT (#FFFFFF) + BTNSHADOW (#808080)
@@ -21,7 +21,7 @@
   color: #000000;
 }
 
-/* -- Title bar (.header) — ACTIVECAPTION navy w/ white text --- */
+/* -- Title bar (.header) - ACTIVECAPTION navy w/ white text --- */
 :root[data-theme="legacy_windows"] .header {
   color: #FFFFFF;
   background: #000080;
@@ -39,7 +39,7 @@
 }
 
 /* -- 3D RAISED bevel: white top+left, dark bottom+right ------- */
-/* Buttons — the canonical Win9x raised look. */
+/* Buttons - the canonical Win9x raised look. */
 :root[data-theme="legacy_windows"] button {
   background: #C0C0C0;
   color: #000000;
@@ -52,7 +52,7 @@
   font-family: "Tahoma", "MS Sans Serif", sans-serif;
 }
 
-/* Pressed/active state — bevel inverts (sunken). */
+/* Pressed/active state - bevel inverts (sunken). */
 :root[data-theme="legacy_windows"] button:active,
 :root[data-theme="legacy_windows"] button.active,
 :root[data-theme="legacy_windows"] button[aria-pressed="true"] {
@@ -62,13 +62,13 @@
   border-bottom: 1px solid #FFFFFF;
 }
 
-/* Disabled — etched gray text, classic Win9x dotted feel. */
+/* Disabled - etched gray text, classic Win9x dotted feel. */
 :root[data-theme="legacy_windows"] button:disabled {
   color: #808080;
   text-shadow: 1px 1px 0 #FFFFFF;
 }
 
-/* -- Cards / panels — same raised bevel, slightly lighter face */
+/* -- Cards / panels - same raised bevel, slightly lighter face */
 :root[data-theme="legacy_windows"] .card,
 :root[data-theme="legacy_windows"] .panel,
 :root[data-theme="legacy_windows"] .modal-content,
@@ -84,7 +84,7 @@
   box-shadow: none;
 }
 
-/* -- Inputs / textareas — SUNKEN bevel (the Win9x edit-control) */
+/* -- Inputs / textareas - SUNKEN bevel (the Win9x edit-control) */
 :root[data-theme="legacy_windows"] input[type="text"],
 :root[data-theme="legacy_windows"] input[type="password"],
 :root[data-theme="legacy_windows"] input[type="email"],
@@ -112,7 +112,7 @@
   outline-offset: -3px;
 }
 
-/* -- Modal overlay — flat navy wash, no blur ------------------ */
+/* -- Modal overlay - flat navy wash, no blur ------------------ */
 :root[data-theme="legacy_windows"] .modal-overlay {
   background: rgba(0, 0, 128, 0.25);
   backdrop-filter: none;
@@ -125,7 +125,7 @@
   font-weight: bold;
 }
 
-/* -- Links — classic underlined navy --------------------------- */
+/* -- Links - classic underlined navy --------------------------- */
 :root[data-theme="legacy_windows"] a {
   color: #000080;
   text-decoration: underline;
@@ -134,7 +134,7 @@
   color: #800080;
 }
 
-/* -- Selection — ACTIVECAPTION wash --------------------------- */
+/* -- Selection - ACTIVECAPTION wash --------------------------- */
 :root[data-theme="legacy_windows"] ::selection {
   background: #000080;
   color: #FFFFFF;

@@ -3,7 +3,7 @@
  *
  * Live-filter + keyboard-navigation state for the slash-commands modal
  * (Task 4). Split out of slash-commands.js to keep that file under the
- * project's 500-line cap — this module owns ONLY the filter/keyboard
+ * project's 500-line cap - this module owns ONLY the filter/keyboard
  * bookkeeping over an already-rendered DOM; it doesn't fetch data, build
  * markup, or know about open/close behavior.
  */
@@ -20,7 +20,7 @@ class SlashCommandFilter {
     /**
      * Description: (re)index every `.command-item` under `root` into the
      *   flat searchable list. Call once after the modal's HTML is
-     *   rendered — the DOM doesn't change shape again while open, only
+     *   rendered - the DOM doesn't change shape again while open, only
      *   visibility toggles, so this doesn't need to re-run per keystroke.
      * Inputs: root (Element) - the modal (or any ancestor of the
      *   `.command-item` rows).
@@ -50,7 +50,7 @@ class SlashCommandFilter {
     }
 
     /**
-     * Description: apply a live-filter query — matches command name and
+     * Description: apply a live-filter query - matches command name and
      *   description, case-insensitive substring. Toggles `.filter-hidden`
      *   on non-matching `.command-item` rows and on any `.command-category`
      *   whose every child item was hidden, per Task 4 ("group headings

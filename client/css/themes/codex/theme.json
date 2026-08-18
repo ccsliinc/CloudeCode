@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Soft white surfaces with an indigo wash — inspired by openai.com/codex.",
+  "description": "Soft white surfaces with an indigo wash - inspired by openai.com/codex.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

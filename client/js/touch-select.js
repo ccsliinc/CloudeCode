@@ -5,16 +5,16 @@
  * way to highlight terminal text, so there is nothing to copy. This
  * module adds that flow. Loaded right AFTER clipboard.js in index.html;
  * terminal.js calls window.TouchSelect.init(this) once from
- * initTerminal() (single attachment — all listeners ride on #terminal /
+ * initTerminal() (single attachment - all listeners ride on #terminal /
  * document, so term.reset() during session swap does not wipe them).
  *
- * Flow (coarse pointers only — the module no-ops entirely on desktop):
+ * Flow (coarse pointers only - the module no-ops entirely on desktop):
  *
  *  1. LONG-PRESS (~500ms, 10px movement tolerance) on the terminal enters
- *     "select mode": the shared status pill says "select mode — drag to
+ *     "select mode": the shared status pill says "select mode - drag to
  *     highlight" and the gesture is hijacked so it can no longer scroll.
  *  2. DRAG moves the selection. Rather than re-implementing pixel→cell
- *     math (fragile under WebGL — there are no DOM text layers to hit),
+ *     math (fragile under WebGL - there are no DOM text layers to hit),
  *     we synthesize the equivalent mousedown/mousemove/mouseup events at
  *     the touch point and let xterm's OWN SelectionService do the work.
  *     Verified against the bundled xterm@5.3.0:
@@ -22,11 +22,11 @@
  *         (bubbling from .xterm-screen reaches it);
  *       - it requires button === 0 and detail === 1 (a synthetic
  *         MouseEvent defaults detail to 0, which silently selects
- *         NOTHING — detail must be set explicitly);
+ *         NOTHING - detail must be set explicitly);
  *       - drag listeners are added to the ownerDocument, so bubbling
  *         synthetic mousemove/mouseup events drive the drag;
  *       - coordinates come from clientX/clientY relative to
- *         .xterm-screen — exactly what we provide.
+ *         .xterm-screen - exactly what we provide.
  *  3. LIFT with an active selection shows a small floating "copy" button
  *     anchored at the lift point (which is where xterm's selectionEnd
  *     sits), clamped inside the visible viewport. Tap →
@@ -43,7 +43,7 @@
  *    only engage while a touch gesture is pending/active);
  *  - WebGL renderer safe: no reliance on DOM text layers;
  *  - keyboard safety: xterm's screenElement mousedown handler calls
- *    term.focus() — our synthetic mousedown fires from a timer (not a
+ *    term.focus() - our synthetic mousedown fires from a timer (not a
  *    trusted gesture, so mobile browsers won't summon the keyboard), and
  *    we blur the textarea immediately after as belt-and-braces.
  */
@@ -98,7 +98,7 @@
 
         // Suppress the iOS long-press callout / context menu while a
         // selection gesture is pending or active (desktop right-click
-        // never touches this path — states are only reachable via touch).
+        // never touches this path - states are only reachable via touch).
         container.addEventListener('contextmenu', (e) => {
             if (state !== 'idle') e.preventDefault();
         }, true);
@@ -129,7 +129,7 @@
         if (!t) return;
 
         if (state === 'pending') {
-            // Moved too far before the timer — this is a scroll gesture.
+            // Moved too far before the timer - this is a scroll gesture.
             // Cancel the long-press and let xterm's own touch scrolling
             // have the gesture completely untouched.
             if (Math.abs(t.clientX - startX) > MOVE_TOLERANCE ||
@@ -153,7 +153,7 @@
         if (!t) return;
 
         if (state === 'pending') {
-            cancelPending(); // plain tap — nothing to do
+            cancelPending(); // plain tap - nothing to do
             return;
         }
 
@@ -169,7 +169,7 @@
         if (term.hasSelection()) {
             showCopyButton(lastX, lastY);
         } else {
-            // Long-press released without a drag — no selection, exit
+            // Long-press released without a drag - no selection, exit
             // quietly (pull the pill down early rather than waiting out
             // its 3s auto-dismiss).
             hidePill();
@@ -208,7 +208,7 @@
         state = 'selecting';
 
         // Place the selection anchor at the long-press point via xterm's
-        // own engine (detail: 1 is REQUIRED — see file header).
+        // own engine (detail: 1 is REQUIRED - see file header).
         dispatchMouse('mousedown', startX, startY);
 
         // xterm's screenElement mousedown handler calls term.focus();
@@ -217,7 +217,7 @@
             term.textarea.blur();
         }
 
-        termWrapper._showStatusPill('select mode — drag to highlight', 'info');
+        termWrapper._showStatusPill('select mode - drag to highlight', 'info');
     }
 
     /**
@@ -308,8 +308,8 @@
      * ================================================================= */
 
     /**
-     * Show the copy button near the END of the selection — the finger
-     * lift point, which is where xterm's selectionEnd sits — hard-clamped
+     * Show the copy button near the END of the selection - the finger
+     * lift point, which is where xterm's selectionEnd sits - hard-clamped
      * inside the visible viewport so it can never render off-screen.
      */
     function showCopyButton(x, y) {
@@ -359,7 +359,7 @@
             if (result.ok) {
                 termWrapper._showStatusPill('copied', 'success');
             } else {
-                termWrapper._showStatusPill('copy blocked — use the copy button for a selectable view', 'error');
+                termWrapper._showStatusPill('copy blocked - use the copy button for a selectable view', 'error');
             }
         });
     }

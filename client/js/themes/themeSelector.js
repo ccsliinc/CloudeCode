@@ -1,5 +1,5 @@
 /**
- * ThemeSelector — native <select> theme picker mounted into the header.
+ * ThemeSelector - native <select> theme picker mounted into the header.
  *
  * Spec section "Architecture B" / "Pluggability Surface":
  *   - Native <select> for free keyboard nav + accessibility.
@@ -29,11 +29,11 @@
      */
     function mount(parentEl) {
         if (!parentEl) {
-            console.warn('ThemeSelector.mount: no parent element — skipping');
+            console.warn('ThemeSelector.mount: no parent element - skipping');
             return null;
         }
         if (!window.Themes) {
-            console.warn('ThemeSelector.mount: window.Themes not available — skipping');
+            console.warn('ThemeSelector.mount: window.Themes not available - skipping');
             return null;
         }
 

@@ -1,15 +1,15 @@
 """
 API routes for the Claude-config file tree + editor (see
 ``src/core/config_files.py`` for the actual list/read/write logic and
-the allowed-roots / hide-list constants — this module is deliberately
+the allowed-roots / hide-list constants - this module is deliberately
 thin: request/response shape, auth, and error translation only).
 
 Mounted under ``/api/v1`` from ``src/main.py`` alongside the other
-routers. Every endpoint requires ``Depends(require_auth)`` — this is
+routers. Every endpoint requires ``Depends(require_auth)`` - this is
 config content, not public data.
 
 Security note: request bodies/params are logged only at the field-name
-level (never file content) — see the ``logger.info`` calls below and in
+level (never file content) - see the ``logger.info`` calls below and in
 ``config_files.write_file``.
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""v0.7.0 Part 3 / feat/hook-driven-status — Claude Code lifecycle hook
+"""v0.7.0 Part 3 / feat/hook-driven-status - Claude Code lifecycle hook
 settings management.
 
 This module owns the idempotent merge of cloudecode's hook block into
@@ -11,11 +11,11 @@ that were injected into the spawned ``claude`` process's environment via
 ``TmuxBackend.start(env=...)``.
 
 Security model:
-    The hook subprocess can't carry a JWT — there's no place for the user
+    The hook subprocess can't carry a JWT - there's no place for the user
     to authenticate the hook. Instead the hook proves identity via the
     HMAC-bearer token that ONLY the cloudecode process and the spawned
     agent share (env-injected at tmux session birth). The route ALSO
-    requires loopback (127.0.0.1) — defense in depth.
+    requires loopback (127.0.0.1) - defense in depth.
 
 Idempotent merge:
     Each managed hook command embeds the literal marker
@@ -46,7 +46,7 @@ logger = structlog.get_logger()
 # touching anything the user added by hand or via another tool.
 CLOUDECODE_HOOKS_MARKER = "# cloudecode-managed"
 
-# feat/hook-driven-status — events that are worth interrupting the user
+# feat/hook-driven-status - events that are worth interrupting the user
 # for (a toast). Unchanged from the original three; kept as its own tuple
 # (rather than folded into ACTIVITY_ONLY_EVENTS below) because the hook
 # endpoint (src/api/routes.py) branches on this exact set to decide
@@ -54,9 +54,9 @@ CLOUDECODE_HOOKS_MARKER = "# cloudecode-managed"
 # to always updating the activity tracker.
 TOAST_EVENTS = ("Stop", "Notification", "PermissionRequest")
 
-# feat/hook-driven-status — events that feed ONLY the activity-status state
+# feat/hook-driven-status - events that feed ONLY the activity-status state
 # machine (src/core/session_activity.py), never a toast. PreToolUse and
-# PostToolUse in particular fire on every single tool call — turning those
+# PostToolUse in particular fire on every single tool call - turning those
 # into toasts would spam the user; they exist purely as the "working"
 # heartbeat and the SubagentStart/SubagentStop pair.
 ACTIVITY_ONLY_EVENTS = (
@@ -207,7 +207,7 @@ def _merge_hooks(
         # Strip any previously-managed entries so re-running the merge
         # doesn't duplicate hooks. User entries pass through untouched.
         user_matchers = _filter_user_matchers(existing_matchers, event)
-        # Append our canonical block AFTER user matchers — Claude Code
+        # Append our canonical block AFTER user matchers - Claude Code
         # runs matchers in order, and we'd rather user hooks fire first
         # (their decisions can short-circuit ours via exit codes).
         hooks_block[event] = user_matchers + list(managed_matchers)
@@ -231,7 +231,7 @@ def _hooks_disabled() -> bool:
         if notif_cfg is None:
             return False
         return bool(getattr(notif_cfg, "disable_claude_hooks", False))
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.debug("claude_hooks_disabled_check_failed", error=str(exc))
         return False
 
@@ -274,7 +274,7 @@ def ensure_hook_settings(
                     return False
         except json.JSONDecodeError as exc:
             # User's file is corrupted/unparseable. We CANNOT safely merge
-            # — bail loud rather than clobber.
+            # - bail loud rather than clobber.
             logger.warning(
                 "claude_settings_unparseable",
                 path=str(path),

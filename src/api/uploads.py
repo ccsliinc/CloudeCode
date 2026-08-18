@@ -300,7 +300,7 @@ def validate_image(
     Args:
         data: Raw image bytes from the multipart upload.
         declared_filename: Filename as declared by the client. Only the
-            extension is consulted — the basename is discarded by the caller.
+            extension is consulted - the basename is discarded by the caller.
         max_size_mb: Per-upload size cap in megabytes.
 
     Returns:

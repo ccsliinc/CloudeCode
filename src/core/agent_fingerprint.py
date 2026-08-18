@@ -6,7 +6,7 @@ running inside, or ``None`` if we can't tell.
 
 Patterns were authored from real captures saved during the dependency-
 resolution phase at ``/Users/Adam/Dropbox/llmScratch/{agent}.txt``. Do NOT
-modify them without re-deriving from fresh captures — ordering matters
+modify them without re-deriving from fresh captures - ordering matters
 (most-specific glyph wins) and anchors are tuned to avoid false positives
 against generic box-drawing TUI frames.
 """
@@ -22,7 +22,7 @@ AGENT_FINGERPRINTS: dict[str, list[Union[str, Pattern[str]]]] = {
     "openclaw": [
         "🦞 OpenClaw",
         re.compile(r"^\s*openclaw tui - ws://[\d.]+:\d+ - agent \S+ - session \S+", re.M),
-        "I'm not magic—I'm just extremely persistent with retries",
+        "I'm not magic-I'm just extremely persistent with retries",
     ],
     "hermes": [
         re.compile(r"Hermes Agent v[\d.]+"),
@@ -59,8 +59,8 @@ def detect_agent_type(scrollback: Optional[str]) -> Optional[str]:
     """Identify which AI CLI produced ``scrollback``, or return ``None``.
 
     Two-pass strategy:
-      1. Last 50 lines — catches steady-state prompts/status lines.
-      2. Last 2000 lines — catches boot banners that haven't scrolled off.
+      1. Last 50 lines - catches steady-state prompts/status lines.
+      2. Last 2000 lines - catches boot banners that haven't scrolled off.
     Returns ``None`` for empty / unrecognizable input. Never raises.
     """
     if not scrollback:

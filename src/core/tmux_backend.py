@@ -7,17 +7,17 @@ Key design points:
 
 - **Binary-safe writes** (three-path routing):
 
-  ``send-keys -l <text>`` for short, control-free UTF-8 — the fast path
+  ``send-keys -l <text>`` for short, control-free UTF-8 - the fast path
   for regular typing.
 
   ``send-keys -H <hex pairs>`` for short byte sequences that contain
-  control chars (arrow keys, Ctrl-X, Esc, Backspace — real keystrokes).
+  control chars (arrow keys, Ctrl-X, Esc, Backspace - real keystrokes).
   tmux treats each hex pair as a literal byte delivered via key event,
   which interactive TUIs interpret correctly.
 
   ``load-buffer`` + ``paste-buffer -d -p`` reserved for LARGE payloads
   (actual clipboard pastes). Bracketed-paste markers let Claude
-  distinguish paste from typed input — correct behavior for paste,
+  distinguish paste from typed input - correct behavior for paste,
   wrong behavior for keystrokes.
 
 - **Output streaming**: ``tmux pipe-pane -o 'cat >> <fifo>'`` streams every
@@ -27,7 +27,7 @@ Key design points:
 
 - **Single-active invariant**: the backend itself does NOT enforce
   one-at-a-time; `SessionManager` does. This backend DOES refuse to start
-  if a session with the same name already exists — callers must call
+  if a session with the same name already exists - callers must call
   ``discover_existing()`` first to re-attach.
 
 - **Restart survival**: `discover_existing()` lists ``cloude_*`` sessions on
@@ -57,7 +57,7 @@ logger = structlog.get_logger()
 
 # ---- Tunables ---------------------------------------------------------------
 # Module-scope constants (not in config.json) so they're easy to find in code.
-# If we ever want to expose these, wire through `AuthConfig.session` — for now
+# If we ever want to expose these, wire through `AuthConfig.session` - for now
 # the values below are battle-tested defaults.
 
 #: Rotate the pipe-pane log once it passes 10 MiB.
@@ -70,7 +70,7 @@ ROTATE_AGE_HOURS: int = 24
 #: Default starting window geometry for new tmux sessions. We never attach a
 #: client (output is streamed via pipe-pane), so tmux has no client dims to
 #: key off of. Without `-x/-y` + `window-size manual`, tmux clamps the
-#: window to its 80x24 birth size forever — making TUI apps like Claude CLI
+#: window to its 80x24 birth size forever - making TUI apps like Claude CLI
 #: render at 80x24 while xterm.js draws at the browser's actual size.
 #: These are reasonable defaults; the WS client's first `resize` request
 #: replaces them within milliseconds of connect.
@@ -101,7 +101,7 @@ DEFAULT_SOCKET_NAME: str = "cloude"
 #: first means a pane is never briefly born under the stock limit.
 HISTORY_LIMIT: int = 10000
 
-#: Session name prefix — ``cloude_<slug>``.
+#: Session name prefix - ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
 
 #: FIFO + rotated log live under the log directory. File name is
@@ -146,7 +146,7 @@ def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
 
     tmux parses ``:`` as the window/pane separator and ``.`` as the pane
     separator within a target. If either appears inside ``session_name``
-    the command tmux actually executes is NOT the one we meant to send —
+    the command tmux actually executes is NOT the one we meant to send -
     it selects a different (possibly wrong) target.
 
     We use list-form argv everywhere (``asyncio.create_subprocess_exec``,
@@ -161,7 +161,7 @@ def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
     ``send-keys -t <session>:0.0`` fails with ``can't find window: 0`` and
     NOTHING typed in the browser ever reaches the pane. Targeting the bare
     session name instead resolves to that session's CURRENT window and
-    pane, which is both base-index-agnostic and more correct — a session
+    pane, which is both base-index-agnostic and more correct - a session
     with a second window should receive input where the user is looking,
     not always in window 0.
 
@@ -169,7 +169,7 @@ def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
         session_name: tmux session name. MUST NOT contain ``:`` or ``.``.
         pane: optional explicit ``<window>.<pane>`` specifier. Omit it (the
             default) to target the session's current window/pane. Callers
-            SHOULD keep this a literal — it is never user-controlled and is
+            SHOULD keep this a literal - it is never user-controlled and is
             not validated.
 
     Returns:
@@ -239,13 +239,13 @@ class TmuxBackend(SessionBackend):
         # adoption. The tail loop seeks here on open so bytes that were
         # already captured in the initial scrollback (and painted
         # client-side before the WS opened) aren't streamed again. None
-        # means "seek to EOF" — the normal create/rehydrate behavior.
+        # means "seek to EOF" - the normal create/rehydrate behavior.
         self._adopt_tail_start_offset: Optional[int] = None
 
     # ---- internal helpers ------------------------------------------------
 
     def _tmux_base(self) -> List[str]:
-        """Common tmux argv prefix — always uses our dedicated socket."""
+        """Common tmux argv prefix - always uses our dedicated socket."""
         return ["tmux", "-L", self.socket_name]
 
     async def _apply_history_limit(self) -> None:
@@ -373,7 +373,7 @@ class TmuxBackend(SessionBackend):
 
         ``initial_cols`` / ``initial_rows`` override the module-level
         INITIAL_COLS / INITIAL_ROWS when BOTH are supplied. One without the
-        other is treated as "not supplied" — we don't mix a client dim with
+        other is treated as "not supplied" - we don't mix a client dim with
         a default, because that would create an asymmetric starting pane
         (e.g. client gives cols=100, we'd pair with default rows=40 which
         is almost certainly wrong for that viewport).
@@ -411,8 +411,8 @@ class TmuxBackend(SessionBackend):
         # Claude exits, so we enable remain-on-exit after creation.
         #
         # ``-x`` / ``-y`` fix the window's birth geometry. Without them tmux
-        # uses 80x24 and — combined with default ``window-size latest`` and
-        # zero attached clients — stays there forever. We pair these with
+        # uses 80x24 and - combined with default ``window-size latest`` and
+        # zero attached clients - stays there forever. We pair these with
         # ``window-size manual`` below so `resize-window` is the ONLY thing
         # that can change the size (no client-sizing surprises).
         args = [
@@ -496,7 +496,7 @@ class TmuxBackend(SessionBackend):
         # collision, and raise a RuntimeError that propagates up to the
         # API layer as a 502.
         #
-        # 250ms floor is the spec — empirically catches exec-not-found,
+        # 250ms floor is the spec - empirically catches exec-not-found,
         # missing-binary, and immediate-banner-and-exit cases on modern
         # hardware while staying well below user-perceived launch latency.
         await asyncio.sleep(0.25)
@@ -533,7 +533,7 @@ class TmuxBackend(SessionBackend):
                     for raw_line in out_cap.decode("utf-8", errors="replace").splitlines():
                         # Strip ANSI escape sequences so the surfaced message
                         # is human-readable (the launch banner often opens
-                        # with cursor/color escapes). Coarse CSI/OSC strip —
+                        # with cursor/color escapes). Coarse CSI/OSC strip -
                         # good enough for a one-line error surface.
                         cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line)
                         cleaned = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", cleaned)
@@ -575,7 +575,7 @@ class TmuxBackend(SessionBackend):
         # CLI's multi-line input prompt to recognize Shift+Enter as
         # "newline-insert" vs. CR=submit. Paired with the terminal-features
         # `extkeys` flag below which advertises extended-key support to the
-        # pane's $TERM — Claude reads the terminfo to decide whether to
+        # pane's $TERM - Claude reads the terminfo to decide whether to
         # emit CSI u or legacy keys.
         #
         # ``-s`` targets the tmux server (global, persists for the life of
@@ -634,13 +634,13 @@ class TmuxBackend(SessionBackend):
             "set-option", "-t", self.tmux_session, "window-size", "manual", check=False
         )
         # Prevent size clamping based on other windows in the session.
-        # (We only ever have window 0, but be defensive — future code that
+        # (We only ever have window 0, but be defensive - future code that
         # adds a second window shouldn't silently shrink pane 0.)
         await self._run_tmux(
             "set-option", "-t", self.tmux_session, "aggressive-resize", "off", check=False
         )
 
-        # Start pipe-pane — this streams pane output to our file.
+        # Start pipe-pane - this streams pane output to our file.
         # Using shell redirection so tmux appends (not truncates) on rotation.
         pipe_cmd = f"cat >> {shlex.quote(str(pipe_path))}"
         rc, _, err = await self._run_tmux(
@@ -680,19 +680,19 @@ class TmuxBackend(SessionBackend):
         appended to. We open it and tail from the END so we don't re-emit
         historical output as if it were new.
 
-        For EXTERNAL sessions (Track 1 "Adopt an external session" flow —
+        For EXTERNAL sessions (Track 1 "Adopt an external session" flow -
         user started it via ``tmux -L cloude new -s <name>``), there is
         likely NO pipe-pane active yet, so the caller passes
         ``needs_pipe_setup=True`` to trigger:
 
-        1. Refuse if ``#{pane_dead}`` is ``"1"`` — a dead pane can't be
+        1. Refuse if ``#{pane_dead}`` is ``"1"`` - a dead pane can't be
            usefully adopted.
-        2. ``ensure_pipe_pane()`` — query first, start only if not already
+        2. ``ensure_pipe_pane()`` - query first, start only if not already
            active (non-toggle).
         3. ``set-option remain-on-exit on`` defensively so an external
            child exiting doesn't silently collapse the pane while our
            adoption is live.
-        4. WARN if ``window-size`` isn't ``manual`` — ``resize-window``
+        4. WARN if ``window-size`` isn't ``manual`` - ``resize-window``
            may oscillate against tmux's auto-sizing.
 
         External mode is also auto-triggered when ``self._is_external`` is
@@ -707,7 +707,7 @@ class TmuxBackend(SessionBackend):
             return
 
         # Verify the session is actually alive on the socket. If it's not,
-        # caller made a mistake — raise loudly so the upstream rehydrate
+        # caller made a mistake - raise loudly so the upstream rehydrate
         # path can clean up stale metadata instead of entering a bogus state.
         if not self.is_alive():
             raise RuntimeError(
@@ -719,7 +719,7 @@ class TmuxBackend(SessionBackend):
         if do_external_setup:
             target = _safe_target(self.tmux_session)
 
-            # 1. Refuse dead panes — nothing to stream from, and our attempts
+            # 1. Refuse dead panes - nothing to stream from, and our attempts
             # to set options on them produce confusing errors further down.
             rc, out, err = await self._run_tmux(
                 "display-message", "-t", target, "-p", "#{pane_dead}",
@@ -739,7 +739,7 @@ class TmuxBackend(SessionBackend):
             # existing pipe-pane (e.g. personal logging).
             await self.ensure_pipe_pane()
 
-            # 2b. Record the FIFO offset NOW — immediately after
+            # 2b. Record the FIFO offset NOW - immediately after
             # pipe-pane is confirmed active. The tail loop will seek
             # here on open instead of EOF so nothing between "pipe-pane
             # started" and "tail loop actually opens fd" is lost. The
@@ -797,7 +797,7 @@ class TmuxBackend(SessionBackend):
         if not pipe_path.exists():
             # Shouldn't happen if tmux's pipe-pane is alive, but handle gracefully
             # by re-running pipe-pane to re-establish the pipe. This is a
-            # defensive reconnect — the old pipe-pane process inside tmux
+            # defensive reconnect - the old pipe-pane process inside tmux
             # continues, we just make sure our file target exists.
             logger.warning(
                 "tmux_backend_pipe_missing_recreating",
@@ -865,7 +865,7 @@ class TmuxBackend(SessionBackend):
 
         if state == "1":
             # Adoption contract: when the user hands the session over to
-            # CloudeCode, our pipe MUST be the one delivering bytes — otherwise
+            # CloudeCode, our pipe MUST be the one delivering bytes - otherwise
             # the WS streaming loop tails an empty file forever and the
             # browser sees a frozen banner. Close whatever pipe is already
             # active (typically the user's own logging pipe-pane) before
@@ -916,7 +916,7 @@ class TmuxBackend(SessionBackend):
         Alternative constructor for the Track 1 "Adopt an external session"
         flow. Unlike the normal ``TmuxBackend(...)`` path, which slugifies
         ``session_id`` into ``cloude_<slug>``, this preserves the literal
-        tmux name the user gave their session — we're adopting, not
+        tmux name the user gave their session - we're adopting, not
         creating.
 
         Also flips ``self._is_external = True`` so ``attach_existing()``
@@ -946,7 +946,7 @@ class TmuxBackend(SessionBackend):
             socket_name=socket_name,
             scrollback_lines=scrollback_lines,
         )
-        # Bypass the slugified ``cloude_<slug>`` naming — we're adopting.
+        # Bypass the slugified ``cloude_<slug>`` naming - we're adopting.
         inst.tmux_session = session_name
         inst.slug = session_name  # used in the pipe-file filename
         inst._is_external = True
@@ -965,12 +965,12 @@ class TmuxBackend(SessionBackend):
         against ``owned_names`` (the SessionManager-persisted set of
         session names Cloude Code created). When ``owned_names`` is
         None, we fall back to the ``cloude_`` prefix heuristic AND log
-        a debug note — callers from the live app path should always
+        a debug note - callers from the live app path should always
         pass the owned set so a user's ``cloude_whatever`` external
         session doesn't masquerade as ours.
 
         If ``owned_names`` contains a name that's NOT in the live tmux
-        listing, log a WARN (stale metadata — the reconciler should
+        listing, log a WARN (stale metadata - the reconciler should
         prune, but we surface it here too for observability).
         """
         if not shutil.which("tmux"):
@@ -983,7 +983,7 @@ class TmuxBackend(SessionBackend):
             check=False,
         )
         if rc != 0:
-            # Exit 1 w/ "no server running" — expected when no sessions yet.
+            # Exit 1 w/ "no server running" - expected when no sessions yet.
             return []
 
         raw_lines = out.decode("utf-8", errors="replace").splitlines()
@@ -1082,9 +1082,9 @@ class TmuxBackend(SessionBackend):
         - Large (paste payload)          → load-buffer + paste-buffer -d -p
 
         ``send-keys -l`` treats the payload literally as UTF-8 text with no
-        key-name lookup — fastest path for regular typing. ``send-keys -H``
+        key-name lookup - fastest path for regular typing. ``send-keys -H``
         delivers each 2-hex-digit argv token as a literal byte *as a key
-        event* — the correct vehicle for keystrokes like Backspace (0x7f),
+        event* - the correct vehicle for keystrokes like Backspace (0x7f),
         Escape (0x1b), arrow keys (\\x1b[A), Ctrl chords (0x01-0x1f), and
         F-keys. ``paste-buffer -d -p`` wraps the payload in bracketed-paste
         markers (\\x1b[200~ ... \\x1b[201~); Claude's TUI uses those to tell
@@ -1098,13 +1098,13 @@ class TmuxBackend(SessionBackend):
             return
 
         if len(data) > PASTE_THRESHOLD_BYTES:
-            # True paste — use bracketed paste so Claude distinguishes from typed input
+            # True paste - use bracketed paste so Claude distinguishes from typed input
             await self._write_via_paste_buffer(data)
         elif _has_control_chars(data):
             # Short keystroke with control bytes (arrow, Ctrl-X, Esc, Backspace, F-keys)
             await self._write_via_hex_keys(data)
         else:
-            # Short plain text — fastest path
+            # Short plain text - fastest path
             await self._write_via_send_keys_literal(data)
 
     async def _write_via_send_keys_literal(self, data: bytes) -> None:
@@ -1335,7 +1335,7 @@ class TmuxBackend(SessionBackend):
     async def rename_session(self, new_name: str) -> None:
         """Rename this tmux session in-place via ``rename-session``.
 
-        Atomic from the tmux server's perspective — the session keeps its
+        Atomic from the tmux server's perspective - the session keeps its
         windows, panes, history, pipe-pane hooks, and remain-on-exit setting.
         Caller is responsible for upstream state re-keying (the SessionManager
         layer handles ``owned_tmux_sessions`` + ``pinned_themes`` + the
@@ -1345,7 +1345,7 @@ class TmuxBackend(SessionBackend):
             new_name: New tmux session name. MUST be pre-validated by the
                 caller (route layer enforces ``^[A-Za-z0-9_-]{1,64}$``). We
                 still fail loudly via ``_safe_target`` if the value contains
-                a target separator — defense in depth, never trust upstream.
+                a target separator - defense in depth, never trust upstream.
 
         Raises:
             ValueError: ``new_name`` contains tmux target separators (``:``
@@ -1361,7 +1361,7 @@ class TmuxBackend(SessionBackend):
             raise RuntimeError("rename_session: backend has no tmux session name")
 
         if new_name == self.tmux_session:
-            # No-op rename. Treat as success — the user's intent ("the
+            # No-op rename. Treat as success - the user's intent ("the
             # session should be named X") is already satisfied.
             return
 
@@ -1450,7 +1450,7 @@ class TmuxBackend(SessionBackend):
         finally:
             # Note: Item 7 will move this flag flip closer to the WS send
             # site (after bytes are written to the socket). For now we
-            # clear it immediately — the callback-suppression is still a
+            # clear it immediately - the callback-suppression is still a
             # future-Item-7 concern.
             self.replay_in_progress = False
 
@@ -1571,10 +1571,10 @@ class TmuxBackend(SessionBackend):
             # Seek position:
             #   - Adoption path: to the recorded post-pipe-pane byte
             #     offset so we resume exactly where the initial
-            #     scrollback painted. Bounded to actual file size —
+            #     scrollback painted. Bounded to actual file size -
             #     an offset larger than the file (shouldn't happen
             #     but defensive) degrades to SEEK_END.
-            #   - Normal path (create / rehydrate): SEEK_END — we
+            #   - Normal path (create / rehydrate): SEEK_END - we
             #     only want bytes produced after we started reading.
             if self._adopt_tail_start_offset is not None:
                 try:
@@ -1585,7 +1585,7 @@ class TmuxBackend(SessionBackend):
                 try:
                     os.lseek(fd, seek_to, os.SEEK_SET)
                 except OSError:
-                    # Fall back to EOF — no worse than normal rehydrate.
+                    # Fall back to EOF - no worse than normal rehydrate.
                     try:
                         os.lseek(fd, 0, os.SEEK_END)
                     except OSError:
@@ -1597,7 +1597,7 @@ class TmuxBackend(SessionBackend):
                     recorded=self._adopt_tail_start_offset,
                     file_size=current_size,
                 )
-                # Single-use — clear so subsequent fd reopens (rotation)
+                # Single-use - clear so subsequent fd reopens (rotation)
                 # use SEEK_END like the normal path.
                 self._adopt_tail_start_offset = None
             else:
@@ -1607,7 +1607,7 @@ class TmuxBackend(SessionBackend):
                     pass
 
             while self._running:
-                # Rotation check — once a second is plenty.
+                # Rotation check - once a second is plenty.
                 now = time.monotonic()
                 if now - self._last_rotate_check > 1.0:
                     self._last_rotate_check = now
@@ -1650,7 +1650,7 @@ class TmuxBackend(SessionBackend):
         We rename the current file to ``<name>.1``, then truncate the pipe
         back to zero. tmux's ``cat >> file`` keeps appending after our
         rename because the shell re-opens the path each time the pipe-pane
-        hook fires — no tmux restart needed. We re-point our read fd at the
+        hook fires - no tmux restart needed. We re-point our read fd at the
         freshly-truncated file.
         """
         try:

@@ -1,9 +1,9 @@
 """User-defined launch wrappers for the "claude" agent family.
 
-feat/launch-wrappers — replaces the hardcoded ``cld`` / ``cldor`` zsh
+feat/launch-wrappers - replaces the hardcoded ``cld`` / ``cldor`` zsh
 functions in ``Settings.get_agent_command()`` with a user-editable list of
 named wrappers stored in ``config.json`` (``agents.wrappers``). A wrapper's
-``script`` is arbitrary multi-line shell text — anything from a single
+``script`` is arbitrary multi-line shell text - anything from a single
 command (``"claude --dangerously-skip-permissions"``) up to a full function
 definition copy-pasted verbatim, including the author's real ``cld``:
 
@@ -23,20 +23,20 @@ via the settings-panel textarea round-trips through ``json.dump(..., indent=2)``
 with zero extra logic. An array-of-lines shape would read slightly better
 in a hand-edited config.json but forces a join/split step at every read and
 write site for a benefit that only matters if someone is hand-editing
-30-line shell functions directly in JSON — the UI textarea is the intended
+30-line shell functions directly in JSON - the UI textarea is the intended
 editing surface, and it preserves whitespace/indentation exactly either way.
 
 Execution model (see ``render_wrapper_invocation``):
   1. The script's exact bytes are written to a stable per-wrapper file
-     (never embedded into a shell-quoted string — sidesteps every quoting
+     (never embedded into a shell-quoted string - sidesteps every quoting
      hazard a pasted function might contain: single quotes, ``$(...)``,
      ``||`` blocks, nested double quotes).
   2. That file is ``source``-d from inside the same ``zsh -c`` wrapper the
      legacy ``claude_command`` / ``cld`` path already uses (so ``~/.zshrc``
-     is loaded first — same reason a bare ``cld`` would otherwise be
+     is loaded first - same reason a bare ``cld`` would otherwise be
      "command not found" under tmux's non-interactive pane shell).
   3. If the script is a bare runnable command/one-liner (``entry`` unset),
-     sourcing it is enough — this is the migrated-``claude_command`` case
+     sourcing it is enough - this is the migrated-``claude_command`` case
      and the thin ``cld "$@"`` / ``cldor "$@"`` migration-seeded wrappers
      (see ``src/core/config_migration.py``), which merely invoke the
      function the user's own ``~/.zshrc`` already defines.
@@ -46,13 +46,13 @@ Execution model (see ``render_wrapper_invocation``):
   ``model`` (the OpenRouter model id, when set) is forwarded as the OUTER
   zsh -c's own positional parameter ``$1`` (``zsh -c '<script>' _ <model>``),
   which both the ``source <file> "$@"`` step and the ``<entry> "$@"`` step
-  re-forward unchanged — exactly mirroring how the real ``cldor`` consumes
+  re-forward unchanged - exactly mirroring how the real ``cldor`` consumes
   ``$1`` as its model argument and forwards the rest via ``"$@"``. This
   requires no placeholder syntax inside the script at all.
   The ``( ... )`` subshell form the author's real functions use is
   preserved verbatim in the sourced file, so env exports/unsets inside a
   wrapper (``CLAUDE_CODE_OAUTH_TOKEN``, ``ANTHROPIC_BASE_URL``, ...) never
-  leak into the ``zsh -c`` shell that invoked it — sourcing only *defines*
+  leak into the ``zsh -c`` shell that invoked it - sourcing only *defines*
   the function; the subshell isolation happens when it's *called*.
 """
 
@@ -96,7 +96,7 @@ def is_valid_wrapper_id(v: str) -> bool:
 # rather than a hardcoded list of any particular user's wrapper ids:
 # library code must not know that one person's OpenRouter wrapper happens
 # to be called "cldor". A wrapper is guessed to take a model id when its
-# own human-authored text says so — the migration-seeded OpenRouter
+# own human-authored text says so - the migration-seeded OpenRouter
 # wrapper's label is "cldor (openrouter)" and its description says "model
 # as first argument", while the subscription wrappers ("claude", "cld")
 # mention neither.
@@ -134,7 +134,7 @@ class AgentWrapper(BaseModel):
       ``Settings.get_agent_command``) and as the on-disk script filename.
       NEVER rename one: ``Session.agent_type`` stores it, so a rename
       orphans every running and historical session launched through it.
-    - ``family``: which command family this wrapper wraps — one of
+    - ``family``: which command family this wrapper wraps - one of
       ``src/core/agent_families.AGENT_FAMILY_NAMES`` (claude, codex,
       hermes, openclaw, shell). Defaults to ``"claude"`` because every
       wrapper that existed before this field was, by construction, a
@@ -142,13 +142,13 @@ class AgentWrapper(BaseModel):
       The family selects which static ``agents.<family>_command`` string
       is the fallback when the family has no wrappers at all.
     - ``label``: human-readable name shown in the UI.
-    - ``script``: the full shell source — a plain command, or a complete
+    - ``script``: the full shell source - a plain command, or a complete
       function definition. Never validated for shell syntax (arbitrary
       user shell, same trust level as the pre-existing ``claude_command``
       field); written verbatim to disk, never interpolated into a quoted
       string.
     - ``entry``: function name to invoke after sourcing ``script``. Unset
-      (None/empty) means ``script`` is directly runnable on its own — the
+      (None/empty) means ``script`` is directly runnable on its own - the
       common case for a migrated single command or a thin
       ``cld "$@"``-style forwarder to a function the user's own
       ``~/.zshrc`` defines. Set it when ``script`` is a function
@@ -161,7 +161,7 @@ class AgentWrapper(BaseModel):
     - ``accepts_model``: whether this wrapper consumes an OpenRouter model
       id as its first argument (the ``cldor`` shape). Model choice and
       wrapper choice are two INDEPENDENT axes; collapsing them into one
-      flat picker list is what caused the regression this field fixes —
+      flat picker list is what caused the regression this field fixes -
       a model chosen next to a wrapper that ignores models got forwarded
       to the DEFAULT wrapper, whose ``"$@"`` passed the model id through
       to ``claude`` as a PROMPT ARGUMENT. Defaults to ``False`` so a
@@ -173,7 +173,7 @@ class AgentWrapper(BaseModel):
       enforced server-side too, not just in the UI.
 
     SECURITY: there is deliberately no "secret" field. A wrapper is a
-    shell command — secrets must never be pasted into ``script`` or
+    shell command - secrets must never be pasted into ``script`` or
     ``description``. The correct pattern, which the author's own ``cld``
     demonstrates, is to read from the macOS Keychain at *run time* inside
     the script (``security find-generic-password ...``), so no credential
@@ -274,7 +274,7 @@ def wrapper_scripts_dir(log_directory: str) -> Path:
     """Directory the resolved wrapper script files live in.
 
     Description: co-located under the app's own log directory (already a
-      writable, per-install path — see ``Settings.get_log_dir``) rather
+      writable, per-install path - see ``Settings.get_log_dir``) rather
       than a shared /tmp, so two installs never collide and cleanup is
       implicit (small text files, never grow, never need sweeping).
     Inputs: log_directory (str) - Settings.log_directory (pre-expansion OK).
@@ -286,10 +286,10 @@ def wrapper_scripts_dir(log_directory: str) -> Path:
 def _write_script_file(wrapper: AgentWrapper, scripts_dir: Path) -> Path:
     """Write ``wrapper.script`` verbatim to its stable on-disk path.
 
-    Description: rewritten on every resolution call (cheap — a few KB at
+    Description: rewritten on every resolution call (cheap - a few KB at
       most) so an edited-but-not-yet-restarted config always sources the
-      current script text. Bytes are written EXACTLY as stored — no
-      escaping, no line-ending normalization — so a round trip through
+      current script text. Bytes are written EXACTLY as stored - no
+      escaping, no line-ending normalization - so a round trip through
       config.json -> disk is byte-for-byte faithful to what the user
       pasted, indentation included.
     Inputs: wrapper (AgentWrapper); scripts_dir (Path).
@@ -311,7 +311,7 @@ def render_wrapper_invocation(
     """Build the single shell-string command for launching this wrapper.
 
     Description: see the module docstring's "Execution model" section for
-      the full reasoning. Returns exactly one flat string — the shape
+      the full reasoning. Returns exactly one flat string - the shape
       every other branch of ``Settings.get_agent_command`` already
       returns, handed straight to the tmux backend's
       ``new-session ... <command>``.
@@ -335,13 +335,13 @@ def render_wrapper_invocation(
     if model:
         # `_` is a throwaway $0; the model becomes $1, forwarded through
         # every "$@" in `inner` above (source's own arg-forwarding, then
-        # the entry call) — see module docstring point 3.
+        # the entry call) - see module docstring point 3.
         outer += f" _ {shlex.quote(model)}"
     return outer
 
 
 # ---------------------------------------------------------------------------
-# Offered example wrappers — NOT auto-installed anywhere. Served only via
+# Offered example wrappers - NOT auto-installed anywhere. Served only via
 # GET /api/v1/agents/wrappers/examples for a user to explicitly import into
 # their own config.json (see the settings-panel "import example" action).
 # EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL,
@@ -445,7 +445,7 @@ EXAMPLE_WRAPPERS: List[dict] = [
         "script": EXAMPLE_WRAPPER_CLD,
         "entry": "cld",
         "description": (
-            "example — reads a Claude subscription OAuth token from the "
+            "example - reads a Claude subscription OAuth token from the "
             "macOS Keychain at run time (entry 'claude setup-token' first) "
             "and clears every OpenRouter/Bedrock/Vertex env var so it can't "
             "accidentally inherit routing from a prior shell."
@@ -460,7 +460,7 @@ EXAMPLE_WRAPPERS: List[dict] = [
         "script": EXAMPLE_WRAPPER_CLDOR,
         "entry": "cldor",
         "description": (
-            "example — takes a model id as its first argument, reads an "
+            "example - takes a model id as its first argument, reads an "
             "OpenRouter API key from the macOS Keychain, and runs Claude "
             "Code isolated in its own CLAUDE_CONFIG_DIR so it never shares "
             "session/auth state with a subscription-mode launch."

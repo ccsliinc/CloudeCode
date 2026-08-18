@@ -1,5 +1,5 @@
 /* ============================================================
-   Terminal Theme — Pure UNIX / xterm canonical
+   Terminal Theme - Pure UNIX / xterm canonical
    Black canvas, light-gray text, ANSI 16-color VT100 palette.
    Zero decoration: no border-radius, no shadows, no gradients.
    Scoped to :root[data-theme="terminal"].
@@ -8,7 +8,7 @@
 /* ------------------------------------------------------------
    GLOBAL DECORATION NUKE
    Sharp corners + zero shadows on EVERY element + pseudo-element.
-   The wildcard + !important is intentional — terminals do not
+   The wildcard + !important is intentional - terminals do not
    have rounded corners. They never have. They never will.
    ------------------------------------------------------------ */
 :root[data-theme="terminal"] *,
@@ -24,7 +24,7 @@
 /* ------------------------------------------------------------
    ROOT CANVAS
    Pure black background. Light-gray (#C7C7C7 = xterm fg) text.
-   Monospace forced everywhere — no proportional fonts in the grid.
+   Monospace forced everywhere - no proportional fonts in the grid.
    ------------------------------------------------------------ */
 :root[data-theme="terminal"] {
   background-color: var(--color-bg);
@@ -41,7 +41,7 @@
 /* ------------------------------------------------------------
    TYPOGRAPHY
    Force monospace on all text-bearing elements within scope.
-   Kill font-smoothing softness — terminals render crisp pixels.
+   Kill font-smoothing softness - terminals render crisp pixels.
    ------------------------------------------------------------ */
 :root[data-theme="terminal"] body,
 :root[data-theme="terminal"] input,
@@ -132,7 +132,7 @@
 
 /* ------------------------------------------------------------
    SELECTION
-   Inverse video — classic terminal selection.
+   Inverse video - classic terminal selection.
    ------------------------------------------------------------ */
 :root[data-theme="terminal"] ::selection {
   background-color: var(--color-fg);
@@ -186,7 +186,7 @@
 /* ------------------------------------------------------------
    TABLES
    Hairline borders only. No zebra striping (UNIX `column`/`ls`
-   doesn't stripe — neither do we).
+   doesn't stripe - neither do we).
    ------------------------------------------------------------ */
 :root[data-theme="terminal"] table {
   border-collapse: collapse;

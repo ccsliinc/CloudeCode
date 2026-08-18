@@ -1,10 +1,10 @@
 /**
- * SettingsSections — the section renderers for the settings modal
+ * SettingsSections - the section renderers for the settings modal
  * (client/js/settings-panel.js).
  *
  * Pure functions: each takes the last `GET /config/settings` summary plus
  * whatever it needs, and returns an HTML string. No state, no DOM reads,
- * no event wiring — all of that stays in settings-panel.js, which owns
+ * no event wiring - all of that stays in settings-panel.js, which owns
  * the panel lifecycle and the batched Save.
  *
  * Split out of settings-panel.js when the tab layout pushed that file
@@ -15,7 +15,7 @@
     'use strict';
     /**
      * Escape a string for safe interpolation into innerHTML-built markup.
-     * Description: mirrors AppController._escapeHtml — duplicated locally
+     * Description: mirrors AppController._escapeHtml - duplicated locally
      *   (single small pure function) rather than reaching into `App`,
      *   since this module must also work before app.js has finished
      *   constructing `window.App`.
@@ -35,7 +35,7 @@
      *   currentValue (any) - the value from `lastSummary` for this field
      *     (raw string/bool for plain fields, `{configured: bool}` for
      *     secret fields).
-     *   effectiveText (string|null) - only used when field.showEffective —
+     *   effectiveText (string|null) - only used when field.showEffective -
      *     the "what runs now" preview line.
      * Output: string - HTML for one `.settings-field` block.
      */
@@ -57,14 +57,14 @@
 
         if (field.type === 'secret') {
             var configured = !!(currentValue && currentValue.configured);
-            var placeholder = configured ? 'configured — leave blank to keep' : 'not set';
+            var placeholder = configured ? 'configured - leave blank to keep' : 'not set';
             return (
                 '<div class="settings-field">' +
                 labelHtml +
                 '  <input type="password" autocomplete="new-password" id="' + inputId + '" ' +
                 '    data-settings-key="' + field.key + '" data-settings-type="secret" ' +
                 '    class="modal-input" placeholder="' + escapeHtml(placeholder) + '">' +
-                '  <div class="settings-field-hint">' + (configured ? 'a value is set — typing here replaces it' : 'not configured — this channel is disabled') + '</div>' +
+                '  <div class="settings-field-hint">' + (configured ? 'a value is set - typing here replaces it' : 'not configured - this channel is disabled') + '</div>' +
                 '</div>'
             );
         }
@@ -114,7 +114,7 @@
     /**
      * Render the appearance section shell. The actual `<select>` is
      * mounted into `#settings-theme-slot` by `window.ThemeSelector.mount`
-     * right after this HTML is inserted (see `renderPanel`) — it can't be
+     * right after this HTML is inserted (see `renderPanel`) - it can't be
      * built as a string because ThemeSelector owns its own DOM node and
      * change-listener wiring.
      * Output: string - HTML for the appearance `.settings-section`.
@@ -123,7 +123,7 @@
         return (
             '<section class="settings-section" data-settings-section="appearance">' +
             '  <h3 class="settings-section-title">appearance</h3>' +
-            '  <div class="settings-section-description">theme applies immediately — no save needed.</div>' +
+            '  <div class="settings-section-description">theme applies immediately - no save needed.</div>' +
             '  <div class="settings-field">' +
             '    <label class="settings-field-label" for="theme-selector">theme</label>' +
             '    <div id="settings-theme-slot"></div>' +
@@ -134,7 +134,7 @@
 
     /**
      * Render the server section: read-only HOST bind address plus an
-     * inline safety warning. Deliberately not editable — see the
+     * inline safety warning. Deliberately not editable - see the
      * settings-screen spec's HOST handling: it lives in `.env`, not
      * config.json, has no atomic-write convention in this codebase, and
      * the launchd wrapper on the deploy host REFUSES TO BOOT on a
@@ -151,18 +151,18 @@
             ? (
                 '<div class="settings-warning">' +
                 '  <strong>this bind address exposes a remote shell on every network interface.</strong> ' +
-                '  the server\'s startup guard refuses to boot when HOST is 0.0.0.0, empty, or missing — ' +
+                '  the server\'s startup guard refuses to boot when HOST is 0.0.0.0, empty, or missing - ' +
                 '  if this got here from a hand-edited .env, the app will not come back up after a restart. ' +
                 '  fix .env directly on the host, then restart.' +
                 '</div>'
             )
             : (
-                '<div class="settings-field-hint">bound to a specific interface — not exposed on every network.</div>'
+                '<div class="settings-field-hint">bound to a specific interface - not exposed on every network.</div>'
             );
         return (
             '<section class="settings-section" data-settings-section="server">' +
             '  <h3 class="settings-section-title">server</h3>' +
-            '  <div class="settings-section-description">bind address — read only. lives in .env, not config.json; edit it on the host directly.</div>' +
+            '  <div class="settings-section-description">bind address - read only. lives in .env, not config.json; edit it on the host directly.</div>' +
             '  <div class="settings-field">' +
             '    <label class="settings-field-label">host</label>' +
             '    <input type="text" class="modal-input" value="' + escapeHtml(server.host || '') + '" readonly disabled>' +

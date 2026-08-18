@@ -1,6 +1,6 @@
 """The agent-family registry: one table, no if/elif chains.
 
-feat/universal-wrappers — wrappers used to be a claude-only concept. A
+feat/universal-wrappers - wrappers used to be a claude-only concept. A
 wrapper now declares which COMMAND FAMILY it wraps (``AgentWrapper.family``),
 and one settings screen administers every family. Adding a sixth family must
 be a DATA addition to ``AGENT_FAMILIES`` below and nothing else: no new
@@ -224,7 +224,7 @@ def wrappers_for_family(wrappers: List, family_name: str) -> List:
 
     Description: a wrapper with no ``family`` attribute at all (a raw dict
       from a config read before validation) is treated as ``DEFAULT_FAMILY``
-      — the same additive-default rule ``AgentWrapper.family`` applies.
+      - the same additive-default rule ``AgentWrapper.family`` applies.
     Inputs:
       wrappers (list) - AgentWrapper objects or AgentWrapper-shaped dicts.
       family_name (str) - the family to keep.
@@ -252,13 +252,13 @@ def resolve_agent_type(agent_type: Optional[str], wrappers: List) -> Tuple[Agent
       resolved to before:
 
       1. A RESERVED family name (``codex``, ``hermes``, ``openclaw``,
-         ``shell``) is that family, with NO explicit wrapper — never
+         ``shell``) is that family, with NO explicit wrapper - never
          looked up as a wrapper id. This is why a historical session whose
          ``agent_type`` is ``"shell"`` still launches the shell family:
          reserved names were already checked first, and wrapper ids matching
          them are refused at creation time (``Settings.add_wrapper``).
          The family's own wrappers are then consulted by the caller, which
-         is the new behaviour — and a no-op for every existing config,
+         is the new behaviour - and a no-op for every existing config,
          because no existing config has a non-claude wrapper.
       2. Otherwise a WRAPPER ID match wins, across every family. This keeps
          ``agent_type="claude"`` resolving to a wrapper whose id is
@@ -302,7 +302,7 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
       wrappers, so nothing takes precedence over it), and the shell string
       this family would actually launch right now. Built server-side so
       the client never re-derives the wrapper-beats-static-command
-      precedence rule — the same reasoning behind the pre-existing
+      precedence rule - the same reasoning behind the pre-existing
       ``effective_claude_command``.
     Inputs:
       agents (AgentsConfig) - the loaded agents block; read via getattr so

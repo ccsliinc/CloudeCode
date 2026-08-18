@@ -60,7 +60,7 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 
-# v0.7.0 — one-shot deprecation log guard for the legacy
+# v0.7.0 - one-shot deprecation log guard for the legacy
 # ``PATCH /sessions/{name}/pinned-theme`` alias. Flipped True on the first
 # hit per server process so we don't spam logs every PATCH while still
 # emitting a single audit line per uptime window. Removed when the alias
@@ -130,7 +130,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         # SessionManager.create_session re-raises RuntimeError verbatim for
-        # backend infrastructure failures — tmux missing, new-session exec
+        # backend infrastructure failures - tmux missing, new-session exec
         # error, or (most importantly) the dead-on-arrival agent probe in
         # TmuxBackend.start() catching a child that exited before writing
         # a byte. 502 Bad Gateway is the right semantic: our upstream (the
@@ -160,7 +160,7 @@ async def get_session(
     returns the current (most-recently-created) one. Back-compat: existing
     clients call ``GET /sessions`` with no params and get "the" session.
 
-    ``include_scrollback`` (query, optional, default False) — when True
+    ``include_scrollback`` (query, optional, default False) - when True
     and the resolved session has a live tmux backend, the response's
     ``initial_scrollback_b64`` field is populated with base64-encoded
     pane-capture bytes. Used by the launchpad's "return to running
@@ -168,14 +168,14 @@ async def get_session(
     xterm before the WS opens, mirroring the adopt path. Off by default
     so existing callers see no change.
 
-    ``cols`` / ``rows`` (query, optional) — when ``include_scrollback`` is
+    ``cols`` / ``rows`` (query, optional) - when ``include_scrollback`` is
     True AND both are positive ints, the pane is pre-resized to the
     client's xterm geometry BEFORE the capture call. ``tmux capture-pane``
     snapshots at the pane's CURRENT width, which is whatever the most-
     recent attached client set it to. Without this pre-resize, a mobile
     client (~80 cols) rejoining a session whose pane was last sized by a
     desktop client (~144 cols) gets desktop-width scrollback bytes that
-    xterm paints at mobile width — the upper/older history reflows into
+    xterm paints at mobile width - the upper/older history reflows into
     garbled rows. Forcing tmux to re-render at the client's true width
     eliminates that mismatch. The subsequent WS-handshake resize becomes
     a no-op (same dims) on this client; other attached clients see a
@@ -192,7 +192,7 @@ async def get_session(
         raise HTTPException(status_code=404, detail="No active session")
 
     if include_scrollback:
-        # Resolve the id we actually loaded info for — when session_id was
+        # Resolve the id we actually loaded info for - when session_id was
         # omitted, get_session_info returned the "current" session; we need
         # the same canonical id for the capture call so we don't reach for
         # a different backend.
@@ -314,7 +314,7 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
 async def detach_session(request: Request, session_id: Optional[str] = None):
     """Detach from a session WITHOUT killing tmux.
 
-    Soft counterpart to ``DELETE /sessions`` — tears down the server-side
+    Soft counterpart to ``DELETE /sessions`` - tears down the server-side
     backend refs (reader task, idle watcher, our pipe-pane) for THAT session
     while leaving the tmux session alive. ``session_id`` (query, optional)
     selects which session; omitted detaches the current one. Other live
@@ -344,7 +344,7 @@ async def list_attachable_sessions(request: Request):
     Excludes the currently-active backend's session name so the UI never
     offers self-adopt as a valid action (the client also filters defensively).
     Each row carries ``created_by_cloude`` sourced from the SessionManager's
-    persisted ``owned_tmux_sessions`` set — not a spoofable prefix match.
+    persisted ``owned_tmux_sessions`` set - not a spoofable prefix match.
     """
     session_manager = request.app.state.session_manager
 
@@ -376,7 +376,7 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
     """Adopt an externally-started tmux session as a new concurrent session.
 
     Multi-session: this NEVER detaches another session and NEVER returns 409
-    — multiple adopted/owned sessions coexist. ``confirm_detach`` in the body
+    - multiple adopted/owned sessions coexist. ``confirm_detach`` in the body
     is accepted for API back-compat and ignored. Other failures (pane dead,
     tmux not running, unsafe session name) propagate as 500 via the app's
     error middleware; we deliberately do NOT wrap them here.
@@ -413,7 +413,7 @@ async def destroy_external_session(request: Request, name: str):
     to call adopt-then-destroy, which 500'd whenever the target pane was
     dead (foreground process exited). This endpoint kills the tmux
     session directly via ``tmux -L <socket> kill-session -t <name>``,
-    skipping adoption — so dead-pane sessions can still be cleaned up.
+    skipping adoption - so dead-pane sessions can still be cleaned up.
 
     Returns:
         SuccessResponse. ``message`` indicates whether the session was
@@ -458,7 +458,7 @@ async def _apply_session_theme(
 
     v0.7.0 behavior:
       * Validates the tmux name against the known-sessions set (same
-        rules as the legacy route — owned ∪ active ∪ attachable probe).
+        rules as the legacy route - owned ∪ active ∪ attachable probe).
       * Writes ``<session.working_dir>/.cc.theme`` via
         ``session_manager.set_project_theme`` (atomic tmp+rename).
         Empty/None ``theme_id`` clears the dotfile.
@@ -517,7 +517,7 @@ async def _apply_session_theme(
                     matched_working_dir = sess_obj.working_dir
                 break
 
-    # v0.7.0 — write the project-scoped dotfile. When no live session
+    # v0.7.0 - write the project-scoped dotfile. When no live session
     # carries this name we still update the legacy JSON map below so
     # downgrades + non-live pins remain functional (this is the one
     # path where pinned_themes.json is still the source of truth).
@@ -531,7 +531,7 @@ async def _apply_session_theme(
                 working_dir=matched_working_dir,
                 error=str(exc),
             )
-            # working_dir gone (project deleted on disk) — don't crash;
+            # working_dir gone (project deleted on disk) - don't crash;
             # fall through to the JSON mirror so the in-memory + map
             # update still happens. Caller will see a 200 with the pin
             # reflected even though the dotfile couldn't be written.
@@ -564,7 +564,7 @@ async def _apply_session_theme(
         if info is not None:
             return info
 
-    # Non-active pin update — synthesize a minimal SessionInfo-shaped
+    # Non-active pin update - synthesize a minimal SessionInfo-shaped
     # echo that carries the pin so the pydantic contract still holds.
     placeholder_session = Session(
         id=f"pinned:{session_name}",
@@ -599,15 +599,15 @@ async def set_session_theme(
 ):
     """Set (or clear) the project-scoped theme for a session.
 
-    v0.7.0 — supersedes ``PATCH /sessions/{name}/pinned-theme``. The
+    v0.7.0 - supersedes ``PATCH /sessions/{name}/pinned-theme``. The
     theme id is written to ``<session.working_dir>/.cc.theme`` so two
     browsers / two machines pointed at the same project converge on
     the same theme without round-tripping a per-machine cache.
 
     Body shape: ``{"theme_id": "<id>"}`` or ``{"theme_id": null}`` (or
     empty string) to clear. The session is validated against the same
-    known-tmux-names set used by the legacy route — owned ∪ active ∪
-    attachable probe — so this endpoint can't become an arbitrary KV
+    known-tmux-names set used by the legacy route - owned ∪ active ∪
+    attachable probe - so this endpoint can't become an arbitrary KV
     store while still accepting pins for detached-but-alive sessions.
 
     The response is the live ``SessionInfo`` when the named session is
@@ -630,14 +630,14 @@ async def set_session_unread(
 ):
     """Manually mark (or clear) a session unread for followup.
 
-    feat/hook-driven-status — ``session_name`` is the literal tmux session
+    feat/hook-driven-status - ``session_name`` is the literal tmux session
     name (same convention as ``/sessions/{session_name}/theme``), so this
     works whether the session is currently attached to or only attachable.
     Persisted server-side (not localStorage) so the flag follows the user
-    across browsers/devices — see ``SessionManager.set_manual_unread``.
+    across browsers/devices - see ``SessionManager.set_manual_unread``.
 
     Unlike the auto flag a ``Stop`` hook sets, this one is NOT cleared by
-    merely viewing the session — only a subsequent call to this same
+    merely viewing the session - only a subsequent call to this same
     endpoint (typically the user clicking the control again) clears it.
     """
     session_manager = request.app.state.session_manager
@@ -657,11 +657,11 @@ async def set_session_unread(
 async def set_pinned_theme(
     request: Request, session_name: str, body: UpdatePinnedThemeRequest
 ):
-    """DEPRECATED v0.7.0 — use ``PATCH /sessions/{session_name}/theme``.
+    """DEPRECATED v0.7.0 - use ``PATCH /sessions/{session_name}/theme``.
 
     Kept as a routing alias for ONE release so v0.6.x clients keep
     working through an upgrade window. Internally forwards to the same
-    code path as the new endpoint — the theme id is written to
+    code path as the new endpoint - the theme id is written to
     ``<session.working_dir>/.cc.theme`` regardless of which route the
     client hits. The response shape is unchanged.
 
@@ -688,7 +688,7 @@ async def set_pinned_theme(
 # ---------------------------------------------------------------------------
 # Session rename
 # ---------------------------------------------------------------------------
-# v0.7.1 — PATCH /sessions/{session_id}/name renames a live tmux session
+# v0.7.1 - PATCH /sessions/{session_id}/name renames a live tmux session
 # on the ``-L cloude`` socket via ``tmux rename-session`` and broadcasts a
 # ``session.renamed`` WS event so every browser bound to that session id
 # updates its displayed name + ``document.title``. See SessionManager's
@@ -696,14 +696,14 @@ async def set_pinned_theme(
 # map, session metadata).
 #
 # Name validation is intentionally STRICTER than ``_sanitize_tmux_name``
-# in the SessionManager — that helper accepts spaces, unicode, emoji, and
+# in the SessionManager - that helper accepts spaces, unicode, emoji, and
 # only escapes ``.``/``:`` because tmux's own grammar requires it. The
 # rename surface, by contrast, is user-facing and edits via an inline
-# input — we hold it to ``^[A-Za-z0-9_-]{1,64}$`` to avoid shell-quoting
+# input - we hold it to ``^[A-Za-z0-9_-]{1,64}$`` to avoid shell-quoting
 # weirdness, filesystem-path collisions (the FIFO log filename is derived
 # from the slug), and visually confusing whitespace runs in the launchpad
 # row. Existing sessions whose names contain spaces / unicode keep working
-# fine — they just can't be re-named to a value containing those chars.
+# fine - they just can't be re-named to a value containing those chars.
 _RENAME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -721,15 +721,15 @@ async def rename_session_endpoint(
     so the value is safe inside a tmux target, a FIFO filename, and a
     JSON-shaped WS payload). Returns:
 
-      * 400 — invalid name (empty, too long, or contains a disallowed char)
-      * 404 — unknown session id
-      * 409 — name already in use by another live OR owned-but-detached session
-      * 500 — tmux ``rename-session`` itself failed
-      * 200 — success; body is the updated ``SessionInfo``
+      * 400 - invalid name (empty, too long, or contains a disallowed char)
+      * 404 - unknown session id
+      * 409 - name already in use by another live OR owned-but-detached session
+      * 500 - tmux ``rename-session`` itself failed
+      * 200 - success; body is the updated ``SessionInfo``
 
     On success the server broadcasts ``session.renamed`` to every WS bound
     to ``session_id`` so all attached tabs update their displayed name +
-    ``document.title``. The broadcast is best-effort — broadcast failures
+    ``document.title``. The broadcast is best-effort - broadcast failures
     log a warning but do not roll back the rename (the in-memory state is
     already authoritative).
     """
@@ -782,7 +782,7 @@ async def rename_session_endpoint(
                 session_id=session_id, new_name=new_name
             ).model_dump_json(),
         )
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "rename_session_broadcast_failed",
             session_id=session_id,
@@ -930,7 +930,7 @@ async def upload_file(
 # Three endpoints:
 #   GET  /sessions/{session_id}/toasts?unacked=true  → list (backfill on attach)
 #   POST /sessions/{session_id}/toasts               → record + broadcast
-#       (SYNTHETIC — Part 3 will add a hook-driven endpoint; this one is
+#       (SYNTHETIC - Part 3 will add a hook-driven endpoint; this one is
 #        intentionally kept for client/manual testing)
 #   POST /toasts/{toast_id}/ack?session_id=<id>      → mark acked + broadcast
 #
@@ -952,7 +952,7 @@ async def list_session_toasts(
 
     Used by the client on (re)attach to backfill any toast that fired
     while the browser was disconnected. Newest-first. Returns an empty
-    list (NOT 404) when the session has no toasts — the launchpad polls
+    list (NOT 404) when the session has no toasts - the launchpad polls
     speculatively and an empty array is the right success shape.
     """
     session_manager = request.app.state.session_manager
@@ -970,7 +970,7 @@ async def list_session_toasts(
 async def create_session_toast(
     request: Request, session_id: str, body: CreateToastRequest
 ):
-    """Synthetic toast creation — record + broadcast to the session.
+    """Synthetic toast creation - record + broadcast to the session.
 
     INTENTIONALLY TEMPORARY for v0.7.0 Part 2: lets the client and storage
     layer be exercised end-to-end without a real Claude Code hook. Part 3
@@ -1001,7 +1001,7 @@ async def create_session_toast(
             session_id,
             ToastNewMessage(toast=toast).model_dump_json(),
         )
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning("toast_broadcast_failed", session_id=session_id, error=str(exc))
 
     return toast
@@ -1017,7 +1017,7 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
 
     ``session_id`` is a required query parameter (not body) so this is a
     cleanly bookmarkable / curlable URL. The broadcast lets OTHER browsers
-    attached to the same session dismiss the toast in lockstep — no
+    attached to the same session dismiss the toast in lockstep - no
     localStorage cross-tab sync needed.
 
     Idempotent at the storage layer: a double-click won't re-broadcast.
@@ -1038,7 +1038,7 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
             session_id,
             ToastAckMessage(toast_id=toast_id).model_dump_json(),
         )
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "toast_ack_broadcast_failed",
             session_id=session_id,
@@ -1058,12 +1058,12 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
 # Auth model:
 #   This endpoint INTENTIONALLY does NOT use Depends(require_auth). The hook
 #   subprocess is spawned by Claude Code from inside a tmux pane that runs
-#   on the same machine as cloudecode — there's no place for a JWT. Instead
+#   on the same machine as cloudecode - there's no place for a JWT. Instead
 #   we authenticate via TWO orthogonal layers:
 #
-#     1. Loopback-only — client_host must be 127.0.0.1 (or ::1/localhost).
+#     1. Loopback-only - client_host must be 127.0.0.1 (or ::1/localhost).
 #        Anything else is rejected with 403.
-#     2. HMAC bearer token — a per-session URL-safe token (32 bytes,
+#     2. HMAC bearer token - a per-session URL-safe token (32 bytes,
 #        secrets.token_urlsafe) minted at session-create and injected into
 #        the spawned agent's env as CLOUDECODE_HOOK_TOKEN. The hook
 #        forwards it via the X-Cloudecode-Token header. We validate via
@@ -1074,10 +1074,10 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
 # somehow learn a token (e.g. via a /proc dump on a multi-user box).
 
 
-# feat/hook-driven-status — the endpoint now accepts every managed event,
+# feat/hook-driven-status - the endpoint now accepts every managed event,
 # not just the three toast-worthy ones. TOAST_EVENTS still get a toast +
 # WS broadcast (unchanged behavior); ACTIVITY_ONLY_EVENTS update ONLY the
-# activity-status state machine (src/core/session_activity.py) — no toast,
+# activity-status state machine (src/core/session_activity.py) - no toast,
 # no broadcast, since PreToolUse/PostToolUse fire on every tool call and
 # would spam the toast UI. Single source of truth for both sets lives in
 # claude_hooks.py (also consulted by ``ensure_hook_settings`` to decide
@@ -1090,7 +1090,7 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[str]]:
     """Map a hook event + payload into (title, body) for the toast.
 
-    Defensive ``.get()`` everywhere — Claude Code's payload shape is not
+    Defensive ``.get()`` everywhere - Claude Code's payload shape is not
     a formally-stable contract across versions, and a malformed payload
     must NEVER raise here (it just yields a generic toast).
 
@@ -1123,7 +1123,7 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
         tool_name = payload.get("tool_name")
         tool_input = payload.get("tool_input")
         if isinstance(tool_name, str) and tool_name:
-            # Surface the most recognizable bit of tool_input — Bash =>
+            # Surface the most recognizable bit of tool_input - Bash =>
             # command, Edit/Write => file_path, else the tool name alone.
             detail = ""
             if isinstance(tool_input, dict):
@@ -1144,7 +1144,7 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             body = message.strip()[:200]
-    else:  # pragma: no cover — only called for TOAST_EVENTS kinds
+    else:  # pragma: no cover - only called for TOAST_EVENTS kinds
         title = "Claude event"
 
     return title, body
@@ -1165,22 +1165,22 @@ async def claude_event_hook(request: Request):
                                or ACTIVITY_ONLY_EVENTS
                                ``UserPromptSubmit``/``PreToolUse``/
                                ``PostToolUse``/``SubagentStart``/
-                               ``SubagentStop`` — feat/hook-driven-status)
+                               ``SubagentStop`` - feat/hook-driven-status)
 
     Body: the raw JSON Claude Code's hook would normally pipe to a
     shell command's stdin (we just forward stdin → curl --data-binary @-).
-    Schema is per-event and tolerated defensively — see
+    Schema is per-event and tolerated defensively - see
     ``_hook_event_presentation``.
 
     On success: EVERY event kind updates the activity-status state machine
-    (``SessionManager.record_hook_event`` — see
+    (``SessionManager.record_hook_event`` - see
     ``src/core/session_activity.py``). TOAST_EVENTS additionally record a
     toast (existing Part 2 storage) and broadcast ``toast.new`` to the
     session's WS subscribers; ACTIVITY_ONLY_EVENTS do neither (PreToolUse/
-    PostToolUse fire on every tool call — a toast per call would spam the
+    PostToolUse fire on every tool call - a toast per call would spam the
     UI) and return ``{"ok": true}`` with no ``toast_id``.
     """
-    # Layer 1 — loopback only. Even a token leak shouldn't let a LAN
+    # Layer 1 - loopback only. Even a token leak shouldn't let a LAN
     # attacker fire toasts at someone else's cloudecode.
     client_host = request.client.host if request.client else ""
     if client_host not in _LOOPBACK_HOSTS:
@@ -1200,7 +1200,7 @@ async def claude_event_hook(request: Request):
 
     session_manager = request.app.state.session_manager
 
-    # Layer 2 — HMAC token validation, constant time.
+    # Layer 2 - HMAC token validation, constant time.
     if not session_manager.validate_hook_token(session_id, token):
         # NEVER log the token value. We log session_id + event_kind so
         # operators can spot brute-force attempts without leaking the secret.
@@ -1211,7 +1211,7 @@ async def claude_event_hook(request: Request):
         )
         raise HTTPException(status_code=403, detail="invalid token")
 
-    # Tolerate empty / malformed body — the title/body resolver is
+    # Tolerate empty / malformed body - the title/body resolver is
     # defensive and falls through to generic copy when fields are absent.
     try:
         payload = await request.json()
@@ -1220,15 +1220,15 @@ async def claude_event_hook(request: Request):
     except Exception:
         payload = {}
 
-    # feat/hook-driven-status — EVERY valid event kind updates the
+    # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.
     # Best-effort: record_hook_event never raises (see its docstring), so
     # this can't turn an activity-only event into a 410/500 for a session
-    # that's mid-teardown — only the toast path below (which DOES need to
+    # that's mid-teardown - only the toast path below (which DOES need to
     # know the session still exists to attach a color/router emit) raises.
     try:
         session_manager.record_hook_event(session_id, event_kind, payload)
-    except Exception as exc:  # pragma: no cover — defensive, see docstring
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
         logger.warning(
             "hook_activity_record_failed",
             session_id=session_id,
@@ -1237,7 +1237,7 @@ async def claude_event_hook(request: Request):
         )
 
     if event_kind not in claude_hooks.TOAST_EVENTS:
-        # ACTIVITY_ONLY_EVENTS — state machine already updated above, no
+        # ACTIVITY_ONLY_EVENTS - state machine already updated above, no
         # toast to create or broadcast.
         return {"ok": True}
 
@@ -1256,7 +1256,7 @@ async def claude_event_hook(request: Request):
         # so the hook subprocess (which can't retry sensibly) just exits.
         raise HTTPException(status_code=410, detail=str(exc))
 
-    # Fan out to every browser bound to this session — matches the
+    # Fan out to every browser bound to this session - matches the
     # Part 2 POST /sessions/{id}/toasts behavior so hook-originated and
     # synthetic toasts present identically.
     try:
@@ -1264,7 +1264,7 @@ async def claude_event_hook(request: Request):
             session_id,
             ToastNewMessage(toast=toast).model_dump_json(),
         )
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "hook_toast_broadcast_failed",
             session_id=session_id,
@@ -1305,12 +1305,12 @@ async def get_logs(request: Request, limit: int = 100):
 async def get_local_servers(request: Request, session_name: str):
     """List dev servers detected for ``session_name``.
 
-    Replaces the old ``GET /api/v1/tunnels`` surface. Pure read — never
+    Replaces the old ``GET /api/v1/tunnels`` surface. Pure read - never
     triggers detection / probes; the LocalServersTracker maintains the
     list as a side effect of pattern matches plus a 30s janitor sweep.
 
     Returns an empty list when the session has no tracked servers (or
-    when the session name is unknown to the tracker — we don't 404 on
+    when the session name is unknown to the tracker - we don't 404 on
     "no servers yet" because the UI polls speculatively before any have
     been detected).
     """
@@ -1367,7 +1367,7 @@ def _build_browse_response(resolved: Path) -> BrowseResponse:
 
     Shared by the ``browse`` and ``mkdir`` endpoints so the directory-listing
     logic lives in exactly one place. ``resolved`` MUST already be an existing
-    directory — callers own the existence/type checks (browse 404s, mkdir
+    directory - callers own the existence/type checks (browse 404s, mkdir
     creates). Hidden (dot-prefixed) entries are skipped and individual
     unreadable children are silently ignored so one bad entry never fails the
     whole listing.
@@ -1450,7 +1450,7 @@ async def make_directory(body: MkdirRequest):
     Resolves the requested path (``~`` is expanded), creates it along with any
     missing parents, then lists it exactly like ``browse_directory`` so the
     folder picker can navigate straight into the new directory. ``mkdir -p``
-    semantics make this idempotent — it succeeds if the directory already
+    semantics make this idempotent - it succeeds if the directory already
     exists. Matches the browse endpoint's path handling (resolve, no root
     restriction).
 
@@ -1482,7 +1482,7 @@ async def make_directory(body: MkdirRequest):
 # SECURITY: neither endpoint runs anything. There is deliberately NO
 # "execute this command" route. A stored command reaches a shell only by
 # being typed into a console session the user is watching, addressed by
-# ``CreateSessionRequest.terminal_command_id`` — see
+# ``CreateSessionRequest.terminal_command_id`` - see
 # src/core/terminal_commands.py's module docstring before adding anything
 # to this section.
 
@@ -1521,12 +1521,12 @@ async def replace_terminal_commands(body: ReplaceTerminalCommandsRequest):
 
 # ---- provider-selector modal (v3.1) --------------------------------------
 #
-# "Claude" is implicit and never appears in this list — it's the client's
+# "Claude" is implicit and never appears in this list - it's the client's
 # always-present first option, never stored/removable. These endpoints
 # manage ONLY the add/remove-able OpenRouter model catalog persisted at
 # config.json's top-level "providers.models" (see ``Settings.get_provider_models``
 # / ``add_provider_model`` / ``remove_provider_model`` in src/config.py).
-# Model id format (the shell-injection guard — ``Settings.get_agent_command``
+# Model id format (the shell-injection guard - ``Settings.get_agent_command``
 # interpolates the id into a shell command string) is enforced here with an
 # explicit 400, matching ``CreateSessionRequest.model``'s pydantic validator
 # (src/models.py) which guards the session-create path the same way.
@@ -1564,7 +1564,7 @@ async def add_provider_model(body: AddProviderModelRequest):
         models = settings.add_provider_model(body.model)
     except ValueError as e:
         # add_provider_model only raises ValueError for a duplicate (format
-        # was already checked above) — 409 Conflict is the right semantic.
+        # was already checked above) - 409 Conflict is the right semantic.
         raise HTTPException(status_code=409, detail=str(e))
 
     return ProviderModelsResponse(models=models)
@@ -1579,7 +1579,7 @@ async def remove_provider_model(model: str):
     """Remove an OpenRouter model id from the provider catalog.
 
     ``{model:path}`` (not the default ``{model}``) because model ids
-    contain ``/`` (e.g. ``openai/gpt-5.6-sol``) — the plain converter
+    contain ``/`` (e.g. ``openai/gpt-5.6-sol``) - the plain converter
     would truncate at the first slash.
 
     Raises:
@@ -1598,7 +1598,7 @@ async def remove_provider_model(model: str):
 # Replaces the hardcoded cld/cldor zsh functions with user-defined, named
 # wrappers (see src/core/agent_wrappers.py for the schema and resolution
 # model). A wrapper's own ``id`` is also a valid ``agent_type`` value for
-# ``POST /sessions`` — launching through a specific wrapper needs no
+# ``POST /sessions`` - launching through a specific wrapper needs no
 # separate field, see CreateSessionRequest.agent_type's docstring.
 
 
@@ -1645,7 +1645,7 @@ async def list_wrappers():
 )
 async def list_wrapper_examples():
     """Offer known-good example wrappers (the author's real cld/cldor
-    functions) for a user to import. Never auto-installed — see
+    functions) for a user to import. Never auto-installed - see
     ``src.core.agent_wrappers.EXAMPLE_WRAPPERS``."""
     return WrapperExamplesResponse(wrappers=list(EXAMPLE_WRAPPERS))
 
@@ -1794,7 +1794,7 @@ async def health_endpoint(request: Request):
 #      `~/Library/Application Support/cloude-code-menubar/themes/`
 #
 # Each `theme.json` is try-parsed against `ThemeManifest`. Failures are
-# LOGGED-AND-SKIPPED — never 500, never silently substituted with claude
+# LOGGED-AND-SKIPPED - never 500, never silently substituted with claude
 # defaults. The endpoint must always return a usable list (possibly empty
 # in pathological cases; the client has its own claude fallback).
 #
@@ -1803,7 +1803,7 @@ async def health_endpoint(request: Request):
 # they live in different folders.
 def _bundled_themes_root() -> Path:
     """Return repo's `client/css/themes/` dir. Matches the static mount."""
-    # routes.py lives at src/api/routes.py — parent.parent.parent = repo root
+    # routes.py lives at src/api/routes.py - parent.parent.parent = repo root
     return Path(__file__).resolve().parent.parent.parent / "client" / "css" / "themes"
 
 
@@ -1831,7 +1831,7 @@ def _load_manifest(theme_dir: Path, source: str) -> Optional[ThemeManifest]:
             raw = json.load(fh)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
         # UnicodeDecodeError is NOT an OSError (it's a ValueError subclass)
-        # — explicitly catch it so binary garbage masquerading as a
+        # - explicitly catch it so binary garbage masquerading as a
         # theme.json gets logged + skipped instead of 500'ing the
         # endpoint. Other ValueErrors are intentionally left to surface
         # since they'd indicate a real bug in our code, not bad input.
@@ -1910,7 +1910,7 @@ async def list_themes() -> List[ThemeManifest]:
     """List discovered theme manifests (bundled + user).
 
     Bundled themes are sorted first (alphabetical by name within each group).
-    Malformed manifests are skipped with a warning log — never 500.
+    Malformed manifests are skipped with a warning log - never 500.
     The client has its own Claude fallback, so an empty list is acceptable
     in degraded states.
 

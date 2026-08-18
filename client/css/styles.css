@@ -1,5 +1,5 @@
 /* =====================================================================
- * Design tokens (Phase 1 — CSS variables)
+ * Design tokens (Phase 1 - CSS variables)
  * ---------------------------------------------------------------------
  * All color / shadow / radius / font values used throughout this file
  * are sourced from semantic tokens defined here. A downstream theme
@@ -7,7 +7,7 @@
  * selectors WITHOUT touching component rules below.
  *
  * Naming rule: tokens describe ROLE, not literal value. Defaults below
- * preserve the original Claude-coral dark palette — pixel-identical to
+ * preserve the original Claude-coral dark palette - pixel-identical to
  * pre-refactor when no `data-theme` attribute is set on <html>.
  * ===================================================================== */
 :root {
@@ -46,7 +46,7 @@
     --color-border:        #3e3e42;
     --color-border-subtle: #2d2d30;   /* row separators inside lists */
 
-    /* ---- Accent (Claude coral — primary brand) ------------------ */
+    /* ---- Accent (Claude coral - primary brand) ------------------ */
     --color-accent:                #d77757;
     --color-accent-strong:         #e88768;                 /* hover variant */
     --color-accent-bg-soft:        rgba(215, 119, 87, 0.08);
@@ -267,7 +267,7 @@ body {
  * controls) used to be `.header` itself. It is now `.header-row`, a
  * dedicated wrapper, so `#home-subheader` (launchpad only, second row of
  * `.header`) is never a SIBLING of `h1` inside the same flex/grid parent
- * — header-title-fit.js's slotWidth() computes the title's shrink budget
+ * - header-title-fit.js's slotWidth() computes the title's shrink budget
  * from `h1`'s parent's children on the documented assumption that they
  * are all fixed-size, single-row content. A full-width second row in
  * that same parent broke that assumption and starved the budget to
@@ -381,11 +381,11 @@ h1:hover {
     flex-shrink: 0;
 }
 
-/* HOME-HEADER-CONSOLIDATION — launchpad-only header-row layout.
+/* HOME-HEADER-CONSOLIDATION - launchpad-only header-row layout.
  *
  * Toggled on/off by setHeaderIdentity() in app.js (only showLaunchpad()
  * passes a `subheader`), never applied on auth or terminal. Applies to
- * `.header-row` (the wrapper around spacer/toggle/title/controls — see
+ * `.header-row` (the wrapper around spacer/toggle/title/controls - see
  * its own comment above for why it exists as a separate element from
  * `.header`).
  *
@@ -395,38 +395,38 @@ h1:hover {
  * (0.008px off at 1280px, 0px at 390px) but broke the title's own text
  * fit: header-title-fit.js's slotWidth() (client/js/header-title-fit.js)
  * computes the title's shrink budget by walking `.header-row`'s actual
- * DOM children and summing their RENDERED widths — an empty grid track
+ * DOM children and summing their RENDERED widths - an empty grid track
  * with no element in it (the reserved-but-content-less left column,
  * since `#session-sidebar-toggle` is `display: none` here) is invisible
  * to that walk. The JS concluded the full "Cloude Code Launcher" fit
  * (its math never subtracted the reserved column it couldn't see) and
  * left the untruncated string in the DOM, while the grid actually
- * rendered the title only 160px of room — so plain CSS
+ * rendered the title only 160px of room - so plain CSS
  * `text-overflow: ellipsis` silently clipped it to "Cloude Code L…" with
  * nothing in the DOM saying so. Confirmed by comparing the DOM
  * `textContent` (full) against the rendered box in a screenshot
- * (truncated) — a genuine "the two disagree" case, not a JS bug.
+ * (truncated) - a genuine "the two disagree" case, not a JS bug.
  *
  * `#header-home-spacer` (a real, `visibility: hidden` element, not a grid
  * track) fixes this at the root: it is an actual DOM sibling of `h1`
  * with a real rendered width, so it is counted correctly by both the
- * BROWSER's flex layout and header-title-fit.js's DOM walk — the two can
+ * BROWSER's flex layout and header-title-fit.js's DOM walk - the two can
  * no longer disagree, because they are now reading the same geometry.
  * `#appTitle` gets `flex: 1 1 auto` (grows AND shrinks) with
  * `justify-content: center` on itself so the icon+text pair centres
  * within whatever room is actually left, and shrinks through
  * header-title-fit.js's normal, correct middle-elision path if that room
- * ever gets tighter than the full string — the SAME mechanism session
+ * ever gets tighter than the full string - the SAME mechanism session
  * titles already use, not a new one.
  *
  * `--home-header-flank-w` mirrors `.controls`' own real width (TWO
- * buttons, not three — header-menu.js permanently re-parents logoutBtn
+ * buttons, not three - header-menu.js permanently re-parents logoutBtn
  * and settingsBtn into its overflow panel at every width, so only
  * `#configEditorBtn` and its kebab `#header-menu-toggle` stay inline).
  * Verified after the fix, both widths, full "Cloude Code Launcher" text
  * renders untruncated, 0px / 0.008px off-centre.
  */
-/* Hidden by default — never touches the terminal/auth header layout.
+/* Hidden by default - never touches the terminal/auth header layout.
  * Only `.header--home` (below) turns it into a real, invisible, but
  * SIZED sibling. */
 .header-home-spacer {
@@ -444,7 +444,7 @@ h1:hover {
     width: var(--home-header-flank-w);
 }
 
-/* Stamped on <body> as `.home-header-active` — DELIBERATELY NOT the same
+/* Stamped on <body> as `.home-header-active` - DELIBERATELY NOT the same
  * class as `.header--home`. `.header--home` is a bare class selector, so
  * reusing it on <body> would make it match here too and put the WHOLE
  * PAGE in `display: grid` (caught in the browser: bodyDisplay flipped to
@@ -461,19 +461,19 @@ body.home-header-active {
 @media (max-width: 480px) {
     body.home-header-active {
         /* .home-subheader drops to 0.72rem under 480px (see media query
-         * below) — its line box shrinks with it. */
+         * below) - its line box shrinks with it. */
         --home-subheader-extra: 18px;
     }
 }
 
 /* #session-sidebar-toggle stays `display: none` here (app.js never shows
- * it on the launchpad) — no rule needed, it contributes nothing to the
+ * it on the launchpad) - no rule needed, it contributes nothing to the
  * flex row either way. */
 
 .header--home #appTitle {
     /* Grows to fill the room the spacer/controls leave AND shrinks
      * through header-title-fit.js's normal middle-elision path if that
-     * room gets tight — same budget mechanism the terminal's session
+     * room gets tight - same budget mechanism the terminal's session
      * title already uses, just with a short fixed string here instead of
      * a long session name. */
     flex: 1 1 auto;
@@ -486,7 +486,7 @@ body.home-header-active {
 }
 
 /* Second row of `.header`, a sibling of `.header-row` (NOT a grid cell of
- * it — see the `.header-row` comment above for why h1's actual parent
+ * it - see the `.header-row` comment above for why h1's actual parent
  * must stay exactly the original three children). Centred by plain
  * `text-align`, which is real centring against the header's own width at
  * every viewport, not a fixed margin. */
@@ -504,7 +504,7 @@ body.home-header-active {
     max-width: 100%;
 }
 
-/* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
+/* SESSION-IDENTITY-V2 - header identity icon. Wraps either an emoji
  * (launchpad/auth) or the brand SVG (terminal). Sizing is consistent
  * across both modes so the title baseline doesn't jump on screen swap. */
 .header-icon {
@@ -533,7 +533,7 @@ body.home-header-active {
     display: block;
 }
 
-/* v0.7.2 — inline rename affordance in the page header. A small pencil
+/* v0.7.2 - inline rename affordance in the page header. A small pencil
  * button sits next to the title text and triggers inline edit mode.
  * Styled to match the launchpad's .running-session-rename for visual consistency. */
 .header-rename-pencil {
@@ -577,11 +577,11 @@ body.home-header-active {
     margin-left: 8px;
 }
 
-/* v0.7.2 — inline rename affordance on the launchpad's running-sessions
+/* v0.7.2 - inline rename affordance on the launchpad's running-sessions
  * rows. The pencil button triggers inline-edit mode (swaps the name span
  * for an input). Only rows with a known session_id render the pencil
  * (toggled in renderRunningSessions); external adopt-target rows get no
- * pencil — the user can adopt first, then rename from the in-session header. */
+ * pencil - the user can adopt first, then rename from the in-session header. */
 .running-session-rename {
     width: 24px;
     height: 24px;
@@ -642,13 +642,13 @@ body.home-header-active {
 /* Header control icons. Inline SVG paths use stroke="currentColor" so a
  * theme override of --color-accent re-skins them automatically. We pin
  * `color` on the <svg> itself (not the <button>) so danger-styled
- * buttons still render the icon in accent — preserves pre-token visual. */
+ * buttons still render the icon in accent - preserves pre-token visual. */
 .header .controls button > svg {
     color: var(--color-accent);
 }
 
 /* The delete button's icon must read as destructive, not merely its
- * border/background — a red-bordered button drawing its glyph in the
+ * border/background - a red-bordered button drawing its glyph in the
  * default accent color muddies the "this is dangerous" signal the
  * trash-can icon is there to give. Overrides the accent rule above for
  * any button.danger specifically. */
@@ -820,7 +820,7 @@ body.home-header-active {
     pointer-events: none;
     transition: opacity 0.2s;
     border: 1px solid var(--color-accent);
-    /* See button[data-tooltip]::after — same reasoning. The light no
+    /* See button[data-tooltip]::after - same reasoning. The light no
      * longer sits in .controls at all (it is a home-bar or FAB-rail item
      * now), but the stacking guard still earns its place: in the bar it
      * has a text label sibling, and on the rail it must clear the
@@ -934,11 +934,11 @@ body.home-header-active {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Local Servers panel — pure detection readout. The server tracks any   */
+/* Local Servers panel - pure detection readout. The server tracks any   */
 /* dev port detected in pane output (Vite, Next, Flask, etc.) and pushes */
 /* `local_server_detected` / `local_server_lost` over the WebSocket. The */
 /* row is intentionally minimal: monospace port chip on the left, the    */
-/* clickable URL on the right. No CRUD affordances — display-only.       */
+/* clickable URL on the right. No CRUD affordances - display-only.       */
 /* ---------------------------------------------------------------------- */
 .local-servers {
     background: var(--color-bg-card);
@@ -1277,7 +1277,7 @@ body.home-header-active {
 
 /* Edit + delete are ALWAYS rendered and ALWAYS visible (no `:hover`-only
  * reveal anywhere in this file) so they are reachable on touch devices
- * with no hover state at all — the user drives this from a phone. See
+ * with no hover state at all - the user drives this from a phone. See
  * the `@media (pointer: coarse)` block below for the touch-specific
  * hit-area bump. */
 .project-delete-btn {
@@ -1308,7 +1308,7 @@ body.home-header-active {
     transform: scale(1.1);
 }
 
-/* Edit (pencil) button — sits immediately left of the delete ×. Calm
+/* Edit (pencil) button - sits immediately left of the delete ×. Calm
  * neutral default, amber on hover so it never competes with the
  * destructive red of delete. */
 .project-edit-btn {
@@ -1339,7 +1339,7 @@ body.home-header-active {
     transform: scale(1.1);
 }
 
-/* Touch hit-area bump. `pointer: coarse` covers phones/tablets — no
+/* Touch hit-area bump. `pointer: coarse` covers phones/tablets - no
  * `:hover` involved, since a coarse pointer generally can't hover at
  * all. 44px is the standard minimum touch target (Apple HIG / WCAG
  * 2.5.5); `.project-item` gets matching right padding so the wider
@@ -1422,7 +1422,7 @@ body.home-header-active {
 .adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-left: 3px solid var(--color-accent); border-radius: var(--radius-md); color: var(--color-fg); font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
 .adopt-disclosure-body p + p { margin-top: 10px; }
 .adopt-disclosure-body code { background: var(--color-bg-overlay-faint); padding: 2px 6px; border-radius: var(--radius-sm); color: var(--color-accent); }
-/* README link — was a bare <a> with NO rule targeting it at all, so every
+/* README link - was a bare <a> with NO rule targeting it at all, so every
  * theme showed the browser's default blue (link) / purple (visited)
  * instead of the theme's own accent. Underlined at rest (not just on
  * hover) so it stays distinguishable from the surrounding body text by
@@ -1525,7 +1525,7 @@ body.home-header-active {
     }
 
     .project-item {
-        /* Left/top/bottom only — right stays whatever the base rule (or
+        /* Left/top/bottom only - right stays whatever the base rule (or
          * the pointer:coarse touch bump above) set, so edit/delete never
          * get clipped under the description text on a narrow phone. */
         padding-top: 12px;
@@ -2140,7 +2140,7 @@ body.home-header-active {
     outline: none;
 }
 
-/* Live-filter input (Task 4) — sits above the all-commands list, inside
+/* Live-filter input (Task 4) - sits above the all-commands list, inside
    the modal that's already open. Does not affect open/close behavior. */
 .command-filter-input {
     width: 100%;
@@ -2161,7 +2161,7 @@ body.home-header-active {
     box-shadow: 0 0 12px var(--color-accent-glow-strong);
 }
 
-/* Keyboard-selected row while filtering — mirrors the existing :hover
+/* Keyboard-selected row while filtering - mirrors the existing :hover
    treatment so arrow-key navigation looks the same as a mouse hover. */
 .command-item.keyboard-active {
     background: var(--color-border);
@@ -2289,7 +2289,7 @@ body.home-header-active {
     color: var(--color-accent);
 }
 
-/* Keyboard / type-ahead selection — stronger than hover, with an inset
+/* Keyboard / type-ahead selection - stronger than hover, with an inset
    accent bar so the active row reads clearly during arrow + type nav. */
 .folder-picker-item-active {
     background: var(--color-accent-bg);
@@ -2322,7 +2322,7 @@ body.home-header-active {
     font-style: italic;
 }
 
-/* Provider selector modal — reuses .folder-picker-list/-item/-status above.
+/* Provider selector modal - reuses .folder-picker-list/-item/-status above.
    provider-item-name gets flex:1 so the remove "x" (model rows only) and
    the "+ add model" affordance line up flush right. */
 .provider-item-name {
@@ -2444,7 +2444,7 @@ body.home-header-active {
     background: rgba(215, 119, 87, 0.14); /* TODO: theme-token candidate (accent-bg-mid) */
 }
 
-/* Ownership stripe — was --color-success / --color-warning, generic
+/* Ownership stripe - was --color-success / --color-warning, generic
  * status semantics with no relation to "owned vs external". In themes
  * where warning renders as flat yellow against an accent-tinted card
  * (e.g. Claude's coral card, Matrix's green card) the stripe read as a
@@ -2588,11 +2588,11 @@ body.home-header-active {
 }
 
 /* =====================================================================
- * Phase 2 — Theme selector
+ * Phase 2 - Theme selector
  * ---------------------------------------------------------------------
  * Native <select> mounted by themeSelector.js. feat/settings-screen:
  * mount point moved from `.header .controls` into the settings panel's
- * appearance section (see settings-panel.js's mountThemeSlot) — this
+ * appearance section (see settings-panel.js's mountThemeSlot) - this
  * class itself is unchanged, still theme-aware via CSS vars so each
  * bundled theme re-skins it automatically with no per-theme rule.
  * Native control = free keyboard nav + accessible by default. The
@@ -2614,7 +2614,7 @@ body.home-header-active {
     cursor: pointer;
     transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
     /* Caret rendered as inline SVG in currentColor so it tracks the foreground
-     * across all themes — encoded background-image instead of an extra
+     * across all themes - encoded background-image instead of an extra
      * pseudo-element keeps this a pure single-selector rule. */
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M3 5l3 3 3-3'/></svg>");
     background-repeat: no-repeat;
@@ -2634,7 +2634,7 @@ body.home-header-active {
     box-shadow: 0 0 0 2px var(--color-accent-bg);
 }
 
-/* Native <select> popup max-height — supported in Chromium-based browsers
+/* Native <select> popup max-height - supported in Chromium-based browsers
  * via the `size` attribute; this rule is a hint that some UA stylesheets
  * honor for the dropdown panel itself. */
 .theme-selector option {
@@ -2660,7 +2660,7 @@ body.home-header-active {
  * heading - both of those descriptions are stale). Tap to fan out 6
  * sub-action buttons in a vertical column. All colors flow through
  * theme tokens so every theme retints automatically. All animations
- * use transform + opacity ONLY (GPU compositor) — no layout thrash.
+ * use transform + opacity ONLY (GPU compositor) - no layout thrash.
  * Reduced-motion gated at the bottom of the block.
  * ===================================================================== */
 /* ---- Inline FAB wrapper (lives inside the section heading row) ----- */
@@ -2679,13 +2679,13 @@ body.home-header-active {
 
 /* When open, lift ABOVE the backdrop (1050) so item clicks land on the
  * pills, not the backdrop. Without this, the backdrop intercepts every
- * click and silently closes the menu — which presents to the user as
+ * click and silently closes the menu - which presents to the user as
  * "the buttons don't do anything." */
 .new-fab--open { z-index: 1100; }
 
 .new-fab.hidden { display: none; }
 
-/* ---- Trigger ("+" / "×") — ghost style ----------------------------- */
+/* ---- Trigger ("+" / "×") - ghost style ----------------------------- */
 .new-fab__trigger {
     /* Outline/ghost: transparent fill, visible border + readable glyph at rest.
      * Border + glyph use --color-fg-muted (always contrasts against bg because
@@ -2732,11 +2732,11 @@ body.home-header-active {
 .new-fab__trigger:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-    /* Keep ghost discipline on focus — no solid fill */
+    /* Keep ghost discipline on focus - no solid fill */
     background: transparent;
 }
 
-/* When OPEN: × glyph + border in accent color (still ghost — no fill) */
+/* When OPEN: × glyph + border in accent color (still ghost - no fill) */
 .new-fab--open .new-fab__trigger {
     color: var(--color-accent);
     border-color: var(--color-accent);
@@ -2989,12 +2989,12 @@ body.home-header-active {
  * so every floating control shares one bottom row. */
 
 /* =====================================================================
- * IMG-PASTE — inline status pill
+ * IMG-PASTE - inline status pill
  * ---------------------------------------------------------------------
  * Top-center toast for upload progress + result. Three semantic kinds
  * driven by ``data-kind`` attribute: info (uploading), success (paste
  * complete), error (upload failure). Animates in via opacity +
- * translateY (compositor-only — no layout thrash). Auto-dismissed by
+ * translateY (compositor-only - no layout thrash). Auto-dismissed by
  * the JS controller (3s info/success, 5s error).
  * ===================================================================== */
 /* THE ONE TOAST. Was .cloude-status-pill, built by terminal.js at
@@ -3056,7 +3056,7 @@ body.home-header-active {
 
 
 /* =====================================================================
- * CLIPBOARD — 📎 attach menu
+ * CLIPBOARD - 📎 attach menu
  * ---------------------------------------------------------------------
  * Small fixed-position popup anchored above the 📎 button (bottom-right
  * slot) by clipboard.js#positionMenu. Token-only styling, mirroring the
@@ -3099,7 +3099,7 @@ body.home-header-active {
 }
 
 /* =====================================================================
- * TOUCH-SELECT — floating copy button (touch-select.js)
+ * TOUCH-SELECT - floating copy button (touch-select.js)
  * ---------------------------------------------------------------------
  * Small fixed-position action shown at the finger lift point after a
  * long-press drag selection. Token-only styling, mirroring the attach
@@ -3143,7 +3143,7 @@ body.home-header-active {
 }
 
 /* ===========================================================================
- * Settings panel (feat/settings-screen) — client/js/settings-panel.js.
+ * Settings panel (feat/settings-screen) - client/js/settings-panel.js.
  * Reuses the app's existing .modal-overlay / .modal-input / .modal-btn
  * primitives (see the "Modals" block above) for the chrome; this block
  * only adds the settings-specific layout (wide scrollable content, one
@@ -3295,7 +3295,7 @@ body.home-header-active {
     margin-right: auto;
 }
 
-/* feat/launch-wrappers — wrapper list/editor (client/js/agent-wrappers-panel.js) */
+/* feat/launch-wrappers - wrapper list/editor (client/js/agent-wrappers-panel.js) */
 
 .settings-wrapper-security-note {
     margin-bottom: 14px;
@@ -3618,7 +3618,7 @@ body.home-header-active {
     outline-offset: -2px;
 }
 
-/* Panes are hidden, never removed — that is what preserves unsaved edits
+/* Panes are hidden, never removed - that is what preserves unsaved edits
  * across a tab switch. See settings-tabs.js's module docstring. */
 .settings-tabpanel.hidden {
     display: none;
@@ -3697,7 +3697,7 @@ body.home-header-active {
     margin-top: 10px;
 }
 
-/* feat/universal-wrappers — one group per command family on the wrappers
+/* feat/universal-wrappers - one group per command family on the wrappers
  * settings screen. The group is a visual container only; every wrapper row
  * inside it keeps the markup it already had. */
 .settings-wrapper-family {

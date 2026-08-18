@@ -1,4 +1,4 @@
-// Blade Runner theme — cyan-cobalt rain streaks falling across a rain-slick night.
+// Blade Runner theme - cyan-cobalt rain streaks falling across a rain-slick night.
 // Mounts a fixed full-viewport <canvas> at z-index: -1.
 // Throttled to ~30fps desktop / ~15fps mobile.
 // Pauses on document.visibilitychange (hidden -> suspend RAF).
@@ -25,7 +25,7 @@ function makeStreak(width, height, seed) {
     len,
     w: Math.random() < 0.7 ? 1 : 2,
     speed: 6 + Math.random() * 8,
-    // Cyan-cobalt with varying alpha — Deakins blue shadow on Cronenweth wet street.
+    // Cyan-cobalt with varying alpha - Deakins blue shadow on Cronenweth wet street.
     alpha: 0.18 + Math.random() * 0.42,
   };
 }

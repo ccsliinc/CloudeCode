@@ -1,7 +1,7 @@
 {
   "id": "matrix",
   "name": "Matrix",
-  "description": "Phosphor green CRT with falling katakana — wake up, Neo.",
+  "description": "Phosphor green CRT with falling katakana - wake up, Neo.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

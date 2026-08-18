@@ -1,5 +1,5 @@
 /**
- * SettingsPanel — gear-icon modal folding in the theme chooser plus the
+ * SettingsPanel - gear-icon modal folding in the theme chooser plus the
  * agent/notifications/server config sections.
  *
  * TABBED (feat/settings-tabs-and-commands). FOUR tabs, declared in TABS
@@ -17,7 +17,7 @@
  * the schema, and the batched Save.
  *
  * Data-driven by design (the user's "so we can extrapolate" requirement):
- * SECTIONS below is the single place a future setting gets added — a new
+ * SECTIONS below is the single place a future setting gets added - a new
  * field object in an existing section's `fields` array, or a whole new
  * section object, is all that's needed for it to render, collect, and
  * PATCH correctly. No per-field wiring lives outside `renderField()` /
@@ -29,11 +29,11 @@
  * button all dismiss, focus is moved into the panel on open and the
  * triggering button is refocused on close.
  *
- * The appearance section does not appear in SECTIONS — it is special-
+ * The appearance section does not appear in SECTIONS - it is special-
  * cased in `renderAppearanceSection()` because it delegates entirely to
  * `window.ThemeSelector.mount()` / `window.Themes`, which already own
  * persistence (localStorage global default, or a server-side PATCH for
- * an active session's pinned/project theme — see registry.js). Appearance
+ * an active session's pinned/project theme - see registry.js). Appearance
  * changes apply immediately through that existing pipeline and are never
  * part of this panel's own Save/PATCH flow.
  */
@@ -44,17 +44,17 @@
     //
     // type: 'text' | 'secret' | 'checkbox'.
     // group: which top-level PATCH /config/settings key this field lives
-    //   under ('agents' | 'notifications') — must match the server's
+    //   under ('agents' | 'notifications') - must match the server's
     //   ConfigSettingsUpdateRequest sub-model field names exactly.
     // secret fields never receive their real value from the server (see
-    // Settings._mask_secret / get_settings_summary on the Python side) —
+    // Settings._mask_secret / get_settings_summary on the Python side) -
     // the input starts empty with a placeholder describing current state,
     // and an empty submit means "leave unchanged" (see collectSectionPatch).
 
     // NO AGENT FIELDS HERE, and none of the four ``<family>_command``
     // keys is collectable by this panel at all. The "agents" tab held
     // three editable command fields (codex/hermes/openclaw) while
-    // ``claude_command`` sat on the wrappers tab as a disabled row — the
+    // ``claude_command`` sat on the wrappers tab as a disabled row - the
     // two halves of a split that feat/universal-wrappers had already
     // unified underneath, since wrappers now cover every family.
     //
@@ -103,9 +103,9 @@
     // general (appearance, the global music volume, and the read-only
     // server block). Every pane is rendered once at open and only
     // shown/hidden afterwards, so unsaved
-    // edits survive tab switches — see settings-tabs.js.
+    // edits survive tab switches - see settings-tabs.js.
     var TABS = [
-        // feat/universal-wrappers — one screen for every family's
+        // feat/universal-wrappers - one screen for every family's
         // wrappers. Each family's legacy static command renders INSIDE its
         // own group (agent-wrappers-view.renderLegacyCommand), so there is
         // no separate claude-only legacy slot any more.
@@ -114,7 +114,7 @@
         // wrappers screen already documents inside each family's group;
         // administering the same value from two screens meant two places
         // to look and one of them called the value inert. The keys and
-        // their fallback behaviour are unchanged — see the note above
+        // their fallback behaviour are unchanged - see the note above
         // NOTIFICATION_FIELDS. Four tabs now; measured at 390px the strip
         // is 393px against a 355px window, so it still scrolls, by 38px
         // instead of 89px. Shorter drag, not no drag.
@@ -129,7 +129,7 @@
         { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'audio', 'server'] },
     ];
 
-    // Module state — the last GET /config/settings payload, so re-renders
+    // Module state - the last GET /config/settings payload, so re-renders
     // (e.g. after a save) don't need a network round trip for fields the
     // user didn't just change.
     var lastSummary = null;
@@ -187,9 +187,9 @@
      *   - text fields: included if the value differs from the value
      *     `renderField` seeded it with (so an untouched field, even one
      *     the user clicked into and clicked back out of unchanged, isn't
-     *     sent — matches the "omit = leave unchanged" server contract).
+     *     sent - matches the "omit = leave unchanged" server contract).
      *   - secret fields: included ONLY if non-empty (an empty secret
-     *     input always means "didn't type a new one", never "clear it" —
+     *     input always means "didn't type a new one", never "clear it" -
      *     clearing a channel is done by unmasking to "not set" server-
      *     side, which this UI doesn't expose as a distinct action to
      *     avoid an accidental blank submit wiping a working webhook).
@@ -264,7 +264,7 @@
             var bodyEl = overlayEl.querySelector('#settings-panel-body');
             if (bodyEl) {
                 // Repaint from the authoritative post-write summary, then
-                // put the user back on the tab they saved from — a save
+                // put the user back on the tab they saved from - a save
                 // that silently bounced them to the first tab would read
                 // as the panel having lost their place.
                 var priorTab = window.SettingsTabs.activeTab(bodyEl);
@@ -282,7 +282,7 @@
     }
 
     /**
-     * Mount the theme `<select>` into this panel's slot. Idempotent —
+     * Mount the theme `<select>` into this panel's slot. Idempotent -
      * ThemeSelector.mount() repopulates an existing `#theme-selector`
      * rather than duplicating it, so calling this on every render (open,
      * post-save) is safe.
@@ -323,7 +323,7 @@
 
     /**
      * Close the panel: remove the overlay from the DOM and return focus
-     * to whatever triggered the open (the gear button, normally) — same
+     * to whatever triggered the open (the gear button, normally) - same
      * dismissal contract as `AppController.showConfirmModal`.
      * Output: void.
      */
@@ -341,7 +341,7 @@
     /**
      * Open the settings panel: fetch the current summary, build the
      * overlay, wire Escape/backdrop/close/save, and move focus in.
-     * Safe to call while already open — just re-focuses.
+     * Safe to call while already open - just re-focuses.
      * Inputs: opener (Element|null) - element to refocus on close.
      * Output: Promise<void>.
      */

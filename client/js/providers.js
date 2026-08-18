@@ -4,7 +4,7 @@
  * Shown before every real launch (new project, open-folder, clone-github,
  * existing-project row click). Lets the user pick a launch wrapper and,
  * for wrappers that take one, an OpenRouter model, managing the model
- * list inline — no separate settings screen.
+ * list inline - no separate settings screen.
  *
  * TWO STEPS, because there are two independent axes and flattening them
  * into one list produced two real bugs:
@@ -17,7 +17,7 @@
  *       "claude" row returns only when NO wrappers are configured, where
  *       it means the legacy fallback (Settings.get_agent_command).
  *   (b) Picking a model next to a wrapper that ignores models routed the
- *       model to the DEFAULT wrapper, which forwards "$@" to claude — so
+ *       model to the DEFAULT wrapper, which forwards "$@" to claude - so
  *       the model id arrived as a PROMPT argument and Claude answered
  *       the literal string. Models are now offered ONLY after choosing a
  *       wrapper whose `accepts_model` is true (src/core/agent_wrappers.py),
@@ -43,7 +43,7 @@
     const LAST_MODEL_KEY = 'cloude_provider_last_model';
 
     // Same guard as the server (src/models.py MODEL_ID_PATTERN /
-    // is_valid_model_id) — enforced here too so bad input never leaves
+    // is_valid_model_id) - enforced here too so bad input never leaves
     // the browser, but the server remains authoritative (shell-injection
     // guard). The (?!-) lookahead blocks a leading '-', which would
     // otherwise slip past cldor's own "$1" != -* guard and get forwarded
@@ -62,7 +62,7 @@
         try {
             localStorage.setItem(LAST_MODEL_KEY, model || '');
         } catch (_) {
-            // localStorage unavailable (private mode, quota) — non-fatal,
+            // localStorage unavailable (private mode, quota) - non-fatal,
             // just means next launch won't pre-select this choice.
         }
     }
@@ -106,7 +106,7 @@
             const hintEl = overlay.querySelector('#provider-hint');
 
             let models = [];       // OpenRouter model ids
-            let wrappers = [];     // EVERY configured wrapper, unfiltered — each appears exactly once
+            let wrappers = [];     // EVERY configured wrapper, unfiltered - each appears exactly once
             let families = [];     // family registry from the server, for group headings and their order
             let items = [];        // nav list for the CURRENT step
             let activeIndex = -1;
@@ -142,7 +142,7 @@
              *   duplicate and never a synthetic "claude" peer. Only when
              *   NO wrappers exist does a single legacy claude row appear.
              * Step 'model': a "no model" row, the model catalog, and the
-             *   add row — reached only from a wrapper that accepts models.
+             *   add row - reached only from a wrapper that accepts models.
              */
             const buildItems = () => {
                 if (step === 'model') {
@@ -224,7 +224,7 @@
                         return;
                     }
                     // A wrapper that ignores models is launched straight
-                    // away, with no model — never one carried over from a
+                    // away, with no model - never one carried over from a
                     // previous launch. Wrapper choice itself is per-launch,
                     // not remembered (localStorage here is model-only).
                     close({ model: null, wrapperId: item.wrapperId });
@@ -379,7 +379,7 @@
             const submitAdd = async (value) => {
                 if (!value) return;
                 if (!MODEL_ID_RE.test(value)) {
-                    showStatus('invalid model id — use letters, numbers, . _ ~ / -', 'error');
+                    showStatus('invalid model id - use letters, numbers, . _ ~ / -', 'error');
                     return;
                 }
                 try {
@@ -402,10 +402,10 @@
 
             // Modal-wide key handling (capture phase so it works no matter
             // which child holds focus, and reliably fires on Escape even
-            // when nothing inside the overlay has DOM focus — the bug in
+            // when nothing inside the overlay has DOM focus - the bug in
             // showConfirmModal's overlay-scoped listener). Removed on close.
             const onKeyDown = (e) => {
-                // A confirm sub-modal (remove) is open on top of us — let
+                // A confirm sub-modal (remove) is open on top of us - let
                 // IT own every key until it resolves, so its own Escape/
                 // Enter don't also get intercepted here.
                 if (confirmPending) return;
@@ -414,7 +414,7 @@
                     e.preventDefault();
                     if (addInputOpen) { closeAddInput(); return; }
                     // In the model step, Escape backs out one level rather
-                    // than abandoning the launch — the wrapper choice was
+                    // than abandoning the launch - the wrapper choice was
                     // a deliberate step, not a modal the user fell into.
                     if (step === 'model') { backToWrapperStep(); return; }
                     close(null);
@@ -472,11 +472,11 @@
                 } catch (error) {
                     console.error('Launchpad: Failed to load providers:', error);
                     models = [];
-                    showStatus('could not load saved models — showing claude only', 'error');
+                    showStatus('could not load saved models - showing claude only', 'error');
                 }
                 // Best-effort: a failure here leaves `wrappers` empty,
                 // which renders the single legacy claude row rather than
-                // blocking the launch gate. No id is filtered out — a
+                // blocking the launch gate. No id is filtered out - a
                 // wrapper the user configured must appear exactly once,
                 // including one they chose to call "claude".
                 try {

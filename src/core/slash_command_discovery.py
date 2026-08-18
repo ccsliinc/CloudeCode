@@ -2,7 +2,7 @@
 Runtime discovery of a USER's own slash commands and skills.
 
 Distinct from ``scripts/scrape-slash-commands.py`` (release-time, scrapes
-Anthropic's official docs for the built-in/bundled command list) — this
+Anthropic's official docs for the built-in/bundled command list) - this
 module runs PER REQUEST, server-side, and answers a different question:
 "what commands does *this* installation actually have, beyond the
 built-ins?"
@@ -17,14 +17,14 @@ itself reads from:
     - project scope  ``<project>/.claude/commands/``, ``<project>/.claude/skills/``
 
 Namespacing: a subdirectory under a commands/skills root becomes a
-``:``-joined prefix, matching Claude Code's own behavior — e.g.
+``:``-joined prefix, matching Claude Code's own behavior - e.g.
 ``~/.claude/commands/my/cb.md`` is exposed as ``/my:cb``. Verified against
 this machine's real layout (7 files under ``~/.claude/commands/my/``).
 
 ``build_command_groups()`` is the single entry point the API layer calls;
 it merges this runtime discovery with the release-time scraped JSON
 (``src/data/slash-commands.json``) into the grouped shape the frontend
-palette renders directly — see ``docs`` there for the group contract.
+palette renders directly - see ``docs`` there for the group contract.
 """
 from __future__ import annotations
 
@@ -57,12 +57,12 @@ class DiscoveredCommand:
     """
     One discovered command or skill, in the same field shape as a scraped
     built-in record (``command``/``args``/``description``/``type``) plus
-    ``alias_of`` for shape-compatibility, always None here — discovered
+    ``alias_of`` for shape-compatibility, always None here - discovered
     commands don't carry alias metadata.
 
     Inputs (constructor): see field annotations below.
     """
-    command: str  # e.g. "/my:cb" — always slash-prefixed.
+    command: str  # e.g. "/my:cb" - always slash-prefixed.
     description: str
     type: str  # "user-command" | "user-skill" | "plugin-command" | "plugin-skill" | "project-command" | "project-skill"
     args: str = ""
@@ -87,7 +87,7 @@ def _read_frontmatter_description(text: str) -> Optional[str]:
     Inputs: text (str) - full file contents.
     Output: str|None - the description value, or None if there's no
         frontmatter block or no `description` key (or it fails to parse,
-        which is tolerated rather than raised — a malformed frontmatter
+        which is tolerated rather than raised - a malformed frontmatter
         block in a user's own file shouldn't break the whole palette).
     Example: _read_frontmatter_description("---\\nname: x\\ndescription: y\\n---\\nbody")
         -> "y"

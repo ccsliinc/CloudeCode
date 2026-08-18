@@ -21,7 +21,7 @@ intent stays identical.
 Cancellation discipline: ``run()`` catches ``asyncio.CancelledError``
 explicitly to log shutdown intent, then re-raises so the FastAPI
 lifespan's ``await task`` resolves cleanly. Single-iteration failures
-are isolated — a bad project path or permission error logs at WARNING
+are isolated - a bad project path or permission error logs at WARNING
 and the loop continues.
 
 Filesystem I/O (``os.walk`` / ``os.unlink`` / ``Path.stat``) is

@@ -346,7 +346,7 @@ class SessionSidebarController {
         }
 
         // Mark-unread toggle takes priority over the row-switch handler
-        // below — it's a nested control inside the row, and clicking it
+        // below - it's a nested control inside the row, and clicking it
         // must never ALSO trigger a conversation switch.
         const toggleEl = e.target.closest('[data-mark-unread]');
         if (toggleEl) {
@@ -406,7 +406,7 @@ class SessionSidebarController {
 
     /**
      * Toggle the manual unread flag for one row and re-render immediately
-     * (optimistic — the next poll tick reconciles with the server either
+     * (optimistic - the next poll tick reconciles with the server either
      * way, but waiting a full POLL_MS for visual feedback on a click
      * would feel broken).
      *

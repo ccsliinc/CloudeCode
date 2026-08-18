@@ -1,7 +1,7 @@
 {
   "id": "green_crt",
   "name": "Green CRT",
-  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel — distinct from Matrix.",
+  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel - distinct from Matrix.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

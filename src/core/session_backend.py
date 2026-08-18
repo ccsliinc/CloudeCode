@@ -3,9 +3,9 @@
 Defines the `SessionBackend` ABC and the `build_backend()` factory used by
 `SessionManager` to obtain a concrete backend instance. Two backends ship:
 
-- `TmuxBackend` (default when tmux is available on PATH) — survives server
+- `TmuxBackend` (default when tmux is available on PATH) - survives server
   restart, supports scrollback replay.
-- `PTYBackend` (fallback) — thin adapter around the legacy `PTYSession`; does
+- `PTYBackend` (fallback) - thin adapter around the legacy `PTYSession`; does
   NOT survive server restart but has zero external dependencies.
 
 Backend selection is driven by `AuthConfig.session.backend`:
@@ -13,7 +13,7 @@ Backend selection is driven by `AuthConfig.session.backend`:
 - ``"tmux"``  → force tmux; fall through to pty with a WARN log if tmux missing
 - ``"pty"``   → force pty
 
-The factory never raises on missing tmux — a missing binary always degrades
+The factory never raises on missing tmux - a missing binary always degrades
 gracefully to PTYBackend.
 """
 
@@ -43,7 +43,7 @@ class SessionBackend(ABC):
         working_dir: Child process cwd.
         on_output: Async or sync callback invoked with raw bytes as they stream
             from the backend. Backends MUST invoke this on every output chunk
-            EXCEPT when `replay_in_progress` is True (scrollback replay — the
+            EXCEPT when `replay_in_progress` is True (scrollback replay - the
             WebSocket handler replays those bytes manually and IdleWatcher must
             not see them as "new" output).
     """
@@ -82,7 +82,7 @@ class SessionBackend(ABC):
             initial_cols: Optional client-measured terminal width in cells.
                 When supplied, the backend births the pane at these dims
                 instead of its built-in defaults. The WS resize handshake
-                still reshapes later if the client's dims drift — this is
+                still reshapes later if the client's dims drift - this is
                 purely a "birth size" optimization so TUI apps don't flash
                 at the wrong size before the first resize frame arrives.
             initial_rows: See ``initial_cols``. Both MUST be provided together
@@ -102,7 +102,7 @@ class SessionBackend(ABC):
         control bytes (e.g. ``0x03`` for SIGINT). The tmux backend uses
         ``load-buffer`` + ``paste-buffer -d -p`` for any payload containing
         control characters or longer than 256 bytes; short plain text can use
-        ``send-keys -l``. ``send-keys -H`` is forbidden — it requires hex
+        ``send-keys -l``. ``send-keys -H`` is forbidden - it requires hex
         pairs, not raw bytes, and is not a substitute for paste-buffer.
         """
 
@@ -132,7 +132,7 @@ class SessionBackend(ABC):
         running, re-open any file handles or pipes needed to stream output, and
         spawn the reader task.
 
-        Unlike ``start()``, this must NOT create a new underlying session — it
+        Unlike ``start()``, this must NOT create a new underlying session - it
         re-wires the Python-side state to an already-alive backend entity.
 
         Default implementation raises NotImplementedError; backends that
@@ -146,13 +146,13 @@ class SessionBackend(ABC):
 
         Returns:
             List of session names/ids. For tmux, names are the full tmux
-            session names (``cloude_<slug>``). For PTY, always empty — PTYs
+            session names (``cloude_<slug>``). For PTY, always empty - PTYs
             die with the parent.
 
         Callers (i.e. `SessionManager.lifespan_startup`) MUST treat the return
         value as advisory: at most ONE session is re-registered as the active
         one (the slug stored in ``session_metadata.json``). Other discovered
-        sessions are logged and left alone — orphan cleanup is out of scope.
+        sessions are logged and left alone - orphan cleanup is out of scope.
         """
 
     def list_attachable_sessions(
@@ -181,7 +181,7 @@ class SessionBackend(ABC):
                 heuristic (which a user could spoof with their own
                 ``tmux -L cloude new -s cloude_whatever``).
 
-        Default implementation returns ``[]`` — backends that can't
+        Default implementation returns ``[]`` - backends that can't
         enumerate cross-process state (PTY) inherit that behavior. Tmux
         overrides.
         """
@@ -193,7 +193,7 @@ class SessionBackend(ABC):
 
         Used by the WebSocket handler on reconnect to replay recent terminal
         state before entering the live-stream loop. PTY backend has no true
-        scrollback and returns b"" — the browser keeps its own xterm.js
+        scrollback and returns b"" - the browser keeps its own xterm.js
         history instead. tmux backend uses ``capture-pane -pS -<lines> -J``.
 
         Args:
@@ -255,20 +255,20 @@ def build_backend(
             the literal ``tmux_session`` attribute instead of the legacy
             ``cloude_<slug>`` derivation. Ignored by ``PTYBackend`` (PTY
             has no concept of a named session). Callers must already have
-            sanitized the name and included the ``cloude_`` prefix —
+            sanitized the name and included the ``cloude_`` prefix -
             ``SessionManager.create_session`` is the canonical source.
 
     When the selected backend is tmux, the socket name is resolved from
     ``AuthConfig.session.tmux_socket_name`` via ``settings_obj`` (falling
     back to ``TmuxBackend.DEFAULT_SOCKET_NAME`` when ``settings_obj`` is
-    None or the config lookup fails) — the same source of truth the adopt
+    None or the config lookup fails) - the same source of truth the adopt
     path (``SessionManager._adopt_external_session``) already uses, so
     create and adopt cannot disagree on which socket a session lives on.
 
     Returns:
         A concrete `SessionBackend` instance. Never raises on missing tmux.
     """
-    # Late import — these modules import `SessionBackend` from us, so eager
+    # Late import - these modules import `SessionBackend` from us, so eager
     # import would be circular.
     from src.core.tmux_backend import DEFAULT_SOCKET_NAME, TmuxBackend
     from src.utils.pty_session import PTYBackend

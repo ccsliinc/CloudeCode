@@ -1,7 +1,7 @@
 {
   "id": "lovecraft",
   "name": "HP Lovecraft",
-  "description": "Abyssal teal, sickly green, blood-violet — cosmic horror palette.",
+  "description": "Abyssal teal, sickly green, blood-violet - cosmic horror palette.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {

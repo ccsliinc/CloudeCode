@@ -1,7 +1,7 @@
 """PTY-based terminal session for real-time interaction.
 
 Also hosts the `PTYBackend` adapter that wraps `PTYSession` under the
-`SessionBackend` ABC. Keeping both here keeps git history tight — the bulk
+`SessionBackend` ABC. Keeping both here keeps git history tight - the bulk
 of the logic still lives in `PTYSession`.
 """
 
@@ -294,7 +294,7 @@ class PTYBackend(SessionBackend):
     """SessionBackend adapter around the legacy `PTYSession`.
 
     This is the fallback when tmux is unavailable or explicitly disabled. It
-    does NOT survive server restart — PTYs die with the parent process — so
+    does NOT survive server restart - PTYs die with the parent process - so
     `discover_existing()` always returns `[]` and `capture_scrollback()`
     always returns `b""`. The browser keeps its own xterm.js history for the
     PTY case.
@@ -361,7 +361,7 @@ class PTYBackend(SessionBackend):
         return None
 
     async def attach_existing(self) -> None:
-        """PTYs die with the parent process — rehydration is not possible.
+        """PTYs die with the parent process - rehydration is not possible.
 
         ``discover_existing()`` returns ``[]`` for this backend, so
         ``SessionManager.lifespan_startup`` will never reach this path in
@@ -375,13 +375,13 @@ class PTYBackend(SessionBackend):
         )
 
     def discover_existing(self) -> List[str]:
-        """PTYs don't survive restart — always empty."""
+        """PTYs don't survive restart - always empty."""
         return []
 
     def list_attachable_sessions(
         self, owned_names: Optional[set] = None  # noqa: ARG002
     ) -> List[Dict[str, Any]]:
-        """PTYs have no cross-process addressable surface — always empty.
+        """PTYs have no cross-process addressable surface - always empty.
 
         Explicit override (not relying on the ABC default) to document the
         invariant: unlike tmux, a PTY dies with its parent, so there is
@@ -396,5 +396,5 @@ class PTYBackend(SessionBackend):
     # ---- Convenience passthrough (used by SessionManager.send_command) ----
     @property
     def pid(self) -> Optional[int]:
-        """Expose the PTY child pid — used by SessionManager for metadata."""
+        """Expose the PTY child pid - used by SessionManager for metadata."""
         return self._pty.pid if self._pty is not None else None

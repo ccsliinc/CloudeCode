@@ -80,7 +80,7 @@
      * Called from xterm's attachCustomKeyEventHandler closure for EVERY
      * key event. Returns true only when the event was consumed (the
      * caller then returns false so xterm drops it). Anything that is
-     * not a copy chord — including bare Ctrl+C — falls straight through
+     * not a copy chord - including bare Ctrl+C - falls straight through
      * to xterm's default handling.
      */
     function handleCopyChord(ev, term) {
@@ -88,7 +88,7 @@
         if ((ev.key || '').toLowerCase() !== 'c') return false;
 
         // Cmd+C (mac) or Ctrl+Shift+C (win/linux). Bare Ctrl+C (no shift)
-        // is deliberately excluded — that chord is SIGINT and must reach
+        // is deliberately excluded - that chord is SIGINT and must reach
         // the pty untouched.
         const isCopyChord =
             (ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) ||
@@ -96,7 +96,7 @@
         if (!isCopyChord) return false;
 
         if (!term.term || typeof term.term.hasSelection !== 'function' || !term.term.hasSelection()) {
-            return false; // nothing selected — let the key pass through
+            return false; // nothing selected - let the key pass through
         }
 
         ev.preventDefault();
@@ -107,7 +107,7 @@
 
     /**
      * Fire-and-forget clipboard write. Success is silent (matches macOS
-     * Terminal — the selection staying put is the confirmation); failure
+     * Terminal - the selection staying put is the confirmation); failure
      * surfaces via the existing status pill. Never throws.
      */
     function writeSystemClipboard(term, text) {
@@ -270,7 +270,7 @@
                 report(term, 'clipboard is empty', 'info');
                 return;
             } catch (err) {
-                // Permission denied / unsupported MIME — fall through to
+                // Permission denied / unsupported MIME - fall through to
                 // the text-only path before giving up.
             }
         }

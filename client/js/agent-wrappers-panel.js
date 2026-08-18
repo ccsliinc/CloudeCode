@@ -1,5 +1,5 @@
 /**
- * AgentWrappersPanel — state and behavior for the wrappers settings
+ * AgentWrappersPanel - state and behavior for the wrappers settings
  * screen, mounted by client/js/settings-panel.js into the "wrappers" tab.
  *
  * feat/universal-wrappers: this screen used to administer claude wrappers
@@ -15,7 +15,7 @@
  *
  * Unlike settings-panel.js's generic fields (which batch into one Save
  * button), every wrapper action here writes immediately via its own API
- * call and re-renders — the same "applies immediately" contract the
+ * call and re-renders - the same "applies immediately" contract the
  * appearance section uses, because add/edit/delete/set-default are each a
  * complete server-side mutation (see Settings.add_wrapper et al) with no
  * partial state a batched Save could usefully defer.

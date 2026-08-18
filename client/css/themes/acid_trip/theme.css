@@ -1,5 +1,5 @@
 /* ============================================================
- * Acid Trip theme — Wilson/Moscoso x psy-trance
+ * Acid Trip theme - Wilson/Moscoso x psy-trance
  * ------------------------------------------------------------
  * Saturated dark eggplant ground. Electric yellow on hot pink
  * border = Moscoso vibrating-edge complementary clash. Cyan
@@ -43,7 +43,7 @@
     0 0 12px -2px var(--color-accent-glow);
 }
 
-/* A11y override — vestibular-safe. Kills all chromatic motion
+/* A11y override - vestibular-safe. Kills all chromatic motion
  * and accent breathing for users who request reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="acid_trip"] body,

@@ -1,5 +1,5 @@
 /**
- * TerminalCommandsPanel — the settings modal's "terminal" tab: a
+ * TerminalCommandsPanel - the settings modal's "terminal" tab: a
  * user-editable, reorderable list of common shell commands, each runnable
  * in one click.
  *
@@ -18,7 +18,7 @@
  * a non-interactive shell none of them would be found.
  *
  * Persistence is a WHOLE-LIST replace (PUT /terminal/commands) because
- * add, edit, delete and reorder are all just "the list is now this" —
+ * add, edit, delete and reorder are all just "the list is now this" -
  * one endpoint, one validation gate, and the stored order can never
  * disagree with itself. Like AgentWrappersPanel, edits here write
  * immediately rather than joining the panel's batched Save.
@@ -239,7 +239,7 @@
 
     /**
      * Run one entry: close the settings modal, then open a new console
-     * session that runs it. Only the id is sent — see this module's
+     * session that runs it. Only the id is sent - see this module's
      * docstring.
      * Inputs: id (string). Output: Promise<void>.
      */

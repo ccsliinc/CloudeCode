@@ -32,7 +32,7 @@ class UnreadStore:
     atomically persisted to a single JSON file.
 
     - "auto" is set by a ``Stop`` hook, cleared when a WS terminal binds
-      to the session (the user looked at it) — see
+      to the session (the user looked at it) - see
       ``SessionManager.mark_session_viewed``.
     - "manual" is set/cleared ONLY by the user's explicit mark-unread
       control; viewing the session does NOT clear it.

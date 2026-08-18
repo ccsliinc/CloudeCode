@@ -25,7 +25,7 @@ We do not attempt to detect "waiting for user input" from tmux alone -
 tmux's pane-level introspection cannot distinguish an agent that is
 thinking from one that is blocked on a prompt, so claiming that state from
 a bare pane query would be fabricated, not detected. (feat/hook-driven-status
-adds an HONEST way to detect it — Claude Code's own lifecycle hooks — see
+adds an HONEST way to detect it - Claude Code's own lifecycle hooks - see
 ``src.core.session_activity``. This module's ``resolve_pane_status()``
 remains the tmux-only, hook-independent classification and is now used two
 ways: as the liveness/death check every unified status still defers to

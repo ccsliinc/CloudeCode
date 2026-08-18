@@ -1,4 +1,4 @@
-/* Codex theme — soft indigo wash, light surfaces.
+/* Codex theme - soft indigo wash, light surfaces.
    Scoped under :root[data-theme="codex"] for global rules and
    #terminal-screen[data-session-theme="codex"] for terminal scope. */
 
@@ -12,7 +12,7 @@
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Soften shadows on cards in light mode — heavy dark-mode shadows look harsh on white. */
+/* Soften shadows on cards in light mode - heavy dark-mode shadows look harsh on white. */
 :root[data-theme="codex"] .session-card,
 :root[data-theme="codex"] .modal {
   box-shadow:
@@ -21,7 +21,7 @@
     0 16px 32px rgba(124, 92, 255, 0.06);
 }
 
-/* Terminal scope — when this is the active session theme, the terminal
+/* Terminal scope - when this is the active session theme, the terminal
    chrome (the area around xterm) gets the same light treatment. */
 #terminal-screen[data-session-theme="codex"] {
   background: linear-gradient(180deg, #f7f7fa 0%, #efecff 100%);

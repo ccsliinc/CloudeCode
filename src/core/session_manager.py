@@ -1,7 +1,7 @@
 """Session manager for Claude Code instances.
 
 Multi-concurrent-session design: holds any number of live `SessionBackend`
-instances, keyed by ``session_id`` — two browser tabs can each attach to a
+instances, keyed by ``session_id`` - two browser tabs can each attach to a
 different session and neither disconnects the other. Per-session state
 (backend, output subscribers, log buffer, command count, idle watcher, adopt
 FIFO offset) lives in dicts keyed by ``session_id``; global state
@@ -80,7 +80,7 @@ def backfill_agent_type(
     sessions could only have been claude (the only agent we supported
     pre-Phase-6), so backfill those to ``"claude"``. Adopted sessions
     (id prefixed ``adopted:`` or absent from ``owned_tmux_sessions``)
-    stay ``None`` — the Phase 7 fingerprint detector populates them
+    stay ``None`` - the Phase 7 fingerprint detector populates them
     on adopt.
 
     Args:
@@ -111,7 +111,7 @@ def backfill_agent_type(
 def _sanitize_tmux_name(name: str) -> str:
     """Transform a project name into a tmux-safe session name (verbatim where possible).
 
-    tmux forbids only '.' (pane separator) and ':' (window separator) — everything else
+    tmux forbids only '.' (pane separator) and ':' (window separator) - everything else
     (spaces, case, unicode, emoji, punctuation) is legal. This helper preserves the
     original name as closely as possible.
 
@@ -137,7 +137,7 @@ class SessionManager:
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
         # to a different session. Touching one session's entry NEVER
-        # touches another's — that isolation is the whole point.
+        # touches another's - that isolation is the whole point.
         self.sessions: dict[str, Session] = {}
         self.backends: dict[str, SessionBackend] = {}
         # session_id -> configured terminal-command id awaiting its first
@@ -159,18 +159,18 @@ class SessionManager:
         # the live router from ``app.state``; cleared on destroy/detach.
         self.idle_watchers: dict[str, IdleWatcher] = {}
         # Byte offset into an adopted session's pipe-pane FIFO at capture
-        # time — consumed once by the WS tailer. See ``consume_adopt_fifo_offset``.
+        # time - consumed once by the WS tailer. See ``consume_adopt_fifo_offset``.
         self.adopt_fifo_offsets: dict[str, int] = {}
-        # Most-recently-created/adopted session id — backs the back-compat
+        # Most-recently-created/adopted session id - backs the back-compat
         # ``current_session()`` / ``self.session`` / ``self.backend`` views.
         self._last_session_id: Optional[str] = None
-        # Notification router reference — set by ``attach_notification_router``
+        # Notification router reference - set by ``attach_notification_router``
         # during FastAPI lifespan startup (after both the SessionManager and
         # the router are constructed). When None, IdleWatcher instantiation
         # is skipped and no notification events fire.
         self._notification_router = None
 
-        # Track 1 — adopt-external-session support.
+        # Track 1 - adopt-external-session support.
         #
         # ``owned_tmux_sessions`` holds the full tmux session names that
         # Cloude Code itself created (e.g. ``cloude_myproject``). Persisted
@@ -188,16 +188,16 @@ class SessionManager:
         # against stranding in-flight sessions on upgrade.
         self._legacy_metadata_needs_backfill: bool = False
 
-        # v0.7.0 Part 2 — per-session toast notifications. Newest-first list
+        # v0.7.0 Part 2 - per-session toast notifications. Newest-first list
         # per session id; pruning keeps ALL unacked + last 50 acked (see
         # ``_prune_toasts``). Cleared on ``_wipe_session_state``. The
         # ``_theme_accent_cache`` memoizes theme manifest accent-color reads
         # keyed by theme id (manifest files are effectively static across
-        # the server's lifetime — no invalidation needed).
+        # the server's lifetime - no invalidation needed).
         self._pending_toasts: dict[str, list[Toast]] = {}
         self._theme_accent_cache: dict[str, Optional[str]] = {}
 
-        # v0.7.0 Part 3 — per-session HMAC tokens. Minted on
+        # v0.7.0 Part 3 - per-session HMAC tokens. Minted on
         # ``create_session`` / ``adopt_external_session``, injected as
         # ``CLOUDECODE_HOOK_TOKEN`` into the spawned agent's tmux env, and
         # forwarded back by Claude Code's lifecycle hooks via the
@@ -206,7 +206,7 @@ class SessionManager:
         # ``_wipe_session_state``. NEVER logged.
         self._hook_tokens: dict[str, str] = {}
 
-        # SESSION-IDENTITY-V2 — durable per-tmux-name pinned-theme map.
+        # SESSION-IDENTITY-V2 - durable per-tmux-name pinned-theme map.
         # Lives in its own file (``pinned_themes.json``) so it survives
         # detach + swap + re-adopt cycles; ``session_metadata.json`` is
         # unlinked on detach and overwritten on swap and so cannot
@@ -217,16 +217,16 @@ class SessionManager:
         # the launchpad can paint the pin without entering the session).
         self.pinned_themes: dict[str, str] = {}
 
-        # feat/hook-driven-status — ephemeral, in-memory hook-signal state
+        # feat/hook-driven-status - ephemeral, in-memory hook-signal state
         # machine (question/working/subagent-depth/heartbeat). One instance
         # for the whole manager, keyed internally by session_id. NOT
-        # persisted — see src/core/session_activity.py's module docstring
+        # persisted - see src/core/session_activity.py's module docstring
         # for why a restart legitimately forgets this.
         self._activity_tracker = SessionActivityTracker()
 
-        # feat/hook-driven-status — durable per-tmux-name read/unread
+        # feat/hook-driven-status - durable per-tmux-name read/unread
         # store. Own module (src/core/unread_store.py) rather than more
-        # inline dict+I/O here — mirrors pinned_themes' persistence shape
+        # inline dict+I/O here - mirrors pinned_themes' persistence shape
         # (own file, name-keyed, survives detach/swap/re-adopt) without
         # growing this already-large file further.
         self._unread_store = UnreadStore(settings.get_unread_state_path())
@@ -264,7 +264,7 @@ class SessionManager:
         return self.backends.get(sess.id)
 
     # Read-only back-compat aliases. Legacy callers in src/api only READ
-    # these; do NOT assign to them from new code — touch the dicts instead.
+    # these; do NOT assign to them from new code - touch the dicts instead.
     @property
     def session(self) -> Optional[Session]:
         return self.current_session()
@@ -310,7 +310,7 @@ class SessionManager:
         """Build an ``on_output`` callback bound to ``session_id``.
 
         Each backend gets its OWN handler so its bytes only ever land in
-        ``self._subscribers[session_id]`` — destroying session A never
+        ``self._subscribers[session_id]`` - destroying session A never
         touches session B's subscribers.
         """
         async def _on_output(data: bytes) -> None:
@@ -343,16 +343,16 @@ class SessionManager:
         self.command_counts.pop(session_id, None)
         self.idle_watchers.pop(session_id, None)
         self.adopt_fifo_offsets.pop(session_id, None)
-        # v0.7.0 Part 2 — drop pending toasts for this session. Other
+        # v0.7.0 Part 2 - drop pending toasts for this session. Other
         # sessions' toast lists are untouched.
         self._pending_toasts.pop(session_id, None)
-        # v0.7.0 Part 3 — drop the HMAC hook token. After this point any
+        # v0.7.0 Part 3 - drop the HMAC hook token. After this point any
         # incoming hook POST for this session_id rejects with 403 (unknown
         # session → ``validate_hook_token`` returns False).
         self._hook_tokens.pop(session_id, None)
-        # feat/hook-driven-status — drop the ephemeral hook-signal state.
+        # feat/hook-driven-status - drop the ephemeral hook-signal state.
         # The persisted unread flag (keyed by tmux NAME, not session_id) is
-        # deliberately untouched here — it must survive detach/re-adopt.
+        # deliberately untouched here - it must survive detach/re-adopt.
         self._activity_tracker.forget(session_id)
         if self._last_session_id == session_id:
             self._last_session_id = (
@@ -372,7 +372,7 @@ class SessionManager:
         """
         self._notification_router = router
 
-    # ---- v0.7.0 Part 3 — Claude Code hook authentication -----------------
+    # ---- v0.7.0 Part 3 - Claude Code hook authentication -----------------
     #
     # Each live session has a unique per-process HMAC-bearer token that is
     # injected into the spawned agent's tmux env as ``CLOUDECODE_HOOK_TOKEN``.
@@ -380,7 +380,7 @@ class SessionManager:
     # POST to ``/api/v1/hooks/claude-event`` with the token in an
     # ``X-Cloudecode-Token`` header; the route validates via
     # ``validate_hook_token`` before recording a toast. The endpoint is also
-    # loopback-only — this is a defense-in-depth pair, not a single layer.
+    # loopback-only - this is a defense-in-depth pair, not a single layer.
 
     def _mint_hook_token(self, session_id: str) -> str:
         """Mint and store a fresh URL-safe token for ``session_id``.
@@ -423,16 +423,16 @@ class SessionManager:
         """Return the env-var trio injected into the spawned agent's tmux env.
 
         Minted lazily on first call so backends that ``start()`` BEFORE the
-        session is fully registered (we don't — see ``create_session``) can
+        session is fully registered (we don't - see ``create_session``) can
         still ask. Empty dict when the configured port can't be read.
 
         Variables:
-            CLOUDECODE_SESSION_ID — used as the ``X-Cloudecode-Session``
+            CLOUDECODE_SESSION_ID - used as the ``X-Cloudecode-Session``
                 header so the hook endpoint can route the POST to the right
                 session's toast bucket.
-            CLOUDECODE_HOOK_TOKEN — bearer credential for the same hook
+            CLOUDECODE_HOOK_TOKEN - bearer credential for the same hook
                 endpoint. Validated via ``validate_hook_token``.
-            CLOUDECODE_HOOK_URL — full loopback URL the hook curl POSTs to.
+            CLOUDECODE_HOOK_URL - full loopback URL the hook curl POSTs to.
                 Built from ``settings.port`` so port overrides (e.g.
                 cloudecode running on 5001 vs the default 8000) flow
                 through automatically.
@@ -440,7 +440,7 @@ class SessionManager:
         token = self._hook_tokens.get(session_id) or self._mint_hook_token(session_id)
         try:
             port = settings.port
-        except Exception:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover - defensive
             return {}
         return {
             "CLOUDECODE_SESSION_ID": session_id,
@@ -473,7 +473,7 @@ class SessionManager:
         Behavior:
         - Build a probe backend using the metadata slug (if any).
         - Ask it to `discover_existing()`.
-        - Reconcile ``owned_tmux_sessions`` against the live listing —
+        - Reconcile ``owned_tmux_sessions`` against the live listing -
           prune entries whose tmux session no longer exists. Prevents
           indefinite growth from orphaned records after crashes.
         - If the metadata's slug is present in the discovered list AND
@@ -484,7 +484,7 @@ class SessionManager:
           slug to the owned set and re-persist so subsequent boots use
           the new schema directly.
         - Log other discovered sessions and leave them alone (orphan
-          cleanup is out of scope — a v2 ``cloude-cleanup`` script).
+          cleanup is out of scope - a v2 ``cloude-cleanup`` script).
 
         After tmux reconciliation, runs a one-shot orphan sweep of
         ``.cloude_uploads/`` buckets to catch files left by force-killed
@@ -525,7 +525,7 @@ class SessionManager:
         by ``current_session()`` after ``_load_session_metadata``.
         """
         persisted = self.current_session()
-        # Phase 6 — one-shot agent_type backfill. Logic extracted to the
+        # Phase 6 - one-shot agent_type backfill. Logic extracted to the
         # top-level ``backfill_agent_type`` helper for direct unit testing
         # without spinning up the full lifespan path. Idempotent + safe to
         # re-run; only persists + logs when something actually changed.
@@ -562,10 +562,10 @@ class SessionManager:
                 if persisted is not None:
                     self._save_session_metadata()
 
-        # SESSION-IDENTITY-V2 — prune pinned-theme entries whose tmux
+        # SESSION-IDENTITY-V2 - prune pinned-theme entries whose tmux
         # session is gone. We only prune when we have a confirmed live
         # tmux probe (non-empty ``tmux_alive`` OR a successful empty
-        # listing — both mean the probe ran). Prevents indefinite
+        # listing - both mean the probe ran). Prevents indefinite
         # growth from sessions the user destroyed outside our UI
         # (e.g. ``tmux -L cloude kill-session``).
         if self.pinned_themes:
@@ -581,7 +581,7 @@ class SessionManager:
                     self.pinned_themes.pop(name, None)
                 self._save_pinned_themes()
 
-        # feat/hook-driven-status — same reconciliation for the persisted
+        # feat/hook-driven-status - same reconciliation for the persisted
         # unread store: a tmux session the user killed outside our UI
         # (``tmux -L cloude kill-session``) shouldn't leave a permanent
         # unread badge nothing can ever clear (mark_session_viewed needs a
@@ -596,7 +596,7 @@ class SessionManager:
                     "session_backend_discovered_orphans",
                     count=len(tmux_alive),
                     names=sorted(tmux_alive),
-                    hint="no metadata on disk — leaving orphans alone",
+                    hint="no metadata on disk - leaving orphans alone",
                 )
             return
 
@@ -747,7 +747,7 @@ class SessionManager:
     def _load_session_metadata(self):
         """Load session metadata from disk if it exists.
 
-        Unlike the pre-refactor code, we do NOT probe the process here — at
+        Unlike the pre-refactor code, we do NOT probe the process here - at
         `__init__` time we don't yet know which backend to build. The probe
         happens in `lifespan_startup()`.
 
@@ -815,7 +815,7 @@ class SessionManager:
         ext4 ``data=ordered``, is a real scenario).
 
         The directory's own ``fsync`` (for rename durability) is skipped
-        — this is metadata, not a source of truth for money. Losing
+        - this is metadata, not a source of truth for money. Losing
         the very last write to a sudden power failure is acceptable;
         losing SESSION OWNERSHIP isn't, which is what the atomic rename
         prevents.
@@ -831,7 +831,7 @@ class SessionManager:
                 os.fsync(f.fileno())
             except OSError as exc:
                 # tmpfs and some network FS don't support fsync; log and
-                # continue — the rename is still atomic per POSIX.
+                # continue - the rename is still atomic per POSIX.
                 logger.debug("metadata_fsync_unsupported", error=str(exc))
 
         os.replace(str(tmp), str(path))
@@ -840,7 +840,7 @@ class SessionManager:
         """Save session metadata atomically, including the owned-set.
 
         Persists ``session`` if given, else the current session. Only one
-        session is ever persisted across restarts — the most-recently-
+        session is ever persisted across restarts - the most-recently-
         active one is the pragmatic choice (concurrent live sessions are a
         runtime feature, not a durability one).
         """
@@ -854,7 +854,7 @@ class SessionManager:
             self._write_metadata_atomic(payload)
 
             # Clear the backfill sentinel once we've successfully persisted
-            # the new schema — one successful save is the migration.
+            # the new schema - one successful save is the migration.
             self._legacy_metadata_needs_backfill = False
 
             logger.debug(
@@ -936,12 +936,12 @@ class SessionManager:
 
         Called when a WS terminal actually binds to a session (see
         ``src/api/websocket.py``'s ``connection_manager.bind_session``
-        call site) — the strongest "the user is looking at this" signal
+        call site) - the strongest "the user is looking at this" signal
         the server has, deliberately stronger than merely appearing in a
         list/poll response. Does NOT touch the manual flag: a session the
         user explicitly pinned unread for followup stays flagged even
         after they open it, until they explicitly clear it (see
-        ``set_manual_unread``) — this is the "survives being viewed"
+        ``set_manual_unread``) - this is the "survives being viewed"
         requirement.
         """
         backend = self.backends.get(session_id)
@@ -955,7 +955,7 @@ class SessionManager:
 
         Description: The user-facing "mark unread for followup" control.
             Keyed by tmux name (not session_id) so it works for BOTH a
-            live session and an attachable-but-not-live one — you can pin
+            live session and an attachable-but-not-live one - you can pin
             a conversation unread whether or not anything is currently
             attached to it. Unlike the auto flag, nothing but this method
             (a repeat call, presumably from the user clicking again)
@@ -984,7 +984,7 @@ class SessionManager:
     ) -> None:
         """Persist (or clear) the pinned theme for a tmux session name.
 
-        ``theme_id`` None or empty clears the pin. Always persists — a
+        ``theme_id`` None or empty clears the pin. Always persists - a
         cleared pin must round-trip across server restart same as a set
         one. Mirrors onto the live in-memory ``Session.pinned_theme``
         when the named session is the currently-active backend, so a
@@ -1009,7 +1009,7 @@ class SessionManager:
                     # Persist into session_metadata so a server-restart
                     # rehydrate path keeps the in-memory mirror coherent
                     # (belt-and-suspenders; durable source of truth is
-                    # ``pinned_themes.json`` — adopt seeds from there).
+                    # ``pinned_themes.json`` - adopt seeds from there).
                     self._save_session_metadata(sess)
                 break
 
@@ -1024,7 +1024,7 @@ class SessionManager:
             self.pinned_themes.pop(tmux_name, None)
             self._save_pinned_themes()
 
-    # ---- project-scoped theme (v0.7.0 — .cc.theme dotfile) -------------
+    # ---- project-scoped theme (v0.7.0 - .cc.theme dotfile) -------------
     #
     # The source of truth for a project's theme is ``<working_dir>/.cc.theme``
     # (a single-line file containing the theme id + trailing newline). This
@@ -1037,7 +1037,7 @@ class SessionManager:
     # release so sessions pinned under v0.6.x still paint correctly.
     # ``migrate_pinned_theme_to_dotfile`` is best-effort and runs on
     # attach/adopt to ferry old entries into the new format. The old map
-    # is not deleted by migration — it decays naturally as users re-pin.
+    # is not deleted by migration - it decays naturally as users re-pin.
 
     @staticmethod
     def _project_theme_path(working_dir) -> Optional[Path]:
@@ -1059,7 +1059,7 @@ class SessionManager:
 
         Resolution order:
           1. ``<working_dir>/.cc.theme`` (v0.7.0+ project-scoped source of truth)
-          2. ``pinned_themes.json`` keyed by the bare tmux name — but ONLY
+          2. ``pinned_themes.json`` keyed by the bare tmux name - but ONLY
              when a caller already supplied ``working_dir`` *and* no
              dotfile exists. This branch is the read-time back-compat
              fallback for sessions pinned under v0.6.x.
@@ -1110,7 +1110,7 @@ class SessionManager:
                 f"working_dir is not a directory: {parent}"
             )
 
-        # Clear branch — delete the dotfile if present.
+        # Clear branch - delete the dotfile if present.
         if not theme_id:
             if path.exists():
                 try:
@@ -1137,7 +1137,7 @@ class SessionManager:
             try:
                 os.chmod(str(tmp), 0o644)
             except OSError:
-                # chmod failure on the tmp shouldn't abort the write —
+                # chmod failure on the tmp shouldn't abort the write -
                 # the final replace will still publish the file. Log only.
                 logger.debug("project_theme_chmod_failed", path=str(tmp))
             os.replace(str(tmp), str(path))
@@ -1165,7 +1165,7 @@ class SessionManager:
 
         Best-effort: any exception is logged and swallowed so the
         attach/adopt path is never broken by a failed migration. The
-        legacy map entry is intentionally NOT deleted — let it decay
+        legacy map entry is intentionally NOT deleted - let it decay
         naturally; this release keeps it as a read-time fallback.
 
         Returns True on successful migration, False otherwise.
@@ -1179,7 +1179,7 @@ class SessionManager:
             path = self._project_theme_path(working_dir)
             if path is None:
                 return False
-            # If the dotfile already exists, the new format wins — nothing
+            # If the dotfile already exists, the new format wins - nothing
             # to migrate.
             if path.exists():
                 return False
@@ -1250,13 +1250,13 @@ class SessionManager:
     # Color resolution: when a toast is recorded, we read the session's
     # project theme (via ``resolve_project_theme``), then read the theme
     # manifest at ``client/css/themes/<id>/theme.json`` to extract the
-    # ``--color-accent`` CSS var. The lookup is memoized per theme id —
+    # ``--color-accent`` CSS var. The lookup is memoized per theme id -
     # theme manifests are static files that don't change during a server's
     # uptime, so no invalidation is needed. ``--color-accent`` was chosen
     # because (a) every theme.json sampled defines it, and (b) it's the
     # value already used elsewhere in the client as the session-identity
     # accent. Fall back to None when the theme isn't found or the var is
-    # missing — the client CSS has its own ``var(... fallback)`` chain.
+    # missing - the client CSS has its own ``var(... fallback)`` chain.
 
     _TOAST_ACKED_CAP = 50
 
@@ -1267,7 +1267,7 @@ class SessionManager:
         Computed from this file's location: session_manager.py lives at
         ``src/core/session_manager.py``, so two ``parent`` hops reach
         the repo root. Mirrors the resolver used in
-        ``routes._bundled_themes_root`` — kept duplicated rather than
+        ``routes._bundled_themes_root`` - kept duplicated rather than
         cross-imported to avoid a routes <-> session_manager cycle.
         """
         return (
@@ -1288,7 +1288,7 @@ class SessionManager:
         if not theme_id:
             return None
         # ``None`` is a valid cached value (theme exists but has no
-        # accent var) — distinguish via ``in`` check rather than truthiness.
+        # accent var) - distinguish via ``in`` check rather than truthiness.
         if theme_id in self._theme_accent_cache:
             return self._theme_accent_cache[theme_id]
 
@@ -1321,7 +1321,7 @@ class SessionManager:
 
         Returns None when the session is unknown, has no working dir, or
         has no resolvable theme. The hot path is two dict reads + a
-        cached lookup once the theme is known — cheap enough to call on
+        cached lookup once the theme is known - cheap enough to call on
         every ``record_toast`` without batching.
         """
         if session is None:
@@ -1349,12 +1349,12 @@ class SessionManager:
                 if acked_count < self._TOAST_ACKED_CAP:
                     keep.append(t)
                     acked_count += 1
-                # else: drop — past the cap
+                # else: drop - past the cap
             else:
                 keep.append(t)
         self._pending_toasts[session_id] = keep
 
-    # v0.7.0 Part 4 — Map the WS toast ``kind`` string (the wire-level
+    # v0.7.0 Part 4 - Map the WS toast ``kind`` string (the wire-level
     # vocabulary used by the Claude hook endpoint) to a typed EventType
     # so the notification router can fan out to ntfy + Slack. Unmapped
     # kinds (e.g. a future toast kind that doesn't need a push) skip
@@ -1379,16 +1379,16 @@ class SessionManager:
         so the client can paint a session-colored left border without an
         extra theme lookup on the wire. Caller is responsible for the
         WS broadcast (the route layer does this after calling this method
-        — keeps storage and fanout decoupled).
+        - keeps storage and fanout decoupled).
 
-        v0.7.0 Part 4 — also emits a ``NotificationEvent`` into the
+        v0.7.0 Part 4 - also emits a ``NotificationEvent`` into the
         attached router (if any) so ntfy + Slack channels fan out from
         the same call site. Emit is best-effort: router missing, kind
         unmapped, or import error all skip the emit without raising.
 
         Raises:
             ValueError: when ``session_id`` is unknown (we won't record
-                toasts for sessions that don't exist — the client would
+                toasts for sessions that don't exist - the client would
                 have no live WS to receive them on).
         """
         import uuid as _uuid
@@ -1420,10 +1420,10 @@ class SessionManager:
             color=color,
         )
 
-        # v0.7.0 Part 4 — fan out to the notification router (ntfy + Slack).
+        # v0.7.0 Part 4 - fan out to the notification router (ntfy + Slack).
         # Lazy import to keep the (already-circular-prone) notifications
         # package off the session_manager import chain. Any failure here
-        # is best-effort — the toast is already recorded and the WS
+        # is best-effort - the toast is already recorded and the WS
         # broadcast happens regardless.
         try:
             if self._notification_router is not None:
@@ -1457,12 +1457,12 @@ class SessionManager:
         """Feed one Claude Code lifecycle hook event into the activity model.
 
         Description: Called by the hook endpoint (``POST
-            /hooks/claude-event``) for EVERY event kind — including the
+            /hooks/claude-event``) for EVERY event kind - including the
             ones that never produce a toast (PreToolUse/PostToolUse/
             SubagentStart/SubagentStop/UserPromptSubmit). Best-effort by
             design: an unknown ``session_id`` is a documented no-op here
             (the toast path, ``record_toast``, is the one that legitimately
-            raises/404s on an unknown session — activity tracking is a
+            raises/404s on an unknown session - activity tracking is a
             secondary signal and must never block hook delivery or make
             the endpoint fail for a session that's mid-teardown).
         Inputs:
@@ -1490,7 +1490,7 @@ class SessionManager:
 
         Returns True when the toast was found AND state actually changed
         (i.e. wasn't already acked). Returns False when not found OR
-        already acked — useful for the route layer to skip the WS
+        already acked - useful for the route layer to skip the WS
         broadcast on a no-op double-click.
         """
         bucket = self._pending_toasts.get(session_id)
@@ -1516,7 +1516,7 @@ class SessionManager:
         """Return toasts for a session, optionally filtered to unacked.
 
         Newest-first. Returns an empty list (NOT None) when the session
-        has no recorded toasts — callers can iterate without a None check.
+        has no recorded toasts - callers can iterate without a None check.
         """
         bucket = self._pending_toasts.get(session_id, [])
         if unacked_only:
@@ -1533,7 +1533,7 @@ class SessionManager:
         strings); a session's output never leaks into another's queue.
         """
         sid = self._resolve_session_id(session_id)
-        # Tolerate "no session yet" — return an orphan queue so callers
+        # Tolerate "no session yet" - return an orphan queue so callers
         # (e.g. the auth-only WS test) don't have to special-case it.
         key = sid if sid is not None else "__orphan__"
         queue: asyncio.Queue = asyncio.Queue()
@@ -1637,7 +1637,7 @@ class SessionManager:
     ) -> Session:
         """Create a new Claude Code session.
 
-        Multiple sessions coexist — this does NOT raise if other sessions
+        Multiple sessions coexist - this does NOT raise if other sessions
         are live (the old single-active invariant is gone). A zombie
         session matching this exact ``session_id`` (stale metadata, dead
         backend) is cleaned up first.
@@ -1646,18 +1646,18 @@ class SessionManager:
         ``start()`` so the pane is birthed at the client's measured size.
         Both must be supplied together or both omitted; backends fall back
         to their own defaults otherwise. The WS resize handshake reshapes
-        later regardless — these are strictly a birth-time optimization.
+        later regardless - these are strictly a birth-time optimization.
 
         ``project_name`` (optional) is the human-readable project label from
         the launchpad. When supplied and non-empty after sanitization, the
         resulting tmux session is named ``cloude_<sanitized name>`` verbatim
         instead of falling back to the legacy ``cloude_ses_<hex>`` derivation
         keyed off ``session_id``. An empty/whitespace-only value (or one that
-        sanitizes to empty) silently falls back to legacy naming — this is
+        sanitizes to empty) silently falls back to legacy naming - this is
         by design so the launchpad can always send the field without special-
         casing blanks. PTYBackend ignores the override entirely.
 
-        ``model`` (provider-selector modal, v3.1) — only meaningful when
+        ``model`` (provider-selector modal, v3.1) - only meaningful when
         the resolved agent_type is ``"claude"``. None launches Claude
         directly via the ``cld`` zsh function; set launches it OpenRouter-
         routed via ``cldor <model>`` (see ``Settings.get_agent_command``).
@@ -1666,11 +1666,11 @@ class SessionManager:
         ``auto_start_claude``, so it survives for the life of the session
         even on a manual/no-autostart create.
 
-        ``terminal_command_id`` (feat/settings-tabs-and-commands) — id of
+        ``terminal_command_id`` (feat/settings-tabs-and-commands) - id of
         a configured entry in config.json's ``terminal_commands``. When it
         resolves, the stored command text is TYPED into the new pane after
         the shell starts, via the existing ``SessionBackend.write()``
-        (tmux ``send-keys``) — the same path a keystroke from the user's
+        (tmux ``send-keys``) - the same path a keystroke from the user's
         browser takes. It is never exec'd by this process and never passed
         to a shell by us, which is why an id (not a command string) is
         what crosses the API boundary; see
@@ -1678,7 +1678,7 @@ class SessionManager:
         the session is just a plain console.
         """
         # Clean up a zombie entry for this exact id (stale metadata / dead
-        # backend) — but leave any OTHER live sessions alone.
+        # backend) - but leave any OTHER live sessions alone.
         if session_id in self.sessions and (
             session_id not in self.backends
             or not self.backends[session_id].is_alive()
@@ -1686,7 +1686,7 @@ class SessionManager:
             logger.info("cleaning_up_zombie_session", session_id=session_id)
             self._wipe_session_state(session_id)
 
-        # Phase 6 — resolve effective agent_type. Precedence:
+        # Phase 6 - resolve effective agent_type. Precedence:
         #   1. explicit ``agent_type`` kwarg (request-level override)
         #   2. project-level default (ProjectConfig.agent_type) when
         #      ``project_name`` matches a configured project
@@ -1756,20 +1756,20 @@ class SessionManager:
 
         # Uniquify-on-collision: a project click must ALWAYS spawn a NEW
         # session against the working_dir, never adopt/reuse an existing
-        # one — the user runs multiple concurrent sessions per directory.
+        # one - the user runs multiple concurrent sessions per directory.
         # If the derived name is already taken, append a numeric suffix
         # (``cloude_foo`` -> ``cloude_foo-2`` -> ``cloude_foo-3`` ...)
         # until we find one that's free against EVERY source of truth:
-        #   - the live tmux socket (probe.discover_existing()) — tmux
+        #   - the live tmux socket (probe.discover_existing()) - tmux
         #     itself hard-fails "duplicate session" on collision
-        #   - self.active_tmux_names() — in-memory live backends
-        #   - self.owned_tmux_sessions — persisted names we've taken,
+        #   - self.active_tmux_names() - in-memory live backends
+        #   - self.owned_tmux_sessions - persisted names we've taken,
         #     including detached-but-not-destroyed sessions
         # This mirrors rename_session's collision check (active OR
         # owned_tmux_sessions) so a name minted here can never be
         # rejected by the rename guard later. Explicit attach-to-a-
         # specific-session still goes through adopt_external_session
-        # via the running-sessions list — untouched by this path.
+        # via the running-sessions list - untouched by this path.
         if tmux_session_name:
             probe = build_backend(
                 settings,
@@ -1820,18 +1820,18 @@ class SessionManager:
                 session_name=tmux_session_name,
             )
 
-            # v0.7.0 Part 3 — mint the per-session hook token BEFORE the
+            # v0.7.0 Part 3 - mint the per-session hook token BEFORE the
             # tmux spawn so we can inject CLOUDECODE_* env vars into the
             # new-session call. TmuxBackend merges ``env`` into the tmux
             # process's environment, which the spawned agent inherits.
             # PTYBackend's start() signature also accepts ``env`` (or
-            # ignores extra kwargs — see backend) so this is safe across
+            # ignores extra kwargs - see backend) so this is safe across
             # backend types.
             self._mint_hook_token(session_id)
             spawn_env = self.get_env_for_spawn(session_id)
 
             if auto_start_claude:
-                # Phase 6 — resolve via the agents map. For claude with
+                # Phase 6 - resolve via the agents map. For claude with
                 # default config this yields the same string the old
                 # ``f"{claude_cli} --dangerously-skip-permissions"`` did
                 # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
@@ -1849,7 +1849,7 @@ class SessionManager:
                     initial_rows=initial_rows,
                 )
 
-            # Recorded, not typed yet — it is flushed when the client
+            # Recorded, not typed yet - it is flushed when the client
             # attaches, so the handshake's repaint cannot clear the output.
             # See flush_pending_terminal_command.
             if terminal_command_id:
@@ -1863,7 +1863,7 @@ class SessionManager:
             # defense-in-depth for any future backend that omits `.pid`.
             pid = getattr(backend, "pid", None)
 
-            # v0.7.0 — seed pinned_theme from ``<work_path>/.cc.theme`` (or
+            # v0.7.0 - seed pinned_theme from ``<work_path>/.cc.theme`` (or
             # legacy ``pinned_themes.json`` for the tmux name when no
             # dotfile exists). New projects without a pin yield None,
             # which is the original behavior.
@@ -1878,7 +1878,7 @@ class SessionManager:
                 agent_type=resolved_agent_type,
                 model=model,
                 pinned_theme=prior_pin,
-                # PIN-FIX-EXECUTE — carry the bare tmux name on the inner
+                # PIN-FIX-EXECUTE - carry the bare tmux name on the inner
                 # Session so frontend can use it as the pin-key handle
                 # without falling back to session.id.
                 tmux_session=tmux_session_name,
@@ -1891,14 +1891,14 @@ class SessionManager:
             # deterministic when both exist.
             try:
                 self.migrate_pinned_theme_to_dotfile(new_session)
-            except Exception as exc:  # pragma: no cover — helper swallows
+            except Exception as exc:  # pragma: no cover - helper swallows
                 logger.debug(
                     "post_create_migrate_unexpected_throw", error=str(exc)
                 )
 
             # Track 1: record tmux-backend ownership so a post-create crash
             # still leaves the name recoverable from ``session_metadata.json``
-            # — and the adopt UI correctly flags it as ``created_by_cloude``.
+            # - and the adopt UI correctly flags it as ``created_by_cloude``.
             owned_name = getattr(backend, "tmux_session", None)
             if owned_name:
                 self.owned_tmux_sessions.add(owned_name)
@@ -1943,7 +1943,7 @@ class SessionManager:
         except RuntimeError as e:
             # Backend.start() raises RuntimeError for hard infrastructure
             # failures: tmux missing on PATH, ``new-session`` non-zero exit,
-            # OR — added in the dead-on-arrival probe — when the spawned
+            # OR - added in the dead-on-arrival probe - when the spawned
             # agent process exits immediately and tmux's remain-on-exit
             # would otherwise leave the user staring at a frozen welcome
             # screen. Preserve the type (do NOT rewrap as ValueError) so
@@ -1997,13 +1997,13 @@ class SessionManager:
         Python-side handles (reader task, idle watcher, backend ref, output
         subscribers, stashed offset) for THAT session ONLY and stops its
         pipe-pane so the server-side tmux session can be cleanly re-adopted
-        later — but it leaves the tmux session itself alive. Other live
+        later - but it leaves the tmux session itself alive. Other live
         sessions are untouched.
 
         Why stop pipe-pane here (vs leaving it attached): our pipe-pane
         writes into ``tmux_<slug>.pipe``; the subsequent re-adopt via
         ``TmuxBackend.for_external`` derives its pipe path as
-        ``tmux_ext_<slug>.pipe`` — a DIFFERENT file. If we leave the old
+        ``tmux_ext_<slug>.pipe`` - a DIFFERENT file. If we leave the old
         pipe-pane active, the re-adopt's ``ensure_pipe_pane`` sees
         ``#{pane_pipe} == 1`` and refuses to clobber it, then the tailer
         opens the new (empty) path and silently streams nothing.
@@ -2024,7 +2024,7 @@ class SessionManager:
         logger.info("detaching_session", session_id=sid)
 
         try:
-            # Tear down the idle watcher first — mirrors destroy ordering so
+            # Tear down the idle watcher first - mirrors destroy ordering so
             # a trailing poll iteration can't fire after the backend is gone.
             iw = self.idle_watchers.get(sid)
             if iw is not None:
@@ -2084,7 +2084,7 @@ class SessionManager:
 
             was_persisted = (self.current_session() is not None and
                              self.current_session().id == sid)
-            # Wipe THIS session's state only — leave tmux alive, leave
+            # Wipe THIS session's state only - leave tmux alive, leave
             # other sessions alone.
             self._wipe_session_state(sid)
 
@@ -2114,7 +2114,7 @@ class SessionManager:
 
     async def destroy_session(self, session_id: Optional[str] = None) -> bool:
         """Destroy a session (kill its backend / tmux). ``session_id`` None
-        → the current session. Only touches THAT session's state — other
+        → the current session. Only touches THAT session's state - other
         live sessions are untouched.
         """
         sid = self._resolve_session_id(session_id)
@@ -2141,7 +2141,7 @@ class SessionManager:
             owned_name = getattr(backend, "tmux_session", None) if backend else None
             if owned_name:
                 self.owned_tmux_sessions.discard(owned_name)
-                # SESSION-IDENTITY-V2 — explicit destroy means this name is
+                # SESSION-IDENTITY-V2 - explicit destroy means this name is
                 # dead; drop its pin too.
                 self.discard_pinned_theme(owned_name)
 
@@ -2189,7 +2189,7 @@ class SessionManager:
 
         Validates uniqueness against every live backend's tmux name
         (``active_tmux_names()``) AND the persisted ``owned_tmux_sessions``
-        set — a name collision against either is a conflict.
+        set - a name collision against either is a conflict.
 
         On success the following state is updated atomically (from the
         caller's perspective; we hold no async lock since SessionManager
@@ -2258,7 +2258,7 @@ class SessionManager:
         await backend.rename_session(new_name)
 
         # Re-key owned set (idempotent ``discard`` + ``add``). Adopted
-        # sessions aren't in this set — only owned ones are persisted —
+        # sessions aren't in this set - only owned ones are persisted -
         # so this is a no-op for adopt rows. We still ALWAYS add ``new_name``
         # only when the OLD name was in the set, so an adopt-then-rename
         # doesn't accidentally promote an external session into the owned
@@ -2282,7 +2282,7 @@ class SessionManager:
         # path sees the right name in session_metadata.json).
         sess.tmux_session = new_name
 
-        # Persist. Best-effort — a write failure logs but doesn't roll the
+        # Persist. Best-effort - a write failure logs but doesn't roll the
         # tmux rename back, since the tmux side already succeeded and the
         # in-memory state is authoritative until the next restart anyway.
         try:
@@ -2479,7 +2479,7 @@ class SessionManager:
         The returned ``SessionInfo.session.pty_pid`` is resolved LIVE off
         that same status map (see the ``live_pid`` block below) rather than
         trusting whatever was captured on ``Session`` at creation/adopt
-        time — see fix/adopted-session-pid.
+        time - see fix/adopted-session-pid.
         """
         sess = self.sessions.get(session_id)
         backend = self.backends.get(session_id)
@@ -2501,7 +2501,7 @@ class SessionManager:
             status_map = self._build_tmux_status_map()
         row = status_map.get(tmux_session_name) if tmux_session_name else None
         raw_tmux_status = row["status"] if row else STATUS_UNKNOWN
-        # feat/hook-driven-status — the raw tmux classification (dead check
+        # feat/hook-driven-status - the raw tmux classification (dead check
         # + graceful-fallback source) is combined with this session's live
         # hook signal (if any) and its persisted unread flag into ONE
         # unified status. See src/core/session_activity.py.
@@ -2510,17 +2510,17 @@ class SessionManager:
             session_id, raw_tmux_status, unread=unread
         )
 
-        # fix/adopted-session-pid — pid is resolved LIVE off the same bulk
+        # fix/adopted-session-pid - pid is resolved LIVE off the same bulk
         # ``list_pane_status_all()`` row already fetched for status above,
         # instead of trusting ``sess.pty_pid`` (which for an ADOPTED
         # session is hardcoded None at registration time, and for ANY
         # session goes stale the moment the pane's foreground process
-        # changes — e.g. claude exits and a bare shell remains). The bulk
+        # changes - e.g. claude exits and a bare shell remains). The bulk
         # call already runs once per status fetch, so this is free. Falls
         # back to ``backend.pid`` (a single extra query) only when the row
         # is missing or its pid could not be parsed; falls back to the
         # captured ``sess.pty_pid`` last, for non-tmux backends that
-        # never appear in the tmux status map at all (PTYBackend — whose
+        # never appear in the tmux status map at all (PTYBackend - whose
         # pid is stable for the process lifetime, so the captured value
         # is still correct).
         live_pid = row.get("pid") if row else None
@@ -2543,7 +2543,7 @@ class SessionManager:
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
-            # fix/session-ownership-source — ownership is membership in the
+            # fix/session-ownership-source - ownership is membership in the
             # persisted owned set, NOT the shape of ``session_id``. After a
             # restart the app re-attaches to still-running tmux sessions
             # through the adopt path, so a session this app created carries
@@ -2619,7 +2619,7 @@ class SessionManager:
 
         Thin pass-through to ``backend.list_attachable_sessions``, but we
         always instantiate a fresh PROBE backend rather than using
-        ``self.backend`` — the user should be able to list external
+        ``self.backend`` - the user should be able to list external
         sessions whether or not they currently have an active session
         (the adopt-UI fetch happens at launchpad render time).
         """
@@ -2642,7 +2642,7 @@ class SessionManager:
             if hasattr(probe, "list_pane_status_all")
             else {}
         )
-        # SESSION-IDENTITY-V2 — decorate each row with its persisted
+        # SESSION-IDENTITY-V2 - decorate each row with its persisted
         # pinned theme (if any). The launchpad's active-session banner
         # uses this so re-entering a session paints the right theme on
         # first frame; without it, the client would wait until the
@@ -2654,7 +2654,7 @@ class SessionManager:
                 row["pinned_theme"] = self.pinned_themes.get(name)
                 status_row = status_map.get(name)
                 raw_tmux_status = status_row["status"] if status_row else STATUS_UNKNOWN
-                # feat/hook-driven-status — attachable rows have no live
+                # feat/hook-driven-status - attachable rows have no live
                 # session_id (nothing is currently attached to them), so
                 # there is no hook signal to consult by construction: no
                 # hook can ever fire for a session with no running process
@@ -2677,17 +2677,17 @@ class SessionManager:
 
         Multi-session: this NEVER detaches another session and NEVER
         raises 409. ``confirm_detach`` is accepted for API back-compat
-        and IGNORED — multiple adopted/owned sessions coexist. If a
+        and IGNORED - multiple adopted/owned sessions coexist. If a
         session with this exact id (``adopted:<name>``) is already
         registered (re-adopt by another tab), its old backend is wiped
         first before the fresh attach.
 
         Ordered sequence (fixes the scrollback/WS race):
           1. Build a ``TmuxBackend.for_external(name, ...)`` instance.
-          2. ``attach_existing(needs_pipe_setup=True)`` — starts pipe-pane
+          2. ``attach_existing(needs_pipe_setup=True)`` - starts pipe-pane
              BEFORE any scrollback capture so the FIFO is warm.
           3. Record ``fifo_start_offset = os.path.getsize(pipe_path)``
-             right after pipe-pane is active — the WS tailer seeks here
+             right after pipe-pane is active - the WS tailer seeks here
              so the client doesn't see bytes already painted via scrollback.
           3b. Resize the pane to the attaching client's dimensions, when
              it supplied them. An external session is born 80x24 and this
@@ -2701,7 +2701,7 @@ class SessionManager:
           5. Register the session/backend (keyed ``adopted:<name>``) and
              stash the FIFO offset for the WS handler to consume.
 
-        The adopted session is NOT added to ``owned_tmux_sessions`` — it
+        The adopted session is NOT added to ``owned_tmux_sessions`` - it
         isn't ours, we're borrowing it.
 
         Args:
@@ -2747,11 +2747,11 @@ class SessionManager:
             self._wipe_session_state(adopted_id)
 
         # Resolve the adopted pane's cwd via a one-shot tmux probe. We
-        # use this for metadata display only — we never chdir.
+        # use this for metadata display only - we never chdir.
         working_dir = await self._resolve_external_cwd(name)
 
         # Late import: src.core.tmux_backend imports SessionBackend from
-        # session_backend, which we already import — no cycle — but
+        # session_backend, which we already import - no cycle - but
         # keeping the import local matches the pattern in build_backend.
         from src.core.tmux_backend import TmuxBackend
 
@@ -2763,11 +2763,11 @@ class SessionManager:
             scrollback_lines=settings.load_auth_config().session.scrollback_lines,
         )
 
-        # Step 3 — ensure pipe-pane BEFORE capturing scrollback so the
+        # Step 3 - ensure pipe-pane BEFORE capturing scrollback so the
         # FIFO is guaranteed warm at the moment we read its size.
         await backend.attach_existing(needs_pipe_setup=True)
 
-        # Step 3b — reshape the adopted pane to the client's grid before
+        # Step 3b - reshape the adopted pane to the client's grid before
         # anything reads it. See the docstring: without this an adopted
         # session keeps tmux's 80x24 birth geometry forever.
         if initial_cols and initial_rows:
@@ -2793,9 +2793,9 @@ class SessionManager:
                     error=str(exc),
                 )
 
-        # Step 4 — record FIFO offset immediately. Any bytes that hit
+        # Step 4 - record FIFO offset immediately. Any bytes that hit
         # the FIFO between this line and the scrollback capture below
-        # will be BOTH in the scrollback AND after the offset — that's
+        # will be BOTH in the scrollback AND after the offset - that's
         # fine; the client paints the scrollback first and the tailer
         # seeks past the offset, so the overlap is bounded and
         # well-defined.
@@ -2813,7 +2813,7 @@ class SessionManager:
             )
             fifo_start_offset = 0
 
-        # Step 5 — capture scrollback AFTER the offset read so anything
+        # Step 5 - capture scrollback AFTER the offset read so anything
         # that arrives mid-capture is safely past the offset (the tailer
         # will stream it without duplication).
         scrollback = backend.capture_scrollback()
@@ -2823,7 +2823,7 @@ class SessionManager:
             if scrollback else ""
         )
 
-        # Phase 7 — fingerprint the captured bytes to identify which AI
+        # Phase 7 - fingerprint the captured bytes to identify which AI
         # CLI is running inside the adopted tmux session. ``None`` is a
         # valid outcome and renders as "Unknown" in the UI (Phase 8).
         from src.core.agent_fingerprint import detect_agent_type
@@ -2838,26 +2838,26 @@ class SessionManager:
             agent_type=detected_agent_type,
         )
 
-        # Step 5 — register.
-        # v0.7.0 — project-scoped theme lookup: ``<working_dir>/.cc.theme``
+        # Step 5 - register.
+        # v0.7.0 - project-scoped theme lookup: ``<working_dir>/.cc.theme``
         # is the source of truth. ``pinned_themes.json`` is read as a
         # back-compat fallback only when no dotfile exists; the
         # migration helper below ferries old entries into the new format.
         prior_pin = self.resolve_project_theme(working_dir, name)
-        # fix/adopt-response-pid — ``_session_info_for`` still resolves
+        # fix/adopt-response-pid - ``_session_info_for`` still resolves
         # ``pty_pid`` LIVE on every subsequent read (a tmux pane's
         # foreground pid changes over the session's life, so any value
         # captured here goes stale eventually regardless). But the
         # ADOPT RESPONSE ITSELF (``AdoptSessionResponse.session``) is
         # built from THIS ``adopted_session`` object directly in
-        # ``routes.adopt_session`` — it never goes through
+        # ``routes.adopt_session`` - it never goes through
         # ``_session_info_for``. Leaving this None meant the client's
-        # very first paint (and everything cached from it — see
+        # very first paint (and everything cached from it - see
         # client/js/terminal.js ``connectToSession``) showed "PID: ?"
         # forever, even though a later GET /sessions would have shown
         # the real pid. Reusing ``TmuxBackend.pid`` (same property
         # ``create_session`` already uses below) instead of inventing a
-        # third pid-resolution path — one extra ``display-message``
+        # third pid-resolution path - one extra ``display-message``
         # call, paid once per adopt, not on a hot path.
         adopted_session = Session(
             id=adopted_id,
@@ -2868,7 +2868,7 @@ class SessionManager:
             last_activity=datetime.utcnow(),
             agent_type=detected_agent_type,
             pinned_theme=prior_pin,
-            # PIN-FIX-EXECUTE — carry the bare tmux name so frontend uses
+            # PIN-FIX-EXECUTE - carry the bare tmux name so frontend uses
             # it (not the "adopted:" prefixed id) as the pin-key handle.
             tmux_session=name,
         )
@@ -2878,10 +2878,10 @@ class SessionManager:
         # Failures here are logged + swallowed; never block adopt.
         try:
             self.migrate_pinned_theme_to_dotfile(adopted_session)
-        except Exception as exc:  # pragma: no cover — helper already swallows
+        except Exception as exc:  # pragma: no cover - helper already swallows
             logger.debug("post_adopt_migrate_unexpected_throw", error=str(exc))
 
-        # v0.7.0 Part 3 — mint a hook token for the adopted session and
+        # v0.7.0 Part 3 - mint a hook token for the adopted session and
         # best-effort push the env into the live tmux session via
         # ``set-environment``. CAVEAT: tmux's session env propagates to NEW
         # processes spawned in panes; the already-running ``claude`` (the
@@ -2897,14 +2897,14 @@ class SessionManager:
                 await backend._run_tmux(
                     "set-environment", "-t", name, var, val, check=False
                 )
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception as exc:  # pragma: no cover - defensive
             logger.debug(
                 "adopt_set_environment_failed",
                 session=name,
                 error=str(exc),
             )
         # External sessions are intentionally NOT added to
-        # ``owned_tmux_sessions`` — we don't own them; we adopted them.
+        # ``owned_tmux_sessions`` - we don't own them; we adopted them.
         self._save_session_metadata(adopted_session)
 
         # Stash the FIFO offset for THIS session's WS tailer to consume.
@@ -2951,11 +2951,11 @@ class SessionManager:
         a row that is NOT the currently-active backend. The previous flow was
         adopt-then-destroy, which fails with ``RuntimeError("pane already
         dead")`` for sessions where the foreground process exited (e.g. user
-        Ctrl-D'd ``claude``) — leaving the session permanently un-killable
+        Ctrl-D'd ``claude``) - leaving the session permanently un-killable
         from the UI. This path skips adoption entirely and just runs
         ``tmux -L <socket> kill-session -t <name>`` directly.
 
-        Refuses to destroy the currently-active backend's session — the
+        Refuses to destroy the currently-active backend's session - the
         caller should use ``DELETE /sessions`` for that path so the in-memory
         backend, idle watcher, local-server tracker entries, and metadata
         get torn down cleanly.
@@ -2987,7 +2987,7 @@ class SessionManager:
                     "use DELETE /sessions to destroy it"
                 )
 
-        # Validate the name as a tmux target — same rule as adoption,
+        # Validate the name as a tmux target - same rule as adoption,
         # so we don't accidentally interpret ':' or '.' as separators.
         try:
             target = _safe_target(name)
@@ -3010,7 +3010,7 @@ class SessionManager:
         _, stderr = await proc.communicate()
         rc = proc.returncode or 0
 
-        # Drop ownership tracking regardless — if it WAS owned and we
+        # Drop ownership tracking regardless - if it WAS owned and we
         # just killed it, the entry is now stale; if it wasn't owned,
         # the discard is a no-op. Persist so a server restart doesn't
         # resurrect the pruned entry.
@@ -3025,7 +3025,7 @@ class SessionManager:
                     error=str(exc),
                 )
 
-        # SESSION-IDENTITY-V2 — drop any pinned theme for this name so
+        # SESSION-IDENTITY-V2 - drop any pinned theme for this name so
         # killing a session also evicts its preference. No-op if no pin
         # was set.
         self.discard_pinned_theme(name)
@@ -3034,7 +3034,7 @@ class SessionManager:
             logger.info("external_session_destroyed", name=name)
             return {"name": name, "killed": True, "already_gone": False}
 
-        # tmux returns non-zero for "session not found" too — treat that
+        # tmux returns non-zero for "session not found" too - treat that
         # as success so the UI converges. We match against the canonical
         # phrasing tmux emits: "can't find session: <name>".
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
@@ -3044,7 +3044,7 @@ class SessionManager:
             )
             return {"name": name, "killed": False, "already_gone": True}
 
-        # Genuine failure — surface as RuntimeError so the route layer
+        # Genuine failure - surface as RuntimeError so the route layer
         # turns it into a 500 with the tmux stderr in the detail. This
         # is the only path that should ever 500.
         logger.error(
@@ -3061,7 +3061,7 @@ class SessionManager:
         """Best-effort cwd probe for an adopted tmux pane.
 
         Reads ``#{pane_current_path}`` via ``tmux display-message``.
-        Falls back to ``~`` on any failure — metadata only, never chdir.
+        Falls back to ``~`` on any failure - metadata only, never chdir.
         """
         from src.core.tmux_backend import _safe_target, DEFAULT_SOCKET_NAME
 

@@ -67,13 +67,13 @@ _REFRESH_PURGE_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 async def _refresh_purge_loop(store: RefreshStore):
-    """Background task — sweeps expired refresh tokens every 6 hours."""
+    """Background task - sweeps expired refresh tokens every 6 hours."""
     while True:
         try:
             await asyncio.sleep(_REFRESH_PURGE_INTERVAL_SECONDS)
             await store.purge_expired()
         except asyncio.CancelledError:
-            # Normal shutdown path — let it propagate.
+            # Normal shutdown path - let it propagate.
             raise
         except Exception as e:  # pragma: no cover - defensive
             logger.error("refresh_purge_loop_error", error=str(e))
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("application_starting", version="1.0.0")
 
-    # feat/launch-wrappers — one-shot, idempotent config.json migration
+    # feat/launch-wrappers - one-shot, idempotent config.json migration
     # (hardcoded cld/cldor -> user-editable wrappers). MUST run before the
     # first load_auth_config() call below so a freshly-seeded wrapper list
     # is visible immediately. Best-effort / fail-soft, same posture as
@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI):
     auth_cfg = settings.load_auth_config()
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
-    # v0.7.0 Part 4 — Slack incoming-webhook channel. Empty URL = silently
+    # v0.7.0 Part 4 - Slack incoming-webhook channel. Empty URL = silently
     # disabled (slack.init logs once and returns without building a client).
     await slack_backend.init(getattr(notif_cfg, "slack_webhook_url", ""))
     # Pushover channel. Either field empty = silently disabled
@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
     # instances created via create_session have a valid emit target.
     session_manager.attach_notification_router(notification_router)
 
-    # v0.7.0 Part 3 — idempotent-merge cloudecode's Claude Code lifecycle
+    # v0.7.0 Part 3 - idempotent-merge cloudecode's Claude Code lifecycle
     # hooks into ~/.claude/settings.json. Best effort: a parse error /
     # write error / disabled-by-config all return without raising, and a
     # try/except guards against any genuinely unexpected throw so server
@@ -140,10 +140,10 @@ async def lifespan(app: FastAPI):
     # is idempotent and re-running is cheap.
     try:
         claude_hooks.ensure_hook_settings()
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning("claude_hooks_ensure_failed", error=str(exc))
 
-    # Plan v3.2 — LocalServersTracker replaces the demolished tunnel
+    # Plan v3.2 - LocalServersTracker replaces the demolished tunnel
     # subsystem. Hooks into log_monitor pattern callbacks for detection
     # and runs a 30s janitor that retires stopped listeners.
     local_servers = LocalServersTracker(loop=asyncio.get_running_loop())
@@ -157,7 +157,7 @@ async def lifespan(app: FastAPI):
     # Item 5: refresh-token revocation store. Lives in the existing state
     # directory (log_directory) so it rides along with the rest of the
     # app's persistent state. Must be up BEFORE any request can hit
-    # /auth/verify — which in practice means before the yield below.
+    # /auth/verify - which in practice means before the yield below.
     log_dir = settings.get_log_dir()
     db_path = str(log_dir / "refresh_tokens.db")
     refresh_store = RefreshStore(db_path)
@@ -173,7 +173,7 @@ async def lifespan(app: FastAPI):
     app.state.refresh_store = refresh_store
     app.state.notification_router = notification_router
 
-    # Background upload-uploads TTL pruner — safety net for long-running
+    # Background upload-uploads TTL pruner - safety net for long-running
     # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan
     # sweep in SessionManager.lifespan_startup) cover the common cases;
     # this handles slow-bleed accumulation when the server stays up for
@@ -223,7 +223,7 @@ async def lifespan(app: FastAPI):
     update_checker.stop()
     set_update_checker(None)
 
-    # Stop the upload sweeper first — it touches no other components, so
+    # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window
     # to log shutdown intent before the rest of teardown noise hits.
     if upload_sweeper_task is not None:
@@ -268,11 +268,11 @@ app = FastAPI(
 )
 
 
-# Provider-selector modal (v3.1) — remap FastAPI's default 422 to 400 for
+# Provider-selector modal (v3.1) - remap FastAPI's default 422 to 400 for
 # request-BODY validation failures. Needed so the model-id shell-injection
 # guard on ``CreateSessionRequest.model`` (a pydantic field_validator in
 # src/models.py, which raises before the route body ever runs) surfaces as
-# 400 — matching the sibling ``POST /api/v1/providers/models`` endpoint,
+# 400 - matching the sibling ``POST /api/v1/providers/models`` endpoint,
 # which validates the same regex manually and returns an explicit 400. No
 # other route in this app asserts on the literal 422 status code (grepped
 # at introduction time), so this is a safe app-wide remap rather than a
@@ -302,30 +302,30 @@ logger.info("CORS allowed origins", origins=settings.allowed_origins)
 # as you call it, but they EXECUTE inner-to-outer on the request and
 # outer-to-inner on the response. We want CSP applied to EVERY response
 # including those produced by CORS preflight, static files, and the
-# catch-all SPA route — so we register it here, after CORS. On response
+# catch-all SPA route - so we register it here, after CORS. On response
 # path it runs last, giving us a single place to stamp headers on
 # anything the app returns (including errors).
 #
 # Policy rationale for a local / LAN-only SPA:
-# - `default-src 'self'` — lock everything to same-origin by default.
-# - `script-src 'self'` — no inline or eval; all JS ships from /static.
+# - `default-src 'self'` - lock everything to same-origin by default.
+# - `script-src 'self'` - no inline or eval; all JS ships from /static.
 #   xterm.js and its addons used to load from cdn.jsdelivr.net; they are
 #   now vendored under client/vendor/xterm/ (see that dir's VERSION.md)
 #   and served same-origin, so the CDN host is no longer needed here.
-# - `style-src 'self' 'unsafe-inline'` — xterm addons (webgl, fit) inject
+# - `style-src 'self' 'unsafe-inline'` - xterm addons (webgl, fit) inject
 #   inline style attributes on DOM nodes they manage. Without
 #   `'unsafe-inline'` the terminal renders blank. This is the smallest
 #   concession that keeps the terminal usable. cdn.jsdelivr.net dropped
 #   here too now that xterm.css is vendored same-origin.
-# - `connect-src 'self' ws: wss:` — WebSocket terminal stream runs on
+# - `connect-src 'self' ws: wss:` - WebSocket terminal stream runs on
 #   the same origin; allow ws:/wss: so future tunnels (Cloudflare named)
 #   with a different scheme can still connect.
-# - `img-src 'self' data:` — data: URIs are used for QR codes / emoji SVGs.
-# - `font-src 'self' data:` — xterm embeds icon fonts as data: URIs. This
+# - `img-src 'self' data:` - data: URIs are used for QR codes / emoji SVGs.
+# - `font-src 'self' data:` - xterm embeds icon fonts as data: URIs. This
 #   never actually needed cdn.jsdelivr.net (xterm.css references no
 #   remote font URL), so nothing changes here beyond the comment being
 #   made honest.
-# - `frame-ancestors 'none'` — clickjack defense; Cloude Code is never
+# - `frame-ancestors 'none'` - clickjack defense; Cloude Code is never
 #   meant to be iframed.
 @app.middleware("http")
 async def csp_headers(request: Request, call_next):
@@ -350,7 +350,7 @@ async def csp_headers(request: Request, call_next):
 #   - app.state.limiter is where SlowAPIMiddleware looks it up.
 #   - _rate_limit_exceeded_handler emits a 429 with a Retry-After header
 #     derived from the exception's reset time. Do NOT override or duplicate
-#     its logging — slowapi already warns on 429 internally.
+#     its logging - slowapi already warns on 429 internally.
 app.state.limiter = auth_limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -390,7 +390,7 @@ class NoCacheStaticFiles(StaticFiles):
     ``.json`` is on the list as of Phase 9 (theme system): ``theme.json``
     files served from ``/static/css/themes/<id>/`` and ``/themes/<id>/``
     are user-edited at runtime, and iOS Safari was caching them across
-    sessions — flipping a manifest's CSS vars and requiring a hard reload
+    sessions - flipping a manifest's CSS vars and requiring a hard reload
     to see the change. Same revalidation strategy as JS/HTML.
 
     Applied via subclass rather than ASGI middleware because (a) it only
@@ -465,7 +465,7 @@ def _render_index_html() -> str:
 
 
 # ---------------------------------------------------------------------------
-# User themes mount (Phase 9 — pluggability surface)
+# User themes mount (Phase 9 - pluggability surface)
 # ---------------------------------------------------------------------------
 # Serves user-authored theme assets from
 # ``~/Library/Application Support/cloude-code-menubar/themes/`` (or env
@@ -474,14 +474,14 @@ def _render_index_html() -> str:
 # and is consumed by client/js/themes/registry.js when applying a manifest
 # whose ``source`` field is ``"user"``.
 #
-# UNAUTH on purpose — per spec section "Architecture F" (Pluggability
+# UNAUTH on purpose - per spec section "Architecture F" (Pluggability
 # Surface) and the T3 critique decision, theme assets contain no secrets
 # and mirror the unauth ``/static/*`` mount. Theme authors MUST NOT put
-# secrets in theme.json or effects.js — same threat model as any static
+# secrets in theme.json or effects.js - same threat model as any static
 # resource served on the LAN-only deployment.
 #
 # Mount only when the dir exists on disk so a missing user dir isn't a
-# 500 source — the discovery endpoint also gracefully handles absence.
+# 500 source - the discovery endpoint also gracefully handles absence.
 def _resolve_user_themes_dir() -> Path:
     """Resolve user themes dir. Honors env override, defaults to OS-portable
     Application Support path on macOS / config dir on linux/docker.
@@ -510,7 +510,7 @@ else:
 @app.get("/")
 async def root():
     """Serve the web interface."""
-    # See NoCacheStaticFiles docstring — the HTML shell served from "/"
+    # See NoCacheStaticFiles docstring - the HTML shell served from "/"
     # bypasses StaticFiles, so stamp the no-cache header here too or the
     # phone will keep booting a stale shell that references old JS URLs.
     # _render_index_html() also stamps the live app version into the chip.
@@ -521,7 +521,7 @@ async def root():
 
 
 # Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
-# as `/` — the client-side router (client/js/router.js) reads the path
+# as `/` - the client-side router (client/js/router.js) reads the path
 # on load, validates the slug, and auto-selects the project after auth.
 #
 # Why a dedicated FastAPI route (not a catch-all):
@@ -533,7 +533,7 @@ async def root():
 #   non-empty path segment here and rely on the client router to enforce
 #   the strict slug regex and display a visible error for invalid names.
 #   That means a visitor who pastes a bad URL sees the app shell with an
-#   error banner — not a 404 from the server. Security posture is
+#   error banner - not a 404 from the server. Security posture is
 #   unchanged because no server-side state is touched by this route.
 @app.get("/session/{project}")
 async def session_deep_link(project: str):

@@ -48,9 +48,9 @@ def probe_shell_function(
     """Check whether a zsh function/command named ``name`` resolves.
 
     Description: runs ``zsh -ic 'type <name>'`` (interactive shell, so
-      ``~/.zshrc`` is sourced — same requirement tmux's own spawned pane
+      ``~/.zshrc`` is sourced - same requirement tmux's own spawned pane
       has, see module docstring point 3) and treats exit code 0 as
-      "resolves". Never raises — a missing ``zsh`` binary, a timeout, or
+      "resolves". Never raises - a missing ``zsh`` binary, a timeout, or
       any subprocess error is treated as "not found" (fail toward NOT
       seeding rather than guessing).
     Inputs:
@@ -76,7 +76,7 @@ def probe_shell_function(
 def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
     """Build the list of wrapper dicts to seed from environment detection.
 
-    Description: a plain "claude" wrapper (the safe, universal default —
+    Description: a plain "claude" wrapper (the safe, universal default -
       marked ``default: true`` so a freshly migrated config with NEITHER
       cld nor cldor detected still launches Claude directly, never a
       function that doesn't exist) plus one entry per detected function.
@@ -87,7 +87,7 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
     Output: list[dict] - AgentWrapper-shaped dicts, ready for
       ``AgentWrapper(**d)`` or direct JSON serialization.
       ``accepts_model`` is set explicitly here (not derived) because this
-      function AUTHORS these wrappers and therefore knows the answer —
+      function AUTHORS these wrappers and therefore knows the answer -
       ``derive_accepts_model``'s heuristic exists only for wrappers that
       predate the field or were hand-written by the user.
     Example: build_seed_wrappers(True, True) -> [claude(default=False),
@@ -149,7 +149,7 @@ def _step_v0_to_v1(data: Dict, has_cld: bool, has_cldor: bool) -> Optional[Dict]
     """Version step 0 -> 1: seed ``agents.wrappers`` from the environment.
 
     Description: the original feat/launch-wrappers migration, unchanged in
-      behavior — only the version stamping moved out to the caller so
+      behavior - only the version stamping moved out to the caller so
       steps can be chained. Legacy ``*_command`` keys are NEVER modified
       or removed, only read (for the opt-out check) and left in place.
     Inputs:
@@ -170,7 +170,7 @@ def _step_v0_to_v1(data: Dict, has_cld: bool, has_cldor: bool) -> Optional[Dict]
         return None
 
     # An explicit non-empty claude_command means the user already opted
-    # out of the cld/cldor fallback — don't second-guess that by also
+    # out of the cld/cldor fallback - don't second-guess that by also
     # seeding cld/cldor wrappers (they'd sit unused, and once ANY wrapper
     # list is present it becomes the FIRST-checked source for
     # agent_type=="claude", which would silently stop honoring their
@@ -187,7 +187,7 @@ def _step_v0_to_v1(data: Dict, has_cld: bool, has_cldor: bool) -> Optional[Dict]
 
     if agents_block.get("wrappers"):
         # Already has wrappers (hand-authored or a partial prior
-        # migration) — don't touch the list.
+        # migration) - don't touch the list.
         new_data = dict(data)
         new_data["agents"] = dict(agents_block)
         return new_data
@@ -214,14 +214,14 @@ def _step_v1_to_v2(data: Dict) -> Dict:
       1. ``accepts_model`` on each entry of ``agents.wrappers``, derived
          once from the wrapper's own text (``derive_accepts_model``) so
          an existing OpenRouter wrapper keeps being offered models while
-         every other wrapper defaults to not accepting one — which is
+         every other wrapper defaults to not accepting one - which is
          exactly today's behavior for them, minus the regression where a
          model was forwarded to a wrapper that ignores it.
       2. The top-level ``terminal_commands`` seed list.
       Wrapper ``id`` values and the ``agents.wrappers`` key itself are
       untouched: ``Session.agent_type`` stores a wrapper id, so renaming
       one would orphan every session already recorded against it.
-      A config with NO wrappers (or no ``agents`` block at all) is fine —
+      A config with NO wrappers (or no ``agents`` block at all) is fine -
       there is simply nothing to annotate.
     Inputs: data (dict) - config dict at version 1 (never mutated).
     Output: dict - new config dict; equal in content to the input when
@@ -256,7 +256,7 @@ def _step_v2_to_v3(data: Dict) -> Dict:
     """Version step 2 -> 3: stamp ``family`` on every existing wrapper.
 
     Description: one addition, a no-op when already present. Every wrapper
-      reachable in a v2 config is a CLAUDE wrapper by construction — the
+      reachable in a v2 config is a CLAUDE wrapper by construction - the
       field did not exist, and ``Settings.get_agent_command`` only ever
       consulted ``agents.wrappers`` on the claude path, so any wrapper the
       user configured was, in effect, a claude wrapper whatever they
@@ -272,7 +272,7 @@ def _step_v2_to_v3(data: Dict) -> Dict:
       Wrapper ``id`` values are untouched for the same reason as every
       prior step: ``Session.agent_type`` stores them.
       A config with no wrappers, no ``agents`` block, or a malformed one
-      is fine — there is simply nothing to annotate.
+      is fine - there is simply nothing to annotate.
     Inputs: data (dict) - config dict at version 2 (never mutated).
     Output: dict - new config dict; equal in content to the input when
       every wrapper already declared a family.

@@ -173,7 +173,7 @@
 }
 
 .config-editor-root-label {
-    /* No text-transform here — these are real filesystem paths
+    /* No text-transform here - these are real filesystem paths
        (~/.claude, project .claude, working dir); "uppercase" rendered
        "~/.claude" as "~/.CLAUDE" which is a DIFFERENT, misleading path.
        Every other label in this panel computes text-transform: none;
