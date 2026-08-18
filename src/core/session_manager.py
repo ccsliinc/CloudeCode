@@ -41,6 +41,7 @@ from src.models import (
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
+from src.core.agent_family_display import resolve_family_for_display
 from src.core.session_status import STATUS_UNKNOWN
 from src.core.session_activity import (
     EVENT_STOP,
@@ -2600,6 +2601,19 @@ class SessionManager:
             update={"pty_pid": live_pid}
         )
 
+        # feat/agent-family-pills - resolved fresh on every read (not
+        # persisted) so a config edit (wrapper deleted/renamed) is
+        # reflected immediately instead of showing a stale answer.
+        # ``sess.agent_type_via_fingerprint`` is the only piece of
+        # provenance that DOES need to survive - see its docstring on
+        # ``Session`` for why fingerprint-derived values are otherwise
+        # textually indistinguishable from launched ones.
+        display_family, display_family_source = resolve_family_for_display(
+            sess.agent_type,
+            getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+            from_fingerprint=sess.agent_type_via_fingerprint,
+        )
+
         return SessionInfo(
             session=sess_out,
             recent_logs=self.get_recent_logs(session_id=session_id),
@@ -2608,6 +2622,8 @@ class SessionManager:
             session_backend=backend_name,
             tmux_session=tmux_session_name,
             agent_type=sess.agent_type,
+            agent_family=display_family.name if display_family else None,
+            agent_family_source=display_family_source,
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
@@ -2774,6 +2790,20 @@ class SessionManager:
                 unread = self._is_unread(name)
                 row["status"] = map_tmux_fallback(raw_tmux_status, unread=unread)
                 row["unread"] = unread
+                # feat/agent-family-pills - listing never fingerprints
+                # (only adopt does, since it needs a full scrollback
+                # capture), so ``row.get("agent_type")`` is presently
+                # always None here and this always resolves to
+                # (None, "unknown"). Computed via the same resolver as
+                # SessionInfo anyway, rather than hardcoding "unknown",
+                # so the day listing DOES gain fingerprinting this line
+                # does not need to change.
+                display_family, display_family_source = resolve_family_for_display(
+                    row.get("agent_type"),
+                    getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+                )
+                row["agent_family"] = display_family.name if display_family else None
+                row["agent_family_source"] = display_family_source
         return TmuxListing.answered(rows, reason=listing.reason,
                                     detail=listing.detail)
 
@@ -2978,6 +3008,13 @@ class SessionManager:
             created_at=datetime.utcnow(),
             last_activity=datetime.utcnow(),
             agent_type=detected_agent_type,
+            # feat/agent-family-pills - this value came from scrollback
+            # fingerprinting above, not a launch/config choice. True
+            # regardless of whether detection actually found a match:
+            # ``resolve_family_for_display`` already renders a None/blank
+            # agent_type as "unknown" independent of this flag; the flag
+            # only changes rendering for a value it DID find.
+            agent_type_via_fingerprint=True,
             pinned_theme=prior_pin,
             # PIN-FIX-EXECUTE - carry the bare tmux name so frontend uses
             # it (not the "adopted:" prefixed id) as the pin-key handle.

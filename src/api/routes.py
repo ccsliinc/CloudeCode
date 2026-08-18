@@ -51,6 +51,7 @@ from src.models import (
     WrapperExamplesResponse,
 )
 from src.core.tmux_listing import coerce_listing
+from src.core.agent_family_display import resolve_family_for_display
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
@@ -618,6 +619,14 @@ async def _apply_session_theme(
         last_activity=datetime.utcnow(),
         pinned_theme=theme_id,
     )
+    # feat/agent-family-pills - this placeholder carries no real
+    # agent_type, so it resolves to (None, "unknown") same as any other
+    # unresolvable input. Run through the real resolver rather than
+    # hardcoding the strings, so a future change to the resolver's
+    # "no value at all" outcome does not have to be remembered here too.
+    placeholder_family, placeholder_family_source = resolve_family_for_display(
+        None, getattr(getattr(settings, "agents", None), "wrappers", None) or []
+    )
     return SessionInfo(
         session=placeholder_session,
         recent_logs=[],
@@ -628,6 +637,8 @@ async def _apply_session_theme(
         session_backend="none",
         tmux_session=session_name,
         agent_type=None,
+        agent_family=placeholder_family.name if placeholder_family else None,
+        agent_family_source=placeholder_family_source,
         pinned_theme=theme_id,
     )
 

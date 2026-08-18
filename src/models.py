@@ -88,6 +88,21 @@ class Session(BaseModel):
         None,
         description="Agent CLI type: 'claude' | 'codex' | 'hermes' | 'openclaw' (None = unknown / pre-Phase-6 / not yet fingerprinted)",
     )
+    # feat/agent-family-pills - True iff ``agent_type`` above was produced
+    # by scrollback fingerprinting (src/core/agent_fingerprint.py) at
+    # adopt time rather than an explicit launch/config choice. A
+    # fingerprinted "codex" and a launched "codex" are textually
+    # identical in ``agent_type``; this is the only place that
+    # provenance survives, so ``resolve_family_for_display`` (see
+    # src/core/agent_families.py) can render a guess differently from a
+    # fact. Optional-with-default so legacy ``session_metadata.json``
+    # files (written before this field existed) deserialize cleanly and
+    # correctly read as "not a fingerprint guess" (they predate
+    # fingerprinting entirely).
+    agent_type_via_fingerprint: bool = Field(
+        default=False,
+        description="True iff agent_type came from scrollback fingerprinting, not an explicit choice",
+    )
     # SESSION-IDENTITY-V2 - per-session pinned theme. None = no pin (the
     # global localStorage theme rules). Optional + None default so legacy
     # ``session_metadata.json`` files (written before the field existed)
@@ -171,6 +186,28 @@ class SessionInfo(BaseModel):
     agent_type: Optional[str] = Field(
         default=None,
         description="Agent CLI type label (mirrors Session.agent_type)",
+    )
+    # feat/agent-family-pills - THREE-OUTCOME display of agent_type,
+    # computed by ``resolve_family_for_display`` (src/core/agent_families.py)
+    # at the moment this SessionInfo is built. NOT a mirror of
+    # ``Session.agent_type``: that field is a launch-time value that
+    # always has SOMETHING in it once a session is running; this pair can
+    # legitimately be ``(None, "unknown")`` when agent_type no longer
+    # resolves to any known wrapper or family (e.g. its wrapper was
+    # deleted from config after the session launched). The client must
+    # render "unknown family" for that case, never fall back to
+    # agent_type's raw string.
+    agent_family: Optional[str] = Field(
+        default=None,
+        description="Resolved family name for display ('claude'/'codex'/... ), or None if it could not be determined",
+    )
+    agent_family_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provenance of agent_family: 'wrapper' | 'reserved_name' | "
+            "'fingerprint' | 'derived_deepest' | 'unknown'. See "
+            "src.core.agent_families.resolve_family_for_display."
+        ),
     )
     # SESSION-IDENTITY-V2 - surface the pinned theme at the top level so
     # the UI can paint identity (header icon + title swap) without diving
@@ -585,6 +622,24 @@ class AttachableSession(BaseModel):
     agent_type: Optional[str] = Field(
         default=None,
         description="Detected agent CLI type for this tmux session (None = not yet fingerprinted)",
+    )
+    # feat/agent-family-pills - see SessionInfo.agent_family /
+    # agent_family_source for the full contract. For attachable rows
+    # ``agent_type`` is currently always None (listing never runs the
+    # fingerprint detector - only adopt does), so these presently always
+    # resolve to (None, "unknown"); computed via the same
+    # ``resolve_family_for_display`` rather than duplicated so the two
+    # payload shapes can never disagree about the same session.
+    agent_family: Optional[str] = Field(
+        default=None,
+        description="Resolved family name for display, or None if it could not be determined",
+    )
+    agent_family_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provenance of agent_family: 'wrapper' | 'reserved_name' | "
+            "'fingerprint' | 'derived_deepest' | 'unknown'."
+        ),
     )
     # SESSION-IDENTITY-V2 - pinned theme for this attachable session. None
     # = no pin. Discovery code populates from the active SessionManager

@@ -101,6 +101,16 @@
     --color-badge-external-bg: #4a3a2a;
     --color-badge-external-fg: #fbbf24;
 
+    /* feat/agent-family-pills - a FACT (explicit wrapper/family) and a
+       GUESS (fingerprint/derived_deepest) must not look alike; unknown
+       is a third, visibly neutral state - see .family-pill below. */
+    --color-family-fact-bg:    #2a3a3a;
+    --color-family-fact-fg:    #5eead4;
+    --color-family-guess-bg:   #3a2a3a;
+    --color-family-guess-fg:   #e879f9;
+    --color-family-unknown-bg: #333333;
+    --color-family-unknown-fg: #999999;
+
     /* ---- Agent badges (Phase 8 will consume these) -------------- */
     --badge-color-claude:    #d77757;
     --badge-color-codex:     #4ade80;
@@ -2635,6 +2645,49 @@ body.home-header-active {
 
 .badge-tmux     { background: var(--color-badge-tmux-bg);     color: var(--color-badge-tmux-fg); }
 .badge-external { background: var(--color-badge-external-bg); color: var(--color-badge-external-fg); }
+
+/* feat/agent-family-pills - THREE-OUTCOME RULE applied to the family
+ * badge. Three states, never collapsed into each other:
+ *   --fact    a stored/explicit answer (solid border, filled)
+ *   --guess   an inferred answer (fingerprint scan or a wrapper with no
+ *             recorded family) - DASHED border so a guess never reads
+ *             identically to a fact at a glance, not just on hover
+ *   --unknown could not be determined at all - literally says so
+ */
+.family-pill {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.3px;
+    border: 1px solid transparent;
+}
+
+.family-pill--fact {
+    background: var(--color-family-fact-bg);
+    color: var(--color-family-fact-fg);
+    border-style: solid;
+    border-color: var(--color-family-fact-fg);
+}
+
+.family-pill--guess {
+    background: var(--color-family-guess-bg);
+    color: var(--color-family-guess-fg);
+    border-style: dashed;
+    border-color: var(--color-family-guess-fg);
+}
+
+.family-pill--guess::before {
+    content: "~";
+    margin-right: 2px;
+}
+
+.family-pill--unknown {
+    background: var(--color-family-unknown-bg);
+    color: var(--color-family-unknown-fg);
+    border-style: dotted;
+    border-color: var(--color-family-unknown-fg);
+    font-style: italic;
+}
 
 .running-session-age {
     color: var(--color-fg-faint);

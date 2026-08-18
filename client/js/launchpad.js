@@ -389,6 +389,15 @@ class Launchpad {
                     existing.status = liveStatus;
                     existing.unread = liveUnread;
                     existing.created_by_cloude = !!live.created_by_cloude;
+                    // feat/agent-family-pills - THREE-OUTCOME family
+                    // display. ``agent_family`` is null (not a string)
+                    // whenever the server could not determine it -
+                    // overwritten unconditionally (never `||`'d against
+                    // the previous value) so a session whose wrapper was
+                    // deleted mid-session correctly flips to unknown
+                    // instead of keeping a stale guess.
+                    existing.agent_family = live.agent_family !== undefined ? live.agent_family : null;
+                    existing.agent_family_source = live.agent_family_source !== undefined ? live.agent_family_source : null;
                     if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
                 } else {
                     this.runningSessions.unshift({
@@ -421,6 +430,11 @@ class Launchpad {
                         status: liveStatus,
                         unread: liveUnread,
                         pinned_theme: live.pinned_theme || null,
+                        // feat/agent-family-pills - see the `existing`
+                        // branch above for why this is never defaulted
+                        // to a guessed string.
+                        agent_family: live.agent_family !== undefined ? live.agent_family : null,
+                        agent_family_source: live.agent_family_source !== undefined ? live.agent_family_source : null,
                     });
                 }
             }
@@ -643,6 +657,8 @@ class Launchpad {
                 sid: s.session_id || null,
                 status: s.status || 'unknown',
                 unread: !!s.unread,
+                fam: s.agent_family || null,
+                famSrc: s.agent_family_source || null,
             })),
         });
         if (sig === this._lastRunningSig) {
@@ -703,6 +719,7 @@ class Launchpad {
                   </div>
                   <div class="running-session-badges">
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
+                    ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
                     ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
                   </div>
                 </div>
@@ -737,6 +754,51 @@ class Launchpad {
             if (!ageEl) return;
             ageEl.textContent = this._formatRelativeTime(s.created_at_epoch);
         });
+    }
+
+    /**
+     * Render the agent-family pill for a running-session row.
+     *
+     * feat/agent-family-pills - THREE-OUTCOME RULE applied to the family
+     * badge (see repo CLAUDE.md). ``agentFamily`` is the resolved family
+     * name (e.g. "codex") or null/undefined when
+     * ``resolve_family_for_display`` (src/core/agent_families.py) could
+     * not determine it - NEVER a collapsed guess of "claude". A null
+     * family renders literally as "unknown family", never as any family
+     * name, and never silently as nothing.
+     *
+     * A GUESS AND A FACT MUST NOT LOOK IDENTICAL. ``agentFamilySource``
+     * of "fingerprint" or "derived_deepest" means the value was reached
+     * by inference (scrollback heuristic, or an extra hop past a wrapper
+     * with no recorded family) rather than read directly off a stored
+     * choice ("wrapper" / "reserved_name") - those two render with the
+     * ``family-pill--guess`` class (dashed border, see styles.css)
+     * instead of ``family-pill--fact`` (solid), so the two are visually
+     * distinguishable at a glance, not just in a title attribute a user
+     * has to hover to find.
+     *
+     * Inputs:
+     *   agentFamily (string|null|undefined) - resolved family name.
+     *   agentFamilySource (string|null|undefined) - one of 'wrapper' |
+     *     'reserved_name' | 'fingerprint' | 'derived_deepest' | 'unknown'.
+     * Output: string - one ``<span class="family-pill ...">`` element.
+     * Example: this._renderFamilyPillHtml('codex', 'wrapper')
+     *   -> '<span class="family-pill family-pill--fact" ...>codex</span>'
+     */
+    _renderFamilyPillHtml(agentFamily, agentFamilySource) {
+        const source = agentFamilySource || 'unknown';
+        const isGuess = source === 'fingerprint' || source === 'derived_deepest';
+        const known = !!agentFamily && source !== 'unknown';
+        const label = known ? agentFamily : 'unknown family';
+        const kindClass = !known
+            ? 'family-pill--unknown'
+            : (isGuess ? 'family-pill--guess' : 'family-pill--fact');
+        const title = known
+            ? (isGuess
+                ? `guessed from session output (${source})`
+                : `agent family: ${agentFamily}`)
+            : 'could not determine which agent this session is running';
+        return `<span class="family-pill ${kindClass}" data-family-source="${this._escapeHtml(source)}" title="${this._escapeHtml(title)}">${this._escapeHtml(label)}</span>`;
     }
 
     /**
