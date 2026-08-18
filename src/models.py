@@ -273,15 +273,20 @@ class SessionInfo(BaseModel):
     # badged EXTERNAL after a restart, because restart re-attaches through
     # the adopt path and mints ``adopted:`` ids for sessions the server
     # still correctly owns). Neither guess is derivable client-side. The
-    # server resolves it from the persisted ``owned_tmux_sessions`` set,
-    # which is authoritative, survives restart, and is what
-    # AttachableSession.created_by_cloude already uses - so both payloads
-    # now answer the same question from the same place.
+    # server resolves it from ``sessions.origin`` (feat/sessions-table,
+    # S4), falling back to the legacy in-memory ``owned_tmux_sessions``
+    # set while the cutover settles. It is authoritative, survives
+    # restart, and is what AttachableSession.created_by_cloude already
+    # uses - so both payloads now answer the same question from the same
+    # place. True covers BOTH ``origin='created'`` and
+    # ``origin='adopted'`` (design 4.6: an adopted session becomes ours
+    # for good); ``origin='observed'`` is the only external value.
     created_by_cloude: bool = Field(
         default=False,
         description=(
-            "True iff this app CREATED the tmux session (name is in the "
-            "persisted owned_tmux_sessions set); False if it was adopted"
+            "True iff this session is OURS - sessions.origin is 'created' "
+            "or 'adopted'. False means 'observed': a session on our socket "
+            "we have never claimed"
         ),
     )
 
@@ -604,9 +609,13 @@ class DirectoryEntry(BaseModel):
 class AttachableSession(BaseModel):
     """A tmux session on our socket that the UI may adopt.
 
-    ``created_by_cloude`` is True iff the name is in the server's persisted
-    ``owned_tmux_sessions`` set - i.e. we birthed it via ``POST /sessions``.
-    False means the user started it externally (the intended adopt target).
+    ``created_by_cloude`` is True iff this session is OURS, resolved from
+    ``sessions.origin`` on the tmux INSTANCE triple (socket, name,
+    creation epoch) - both ``created`` and ``adopted`` count, per design
+    section 4.6. False means ``observed``: a session on our socket we have
+    never claimed, which is the intended adopt target. Resolving on the
+    instance rather than the name is what stops a reused tmux name from
+    inheriting a dead session's badge.
     """
     name: str = Field(..., description="Literal tmux session name")
     created_by_cloude: bool = Field(
@@ -1261,3 +1270,111 @@ class ConfigSettingsUpdateRequest(BaseModel):
 
     agents: Optional[AgentCommandsUpdate] = None
     notifications: Optional[NotificationSecretsUpdate] = None
+
+
+# --- feat/sessions-table (S4) ----------------------------------------------
+# The stored ``sessions`` row on the wire, and the status of the one-way
+# first-run import. Appended rather than folded into the models above:
+# ``SessionInfo`` describes a session the app currently has OPEN, while
+# ``SessionRecord`` describes a row that exists whether or not anything is
+# attached to it. Conflating them is how RECENT ends up unable to show a
+# session that is merely stopped.
+
+
+class SessionRecord(BaseModel):
+    """One row of the ``sessions`` table, as the home screen reads it.
+
+    Every field that can be unmeasured is nullable or carries an explicit
+    unknown value. In particular ``lifecycle`` has THREE values and
+    ``unknown`` is not a flavour of ``stopped``: it means the tmux probe
+    did not answer, and a row in that state offers no lifecycle actions.
+    """
+
+    session_uuid: str = Field(..., description="Stable external identity")
+    origin: str = Field(
+        ...,
+        description=(
+            "'created' | 'adopted' | 'observed'. The first two are OURS; "
+            "'observed' is the only value that renders as external"
+        ),
+    )
+    owned: bool = Field(
+        ...,
+        description="True when origin is 'created' or 'adopted' (design 4.6)",
+    )
+    adopted_at: Optional[str] = Field(
+        default=None,
+        description="When this session was first claimed. Never rewritten",
+    )
+    tmux_socket: Optional[str] = Field(default=None)
+    tmux_name: Optional[str] = Field(default=None)
+    tmux_created_epoch: Optional[int] = Field(
+        default=None,
+        description=(
+            "tmux #{session_created}. With socket and name this is the "
+            "INSTANCE identity; the name alone is not an identity"
+        ),
+    )
+    lifecycle: str = Field(
+        ...,
+        description="'running' | 'stopped' | 'unknown' - see design 4.2",
+    )
+    lifecycle_checked_at: Optional[str] = Field(default=None)
+    lifecycle_source: Optional[str] = Field(default=None)
+    project_id: Optional[int] = Field(default=None)
+    project_attribution: str = Field(
+        ...,
+        description=(
+            "'explicit' | 'derived_deepest' | 'none' | 'unknown'. 'none' "
+            "means probed and matched nothing; 'unknown' means we could "
+            "not probe. Only 'unknown' is NEEDS ATTENTION"
+        ),
+    )
+    working_dir: Optional[str] = Field(default=None)
+    agent_type: Optional[str] = Field(default=None)
+    agent_family: Optional[str] = Field(default=None)
+    agent_family_source: Optional[str] = Field(
+        default=None,
+        description="Unresolved renders as UNKNOWN, never as 'claude'",
+    )
+    model: Optional[str] = Field(default=None)
+    archived_at: Optional[str] = Field(
+        default=None,
+        description="Visibility only. NEVER hides a running session",
+    )
+    title: Optional[str] = Field(default=None)
+
+
+class SessionImportStatus(BaseModel):
+    """Whether the one-way first-run session import has run, and if not why.
+
+    THREE OUTCOMES. ``state`` is ``completed`` (the latch is stamped),
+    ``pending`` (it has not run and MUST retry - typically because the
+    tmux probe could not answer), or ``unavailable`` (the datastore
+    itself could not be read, so we cannot even say which of the first
+    two applies). ``pending`` is never reported as ``completed``, because
+    a stamped latch over a failed probe is permanent silent data loss.
+    """
+
+    state: str = Field(
+        ..., description="'completed' | 'pending' | 'unavailable'"
+    )
+    imported_at: Optional[str] = Field(
+        default=None,
+        description="meta.imported_from_json_at. None whenever not completed",
+    )
+    pending_reason: Optional[str] = Field(
+        default=None,
+        description="The tmux probe's own reason token, e.g. 'timeout'",
+    )
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sentence for the home screen. Present ONLY when there is "
+            "something to act on, so its presence means act"
+        ),
+    )
+    session_count: Optional[int] = Field(
+        default=None,
+        description="Rows in the sessions table. None when unavailable",
+    )

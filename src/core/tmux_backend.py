@@ -1075,7 +1075,9 @@ class TmuxBackend(SessionBackend):
         return None, out.decode("utf-8", errors="replace")
 
     def list_attachable_sessions(
-        self, owned_names: Optional[set] = None
+        self,
+        owned_names: Optional[set] = None,
+        owned_instances: Optional[set] = None,
     ) -> TmuxListing:
         """Enumerate tmux sessions on our socket for the adopt UI.
 
@@ -1086,6 +1088,16 @@ class TmuxBackend(SessionBackend):
         Inputs:
             owned_names (Optional[set]): names this app persisted as its
                 own, used to resolve ``created_by_cloude``.
+            owned_instances (Optional[set]): ``(tmux_name, epoch)`` pairs
+                sourced from ``sessions.origin`` (feat/sessions-table,
+                S4). PREFERRED over ``owned_names`` when supplied,
+                because it identifies the tmux INSTANCE rather than the
+                name, and the name is not an identity - it is reusable.
+                An entry whose epoch is ``None`` is a legacy in-memory
+                name carrying no creation time; it matches on the name
+                alone, exactly as before. ``None`` for the whole argument
+                means "no instance opinion", and resolution falls back to
+                ``owned_names``.
 
         Output:
             TmuxListing: ``ok=True`` with one dict row per session when
@@ -1095,13 +1107,19 @@ class TmuxBackend(SessionBackend):
                 timed out, or failed - the caller must not read that as
                 zero sessions.
 
-        ``created_by_cloude`` is set by cross-referencing each name
-        against ``owned_names`` (the SessionManager-persisted set of
-        session names Cloude Code created). When ``owned_names`` is
-        None, we fall back to the ``cloude_`` prefix heuristic AND log
-        a debug note - callers from the live app path should always
-        pass the owned set so a user's ``cloude_whatever`` external
-        session doesn't masquerade as ours.
+        RESOLUTION ORDER for ``created_by_cloude``, most specific
+        first: ``owned_instances`` (identity - name AND epoch), then
+        ``owned_names`` (the SessionManager-persisted name set), then the
+        ``cloude_`` prefix heuristic. When both owned arguments are None
+        we take the heuristic AND log a debug note - callers from the
+        live app path should always pass an owned set so a user's
+        ``cloude_whatever`` external session doesn't masquerade as ours.
+
+        WHY THE EPOCH TIER MATTERS. If a session named ``foo`` that this
+        app owned dies, and the user creates a new unrelated ``foo``, the
+        name still matches the owned set and the new, unowned process
+        would badge as ours. The epoch differs, so the instance does not
+        match, and the new session correctly badges external.
 
         If ``owned_names`` contains a name that's NOT in the live tmux
         listing, log a WARN (stale metadata - the reconciler should
@@ -1147,7 +1165,15 @@ class TmuxBackend(SessionBackend):
             except ValueError:
                 window_count = 0
 
-            if owned_names is not None:
+            if owned_instances is not None:
+                # Identity tier: match the INSTANCE. A (name, None) entry
+                # is a legacy in-memory name with no creation time and
+                # matches on the name alone.
+                created_by_cloude = (
+                    (name, created_at_epoch) in owned_instances
+                    or (name, None) in owned_instances
+                )
+            elif owned_names is not None:
                 created_by_cloude = name in owned_names
             else:
                 # Fallback heuristic; caller from live path should pass

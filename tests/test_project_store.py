@@ -43,7 +43,6 @@ from src.core.db_migration import ensure_db_migrated
 from src.core.db_models import META_IMPORTED_FROM_JSON_RESULT, PROJECT_SOURCE_CONFIG_IMPORT
 from src.core.project_store import (
     ImportResult,
-    ensure_projects_imported,
     get_project_by_root,
     import_from_config,
     list_projects,
@@ -229,22 +228,61 @@ def test_duplicate_against_an_already_imported_row_is_also_recorded(tmp_path):
         assert rows[0]["display_name"] == "orig"
 
 
-# --- ensure_projects_imported: the once-only guard -------------------------
+# --- the latch does NOT belong to this module any more ---------------------
+#
+# feat/sessions-table (S4). project_store used to own
+# ``ensure_projects_imported``, which stamped meta.imported_from_json_at
+# as soon as the PROJECTS stage finished. That was correct while projects
+# were the whole import, and became a silent-data-loss bug the moment
+# sessions joined it: the latch would be stamped BEFORE the tmux probe
+# ran, so a failed probe would import no sessions and permanently mark
+# the import complete. The stamp now lives in exactly one place,
+# src/core/session_import.py, after the probe has succeeded.
 
 
-def test_ensure_projects_imported_runs_once(tmp_path):
+def test_project_store_never_stamps_the_import_latch():
+    """No code path in project_store.py may stamp imported_from_json_at.
+
+    Asserted at the AST level rather than by running the import, because
+    the danger is a FUTURE edit re-adding the stamp here, and a
+    behavioural test only catches the stamp on the paths it happens to
+    exercise.
+    """
+    tree = ast.parse(PROJECT_STORE_PATH.read_text())
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != "set_meta":
+            continue
+        for arg in node.args:
+            literal = getattr(arg, "value", None)
+            ident = getattr(arg, "id", None)
+            if literal == "imported_from_json_at" or ident == "META_IMPORTED_FROM_JSON_AT":
+                offenders.append(node.lineno)
+    assert offenders == [], (
+        "project_store.py stamps the one-way import latch at line(s) "
+        f"{offenders}. The latch may only be stamped by "
+        "src/core/session_import.py, and only after a SUCCESSFUL tmux probe"
+    )
+
+
+def test_import_from_config_is_idempotent_so_a_retry_is_safe(tmp_path):
+    """A failed-probe retry re-runs the projects stage without doubling rows.
+
+    This is what lets session_import run the projects stage before the
+    tmux gate: if the probe fails and the whole import retries on the
+    next start, projects must not be imported twice.
+    """
     with closing(_migrated_conn(tmp_path)) as conn:
         projects = [FakeProjectConfig(name="p1", path="/tmp/p1")]
         with transaction(conn):
-            first = ensure_projects_imported(conn, projects, now="2026-08-18T00:00:00Z")
-        assert first is not None
+            first = import_from_config(conn, projects, now="2026-08-18T00:00:00Z")
         assert first.imported == 1
-
-        # Second call, even with a DIFFERENT project list, is a no-op:
-        # the flag is already stamped.
         with transaction(conn):
-            second = ensure_projects_imported(
-                conn, [FakeProjectConfig(name="p2", path="/tmp/p2")], now="2026-08-18T02:00:00Z"
-            )
-        assert second is None
+            second = import_from_config(conn, projects, now="2026-08-18T02:00:00Z")
+        assert second.imported == 0
+        assert len(second.dropped) == 1
         assert len(list_projects(conn)) == 1

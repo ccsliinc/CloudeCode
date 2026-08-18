@@ -1,0 +1,273 @@
+"""Repository layer for the ``sessions`` table (design doc section 3.3).
+
+Hand-rolled sqlite3, matching src/core/db.py and src/core/project_store.py
+house style. No ORM.
+
+IDENTITY, WHICH IS THE WHOLE POINT OF THIS MODULE.
+
+A session has two identities and they answer different questions:
+
+  ``session_uuid``  stable EXTERNAL identity, minted by the app, never
+                    reused, never recomputed. What a URL or a foreign key
+                    should carry.
+  the INSTANCE      ``(tmux_socket, tmux_name, tmux_created_epoch)``. What
+                    a live ``tmux list-sessions`` row can be matched
+                    against. Enforced by ``ux_sessions_tmux_instance``.
+
+The tmux NAME alone is NOT an identity. Names are reusable, and this app
+re-mints them itself with a ``-2``/``-3`` uniquifier
+(session_manager ``_sanitize_tmux_name``). ``#{session_created}`` is what
+separates "the same session" from "a different session that took the
+name", and it is why every lookup in this module keys on the triple and
+never on the name.
+
+WHAT THAT BUYS. When a session dies and a new one takes its name, the new
+instance's epoch differs, so it does not match the old row, so NO
+statement in this module touches the old row. The new instance gets its
+own row with ``origin='observed'`` and a fresh ``session_uuid``; the old
+row keeps its origin and its ``adopted_at`` byte for byte and falls to
+``stopped`` at the next successful probe. Without the epoch, name reuse
+would silently transfer an adoption to a process the user never claimed
+and badge it as his.
+
+WHERE THE WRITES LIVE. This module is the READ side. Everything that
+can create, claim or refuse a row is in src/core/session_identity.py,
+because those are the only operations that can get identity wrong.
+
+THE ONE-SECOND COLLISION. ``#{session_created}`` has one-second
+resolution, so a session killed and recreated with the same name inside
+the same second produces a colliding triple. When the stored row for that
+triple is already ``stopped``, it CANNOT be the live session we are
+looking at, and the correct action is to REFUSE THE MERGE AND LOG - never
+to overwrite. See :func:`record_instance` and design section 4.6.
+
+ORIGIN REPLACES ``owned_tmux_sessions``. ``origin`` is a stored column
+anchored on the instance triple, so it survives an app restart, a server
+restart and a reboot, which the in-memory set never did. It is written
+ONCE and never recomputed. Both ``created`` and ``adopted`` badge as
+OURS (design 4.6, decided 2026-08-17); ``observed`` is the only value
+that renders as external.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import structlog
+
+from src.core.db import table_exists
+from src.core.db_models import (
+    DEFAULT_TMUX_SOCKET,
+    SESSION_ATTRIBUTION_UNKNOWN,
+    SESSION_LIFECYCLE_UNKNOWN,
+    SESSION_ORIGIN_OBSERVED,
+    SESSION_OWNED_ORIGINS,
+)
+
+logger = structlog.get_logger()
+
+SESSIONS_TABLE = "sessions"
+
+def sessions_table_ready(conn: sqlite3.Connection) -> bool:
+    """Report whether this database has reached schema v2.
+
+    Description: every read in this module returns an empty answer rather
+      than raising on a pre-v2 file, so the app keeps working on a
+      database that has not been migrated yet. Writes still raise, because
+      a silently dropped write is the failure mode this whole subsystem
+      exists to prevent.
+    Inputs: conn (sqlite3.Connection).
+    Output: bool - True when the ``sessions`` table exists.
+    """
+    return table_exists(conn, SESSIONS_TABLE)
+
+
+def get_instance(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: int,
+) -> Optional[Dict[str, Any]]:
+    """Look up the row for one tmux instance triple.
+
+    Description: the ONLY lookup shape this module offers for a live tmux
+      session. There is deliberately no get-by-name: a name matches any
+      number of historical instances, and picking one of them is the bug
+      the epoch was added to prevent.
+    Inputs: conn (sqlite3.Connection). socket (str) - tmux socket name.
+      name (str) - tmux session name. epoch (int) -
+      ``#{session_created}``.
+    Output: dict | None - the row, or None when no row has that triple
+      (including on a pre-v2 database).
+    Example: get_instance(conn, socket='cloude', name='a', epoch=1000)
+    """
+    if not sessions_table_ready(conn):
+        return None
+    row = conn.execute(
+        "SELECT * FROM sessions WHERE tmux_socket = ? AND tmux_name = ? "
+        "AND tmux_created_epoch = ?",
+        (socket, name, int(epoch)),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def owned_instances(
+    conn: sqlite3.Connection, *, socket: str = DEFAULT_TMUX_SOCKET
+) -> Set[Tuple[str, int]]:
+    """Return every ``(tmux_name, epoch)`` pair this app owns on a socket.
+
+    Description: the replacement source of truth for the ownership badge.
+      Keyed on the INSTANCE, not the name, so a reused name cannot inherit
+      a previous instance's badge - which is the entire reason the epoch
+      is in the index. Prefer this over :func:`owned_names` at any call
+      site that has the epoch to hand.
+    Inputs: conn (sqlite3.Connection). socket (str) - tmux socket.
+    Output: set[tuple[str, int]] - empty on a pre-v2 database, which the
+      caller must treat as "no DB opinion" and fall back, never as "the
+      app owns nothing".
+    Example: owned_instances(conn)  # {('cloude_a', 1000)}
+    """
+    if not sessions_table_ready(conn):
+        return set()
+    placeholders = ", ".join("?" for _ in SESSION_OWNED_ORIGINS)
+    rows = conn.execute(
+        "SELECT tmux_name, tmux_created_epoch FROM sessions "
+        f"WHERE tmux_socket = ? AND origin IN ({placeholders}) "
+        "AND tmux_name IS NOT NULL AND tmux_created_epoch IS NOT NULL",
+        (socket, *SESSION_OWNED_ORIGINS),
+    ).fetchall()
+    return {(str(row[0]), int(row[1])) for row in rows}
+
+
+def owned_names(
+    conn: sqlite3.Connection, *, socket: str = DEFAULT_TMUX_SOCKET
+) -> Set[str]:
+    """Return the tmux NAMES this app owns on a socket.
+
+    Description: the lossy sibling of :func:`owned_instances`, for the
+      call sites that genuinely do not have an epoch (``SessionInfo``
+      carries a name and no creation time). It is lossy in one specific
+      way worth stating: if a name was owned as one instance and is now a
+      different, unowned instance, this returns the name and the badge
+      will be wrong for that one row until the epoch reaches that call
+      site. Use :func:`owned_instances` wherever the epoch exists.
+    Inputs: conn (sqlite3.Connection). socket (str).
+    Output: set[str] - empty on a pre-v2 database.
+    """
+    return {name for name, _epoch in owned_instances(conn, socket=socket)}
+
+
+def list_sessions(
+    conn: sqlite3.Connection,
+    *,
+    lifecycle: Optional[str] = None,
+    include_archived: bool = True,
+) -> List[Dict[str, Any]]:
+    """Return session rows as plain dicts, newest first.
+
+    Description: ``include_archived`` defaults to True and the RUNNING
+      caller must leave it that way. Design section 4.8 makes it a
+      schema-level guarantee that archiving never hides a live process,
+      so the running query does not reference ``archived_at`` at all.
+    Inputs: conn (sqlite3.Connection). lifecycle (str | None) - filter to
+      one of db_models.SESSION_LIFECYCLES; None returns every state,
+      including ``unknown``. include_archived (bool).
+    Output: list[dict] - empty on a pre-v2 database.
+    Example: list_sessions(conn, lifecycle='stopped', include_archived=False)
+    """
+    if not sessions_table_ready(conn):
+        return []
+    clauses: List[str] = []
+    values: List[Any] = []
+    if lifecycle is not None:
+        clauses.append("lifecycle = ?")
+        values.append(lifecycle)
+    if not include_archived:
+        clauses.append("archived_at IS NULL")
+    query = "SELECT * FROM sessions"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id DESC"
+    return [dict(row) for row in conn.execute(query, values).fetchall()]
+
+
+def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Return the rows the home screen must surface as CANNOT DETERMINE.
+
+    Description: design section 4.3's NEEDS ATTENTION group, restricted
+      to what the sessions table itself can answer: a row whose lifecycle
+      could not be evaluated, or whose project attribution could not be
+      evaluated. This group exists so the third outcome reaches the
+      roll-up instead of being folded into RUNNING or RECENT. Empty on a
+      healthy machine, which is the point.
+
+      ``project_attribution='none'`` is deliberately NOT here: "probed,
+      and it belongs to no project" is a complete answer.
+    Inputs: conn (sqlite3.Connection).
+    Output: list[dict] - empty on a pre-v2 database.
+    """
+    if not sessions_table_ready(conn):
+        return []
+    rows = conn.execute(
+        "SELECT * FROM sessions WHERE lifecycle = ? OR project_attribution = ? "
+        "ORDER BY id DESC",
+        (SESSION_LIFECYCLE_UNKNOWN, SESSION_ATTRIBUTION_UNKNOWN),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_sessions(conn: sqlite3.Connection) -> int:
+    """Count every row in the sessions table.
+
+    Description: used by the import guard and by tests that must assert
+      "zero rows were written", which is a different statement from "the
+      query returned nothing".
+    Inputs: conn (sqlite3.Connection).
+    Output: int - 0 on a pre-v2 database.
+    """
+    if not sessions_table_ready(conn):
+        return 0
+    row = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
+    return int(row[0]) if row else 0
+
+
+def is_owned_origin(origin: Optional[str]) -> bool:
+    """Report whether an origin value badges as OURS.
+
+    Description: the one place the membership test is spelled, so the
+      badge cannot be right on one screen and wrong on another - which is
+      exactly how the original ownership bug survived three hand-repaired
+      call sites. Both ``created`` and ``adopted`` are ours (design 4.6);
+      ``observed`` is the only external value.
+    Inputs: origin (str | None) - a ``sessions.origin`` value, or None
+      for a row we do not have.
+    Output: bool - False for None, which is honest: no row is not the
+      same claim as an unowned row, and the caller decides what to do
+      with the absence.
+    Example: is_owned_origin('adopted')  # True
+    """
+    return origin in SESSION_OWNED_ORIGINS
+
+
+def observed_origin_for(name: str, owned_tmux_names: Set[str]) -> str:
+    """Choose the import-time origin for one live tmux session.
+
+    Description: design section 5.3 step 4. ``created`` when the legacy
+      in-memory owned set holds the name, otherwise ``observed``. It can
+      NEVER return ``adopted``: past adoptions were never persisted
+      anywhere, so importing one would be inventing a fact the app has no
+      evidence for. The user re-adopts once, and from then on it sticks.
+    Inputs: name (str) - a live tmux session name. owned_tmux_names
+      (set[str]) - the legacy ``SessionManager.owned_tmux_sessions``.
+    Output: str - ``created`` or ``observed``. Never ``adopted``.
+    Example: observed_origin_for('a', {'a'})  # 'created'
+    """
+    from src.core.db_models import SESSION_ORIGIN_CREATED
+
+    return (
+        SESSION_ORIGIN_CREATED
+        if name in owned_tmux_names
+        else SESSION_ORIGIN_OBSERVED
+    )

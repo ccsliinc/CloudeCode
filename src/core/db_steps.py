@@ -24,7 +24,12 @@ import sqlite3
 from typing import Callable, Dict, List
 
 from src.core.db import ensure_install_id, set_meta
-from src.core.db_models import DDL_V1, META_CREATED_AT, META_SCHEMA_VERSION
+from src.core.db_models import (
+    DDL_V1,
+    DDL_V2,
+    META_CREATED_AT,
+    META_SCHEMA_VERSION,
+)
 from src.core.migration_trail import utc_now
 
 
@@ -48,12 +53,34 @@ def _step_v0_to_v1(conn: sqlite3.Connection) -> None:
     ensure_install_id(conn)
 
 
+def _step_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Create the sessions table and its four indexes (design section 3.3).
+
+    Description: build step S4. Idempotent by construction - every
+      statement in DDL_V2 carries IF NOT EXISTS, so re-running this after
+      an interrupted attempt creates whatever is missing and no-ops on
+      the rest. Purely additive: it creates one table and four indexes
+      and touches nothing that shipped in v1, so a v1 reader that has not
+      been upgraded keeps working against the same file.
+
+      The unique index it installs, ux_sessions_tmux_instance, is the
+      object that makes tmux-name reuse safe: identity is the triple
+      (tmux_socket, tmux_name, tmux_created_epoch), never the name alone.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v1_to_v2(conn)  # after _step_v0_to_v1
+    """
+    for statement in DDL_V2:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
 # step is a database that can never reach the version the code demands.
 STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _step_v0_to_v1,
+    1: _step_v1_to_v2,
 }
 
 

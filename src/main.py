@@ -210,34 +210,54 @@ async def lifespan(app: FastAPI):
     # signal source for IdleWatcher in Item 7).
     auth_cfg = settings.load_auth_config()
 
-    # feat/projects-table (S3) - shadow AuthConfig.projects into
-    # cloude.db, once per install, guarded by meta.imported_from_json_at
-    # (src/core/project_store.ensure_projects_imported). config.json
+    # feat/sessions-table (S4) - the ONE first-run import: config
+    # projects, then live tmux sessions, guarded by the one-way latch
+    # meta.imported_from_json_at (src/core/session_import). config.json
     # stays authoritative for writes; this never modifies it. Only runs
     # when the datastore resolved writable at boot - a degraded/read-only
     # datastore is left alone, and the app keeps working from
-    # config.json exactly as it did before this table existed. Best
+    # config.json exactly as it did before these tables existed. Best
     # effort and never blocks boot, same posture as claude_hooks below.
+    #
+    # THE PROBE IS TAKEN HERE, ONCE, AND HANDED IN. A TmuxListing with
+    # ok=False imports ZERO sessions and leaves the latch UNSET so the
+    # next start retries - see session_import's module docstring for why
+    # stamping it anyway would silently destroy the user's history. The
+    # pending notice is stashed on app.state for the home screen; its
+    # presence means "session import has not run yet", and its absence is
+    # NOT proof it has (read meta.imported_from_json_at for that).
+    app.state.session_import_notice = None
     if datastore_state.healthy:
         from src.core.db import connect, db_path_for, transaction
-        from src.core.project_store import ensure_projects_imported
+        from src.core.session_import import run_first_run_import
+        from src.core.tmux_listing import coerce_listing
 
         try:
+            _listing = coerce_listing(session_manager.list_attachable_sessions())
             with closing(
                 connect(db_path_for(settings.get_state_dir()))
-            ) as _projects_conn:
-                with transaction(_projects_conn):
-                    _import_result = ensure_projects_imported(
-                        _projects_conn, auth_cfg.projects
+            ) as _import_conn:
+                with transaction(_import_conn):
+                    _import_result = run_first_run_import(
+                        _import_conn,
+                        projects=auth_cfg.projects,
+                        listing=_listing,
+                        owned_tmux_names=set(
+                            session_manager.owned_tmux_sessions
+                        ),
                     )
-                if _import_result is not None:
-                    logger.info(
-                        "projects_imported_from_config",
-                        imported=_import_result.imported,
-                        duplicates_dropped=len(_import_result.dropped),
-                    )
+                app.state.session_import_notice = (
+                    _import_result.home_screen_notice()
+                )
+                logger.info(
+                    "first_run_import",
+                    outcome=_import_result.outcome,
+                    sessions_imported=_import_result.sessions_imported,
+                    listing_ok=_listing.ok,
+                    listing_reason=_listing.reason,
+                )
         except Exception as exc:  # noqa: BLE001 - import must never block boot
-            logger.warning("projects_import_failed", error=str(exc))
+            logger.warning("first_run_import_failed", error=str(exc))
 
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)

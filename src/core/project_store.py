@@ -5,11 +5,24 @@ Hand-rolled sqlite3, matching src/core/db.py's house style - no ORM, no
 below), and every write wrapped in the caller-or-callee transaction
 convention already used by db_migration.py.
 
+WHO OWNS THE ONE-WAY LATCH. Not this module, and it used to. An
+earlier version of ``ensure_projects_imported`` stamped
+``meta.imported_from_json_at`` as soon as the PROJECTS stage finished.
+That was correct while projects were the whole import and became a
+silent-data-loss bug the moment sessions joined it (build step S4): the
+latch would be stamped before the tmux probe had even run, so a failed
+probe would import no sessions AND permanently mark the import complete.
+The stamp now lives in exactly one place, ``src/core/session_import.py``,
+at the end of the success path, and this module only ever performs the
+projects stage. ``import_from_config`` is idempotent against rows already
+present, so re-running it after a failed probe does not double anything.
+
 ``config.json`` REMAINS AUTHORITATIVE for writes. Nothing in this module
 writes to config.json, and nothing in this module is called from the
 config-write path (src/config.py's ``add_project`` / ``delete_project`` /
 ``update_project`` etc). This table is a SHADOW: imported once from
-config.json at first run (``ensure_projects_imported``), read by the
+config.json at first run (by
+``src/core/session_import.run_first_run_import``), read by the
 GET /projects/presence route, and compared against config.json - never
 trusted over it.
 
@@ -33,7 +46,6 @@ import structlog
 
 from src.core.db import get_meta, set_meta, table_exists, transaction
 from src.core.db_models import (
-    META_IMPORTED_FROM_JSON_AT,
     META_IMPORTED_FROM_JSON_RESULT,
     PROJECT_SOURCE_CONFIG_IMPORT,
 )
@@ -185,35 +197,6 @@ def import_from_config(
         )
 
     return ImportResult(imported=imported, dropped=dropped)
-
-
-def ensure_projects_imported(
-    conn: sqlite3.Connection,
-    projects: Iterable[ProjectConfigLike],
-    *,
-    now: Optional[str] = None,
-) -> Optional[ImportResult]:
-    """Run ``import_from_config`` exactly once per install, ever.
-
-    Description: guarded by ``meta.imported_from_json_at`` (design
-      section 5.3), the SAME flag the later sessions/themes/unread
-      import stages (build steps S4-S7) will check before extending
-      their own artifact into the DB - this call only performs the
-      CONFIG PROJECTS stage of that sequence, but stamps the shared flag
-      so a later stage's own guard (once it exists) is consistent with
-      this one rather than re-deriving "have we imported" a second way.
-      config.json is never modified by this call or anything it calls.
-    Inputs: conn (sqlite3.Connection) - caller owns the transaction.
-      projects (Iterable[ProjectConfigLike]). now (str | None).
-    Output: ImportResult | None - None when the flag was already set
-      (import already ran in a previous process lifetime).
-    """
-    if get_meta(conn, META_IMPORTED_FROM_JSON_AT) is not None:
-        return None
-    stamp = now or utc_now()
-    result = import_from_config(conn, projects, now=stamp)
-    set_meta(conn, META_IMPORTED_FROM_JSON_AT, stamp)
-    return result
 
 
 def list_projects(

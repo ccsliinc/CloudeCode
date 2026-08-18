@@ -226,8 +226,8 @@ def test_two_backups_in_the_same_second_do_not_collide(tmp_path) -> None:
     from src.core.db_backup import take_backup
 
     ensure_db_migrated(tmp_path, 4, "0.8.2")
-    first = take_backup(db_path_for(tmp_path), tmp_path, 1)
-    second = take_backup(db_path_for(tmp_path), tmp_path, 1)
+    first = take_backup(db_path_for(tmp_path), tmp_path, CURRENT_SCHEMA_VERSION)
+    second = take_backup(db_path_for(tmp_path), tmp_path, CURRENT_SCHEMA_VERSION)
     assert first.verified and second.verified
     assert first.path != second.path
     assert first.path.exists() and second.path.exists()

@@ -88,7 +88,7 @@ def test_bootstrap_creates_db_and_writes_the_trail_first(tmp_path) -> None:
     state = ensure_db_migrated(tmp_path, 4, "0.8.2")
     assert state.status == STATUS_OK
     assert state.schema_version == CURRENT_SCHEMA_VERSION
-    assert state.migrations_applied == ["0->1"]
+    assert state.migrations_applied == ["0->1", "1->2"]
     assert db_path_for(tmp_path).exists()
 
     entries = MigrationTrail(tmp_path).read().entries

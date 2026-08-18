@@ -49,6 +49,8 @@ from src.models import (
     MODEL_ID_PATTERN,
     WrapperListResponse,
     WrapperExamplesResponse,
+    SessionRecord,
+    SessionImportStatus,
 )
 from src.core.tmux_listing import coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -2075,3 +2077,180 @@ async def get_projects_presence() -> dict:
         return {"status": "unreachable", "projects": [], "detail": str(exc)}
 
     return {"status": "ok", "projects": rows, "detail": None}
+
+
+# --- feat/sessions-table (S4) ----------------------------------------------
+# Appended, not woven into the routes above. These two read the STORED
+# sessions table; every route before them reads live process state. The
+# separation is deliberate: a stored row exists whether or not anything is
+# attached to it, which is the only way RECENT can show a stopped session.
+
+
+def _session_record_payload(row: dict) -> SessionRecord:
+    """Project one sessions row onto the wire model.
+
+    Description: one place that maps DB columns to wire fields, so the
+      ``owned`` flag cannot be computed differently by two routes - the
+      ownership badge was already hand-repaired across three sites once,
+      and that is precisely how the original bug survived.
+    Inputs: row (dict) - a ``sessions`` row from session_store.
+    Output: SessionRecord.
+    """
+    from src.core.session_store import is_owned_origin
+
+    return SessionRecord(
+        session_uuid=str(row.get("session_uuid")),
+        origin=str(row.get("origin")),
+        owned=is_owned_origin(row.get("origin")),
+        adopted_at=row.get("adopted_at"),
+        tmux_socket=row.get("tmux_socket"),
+        tmux_name=row.get("tmux_name"),
+        tmux_created_epoch=row.get("tmux_created_epoch"),
+        lifecycle=str(row.get("lifecycle")),
+        lifecycle_checked_at=row.get("lifecycle_checked_at"),
+        lifecycle_source=row.get("lifecycle_source"),
+        project_id=row.get("project_id"),
+        project_attribution=str(row.get("project_attribution")),
+        working_dir=row.get("working_dir"),
+        agent_type=row.get("agent_type"),
+        agent_family=row.get("agent_family"),
+        agent_family_source=row.get("agent_family_source"),
+        model=row.get("model"),
+        archived_at=row.get("archived_at"),
+        title=row.get("title"),
+    )
+
+
+@router.get(
+    "/sessions/records",
+    response_model=List[SessionRecord],
+    dependencies=[Depends(require_auth)],
+)
+async def list_session_records(request: Request):
+    """Every stored session row, newest first, archived rows included.
+
+    Description: archived rows are INCLUDED and the caller filters,
+      because design section 4.8 makes it a schema-level guarantee that
+      archiving never hides a running session - a route that filtered
+      here could quietly break that guarantee for the RUNNING group.
+    Inputs: request (Request) - unused beyond auth.
+    Output: list[SessionRecord] - empty when the datastore is absent or
+      has not reached schema v2. That emptiness is reported honestly by
+      GET /sessions/import-status, which is where a caller asks whether
+      the absence of rows is an answer or a failure.
+    Raises: HTTPException 503 - the datastore exists but is unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return []
+
+    def _read() -> list:
+        """Open, read and close on ONE pooled thread (connections are
+        thread-affine).
+
+        Inputs: none (closes over db_path).
+        Output: list[dict] - raw session rows.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.list_sessions(conn)
+
+    try:
+        rows = await run_in_threadpool(_read)
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return [_session_record_payload(row) for row in rows]
+
+
+@router.get(
+    "/sessions/import-status",
+    response_model=SessionImportStatus,
+    dependencies=[Depends(require_auth)],
+)
+async def session_import_status(request: Request):
+    """Whether the one-way first-run session import has run, and if not why.
+
+    Description: THE THIRD OUTCOME MADE VISIBLE. The import is guarded by
+      ``meta.imported_from_json_at``, a latch stamped once and never
+      cleared, over an input (the live tmux process list) that is gone by
+      tomorrow. If the tmux probe fails, the import writes NOTHING and
+      leaves the latch unset - correct, but invisible, because an empty
+      RECENT list looks exactly like a user with no history. This route is
+      how that silence gets a voice: ``pending`` with the probe's own
+      reason, and a ``notice`` sentence for the home screen.
+
+      ``unavailable`` is its own state and is never folded into either of
+      the other two: a datastore we could not read tells us nothing about
+      whether the import ran.
+    Inputs: request (Request) - unused beyond auth.
+    Output: SessionImportStatus.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for, get_meta
+    from src.core.db_models import (
+        META_IMPORTED_FROM_JSON_AT,
+        META_SESSION_IMPORT_PENDING_REASON,
+    )
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return SessionImportStatus(
+            state="pending",
+            pending_reason="datastore_absent",
+            notice=(
+                "Session import is PENDING: the datastore has not been "
+                "created yet. No sessions were imported and none were lost."
+            ),
+        )
+
+    def _read() -> tuple:
+        """Read the latch, the pending reason and the row count together.
+
+        Inputs: none (closes over db_path).
+        Output: tuple[str | None, str | None, int].
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return (
+                get_meta(conn, META_IMPORTED_FROM_JSON_AT),
+                get_meta(conn, META_SESSION_IMPORT_PENDING_REASON),
+                session_store.count_sessions(conn),
+            )
+
+    try:
+        imported_at, pending_reason, count = await run_in_threadpool(_read)
+    except DatastoreUnreadableError as exc:
+        return SessionImportStatus(
+            state="unavailable",
+            notice=(
+                "Session import state CANNOT BE DETERMINED: the datastore "
+                f"could not be read ({exc}). This is not a report that the "
+                "import did or did not run."
+            ),
+        )
+
+    if imported_at:
+        return SessionImportStatus(
+            state="completed", imported_at=imported_at, session_count=count
+        )
+
+    reason = pending_reason or "not_yet_run"
+    return SessionImportStatus(
+        state="pending",
+        pending_reason=reason,
+        session_count=count,
+        notice=(
+            "Session import is PENDING: tmux could not be listed "
+            f"(reason: {reason}). No sessions were imported and none were "
+            "lost. This retries automatically on the next start."
+        ),
+    )

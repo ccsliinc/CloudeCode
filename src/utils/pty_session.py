@@ -389,7 +389,9 @@ class PTYBackend(SessionBackend):
         return TmuxListing.answered([], reason=REASON_NOT_APPLICABLE)
 
     def list_attachable_sessions(
-        self, owned_names: Optional[set] = None  # noqa: ARG002
+        self,
+        owned_names: Optional[set] = None,  # noqa: ARG002
+        owned_instances: Optional[set] = None,  # noqa: ARG002
     ) -> TmuxListing:
         """PTYs have no cross-process addressable surface - always empty.
 

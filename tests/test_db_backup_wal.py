@@ -43,6 +43,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
+from src.core.db_models import CURRENT_SCHEMA_VERSION
 from src.core.db import connect, db_path_for, get_schema_version
 from src.core.db_backup import take_backup, verify_backup
 from src.core.db_migration import ensure_db_migrated
@@ -143,15 +144,15 @@ def test_vacuum_into_captures_wal_commits_and_cp_does_not(tmp_path) -> None:
     cp_count = _count_meta_rows(cp_target)
 
     # --- the sanctioned mechanism -------------------------------------
-    result = take_backup(live, tmp_path, 1)
+    result = take_backup(live, tmp_path, CURRENT_SCHEMA_VERSION)
     assert result.verified is True, result.reason
     vacuum_count = _count_meta_rows(result.path)
 
-    verified, reason = verify_backup(result.path, 1)
+    verified, reason = verify_backup(result.path, CURRENT_SCHEMA_VERSION)
     assert verified is True, reason
     with closing(connect(result.path, create=False)) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert get_schema_version(conn) == 1
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
 
     # THE ASSERTION THAT MAKES THIS TEST MEAN ANYTHING.
     assert vacuum_count != cp_count, (
@@ -176,12 +177,15 @@ def test_backup_verification_rejects_a_wrong_version_snapshot(tmp_path) -> None:
     the database the migration is about to leave.
     """
     ensure_db_migrated(tmp_path, 4, "0.8.2")
-    result = take_backup(db_path_for(tmp_path), tmp_path, 1)
+    result = take_backup(db_path_for(tmp_path), tmp_path, CURRENT_SCHEMA_VERSION)
     assert result.verified is True
 
     verified, reason = verify_backup(result.path, 99)
     assert verified is False
-    assert "records schema_version 1, expected 99" in reason
+    assert (
+        f"records schema_version {CURRENT_SCHEMA_VERSION}, expected 99"
+        in reason
+    )
 
 
 def test_unverifiable_backup_is_deleted_not_left_behind(tmp_path) -> None:
@@ -216,7 +220,7 @@ def test_verification_rejects_a_corrupt_copy_whose_version_still_reads(
     real SQLite file - not a patched-out integrity_check.
     """
     ensure_db_migrated(tmp_path, 4, "0.8.2")
-    result = take_backup(db_path_for(tmp_path), tmp_path, 1)
+    result = take_backup(db_path_for(tmp_path), tmp_path, CURRENT_SCHEMA_VERSION)
     assert result.verified is True
 
     # Grow the copy past one page, then scribble on a later page.
@@ -238,9 +242,9 @@ def test_verification_rejects_a_corrupt_copy_whose_version_still_reads(
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "1"
+            == str(CURRENT_SCHEMA_VERSION)
         )
 
-    verified, reason = verify_backup(result.path, 1)
+    verified, reason = verify_backup(result.path, CURRENT_SCHEMA_VERSION)
     assert verified is False
     assert "integrity_check" in reason

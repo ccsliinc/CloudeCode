@@ -412,7 +412,7 @@ def test_list_attachable_sessions_maps_tmux_status_with_unread(monkeypatch, tmp_
     mgr.set_manual_unread("external_sess", True)
 
     class _FakeProbe:
-        def list_attachable_sessions(self, owned_names):
+        def list_attachable_sessions(self, owned_names, owned_instances=None):
             return [{"name": "external_sess", "created_by_cloude": False, "created_at_epoch": 0, "window_count": 1}]
 
         def list_pane_status_all(self):

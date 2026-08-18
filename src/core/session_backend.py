@@ -161,7 +161,9 @@ class SessionBackend(ABC):
         """
 
     def list_attachable_sessions(
-        self, owned_names: Optional[set] = None
+        self,
+        owned_names: Optional[set] = None,
+        owned_instances: Optional[set] = None,
     ) -> TmuxListing:
         """Return all sessions on this backend's addressable surface.
 
@@ -177,7 +179,11 @@ class SessionBackend(ABC):
         Each dict MUST contain:
             - ``name`` (str): tmux session name as returned by
               ``#{session_name}``.
-            - ``created_by_cloude`` (bool): True iff ``name`` appears in
+            - ``created_by_cloude`` (bool): resolved from
+              ``owned_instances`` when supplied (a ``(tmux_name, epoch)``
+              set sourced from ``sessions.origin``, which identifies the
+              tmux INSTANCE rather than the reusable name); otherwise
+              True iff ``name`` appears in
               ``owned_names``. Backends that don't cross-reference an
               owned-set fall back to backend-specific heuristics.
             - ``created_at_epoch`` (int): UNIX epoch seconds from

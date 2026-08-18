@@ -658,10 +658,16 @@ class SessionManager:
         # tmux session on our socket (``cloude_foo`` they made themselves)
         # must NOT be rehydrated as if it were ours; it'll surface in the
         # adopt UI instead.
+        # feat/sessions-table (S4): this is an OWNERSHIP decision, so it
+        # goes through the shared resolver rather than reading the legacy
+        # set directly - a session whose stored origin is 'created' or
+        # 'adopted' is ours and must rehydrate even after the in-memory
+        # set has been rebuilt from scratch by a restart. That is the
+        # whole reason origin is a stored column.
         ownership_ok = (
             target_name is not None
             and (
-                target_name in self.owned_tmux_sessions
+                self.is_owned_tmux_name(target_name)
                 or self._legacy_metadata_needs_backfill
             )
         )
@@ -2637,7 +2643,7 @@ class SessionManager:
             # payloads can never disagree about the same session.
             created_by_cloude=bool(
                 tmux_session_name
-                and tmux_session_name in self.owned_tmux_sessions
+                and self.is_owned_tmux_name(tmux_session_name)
             ),
         )
 
@@ -2698,6 +2704,137 @@ class SessionManager:
                 names.add(n)
         return names
 
+    # ---- Ownership: sessions.origin is the source of truth -------------
+    #
+    # feat/sessions-table (S4). Ownership used to be membership of the
+    # in-memory ``owned_tmux_sessions`` set, which was rebuilt from a live
+    # listing on every start and therefore could not remember an adoption
+    # across a restart. It is now ``sessions.origin``, a stored column
+    # anchored on the tmux INSTANCE triple.
+    #
+    # ``owned_tmux_sessions`` is deliberately still maintained and still
+    # consulted. It is removed in a separate follow-up, only once
+    # scripts/verify_session_ownership_badge.py has passed against the DB
+    # as the source of truth. Until then the two are UNIONed, which can
+    # only ever widen the owned set by rows the import derived FROM that
+    # same set - so the badge cannot regress while the cutover settles.
+    #
+    # THE DB IS CONSULTED THROUGH ONE PLACE. Three call sites reading
+    # ownership three different ways is how the original bug survived, so
+    # every read below funnels through ``_owned_instances_from_db``.
+
+    def _datastore_connection(self):
+        """Open cloude.db for a best-effort ownership read, or return None.
+
+        Description: ownership is read on the render path, so a database
+          that is missing, locked or pre-v2 must degrade to the legacy
+          in-memory set rather than raise into a badge. None means "the
+          datastore has no opinion", which is NOT the same as "this app
+          owns nothing" - the caller falls back instead of concluding.
+        Inputs: none (reads ``settings.get_state_dir()``).
+        Output: sqlite3.Connection | None.
+        """
+        try:
+            from src.core.db import connect, db_path_for
+
+            path = db_path_for(settings.get_state_dir())
+            if not Path(path).exists():
+                return None
+            return connect(path, create=False)
+        except Exception as exc:  # noqa: BLE001 - never break the render path
+            logger.debug("ownership_datastore_unavailable", error=str(exc))
+            return None
+
+    def _owned_instances_from_db(self) -> Optional[set]:
+        """Read the owned ``(tmux_name, epoch)`` pairs from sessions.origin.
+
+        Description: the single DB read behind every ownership decision in
+          this class. Keyed on the instance, never on the name alone, so a
+          reused tmux name cannot inherit a dead session's badge.
+        Inputs: none.
+        Output: set[tuple[str, int]] | None - None when the datastore
+          could not answer at all (absent, unreadable, pre-v2). An EMPTY
+          SET is a real answer of "the DB knows of no owned instance";
+          None is the absence of an answer, and the two are handled
+          differently by every caller.
+        """
+        conn = self._datastore_connection()
+        if conn is None:
+            return None
+        try:
+            from src.core.session_store import owned_instances, sessions_table_ready
+
+            if not sessions_table_ready(conn):
+                return None
+            return owned_instances(conn, socket=self._tmux_socket_name())
+        except Exception as exc:  # noqa: BLE001 - never break the render path
+            logger.debug("ownership_db_read_failed", error=str(exc))
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
+    def _tmux_socket_name(self) -> str:
+        """The tmux socket the stored instance triples are keyed on.
+
+        Description: read from settings with the schema default as the
+          fallback, so a row written by the import and a row read by the
+          badge cannot disagree about which socket they describe.
+        Inputs: none.
+        Output: str.
+        """
+        from src.core.db_models import DEFAULT_TMUX_SOCKET
+
+        session_cfg = getattr(settings, "session", None)
+        return (
+            getattr(session_cfg, "tmux_socket_name", None)
+            or DEFAULT_TMUX_SOCKET
+        )
+
+    def owned_tmux_instances(self) -> Optional[set]:
+        """Owned ``(tmux_name, epoch)`` pairs, DB first, legacy set folded in.
+
+        Description: the value handed to the attachable listing, which is
+          the one path that HAS the epoch for every row and can therefore
+          make the identity-correct decision. Legacy names contribute with
+          a wildcard epoch of None, which the backend treats as
+          name-matching for that name only.
+        Inputs: none.
+        Output: set[tuple[str, int | None]] | None - None when the DB had
+          no opinion AND the legacy set is empty, so the backend keeps its
+          existing name-based behaviour untouched.
+        """
+        from_db = self._owned_instances_from_db()
+        legacy = {(name, None) for name in self.owned_tmux_sessions}
+        if from_db is None:
+            return legacy or None
+        combined = set(from_db) | legacy
+        return combined or set()
+
+    def is_owned_tmux_name(self, name: Optional[str]) -> bool:
+        """Report whether a tmux NAME belongs to a session we own.
+
+        Description: the name-only fallback, for call sites that carry no
+          creation epoch - ``SessionInfo`` is one. Lossy in exactly one
+          way, stated so nobody has to rediscover it: a name owned as one
+          instance and now reused by a different, unowned instance reads
+          as owned here until the epoch reaches this call site. The
+          attachable listing, which does have the epoch, is not lossy.
+        Inputs: name (str | None) - a tmux session name.
+        Output: bool - False for None or an empty name.
+        Example: mgr.is_owned_tmux_name('cloude_a')
+        """
+        if not name:
+            return False
+        if name in self.owned_tmux_sessions:
+            return True
+        from_db = self._owned_instances_from_db()
+        if from_db is None:
+            return False
+        return any(owned_name == name for owned_name, _epoch in from_db)
+
     def list_attachable_sessions(self) -> TmuxListing:
         """Enumerate tmux sessions on our socket, flagged by ownership.
 
@@ -2729,7 +2866,8 @@ class SessionManager:
         )
         listing = coerce_listing(
             probe.list_attachable_sessions(
-                owned_names=set(self.owned_tmux_sessions)
+                owned_names=set(self.owned_tmux_sessions),
+                owned_instances=self.owned_tmux_instances(),
             )
         )
         if not listing.ok:
