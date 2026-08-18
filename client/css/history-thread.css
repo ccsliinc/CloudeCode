@@ -1,0 +1,436 @@
+/*
+ * History viewer - thread internals: the message-thread layout itself.
+ * ---------------------------------------------------------------------
+ * Split from history.css at the 500-line limit. The seam is "the browser
+ * chrome and the two list levels" (there) versus "one conversation
+ * rendered as bubbles, chips, dividers and notes" (here). MUST load AFTER
+ * history.css: the desktop media query at the foot of that file narrows
+ * `.history-thread__list`, and source order is what decides.
+ *
+ * `dvh`, never bare `vh` - same reason as history.css, see its header.
+ */
+
+/* ---------------------------------------------------------- thread */
+
+.history-thread {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.history-thread__header {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.history-thread__title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-fg);
+    margin-bottom: 4px;
+    overflow-wrap: anywhere;
+}
+
+.history-thread__list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 10px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+
+.history-thread__status {
+    flex: 0 0 auto;
+    min-height: 1.2em;
+    padding: 0 14px 4px;
+    font-size: 0.7rem;
+    color: var(--color-fg-subtle);
+}
+
+/* --------------------------------------------------------- controls */
+
+.history-controls {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.history-search {
+    display: flex;
+    flex: 1 1 200px;
+    gap: 6px;
+}
+
+.history-search__input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 7px 9px;
+    font-size: 0.8rem;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+}
+
+.history-search__go {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    font-size: 0.78rem;
+    color: var(--color-on-accent);
+    background: var(--color-accent);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.history-search__results {
+    flex: 1 1 100%;
+    max-height: 34dvh;
+    overflow-y: auto;
+}
+
+.history-search__results:empty {
+    display: none;
+}
+
+.history-search__note {
+    padding: 6px 0;
+    font-size: 0.72rem;
+    color: var(--color-fg-subtle);
+}
+
+.history-hit {
+    display: block;
+    width: 100%;
+    padding: 7px 8px;
+    text-align: left;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    margin-bottom: 4px;
+    cursor: pointer;
+}
+
+.history-hit__where {
+    display: block;
+    font-size: 0.66rem;
+    color: var(--color-accent);
+}
+
+.history-hit__snippet {
+    display: block;
+    font-size: 0.74rem;
+    color: var(--color-fg-muted);
+    overflow-wrap: anywhere;
+}
+
+.history-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    font-size: 0.74rem;
+    color: var(--color-fg-muted);
+    cursor: pointer;
+}
+
+/* ---------------------------------------------------------- bubbles */
+
+.history-turn {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+}
+
+.history-turn--user {
+    align-items: flex-end;
+}
+
+.history-turn--assistant {
+    align-items: flex-start;
+}
+
+.history-bubble {
+    max-width: 84%;
+    padding: 9px 11px;
+    border-radius: 14px;
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+/*
+ * The archive is full of code, markup and half-written HTML. It is
+ * written into the DOM with textContent (see history-render.js), so
+ * `pre-wrap` is what makes it READ correctly: newlines survive, runs of
+ * spaces survive, and `anywhere` stops a 400-character path from forcing
+ * the whole thread to scroll sideways on a phone.
+ */
+.history-bubble__text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.history-bubble--user {
+    background: var(--color-accent-bg);
+    border: 1px solid var(--color-accent-border);
+    border-bottom-right-radius: 4px;
+    color: var(--color-fg);
+}
+
+.history-bubble--assistant {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-bottom-left-radius: 4px;
+    color: var(--color-fg);
+}
+
+.history-bubble__flag {
+    margin-top: 6px;
+    font-size: 0.66rem;
+    color: var(--color-warning);
+}
+
+.history-turn__when {
+    margin: 2px 4px 0;
+    font-size: 0.62rem;
+    color: var(--color-fg-subtle);
+}
+
+/* ------------------------------------------------------------- chips */
+
+/*
+ * A chip is a full-width single line between turns, deliberately NOT a
+ * bubble: a turn with twelve tool calls should still read as one turn.
+ * Built as <details> so it expands with no JavaScript and no inline
+ * handler, which is what keeps it inside `default-src 'self'`.
+ */
+.history-chip {
+    align-self: stretch;
+    font-size: 0.7rem;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-overlay-faint);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+}
+
+.history-chip__summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 9px;
+    cursor: pointer;
+    list-style: none;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.history-chip__summary::-webkit-details-marker {
+    display: none;
+}
+
+.history-chip__icon {
+    color: var(--color-accent);
+}
+
+.history-chip__name {
+    color: var(--color-fg-muted);
+}
+
+.history-chip__id {
+    font-family: 'SF Mono', Menlo, monospace;
+    color: var(--color-fg-subtle);
+}
+
+.history-chip__duration {
+    margin-left: auto;
+    color: var(--color-info);
+}
+
+.history-chip__progress {
+    color: var(--color-fg-subtle);
+}
+
+.history-chip__body {
+    padding: 6px 9px 9px;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.history-chip__gap {
+    margin: 6px 0 0;
+    font-size: 0.66rem;
+    line-height: 1.4;
+    color: var(--color-fg-subtle);
+}
+
+/* ---------------------------------------------------------- dividers */
+
+/*
+ * Full width, and loud enough to be a landmark while scrolling past 46 of
+ * them. The thread does not renumber or collapse across one: everything
+ * that was compacted stays exactly where it was, with this drawn through
+ * it.
+ */
+.history-divider {
+    align-self: stretch;
+    margin: 10px 0;
+    padding: 6px 8px;
+    text-align: center;
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border-top: 1px solid var(--color-warning-border);
+    border-bottom: 1px solid var(--color-warning-border);
+}
+
+.history-divider--expandable > .history-divider__label {
+    cursor: pointer;
+    list-style: none;
+}
+
+.history-divider--expandable > .history-divider__label::-webkit-details-marker {
+    display: none;
+}
+
+.history-divider__label {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.history-divider__body {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--color-warning-border);
+    text-align: left;
+}
+
+.history-divider__text {
+    max-height: 40dvh;
+    overflow-y: auto;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    color: var(--color-fg-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- notes */
+
+.history-note {
+    align-self: stretch;
+    display: flex;
+    gap: 8px;
+    padding: 4px 9px;
+    font-size: 0.66rem;
+    color: var(--color-fg-subtle);
+    border-left: 2px solid var(--color-border);
+}
+
+.history-note__type {
+    flex: 0 0 auto;
+    font-family: 'SF Mono', Menlo, monospace;
+    color: var(--color-fg-faint);
+}
+
+.history-note__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    /* Notes are context, not content: three lines is a signpost, more is
+       a distraction in the middle of a conversation. */
+    max-height: 4.5em;
+    overflow: hidden;
+}
+
+/*
+ * An assistant turn whose content is not in this response. Deliberately
+ * the quietest thing on the page: it appears roughly once every four
+ * assistant turns, so it has to be legible without competing with the
+ * conversation it sits inside.
+ */
+.history-note--empty {
+    opacity: 0.55;
+    font-size: 0.62rem;
+    border-left-color: var(--color-border-subtle);
+}
+
+/* --------------------------------------------- third-outcome blocks */
+
+/*
+ * "Could not be evaluated" is never an empty list and never a silent
+ * skip, so it gets a visible block of its own with the reason in it.
+ */
+.history-unavailable {
+    margin: 16px 14px;
+    padding: 12px;
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger-border);
+    border-radius: 8px;
+}
+
+.history-unavailable__title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--color-danger-strong);
+}
+
+.history-unavailable__reason {
+    margin-top: 6px;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    color: var(--color-fg-muted);
+}
+
+.history-unavailable__code {
+    margin-top: 6px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.68rem;
+    color: var(--color-fg-subtle);
+}
+
+.history-caveat {
+    margin: 10px 14px 0;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    border-radius: 6px;
+}
+
+/* A row jumped to from search, marked so the eye finds it on arrival. */
+.history-target {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+/* ------------------------------------------------------------ desktop */
+
+@media (min-width: 768px) {
+    .history-thread__list,
+    .history-controls,
+    .history-thread__header {
+        max-width: 860px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
+    }
+
+    .history-bubble {
+        max-width: 70%;
+        font-size: 0.86rem;
+    }
+}

@@ -1,0 +1,194 @@
+/*
+ * History viewer - read-only conversation archive.
+ * ---------------------------------------------------------------------
+ * PHONE FIRST. The base rules here ARE the phone layout; the only media
+ * query widens things for a desktop window. Nothing needs a hover to be
+ * usable and nothing depends on a pointer.
+ *
+ * `dvh`, NEVER BARE `vh`. On iOS Safari `100vh` is the height of the
+ * viewport with the URL bar HIDDEN, which is taller than what is on
+ * screen when the bar is showing - so a `100vh` overlay pushes its own
+ * bottom edge under the browser chrome and the last message is
+ * unreachable. `dvh` tracks the live viewport. This codebase has been
+ * burned by that repeatedly; see the comment on `.screen` in styles.css.
+ *
+ * ONE SCROLLER PER LEVEL. The project and session lists scroll the
+ * `.history-body`. The thread does NOT: its header, controls and status
+ * strip stay put and only `.history-thread__list` scrolls, which is what
+ * makes the paging arithmetic in history-thread.js meaningful - it reads
+ * `scrollTop` and `scrollHeight` off exactly one element. `--thread`
+ * turns the outer scroller off so the two can never both scroll and
+ * fight each other.
+ *
+ * Colours are the app's existing custom properties, so the viewer follows
+ * whatever theme is active instead of shipping a second palette.
+ */
+
+.history-overlay {
+    /* Overrides .modal-overlay's centring: this is a full-screen surface,
+       not a card floating in the middle of one. */
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    background: var(--color-bg);
+    height: 100dvh;
+    padding: 0;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.history-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    background: var(--color-bg-page);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.history-header__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--color-fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-header__back,
+.history-header__close {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.history-header__back:hover,
+.history-header__close:hover {
+    color: var(--color-fg);
+    background: var(--color-bg-hover);
+}
+
+/* ------------------------------------------------------------------ body */
+
+.history-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* The thread owns its own scroller - see the file header. */
+.history-body--thread {
+    overflow: hidden;
+    padding-bottom: 0;
+}
+
+.history-loading,
+.history-empty {
+    padding: 24px 16px;
+    color: var(--color-fg-muted);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+/* ------------------------------------------------------- list rows */
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.history-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    padding: 12px 14px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--color-border-subtle);
+    color: var(--color-fg);
+    cursor: pointer;
+}
+
+.history-row:hover,
+.history-row:focus-visible {
+    background: var(--color-bg-hover);
+}
+
+.history-row__title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    /* Session titles and slugs run long; wrap rather than clip so the
+       distinguishing tail of a name is never the part that is hidden. */
+    overflow-wrap: anywhere;
+}
+
+.history-row__sub {
+    font-size: 0.75rem;
+    color: var(--color-fg-muted);
+    overflow-wrap: anywhere;
+}
+
+.history-more {
+    display: block;
+    width: calc(100% - 28px);
+    margin: 14px;
+    padding: 10px;
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+/* --------------------------------------------------------- meta chips */
+
+.history-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: 0.68rem;
+    color: var(--color-fg-faint);
+}
+
+.history-meta__label {
+    color: var(--color-fg-subtle);
+    margin-right: 3px;
+}
+
+.history-meta__value {
+    color: var(--color-fg-muted);
+    overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ desktop */
+
+@media (min-width: 768px) {
+    .history-body {
+        /* Cap the measure and centre it: a full-width list on a wide
+           monitor is a worse read than a column. The THREAD's own desktop
+           rules live in history-thread.css beside the base rules they
+           narrow -- they are equal specificity, so they have to be in the
+           file that loads last or the base rule wins. */
+        max-width: 860px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
+    }
+}
