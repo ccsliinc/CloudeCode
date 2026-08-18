@@ -355,6 +355,25 @@ body:has(#auth-screen.active) .status-rail {
     align-items: center;
     justify-content: flex-start;
     width: 100%;
+    /* Flex-column children size to their MAX-CONTENT width during the
+     * parent's shrink-to-fit pass (`.cloude-session-theme` has no fixed
+     * width, only min/max-width), and a run of text with no break
+     * opportunity - one long word, or an id-fallback name joined by
+     * underscores like `black_market` - has a max-content width equal to
+     * its full unbroken length. That inflated preferred width pushes
+     * `.cloude-session-theme__list` past its own clamped box, and because
+     * the list sets `overflow-y: auto` the UA is spec-required to resolve
+     * the omitted `overflow-x` to `auto` too (not `visible`) - so the
+     * overflow doesn't just clip, it becomes a genuine horizontal scroll
+     * inside the picker. `overflow-wrap: anywhere` gives the browser a
+     * break opportunity everywhere, which both lets the label actually
+     * wrap onto a second line AND, just as importantly, caps the
+     * intrinsic width calculation itself so the container never inflates
+     * past its max-width in the first place. min-width: 0 is the flex-item
+     * half of the same fix - without it a flex child's automatic minimum
+     * size is its content's min-content width, which for unbreakable text
+     * is that same full length, so the wrap alone isn't enough. */
+    min-width: 0;
     height: auto;
     min-height: 44px;
     border-radius: 0;
@@ -365,6 +384,7 @@ body:has(#auth-screen.active) .status-rail {
     color: var(--color-fg);
     font-family: var(--font-mono);
     font-size: 13px;
+    overflow-wrap: anywhere;
     cursor: pointer;
 }
 
