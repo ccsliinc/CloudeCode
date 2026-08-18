@@ -171,6 +171,119 @@ def test_build_backend_auto_picks_tmux_when_available():
     assert isinstance(backend, TmuxBackend)
 
 
+@requires_tmux
+def test_build_backend_honors_configured_socket_name():
+    """REGRESSION (fix/backend-socket-name): ``build_backend`` used to
+    construct ``TmuxBackend`` without ``socket_name`` at all, so every
+    session silently landed on the hardcoded ``DEFAULT_SOCKET_NAME``
+    ("cloude") no matter what ``AuthConfig.session.tmux_socket_name``
+    said. This locks in that a configured non-default socket name is
+    actually threaded through to the backend instance.
+
+    Uses a unique, never-``cloude`` socket name so this test can never
+    touch the app's real shared socket even if the fix regresses.
+    """
+    configured = f"cloude_regress_{uuid.uuid4().hex[:8]}"
+    assert configured != "cloude"
+
+    class StubSettings:
+        def load_auth_config(self):
+            class AC:
+                class session:
+                    backend = "tmux"
+                    tmux_socket_name = configured
+                    scrollback_lines = 100
+
+            return AC()
+
+    backend = build_backend(
+        settings_obj=StubSettings(),
+        session_id=f"socket-honor-{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+    )
+    assert isinstance(backend, TmuxBackend)
+    assert backend.socket_name == configured, (
+        f"build_backend must honor the configured tmux_socket_name; "
+        f"expected {configured!r}, got {backend.socket_name!r}"
+    )
+
+
+@requires_tmux
+def test_build_backend_defaults_to_cloude_socket_with_no_settings():
+    """Counterpart to the regression test above: with no settings object
+    (or a settings object whose config lookup fails), the default path
+    MUST be unchanged — sessions still land on ``DEFAULT_SOCKET_NAME``
+    ("cloude"). This is the socket the user's live sessions already run
+    on; a regression here would strand them.
+    """
+    from src.core.tmux_backend import DEFAULT_SOCKET_NAME
+
+    backend = build_backend(
+        settings_obj=None,
+        session_id=f"socket-default-{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+    )
+    assert isinstance(backend, TmuxBackend)
+    assert backend.socket_name == DEFAULT_SOCKET_NAME == "cloude"
+
+
+@requires_tmux
+def test_build_backend_create_and_adopt_agree_on_socket(tmux_socket_cleanup):
+    """A session created via ``build_backend`` on a configured socket must
+    be adoptable AND destroyable on that SAME socket — the split-brain
+    the bug caused: create silently used ``cloude`` while the adopt path
+    (``SessionManager._adopt_external_session``, session_manager.py:2762)
+    already read the configured value, so an adopted-by-name lookup could
+    never find a session that create had actually placed elsewhere.
+
+    Runs entirely on ``tmux_socket_cleanup``'s unique per-test socket —
+    never the real ``cloude`` socket.
+    """
+
+    class StubSettings:
+        def load_auth_config(self):
+            class AC:
+                class session:
+                    backend = "tmux"
+                    tmux_socket_name = tmux_socket_cleanup
+                    scrollback_lines = 100
+
+            return AC()
+
+    settings_obj = StubSettings()
+    created = build_backend(
+        settings_obj=settings_obj,
+        session_id=f"agree-{uuid.uuid4().hex[:6]}",
+        working_dir=Path.home(),
+        on_output=None,
+        session_name=f"cloude_agree_{uuid.uuid4().hex[:6]}",
+    )
+    try:
+        asyncio.run(created.start())
+
+        adopt_socket = settings_obj.load_auth_config().session.tmux_socket_name
+        assert created.socket_name == adopt_socket, (
+            "create and adopt resolved DIFFERENT sockets — split-brain"
+        )
+
+        adopted = TmuxBackend.for_external(
+            session_name=created.tmux_session,
+            working_dir=Path.home(),
+            on_output=None,
+            socket_name=adopt_socket,
+        )
+        asyncio.run(adopted.attach_existing(needs_pipe_setup=True))
+        assert adopted.is_alive(), (
+            "adopt could not find the session create just started on "
+            "the same configured socket"
+        )
+        asyncio.run(adopted.stop())
+    finally:
+        asyncio.run(created.stop())
+
+
 # ---- TmuxBackend integration (requires tmux) ----------------------------
 
 
