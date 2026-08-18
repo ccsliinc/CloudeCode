@@ -97,6 +97,7 @@
     "brightCyan": "#5cffb8",
     "brightWhite": "#aaffaa"
   },
+  "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/scifi-drone.m4a",
     "srcFallback": "/static/assets/audio/scifi-drone.ogg",

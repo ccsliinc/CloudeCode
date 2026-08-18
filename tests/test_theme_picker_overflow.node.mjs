@@ -207,8 +207,13 @@ test('all 23 real bundled theme names/ids fit even at the pre-fix rule (sanity)'
     // theme without a wrap point is added, adopted, or falls back to its
     // id. This test is a sanity check, not the regression guard above.
     const themesDir = path.join(__dirname, '..', 'client', 'css', 'themes');
+    // A theme is a directory holding a theme.json, which is exactly the rule
+    // _scan_themes_root applies server-side. Counting bare directories also
+    // counted client/css/themes/_shared/, the effects harness, which is not a
+    // theme and never appears in the picker.
     const dirs = fs.readdirSync(themesDir).filter((d) =>
-        fs.statSync(path.join(themesDir, d)).isDirectory());
+        fs.statSync(path.join(themesDir, d)).isDirectory()
+        && fs.existsSync(path.join(themesDir, d, 'theme.json')));
     assert.equal(dirs.length, 23, `expected 23 bundled themes, found ${dirs.length}`);
     const containerMax = 40;
     for (const d of dirs) {
