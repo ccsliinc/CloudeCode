@@ -36,6 +36,18 @@
     "sweep_interval_seconds": 3600,
     "max_size_mb": 10
   },
+  "_comment_history": "Read-only conversation-archive viewer (GET /api/v1/history/*). DEFAULT OFF: it needs the separate claude-history archive database plus the optional deps in requirements-history.txt. Leave enabled false unless you have both. stale_after_seconds drives the current/stale freshness verdict; past hard_stale_after_seconds the API answers unavailable rather than reading from an old index.",
+  "history": {
+    "enabled": false,
+    "db_path": "",
+    "stale_after_seconds": 21600,
+    "hard_stale_after_seconds": 259200,
+    "default_page_size": 50,
+    "max_page_size": 200,
+    "max_text_chars": 20000,
+    "max_outline_turns": 500,
+    "busy_timeout_ms": 5000
+  },
   "_comment_common_slash_commands": "Bare strings still work exactly as before; their short descriptions come from the built-in table in src/core/slash_command_labels.py. Use the object form only to override the wording or to describe a command the table does not know. Keep descriptions under 28 characters - they render on the chip on a phone.",
   "common_slash_commands": [
     "/clear",

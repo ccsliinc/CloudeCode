@@ -276,6 +276,57 @@ class UploadsConfig(BaseModel):
     max_file_size_mb: int = Field(default=50, ge=1)
 
 
+class HistoryConfig(BaseModel):
+    """Read-only Claude Code conversation-archive viewer configuration.
+
+    DEFAULT OFF, and that is a design decision rather than caution. The
+    archive is a separate multi-gigabyte SQLite file produced by the
+    ``claude-history`` project; the overwhelming majority of installs do
+    not have it, and Cloude Code is a fork that sends fixes upstream. A
+    hard dependency on that file (or on SQLAlchemy, which nothing else
+    here needs) would fail startup everywhere it is absent, so both the
+    package import and the database open are lazy and every failure to
+    reach the archive is reported as a THIRD outcome (``unavailable`` with
+    a machine-readable reason), never as an empty success.
+
+    - ``enabled``: master switch. False = the router still mounts (so the
+      client gets a structured "disabled" answer instead of a 404) and
+      every endpoint returns ``status: "unavailable"``, ``reason:
+      "disabled"``. Nothing opens the database.
+    - ``db_path``: absolute path to ``claude_history.db``. Empty string
+      means "not configured", which is its own reason and is NOT the same
+      as "the file is missing".
+    - ``stale_after_seconds``: how far behind the last COMPLETED ingest
+      run may be before freshness reads ``stale``. Answers still return
+      ``ok`` with a caveat; degrading a working read to unavailable here
+      burns the alert's credibility for no gain. Default 6h.
+    - ``hard_stale_after_seconds``: past this the archive is old enough
+      that a confident answer is worse than none, so ``status`` becomes
+      ``unavailable`` with ``reason: "index_stale"``. Default 72h.
+    - ``default_page_size`` / ``max_page_size``: thread-window paging. The
+      ``messages`` table is millions of rows; ``max_page_size`` is a hard
+      server-side cap, not a suggestion, so no client can ask for a whole
+      session.
+    - ``max_text_chars``: per-message body cap in a window response. A
+      single pasted log can be megabytes; over-cap bodies are truncated
+      and FLAGGED (``text_truncated``) rather than silently shortened.
+    - ``max_outline_turns``: cap on user-turn stubs in a session outline,
+      again flagged when it binds.
+    - ``busy_timeout_ms``: SQLite busy timeout for reader connections. The
+      archive is WAL and the ingestion hooks write to it live, so a short
+      wait beats an instant "database is locked".
+    """
+    enabled: bool = False
+    db_path: str = ""
+    stale_after_seconds: int = Field(default=21600, ge=1)
+    hard_stale_after_seconds: int = Field(default=259200, ge=1)
+    default_page_size: int = Field(default=50, ge=1)
+    max_page_size: int = Field(default=200, ge=1)
+    max_text_chars: int = Field(default=20000, ge=256)
+    max_outline_turns: int = Field(default=500, ge=1)
+    busy_timeout_ms: int = Field(default=5000, ge=0)
+
+
 class AuthRateLimits(BaseModel):
     """Rate-limit knobs for authentication endpoints.
 
@@ -327,6 +378,9 @@ class AuthConfig(BaseModel):
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
+    # Read-only conversation-archive viewer. Default-OFF optional module;
+    # see HistoryConfig for why it is not always-on.
+    history: HistoryConfig = Field(default_factory=HistoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     # feat/settings-tabs-and-commands — user-editable common shell
     # commands, each runnable in a console session (see
@@ -774,6 +828,21 @@ class Settings(BaseSettings):
                 )
                 uploads_config = UploadsConfig()
 
+            # Build HistoryConfig from the optional "history" block; same
+            # malformed-block tolerance as every sibling. Missing block →
+            # defaults, which means DISABLED. A bad block must not brick
+            # startup for a feature most installs never turn on.
+            history_data = data.get("history", {}) or {}
+            try:
+                history_config = HistoryConfig(**history_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_history_config_block",
+                    raw=history_data,
+                )
+                history_config = HistoryConfig()
+
             # Build ProvidersConfig from optional "providers" block; same
             # malformed-block tolerance as session/tunnel/etc. Missing block
             # → defaults (the curated 3-model trio, _DEFAULT_PROVIDER_MODELS).
@@ -839,6 +908,7 @@ class Settings(BaseSettings):
                 notifications=notifications_config,
                 agents=agents_config,
                 uploads=uploads_config,
+                history=history_config,
                 providers=providers_config,
                 terminal_commands=terminal_commands_config,
             )

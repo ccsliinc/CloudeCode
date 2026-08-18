@@ -1,0 +1,15 @@
+# Optional dependencies for the read-only conversation-archive viewer
+# (config.json "history" block, default OFF).
+#
+# Deliberately NOT in requirements.txt. Nothing else in Cloude Code uses
+# SQLAlchemy, and `claude_history` is a separate project that produces the
+# multi-gigabyte archive database; most installs have neither and must not
+# be made to carry them. Both are imported lazily at request time, so an
+# install without them starts normally and every history endpoint answers
+# `unavailable` / `dependency_missing`.
+#
+# Install only if you actually have an archive to read:
+#   pip install -r requirements-history.txt
+#   pip install -e /path/to/claude-history
+
+sqlalchemy>=2.0
