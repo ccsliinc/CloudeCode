@@ -1073,16 +1073,22 @@ class Launchpad {
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
-                <!-- ADOPT-EXTERNAL HELP. Lives at the TOP of the pane, under the
+                <!-- LAUNCHPAD HELP. Lives at the TOP of the pane, under the
                      launcher title and its subtitle - NOT in the running-sessions
-                     heading row where it used to sit. Two reasons it moved:
-                     (a) the running-sessions section is display:none until a
-                     session exists, so the one explanation of how to adopt a
-                     session you started yourself was hidden from exactly the
-                     user who had not started one yet; (b) as a bordered text "?"
-                     pill it was the only non-SVG glyph on the pane and read as a
-                     different weight from every icon around it.
-                     The marker is now an inline SVG in the same family as the
+                     heading row where the adopt-only version of this used to sit.
+                     Two reasons it moved there originally: (a) the running-sessions
+                     section is display:none until a session exists, so the one
+                     explanation of how to adopt a session you started yourself was
+                     hidden from exactly the user who had not started one yet;
+                     (b) as a bordered text "?" pill it was the only non-SVG glyph
+                     on the pane and read as a different weight from every icon
+                     around it. It has since grown from "how to adopt" into the
+                     app's one general help surface (adopting, wrappers, slash
+                     commands) because there is nowhere else on this screen a
+                     stuck user would look - see docs/help-content-audit.md for
+                     what was wrong with the old copy and why each section reads
+                     the way it does now.
+                     The marker is an inline SVG in the same family as the
                      .new-fab__icon set: viewBox "0 0 24 24" with stroke-width
                      1.8 as a PRESENTATION ATTRIBUTE on the svg, inherited by
                      the paths. Do not move stroke-width into a CSS svg rule -
@@ -1096,9 +1102,10 @@ class Launchpad {
                      NOTE FOR ANY FUTURE EDIT OF THIS BLOCK: no backticks in
                      here. The whole return value is a template literal, so a
                      backtick in a comment ends the string and takes the module
-                     out with it. -->
+                     out with it. Also: no em dashes or en dashes in the rendered
+                     copy itself (project style rule) - use a period or a colon. -->
                 <details class="adopt-disclosure">
-                    <summary aria-label="how to adopt an external tmux session" title="adopting external sessions">
+                    <summary aria-label="help: adopting sessions, wrappers, and slash commands" title="help">
                         <svg class="adopt-disclosure__icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <circle cx="12" cy="12" r="10"/>
                             <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
@@ -1106,15 +1113,23 @@ class Launchpad {
                         </svg>
                     </summary>
                     <div class="adopt-disclosure-body">
-                        <p>you don't have to launch through cloude — <em>any</em> tmux session on the <code>cloude</code> socket with <code>claude</code> running inside it is adoptable from here. start one yourself in any terminal:</p>
+                        <p><strong>adopting a session you started yourself</strong></p>
+                        <p>you don't have to launch through cloude. <em>any</em> tmux session on the <code>cloude</code> socket with <code>claude</code> running inside it shows up here, adoptable. start one yourself in any terminal:</p>
                         <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork; claude</code></pre>
-                        <p>it shows up in this list tagged <code>EXTERNAL</code> — click it to adopt. note the <code>-L cloude</code>: a plain <code>tmux new -s mywork</code> lives on the default socket and won't appear here.</p>
+                        <p>it shows up in this list tagged <code>EXTERNAL</code>. click it to adopt. that tag is worked out fresh each time this list loads by checking which tmux session names cloude itself created, not stored on the session, so give it a few seconds after adopting elsewhere before you trust it. note the <code>-L cloude</code> flag: a plain <code>tmux new -s mywork</code> lives on the default socket and never appears here.</p>
                         <p>to launch claude in one line so the pane survives claude exiting:</p>
                         <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
-                        <p>the <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
-                        <p>if you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
+                        <p>the <code>exec \$SHELL</code> part keeps the pane alive with a shell prompt after claude exits.</p>
+                        <p>if you already have a launcher function (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, run it through an interactive shell so it resolves:</p>
                         <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
-                        <p>full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                        <p>full <code>cld</code> setup in the <a href="https://github.com/Adoom666/CloudeCode#before-you-start-three-things-that-will-bite-you" target="_blank" rel="noopener">README</a>.</p>
+
+                        <p><strong>wrappers and launch wrappers are the same thing</strong></p>
+                        <p>settings names the tab <code>wrappers</code>; the panel inside it titles the same section <code>launch wrappers</code>. both mean one object: a named shell command tied to one agent family (claude, codex, hermes, openclaw, or shell) that runs when a session launches. there is no second, different kind of wrapper hiding anywhere.</p>
+                        <p>configure them under settings, wrappers tab. pick one per family as the default, or choose a different one at launch time from the new-session picker. a family with no wrappers falls back to its static legacy command, shown collapsed under "advanced: legacy &lt;family&gt; command" inside that family's group.</p>
+
+                        <p><strong>slash commands</strong></p>
+                        <p>open the slash command list from the <code>/</code> control next to the terminal input (or the d-pad). the row above the terminal shows your starred favorites as tappable chips. star a command in the list to add it there; until you star anything, the row shows a small built-in default set, not your own picks.</p>
                     </div>
                 </details>
 
