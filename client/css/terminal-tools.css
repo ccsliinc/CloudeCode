@@ -126,64 +126,60 @@ body:has(#auth-screen.active) .fab-menu-btn {
  * The status light is out of the top header for good, and it is out from
  * under the session tools too - it used to sit one slot below
  * .session-editor-fab on the same right-hand rail, which read as a third
- * FAB stacked under the other two rather than as state. On a screen with
- * bottom furniture the light lives there (the home screen's .home-bar).
- * The terminal screen has no full bottom bar - it is not paying its
- * vertical pixels back for chrome - so this is a minimal bar of its own:
- * one small chip pinned to the BOTTOM-LEFT corner, well clear of the FAB
- * column, `position: fixed` so it spends NO vertical layout space. One
- * 12px dot in a small elevated box, nothing else - anything more belongs
- * in a FAB menu, not here.
- *
- * Not a flex row with a label like the home bar's: there is no width to
- * spend over live output. The `.status:focus::after` tooltip is the text,
- * anchored above the chip so it cannot run off the bottom of the
- * viewport.
+ * FAB stacked under the other two rather than as state. It used to live
+ * in a `position: fixed` chip pinned to the bottom-left corner after
+ * that - floating OVER live terminal output, not part of any bar. That
+ * chip is gone. The light now lives in `.info` (client/index.html,
+ * styled below and in styles.css) - a real, in-flow bar that has always
+ * spanned the terminal screen's full width at the bottom holding the
+ * session id/PID readout. Same visual language as the home screen's
+ * `.home-bar`: a shrinkable item on the left, a spacer, a shrinkable
+ * status group (dot + label) on the right - just a different box,
+ * because `.info` already existed and already had a place to grow into
+ * rather than needing the screen restructured the way home-bar.css did.
  * ------------------------------------------------------------------- */
-.terminal-status-bar {
-    position: fixed;
-    left: var(--fab-edge);
-    bottom: var(--fab-edge);
-    display: flex;
+.terminal-bar__spacer {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.terminal-bar__status {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    padding: 8px;
-    border-radius: var(--radius-md);
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border);
-    z-index: 60;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
 }
 
-/* When the light is mounted in the home bar this container is empty, so
- * it collapses rather than sitting invisible over the launchpad. Belt and
- * braces with the screen-scoped rule below, which is the one that also
- * covers the auth screen. */
-.terminal-status-bar:empty {
-    display: none;
+.terminal-bar__status-text {
+    font-size: 0.7rem;
+    color: var(--color-fg-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
-/* Same screen scoping as .fab-menu-btn above: no session, no bar. On the
- * home screen the light is in the bar; on the auth screen there is no bar
- * and therefore no light, which is the rule rather than an oversight. */
-body:has(#launchpad-screen.active) .terminal-status-bar,
-body:has(#auth-screen.active) .terminal-status-bar {
-    display: none;
+.terminal-bar__status .status {
+    flex-shrink: 0;
 }
 
-/* The tooltip is centred under the dot everywhere else, and BELOW it by
- * default (`.status::after` in styles.css: `bottom: -30px`). This chip
- * sits at the bottom edge of the viewport, so a tooltip growing downward
- * would run off screen - it has to grow UPWARD instead. It also anchors
- * to the LEFT edge of the dot and grows rightward: the chip sits close to
- * the left edge of the viewport, so a centred nowrap box would clip on
- * that side first for a long string ("server unreachable - Failed to
- * fetch"), capped at the viewport either way. */
-.terminal-status-bar .status::after {
+/* The tooltip is centred under the dot and grows DOWNWARD by default
+ * (`.status::after` in styles.css: `bottom: -30px`). `.info` sits at the
+ * bottom edge of the viewport, so downward would run off screen - same
+ * fix as before, just re-anchored: the status group sits near the RIGHT
+ * edge of the bar now (session id is on the left), so the tooltip grows
+ * from the dot's right edge leftward instead of centred, which is what
+ * kept it on screen when the dot sat near the left edge. Capped at the
+ * viewport width either way for a long string ("server unreachable -
+ * Failed to fetch"). */
+.terminal-bar__status .status::after {
     bottom: auto;
     top: -34px;
-    left: 0;
+    left: auto;
+    right: 0;
     transform: none;
-    max-width: calc(100vw - var(--fab-edge) * 2);
+    max-width: calc(100vw - 24px);
     overflow: hidden;
     text-overflow: ellipsis;
 }

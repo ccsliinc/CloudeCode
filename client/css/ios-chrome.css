@@ -110,13 +110,12 @@ html {
     bottom: auto;
 }
 
-/* The connection light bar sits at the bottom-LEFT corner, on the same
- * edge as the bottom-row FABs above, so it pays the same bottom inset -
- * without this it would sit under the home indicator in standalone mode
- * while every other bottom-edge control moved up clear of it. */
-.terminal-status-bar {
-    bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
-}
+/* THE CONNECTION LIGHT NEEDS NO RULE HERE ANY MORE. It used to be a
+ * `position: fixed` chip that had to be pushed up off the home indicator
+ * by hand. It now lives inside `.info`, a normal in-flow child of
+ * `#terminal-screen`, which is a `.screen` - the bottom-inset padding a
+ * few rules up already clears the home indicator for it, the same way it
+ * does for every other screen's last line of content. */
 
 /* Slide-over panels run the full height of the viewport, so they own both
  * the top and bottom insets themselves. `.config-editor-picker-content`

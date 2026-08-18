@@ -880,13 +880,28 @@ button[data-tooltip]:hover::after {
     font-kerning: normal !important;
 }
 
-/* Info footer */
+/* Info footer - the terminal screen's real bottom bar. Flex row so the
+ * session id (left) and the connection-light group (right, added by
+ * terminal-tools.css) can share the width without colliding; #sessionInfo
+ * and .terminal-bar__status both shrink with an ellipsis rather than
+ * fighting each other for space on a narrow phone. */
 .info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     background: var(--color-bg-elevated);
     padding: 10px 20px;
     border-top: 1px solid var(--color-border);
     font-size: 12px;
     color: var(--color-fg-muted);
+}
+
+#sessionInfo {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1448,12 +1463,31 @@ button[data-tooltip]:hover::after {
         gap: 6px;
     }
 
+    /* Bottom padding drops from 10px to 4px here: `.info` now sits
+     * directly below and supplies its own breathing room, so the
+     * terminal doesn't need to pay for a gap AND a bar. Reclaims 6px of
+     * the bar's cost back for the terminal. */
     .terminal-container {
-        padding: 10px;
+        padding: 10px 10px 4px;
     }
 
+    /* `.info` used to be `display: none` below 768px to save the phone
+     * every pixel it could get, back when the connection light was a
+     * `position: fixed` chip floating outside the flex flow and had no
+     * need for this bar to exist at all. Now the light lives inside it
+     * (terminal-tools.css), so it has to stay visible - just as compact
+     * as the row of text it has always held will allow, with its own
+     * padding trimmed to give back to `.terminal-container` above.
+     * `.terminal-container` is `flex: 1`, so it absorbs whatever height
+     * this row takes with no separate calculation needed here. */
     .info {
-        display: none;
+        padding: 2px 12px;
+        gap: 6px;
+        font-size: 11px;
+    }
+
+    .terminal-bar__status-text {
+        font-size: 0.62rem;
     }
 
     .auth-container,
@@ -1476,8 +1510,18 @@ button[data-tooltip]:hover::after {
         font-size: 1rem;
     }
 
+    /* Same reclaim as the 768px block, at this width's own padding
+     * value: bottom drops from 8px to 2px, `.info` supplies the rest of
+     * the breathing room itself. */
     .terminal-container {
-        padding: 8px;
+        padding: 8px 8px 2px;
+    }
+
+    /* Tighter still - this is the width the terminal was fighting for
+     * (hazard-comment history: 720 of 786px). */
+    .info {
+        padding: 1px 10px;
+        gap: 4px;
     }
 
     .auth-prompt {

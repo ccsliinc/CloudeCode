@@ -3,14 +3,15 @@
 // THE RULE. The status light is OUT of the top header entirely, and out
 // from under the session tools (the FAB column) too. A screen that has
 // bottom furniture carries the light there. The home screen's `.home-bar`
-// already does. The terminal screen has no full bottom bar - it clawed its
-// usable height back from 720 to 770 of 786px and is not paying any of
-// that back for chrome - so it gets a MINIMAL bar of its own instead: a
-// small `position: fixed` chip pinned to the bottom-LEFT corner, well
-// clear of the FAB column on the right. Fixed positioning means it still
-// costs zero vertical layout space. The auth screen has neither a bar nor
-// this chip and therefore shows no light, which is the rule applied
-// honestly rather than an oversight.
+// already does. The terminal screen's `.info` bar - a REAL, in-flow bar
+// that has always spanned the terminal screen's full width holding the
+// session id/PID readout - now carries it too. `.info` used to be
+// `display: none` below 768px and the light lived in a `position: fixed`
+// chip pinned to the bottom-left corner instead; both are gone. The auth
+// screen has no bar (its `#terminal-screen` sibling is not `.active`, so
+// `.info` is hidden by the shared `.screen` display rule) and therefore
+// shows no light, which is the rule applied honestly rather than an
+// oversight.
 //
 // WHAT THESE TESTS HOLD DOWN:
 //   (a) the light is not in `.header .controls`, and app.js does not
@@ -18,10 +19,13 @@
 //   (b) there is still exactly ONE #statusText node. It is RE-PARENTED,
 //       never cloned, because app.js and terminal.js both write it by id -
 //       a copy means one writer updating an invisible node;
-//   (c) the terminal bar sits bottom-LEFT, well clear of the FAB column,
-//       so it does not read as a control stacked under the session tools;
-//   (d) the terminal bar's tooltip grows upward and rightward from the
-//       dot, capped at the viewport, so it cannot run off either edge;
+//   (c) the terminal bar is a real, in-flow box (`.info`), not a floating
+//       chip - it has a background/border like the home bar, and it is
+//       declared with no `position: fixed`;
+//   (d) the terminal bar's tooltip grows upward, capped at the viewport,
+//       so it cannot run off either edge - re-anchored from the RIGHT
+//       edge of the dot since the status group now sits near the bar's
+//       right edge (session id on the left), not the bottom-left corner;
 //   (e) #status-rail is gone entirely - no markup, no CSS, no references.
 //
 // Run with: node tests/test_status_light_placement.node.mjs
@@ -85,7 +89,7 @@ function stripCssComments(sheet) {
 /**
  * Declaration block of the first rule whose selector matches exactly.
  * @param {string} sheet  Full stylesheet text (comments already stripped).
- * @param {string} selector  Exact selector, e.g. `.terminal-status-bar`.
+ * @param {string} selector  Exact selector, e.g. `.info`.
  * @returns {string} The text between that rule's braces.
  */
 function ruleBody(sheet, selector) {
@@ -101,6 +105,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'client', 'index.html'),
 const appJs = js('app.js');
 const launchpadJs = js('launchpad.js');
 const tools = stripCssComments(css('terminal-tools.css'));
+const styles = stripCssComments(css('styles.css'));
 const iosChrome = stripCssComments(css('ios-chrome.css'));
 const configDrawer = stripCssComments(css('config-drawer.css'));
 
@@ -139,18 +144,18 @@ test('#statusText is not inside .header .controls', () => {
     assert.ok(controlsStart !== -1, 'expected the header controls row');
     // The controls row ends at the first `</div>` that closes it, but the
     // row contains nested elements, so bound the search by the light's own
-    // container instead: the bar is declared far later in the file, after
+    // container instead: `.info` is declared far later in the file, after
     // every screen element. Asserting the ORDER is what proves it is out of
     // the header - the header block is entirely above the screens.
-    const barStart = html.indexOf('<div class="terminal-status-bar" id="terminal-status-bar">');
-    assert.ok(barStart !== -1, 'expected the #terminal-status-bar container');
+    const infoStart = html.indexOf('<div class="info">');
+    assert.ok(infoStart !== -1, 'expected the .info bar container');
     const statusAt = html.indexOf('id="statusText"');
-    assert.ok(statusAt > barStart, 'the light must be inside the bar, not the header row');
+    assert.ok(statusAt > infoStart, 'the light must be inside .info, not the header row');
     const terminalScreenAt = html.indexOf('<div id="terminal-screen"');
     assert.ok(terminalScreenAt !== -1, 'expected the terminal screen element');
     assert.ok(
-        barStart > terminalScreenAt,
-        'the bar is body-level chrome declared after the screens, not a header child');
+        infoStart > terminalScreenAt,
+        '.info is a child of #terminal-screen, not a header sibling declared before it');
 });
 
 test('#statusText stays focusable so a tap can reveal its text', () => {
@@ -169,10 +174,13 @@ test('_placeStatusLight targets the home bar and the terminal bar, and nothing e
     assert.ok(start !== -1, 'the function must exist');
     const body = appJs.slice(start, appJs.indexOf('\n    }', start));
     assert.match(body, /getElementById\('home-bar-status'\)/, 'home screen goes in the bar');
-    assert.match(body, /getElementById\('terminal-status-bar'\)/, 'every other screen goes in the terminal bar');
+    assert.match(body, /getElementById\('terminal-bar-status'\)/, 'every other screen goes in the terminal bar');
     assert.doesNotMatch(
         body, /\.header \.controls/,
         'the header is not a home for the light any more');
+    assert.doesNotMatch(
+        body, /getElementById\('terminal-status-bar'\)/,
+        'the old floating-chip container id must not come back');
 });
 
 test('all three screens still place the light', () => {
@@ -184,48 +192,72 @@ test('all three screens still place the light', () => {
     }
 });
 
+test('_syncStatusLabel updates both the home bar and the terminal bar labels', () => {
+    const start = appJs.indexOf('_syncStatusLabel() {');
+    assert.ok(start !== -1, 'the function must exist');
+    const body = appJs.slice(start, appJs.indexOf('\n    }', start));
+    assert.match(body, /getElementById\('home-bar-status-text'\)/);
+    assert.match(body, /getElementById\('terminal-bar-status-text'\)/);
+});
+
 /* ---------------------------------------------------------------------------
- * 3. The terminal bar costs no vertical space and sits clear of the FABs
+ * 3. The terminal bar is a real, in-flow box - not a floating overlay
  * ------------------------------------------------------------------------- */
 
-test('the terminal bar is fixed to the bottom-LEFT corner, not the FAB column', () => {
-    const body = ruleBody(tools, '.terminal-status-bar');
-    assert.match(body, /position:\s*fixed/, 'fixed, so it takes no layout height from the terminal');
-    assert.match(body, /left:\s*var\(--fab-edge\)/, 'the left edge, opposite the right-hand FAB column');
-    assert.match(body, /bottom:\s*var\(--fab-edge\)/, 'the bottom edge, not stacked under the session tools');
-    assert.doesNotMatch(body, /right\s*:/, 'must not sit in the FAB column on the right');
-    assert.doesNotMatch(body, /top\s*:/, 'must not sit in the top-right rail any more');
-    assert.match(body, /z-index:\s*60/, 'must clear terminal output, same layer as the FABs');
+test('.info carries no position: fixed - it is real document flow', () => {
+    const body = ruleBody(styles, '.info');
+    assert.doesNotMatch(body, /position\s*:\s*fixed/,
+        'a fixed chip costs the terminal nothing in layout, which is exactly the bug that was reported - '
+        + 'a floating dot reading as "the stupid place", not a bar');
 });
 
-test('the terminal bar reads as a bar - a real box, not a bare dot', () => {
-    const body = ruleBody(tools, '.terminal-status-bar');
+test('.info reads as a bar - a real box, not a bare dot', () => {
+    const body = ruleBody(styles, '.info');
     assert.match(body, /background\s*:/, 'a real bar has a background');
-    assert.match(body, /border\s*:/, 'a real bar has a border, matching the FAB chrome');
-    assert.match(body, /border-radius:\s*var\(--radius-md\)/, 'radius-md, never a pill/oval shape');
+    assert.match(body, /border-top\s*:/, 'a real bar has a border, matching the home bar\'s treatment');
 });
 
-test('the terminal bar is absent on the screens that have no session', () => {
-    // The home screen's light is in the bar; the auth screen has no bar and
-    // therefore no light at all. Same `:has()` screen scoping the FABs use.
-    assert.match(
-        tools,
-        /body:has\(#launchpad-screen\.active\) \.terminal-status-bar,\s*\n\s*body:has\(#auth-screen\.active\) \.terminal-status-bar \{[^}]*display:\s*none/,
-        'both no-session screens must hide the terminal bar');
-    assert.match(ruleBody(tools, '.terminal-status-bar:empty'), /display:\s*none/,
-        'an empty bar collapses rather than sitting invisible');
+test('.info is a flex row so the session id and the status group can share the width', () => {
+    const body = ruleBody(styles, '.info');
+    assert.match(body, /display\s*:\s*flex/);
+});
+
+test('.info is no longer display:none below 768px - the light needs it visible on a phone', () => {
+    // styles.css has more than one `@media (max-width: 768px)` block (one
+    // sets root vars, another holds the terminal/.info rules) - find the
+    // one that actually declares `.info` rather than assuming it is the
+    // first.
+    const blocks = styles.match(/@media \(max-width: 768px\) \{[\s\S]*?\n\}/g) || [];
+    const block = blocks.find((b) => /\.info\s*\{/.test(b));
+    assert.ok(block, 'expected a 768px breakpoint block that declares .info');
+    const infoRuleInBlock = block.match(/\.info\s*\{([^}]*)\}/);
+    assert.ok(infoRuleInBlock, 'expected a compact .info rule inside the 768px block');
+    assert.doesNotMatch(infoRuleInBlock[1], /display\s*:\s*none/,
+        'the light lives here now - hiding it below 768px hides the light on every phone');
+});
+
+test('the terminal-bar status group and label exist and are wired for shrink-to-fit', () => {
+    assert.match(html, /class="terminal-bar__status" id="terminal-bar-status"/);
+    assert.match(html, /class="terminal-bar__status-text" id="terminal-bar-status-text"/);
+    const body = ruleBody(tools, '.terminal-bar__status-text');
+    assert.match(body, /overflow\s*:\s*hidden/);
+    assert.match(body, /text-overflow\s*:\s*ellipsis/);
+});
+
+test('the old floating terminal-status-bar chip rules are gone', () => {
+    assert.doesNotMatch(tools, /\.terminal-status-bar\s*\{/, 'the floating chip container rule must not come back');
+    assert.doesNotMatch(html, /class="terminal-status-bar"/, 'the floating chip element must not come back');
 });
 
 /* ---------------------------------------------------------------------------
- * 4. The tooltip is the only way to read the status on this screen, and it
+ * 4. The tooltip is the only hover-free way to read the status, and it
  *    cannot clip at either edge of the viewport
  * ------------------------------------------------------------------------- */
 
-test('the terminal bar tooltip grows upward and rightward, capped at the viewport', () => {
-    const body = ruleBody(tools, '.terminal-status-bar .status::after');
+test('the terminal bar tooltip grows upward, capped at the viewport', () => {
+    const body = ruleBody(tools, '.terminal-bar__status .status::after');
     assert.match(body, /bottom:\s*auto/, 'the shared rule grows downward off the bottom edge - that must be undone here');
     assert.match(body, /top:\s*-\d/, 'anchor above the dot instead, since the dot sits at the viewport bottom');
-    assert.match(body, /left:\s*0/, 'anchor the left edge to the dot and grow rightwards, away from the left edge');
     assert.match(body, /transform:\s*none/, 'the shared translateX would re-centre it');
     assert.match(body, /max-width:\s*calc\(100vw/, 'capped at the viewport');
 });
@@ -236,16 +268,23 @@ test('the terminal bar tooltip grows upward and rightward, capped at the viewpor
  *    RIGHT) no longer reaches for it
  * ------------------------------------------------------------------------- */
 
-test('the terminal bar pays the safe-area bottom inset in standalone mode', () => {
-    const body = ruleBody(iosChrome, '.terminal-status-bar');
-    assert.match(body, /env\(safe-area-inset-bottom\)/,
-        'the bottom-row FABs above it move up by the inset; without this it sits under the home indicator');
+test('the terminal bar clears the home indicator via the shared .screen inset, not a bespoke rule', () => {
+    // `.info` is a normal child of `#terminal-screen`, a `.screen`, and
+    // `.screen { padding-bottom: env(safe-area-inset-bottom) }` (ios-
+    // chrome.css) already pushes its last line of content clear of the
+    // home indicator - the same mechanism every other screen's content
+    // uses. A bespoke `.terminal-status-bar` rule is not needed and must
+    // not come back; that was only ever required for the fixed chip.
+    assert.doesNotMatch(iosChrome, /\.terminal-status-bar\s*\{/,
+        'no bespoke inset rule for a fixed chip that no longer exists');
+    const screenBody = ruleBody(iosChrome, '.screen');
+    assert.match(screenBody, /env\(safe-area-inset-bottom\)/);
 });
 
 test('the docked config drawer (right side) does not reposition the terminal bar', () => {
     assert.doesNotMatch(
         configDrawer, /\.terminal-status-bar/,
-        'the bar lives at the bottom-left, opposite a drawer that docks on the right');
+        'the old floating-chip selector must not be referenced');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
