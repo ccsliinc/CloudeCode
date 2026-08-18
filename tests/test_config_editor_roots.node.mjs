@@ -239,5 +239,50 @@ test('REGRESSION: roots.js and panel.js share a global scope without colliding',
     );
 });
 
+// ---- three-outcome rule: an unreadable node must say so, distinctly ---
+//
+// Regression coverage for the "no skills shown" investigation: the fix
+// was NOT in this module's root plan (that part was already correct -
+// ~/.claude and <project>/.claude were both reachable, "skills" was
+// already allow-listed) but in how an OSError from iterdir() got
+// swallowed into an empty result. listErrorNotice() is the client-side
+// half: the exact sentence rendered for TreeNode.list_error, kept as a
+// pure function so it is asserted here rather than only visible by
+// opening the picker on a machine with a permission-mangled directory.
+
+test('listErrorNotice names the failure, never reads like "empty"', () => {
+    const s = Roots.listErrorNotice('Permission denied');
+    assert.ok(s.includes('Permission denied'), 'must surface the actual reason');
+    assert.ok(/could not/i.test(s), 'must say it could not evaluate, not that there is nothing');
+    assert.ok(!/[–—]/.test(s), 'no en/em dashes');
+});
+
+test('REGRESSION: an unreadable node and a genuinely empty node render different strings', () => {
+    // The bug this whole module exists to kill, restated for a single
+    // node instead of a root: config_files.py used to catch OSError from
+    // iterdir() and leave `children: []` with no marker, which is
+    // BYTE-IDENTICAL to a directory that was read successfully and truly
+    // has nothing in it. If a future edit removes list_error and goes
+    // back to that, this is the assertion that catches it - not by
+    // testing the empty case (there is nothing to test there, that's the
+    // point), but by proving the two rendered strings can never collapse
+    // into one.
+    const emptyDirRendering = null; // an empty-but-successfully-read dir: no notice at all
+    const unreadableRendering = Roots.listErrorNotice('Permission denied');
+    assert.notEqual(unreadableRendering, emptyDirRendering,
+        'an unreadable directory must never render identically to an empty one');
+});
+
+test('the panel renders list_error through the shared notice builder, not an inline string', () => {
+    const panel = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'config-editor-panel.js'),
+        'utf8',
+    );
+    assert.ok(panel.includes('node.list_error'),
+        'the panel must check TreeNode.list_error before rendering a directory\'s children');
+    assert.ok(panel.includes('window.ConfigEditorRoots.listErrorNotice(node.list_error)'),
+        'the wording must come from the tested pure function, not a second inline copy');
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

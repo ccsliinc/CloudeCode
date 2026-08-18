@@ -405,3 +405,79 @@ def test_resolve_roots_omits_workdir_when_directory_missing(fake_home, tmp_path)
     assert "workdir" not in roots
     assert "project" not in roots
     assert "user" in roots
+
+
+# ---- three-outcome rule: unreadable must never render as empty --------
+#
+# Regression coverage for the file-browser "no skills shown" report: the
+# root cause investigated was NOT the allow-list, the roots, or symlinks
+# (see fix/file-browser-skills commit message) - it was that
+# list_tree()/_build_node() caught OSError from iterdir() and silently
+# returned/left an empty result, indistinguishable from a directory that
+# is genuinely empty or genuinely absent. These tests prove the fix: an
+# unreadable root raises a distinct exception, and an unreadable
+# subdirectory marks itself rather than vanishing.
+
+def test_list_tree_raises_unreadable_not_silently_empty_on_root_permission_denied(fake_home):
+    """A root that exists but cannot be read must raise
+    ConfigFileUnreadableError, never silently return []. Before the fix
+    this returned [] - indistinguishable from ~/.claude genuinely having
+    nothing in it (the exact bug class the user hit)."""
+    os.chmod(fake_home, 0o000)
+    try:
+        with pytest.raises(cf.ConfigFileUnreadableError):
+            cf.list_tree("user", None)
+    finally:
+        os.chmod(fake_home, 0o755)  # restore so pytest can clean up tmp_path
+
+
+def test_list_tree_unreadable_root_is_a_config_file_error_subclass(fake_home):
+    """ConfigFileUnreadableError must still be a ConfigFileError (routes
+    layer callers that only catch the base class must not regress to an
+    uncaught 500), while being distinguishable by callers that check
+    specifically for it (routes layer maps it to 503, not 400)."""
+    assert issubclass(cf.ConfigFileUnreadableError, cf.ConfigFileError)
+
+
+def test_build_node_marks_unreadable_subdirectory_without_dropping_siblings(fake_home):
+    """One unreadable subdirectory (e.g. a permissions-mangled skills/)
+    must not silently render as empty AND must not take down the rest of
+    the tree - siblings still list, and the bad node names itself as
+    unreadable via list_error rather than looking like an empty dir."""
+    skills_dir = fake_home / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "some-skill").mkdir()
+    (fake_home / "hooks").mkdir()
+    (fake_home / "hooks" / "example.py").write_text("# hook\n")
+    os.chmod(skills_dir, 0o000)
+    try:
+        tree = cf.list_tree("user", None)
+    finally:
+        os.chmod(skills_dir, 0o755)
+
+    by_name = {n["name"]: n for n in tree}
+    assert by_name["skills"]["list_error"] is not None
+    assert by_name["skills"]["children"] == []
+    # The sibling directory is unaffected - one bad node doesn't blank
+    # the whole tree.
+    assert by_name["hooks"]["list_error"] is None
+    assert [c["name"] for c in by_name["hooks"]["children"]] == ["example.py"]
+
+
+def test_readable_skills_directory_lists_normally_with_no_list_error(fake_home):
+    """Baseline: when skills/ IS readable, it renders exactly like any
+    other allow-listed directory - list_error is None throughout, proving
+    the fix only changes behavior on a real read failure."""
+    skills_dir = fake_home / "skills"
+    skills_dir.mkdir()
+    skill_one = skills_dir / "my-skill"
+    skill_one.mkdir()
+    (skill_one / "SKILL.md").write_text("# My Skill\n")
+
+    tree = cf.list_tree("user", None)
+    by_name = {n["name"]: n for n in tree}
+    assert by_name["skills"]["list_error"] is None
+    child_names = [c["name"] for c in by_name["skills"]["children"]]
+    assert child_names == ["my-skill"]
+    grandchild_names = [c["name"] for c in by_name["skills"]["children"][0]["children"]]
+    assert grandchild_names == ["SKILL.md"]

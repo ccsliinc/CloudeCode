@@ -107,11 +107,20 @@ async def get_config_file_tree(
     Inputs: root (str, query) - "user", "project", or "workdir";
       project_path (str|None, query) - required for root != "user".
     Output: ConfigFileTreeResponse.
-    Raises: HTTPException(400) - unknown/unavailable root (translated
-      from config_files.ConfigFileError).
+    Raises:
+      HTTPException(400) - unknown/unavailable root (translated from
+        config_files.ConfigFileError).
+      HTTPException(503) - the root exists but could not be read
+        (translated from config_files.ConfigFileUnreadableError, which
+        is checked FIRST since it subclasses ConfigFileError - a
+        permissions problem is "could not evaluate", not "bad request",
+        per this project's three-outcome rule; the client renders this
+        as a distinct error row rather than folding it into "empty").
     """
     try:
         tree = config_files.list_tree(root, project_path)
+    except config_files.ConfigFileUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except config_files.ConfigFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return ConfigFileTreeResponse(root=root, tree=tree)

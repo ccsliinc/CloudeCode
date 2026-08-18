@@ -90,6 +90,27 @@ class ConfigFileError(ValueError):
     was invalid", not server faults."""
 
 
+class ConfigFileUnreadableError(ConfigFileError):
+    """Raised when a ROOT exists but its own contents could not be
+    enumerated (``OSError`` from ``iterdir()`` — typically a permissions
+    problem, not a bad request). This is the THREE-OUTCOME RULE's third
+    state for this endpoint: distinct from "listed, zero entries" (a
+    genuinely empty/absent directory) and from an ordinary
+    ``ConfigFileError`` (client sent something invalid). Routes layer
+    maps this to HTTP 503 rather than 400, so the client can render "I
+    could not check this" instead of silently treating it as "there is
+    nothing here" — see config_files.py's module docstring and
+    CLAUDE.md's THREE-OUTCOME RULE section for why that conflation is a
+    named, recurring bug class in this project.
+
+    A subdirectory (not the root itself) hitting the same OSError does
+    NOT raise this — it would abort the whole tree over one bad
+    subdirectory. That case sets ``TreeNode.list_error`` instead, so the
+    rest of the tree still renders and only that one node says it
+    could not be evaluated.
+    """
+
+
 @dataclass
 class TreeNode:
     """One entry in the rendered file tree.
@@ -102,7 +123,11 @@ class TreeNode:
       (bool) - True for anything under a READONLY_COLLAPSED_DIRS root;
       collapsed (bool) - hint to the frontend to render this subtree
       closed by default; children (list[TreeNode]) - populated for
-      directories.
+      directories; list_error (str|None) - set instead of an empty
+      `children` when THIS directory's own entries could not be
+      enumerated (OSError) - the three-outcome rule's "could not
+      evaluate", kept distinct from a directory that was read
+      successfully and is simply empty.
     """
     name: str
     rel_path: str
@@ -112,6 +137,7 @@ class TreeNode:
     read_only: bool = False
     collapsed: bool = False
     children: list = field(default_factory=list)
+    list_error: Optional[str] = None
 
 
 def _is_hidden(name: str) -> bool:
@@ -257,7 +283,13 @@ def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str
         try:
             entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
         except OSError as exc:
+            # THREE-OUTCOME RULE: this directory could not be evaluated -
+            # do NOT leave it looking like a successfully-listed empty
+            # directory (that reads as "nothing here" when the truth is
+            # "I could not check"). Mark it and keep going; one unreadable
+            # subdirectory must not abort the rest of the tree.
             logger.warning("config_files_listdir_failed", path=str(path), error=str(exc))
+            node.list_error = exc.strerror or str(exc)
             entries = []
         for child in entries:
             child_node = _build_node(root, child, depth + 1, max_depth, root_id)
@@ -282,7 +314,13 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
       ALLOWED_TOP_LEVEL_FILES then ALLOWED_TOP_LEVEL_DIRS then
       READONLY_COLLAPSED_DIRS, each sorted alphabetically within its
       group; "workdir" is files-then-dirs, alphabetical.
-    Raises: ConfigFileError - unknown/unavailable root.
+    Raises:
+      ConfigFileError - unknown/unavailable root (client-caused; the
+        working directory/root simply doesn't apply here).
+      ConfigFileUnreadableError - the root exists but its own entries
+        could not be enumerated (OSError - typically permissions). This
+        is the three-outcome rule's third state: NOT the same as "root
+        exists, zero entries", which returns an empty list normally.
     """
     roots = resolve_roots(project_path)
     root = roots.get(root_id)
@@ -296,7 +334,9 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
         entries = sorted(root.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
     except OSError as exc:
         logger.warning("config_files_list_root_failed", path=str(root), error=str(exc))
-        return []
+        raise ConfigFileUnreadableError(
+            f"{root_id} root could not be read: {exc.strerror or exc}"
+        ) from exc
     for entry in entries:
         node = _build_node(root, entry, depth=0, max_depth=max_depth, root_id=root_id)
         if node is not None:
@@ -312,6 +352,7 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
             "read_only": n.read_only,
             "collapsed": n.collapsed,
             "children": [_to_dict(c) for c in n.children],
+            "list_error": n.list_error,
         }
 
     return [_to_dict(n) for n in nodes]
