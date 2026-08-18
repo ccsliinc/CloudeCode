@@ -1492,31 +1492,22 @@ body.home-header-active {
         gap: 6px;
     }
 
-    /* Bottom padding drops from 10px to 4px here: `.info` now sits
-     * directly below and supplies its own breathing room, so the
-     * terminal doesn't need to pay for a gap AND a bar. Reclaims 6px of
-     * the bar's cost back for the terminal. */
     .terminal-container {
-        padding: 10px 10px 4px;
+        padding: 10px;
     }
 
-    /* `.info` used to be `display: none` below 768px to save the phone
-     * every pixel it could get, back when the connection light was a
-     * `position: fixed` chip floating outside the flex flow and had no
-     * need for this bar to exist at all. Now the light lives inside it
-     * (terminal-tools.css), so it has to stay visible - just as compact
-     * as the row of text it has always held will allow, with its own
-     * padding trimmed to give back to `.terminal-container` above.
-     * `.terminal-container` is `flex: 1`, so it absorbs whatever height
-     * this row takes with no separate calculation needed here. */
+    /* `.info` is `display: none` below 768px again. The connection light
+     * moved into this bar (449afe3, 2026-08-17) so it could avoid being a
+     * `position: fixed` floating chip, but that made the bar visible on
+     * mobile for the first time - `#sessionInfo` (the session id/PID
+     * readout, the bar's only other content) was never shown below this
+     * breakpoint either, so nothing previously visible on a phone is lost
+     * by hiding the whole bar again. Hiding the parent hides the status
+     * light with it - no separate rule needed for the child. Reclaims the
+     * 17px / 2.2% this bar cost at 390x844 (measured 786px -> 769px in
+     * 449afe3) back for the terminal. */
     .info {
-        padding: 2px 12px;
-        gap: 6px;
-        font-size: 11px;
-    }
-
-    .terminal-bar__status-text {
-        font-size: 0.62rem;
+        display: none;
     }
 
     .auth-container,
@@ -1539,18 +1530,8 @@ body.home-header-active {
         font-size: 1rem;
     }
 
-    /* Same reclaim as the 768px block, at this width's own padding
-     * value: bottom drops from 8px to 2px, `.info` supplies the rest of
-     * the breathing room itself. */
     .terminal-container {
-        padding: 8px 8px 2px;
-    }
-
-    /* Tighter still - this is the width the terminal was fighting for
-     * (hazard-comment history: 720 of 786px). */
-    .info {
-        padding: 1px 10px;
-        gap: 4px;
+        padding: 8px;
     }
 
     .auth-prompt {
