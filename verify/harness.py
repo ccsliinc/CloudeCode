@@ -2,7 +2,7 @@
 import shutil, sqlite3, sys, os
 from pathlib import Path
 
-DATA = Path("/Users/jsugamele/Scratch/llmScratch/cc-s4-verify2-data")
+DATA = Path("/Users/jsugamele/Scratch/llmScratch/cc-s4-fixes2-data")
 PRISTINE_DB = DATA / "cloude-live-PRISTINE.db"
 PRISTINE_TRAIL = DATA / "migration_trail-PRISTINE.jsonl"
 

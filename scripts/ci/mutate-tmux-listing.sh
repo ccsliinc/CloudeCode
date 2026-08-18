@@ -23,7 +23,9 @@ MANAGER="$ROOT/src/core/session_manager.py"
 ROUTES="$ROOT/src/api/routes.py"
 LAUNCHPAD="$ROOT/client/js/launchpad.js"
 
-FILES=("$LISTING" "$BACKEND" "$MANAGER" "$ROUTES" "$LAUNCHPAD")
+STDERR="$ROOT/src/core/tmux_stderr.py"
+
+FILES=("$LISTING" "$STDERR" "$BACKEND" "$MANAGER" "$ROUTES" "$LAUNCHPAD")
 BAKDIR="$(mktemp -d)"
 for f in "${FILES[@]}"; do cp "$f" "$BAKDIR/$(basename "$f")"; done
 trap 'for f in "${FILES[@]}"; do cp "$BAKDIR/$(basename "$f")" "$f"; done; rm -rf "$BAKDIR"' EXIT
@@ -76,14 +78,14 @@ mutate "unavailable() reports ok=True" "$LISTING" \
   "return cls(ok=False, sessions=[], reason=reason, detail=detail)||=>||return cls(ok=True, sessions=[], reason=reason, detail=detail)"
 
 # --- B. the split collapses, in BOTH directions ------------------------
-mutate "every failure is read as 'no server'" "$LISTING" \
-  "return any(marker in lowered for marker in _NO_SERVER_MARKERS)||=>||return True"
+mutate "every failure is read as 'no server'" "$STDERR" \
+  "    return classify_tmux_stderr(stderr_text) == STDERR_NO_SERVER||=>||    return True"
 
-mutate "'no server' is read as a real error" "$LISTING" \
-  "return any(marker in lowered for marker in _NO_SERVER_MARKERS)||=>||return False"
+mutate "'no server' is read as a real error" "$STDERR" \
+  "    return classify_tmux_stderr(stderr_text) == STDERR_NO_SERVER||=>||    return False"
 
 mutate "classify_listing_failure always answers zero" "$LISTING" \
-  "    if looks_like_no_server(stderr_text):||=>||    if True:"
+  "    if verdict == STDERR_NO_SERVER:||=>||    if True:"
 
 # --- A2. the backend's own could-not-evaluate branches -----------------
 mutate "missing tmux binary reports zero sessions" "$BACKEND" \
@@ -98,7 +100,7 @@ mutate "a timed-out probe reports zero sessions" "$BACKEND" \
                 ),||=>||                TmuxListing.answered([]),"
 
 mutate "the listing subprocess loses its timeout" "$BACKEND" \
-  "                *args, check=False, timeout=LIST_TIMEOUT_SECONDS||=>||                *args, check=False, timeout=None"
+  "                timeout=LIST_TIMEOUT_SECONDS,||=>||                timeout=None,"
 
 # --- C. the consumers stop honouring ok=False --------------------------
 mutate "the reconciler prunes against an unavailable listing" "$MANAGER" \

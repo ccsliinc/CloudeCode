@@ -54,6 +54,7 @@ from src.core.tmux_listing_parse import (
     LISTING_FORMAT,
     parse_listing_row,
     resolve_ownership,
+    split_listing_rows,
 )
 from src.core.tmux_listing import (
     REASON_PROBE_ERROR,
@@ -61,6 +62,7 @@ from src.core.tmux_listing import (
     REASON_TMUX_MISSING,
     TmuxListing,
     classify_listing_failure,
+    listing_env,
 )
 from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
@@ -362,6 +364,7 @@ class TmuxBackend(SessionBackend):
         stdin_bytes: Optional[bytes] = None,
         check: bool = True,
         timeout: Optional[float] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> tuple[int, bytes, bytes]:
         """Sync variant for use in `is_alive`, `discover_existing`, etc.
 
@@ -373,6 +376,12 @@ class TmuxBackend(SessionBackend):
                 The three enumeration methods pass
                 ``LIST_TIMEOUT_SECONDS`` because they run on the polled
                 request path.
+            env: complete environment for the child, or None to inherit
+                this process's. Only the LISTING path passes one (see
+                :data:`LISTING_ENV_OVERRIDES`); commands that CREATE a
+                session must inherit, because the environment handed to
+                ``new-session`` becomes the user's shell environment and
+                forcing a locale there would break their rendering.
 
         Output:
             tuple[int, bytes, bytes]: returncode, stdout, stderr.
@@ -391,6 +400,7 @@ class TmuxBackend(SessionBackend):
             capture_output=True,
             check=False,
             timeout=timeout,
+            env=env,
         )
         if check and proc.returncode != 0:
             logger.debug(
@@ -1032,7 +1042,10 @@ class TmuxBackend(SessionBackend):
 
         try:
             rc, out, err = self._run_tmux_sync(
-                *args, check=False, timeout=LIST_TIMEOUT_SECONDS
+                *args,
+                check=False,
+                timeout=LIST_TIMEOUT_SECONDS,
+                env=listing_env(),
             )
         except subprocess.TimeoutExpired:
             logger.warning(
@@ -1143,7 +1156,13 @@ class TmuxBackend(SessionBackend):
         if failure is not None:
             return failure
 
-        raw_lines = stdout_text.splitlines()
+        # split_listing_rows, NEVER str.splitlines(). A session name may
+        # legally contain NEL, LS or PS, all three of which splitlines()
+        # treats as row terminators - so one tmux row became two parser
+        # rows, the second one entirely caller-chosen, forging the
+        # identity triple this method badges ownership from. See
+        # tmux_listing_parse's module docstring.
+        raw_lines = split_listing_rows(stdout_text)
         live_names: set = set()
         results: List[Dict[str, Any]] = []
 
@@ -1460,7 +1479,12 @@ class TmuxBackend(SessionBackend):
 
         seen: set = set()
         results: List[Dict[str, Any]] = []
-        for line in stdout_text.splitlines():
+        # Same row-delimiter rule as list_attachable_sessions: the name
+        # is caller-controlled and splitlines() would let it manufacture
+        # extra rows. This format puts the name FIRST, so a forged row
+        # here cannot be told from a real one by field position at all -
+        # which makes using the correct row split the only defence.
+        for line in split_listing_rows(stdout_text):
             line = line.strip()
             if not line:
                 continue
@@ -1571,7 +1595,14 @@ class TmuxBackend(SessionBackend):
         )
         if failure is not None:
             return failure
-        names = stdout_text.splitlines()
+        # The row-delimiter rule again, and it bites hardest here: this
+        # listing feeds the owned-name reconciliation, so a name split
+        # into two by splitlines() manufactures a second cloude_-prefixed
+        # "session" that the reconciler would then act on. The whole row
+        # IS the name in this format, so a name carrying a boundary
+        # character now survives as one row and simply fails to match
+        # anything, which is the honest outcome.
+        names = split_listing_rows(stdout_text)
         return TmuxListing.answered(
             [n.strip() for n in names if n.strip().startswith(SESSION_PREFIX)]
         )

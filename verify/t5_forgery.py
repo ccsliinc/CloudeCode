@@ -9,8 +9,18 @@ so the three tmux accepts are row injectors the D2 fix never considered:
 it hardened the FIELD delimiter and proved that, while the ROW delimiter
 stayed a wider alphabet than tmux validates against.
 """
+import os as _os
+import sys as _sys
+
+
+def _add_repo_root() -> None:
+    """Put THIS worktree's repo root on sys.path. Inputs: none. Output: None."""
+    _sys.path.insert(
+        0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+
 import sys
-sys.path.insert(0, "/Users/jsugamele/Scratch/llmScratch/cc-s4-verify2")
+_add_repo_root()
 from src.core.tmux_listing_parse import parse_listing_row, resolve_ownership
 
 SEP = " "          # also works with "\x85" and " "

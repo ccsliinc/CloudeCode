@@ -1,11 +1,21 @@
 """D1 CLASSIFIER: collect REAL tmux stderr, then classify each with the shipped code."""
+import os as _os
+import sys as _sys
+
+
+def _add_repo_root() -> None:
+    """Put THIS worktree's repo root on sys.path. Inputs: none. Output: None."""
+    _sys.path.insert(
+        0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, "/Users/jsugamele/Scratch/llmScratch/cc-s4-verify2")
+_add_repo_root()
 from src.core.tmux_listing import classify_tmux_stderr, classify_listing_failure
 
 TMUX = "/opt/homebrew/bin/tmux"

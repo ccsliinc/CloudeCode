@@ -44,6 +44,7 @@ from __future__ import annotations
 import sqlite3
 import uuid as _uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -269,25 +270,139 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def get_schema_version(conn: sqlite3.Connection) -> int:
-    """Read meta.schema_version as an int, defaulting to 0.
+#: ``meta.schema_version`` has no row. A real answer: this file has no
+#: v1 schema yet, either brand new or interrupted before the first stamp.
+SCHEMA_VERSION_ABSENT = "absent"
 
-    Description: 0 means "this file has no v1 schema yet" - either a
-      brand new file or one interrupted before the first stamp. A value
-      that will not parse as an int is also reported as 0, and logged:
-      a garbage version is not evidence of a high version, and treating
-      it as one would refuse to boot a repairable install.
+#: ``meta.schema_version`` held a value that parsed as an integer.
+SCHEMA_VERSION_PARSED = "parsed"
+
+#: ``meta.schema_version`` held something that will NOT parse as an
+#: integer. We could not evaluate the version. This is NOT zero.
+SCHEMA_VERSION_UNREADABLE = "unreadable"
+
+
+@dataclass(frozen=True)
+class SchemaVersionRead:
+    """The three-outcome result of reading ``meta.schema_version``.
+
+    Description: absent, parsed, and unreadable are three different
+      facts, and the whole point of this type is that the third one
+      cannot be spelled as a number. Collapsing "unreadable" into 0 made
+      a populated database look like a fresh install, which skipped the
+      backup and recorded a ``bootstrap`` from version 0 in the trail -
+      a false claim about a live database, written into the file whose
+      job is to be the honest history.
+    Inputs (constructor): outcome (str) - one of
+      ``SCHEMA_VERSION_ABSENT``, ``SCHEMA_VERSION_PARSED``,
+      ``SCHEMA_VERSION_UNREADABLE``. value (int | None) - the parsed
+      integer, set ONLY for ``parsed``. raw (str | None) - the stored
+      text exactly as found, for the operator-facing message.
+    Output: a SchemaVersionRead instance.
+    """
+
+    outcome: str
+    value: Optional[int] = None
+    raw: Optional[str] = None
+
+    @property
+    def readable(self) -> bool:
+        """Whether a version could be established at all.
+
+        Inputs: none.
+        Output: bool - False only for ``SCHEMA_VERSION_UNREADABLE``.
+        """
+        return self.outcome != SCHEMA_VERSION_UNREADABLE
+
+
+def read_schema_version(conn: sqlite3.Connection) -> SchemaVersionRead:
+    """Read ``meta.schema_version`` as three outcomes, never as a number.
+
+    Description: the honest primitive behind :func:`get_schema_version`.
+      Any gate that DECIDES something - whether to back up, whether to
+      migrate, whether this is a fresh install - must use this one,
+      because the decision differs between "version 0" and "version
+      unknown" and only this signature can tell them apart.
+
+      Accepted forms are whatever ``int()`` accepts after the value is
+      stripped, so ``' 1 '``, ``'01'`` and ``'+1'`` parse. ``''``,
+      ``'v1'``, ``'1.0'`` and ``'3-dirty'`` do not, and become
+      ``SCHEMA_VERSION_UNREADABLE`` rather than 0.
     Inputs: conn (sqlite3.Connection).
-    Output: int.
+    Output: SchemaVersionRead.
+    Example:
+        >>> read_schema_version(conn).outcome  # doctest: +SKIP
+        'parsed'
     """
     raw = get_meta(conn, META_SCHEMA_VERSION)
     if raw is None:
-        return 0
+        return SchemaVersionRead(SCHEMA_VERSION_ABSENT)
     try:
-        return int(raw)
+        return SchemaVersionRead(SCHEMA_VERSION_PARSED, value=int(str(raw).strip()), raw=str(raw))
     except (TypeError, ValueError):
         logger.warning("db_schema_version_unparseable", raw=raw)
-        return 0
+        return SchemaVersionRead(SCHEMA_VERSION_UNREADABLE, raw=str(raw))
+
+
+def get_schema_version(conn: sqlite3.Connection) -> int:
+    """Read meta.schema_version as an int, reporting 0 when there is none.
+
+    Description: the REPORTING face of :func:`read_schema_version`, for
+      call sites that only render or compare a number and take no
+      irreversible action on it.
+
+      DO NOT USE THIS AS A GATE. It collapses two different facts onto
+      0: "no version recorded" and "a version that will not parse". That
+      collapse is what let a populated 9-project database migrate with
+      ZERO backups taken and be recorded in the trail as a bootstrap
+      from 0. Anything deciding whether to back up, whether to migrate,
+      or whether a file is a fresh install must call
+      :func:`read_schema_version` and handle ``SCHEMA_VERSION_UNREADABLE``
+      as its own outcome.
+    Inputs: conn (sqlite3.Connection).
+    Output: int - the parsed version, or 0 for both absent and
+      unparseable. The caller cannot distinguish those two, which is
+      precisely why this must not gate anything.
+    """
+    read = read_schema_version(conn)
+    return read.value if read.value is not None else 0
+
+
+def database_is_populated(conn: sqlite3.Connection) -> Optional[bool]:
+    """Report whether this file already holds user data, or say it cannot tell.
+
+    Description: a cheap independent discriminator against the
+      fresh-install path, used when the recorded schema version cannot be
+      trusted. The ``projects`` table is the right probe: it exists from
+      v1 onward and an install with rows in it is by definition not a new
+      file, whatever ``meta.schema_version`` happens to say.
+
+      Three outcomes, because guessing here decides whether a real user's
+      data gets backed up. A missing table is a genuine False (a file
+      with no projects table has no projects). A query that FAILS is
+      None - could not evaluate - and the caller must treat that with the
+      same caution as True, never as a licence to skip the backup.
+    Inputs: conn (sqlite3.Connection).
+    Output: bool | None - True when at least one project row exists,
+      False when the table exists and is empty or does not exist at all,
+      None when the question could not be answered.
+    Example:
+        >>> database_is_populated(conn)  # doctest: +SKIP
+        True
+    """
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"
+        ).fetchone()
+        if row is None:
+            return False
+        count = conn.execute("SELECT COUNT(*) FROM projects").fetchone()
+        if count is None:
+            return None
+        return int(count[0]) > 0
+    except sqlite3.Error as exc:
+        logger.warning("db_populated_probe_failed", error=str(exc))
+        return None
 
 
 def ensure_install_id(conn: sqlite3.Connection) -> str:

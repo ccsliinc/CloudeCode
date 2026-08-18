@@ -1,11 +1,21 @@
 """D4: does any production path write an instance row with NULL tmux_session_id?
 D6: can the sessions import be latched shut without going through _latch_sessions_stage?
 """
+import os as _os
+import sys as _sys
+
+
+def _add_repo_root() -> None:
+    """Put THIS worktree's repo root on sys.path. Inputs: none. Output: None."""
+    _sys.path.insert(
+        0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+
 import json
 import sqlite3
 import sys
 
-sys.path.insert(0, "/Users/jsugamele/Scratch/llmScratch/cc-s4-verify2")
+_add_repo_root()
 from verify.harness import fresh_state_dir
 from src.core.db import connect, db_path_for
 from src.core.db_migration import ensure_db_migrated

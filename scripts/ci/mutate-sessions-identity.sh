@@ -31,9 +31,13 @@ TESTS="tests/test_s4_adversarial.py tests/test_s4_regressions.py \
 tests/test_s4_import_regressions.py \
 tests/test_tmux_listing_parse.py tests/test_session_import.py \
 tests/test_session_store.py tests/test_session_ownership_origin.py \
-tests/test_db_migration.py"
+tests/test_db_migration.py \
+tests/test_tmux_row_delimiter.py \
+tests/test_sessions_epoch_and_discriminator.py \
+tests/test_schema_version_three_outcomes.py"
 
 FILES=(
+  "src/core/tmux_stderr.py"
   "src/core/tmux_listing.py"
   "src/core/tmux_listing_parse.py"
   "src/core/session_identity.py"
@@ -90,29 +94,53 @@ PYEOF
 
 echo "--- D1: a probe that COULD NOT LOOK must never report zero sessions ---"
 
+# Repointed after the V4 fix moved the per-line errno decision into
+# _classify_connect_line. Same defect, same assertion, new address.
 mutate "the errno is ignored again, so any connect error means no server" \
-  "src/core/tmux_listing.py" \
-  '    if _CONNECT_ERROR_MARKER in lowered:||=>||    if _CONNECT_ERROR_MARKER in lowered:
-        return STDERR_NO_SERVER
-    if False:'
+  "src/core/tmux_stderr.py" \
+  '    match = _CONNECT_ERRNO_RE.search(line)||=>||    return STDERR_NO_SERVER
+    match = _CONNECT_ERRNO_RE.search(line)'
 
 mutate "the connect-error allowlist is widened to permission denied" \
-  "src/core/tmux_listing.py" \
+  "src/core/tmux_stderr.py" \
   '_NO_SERVER_CONNECT_ERRNOS = frozenset({"no such file or directory"})||=>||_NO_SERVER_CONNECT_ERRNOS = frozenset({"no such file or directory", "permission denied"})'
 
 mutate "an UNPARSEABLE connect line degrades to no_server instead of unknown" \
-  "src/core/tmux_listing.py" \
-  '        if match is None:
-            # A connect failure whose cause we cannot read. Not an answer.
-            return STDERR_UNRECOGNISED||=>||        if match is None:
-            return STDERR_NO_SERVER'
+  "src/core/tmux_stderr.py" \
+  '    if match is None:
+        # A connect failure whose cause we cannot read. Not an answer.
+        return STDERR_UNRECOGNISED||=>||    if match is None:
+        return STDERR_NO_SERVER'
 
-mutate "the bare substring marker comes back into the no-server list" \
-  "src/core/tmux_listing.py" \
-  '_NO_SERVER_MARKERS = (
-    "no server running",||=>||_NO_SERVER_MARKERS = (
-    "error connecting to",
-    "no server running",'
+# REPLACED, WITH A PROOF, not dropped because it was inconvenient.
+#
+# The mutant that used to live here added "error connecting to" to
+# _NO_SERVER_MARKERS. Before the V4 fix that reintroduced D1. After it,
+# the mutant is EQUIVALENT: classify_tmux_stderr resolves every line
+# starting with the connect marker through _classify_connect_line and
+# RETURNS from that branch, so the marker list is unreachable for exactly
+# the lines this marker could match. Verified structurally and by
+# differential execution of both variants over a 1067-input corpus of
+# real and synthetic tmux stderr (paths containing markers, every errno,
+# multi-line, embedded newlines, empty) - not one input distinguished
+# them.
+#
+# Its replacement asserts the property the fix actually added: the
+# markers are matched at the START of a stderr line, never as a bare
+# substring, so text tmux merely MENTIONS cannot assert a verdict. That
+# is observable only away from the connect path, which is why the
+# accompanying test had to be written before this mutation could die.
+mutate "the no-server markers are matched unanchored again" \
+  "src/core/tmux_stderr.py" \
+  '        if any(lowered.startswith(marker) for marker in _NO_SERVER_MARKERS):||=>||        if any(marker in lowered for marker in _NO_SERVER_MARKERS):'
+
+mutate "the markers are consulted BEFORE the errno, so injected text wins" \
+  "src/core/tmux_stderr.py" \
+  '    connect_verdicts = [||=>||    for line in lines:
+        lowered = line.lower()
+        if any(lowered.startswith(marker) for marker in _NO_SERVER_MARKERS):
+            return STDERR_NO_SERVER
+    connect_verdicts = ['
 
 mutate "connect_failed is folded back into an ok=True empty answer" \
   "src/core/tmux_listing.py" \

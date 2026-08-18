@@ -60,6 +60,13 @@ STATUS_DEGRADED_BACKUP_UNVERIFIED = "degraded_backup_unverified"
 STATUS_DEGRADED_SCHEMA_AHEAD = "degraded_schema_ahead"
 STATUS_DEGRADED_MIGRATION_FAILED = "degraded_migration_failed"
 
+# meta.schema_version holds something that will not parse as an integer,
+# so we do not know what shape this file is. Read-only, and NOT collapsed
+# into version 0: treating it as 0 sent a populated database down the
+# fresh-install path, which takes no backup and writes a bootstrap line
+# claiming it started from nothing.
+STATUS_DEGRADED_SCHEMA_VERSION_UNREADABLE = "degraded_schema_version_unreadable"
+
 # Every status that puts the app in read-only mode. paused_trail_unreadable
 # is NOT one of them: the data is provably fine there, only the ability to
 # MIGRATE FURTHER is suspended, and locking a healthy database because its
@@ -69,6 +76,7 @@ READONLY_STATUSES = (
     STATUS_DEGRADED_BACKUP_UNVERIFIED,
     STATUS_DEGRADED_SCHEMA_AHEAD,
     STATUS_DEGRADED_MIGRATION_FAILED,
+    STATUS_DEGRADED_SCHEMA_VERSION_UNREADABLE,
 )
 
 # trail_status as exposed on GET /api/v1/version's data block.

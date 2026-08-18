@@ -26,8 +26,16 @@ its row still says ``running``, and a same-second name reuse used to
 MERGE into it.
 
 A NULL id means NOT RECORDED, never "different". Both sides must carry
-one for the mismatch to fire, so rows predating schema v3 simply fall
-back to the stopped-only guard rather than refusing every re-sighting.
+one for the mismatch to fire, so a row without one falls back to the
+stopped-only guard rather than refusing every re-sighting.
+
+Rows predating schema v3 are NOT the only source of a NULL, which is
+what this said before and it was misleading. The first-run import's
+step 5 - persisted sessions with no live tmux row - writes NULL
+discriminators on a current v3 schema too, because the persisted
+metadata records the app's session id and never tmux's. The guard is
+therefore unarmed for those rows by construction. See
+src/core/session_identity.py for the full note.
 """
 
 from __future__ import annotations

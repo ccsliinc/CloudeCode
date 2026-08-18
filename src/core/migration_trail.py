@@ -68,6 +68,7 @@ from src.core.trail_reader import (
     TRAIL_READ_UNREADABLE,
     TrailReadResult,
     find_unclosed,
+    prior_interrupt_uuid,
     read_trail,
 )
 
@@ -87,6 +88,7 @@ __all__ = [
     "TrailEntry",
     "TrailReadResult",
     "find_unclosed",
+    "prior_interrupt_uuid",
     "new_entry_uuid",
     "read_trail",
     "utc_now",

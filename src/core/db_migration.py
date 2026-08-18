@@ -46,6 +46,7 @@ from src.core.db import (
     transaction,
 )
 from src.core.db_backup import prune_backups, take_backup
+from src.core.db_version_gate import resolve_startable_version
 from src.core.db_steps import run_chain
 from src.core.db_models import (
     CURRENT_SCHEMA_VERSION,
@@ -59,6 +60,7 @@ from src.core.db_state import (
     STATUS_DEGRADED_DB_UNREADABLE,
     STATUS_DEGRADED_MIGRATION_FAILED,
     STATUS_DEGRADED_SCHEMA_AHEAD,
+    STATUS_DEGRADED_SCHEMA_VERSION_UNREADABLE,
     STATUS_OK,
     STATUS_PAUSED_TRAIL_UNREADABLE,
     TRAIL_STATUS_ABSENT,
@@ -75,6 +77,7 @@ from src.core.migration_trail import (
     TrailEntry,
     TrailReadResult,
     find_unclosed,
+    prior_interrupt_uuid,
     utc_now,
 )
 
@@ -285,7 +288,18 @@ def ensure_db_migrated(
                 detail=f"PRAGMA integrity_check: {verdict}",
             )
 
-        current = get_schema_version(conn)
+        # The version is read as THREE outcomes, never as a number, and
+        # the refusal cases live in db_version_gate so the measurement is
+        # separable from the migration it authorises.
+        gate = resolve_startable_version(conn)
+        if gate.blocked:
+            return _state(
+                STATUS_DEGRADED_SCHEMA_VERSION_UNREADABLE,
+                CANNOT_DETERMINE,
+                gate.message,
+                detail=gate.detail,
+            )
+        current = gate.version
 
         if current > CURRENT_SCHEMA_VERSION:
             return _state(
@@ -401,7 +415,7 @@ def ensure_db_migrated(
             )
 
         # DB commit landed FIRST. Only now is the trail closed.
-        prior = _prior_interrupt_uuid(read, started)
+        prior = prior_interrupt_uuid(read, started)
         close_status = (
             TRAIL_STATUS_COMPLETED_AFTER_INTERRUPT if prior else TRAIL_STATUS_COMPLETED
         )
@@ -432,27 +446,6 @@ def ensure_db_migrated(
         state.migrations_applied = applied
         state.last_migration_at = utc_now()
         return state
-
-
-def _prior_interrupt_uuid(
-    read: TrailReadResult, started: TrailEntry
-) -> Optional[str]:
-    """Find an earlier interrupted attempt at the same transition.
-
-    Description: lets a successful retry close as
-      ``completed_after_interrupt`` referencing the first attempt, so the
-      trail shows attempted / died / retried / finished rather than
-      erasing the first attempt.
-    Inputs: read (TrailReadResult) - the trail as read BEFORE this run's
-      started line was appended. started (TrailEntry) - this run's entry.
-    Output: str | None - the earlier entry_uuid, or None.
-    """
-    for entry in reversed(read.entries):
-        if entry.entry_uuid == started.entry_uuid:
-            continue
-        if entry.to_version == started.to_version and entry.status == "started":
-            return entry.entry_uuid
-    return None
 
 
 def _close(trail: MigrationTrail, started: TrailEntry, status: str, **kw) -> None:

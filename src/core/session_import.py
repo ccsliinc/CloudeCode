@@ -76,6 +76,7 @@ from src.core.db_models import (
 from src.core.session_import_mapping import (
     attribute_working_dir,
     _merge_fields,
+    _persisted_session_id,
     _project_roots,
     _row_fields,
     _stopped_epoch,
@@ -447,6 +448,11 @@ def run_first_run_import(
         # one the app created. It is still never ``adopted`` - past
         # adoptions were persisted nowhere, so importing one would be
         # inventing a fact.
+        # Discriminator and epoch are both passed EXPLICITLY, so a NULL in
+        # either is a measured absence, not a forgotten argument. A NULL
+        # discriminator can never cause a refusal, so omitting it silently
+        # unarms the instance-mismatch guard for this row. See
+        # session_import_mapping for what each reads and why.
         result = record_instance(
             conn,
             socket=socket,
@@ -455,6 +461,7 @@ def run_first_run_import(
             origin=observed_origin_for(name, owned),
             lifecycle=SESSION_LIFECYCLE_STOPPED,
             lifecycle_source=SESSION_LIFECYCLE_SOURCE_IMPORT,
+            session_id=_persisted_session_id(entry),
             now=stamp,
             project_attribution=SESSION_ATTRIBUTION_UNKNOWN,
             **_merge_fields(entry),

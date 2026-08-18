@@ -43,9 +43,22 @@ handing the new process the dead session's ``session_uuid``, its
 case, not the exotic one.
 
 A NULL id means NOT RECORDED, never "different". Both sides must carry
-one for the mismatch to fire, so an upgraded install whose rows predate
-schema v3 degrades to the stopped-only guard rather than refusing every
-legitimate re-sighting.
+one for the mismatch to fire, so a row without one degrades to the
+stopped-only guard rather than refusing every legitimate re-sighting.
+
+WHERE NULL IDS ACTUALLY COME FROM, WHICH IS MORE THAN THIS USED TO SAY.
+The earlier wording named only "an upgraded install whose rows predate
+schema v3", which reads as though every row written by current code
+carries an id. It does not. The first-run import has a SECOND path -
+step 5, for sessions that were persisted in session_metadata.json but
+have no live tmux row - and a persisted entry records the app's own
+session id, not tmux's ``#{session_id}``. On the live install this
+import was written for, no tmux id is recorded at all, so step 5 writes
+rows with a NULL discriminator on a brand new v3 schema. That is
+correct and honest: the value was measured absent. But it means the
+instance-mismatch guard is UNARMED for those rows by construction, not
+by legacy, and the stopped-only guard is doing the whole job for them.
+See src/core/session_import.py step 5.
 
 The refusal is the entire reason this is three outcomes and not two.
 """
@@ -156,7 +169,7 @@ def record_instance(
     *,
     socket: str,
     name: str,
-    epoch: int,
+    epoch: Optional[int],
     origin: str,
     lifecycle: str = SESSION_LIFECYCLE_RUNNING,
     lifecycle_source: Optional[str] = None,
@@ -190,7 +203,16 @@ def record_instance(
         different process. Nothing is written and a warning naming BOTH
         rows is logged.
     Inputs: conn (sqlite3.Connection) - caller owns the transaction.
-      socket (str), name (str), epoch (int) - the instance triple.
+      socket (str), name (str), epoch (int | None) - the instance triple.
+      A None epoch means NOT RECORDED, and it is a deliberate, supported
+      value: an imported session the app knew about but whose
+      ``#{session_created}`` was never persisted has no epoch, and
+      inventing a 0 for it put a fabricated value into the identity key
+      (see session_import_mapping._stopped_epoch). A None-epoch row can
+      never MERGE - the lookup that would find it compares against NULL
+      and matches nothing - so it always INSERTs, sits outside the
+      partial unique index, and is filtered out of
+      ``session_store.owned_instances``. It is history, not identity.
       origin (str) - one of db_models.SESSION_ORIGINS; applied on INSERT
       only. lifecycle (str) - default ``running``. lifecycle_source
       (str | None). session_id (str | None) - tmux ``#{session_id}``,
@@ -247,7 +269,7 @@ def record_instance(
         session_uuid,
         socket,
         name,
-        int(epoch),
+        None if epoch is None else int(epoch),
         origin,
         lifecycle,
         stamp,

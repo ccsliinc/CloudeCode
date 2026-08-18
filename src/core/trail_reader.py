@@ -247,3 +247,44 @@ def find_unclosed(entries: List[TrailEntry]) -> List[TrailEntry]:
         for e in entries
         if e.status == TRAIL_STATUS_STARTED and e.entry_uuid not in closed
     ]
+
+
+def prior_interrupt_uuid(
+    read: TrailReadResult, started: TrailEntry
+) -> Optional[str]:
+    """Find an earlier INTERRUPTED attempt at the same transition.
+
+    Description: lets a successful retry close as
+      ``completed_after_interrupt`` referencing the first attempt, so the
+      trail shows attempted / died / retried / finished rather than
+      erasing the first attempt.
+
+      "INTERRUPTED" MEANS UNCLOSED, AND THIS USED TO MEAN "STARTED".
+      Every attempt writes a ``started`` line, including attempts that
+      went on to close cleanly as ``failed``. Matching any earlier
+      ``started`` line therefore matched successful and failed attempts
+      too, so a retry after a CLEAN FAILURE recorded
+      ``completed_after_interrupt`` and asserted an interrupt that never
+      happened. The trail's whole value is that it is the one artifact
+      nobody has to infer from, so a fabricated interrupt in it is worse
+      than a missing one.
+
+      An entry is interrupted when its ``entry_uuid`` has a ``started``
+      line and NO closing line, which
+      :func:`src.core.trail_reader.find_unclosed` already determines
+      from the file itself. Reusing it means the definition of
+      "interrupted" is stated once, so this function and the startup
+      report that surfaces interrupted entries cannot disagree about
+      which attempts those are.
+    Inputs: read (TrailReadResult) - the trail as read BEFORE this run's
+      started line was appended. started (TrailEntry) - this run's entry.
+    Output: str | None - the entry_uuid of the most recent unclosed
+      attempt at the same ``to_version``, or None when every earlier
+      attempt at it was closed (whether it succeeded or failed).
+    """
+    for entry in reversed(find_unclosed(read.entries)):
+        if entry.entry_uuid == started.entry_uuid:
+            continue
+        if entry.to_version == started.to_version:
+            return entry.entry_uuid
+    return None

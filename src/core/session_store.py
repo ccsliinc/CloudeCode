@@ -36,6 +36,38 @@ row keeps its origin and its ``adopted_at`` byte for byte and falls to
 would silently transfer an adoption to a process the user never claimed
 and badge it as his.
 
+NOTHING EVER DELETES A SESSIONS ROW, AND THAT IS A KNOWN GAP.
+Verified by walking the source rather than by grep: no statement
+anywhere in ``src/`` issues ``DELETE FROM sessions``. There is no
+reaper, no expiry, no repair path, and no UI affordance that removes
+one. Combined with the ownership resolver's tier 2 - where ANY stored
+instance for a name is a specific epoch-keyed opinion that returns
+False for every other epoch - this makes a wrong ``owned`` row a
+PERMANENT negative opinion about that name. A user who hits one has no
+way back short of editing cloude.db by hand.
+
+The mitigations that exist are all upstream, and they are why this is a
+gap rather than an active defect: a NULL epoch is filtered out of
+:func:`owned_instances` so it can never become such an opinion, and
+:func:`src.core.session_import_mapping._stopped_epoch` no longer invents
+a 0 that would have created one on every upgrade. So the known routes to
+a wrong row are closed. What is missing is what happens if a new one
+ever appears.
+
+THE INTENDED REPAIR PATH, when it is built, is a REAPER keyed on the
+instance triple: any row whose ``(socket, name, epoch)`` is absent from
+a live listing, and whose ``lifecycle`` has been ``stopped`` for longer
+than a retention window, may be deleted.
+
+Its one non-negotiable precondition, stated here because it is the part
+that is easy to leave out and catastrophic to miss: the reaper MUST run
+only against a listing with ``ok=True``. An unavailable listing carries
+no rows BY CONTRACT, not because there are none, so reaping against one
+would delete the user's entire session history the first time tmux
+failed to answer - turning a transient probe failure into permanent
+data loss. Until that reaper exists, treat every row this module returns
+as immortal.
+
 WHERE THE WRITES LIVE. This module is the READ side. Everything that
 can create, claim or refuse a row is in src/core/session_identity.py,
 because those are the only operations that can get identity wrong.
@@ -114,7 +146,7 @@ def get_instance(
     *,
     socket: str,
     name: str,
-    epoch: int,
+    epoch: Optional[int],
 ) -> Optional[Dict[str, Any]]:
     """Look up the row for one tmux instance triple.
 
@@ -122,14 +154,27 @@ def get_instance(
       session. There is deliberately no get-by-name: a name matches any
       number of historical instances, and picking one of them is the bug
       the epoch was added to prevent.
+
+      A None epoch returns None WITHOUT querying, and that is a real
+      answer rather than a shortcut. "This session's creation epoch was
+      never recorded" identifies no instance: there is nothing to compare
+      against, so no stored row can be shown to be the same process.
+      Returning None routes the caller to INSERT a fresh row, which is
+      correct - the alternative, matching some other row that merely
+      shares the name, is precisely the identity confusion the epoch
+      exists to prevent. The early return also keeps the behaviour
+      explicit rather than relying on SQL's ``= NULL`` never matching,
+      which is the same outcome reached by accident.
     Inputs: conn (sqlite3.Connection). socket (str) - tmux socket name.
-      name (str) - tmux session name. epoch (int) -
-      ``#{session_created}``.
+      name (str) - tmux session name. epoch (int | None) -
+      ``#{session_created}``, or None when it was never recorded.
     Output: dict | None - the row, or None when no row has that triple
-      (including on a pre-v2 database).
+      (including on a pre-v2 database, and always when epoch is None).
     Example: get_instance(conn, socket='cloude', name='a', epoch=1000)
     """
     if not sessions_table_ready(conn):
+        return None
+    if epoch is None:
         return None
     row = conn.execute(
         "SELECT * FROM sessions WHERE tmux_socket = ? AND tmux_name = ? "

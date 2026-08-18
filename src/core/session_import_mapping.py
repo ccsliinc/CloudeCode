@@ -136,16 +136,81 @@ def _merge_fields(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {key: value for key, value in mapping.items() if value is not None}
 
 
-def _stopped_epoch(entry: Dict[str, Any]) -> int:
+def _persisted_session_id(entry: Dict[str, Any]) -> Optional[str]:
+    """Read the tmux ``#{session_id}`` discriminator off a persisted entry.
+
+    Description: the import's source for the instance discriminator when
+      there is no live tmux row to read one from. Returns None when the
+      entry records none, which is the honest answer and NOT the same as
+      forgetting to look - a None can never cause an instance-mismatch
+      refusal, so the difference decides whether that guard is armed for
+      the row.
+
+      DO NOT REACH FOR ``entry["session_id"]`` HERE. That key is the
+      APP's own session identifier and is mapped to
+      ``legacy_session_id`` by :func:`_merge_fields`. tmux's
+      ``#{session_id}`` is a different namespace entirely (``$0``,
+      ``$1``, ...), and writing one into the other's column would
+      manufacture a discriminator mismatch against every real tmux row.
+      Only keys that genuinely hold the tmux value are consulted.
+    Inputs: entry (dict) - one persisted session record.
+    Output: str | None - the tmux session id, or None when unrecorded.
+    Example:
+        >>> _persisted_session_id({"tmux_session_id": "$3"})
+        '$3'
+        >>> _persisted_session_id({"session_id": "abc"}) is None
+        True
+    """
+    value = entry.get("tmux_session_id")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _stopped_epoch(entry: Dict[str, Any]) -> Optional[int]:
     """Choose the instance epoch for a persisted session with no live row.
 
     Description: the entry's own recorded creation epoch when it has one,
-      otherwise 0. A stopped row still needs an epoch so it occupies its
-      own slot in ``ux_sessions_tmux_instance`` and cannot be merged into
-      by a future live session that happens to reuse the name - the live
-      one will carry a real, non-zero ``#{session_created}``.
+      and ``None`` - meaning NOT RECORDED - when it does not.
+
+      THIS USED TO RETURN 0, AND THAT 0 WAS A MEASUREMENT NOBODY MADE.
+      The persisted ``session_metadata.json`` an upgrading install
+      carries has no epoch field at all, so the fallback was the normal
+      path, not the exotic one. A synthesized 0 is indistinguishable
+      downstream from an epoch tmux actually reported, and it entered the
+      IDENTITY KEY: with ``origin='created'`` the row landed in
+      :func:`src.core.session_store.owned_instances`, which gave the
+      ownership resolver a specific, epoch-keyed opinion about that name.
+      The resolver's tier 2 then issued a CONFIDENT NEGATIVE against it,
+      so the user's next real session of the same name badged
+      ``owned=False`` - permanently, since nothing ever deletes a
+      sessions row. An invented value driving a confident verdict is
+      exactly what the three-outcome rule forbids, and the identity
+      layer is the worst place to do it.
+
+      ``None`` is the representation this design already had for "epoch
+      unknown" and the schema was already built for it: the unique index
+      ``ux_sessions_tmux_instance`` is PARTIAL
+      (``WHERE ... tmux_created_epoch IS NOT NULL``) and
+      ``owned_instances`` filters ``tmux_created_epoch IS NOT NULL``. So
+      a NULL-epoch row cannot collide with a real instance and cannot
+      reach the ownership resolver at all - it is recorded, visible, and
+      silent on the question it has no evidence about.
+
+      The cost, stated plainly: two persisted entries for the same name
+      with no epoch produce two rows rather than one, because SQLite
+      treats NULLs as distinct in a unique index. That is the correct
+      trade. Duplicate history is a cosmetic defect; a fabricated
+      identity that silently disowns a live session is not.
     Inputs: entry (dict) - one persisted session record.
-    Output: int.
+    Output: int | None - the recorded epoch, or None when the entry
+      carries none or carries one that will not parse as an integer.
+    Example:
+        >>> _stopped_epoch({"tmux_created_epoch": 1755000000})
+        1755000000
+        >>> _stopped_epoch({}) is None
+        True
     """
     for key in ("tmux_created_epoch", "created_at_epoch"):
         value = entry.get(key)
@@ -154,4 +219,4 @@ def _stopped_epoch(entry: Dict[str, Any]) -> int:
                 return int(value)
             except (TypeError, ValueError):
                 continue
-    return 0
+    return None
