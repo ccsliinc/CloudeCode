@@ -904,6 +904,24 @@ class API {
     }
 
     /**
+     * Sessions: every stored session row (datastore-backed), used by the
+     * home-screen project-to-session tree (feat/project-session-tree) to
+     * learn each RUNNING session's ``project_id`` / ``project_attribution``
+     * - neither field is on the live tmux-probed session shape
+     * (SessionInfo / AttachableSession), only on the stored row.
+     *
+     * @returns {Promise<Array<{tmux_name: string|null, project_id:
+     *   number|null, project_attribution: string}>>} - see
+     *   ``SessionRecord`` (src/models.py). Newest first, archived rows
+     *   included - the caller filters by ``tmux_name`` match against the
+     *   live session list, so an archived/stopped row simply matches
+     *   nothing running and is inert.
+     */
+    async listSessionRecords() {
+        return await this.call('/sessions/records');
+    }
+
+    /**
      * Sessions: Adopt an externally-started tmux session.
      *
      * Server-side this sets up `pipe-pane` on the target, captures the

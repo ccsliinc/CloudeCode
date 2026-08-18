@@ -4069,3 +4069,170 @@ body.home-header-active {
         flex-wrap: wrap;
     }
 }
+
+/* ---------------------------------------------------------------------
+ * feat/project-session-tree (S8) - the two-level project-to-session
+ * tree on the home screen. `.project-node` wraps one project's existing
+ * `.project-item` row (unchanged) plus its child sessions; `.badge`,
+ * `.family-pill`, the status dot and the presence badges are ALL
+ * reused verbatim from the flat running-sessions list / S3 - nothing
+ * here re-themes them. See client/js/launchpad.js renderProjectList().
+ * --------------------------------------------------------------------- */
+
+.project-node {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-node__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.project-node__row .project-item {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Chevron toggle for a project's child sessions. A project with zero
+ * matched running sessions never renders this button at all - there is
+ * nothing to expand, so no control is drawn (see renderProjectList()). */
+.project-node__toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-top: 14px;
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary, var(--color-text));
+    cursor: pointer;
+    font-size: 0.78rem;
+}
+
+.project-node__chevron {
+    display: inline-block;
+    transition: transform 150ms ease;
+}
+
+.project-node__toggle[aria-expanded="true"] .project-node__chevron {
+    transform: rotate(90deg);
+}
+
+.project-node__sessions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 4px 28px;
+}
+
+.project-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--color-accent-bg-soft);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.project-session-row:hover {
+    background: rgba(215, 119, 87, 0.14);
+}
+
+.project-session-row__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.86rem;
+}
+
+/* Synthetic "no project" group - a real, measured answer
+ * (project_attribution === 'none'), styled as an ordinary collapsible
+ * group, deliberately NOT as a warning - it is not the same claim as
+ * NEEDS ATTENTION below. */
+.project-node--virtual > .project-node__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary, var(--color-text));
+    cursor: pointer;
+    text-align: left;
+}
+
+.project-node--virtual .project-node__title {
+    flex: 1;
+    font-weight: 600;
+}
+
+.project-node--virtual .project-node__count {
+    font-size: 0.74rem;
+    opacity: 0.7;
+}
+
+.project-node--virtual .project-node__sessions {
+    margin-left: 12px;
+}
+
+/* NEEDS ATTENTION group - a session whose project could not be
+ * determined (working directory unreadable, or the attribution fetch
+ * itself failed). Never collapsible, never offers an action - same
+ * visual language as `.running-sessions-attention` on purpose. */
+.project-node--attention {
+    margin-top: 4px;
+}
+
+.project-node__header--attention {
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning, #d79921);
+    background: var(--color-accent-bg-soft);
+}
+
+.project-node__attention-head {
+    display: block;
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: var(--color-warning, #d79921);
+}
+
+.project-node--attention .project-node__title {
+    display: block;
+    margin-top: 3px;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.project-node--attention .project-node__sessions {
+    margin-left: 12px;
+    margin-top: 4px;
+}
+
+.project-session-row--attention {
+    cursor: default;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.project-session-row--attention:hover {
+    background: transparent;
+}
+
+.project-session-row__attention-reason {
+    font-size: 0.74rem;
+    opacity: 0.75;
+}
