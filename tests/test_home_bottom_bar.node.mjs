@@ -247,17 +247,34 @@ test('the hover guard cancels the reset transform and outset glow', () => {
     }
 });
 
-test('the hover guard outranks the bare button hover reset', () => {
+test('the bare button hover reset is gone, and .home-bar__btn never opts into its replacement', () => {
+    // SCOPING FIX. `button:hover:not(:disabled)` no longer exists - it is
+    // `.btn-icon:hover:not(:disabled)` now, applied only to
+    // `#configEditorBtn` and `.header-menu-toggle` (see
+    // test_button_box_sizing.node.mjs). Assert both halves: the bare rule
+    // is gone, and .home-bar__btn (built in client/js/launchpad.js) never
+    // carries btn-icon, so the old specificity race cannot come back by
+    // either route.
     const reset = styleRules
         .flatMap((r) => r.selector.split(',').map((s) => ({ selector: s.trim(), body: r.body })))
         .filter((r) => /^button:hover/.test(r.selector) && /transform:/.test(r.body));
-    assert.ok(reset.length > 0,
-        'expected the bare button hover reset in styles.css; if it genuinely '
-        + 'no longer sets a transform, retire this test deliberately');
-    const resetSpec = reset
-        .map((r) => specificity(r.selector))
-        .reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
+    assert.deepEqual(reset, [],
+        'expected zero bare `button:hover` rules in styles.css - that reset '
+        + 'is now scoped to .btn-icon');
 
+    const launchpadJs = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'launchpad.js'), 'utf8');
+    const classAttr = launchpadJs.match(/class="[^"]*\bhome-bar__btn\b[^"]*"/);
+    assert.ok(classAttr, 'expected to find home-bar__btn in the launchpad.js template');
+    assert.ok(!classAttr[0].includes('btn-icon'),
+        '.home-bar__btn must never also carry btn-icon, or the round-icon '
+        + 'reset reaches the bottom bar again');
+
+    // Keep the pre-existing specificity guard too, pinned against the
+    // historical reset's own specificity (0,2,1) rather than reading it
+    // live, since there is no longer a live bare-button rule to read it
+    // from.
+    const historicalResetSpec = [0, 2, 1];
     const guard = homeBarRules
         .flatMap((r) => r.selector.split(',').map((s) => ({ selector: s.trim(), body: r.body })))
         .filter((r) => r.selector.includes('.home-bar__btn')
@@ -266,9 +283,9 @@ test('the hover guard outranks the bare button hover reset', () => {
         .map((r) => specificity(r.selector));
     assert.ok(guard.length > 0, 'no transform-cancelling hover rule for .home-bar__btn');
     const best = guard.reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
-    assert.ok(cmp(best, resetSpec) > 0,
-        `.home-bar__btn hover guard specificity ${best} does not beat the `
-        + `reset's ${resetSpec}; add :not(:disabled) rather than !important`);
+    assert.ok(cmp(best, historicalResetSpec) > 0,
+        `.home-bar__btn hover guard specificity ${best} does not beat ${historicalResetSpec}; `
+        + 'add :not(:disabled) rather than !important');
 });
 
 test('the focus ring is inset, so it cannot paint over the content above', () => {

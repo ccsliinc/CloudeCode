@@ -176,21 +176,44 @@ test('the tree-row hover rule cancels the reset transform and outset glow', () =
     }
 });
 
-test('the neutralizing rule outranks the bare button hover reset', () => {
-    // This is the load-bearing half. `button:hover:not(:disabled)` is
-    // (0,2,1); a plain `.config-editor-toggle:hover` is only (0,2,0) and
-    // loses, which is how the scale survived a rule that looked like it
-    // already handled hover.
+test('the bare button hover reset is gone, and the row classes never opt into its replacement', () => {
+    // SCOPING FIX. `button:hover:not(:disabled)` no longer exists - it is
+    // `.btn-icon:hover:not(:disabled)` now, applied only to
+    // `#configEditorBtn` and `.header-menu-toggle` (see
+    // test_button_box_sizing.node.mjs). The old specificity race
+    // (button:hover:not(:disabled) at (0,2,1) beating a plain
+    // .config-editor-toggle:hover at (0,2,0)) is no longer just won, it is
+    // structurally impossible: nothing here can match a selector that
+    // requires the btn-icon class. Assert both halves, since either one
+    // regressing brings the race back - a reintroduced bare `button:hover`
+    // rule, or a tree row that starts carrying `btn-icon`.
     const reset = styleRules
         .flatMap((r) => r.selector.split(',').map((s) => ({ selector: s.trim(), body: r.body })))
         .filter((r) => /^button:hover/.test(r.selector) && /transform:/.test(r.body));
-    assert.ok(reset.length > 0,
-        'expected the bare button hover reset in styles.css; if it genuinely '
-        + 'no longer sets a transform, retire this test deliberately');
-    const resetSpec = reset
-        .map((r) => specificity(r.selector))
-        .reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
+    assert.deepEqual(reset, [],
+        'expected zero bare `button:hover` rules in styles.css - that reset '
+        + 'is now scoped to .btn-icon');
 
+    const configEditorPanelJs = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'config-editor-panel.js'), 'utf8');
+    for (const cls of ROW_CLASSES) {
+        const classAssignment = new RegExp(
+            `className\\s*=\\s*[\`'"][^\`'"]*\\b${cls}\\b[^\`'"]*[\`'"]`);
+        const m = configEditorPanelJs.match(classAssignment);
+        assert.ok(m, `expected to find where .${cls} is assigned in config-editor-panel.js`);
+        assert.ok(!m[0].includes('btn-icon'),
+            `.${cls} must never also carry btn-icon, or the round-icon reset `
+            + 'reaches tree rows again and the overflow bug returns');
+    }
+
+    // Keep the pre-existing specificity guard too, pinned against the
+    // historical reset's own specificity (0,2,1 - element + :hover + the
+    // :disabled inside :not()) rather than reading it live, since there
+    // is no longer a live bare-button rule to read it from. A future
+    // change that scopes a hover rule back onto plain `button` at that
+    // specificity or higher must not silently out-rank these guards
+    // again.
+    const historicalResetSpec = [0, 2, 1];
     for (const cls of ROW_CLASSES) {
         const guard = rowHoverRules(editorRules, false)
             .filter((r) => r.selector.includes(cls) && /transform:\s*none/.test(r.body));
@@ -198,9 +221,9 @@ test('the neutralizing rule outranks the bare button hover reset', () => {
         const best = guard
             .map((r) => specificity(r.selector))
             .reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
-        assert.ok(cmp(best, resetSpec) > 0,
-            `.${cls} hover guard specificity ${best} does not beat the reset's `
-            + `${resetSpec}; add :not(:disabled) rather than !important`);
+        assert.ok(cmp(best, historicalResetSpec) > 0,
+            `.${cls} hover guard specificity ${best} does not beat ${historicalResetSpec}; `
+            + 'add :not(:disabled) rather than !important');
     }
 });
 

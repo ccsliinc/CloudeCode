@@ -411,7 +411,7 @@ test('the terminal screen can never scroll sideways', () => {
 
 test('tooltips are anchored to their own button, not to an ancestor', () => {
     const css = readClientCss('styles.css');
-    assert.ok(/position:\s*relative;/.test(ruleBody(css, 'button[data-tooltip]')),
+    assert.ok(/position:\s*relative;/.test(ruleBody(css, '.btn-icon[data-tooltip]')),
         'an unpositioned button lets the tooltip escape to the initial containing block, '
         + 'which is what produced 42px of horizontal scroll inside the session');
     // The strip whose rightmost tooltip used to hang past the viewport

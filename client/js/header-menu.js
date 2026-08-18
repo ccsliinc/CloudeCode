@@ -111,7 +111,7 @@ class HeaderMenu {
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.id = 'header-menu-toggle';
-        toggle.className = 'header-menu-toggle';
+        toggle.className = 'btn-icon header-menu-toggle';
         toggle.setAttribute('aria-label', 'More actions');
         toggle.setAttribute('title', 'more');
         toggle.setAttribute('aria-haspopup', 'true');

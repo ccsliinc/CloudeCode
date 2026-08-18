@@ -656,8 +656,34 @@ body.home-header-active {
     color: var(--color-danger);
 }
 
-/* Buttons */
-button {
+/* Round header icon-button.
+ *
+ * This used to be a bare `button {}` element rule reaching every <button>
+ * in the DOM, not just these. That caused two separate incident classes:
+ * a `border-radius: 50%` turned the settings tabs into literal ellipses
+ * (fixed in place at the time, not at the source - see .settings-tab
+ * below), and `transform: scale(1.05)` on hover leaked onto the
+ * per-session theme picker rows and overflowed the list horizontally
+ * (fixed at terminal-tools.css instead of here, commit 842d333).
+ *
+ * Audited every <button> in the app (client/index.html's ~12 static
+ * tags, ~13 `createElement('button')` call sites in client/js/, plus
+ * every per-item row they render) before writing this class. Result:
+ * every one of them already carries its own class with EXPLICIT
+ * background/border/color/width/height/cursor - the comments scattered
+ * through config-editor-modal.css, config-editor.css, config-drawer.css,
+ * home-bar.css, header-menu.css, server-status.css, session-sidebar.css,
+ * toast.css and slash-command-chips.css record each one deliberately
+ * escaping this rule. Exactly two elements in the whole app never
+ * escaped it because they were never meant to: `#configEditorBtn` (the
+ * one header control that stays inline at every width - see
+ * client/js/header-menu.js) and `.header-menu-toggle` (the kebab
+ * trigger it builds). Both get this class explicitly rather than
+ * matching a bare element, and nothing else does. No fallback bare
+ * `button {}` reset is added: since every other button already declares
+ * every property this rule used to hand out for free, a reset would be
+ * dead weight, not a safety net. */
+.btn-icon {
     background: var(--color-accent-bg);
     color: var(--color-accent);
     border: 1px solid var(--color-accent-border);
@@ -676,14 +702,14 @@ button {
     position: relative;
 }
 
-button:hover:not(:disabled) {
+.btn-icon:hover:not(:disabled) {
     background: var(--color-accent-bg-hover);
     border-color: var(--color-accent);
     box-shadow: 0 0 12px var(--color-accent-glow);
     transform: scale(1.05);
 }
 
-button:disabled {
+.btn-icon:disabled {
     background: rgba(62, 62, 66, 0.1);  /* TODO: theme-token candidate (disabled-bg) */
     border-color: rgba(62, 62, 66, 0.3); /* TODO: theme-token candidate (disabled-border) */
     color: var(--color-fg-subtle);
@@ -691,19 +717,22 @@ button:disabled {
     opacity: 0.4;
 }
 
-button.danger {
+.btn-icon.danger {
     color: var(--color-danger);
     border-color: var(--color-danger-border);
     background: var(--color-danger-bg);
 }
 
-button.danger:hover:not(:disabled) {
+.btn-icon.danger:hover:not(:disabled) {
     background: var(--color-danger-bg-hover);
     border-color: var(--color-danger);
     box-shadow: 0 0 12px var(--color-danger-glow);
 }
 
-/* Tooltip on hover (only for buttons with data-tooltip).
+/* Tooltip on hover (only for icon buttons with data-tooltip - currently
+ * just #configEditorBtn; logoutBtn/settingsBtn carry data-tooltip too
+ * but live inside .header-menu-panel, which overrides this to a static
+ * row label - see header-menu.css).
  *
  * The button MUST be the containing block. Without this the tooltip's
  * `position: absolute` resolved against whatever positioned ancestor
@@ -716,11 +745,11 @@ button.danger:hover:not(:disabled) {
  * that element's `overflow: auto` turned the invisible pseudo-element
  * into a real 42px horizontal scroll the user could drag. Measured
  * before: `#terminal-screen.scrollLeft` reached 42 at 390px wide. */
-button[data-tooltip] {
+.btn-icon[data-tooltip] {
     position: relative;
 }
 
-button[data-tooltip]::after {
+.btn-icon[data-tooltip]::after {
     content: attr(data-tooltip);
     position: absolute;
     bottom: -30px;
@@ -742,7 +771,7 @@ button[data-tooltip]::after {
     z-index: 1;
 }
 
-button[data-tooltip]:hover::after {
+.btn-icon[data-tooltip]:hover::after {
     opacity: 1;
 }
 
@@ -1435,7 +1464,7 @@ button[data-tooltip]:hover::after {
         font-size: 1.1rem;
     }
 
-    button {
+    .btn-icon {
         font-size: 18px;
     }
 

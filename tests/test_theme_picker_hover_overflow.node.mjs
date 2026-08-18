@@ -21,21 +21,36 @@
 //   hovered  .cloude-session-theme__list  scrollWidth 193 != clientWidth 188
 // After the fix both states measure scrollWidth === clientWidth === 188.
 //
-// THE SPECIFICITY TRAP. The fix is not "add `transform: none` to the
-// hover rule" - that alone still loses. `button:hover:not(:disabled)`
-// has specificity (0,2,1): element + :hover + the :disabled inside
-// :not() (a :not() contributes the specificity of its argument, not of
-// :not() itself, per spec). A bare `.cloude-session-theme__item:hover`
-// is only (0,2,0) - LOWER - so CSS's cascade gives the button rule's
-// `transform: scale(1.05)` the win regardless of file order, and a fix
-// that only sets `transform: none` on the weaker selector is silently
-// inert. This was caught by hovering a real row with that weaker
-// selector in place and reading its computed `transform`, which stayed
-// `matrix(1.05, 0, 0, 1.05, 0, 0)`. The real fix qualifies the selector
-// with the list ancestor - `.cloude-session-theme__list
-// .cloude-session-theme__item:hover` - raising it to (0,3,0), which
-// beats (0,2,1) on the class/pseudo-class tier alone, with no
-// `!important` and no dependence on stylesheet load order.
+// THE SPECIFICITY TRAP, as it stood at the time. The fix was not "add
+// `transform: none` to the hover rule" - that alone still lost.
+// `button:hover:not(:disabled)` had specificity (0,2,1): element +
+// :hover + the :disabled inside :not() (a :not() contributes the
+// specificity of its argument, not of :not() itself, per spec). A bare
+// `.cloude-session-theme__item:hover` was only (0,2,0) - LOWER - so
+// CSS's cascade gave the button rule's `transform: scale(1.05)` the win
+// regardless of file order, and a fix that only set `transform: none` on
+// the weaker selector was silently inert. This was caught by hovering a
+// real row with that weaker selector in place and reading its computed
+// `transform`, which stayed `matrix(1.05, 0, 0, 1.05, 0, 0)`. The actual
+// fix qualified the selector with the list ancestor -
+// `.cloude-session-theme__list .cloude-session-theme__item:hover` -
+// raising it to (0,3,0), which beat (0,2,1) on the class/pseudo-class
+// tier alone, with no `!important` and no dependence on stylesheet load
+// order.
+//
+// SCOPING FIX (button-selector scoping pass). The bare
+// `button:hover:not(:disabled)` rule this whole race was fought against
+// is gone. It is `.btn-icon:hover:not(:disabled)` now, applied only to
+// `#configEditorBtn` and `.header-menu-toggle` - see
+// test_button_box_sizing.node.mjs. `.cloude-session-theme__item` never
+// carries `btn-icon`, so the race is not just won any more, it is
+// structurally impossible: there is no selector left for the theme
+// picker rows to accidentally match. This file keeps every assertion
+// from the original fix (transform: none, the background swap, the
+// specificity math, the overflow math) pinned against the HISTORICAL
+// button-rule specificity (0,2,1) rather than a live one, so a future
+// change that scopes a hover-scale rule back onto something broad enough
+// to reach these rows still has to clear the same bar.
 //
 // Run with: node tests/test_theme_picker_hover_overflow.node.mjs
 
@@ -196,19 +211,40 @@ function hoverOverflow(itemWidth, scaleFactor, containerWidth) {
 const stylesSrc = css('styles.css');
 const terminalToolsSrc = css('terminal-tools.css');
 
-// Substring search also catches `.auth-button:hover:not(:disabled)` -
-// filter down to the rule with a BARE `button` branch, since that is
-// the one with no class qualifier at all and therefore the one every
-// unrelated button (including this picker's rows) inherits from.
+// Substring search also catches `.auth-button:hover:not(:disabled)` and
+// `.btn-icon:hover:not(:disabled)` - filter down to a BARE `button`
+// branch specifically, since that is the one with no class qualifier at
+// all and would reach every unrelated button (including this picker's
+// rows) if it ever came back.
 const buttonHoverRules = findRules(stylesSrc, 'button:hover:not(:disabled)')
     .filter((r) => r.selector.split(',').map((s) => s.trim()).includes('button:hover:not(:disabled)'));
 
-test('the global button:hover:not(:disabled) rule exists and still scales', () => {
-    assert.equal(buttonHoverRules.length, 1,
-        `expected exactly one bare button:hover:not(:disabled) rule, found ${buttonHoverRules.length}`);
-    assert.match(buttonHoverRules[0].body, /transform:\s*scale\(/,
-        'this test assumes the global rule still applies a scale transform on hover - ' +
-        'if that assumption changed, this whole regression class may be moot and the test should be revisited');
+// The rule the historical bug came from, now scoped to `.btn-icon`. Used
+// below to confirm the scale transform itself is still real (this file
+// is not testing that the feature disappeared, only that it no longer
+// leaks) and as the specificity floor the item-hover guard must clear.
+const iconHoverRules = findRules(stylesSrc, '.btn-icon:hover:not(:disabled)')
+    .filter((r) => r.selector.split(',').map((s) => s.trim()).includes('.btn-icon:hover:not(:disabled)'));
+
+test('the bare button:hover:not(:disabled) rule is gone; .btn-icon:hover:not(:disabled) still scales', () => {
+    assert.equal(buttonHoverRules.length, 0,
+        `expected zero bare button:hover:not(:disabled) rules, found ${buttonHoverRules.length} - `
+        + 'that reset is now scoped to .btn-icon');
+    assert.equal(iconHoverRules.length, 1,
+        `expected exactly one .btn-icon:hover:not(:disabled) rule, found ${iconHoverRules.length}`);
+    assert.match(iconHoverRules[0].body, /transform:\s*scale\(/,
+        'the header icon buttons still get their hover scale - only its reach changed');
+});
+
+test('.cloude-session-theme__item is never assigned the btn-icon class', () => {
+    const sessionThemeMenuSrc = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'session-theme-menu.js'), 'utf8');
+    const classAssignment = sessionThemeMenuSrc.match(
+        /className\s*=\s*[`'"][^`'"]*\bcloude-session-theme__item\b[^`'"]*[`'"]/);
+    assert.ok(classAssignment, 'expected to find where .cloude-session-theme__item is assigned');
+    assert.ok(!classAssignment[0].includes('btn-icon'),
+        '.cloude-session-theme__item must never also carry btn-icon, or the hover-scale '
+        + 'reset reaches theme rows again and the overflow bug returns');
 });
 
 const itemHoverRules = findRules(terminalToolsSrc, 'cloude-session-theme__item:hover');
@@ -230,9 +266,15 @@ test('the item hover rule keeps the background swap (the actual hover affordance
         'removing the scale must not remove the hover feedback entirely - the background swap is the affordance');
 });
 
-test('the item hover selector is specific enough to actually WIN against button:hover:not(:disabled)', () => {
+// Pinned to the historical bare-button rule's own specificity
+// (0 ids, 2 classes [:hover + the :disabled inside :not()], 1 element)
+// rather than read live, since that rule no longer exists to read it
+// from. A future rule broad enough to reach these rows at this
+// specificity or higher must still be beaten.
+const historicalButtonSpec = { ids: 0, classes: 2, elements: 1 };
+
+test('the item hover selector is specific enough to actually WIN against the historical button:hover rule', () => {
     const rule = itemHoverRules[0];
-    const buttonSpec = specificity(buttonHoverRules[0].selector.split(',')[0].trim());
     // Every comma-branch of the item hover selector must individually
     // beat (or tie with, favouring later source order - but this repo's
     // load order is not something a CSS-only fix should have to rely
@@ -241,18 +283,17 @@ test('the item hover selector is specific enough to actually WIN against button:
     const branches = rule.selector.split(',').map((s) => s.trim());
     for (const branch of branches) {
         const branchSpec = specificity(branch);
-        assert.ok(compareSpecificity(branchSpec, buttonSpec) > 0,
+        assert.ok(compareSpecificity(branchSpec, historicalButtonSpec) > 0,
             `selector branch "${branch}" has specificity ` +
             `(${branchSpec.ids},${branchSpec.classes},${branchSpec.elements}) which does not beat ` +
-            `button:hover:not(:disabled)'s (${buttonSpec.ids},${buttonSpec.classes},${buttonSpec.elements}) - ` +
-            `transform: none would lose the cascade and silently do nothing`);
+            `button:hover:not(:disabled)'s (${historicalButtonSpec.ids},${historicalButtonSpec.classes},` +
+            `${historicalButtonSpec.elements}) - transform: none would lose the cascade and silently do nothing`);
     }
 });
 
 test('the weaker, pre-fix selector form would NOT have been enough (proves the test can fail)', () => {
-    const buttonSpec = specificity(buttonHoverRules[0].selector.split(',')[0].trim());
     const weakSpec = specificity('.cloude-session-theme__item:hover');
-    assert.ok(compareSpecificity(weakSpec, buttonSpec) <= 0,
+    assert.ok(compareSpecificity(weakSpec, historicalButtonSpec) <= 0,
         'sanity check failed: the unqualified selector unexpectedly beats the button rule - ' +
         'the specificity model itself may be wrong');
 });

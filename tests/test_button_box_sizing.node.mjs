@@ -1,24 +1,36 @@
-// Node test for the generic `button` box reset and the classes that have
-// to opt out of it.
+// Node test for the button box reset and the classes that have to opt
+// out of it.
 //
-// THE BUG THIS EXISTS TO CATCH. styles.css declares
+// THE BUG THIS EXISTS TO CATCH. styles.css used to declare
 //
 //     button { width: var(--control-size); height: var(--control-size); }
 //
-// which is right for the round header controls and wrong for every other
-// button in the app. With `* { box-sizing: border-box }` that width and
-// height are the WHOLE box, so any class that declares padding but not a
-// box collapses to a 36px square on desktop, 44px at the 768px
-// breakpoint and 40px at 480px, and its own padding is absorbed.
+// unscoped, reaching every <button> in the app. With
+// `* { box-sizing: border-box }` that width and height were the WHOLE
+// box, so any class that declared padding but not a box collapsed to a
+// 36px square on desktop, 44px at the 768px breakpoint and 40px at
+// 480px, and its own padding was absorbed.
 //
-// Measured live at 390px before the fix, against the real stylesheets:
+// Measured live at 390px against the bare-`button` era stylesheets:
 //   .cloude-touch-copy   40x40, content box 2x18, for a 33.7x16 label
 //   .auth-button         320x40 under a 46px .auth-input
 //   .toast__dismiss      40x40 for a 9.3x17 glyph, its 2px/6px padding gone
 //   #session-sidebar-close  a 40px accent-filled circle beside the 28px
 //                           transparent pin, because the rule meant for it
 //                           was written as a CLASS the markup never carries
-// After: 71.7x38, 320x45, 21.3x20, and a 28x28 transparent square.
+// After that fix: 71.7x38, 320x45, 21.3x20, and a 28x28 transparent square.
+//
+// SCOPING FIX (this file). The bare `button {}` reset itself is gone as
+// of the button-selector scoping pass. It is now `.btn-icon {}`, applied
+// only to `#configEditorBtn` and `.header-menu-toggle` - the two round
+// header icon controls it was actually written for. Every other button
+// in the app already carried its own explicit box (that is what the
+// OPT_OUTS list below has always tested), so retiring the bare element
+// selector changes nothing for them; it only stops a THIRD class of
+// button from silently inheriting a square it never asked for. See
+// test_settings_flat_shapes.node.mjs and test_theme_picker_hover_overflow
+// .node.mjs for the two historical incidents that unscoped `button` rule
+// caused (settings tabs as ellipses, theme picker hover overflow).
 //
 // The assertions are against the CSS text, like test_config_editor_hover
 // does, because every one of these bugs is a missing declaration rather
@@ -120,13 +132,35 @@ const sidebarRules = rules(sidebarCss);
 // dead weight and should be retired deliberately, not left to rot.
 // ---------------------------------------------------------------------
 
-test('the bare button rule still pins every button to a control-size square', () => {
-    // There is a second bare `button` rule inside the 768px media query,
-    // but it only bumps font-size; the box comes from exactly one rule.
-    const reset = bySelector(styleRules, 'button').filter((r) => decl(r.body, 'width'));
-    assert.equal(reset.length, 1, 'expected exactly one bare `button` rule to set the box');
+test('no bare `button` element rule exists any more', () => {
+    // The whole point of the scoping pass: nothing should be able to
+    // silently inherit a control-size square (or any other property)
+    // just by being a <button>. If this selector ever comes back
+    // unscoped, it will reintroduce the settings-tab-ellipse and
+    // theme-picker-overflow bug classes on whatever the next new button
+    // happens to be.
+    const bare = bySelector(styleRules, 'button');
+    assert.deepEqual(bare, [], 'expected zero bare `button` element rules in styles.css');
+});
+
+test('.btn-icon pins the round header icon controls to a control-size square', () => {
+    const reset = bySelector(styleRules, '.btn-icon').filter((r) => decl(r.body, 'width'));
+    assert.equal(reset.length, 1, 'expected exactly one `.btn-icon` rule to set the box');
     assert.equal(decl(reset[0].body, 'width'), 'var(--control-size)');
     assert.equal(decl(reset[0].body, 'height'), 'var(--control-size)');
+});
+
+test('.btn-icon is applied to exactly #configEditorBtn in the static markup', () => {
+    // header-menu-toggle is built at runtime by header-menu.js, not
+    // present in index.html, so it is not part of this static check.
+    assert.match(indexHtml, /id="configEditorBtn"[^>]*class="btn-icon hidden"/,
+        '#configEditorBtn should carry the btn-icon class');
+    // Nothing else in the static markup should carry it - every other
+    // button already owns its full box via its own class.
+    const withClass = [...indexHtml.matchAll(/<button[^>]*class="([^"]*)"[^>]*>/g)]
+        .filter((m) => m[1].split(/\s+/).includes('btn-icon'));
+    assert.equal(withClass.length, 1,
+        'btn-icon should be on exactly one static <button> (#configEditorBtn)');
 });
 
 test('box-sizing is border-box, which is why the reset eats padding', () => {
