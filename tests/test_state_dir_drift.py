@@ -197,3 +197,164 @@ def test_drift_disagreement_would_be_caught(tmp_path):
 
     with pytest.raises(AssertionError):
         assert str(target) == wrong
+
+
+# ---------------------------------------------------------------------------
+# feat/datastore-and-trail - the SECOND drift surface: per-FILE resolution.
+#
+# resolve_state_dir answers "which directory", and it has one answer. The
+# question "where is THIS file" is different and has a fallback, because a
+# pre-feat/state-directory install still keeps refresh_tokens.db and the
+# three JSON files under its old LOG_DIRECTORY. Python answers it with
+# Settings._resolve_state_file(); bash answers it with resolve_state_file()
+# in upgrade_rollback_common.sh.
+#
+# The two resolvers now legitimately DIFFER from resolve_state_dir (that is
+# the whole point of the fallback), so the directory tests above are not
+# extended - these cases are added instead of weakening them. All four
+# precedence outcomes are covered for both a JSON state file and
+# refresh_tokens.db, which is the file whose absence used to abort
+# scripts/upgrade.sh on a perfectly healthy install.
+# ---------------------------------------------------------------------------
+
+STATE_FILE_CASES = [
+    "refresh_tokens.db",
+    "session_metadata.json",
+    "pinned_themes.json",
+    "unread_state.json",
+]
+
+
+def _resolve_state_file_bash(install_dir: Path, filename: str, env: dict) -> str:
+    """Run the bash per-file resolver in a subprocess, return raw stdout.
+
+    Inputs: install_dir (Path) - resolve_state_file's $1. filename (str) -
+      its $2. env (dict) - the complete child-process environment.
+    Output: str - stdout with the single trailing newline stripped.
+    """
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; resolve_state_file "$2" "$3"',
+            "_",
+            str(BASH_LIB),
+            str(install_dir),
+            filename,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"resolve_state_file subprocess failed (rc={result.returncode}): "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    return result.stdout.rstrip("\n")
+
+
+def _file_case_setup(tmp_path, monkeypatch, name):
+    """Build an install whose .env declares BOTH state locations.
+
+    Description: writes a .env carrying CLOUDE_STATE_DIR and LOG_DIRECTORY
+      so the bash resolver reads them from the file exactly as it would on
+      a real install, and returns a matching Python Settings plus the
+      child env for bash.
+    Inputs: tmp_path (Path), monkeypatch, name (str) - unique case name.
+    Output: (Settings, Path install_dir, Path new_dir, Path old_dir, dict env).
+    """
+    install_dir = tmp_path / f"install_{name}"
+    install_dir.mkdir()
+    new_dir = tmp_path / f"new_{name}"
+    old_dir = tmp_path / f"old_{name}"
+    new_dir.mkdir()
+    old_dir.mkdir()
+    (install_dir / ".env").write_text(
+        f"CLOUDE_STATE_DIR={new_dir}\nLOG_DIRECTORY={old_dir}\n"
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLOUDE_STATE_DIR", raising=False)
+    settings_obj = Settings(
+        _env_file=None,
+        DEFAULT_WORKING_DIR=str(tmp_path / "wd"),
+        LOG_DIRECTORY=str(old_dir),
+        CLOUDE_STATE_DIR=str(new_dir),
+        TOTP_SECRET="testsecretnotreal",
+        JWT_SECRET="testjwtnotreal",
+    )
+    env = _minimal_child_env(tmp_path, os.environ.get("PATH", "/usr/bin:/bin"))
+    return settings_obj, install_dir, new_dir, old_dir, env
+
+
+@pytest.mark.parametrize("filename", STATE_FILE_CASES)
+def test_drift_state_file_present_in_neither(tmp_path, monkeypatch, filename):
+    """Case 4: the file exists nowhere - both resolvers return the NEW path."""
+    s, install_dir, new_dir, _old, env = _file_case_setup(
+        tmp_path, monkeypatch, "neither" + filename.replace(".", "")
+    )
+    py = str(s._resolve_state_file(filename))
+    sh = _resolve_state_file_bash(install_dir, filename, env)
+    assert py == sh == str(new_dir / filename)
+
+
+@pytest.mark.parametrize("filename", STATE_FILE_CASES)
+def test_drift_state_file_only_new(tmp_path, monkeypatch, filename):
+    """Case 2: only the new location has it - both resolvers use it."""
+    s, install_dir, new_dir, _old, env = _file_case_setup(
+        tmp_path, monkeypatch, "new" + filename.replace(".", "")
+    )
+    (new_dir / filename).write_text("x")
+    py = str(s._resolve_state_file(filename))
+    sh = _resolve_state_file_bash(install_dir, filename, env)
+    assert py == sh == str(new_dir / filename)
+
+
+@pytest.mark.parametrize("filename", STATE_FILE_CASES)
+def test_drift_state_file_only_old(tmp_path, monkeypatch, filename):
+    """Case 3, THE ONE THAT WAS BROKEN: only the pre-feat/state-directory
+    LOG_DIRECTORY has it. Both resolvers must point at the OLD path, which
+    is deliberately NOT what resolve_state_dir returns - before this fix
+    the bash side reported the file missing and scripts/upgrade.sh aborted
+    on an install whose data was perfectly fine."""
+    s, install_dir, new_dir, old_dir, env = _file_case_setup(
+        tmp_path, monkeypatch, "old" + filename.replace(".", "")
+    )
+    (old_dir / filename).write_text("x")
+    py = str(s._resolve_state_file(filename))
+    sh = _resolve_state_file_bash(install_dir, filename, env)
+    assert py == sh == str(old_dir / filename)
+    assert sh != str(new_dir / filename), (
+        "the fallback did nothing - this case is indistinguishable from "
+        "the directory-only resolver, so it proves nothing"
+    )
+
+
+@pytest.mark.parametrize("filename", STATE_FILE_CASES)
+def test_drift_state_file_in_both(tmp_path, monkeypatch, filename):
+    """Case 1: present in both - ambiguous, the NEW path wins in both
+    resolvers, and the old file is left on disk untouched."""
+    s, install_dir, new_dir, old_dir, env = _file_case_setup(
+        tmp_path, monkeypatch, "both" + filename.replace(".", "")
+    )
+    (new_dir / filename).write_text("new")
+    (old_dir / filename).write_text("old")
+    py = str(s._resolve_state_file(filename))
+    sh = _resolve_state_file_bash(install_dir, filename, env)
+    assert py == sh == str(new_dir / filename)
+    assert (old_dir / filename).read_text() == "old", (
+        "resolving must never delete or rewrite the old copy"
+    )
+
+
+def test_refresh_tokens_path_uses_the_fallback(tmp_path, monkeypatch):
+    """Settings.get_refresh_tokens_path() must go through the per-file
+    resolver, not a bare get_state_dir() / name. Without this the app
+    silently starts an EMPTY refresh_tokens.db at the new location and
+    abandons every token in the old one."""
+    s, _install, new_dir, old_dir, _env = _file_case_setup(
+        tmp_path, monkeypatch, "refreshfallback"
+    )
+    (old_dir / "refresh_tokens.db").write_text("existing tokens")
+    assert str(s.get_refresh_tokens_path()) == str(old_dir / "refresh_tokens.db")
+    assert str(s.get_refresh_tokens_path()) != str(new_dir / "refresh_tokens.db")

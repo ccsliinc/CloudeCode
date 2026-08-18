@@ -30,6 +30,7 @@ from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
+from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
@@ -130,6 +131,31 @@ async def _refresh_purge_loop(store: RefreshStore):
             await asyncio.sleep(60)
 
 
+
+def _read_config_version(config_path: Path) -> object:
+    """Read config.json's applied config_version, or say it is unknown.
+
+    Description: the datastore trail records BOTH version counters, and
+    the config number is one of the two ground-truth values the trail's
+    crash-recovery path falls back on when the trail itself cannot be
+    read. It is resolved here, in the caller, so that
+    src/core/db_migration.py never has to parse config.json - the two
+    chains stay independent, exactly as the design requires.
+    Inputs: config_path (Path) - path to config.json.
+    Output: int when the file parses and carries an integer
+      config_version; the string db_state.CANNOT_DETERMINE otherwise.
+      Never 0-as-a-guess: an unreadable config is not a version-0 config.
+    """
+    from src.core.db_state import CANNOT_DETERMINE
+    try:
+        with open(config_path) as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return CANNOT_DETERMINE
+    value = raw.get("config_version") if isinstance(raw, dict) else None
+    return value if isinstance(value, int) else CANNOT_DETERMINE
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -147,6 +173,31 @@ async def lifespan(app: FastAPI):
     # config.json beyond the migration's own backup + atomic write.
     from src.core.config_migration import ensure_config_migrated
     ensure_config_migrated(Path(settings.auth_config_file).expanduser())
+
+    # feat/datastore-and-trail - resolve migration_trail.jsonl, then
+    # create or migrate cloude.db. Runs immediately after the CONFIG
+    # chain because the trail records both moves in one ledger and the
+    # config version is one of the two ground-truth numbers the trail's
+    # crash-recovery path falls back on. Never raises and never blocks
+    # boot: every failure resolves to a named DatastoreState (see
+    # src/core/db_state.py's six outcomes) which the version route
+    # surfaces, so a broken datastore is stated out loud rather than
+    # rendering as an install with no data.
+    from src.core.db_migration import ensure_db_migrated
+    datastore_state = ensure_db_migrated(
+        settings.get_state_dir(),
+        _read_config_version(Path(settings.auth_config_file).expanduser()),
+        resolve_version() or None,
+    )
+    app.state.datastore_state = datastore_state
+    version_routes.set_datastore_state(datastore_state)
+    if not datastore_state.healthy:
+        logger.warning(
+            "datastore_degraded",
+            status=datastore_state.status,
+            schema_version=datastore_state.schema_version,
+            message=datastore_state.message,
+        )
 
     # Initialize core components
     session_manager = SessionManager()
@@ -211,8 +262,12 @@ async def lifespan(app: FastAPI):
     # get_state_dir() has already run once at module load time (see the
     # top of this file) and would have exited the process on failure, so
     # this call is expected to succeed - it re-resolves the same path.
-    log_dir = settings.get_log_dir()
-    db_path = str(log_dir / "refresh_tokens.db")
+    # Resolved per-FILE (not per-directory) so an install that predates
+    # feat/state-directory keeps using the refresh_tokens.db it already
+    # has under the old LOG_DIRECTORY instead of silently starting a new
+    # empty one and abandoning every issued token. See
+    # Settings.get_refresh_tokens_path().
+    db_path = str(settings.get_refresh_tokens_path())
     refresh_store = RefreshStore(db_path)
     await refresh_store.init()
     _refresh_purge_task = asyncio.create_task(

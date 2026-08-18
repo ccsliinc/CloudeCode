@@ -632,6 +632,24 @@ class Settings(BaseSettings):
             return old_path
         return new_path
 
+    def get_refresh_tokens_path(self) -> Path:
+        """Get the path for the refresh-token revocation database.
+
+        Reads from the new state dir with a fallback to the old
+        ``log_directory`` location - see ``_resolve_state_file()``.
+
+        This file USED to be placed with a bare ``get_log_dir() /
+        "refresh_tokens.db"``, i.e. with no fallback at all, which meant
+        an install that predated feat/state-directory silently got a
+        BRAND NEW EMPTY database at the new location on its next start:
+        every issued refresh token abandoned, in a file the app no longer
+        looked at. It also made scripts/upgrade.sh abort, because
+        refresh_tokens.db is a REQUIRED backup file and the directory-only
+        resolver reported it missing. Both are the same bug - a file being
+        one directory over is not a file being gone.
+        """
+        return self._resolve_state_file("refresh_tokens.db")
+
     def get_session_metadata_path(self) -> Path:
         """Get the path for session metadata JSON file.
 
