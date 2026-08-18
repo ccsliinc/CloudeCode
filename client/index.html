@@ -178,16 +178,21 @@
         <h1 id="appTitle">
             <!-- fix/icon-consistency — ships the real brand mark inline so
                  it is correct on FIRST PAINT, before app.js (loaded near
-                 the end of body) has run. app.js's HEADER_BRAND_ICON_URL is
-                 the single source of truth for the path; this src is a
-                 literal copy of it and tests/test_icon_assets.py asserts
-                 they match. aria-hidden because the adjacent
-                 #header-title-text span already names the app in text for
-                 assistive tech — the icon is a decorative echo of that
-                 name, not an independent label. data-brand-icon lets
+                 the end of body) has run. app.js's HEADER_BRAND_ICON_URL /
+                 HEADER_BRAND_ICON_URL_2X are the single source of truth
+                 for the paths; this src/srcset is a literal copy of them
+                 and tests/test_icon_assets.py asserts they match.
+                 fix/real-app-icon-art — these are raster PNGs cropped
+                 straight from macOS/assets/AppIcon-1024.png (the real
+                 rendered cloud + pixel-face artwork), not the vector
+                 approximation that used to live at
+                 client/assets/cloude-icon.svg. aria-hidden because the
+                 adjacent #header-title-text span already names the app in
+                 text for assistive tech — the icon is a decorative echo of
+                 that name, not an independent label. data-brand-icon lets
                  setHeaderIdentity() (app.js) recognise this is already the
                  real mark and skip re-writing it. -->
-            <span id="header-icon" class="header-icon" aria-hidden="true"><img data-brand-icon src="/static/assets/cloude-icon.svg" alt="" /></span>
+            <span id="header-icon" class="header-icon" aria-hidden="true"><img data-brand-icon src="/static/assets/icons/header-icon.png" srcset="/static/assets/icons/header-icon.png 1x, /static/assets/icons/header-icon@2x.png 2x" alt="" /></span>
             <span id="header-title-text">Cloude Code</span>
             <!-- NO VERSION CHIP HERE ANY MORE. It moved to the home
                  screen's bottom bar (client/css/home-bar.css). It was a
