@@ -35,8 +35,14 @@ sys.path.insert(0, str(ROOT))
 
 _WORKDIR = tempfile.mkdtemp(prefix="cc_verify_wd_")
 _LOGDIR = tempfile.mkdtemp(prefix="cc_verify_logs_")
+_STATEDIR = tempfile.mkdtemp(prefix="cc_verify_state_")
 os.environ["DEFAULT_WORKING_DIR"] = _WORKDIR
 os.environ["LOG_DIRECTORY"] = _LOGDIR
+# feat/state-directory - without this, importing src.main below (which
+# runs Settings.get_state_dir() at module load) would create and write
+# into the real ~/Library/Application Support/CloudeCode on the machine
+# running this script, instead of a throwaway directory.
+os.environ["CLOUDE_STATE_DIR"] = _STATEDIR
 os.environ.setdefault("TOTP_SECRET", "verifysecretnotreal")
 os.environ.setdefault("JWT_SECRET", "verifyjwtnotreal")
 

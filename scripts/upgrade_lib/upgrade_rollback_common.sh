@@ -28,25 +28,43 @@
 #     repo_root() which for a from-source install IS the install dir).
 #   - session_metadata.json, pinned_themes.json, unread_state.json, and
 #     refresh_tokens.db do NOT live in the install dir. They live under
-#     LOG_DIRECTORY (src/config.py:486-522's get_log_dir /
-#     get_session_metadata_path / get_pinned_themes_path / analogous
-#     unread-state path, and src/main.py:158-162's RefreshStore). The
-#     .env.example default for LOG_DIRECTORY is /tmp/cloude-code-logs,
-#     which macOS purges on reboot - a backup that skips this directory
-#     entirely because it went looking in the install dir would silently
-#     protect nothing for any install still on that default. This split
-#     exists specifically so that mistake is structurally impossible: the
-#     two arrays are keyed by directory, not merged into one guess.
+#     the app's STATE DIRECTORY (feat/state-directory - src/config.py's
+#     Settings.get_state_dir() / get_session_metadata_path() /
+#     get_pinned_themes_path() / analogous unread-state path, and
+#     src/main.py's RefreshStore placement). The default, when
+#     CLOUDE_STATE_DIR is unset, is
+#     ``~/Library/Application Support/CloudeCode`` - a backup that skips
+#     this directory entirely because it went looking in the install dir
+#     would silently protect nothing. This split exists specifically so
+#     that mistake is structurally impossible: the two arrays are keyed
+#     by directory, not merged into one guess.
+#
+#     PRE feat/state-directory installs still have these files under the
+#     OLD LOG_DIRECTORY-based location. resolve_state_dir() resolves only
+#     the CURRENT (CLOUDE_STATE_DIR / default) DIRECTORY, matching
+#     Settings.get_state_dir() exactly - that is a directory question and
+#     it has one answer. Locating an individual FILE is a different
+#     question with a fallback, and resolve_state_file() below is the one
+#     that answers it, mirroring Settings._resolve_state_file() precedence
+#     for precedence: new location wins when the file is in both, the old
+#     LOG_DIRECTORY location is used when the file is only there, and the
+#     new path is returned when it is in neither.
+#
+#     WITHOUT that fallback take_backup() aborts on a real, existing
+#     install: the user's refresh_tokens.db is under the old
+#     LOG_DIRECTORY, it is in STATE_DIR_REQUIRED_FILES, and the
+#     directory-only resolver reports it MISSING - a hard die() on an
+#     install whose data is perfectly fine and merely one directory over.
 #
 # A single flat list previously named every one of these as if they all
 # lived in the install dir. Four of six did not: take_backup found .env
 # and config.json, silently found nothing for the rest (wrong directory,
 # not "absent"), and reported success anyway - a false green. See
-# resolve_log_dir() and take_backup() below for the fix.
+# resolve_state_dir() and take_backup() below for the fix.
 INSTALL_REQUIRED_PAIR=(".env" "config.json")          # either both exist or neither does; a half-set is a broken install
 INSTALL_OPTIONAL_FILES=("config.json.bak" ".update-check.json")  # app-created lazily; absence is normal
 STATE_DIR_REQUIRED_FILES=("refresh_tokens.db")          # RefreshStore.init() runs on EVERY server startup - if the server was running, this exists
-STATE_DIR_OPTIONAL_FILES=("session_metadata.json" "pinned_themes.json" "unread_state.json")  # created lazily on first session / theme pin / unread event - legitimately absent on a never-used feature
+STATE_DIR_OPTIONAL_FILES=("session_metadata.json" "pinned_themes.json" "unread_state.json" "cloude.db" "migration_trail.jsonl")  # created lazily on first session / theme pin / unread event; cloude.db + migration_trail.jsonl are created on the first startup that runs feat/datastore-and-trail, so they are legitimately absent on an install that has not been upgraded to it yet
 
 # DEFAULT_PORT and resolve_port() live in scripts/resolve-port.sh - the
 # single shared shell-side port resolver every port-aware script in this
@@ -121,32 +139,105 @@ resolve_python() {
 # resolve_port() is sourced from scripts/resolve-port.sh (see the source
 # line near the top of this file) rather than defined here.
 
-# Description: resolve LOG_DIRECTORY the SAME WAY the app does -
-#   src/config.py's get_log_dir() is ``Path(self.log_directory).expanduser()``
-#   with no other transformation, so this reads LOG_DIRECTORY= out of .env
-#   and expands it the identical way (via python's os.path.expanduser, not
-#   a bash tilde trick, so "~" and "~user" both behave exactly like the
-#   app's own Path.expanduser() call). session_metadata.json,
-#   pinned_themes.json, unread_state.json, and refresh_tokens.db all live
-#   here, not in the install dir - see the STATE_DIR_* arrays above.
-# Inputs: $1 - install_dir (must contain a readable .env with LOG_DIRECTORY=).
-# Output: prints the expanded absolute log directory path and returns 0.
-#   Returns 1 and prints nothing when .env is missing or has no
-#   LOG_DIRECTORY= line - callers must treat that as COULD-NOT-EVALUATE for
-#   the state-dir files, not as "no state exists".
-resolve_log_dir() {
+# Description: resolve the app's state directory the SAME WAY the app
+#   does - src/config.py's Settings.get_state_dir() precedence, mirrored
+#   here byte-for-byte (see tests/test_state_dir_drift.py, which asserts
+#   this function and get_state_dir() agree on every path for all three
+#   env cases):
+#     1. CLOUDE_STATE_DIR in the CURRENT PROCESS ENVIRONMENT, if set to a
+#        non-empty value - takes priority, matching pydantic-settings'
+#        own env-var-beats-env-file precedence for the identical field.
+#     2. CLOUDE_STATE_DIR= read out of install_dir/.env, if the process
+#        environment did not have it - an install-local override.
+#     3. ~/Library/Application Support/CloudeCode - the macOS-native
+#        default, computed via Python so "~" expands identically to the
+#        app's own Path.expanduser() call (not a bash tilde trick).
+#   Unlike the old resolve_log_dir() this replaces, there is ALWAYS a
+#   resolvable value (the default never fails to compute) - the function
+#   never returns 1. This is pure path computation, mirroring
+#   get_state_dir()'s path-resolution half only; it does NOT create the
+#   directory - callers that need it to exist still call mkdir -p
+#   themselves, same as before.
+# Inputs: $1 - install_dir (its .env is consulted only as step 2 above;
+#   its absence is not an error).
+# Output: prints the expanded absolute state directory path and returns 0,
+#   always.
+resolve_state_dir() {
     local install_dir="$1" python_bin
     local env_file="${install_dir}/.env"
-    if [ ! -f "${env_file}" ]; then
-        return 1
-    fi
-    local raw
-    raw="$(grep -E '^LOG_DIRECTORY=' "${env_file}" | tail -1 | cut -d= -f2-)"
-    if [ -z "${raw}" ]; then
-        return 1
+    local raw="${CLOUDE_STATE_DIR:-}"
+    if [ -z "${raw}" ] && [ -f "${env_file}" ]; then
+        raw="$(grep -E '^CLOUDE_STATE_DIR=' "${env_file}" | tail -1 | cut -d= -f2-)"
     fi
     python_bin="$(resolve_python "${install_dir}")"
+    if [ -n "${raw}" ]; then
+        "${python_bin}" -c "import os, sys; print(os.path.expanduser(sys.argv[1]))" "${raw}"
+    else
+        "${python_bin}" -c "import os; print(os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'CloudeCode'))"
+    fi
+}
+
+# Description: resolve the OLD, pre-feat/state-directory state location -
+#   the .env LOG_DIRECTORY value, expanded. This is NOT a fallback for the
+#   state DIRECTORY itself (get_state_dir() has no such fallback and
+#   neither does resolve_state_dir); it exists only so resolve_state_file()
+#   can look for an individual leftover file where an older install put it.
+# Inputs: $1 - install_dir (its .env is the only source; the process
+#   environment is deliberately NOT consulted, matching how the Python side
+#   reads log_directory off the loaded Settings rather than off os.environ
+#   at the point of the fallback).
+# Output: prints the expanded path and returns 0 when LOG_DIRECTORY is set
+#   to a non-empty value; prints nothing and returns 1 when it is not set.
+#   An empty stdout therefore means "there is no old location", never "the
+#   old location is the current directory".
+resolve_legacy_state_dir() {
+    local install_dir="$1" python_bin raw
+    local env_file="${install_dir}/.env"
+    [ -f "${env_file}" ] || return 1
+    raw="$(grep -E '^LOG_DIRECTORY=' "${env_file}" | tail -1 | cut -d= -f2-)"
+    [ -n "${raw}" ] || return 1
+    python_bin="$(resolve_python "${install_dir}")"
     "${python_bin}" -c "import os, sys; print(os.path.expanduser(sys.argv[1]))" "${raw}"
+}
+
+# Description: resolve ONE state file by name, with the same old-location
+#   fallback the app itself applies. Mirrors
+#   Settings._resolve_state_file() in src/config.py precedence for
+#   precedence; tests/test_state_dir_drift.py asserts the two agree for
+#   every one of the four cases, so this cannot quietly drift.
+#
+#   Four outcomes, in order:
+#     1. present in BOTH the new state dir and the old LOG_DIRECTORY
+#        location - ambiguous. The NEW path wins and the old file is left
+#        alone. (The Python side logs a warning here; a backup script that
+#        printed one would corrupt the command substitutions this file is
+#        full of, so the resolution is identical and silent.)
+#     2. present only in the new state dir - use it.
+#     3. present only in the old LOG_DIRECTORY location - use it. This is
+#        the case that keeps an existing install upgradable.
+#     4. present in neither - return the NEW path, which is where a
+#        first-time writer would create it. The CALLER still has to test
+#        -f on the result; this function locates a file, it does not
+#        assert that one exists.
+# Inputs: $1 - install_dir. $2 - bare filename, e.g. "refresh_tokens.db".
+# Output: prints the absolute path the app would read that file from, and
+#   returns 0 always (path computation cannot fail).
+resolve_state_file() {
+    local install_dir="$1" filename="$2" state_dir legacy_dir
+    state_dir="$(resolve_state_dir "${install_dir}")"
+    local new_path="${state_dir}/${filename}"
+    legacy_dir="$(resolve_legacy_state_dir "${install_dir}")" || {
+        printf '%s\n' "${new_path}"
+        return 0
+    }
+    local old_path="${legacy_dir}/${filename}"
+    if [ -f "${new_path}" ]; then
+        printf '%s\n' "${new_path}"
+    elif [ -f "${old_path}" ]; then
+        printf '%s\n' "${old_path}"
+    else
+        printf '%s\n' "${new_path}"
+    fi
 }
 
 # Description: confirm install_dir is itself a git work tree root (not an
@@ -381,14 +472,14 @@ _copy_backup_file() {
 }
 
 # Description: back up every piece of user state this install has, split
-#   correctly between the install dir and LOG_DIRECTORY (see the array
-#   comments above resolve_log_dir). SQLite databases (refresh_tokens.db
-#   today, cloude.db once it exists) are routed through _copy_sqlite
-#   (VACUUM INTO + integrity_check), never a raw file copy - see the
-#   "SQLite-safe copying" note above this function for why. Everything
-#   else is copied with cp -p, which is a genuinely safe plain read for
-#   whole-file text/JSON writers. Correct to call whether or not the
-#   server is still running, but scripts/upgrade.sh and
+#   correctly between the install dir and the state directory (see the
+#   array comments above resolve_state_dir). SQLite databases
+#   (refresh_tokens.db today, cloude.db once it exists) are routed through
+#   _copy_sqlite (VACUUM INTO + integrity_check), never a raw file copy -
+#   see the "SQLite-safe copying" note above this function for why.
+#   Everything else is copied with cp -p, which is a genuinely safe plain
+#   read for whole-file text/JSON writers. Correct to call whether or not
+#   the server is still running, but scripts/upgrade.sh and
 #   scripts/rollback.sh both call it AFTER stop_service anyway: a copy
 #   against a quiesced writer is simpler to reason about and faster
 #   (VACUUM INTO against an idle database has nothing to reconcile),
@@ -398,12 +489,11 @@ _copy_backup_file() {
 #   prominently. Exits via die() if: backup_dir already exists; it cannot
 #   be created; any BACKED_UP copy fails; INSTALL_REQUIRED_PAIR is
 #   half-present (one of .env/config.json exists, the other does not - a
-#   broken install, not a legitimate state); the install is configured
-#   (.env present) but LOG_DIRECTORY cannot be resolved from it; or any
-#   STATE_DIR_REQUIRED_FILES entry is missing while the install is
-#   configured (refresh_tokens.db is created by every server startup, so
-#   its absence on a configured, presumably-just-stopped install means
-#   something is already wrong and a backup here would be incomplete).
+#   broken install, not a legitimate state); or any STATE_DIR_REQUIRED_FILES
+#   entry is missing while the install is configured (refresh_tokens.db is
+#   created by every server startup, so its absence on a configured,
+#   presumably-just-stopped install means something is already wrong and a
+#   backup here would be incomplete).
 take_backup() {
     local install_dir="$1" backup_dir="$2"
     if [ -e "${backup_dir}" ]; then
@@ -444,30 +534,42 @@ take_backup() {
 
     if [ "${configured}" -eq 1 ]; then
         local log_dir
-        log_dir="$(resolve_log_dir "${install_dir}")"
+        log_dir="$(resolve_state_dir "${install_dir}")"
         if [ -z "${log_dir}" ]; then
-            die "${install_dir} is configured (.env present) but LOG_DIRECTORY could not be resolved from it - refusing to back up blind. session_metadata.json, pinned_themes.json, unread_state.json, and refresh_tokens.db all live there and would be silently skipped otherwise."
+            # Defensive only - resolve_state_dir() always resolves to a
+            # value (its default never fails to compute). Kept in case a
+            # future edit to resolve_state_dir breaks that contract.
+            die "${install_dir} is configured (.env present) but the state directory could not be resolved - refusing to back up blind. session_metadata.json, pinned_themes.json, unread_state.json, and refresh_tokens.db all live there and would be silently skipped otherwise."
         fi
-        log_step "state directory (LOG_DIRECTORY): ${log_dir}"
+        log_step "state directory (CLOUDE_STATE_DIR): ${log_dir}"
 
+        # Each state file is located INDIVIDUALLY via resolve_state_file,
+        # not by assuming it sits in log_dir. An install that predates
+        # feat/state-directory still has its files under the old
+        # LOG_DIRECTORY, and that is a supported, upgradable install - not
+        # a missing file. See resolve_state_file's four-outcome contract.
+        local src
         for f in "${STATE_DIR_REQUIRED_FILES[@]}"; do
-            if [ -f "${log_dir}/${f}" ]; then
-                _copy_backup_file "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
+            src="$(resolve_state_file "${install_dir}" "${f}")"
+            if [ -f "${src}" ]; then
+                _copy_backup_file "${src}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${src}"
                 _manifest_record "${backup_dir}" BACKED_UP state "${f}"
+                [ "${src}" = "${log_dir}/${f}" ] || log_step "${f} found at the pre-feat/state-directory location ${src} - backing up from there"
             else
-                die "expected ${log_dir}/${f} (created by every server startup) but it is missing - either the server never started successfully on this install, or state has already been lost. Refusing to take a partial backup and proceed with a destructive upgrade. If this install genuinely never ran, there is nothing to upgrade yet."
+                die "expected ${f} but it is in NEITHER the current state directory (${log_dir}) NOR the old LOG_DIRECTORY location. ${f} is created by every server startup, so either the server never started successfully on this install or state has already been lost. Refusing to take a partial backup and proceed with a destructive upgrade. If this install genuinely never ran, there is nothing to upgrade yet."
             fi
         done
         for f in "${STATE_DIR_OPTIONAL_FILES[@]}"; do
-            if [ -f "${log_dir}/${f}" ]; then
-                _copy_backup_file "${log_dir}/${f}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${log_dir}"
+            src="$(resolve_state_file "${install_dir}" "${f}")"
+            if [ -f "${src}" ]; then
+                _copy_backup_file "${src}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${src}"
                 _manifest_record "${backup_dir}" BACKED_UP state "${f}"
             else
                 _manifest_record "${backup_dir}" NOT_PRESENT state "${f}"
             fi
         done
     else
-        log_unknown "skipping the state directory entirely - install was never configured, so LOG_DIRECTORY is unknown and nothing could exist there yet"
+        log_unknown "skipping the state directory entirely - install was never configured, so its CLOUDE_STATE_DIR is unknown and nothing could exist there yet"
     fi
 
     local backed_up_count
@@ -479,9 +581,9 @@ take_backup() {
 
 # Description: restore every BACKED_UP entry from a backup's manifest back
 #   to where the app actually reads it from - install_dir for the
-#   "install" category, the CURRENTLY-configured LOG_DIRECTORY for the
-#   "state" category. Restores install files FIRST so LOG_DIRECTORY can be
-#   read from the just-restored .env before any state file is placed.
+#   "install" category, the CURRENTLY-configured state directory for the
+#   "state" category. Restores install files FIRST so CLOUDE_STATE_DIR can
+#   be read from the just-restored .env before any state file is placed.
 #   Does NOT run config migration afterward - the whole point of a
 #   rollback is that the restored config matches the OLDER code being
 #   checked out alongside it.
@@ -496,10 +598,11 @@ take_backup() {
 #   .manifest produced by take_backup).
 # Output: prints the number of files restored on stdout. Exits via die()
 #   if backup_dir or its manifest is missing, a BACKED_UP install file's
-#   restore copy fails, or (once install files are back) LOG_DIRECTORY
-#   cannot be resolved while the manifest has BACKED_UP state entries to
-#   place, or any of those copies fail. A failure partway leaves
-#   install_dir in a MIXED state - reported loudly, never swallowed.
+#   restore copy fails, or (once install files are back) the state
+#   directory cannot be resolved while the manifest has BACKED_UP state
+#   entries to place, or any of those copies fail. A failure partway
+#   leaves install_dir in a MIXED state - reported loudly, never
+#   swallowed.
 restore_backup() {
     local install_dir="$1" backup_dir="$2"
     if [ ! -d "${backup_dir}" ]; then
@@ -520,11 +623,13 @@ restore_backup() {
 
     if grep -q '^BACKED_UP\tstate\t' "${backup_dir}/.manifest"; then
         local log_dir
-        log_dir="$(resolve_log_dir "${install_dir}")"
+        log_dir="$(resolve_state_dir "${install_dir}")"
         if [ -z "${log_dir}" ]; then
-            die "PARTIAL RESTORE: install files restored (${restored}), but LOG_DIRECTORY cannot be resolved from the just-restored .env, so session_metadata.json/pinned_themes.json/unread_state.json/refresh_tokens.db could NOT be restored. Fix .env's LOG_DIRECTORY and re-run this script (idempotent) to finish."
+            # Defensive only - resolve_state_dir() always resolves to a
+            # value. See the matching note in take_backup() above.
+            die "PARTIAL RESTORE: install files restored (${restored}), but the state directory cannot be resolved from the just-restored .env, so session_metadata.json/pinned_themes.json/unread_state.json/refresh_tokens.db could NOT be restored. Fix .env's CLOUDE_STATE_DIR and re-run this script (idempotent) to finish."
         fi
-        mkdir -p "${log_dir}" || die "could not create LOG_DIRECTORY ${log_dir} to restore state files into"
+        mkdir -p "${log_dir}" || die "could not create state directory ${log_dir} to restore state files into"
         while IFS=$'\t' read -r outcome category name; do
             [ "${outcome}" = "BACKED_UP" ] || continue
             [ "${category}" = "state" ] || continue

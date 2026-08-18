@@ -48,11 +48,24 @@ from src.core.agent_wrappers import (
 
 
 def _settings_with_config(tmp_path: Path, data: dict) -> Settings:
+    """Build an isolated Settings instance pointed entirely at tmp_path.
+
+    feat/state-directory: state_dir_override is set explicitly (not left
+    to default to ~/Library/Application Support/CloudeCode, and not left
+    to inherit tests/conftest.py's session-wide CLOUDE_STATE_DIR) so each
+    test in this file gets its OWN wrapper_scripts_dir, matching the
+    per-test tmp_path isolation this helper has always provided for
+    log_directory.
+    """
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(data))
     s = Settings(
         default_working_dir=str(tmp_path / "wd"),
         log_directory=str(tmp_path / "logs"),
+        # state_dir_override has an explicit Field(alias="CLOUDE_STATE_DIR")
+        # and this model's config does not set populate_by_name - the
+        # alias, not the Python attribute name, is what init accepts.
+        CLOUDE_STATE_DIR=str(tmp_path / "state"),
         totp_secret="x",
         jwt_secret="y",
         auth_config_file=str(config_path),
@@ -170,7 +183,7 @@ def test_real_cld_body_round_trips_byte_for_byte_and_resolves(tmp_path):
     resolved = s.get_agent_command("claude")
     assert resolved.startswith("zsh -c ")
 
-    script_path = wrapper_scripts_dir(s.log_directory) / "cld.zsh"
+    script_path = wrapper_scripts_dir(str(s.get_state_dir())) / "cld.zsh"
     assert script_path.exists()
     on_disk = script_path.read_text()
     assert on_disk == EXAMPLE_WRAPPER_CLD, "script file must match the pasted body byte-for-byte"
@@ -250,7 +263,7 @@ def test_explicit_wrapper_id_as_agent_type_selects_that_wrapper(tmp_path):
     }
     s = _settings_with_config(tmp_path, config_data)
     resolved = s.get_agent_command("cld")
-    script_path = wrapper_scripts_dir(s.log_directory) / "cld.zsh"
+    script_path = wrapper_scripts_dir(str(s.get_state_dir())) / "cld.zsh"
     assert script_path.read_text() == 'cld "$@"'
     assert "cld.zsh" in resolved
 

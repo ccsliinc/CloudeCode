@@ -8,6 +8,15 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // feat/projects-table (S3) - presence for each DB-tracked project,
+        // keyed by the project's raw config path (matches config.json's
+        // ProjectConfig.path, which is also what the DB import stored
+        // verbatim into projects.raw_path - see project_store.py). A
+        // project with no entry here has not reached the DB yet (created
+        // via config write after the one-time boot import) and renders
+        // as if 'unchecked': normal, no badge, actions allowed. Populated
+        // by loadProjectPresence(), called from loadProjects().
+        this.projectPresence = new Map();
         // Running tmux sessions on the `cloude` socket. Populated by
         // loadRunningSessions() - a merged view of:
         //   (a) the currently-active backend (from GET /sessions), and
@@ -273,6 +282,11 @@ class Launchpad {
     async loadProjects() {
         try {
             this.projects = await window.API.getProjects();
+            // Presence is fetched (and merged) BEFORE the first paint so
+            // a missing/unreachable project never flashes as normal for
+            // one frame - renderProjectList() reads this.projectPresence
+            // synchronously, so it has to be populated first.
+            await this.loadProjectPresence();
             this.renderProjectList();
         } catch (error) {
             console.error('Launchpad: Failed to load projects:', error);
@@ -281,6 +295,33 @@ class Launchpad {
         // Refresh running sessions in parallel with the projects view.
         // Failure is non-fatal and handled inside loadRunningSessions.
         this.loadRunningSessions();
+    }
+
+    /**
+     * Fetch live filesystem presence for every DB-tracked project and
+     * index it by raw config path for renderProjectList() to consult.
+     *
+     * Non-fatal: a failed fetch (server datastore unreachable, network
+     * hiccup) clears the map rather than throwing, so every project
+     * renders as 'unchecked' (normal, actions allowed) rather than the
+     * whole launchpad erroring out over a presence sidecar. This is a
+     * deliberate choice not to invent a worse verdict than "could not
+     * ask" - the same three-outcome discipline the server side applies,
+     * mirrored here: failing to LOAD presence is not evidence anything
+     * is missing or unreachable.
+     */
+    async loadProjectPresence() {
+        this.projectPresence = new Map();
+        try {
+            const result = await window.API.getProjectsPresence();
+            if (result && result.status === 'ok' && Array.isArray(result.projects)) {
+                for (const row of result.projects) {
+                    this.projectPresence.set(row.raw_path, row);
+                }
+            }
+        } catch (error) {
+            console.warn('Launchpad: failed to load project presence:', error);
+        }
     }
 
     /**
@@ -1696,13 +1737,43 @@ class Launchpad {
         // Render projects
         projectListEl.innerHTML = this.projects.map((project, index) => {
             const description = project.description || 'no description';
+            // feat/projects-table (S3) - presence badge. `presenceRow` is
+            // undefined for a project the DB import has not seen yet
+            // (created via config write after the one-time boot import);
+            // that renders exactly like 'unchecked' - normal, no badge,
+            // every action allowed, because "not yet probed" is not
+            // evidence of anything wrong. Only 'missing' and
+            // 'unreachable' change the row: they get a visibly distinct
+            // badge (different label AND different color, see
+            // client/css/styles.css) and every action on the row -
+            // opening it, editing it, removing it - is refused, matching
+            // design section 4.1's "every action refused" for both
+            // states. The two states are never rendered the same way:
+            // collapsing "your project is gone" and "I could not check"
+            // into one look is the exact bug this table exists to kill.
+            const presenceRow = this.projectPresence.get(project.path);
+            const presenceState = presenceRow ? presenceRow.presence : 'unchecked';
+            const isDisabled = presenceState === 'missing' || presenceState === 'unreachable';
+            let presenceBadge = '';
+            if (presenceState === 'missing') {
+                presenceBadge = `<div class="project-presence-badge project-presence-badge-missing">MISSING - folder not found</div>`;
+            } else if (presenceState === 'unreachable') {
+                const detail = presenceRow && presenceRow.presence_detail
+                    ? this._escapeHtml(presenceRow.presence_detail)
+                    : 'reason unknown';
+                presenceBadge = `<div class="project-presence-badge project-presence-badge-unreachable">CANNOT DETERMINE - ${detail}</div>`;
+            }
+            const itemClasses = isDisabled
+                ? `project-item project-presence-disabled project-presence-${presenceState}`
+                : 'project-item';
             return `
-                <div class="project-item" data-index="${index}" data-name="${project.name}">
-                    <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                    <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher">${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
+                <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
+                    <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
+                    <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
                     <div class="project-description">${description}</div>
+                    ${presenceBadge}
                 </div>
             `;
         }).join('');
@@ -1714,6 +1785,13 @@ class Launchpad {
                 // Don't open project if clicking an inline action button
                 if (e.target.classList.contains('project-delete-btn') ||
                     e.target.classList.contains('project-edit-btn')) {
+                    return;
+                }
+                // MISSING and CANNOT DETERMINE rows refuse every action -
+                // design section 4.1. The row still exists so it stays
+                // visible and can never be silently opened into a stale
+                // or unreachable directory.
+                if (item.classList.contains('project-presence-disabled')) {
                     return;
                 }
                 const index = parseInt(item.dataset.index);

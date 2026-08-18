@@ -11,9 +11,25 @@ must not depend on the next person remembering.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Iterator
 
 import pytest
+
+# feat/state-directory - guarantee CLOUDE_STATE_DIR is set to a throwaway
+# directory BEFORE any test module is collected/imported, regardless of
+# collection order. Every individual test_*.py file's own
+# `os.environ.setdefault("LOG_DIRECTORY", ...)` bootstrap block only wins
+# a race for whichever file the suite happens to import first (setdefault
+# is a per-process no-op after that). Without this, ANY test that reaches
+# Settings.get_state_dir() (directly, or indirectly via get_log_dir() /
+# get_session_metadata_path() / etc) would silently create and write into
+# the developer's REAL ~/Library/Application Support/CloudeCode directory
+# - exactly the kind of unrequested side effect on real machine state this
+# suite must never cause. conftest.py is imported before any test module
+# in its directory, so this line always wins the race.
+os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_test_state_"))
 
 from tests.socket_guard import (
     FORBIDDEN_SOCKET_NAME,

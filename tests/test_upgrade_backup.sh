@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/test_upgrade_backup.sh - tests for take_backup / restore_backup /
-# resolve_log_dir / _copy_sqlite / _is_sqlite_file in
+# resolve_state_dir / _copy_sqlite / _is_sqlite_file in
 # scripts/upgrade_lib/upgrade_rollback_common.sh, plus the backup-vs-
 # stop_service call ordering in scripts/upgrade.sh and scripts/rollback.sh.
 #
@@ -9,7 +9,7 @@
 # Exits 0 if every case passes, 1 on the first failure, printing which.
 #
 # Covers the three-outcome contract for backup/restore:
-# - a file that lives in LOG_DIRECTORY (not the install dir) is actually
+# - a file that lives in CLOUDE_STATE_DIR (not the install dir) is actually
 #     found and backed up there - the exact bug a design review caught:
 #     the original implementation looked in the wrong directory for four
 #     of six declared files and silently reported success.
@@ -72,7 +72,7 @@ trap 'rm -rf "${WORK}"' EXIT
 INSTALL1="${WORK}/install1"
 LOGDIR1="${WORK}/logs1"
 mkdir -p "${INSTALL1}" "${LOGDIR1}"
-printf 'LOG_DIRECTORY=%s\nPORT=8000\n' "${LOGDIR1}" > "${INSTALL1}/.env"
+printf 'CLOUDE_STATE_DIR=%s\nPORT=8000\n' "${LOGDIR1}" > "${INSTALL1}/.env"
 echo '{"config_version": 1}' > "${INSTALL1}/config.json"
 echo 'fake-refresh-token-db-bytes' > "${LOGDIR1}/refresh_tokens.db"
 echo '{"session":"one"}' > "${LOGDIR1}/session_metadata.json"
@@ -84,9 +84,9 @@ assert "${RC}" "case 1: take_backup exits 0 on a fully-configured install"
 assert "$([ "${OUT}" = "${BACKUP1}" ] && echo 0 || echo 1)" "case 1: take_backup prints the backup dir"
 
 assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
-    "case 1: refresh_tokens.db backed up from LOG_DIRECTORY (not the install dir)"
+    "case 1: refresh_tokens.db backed up from CLOUDE_STATE_DIR (not the install dir)"
 assert "$(grep -q '^BACKED_UP	state	session_metadata.json$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
-    "case 1: session_metadata.json backed up from LOG_DIRECTORY"
+    "case 1: session_metadata.json backed up from CLOUDE_STATE_DIR"
 assert "$(grep -q '^NOT_PRESENT	state	pinned_themes.json$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
     "case 1: pinned_themes.json recorded NOT_PRESENT (never pinned), not a failure"
 assert "$(grep -q '^NOT_PRESENT	state	unread_state.json$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
@@ -98,14 +98,14 @@ assert "$(cmp -s "${LOGDIR1}/refresh_tokens.db" "${BACKUP1}/state/refresh_tokens
 
 # ---------------------------------------------------------------------- #
 # Case 2: configured install, but refresh_tokens.db is MISSING from
-# LOG_DIRECTORY (server never started, or state already lost). Must HALT,
+# CLOUDE_STATE_DIR (server never started, or state already lost). Must HALT,
 # not warn-and-continue.
 # ---------------------------------------------------------------------- #
 
 INSTALL2="${WORK}/install2"
 LOGDIR2="${WORK}/logs2"
 mkdir -p "${INSTALL2}" "${LOGDIR2}"
-printf 'LOG_DIRECTORY=%s\n' "${LOGDIR2}" > "${INSTALL2}/.env"
+printf 'CLOUDE_STATE_DIR=%s\n' "${LOGDIR2}" > "${INSTALL2}/.env"
 echo '{"config_version": 1}' > "${INSTALL2}/config.json"
 # refresh_tokens.db deliberately NOT created
 
@@ -139,16 +139,16 @@ assert "$(grep -q '^BACKED_UP' "${BACKUP3}/.manifest" && echo 1 || echo 0)" \
 # ---------------------------------------------------------------------- #
 # Case 4: restore puts every BACKED_UP file back where the app reads it
 # from - install files into install_dir, state files into the CURRENT
-# LOG_DIRECTORY (read from the just-restored .env), verified with cmp.
+# CLOUDE_STATE_DIR (read from the just-restored .env), verified with cmp.
 # ---------------------------------------------------------------------- #
 
 INSTALL4="${WORK}/install4"
 mkdir -p "${INSTALL4}"
 # Simulate "after a bad upgrade": wrong config, no state dir contents at
-# the new LOG_DIRECTORY (as if the app hasn't run there yet).
+# the new CLOUDE_STATE_DIR (as if the app hasn't run there yet).
 LOGDIR4_NEW="${WORK}/logs4_new"
 mkdir -p "${LOGDIR4_NEW}"
-printf 'LOG_DIRECTORY=%s\n' "${LOGDIR4_NEW}" > "${INSTALL4}/.env"
+printf 'CLOUDE_STATE_DIR=%s\n' "${LOGDIR4_NEW}" > "${INSTALL4}/.env"
 echo '{"config_version": 4, "wrong": true}' > "${INSTALL4}/config.json"
 
 # Corrupt the destination refresh_tokens.db BEFORE restoring, so a
@@ -163,10 +163,10 @@ assert "$(cmp -s "${INSTALL1}/.env" "${INSTALL4}/.env" && echo 0 || echo 1)" \
     "case 4: .env restored byte-identical to the original"
 assert "$(cmp -s "${INSTALL1}/config.json" "${INSTALL4}/config.json" && echo 0 || echo 1)" \
     "case 4: config.json restored byte-identical to the original (overwrote the 'wrong' one)"
-# LOG_DIRECTORY in install4's restored .env is LOGDIR1 (that's what backup1
+# CLOUDE_STATE_DIR in install4's restored .env is LOGDIR1 (that's what backup1
 # recorded), so the state files must land in LOGDIR1, not LOGDIR4_NEW.
 assert "$(cmp -s "${BACKUP1}/state/refresh_tokens.db" "${LOGDIR1}/refresh_tokens.db" && echo 0 || echo 1)" \
-    "case 4: refresh_tokens.db restored into LOG_DIRECTORY, overwriting the corrupted copy"
+    "case 4: refresh_tokens.db restored into CLOUDE_STATE_DIR, overwriting the corrupted copy"
 assert "$([ ! -f "${LOGDIR4_NEW}/refresh_tokens.db" ] && echo 0 || echo 1)" \
     "case 4: refresh_tokens.db NOT dumped into the stale/wrong log dir"
 
@@ -371,7 +371,7 @@ chmod +x "${FAKEBIN}/sqlite3"
 C8_INSTALL="${C8_DIR}/install"
 C8_LOGDIR="${C8_DIR}/logs"
 mkdir -p "${C8_INSTALL}" "${C8_LOGDIR}"
-printf 'LOG_DIRECTORY=%s\n' "${C8_LOGDIR}" > "${C8_INSTALL}/.env"
+printf 'CLOUDE_STATE_DIR=%s\n' "${C8_LOGDIR}" > "${C8_INSTALL}/.env"
 echo '{"config_version": 1}' > "${C8_INSTALL}/config.json"
 python3 -c "
 import sqlite3
@@ -401,6 +401,48 @@ fi
 # order (static line numbers) rather than executing them end-to-end,
 # which would need a real running server this test suite has no business
 # starting.
+# ---------------------------------------------------------------------- #
+# Case 10: THE REGRESSION THIS FIXES. A pre-feat/state-directory install
+# whose refresh_tokens.db still sits under the old LOG_DIRECTORY. Before
+# resolve_state_file() existed, take_backup resolved only the CURRENT
+# state directory, found nothing, and die()d as MISSING - aborting the
+# upgrade of an install whose data was perfectly fine and merely one
+# directory over. It must now be found there and backed up, and the same
+# must hold for an optional JSON file.
+# ---------------------------------------------------------------------- #
+INSTALL10="${WORK}/install10"
+NEWDIR10="${WORK}/state10-new"
+OLDDIR10="${WORK}/state10-old"
+BACKUP10="${WORK}/backup10"
+mkdir -p "${INSTALL10}" "${NEWDIR10}" "${OLDDIR10}"
+printf 'CLOUDE_STATE_DIR=%s\nLOG_DIRECTORY=%s\n' "${NEWDIR10}" "${OLDDIR10}" > "${INSTALL10}/.env"
+echo '{}' > "${INSTALL10}/config.json"
+# Old location only - exactly the user's existing install.
+echo 'old-refresh-token-db-bytes' > "${OLDDIR10}/refresh_tokens.db"
+echo '{"old":true}' > "${OLDDIR10}/pinned_themes.json"
+
+CLOUDE_STATE_DIR="" take_backup "${INSTALL10}" "${BACKUP10}" > "${WORK}/case10.out" 2> "${WORK}/case10.err"
+CASE10_RC=$?
+
+assert "${CASE10_RC}" \
+    "case 10: take_backup SUCCEEDS when state files are at the old LOG_DIRECTORY location"
+assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db$' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
+    "case 10: refresh_tokens.db backed up from the old location, not reported missing"
+assert "$(cmp -s "${OLDDIR10}/refresh_tokens.db" "${BACKUP10}/state/refresh_tokens.db" && echo 0 || echo 1)" \
+    "case 10: the bytes backed up are the OLD file's, not an empty new one"
+assert "$(grep -q '^BACKED_UP	state	pinned_themes.json$' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
+    "case 10: an optional JSON file at the old location is backed up too"
+assert "$([ ! -f "${NEWDIR10}/refresh_tokens.db" ] && echo 0 || echo 1)" \
+    "case 10: resolving the old location never creates anything at the new one"
+
+# And the NEW location still wins when the file is in both.
+echo 'new-refresh-token-db-bytes' > "${NEWDIR10}/refresh_tokens.db"
+RESOLVED10="$(resolve_state_file "${INSTALL10}" refresh_tokens.db)"
+assert "$([ "${RESOLVED10}" = "${NEWDIR10}/refresh_tokens.db" ] && echo 0 || echo 1)" \
+    "case 10: with the file in BOTH locations the new one wins (got ${RESOLVED10})"
+assert "$([ -f "${OLDDIR10}/refresh_tokens.db" ] && echo 0 || echo 1)" \
+    "case 10: the old copy is never deleted by resolution"
+
 # ---------------------------------------------------------------------- #
 
 UPGRADE_SH="${REPO_ROOT}/scripts/upgrade.sh"

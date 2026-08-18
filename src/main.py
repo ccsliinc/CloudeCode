@@ -5,7 +5,7 @@ import json
 import mimetypes
 import structlog
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from src.config import settings
+from src.config import settings, StateDirUnavailableError
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
@@ -30,12 +30,61 @@ from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
+from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
 from src.api.config_files_routes import router as config_files_router
 from src.api.status_routes import router as status_router
+
+# feat/state-directory - resolve (and, if needed, create) the app's state
+# directory ONCE at module load, before anything that depends on it is
+# constructed. This is deliberately NOT deferred to lifespan(): a server
+# that cannot write its own state must never bind a port and accept
+# traffic that looks live but cannot actually persist a session, a
+# refresh token, or a theme pin. Mirrors the exact fatal-startup-error
+# convention already used by src/config.py's own `Settings()` construction
+# below - a clear banner to stderr (captured by the Electron app's own
+# logs, which is what actually shows the user a startup failure - this
+# app has no server-rendered "error page" route), a copy written to a
+# throwaway diagnostic log for local debugging, then a hard, immediate
+# process exit. This is intentionally NOT a silent fallback to /tmp and
+# NOT an unhandled traceback - it is a named, described failure.
+try:
+    settings.get_state_dir()
+except StateDirUnavailableError as exc:
+    import sys as _sys
+
+    _banner = f"""
+========================================
+CLOUDE CODE - STATE DIRECTORY ERROR
+========================================
+
+{exc}
+
+The server refuses to start rather than write your session data,
+pinned themes, unread flags, or refresh tokens somewhere you did not
+choose (or silently drop them in a temp directory that macOS purges on
+reboot).
+
+To fix:
+1. Make the target directory writable, or
+2. Set CLOUDE_STATE_DIR in .env to a writable path, then restart.
+========================================
+"""
+    print(_banner, file=_sys.stderr)
+    _error_log = Path("/tmp/cloude-code-startup-error.log")
+    try:
+        with open(_error_log, "w") as _f:
+            _f.write(_banner)
+        print(f"\nError details written to: {_error_log}", file=_sys.stderr)
+    except OSError:
+        # Diagnostic-log write is best-effort - never mask the real
+        # error, and never crash differently because /tmp itself is
+        # unwritable too.
+        pass
+    _sys.exit(1)
 
 # Configure structlog
 structlog.configure(
@@ -82,6 +131,31 @@ async def _refresh_purge_loop(store: RefreshStore):
             await asyncio.sleep(60)
 
 
+
+def _read_config_version(config_path: Path) -> object:
+    """Read config.json's applied config_version, or say it is unknown.
+
+    Description: the datastore trail records BOTH version counters, and
+    the config number is one of the two ground-truth values the trail's
+    crash-recovery path falls back on when the trail itself cannot be
+    read. It is resolved here, in the caller, so that
+    src/core/db_migration.py never has to parse config.json - the two
+    chains stay independent, exactly as the design requires.
+    Inputs: config_path (Path) - path to config.json.
+    Output: int when the file parses and carries an integer
+      config_version; the string db_state.CANNOT_DETERMINE otherwise.
+      Never 0-as-a-guess: an unreadable config is not a version-0 config.
+    """
+    from src.core.db_state import CANNOT_DETERMINE
+    try:
+        with open(config_path) as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return CANNOT_DETERMINE
+    value = raw.get("config_version") if isinstance(raw, dict) else None
+    return value if isinstance(value, int) else CANNOT_DETERMINE
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -100,6 +174,31 @@ async def lifespan(app: FastAPI):
     from src.core.config_migration import ensure_config_migrated
     ensure_config_migrated(Path(settings.auth_config_file).expanduser())
 
+    # feat/datastore-and-trail - resolve migration_trail.jsonl, then
+    # create or migrate cloude.db. Runs immediately after the CONFIG
+    # chain because the trail records both moves in one ledger and the
+    # config version is one of the two ground-truth numbers the trail's
+    # crash-recovery path falls back on. Never raises and never blocks
+    # boot: every failure resolves to a named DatastoreState (see
+    # src/core/db_state.py's six outcomes) which the version route
+    # surfaces, so a broken datastore is stated out loud rather than
+    # rendering as an install with no data.
+    from src.core.db_migration import ensure_db_migrated
+    datastore_state = ensure_db_migrated(
+        settings.get_state_dir(),
+        _read_config_version(Path(settings.auth_config_file).expanduser()),
+        resolve_version() or None,
+    )
+    app.state.datastore_state = datastore_state
+    version_routes.set_datastore_state(datastore_state)
+    if not datastore_state.healthy:
+        logger.warning(
+            "datastore_degraded",
+            status=datastore_state.status,
+            schema_version=datastore_state.schema_version,
+            message=datastore_state.message,
+        )
+
     # Initialize core components
     session_manager = SessionManager()
     # Re-adopt a surviving tmux session (if any) from previous server run.
@@ -110,6 +209,36 @@ async def lifespan(app: FastAPI):
     # Item 6: notification router. Wired AFTER log_monitor (which is the
     # signal source for IdleWatcher in Item 7).
     auth_cfg = settings.load_auth_config()
+
+    # feat/projects-table (S3) - shadow AuthConfig.projects into
+    # cloude.db, once per install, guarded by meta.imported_from_json_at
+    # (src/core/project_store.ensure_projects_imported). config.json
+    # stays authoritative for writes; this never modifies it. Only runs
+    # when the datastore resolved writable at boot - a degraded/read-only
+    # datastore is left alone, and the app keeps working from
+    # config.json exactly as it did before this table existed. Best
+    # effort and never blocks boot, same posture as claude_hooks below.
+    if datastore_state.healthy:
+        from src.core.db import connect, db_path_for, transaction
+        from src.core.project_store import ensure_projects_imported
+
+        try:
+            with closing(
+                connect(db_path_for(settings.get_state_dir()))
+            ) as _projects_conn:
+                with transaction(_projects_conn):
+                    _import_result = ensure_projects_imported(
+                        _projects_conn, auth_cfg.projects
+                    )
+                if _import_result is not None:
+                    logger.info(
+                        "projects_imported_from_config",
+                        imported=_import_result.imported,
+                        duplicates_dropped=len(_import_result.dropped),
+                    )
+        except Exception as exc:  # noqa: BLE001 - import must never block boot
+            logger.warning("projects_import_failed", error=str(exc))
+
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
     # v0.7.0 Part 4 - Slack incoming-webhook channel. Empty URL = silently
@@ -154,12 +283,21 @@ async def lifespan(app: FastAPI):
     # callback registry is populated before pattern matches start firing).
     await log_monitor.start_monitoring()
 
-    # Item 5: refresh-token revocation store. Lives in the existing state
-    # directory (log_directory) so it rides along with the rest of the
-    # app's persistent state. Must be up BEFORE any request can hit
+    # Item 5: refresh-token revocation store. Lives in the app's state
+    # directory (feat/state-directory - see Settings.get_state_dir(),
+    # ~/Library/Application Support/CloudeCode by default, overridable
+    # via CLOUDE_STATE_DIR) so it rides along with the rest of the app's
+    # persistent state. Must be up BEFORE any request can hit
     # /auth/verify - which in practice means before the yield below.
-    log_dir = settings.get_log_dir()
-    db_path = str(log_dir / "refresh_tokens.db")
+    # get_state_dir() has already run once at module load time (see the
+    # top of this file) and would have exited the process on failure, so
+    # this call is expected to succeed - it re-resolves the same path.
+    # Resolved per-FILE (not per-directory) so an install that predates
+    # feat/state-directory keeps using the refresh_tokens.db it already
+    # has under the old LOG_DIRECTORY instead of silently starting a new
+    # empty one and abandoning every issued token. See
+    # Settings.get_refresh_tokens_path().
+    db_path = str(settings.get_refresh_tokens_path())
     refresh_store = RefreshStore(db_path)
     await refresh_store.init()
     _refresh_purge_task = asyncio.create_task(
