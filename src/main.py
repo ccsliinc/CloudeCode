@@ -770,10 +770,29 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
 
+    # reload is OFF by default - see settings.dev_reload / CLOUDE_DEV_RELOAD
+    # in src/config.py. A file-watching reloader re-execs the whole server
+    # on every write under the watch root, including the writes a `git
+    # pull` makes to a deployed checkout. That is a production incident
+    # waiting to happen, not a convenience: it also means an unrelated
+    # local edit can restart a server other people depend on. Never flip
+    # this hardcoded True again - tests/test_no_reload_in_production.py
+    # fails the build if this call is ever wired to a literal True.
+    if settings.dev_reload:
+        logger.warning(
+            "dev_reload_enabled",
+            note=(
+                "uvicorn --reload is ON via CLOUDE_DEV_RELOAD=1. This "
+                "process will restart itself whenever any watched file "
+                "changes, including a git pull. Never set this in a "
+                "deployed/production .env."
+            ),
+        )
+
     uvicorn.run(
         "src.main:app",
         host=settings.host,
         port=settings.port,
-        reload=True,
+        reload=settings.dev_reload,
         log_level="info"
     )
