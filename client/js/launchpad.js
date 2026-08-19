@@ -124,7 +124,11 @@ class Launchpad {
         const actions = {
             'new-claude-project': () => this.startNewClaudeProject(),
             'new-session':        () => this.startSessionInExistingProject(),
-            'open-folder':        () => this.openProjectFromFolder(),
+            // No 'open-folder' entry: this table is keyed by the FAB's
+            // data-action attributes and no menu item carries that action
+            // any more. openProjectFromFolder() is still very much alive -
+            // startNewClaudeProject() calls it directly as its third
+            // choice - so only the dead dispatch key is gone, not the flow.
             'connect-openclaw':   () => this.createNewSessionWithAgent('openclaw'),
             'connect-hermes':     () => this.createNewSessionWithAgent('hermes'),
             'new-console':        () => this.createConsoleSession(),
@@ -941,15 +945,9 @@ class Launchpad {
             const escapedName = this._escapeHtml(s.name);
             const escapedDisplay = this._escapeHtml(displayName);
             const sidAttr = s.session_id ? ` data-session-id="${this._escapeHtml(s.session_id)}"` : '';
-            // Pencil rename button - only for sessions whose id we know
-            // (rename PATCH requires session_id, not the tmux name).
-            // Detached-but-known rows qualify since their id is in
-            // ``session_id``. External adopt-target rows (no session_id
-            // until adopted) get no pencil - the user can adopt first,
-            // then rename from the in-session header.
-            const renamePencil = s.session_id
-                ? `<span class="running-session-rename" role="button" aria-label="rename session" data-rename-sid="${this._escapeHtml(s.session_id)}" data-rename-name="${escapedName}" title="rename session">${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</span>`
-                : '';
+            // Pencil rename button, in one of three states - never absent.
+            // See _renderRenamePencilHtml for why omitting it was the bug.
+            const renamePencil = this._renderRenamePencilHtml(s, escapedName);
             // Status dot: real activity status (running/idle/dead/unknown)
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
             // NOT the old ownership-colored placeholder. title + aria-label
@@ -1184,6 +1182,84 @@ class Launchpad {
     }
 
     /**
+     * Description: render the rename pencil for one running-session row in
+     *   one of THREE states, and never omit it.
+     *
+     *   THE BUG THIS FIXES. The pencil used to be gated on
+     *   ``s.session_id`` alone, and a row without one simply had no
+     *   pencil. But the badge in the same row is gated on
+     *   ``created_by_cloude``, and those two fields answer DIFFERENT
+     *   questions: ``created_by_cloude`` is about ORIGIN (did this app
+     *   create or adopt this session - durable, name-keyed, survives a
+     *   restart), while ``session_id`` is only populated by the
+     *   ``/sessions/list`` merge and therefore really means "is this
+     *   session currently open right now". A session this app owns but
+     *   which is not currently open is badged TMUX and had no pencil,
+     *   which is exactly what the user reported: a row that says TMUX,
+     *   says it is his, and offers no way to rename it.
+     *
+     *   Silently removing a control is the worst available answer,
+     *   because an absent affordance is indistinguishable from a broken
+     *   one - the user cannot tell "you may not do this" from "this app
+     *   forgot to draw the button". So the control is always drawn, and
+     *   when it cannot act it says why:
+     *
+     *     1. RENAMEABLE  - ``session_id`` known. Live pencil, unchanged
+     *        behaviour, carries ``data-rename-sid`` and is the only state
+     *        the click handler's ``.running-session-rename`` selector can
+     *        match.
+     *     2. UNAVAILABLE - no ``session_id``, but ownership IS known. We
+     *        can state the precondition precisely, because the rename
+     *        endpoint is keyed on a session id we do not currently hold:
+     *        open it (ours) or adopt it (external) and rename becomes
+     *        available. Drawn dimmed with the reason in ``title`` and in
+     *        ``aria-label``, so the reason is available to a screen
+     *        reader and not only to a hovering mouse.
+     *     3. CANNOT DETERMINE - no ``session_id`` AND ownership is null.
+     *        ``created_by_cloude`` is genuinely nullable: server_status.py
+     *        fills it with ``ownership_by_name.get(name)``, which yields
+     *        None for a name the ownership map never answered for. That is
+     *        not "external", and this state does not pretend it is.
+     *
+     *   States 2 and 3 use a DIFFERENT class from state 1
+     *   (``running-session-rename-unavailable``), which is what keeps them
+     *   out of the live click path: the delegated handler selects on
+     *   ``.running-session-rename`` and a class token is matched whole, so
+     *   an unavailable pencil can never reach the rename call no matter
+     *   what data attributes it carries. It carries none.
+     *
+     * Inputs:
+     *   s (object) - the row's session record. Reads ``session_id``
+     *     (string|null) and ``created_by_cloude`` (boolean|null).
+     *   escapedName (string) - the row's tmux name, ALREADY HTML-escaped
+     *     by the caller. Not re-escaped here.
+     * Output: string - exactly one ``<span>`` element. Never empty.
+     * Example: this._renderRenamePencilHtml({session_id: null,
+     *   created_by_cloude: true}, 'cloude_fs2')
+     *   -> '<span class="running-session-rename-unavailable" ...>'
+     */
+    _renderRenamePencilHtml(s, escapedName) {
+        const pencil = window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : '';
+        if (s.session_id) {
+            return `<span class="running-session-rename" role="button" aria-label="rename session"`
+                + ` data-rename-sid="${this._escapeHtml(s.session_id)}"`
+                + ` data-rename-name="${escapedName}" title="rename session">${pencil}</span>`;
+        }
+        // Ownership is a THREE-valued field here. `== null` catches both
+        // null and undefined and nothing else, deliberately: `!s.x` would
+        // fold the genuine unknown into "external" and invent an answer.
+        const reason = s.created_by_cloude == null
+            ? 'rename unavailable: CANNOT DETERMINE whether this session is yours,'
+                + ' so whether it can be renamed is unknown'
+            : (s.created_by_cloude
+                ? 'rename unavailable until this session is open - click the row to open it'
+                : 'rename unavailable until this session is adopted - click the row to adopt it');
+        return `<span class="running-session-rename-unavailable" aria-disabled="true"`
+            + ` aria-label="${this._escapeHtml(reason)}"`
+            + ` title="${this._escapeHtml(reason)}">${pencil}</span>`;
+    }
+
+    /**
      * Render the agent-family pill for a running-session row.
      *
      * feat/agent-family-pills - THREE-OUTCOME RULE applied to the family
@@ -1212,6 +1288,7 @@ class Launchpad {
      * Example: this._renderFamilyPillHtml('codex', 'wrapper')
      *   -> '<span class="family-pill family-pill--fact" ...>codex</span>'
      */
+
     _renderFamilyPillHtml(agentFamily, agentFamilySource) {
         const source = agentFamilySource || 'unknown';
         const isGuess = source === 'fingerprint' || source === 'derived_deepest';
@@ -1429,12 +1506,25 @@ class Launchpad {
                 return;
             }
 
+            // Pencil icon path, UNAVAILABLE state. A row whose session id
+            // we do not hold now draws a dimmed pencil that explains why
+            // instead of drawing nothing (see _renderRenamePencilHtml).
+            // It carries a different class so it can never match the live
+            // selector below, but it still has to swallow its own click:
+            // without this, clicking a control the UI just told you is
+            // unavailable would fall through to the row and open or adopt
+            // the session, which is a surprising side effect from a
+            // disabled affordance. The reason is already on the element
+            // as title + aria-label, so there is nothing further to say.
+            if (e.target.closest('.running-session-rename-unavailable')) {
+                e.stopPropagation();
+                return;
+            }
+
             // Pencil icon path: inline-edit the session name. Stop
             // propagation so the row click handler (return/adopt) doesn't
             // also fire and race the edit. Only pencil buttons with a
             // ``data-rename-sid`` appear in rows with a known session_id.
-            // External adopt-target rows have no pencil - the user can
-            // adopt first, then rename from the in-session header.
             if (renameEl) {
                 e.stopPropagation();
                 const sid = renameEl.dataset.renameSid;
@@ -1864,14 +1954,15 @@ class Launchpad {
                                     </span>
                                     <span class="new-fab__label">new session</span>
                                 </button>
-                                <button class="new-fab__item" type="button" role="menuitem" data-action="open-folder" tabindex="-1">
-                                    <span class="new-fab__icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                                        </svg>
-                                    </span>
-                                    <span class="new-fab__label">open from folder</span>
-                                </button>
+                                <!-- NO "open from folder" ITEM HERE ANY MORE.
+                                     Opening a folder already on disk is one
+                                     of the three ways to start a claude
+                                     project, not a peer of starting one, so
+                                     it is now the third choice inside "new
+                                     claude project" above (see
+                                     startNewClaudeProject). Do not restore
+                                     it here: two entry points to the same
+                                     flow is what this removed. -->
                                 <button class="new-fab__item" type="button" role="menuitem" data-action="connect-openclaw" tabindex="-1">
                                     <span class="new-fab__icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -2999,15 +3090,26 @@ class Launchpad {
     }
 
     /**
-     * The "new claude project" entrypoint, with clone-from-github folded
-     * in as one of its options.
+     * The "new claude project" entrypoint, with clone-from-github AND
+     * open-from-folder folded in as options.
      *
      * Description: "create new project" never said which agent it was
      *   creating for, and cloning a repo sat beside it as a peer even
      *   though a clone IS a new claude project, just one whose contents
      *   arrive from a remote. This asks how the project should start,
-     *   then routes into the two existing flows unchanged - no launch
+     *   then routes into the three existing flows unchanged - no launch
      *   logic is duplicated or reimplemented here.
+     *
+     *   "open an existing folder" joined this list for the same reason
+     *   the clone did: all three make a claude project, and they differ
+     *   only in where the folder comes from - made fresh, cloned from a
+     *   remote, or already on disk. It used to be a peer of "new claude
+     *   project" in the top-level add menu, which put a THIRD entry point
+     *   in front of the user for a decision that is really one branch
+     *   inside a single flow. Each option routes straight into the method
+     *   that already implemented it, so this method holds no launch logic
+     *   of its own and there is nothing here to drift.
+     *
      * Inputs: none.
      * Output: Promise<void> - resolves once the chosen flow finishes, or
      *   immediately when the user cancels.
@@ -3019,10 +3121,12 @@ class Launchpad {
             items: [
                 { key: 'empty', label: 'start empty', sub: 'a fresh working folder' },
                 { key: 'clone', label: 'clone from github', sub: 'start from an existing repository' },
+                { key: 'folder', label: 'open an existing folder', sub: 'a folder already on this machine' },
             ],
         });
         if (how === 'empty') return this.createNewSession();
         if (how === 'clone') return this.showCloneFromGithubModal();
+        if (how === 'folder') return this.openProjectFromFolder();
         return undefined;
     }
 

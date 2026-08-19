@@ -511,9 +511,68 @@ body.home-header-active {
     }
 }
 
-/* #session-sidebar-toggle stays `display: none` here (app.js never shows
- * it on the launchpad) - no rule needed, it contributes nothing to the
- * flex row either way. */
+/* THE SIDEBAR TOGGLE IS VISIBLE ON THE HOME SCREEN, AND THIS COMMENT
+ * USED TO SAY THE OPPOSITE.
+ *
+ * It read: "#session-sidebar-toggle stays `display: none` here (app.js
+ * never shows it on the launchpad) - no rule needed, it contributes
+ * nothing to the flex row either way." That stopped being true when the
+ * conversation bar became available (and pinnable) on the home screen:
+ * app.js's showLaunchpad() calls SessionSidebar.show(), which strips the
+ * `.hidden` class off the toggle. Its own doc comment says so - "Called
+ * on entering the terminal screen AND the home screen". So the flank
+ * arithmetic below was reasoning about an element it believed was not
+ * rendered, and the element was rendered.
+ *
+ * Two things went wrong as a result, both measured at 1280px before the
+ * fix:
+ *
+ * 1. THE TOGGLE WAS NOT AT THE TOP LEFT. `#header-home-spacer` precedes
+ *    it in DOM order, and on the home screen the spacer becomes a real,
+ *    80px, invisible-but-SIZED flex item. So the hamburger was pushed
+ *    80px inboard of the header's content edge and floated in dead space
+ *    between nothing and the title - measured left edge 100px against a
+ *    20px content edge. On the terminal screen the spacer is
+ *    `display: none`, so there the toggle is genuinely first and sits
+ *    where it belongs, which is why this only ever looked wrong at home.
+ *
+ * 2. THE TITLE WAS NOT CENTRED. The spacer exists for exactly one job:
+ *    be as wide as `.controls` so the title lands on the true centre.
+ *    The toggle added a further 36px (32px box + 4px margin) to the LEFT
+ *    flank with no counterpart on the right, so the left flank was
+ *    116px against a right flank of 80px and the title sat 18px right of
+ *    centre.
+ *
+ * The fix keeps both flanks equal by making them SHARE one budget rather
+ * than by adding a second invisible element: the toggle is ordered to
+ * the content edge, and the spacer gives back exactly the room the
+ * toggle takes. `order` is safe for the title-fit code, which walks DOM
+ * children and sums widths - a reordered row has the same children and
+ * the same total.
+ *
+ * --home-header-toggle-w MIRRORS session-sidebar.css's
+ * `.session-sidebar-toggle` (width 32px + margin-right 4px). That is a
+ * duplicated constant across two files, so it is not left on trust:
+ * tests/test_header_help_and_toggle.node.mjs measures the toggle's real
+ * outer width in a browser and fails if the two ever disagree, and the
+ * same suite asserts the two flanks are equal rather than asserting
+ * either number. */
+.header--home {
+    --home-header-toggle-w: 36px;
+}
+
+.header--home #session-sidebar-toggle:not(.hidden) {
+    order: -1;
+}
+
+/* Only shrink the spacer while the toggle is actually rendering. When
+ * the toggle is `.hidden` (it is `display: none` then, and contributes
+ * no width) the spacer must keep the full flank or the title would go
+ * off centre the other way. Three states, one rule each, never a guess
+ * about which one is live. */
+.header--home:has(#session-sidebar-toggle:not(.hidden)) .header-home-spacer {
+    width: calc(var(--home-header-flank-w) - var(--home-header-toggle-w));
+}
 
 .header--home #appTitle {
     /* Grows to fill the room the spacer/controls leave AND shrinks
@@ -627,6 +686,38 @@ body.home-header-active {
  * for an input). Only rows with a known session_id render the pencil
  * (toggled in renderRunningSessions); external adopt-target rows get no
  * pencil - the user can adopt first, then rename from the in-session header. */
+/* The UNAVAILABLE and CANNOT-DETERMINE rename states (see
+ * launchpad.js::_renderRenamePencilHtml). Same box as the live pencil so
+ * the row's layout does not shift between a renameable session and one
+ * that is not - the control occupies the same place either way, which is
+ * the whole point of drawing it instead of omitting it.
+ *
+ * It is dimmed and takes no hover treatment, so it reads as present but
+ * inert. `cursor: not-allowed` is the only cursor here that is not a lie:
+ * `pointer` would promise an action, and `default` would read as decorative
+ * text. No new colour - the same --color-fg-muted the live pencil rests
+ * at, carried at reduced opacity.
+ *
+ * DELIBERATELY NOT `.running-session-rename` plus a modifier. The
+ * delegated click handler selects on `.running-session-rename`, and a
+ * class token matches whole, so a separate token is what structurally
+ * guarantees this element can never reach the rename call. A modifier
+ * class would leave that guarantee to a runtime `if` somebody could
+ * later drop. */
+.running-session-rename-unavailable {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-fg-muted);
+    opacity: 0.4;
+    cursor: not-allowed;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    font-size: 14px;
+}
+
 .running-session-rename {
     width: 24px;
     height: 24px;
@@ -4373,19 +4464,67 @@ body.home-header-active {
     display: none;
 }
 
-/* Home screen only, gated on the class app.js already stamps on the
+/* THE WHITE SQUARE, AND WHY IT WAS THERE.
+ *
+ * This button used to carry NO class at all. It was written on the
+ * assumption, stated in its old comment, that it "inherits the shared
+ * header icon-button look from the `.controls button` rules far above".
+ * There are no such rules. The only `.controls`-scoped declarations in
+ * this file are `.header .controls button > svg { color }` and its
+ * `.danger` sibling - both of which style the GLYPH, neither of which
+ * styles the BUTTON. The button look lives in `.btn-icon` (far above),
+ * and that rule replaced an earlier bare `button {}` element reset which
+ * was deliberately deleted; its comment records that exactly two
+ * elements were expected to opt in by class and that no fallback reset
+ * would be added. This button was written after that deletion and opted
+ * into nothing.
+ *
+ * So it fell through to the USER-AGENT stylesheet. Measured in Chromium
+ * before the fix: `background-color: rgb(239, 239, 239)` (UA ButtonFace),
+ * `border: 2px outset`, `border-radius: 0px`, `appearance: auto`,
+ * 20x20 shrink-wrapped around its 16px glyph instead of the
+ * `--control-size` box every sibling uses. A near-white, hard-cornered,
+ * bevelled square with a correctly-coloured "?" drawn on top of it -
+ * which is the white square the user reported. It was never an asset
+ * problem: the glyph is inline SVG with `stroke="currentColor"` and it
+ * resolved correctly the whole time (measured `rgb(215, 119, 87)`, the
+ * accent). Nothing here introduces a colour; `.btn-icon` on the element
+ * hands it the same theme tokens every other header icon button has
+ * always used.
+ *
+ * Note this cannot be caught by a DOM assertion. The element, its class,
+ * its glyph and its aria were all correct while it rendered wrong, so
+ * the test for it reads `getComputedStyle` in a real browser - see
+ * scripts/ci/mutate-header-icons-and-menu.sh and
+ * tests/test_header_help_and_toggle.node.mjs.
+ *
+ * Home screen only, gated on the class app.js already stamps on the
  * header for the launchpad, so no screen-switch code has to remember to
- * show or hide this button. It inherits the shared header icon-button
- * look from the `.controls button` rules far above - nothing is
- * restyled here. */
+ * show or hide this button. The ID selector here outranks `.btn-icon`'s
+ * own `display: flex`, so the gate keeps working. */
 #launchpad-help-btn {
     display: none;
 }
 
+/* BESIDE THE TITLE, NOT IN THE RIGHT-HAND CLUSTER. The button is a child
+ * of `#appTitle` now (see client/index.html), so it inherits that box's
+ * centring and stays glued to the title text at every width.
+ *
+ * `flex-shrink: 0` is load-bearing, not cosmetic: header-title-fit.js's
+ * availableWidth() enumerates the h1's LIVE children and subtracts each
+ * one's outer width from the title's elision budget, and its doc comment
+ * states the invariant that every such child is fixed-size. A shrinkable
+ * child would make the measured budget disagree with what the browser
+ * actually lays out, which is the precise failure mode that once clipped
+ * the title to "Cloude Code L..." with the full string still in the DOM.
+ * The same function skips `display: none` children, so this button costs
+ * the terminal screen's session title exactly nothing. */
 .header--home #launchpad-help-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    margin-left: 8px;
 }
 
 /* ITEM 37, THE SECOND INSTANCE - a themed session row's LEFT EDGE.
