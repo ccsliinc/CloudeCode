@@ -1,24 +1,32 @@
 /**
- * Session Sidebar Module - switch conversations without leaving the
- * terminal view.
+ * Session Sidebar Module - the user's working set of SESSIONS, available
+ * from every screen.
  *
- * Mounted from a hamburger button at the top-left of the header (only
- * visible on the terminal screen, wired by app.js's showTerminal /
- * returnToExistingTerminal / showLaunchpad / showAuth). Opening it lists
- * every session (live + attachable) with a status dot; clicking a row
- * switches to that conversation in place.
+ * Mounted from a hamburger button at the top-left of the header. It used
+ * to appear only on the terminal screen; it is now available on the HOME
+ * screen too, and can be pinned there, because switching between the
+ * conversations you are working on is not a thing you only want to do
+ * once you are already inside one of them. The home screen keeps its own
+ * project-to-session tree - this bar is not a project browser and does
+ * not try to be one.
  *
- * Deliberately smaller in scope than the launchpad's Running Sessions
- * list: switching, the unread flag, and the one destructive row control.
- * No inline rename - that still lives on the launchpad only. The
- * destructive control is not duplicated either: its glyph, tooltip, and
- * confirm copy all come from the shared
- * client/js/session-row-actions.js.
+ * THE FOUR SIBLING MODULES, and why this file is not all of them:
+ *   session-sidebar-fetch.js        two endpoints -> one row list, plus
+ *                                   the verdict about whether the probe
+ *                                   answered at all
+ *   session-sidebar-arrangement.js  which sessions are pinned, and the
+ *                                   order the user put them in
+ *   session-sidebar-reorder.js      the keyboard and pointer interactions
+ *                                   that change that arrangement
+ *   session-sidebar-density.js      how much each row says
+ *   session-sidebar-rows.js         the row markup
+ *   session-sidebar-pin.js          pinning the BAR docked open
+ * This file owns the panel: open, close, poll, paint, and route a click.
  *
- * PINNING the bar open lives in the sibling module
- * client/js/session-sidebar-pin.js (split out for the 500-line rule);
- * this file calls into it at exactly four points - init, open, close,
- * and _closeAfterSwitch.
+ * TWO DIFFERENT PINS LIVE HERE. Pinning the BAR (docked, no backdrop) is
+ * session-sidebar-pin.js. Pinning a SESSION (sorted to the top band) is
+ * session-sidebar-arrangement.js. The user asked for both, in separate
+ * sentences, so neither name was free to mean the other.
  */
 
 console.log('[SessionSidebar Module] Loading...');
@@ -36,8 +44,12 @@ class SessionSidebarController {
         this._pollInterval = null;
         this._lastSig = null;
 
-        // The currently-attached session, so the sidebar can mark its own
-        // row active and skip a self-switch on click.
+        // Last painted rows + verdict, so a repaint triggered by a local
+        // change (pin, move, density) does not have to wait for a fetch.
+        this._rows = [];
+        this._listing = { ok: true, reason: null, detail: null };
+        this._missing = [];
+
         this._activeSessionId = null;
         this._activeTmuxName = null;
     }
@@ -52,18 +64,14 @@ class SessionSidebarController {
     /**
      * Poll cadence while the panel is open. Matches the launchpad's
      * Running Sessions poller (5s) so status freshness is consistent
-     * across both surfaces - no separate tuning knob to keep in sync.
+     * across both surfaces.
      * @type {number}
      */
     static get POLL_MS() { return 5000; }
 
     /**
-     * Wire DOM elements + event listeners once. Idempotent.
-     *
-     * Description: Locates the hamburger toggle, panel, backdrop, close
-     *   button, and list container (markup lives in client/index.html),
-     *   and binds click/keydown handlers. Safe to call multiple times -
-     *   guarded by `this._wired`.
+     * Description: wire DOM elements + event listeners once, and load the
+     *   persisted arrangement and density. Idempotent.
      * Inputs: none.
      * Output: void.
      */
@@ -106,16 +114,19 @@ class SessionSidebarController {
         });
 
         this._wired = true;
+        if (window.SessionSidebarArrangement) window.SessionSidebarArrangement.load();
         if (window.SessionSidebarPin) window.SessionSidebarPin.init();
+        if (window.SessionSidebarDensity) window.SessionSidebarDensity.init();
+        if (window.SessionSidebarReorder) window.SessionSidebarReorder.init();
         console.log('SessionSidebar: wired');
     }
 
     /**
-     * Reveal the hamburger toggle (called on entering the terminal
-     * screen). Re-opens the panel if it was open on a prior visit
-     * (persisted state) so the user's layout preference survives
-     * navigation.
-     *
+     * Description: reveal the hamburger toggle and re-open the panel if it
+     *   was open on a prior visit. Called on entering the terminal screen
+     *   AND the home screen - the bar is available on both, which is why
+     *   this takes no screen argument: there is nothing screen-specific
+     *   left in it.
      * Inputs: none.
      * Output: void.
      */
@@ -127,29 +138,31 @@ class SessionSidebarController {
         try { stored = localStorage.getItem(SessionSidebarController.STORAGE_KEY); } catch (_) { /* ignore */ }
         if (stored === '1' && !this.isOpen) {
             this.open();
+        } else if (window.SessionSidebarPin) {
+            window.SessionSidebarPin.apply();
         }
     }
 
     /**
-     * Hide the hamburger toggle and close the panel (called on leaving
-     * the terminal screen - showLaunchpad / showAuth). Does NOT clear
-     * the persisted open/closed preference, only the live DOM state.
-     *
+     * Description: hide the hamburger toggle and close the panel, WITHOUT
+     *   clearing the persisted open/closed preference. That distinction is
+     *   the whole reason `close()` takes an argument: leaving a screen is
+     *   not the user closing the bar, and treating it as one meant a
+     *   pinned-open bar came back closed after one round trip through the
+     *   home screen.
      * Inputs: none.
      * Output: void.
      */
     hide() {
-        this.close();
+        this.close({ persist: false });
         if (this.toggleBtn) this.toggleBtn.classList.add('hidden');
     }
 
     /**
-     * Record which session is currently attached so the row list can
-     * mark it active and the row click handler can no-op on self-click.
-     *
-     * Inputs:
-     *   sessionId (string|null) - Session.id of the attached session.
-     *   tmuxName (string|null) - bare tmux session name.
+     * Description: record which session is currently attached so the row
+     *   list can mark it active and the click handler can no-op on a
+     *   self-click.
+     * Inputs: sessionId (string|null), tmuxName (string|null).
      * Output: void.
      */
     setActiveSession(sessionId, tmuxName) {
@@ -158,15 +171,17 @@ class SessionSidebarController {
         if (this.isOpen) this._fetchAndRender();
     }
 
-    /** Toggle open/closed. */
+    /** Description: toggle open/closed. Inputs: none. Output: void. */
     toggle() {
         if (this.isOpen) this.close(); else this.open();
     }
 
     /**
-     * Open the panel: reveals it, starts the poller, persists the
-     * open state, and does an immediate fetch so the list isn't stale
-     * for up to POLL_MS on open.
+     * Description: open the panel, start the poller, persist the open
+     *   state, and fetch immediately so the list is not stale for up to
+     *   POLL_MS.
+     * Inputs: none.
+     * Output: void.
      */
     open() {
         if (!this.panel) return;
@@ -176,29 +191,39 @@ class SessionSidebarController {
         this.backdrop.hidden = false;
         this.toggleBtn.setAttribute('aria-expanded', 'true');
         try { localStorage.setItem(SessionSidebarController.STORAGE_KEY, '1'); } catch (_) { /* ignore */ }
+        if (window.SessionSidebarDensity) window.SessionSidebarDensity.apply();
         if (window.SessionSidebarPin) window.SessionSidebarPin.apply();
         this._fetchAndRender();
         this._startPoll();
     }
 
-    /** Close the panel and stop polling (no point polling hidden UI). */
-    close() {
+    /**
+     * Description: close the panel and stop polling.
+     * Inputs: opts (object) - {persist (boolean)}, default true. Pass
+     *   `{persist: false}` when the bar is being taken off screen for a
+     *   reason that is not the user closing it.
+     * Output: void.
+     */
+    close(opts) {
         if (!this.panel) return;
+        const persist = !opts || opts.persist !== false;
         this.isOpen = false;
         this.panel.classList.remove('session-sidebar-panel--open');
         this.panel.setAttribute('aria-hidden', 'true');
         this.backdrop.hidden = true;
         if (this.toggleBtn) this.toggleBtn.setAttribute('aria-expanded', 'false');
-        try { localStorage.setItem(SessionSidebarController.STORAGE_KEY, '0'); } catch (_) { /* ignore */ }
+        if (persist) {
+            try { localStorage.setItem(SessionSidebarController.STORAGE_KEY, '0'); } catch (_) { /* ignore */ }
+        }
         if (window.SessionSidebarPin) window.SessionSidebarPin.apply();
         this._stopPoll();
     }
 
     /**
-     * Close the bar after a conversation switch, unless it is pinned open
-     * (see client/js/session-sidebar-pin.js). Every switch path routes
-     * through this rather than calling close() directly, so "pinned means
-     * it stays put" is decided in exactly one place.
+     * Description: close the bar after a conversation switch, unless it is
+     *   pinned open. Every switch path routes through this rather than
+     *   calling close() directly, so "pinned means it stays put" is
+     *   decided in exactly one place.
      * Inputs: none. Output: void.
      */
     _closeAfterSwitch() {
@@ -206,6 +231,7 @@ class SessionSidebarController {
         else this.close();
     }
 
+    /** Description: start the poll timer. Inputs: none. Output: void. */
     _startPoll() {
         if (this._pollInterval) return;
         this._pollInterval = setInterval(() => {
@@ -215,6 +241,7 @@ class SessionSidebarController {
         }, SessionSidebarController.POLL_MS);
     }
 
+    /** Description: stop the poll timer. Inputs: none. Output: void. */
     _stopPoll() {
         if (this._pollInterval) {
             clearInterval(this._pollInterval);
@@ -223,119 +250,82 @@ class SessionSidebarController {
     }
 
     /**
-     * Fetch the merged session list (live + attachable) and repaint.
-     *
-     * Description: Same two-endpoint merge the launchpad uses
-     *   (GET /sessions/attachable for detached/external rows,
-     *   GET /sessions/list for currently-live ones, each SessionInfo
-     *   carrying `activity_status`), trimmed to what the sidebar
-     *   actually renders. Both calls tolerate failure independently so
-     *   a transient error on one doesn't blank the whole list.
+     * Description: fetch the merged session list and repaint. A poll tick
+     *   that lands mid-drag is dropped rather than applied: reordering the
+     *   list out from under a finger that is holding a row is a data race
+     *   the user can see.
      * Inputs: none.
      * Output: Promise<void>.
      */
     async _fetchAndRender() {
-        let rows = [];
-        try {
-            const attachable = await window.API.listAttachableSessions();
-            rows = Array.isArray(attachable) ? attachable.slice() : [];
-        } catch (err) {
-            console.error('SessionSidebar: listAttachableSessions failed:', err);
-        }
-
-        try {
-            const live = typeof window.API.listSessions === 'function'
-                ? await window.API.listSessions()
-                : [];
-            for (const info of (Array.isArray(live) ? live : [])) {
-                const tmuxName = info && info.tmux_session;
-                if (!tmuxName) continue;
-                const sessionId = (info.session && info.session.id) || null;
-                const status = info.activity_status || 'unknown';
-                const unread = !!info.unread;
-                const existing = rows.find((r) => r.name === tmuxName);
-                if (existing) {
-                    existing.is_active = true;
-                    existing.session_id = sessionId;
-                    existing.status = status;
-                    existing.unread = unread;
-                    existing.created_by_cloude = !!info.created_by_cloude;
-                    if (info.pinned_theme) existing.pinned_theme = info.pinned_theme;
-                } else {
-                    rows.unshift({
-                        name: tmuxName,
-                        // The badge means: did THIS APP CREATE this tmux
-                        // session, or did it merely ADOPT one started
-                        // outside it? Origin, not current state - so it must
-                        // not flip on open/close and must survive a server
-                        // restart. Taken verbatim from the server, which
-                        // resolves it from the persisted
-                        // `owned_tmux_sessions` set. Never derived here -
-                        // see the same merge in client/js/launchpad.js for
-                        // the two local derivations that were both wrong.
-                        created_by_cloude: !!info.created_by_cloude,
-                        created_at_epoch: 0,
-                        is_active: true,
-                        session_id: sessionId,
-                        status,
-                        unread,
-                        pinned_theme: info.pinned_theme || null,
-                    });
-                }
-            }
-        } catch (err) {
-            // No active session for this tab - fine, rows stays as-is.
-        }
-
-        // Mark this tab's own attached session (may differ from any
-        // row's is_active flag if the fetch raced a switch).
-        for (const row of rows) {
-            row.is_this_tab = !!this._activeTmuxName && row.name === this._activeTmuxName;
-        }
-
-        rows.sort((a, b) => {
-            if (!!a.is_this_tab !== !!b.is_this_tab) return a.is_this_tab ? -1 : 1;
-            if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
-            return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
-        });
-
-        this.render(rows);
+        if (window.SessionSidebarReorder && window.SessionSidebarReorder.isDragging()) return;
+        const result = await window.SessionSidebarFetch.load(this._activeTmuxName);
+        this._listing = result.listing;
+        this._rows = result.rows;
+        this.repaint();
     }
 
     /**
-     * Paint the row list. Markup comes from
-     * client/js/session-sidebar-rows.js; this method owns only the
-     * repaint DECISION - it skips the DOM rewrite when the row signature
-     * has not changed since the last paint, so the 5s poll tick does not
-     * thrash focus or scroll position while the panel sits open and idle.
+     * Description: apply the user's arrangement to the last fetched rows
+     *   and paint. Separate from the fetch so a pin, a move or a density
+     *   change repaints instantly instead of waiting for the next poll.
      *
-     * Inputs:
-     *   rows (Array<object>) - merged + sorted session rows.
+     *   The signature diff that skips a no-op DOM rewrite now includes the
+     *   arrangement and the density, because both are things the row
+     *   SHOWS; leaving them out meant a pin the user just clicked did not
+     *   paint until something unrelated happened to change.
+     * Inputs: none.
      * Output: void.
      */
-    render(rows) {
+    repaint() {
         if (!this.listEl) return;
-        const sig = window.SessionSidebarRows.signature(rows);
+        const arrangement = window.SessionSidebarArrangement;
+        const density = window.SessionSidebarDensity
+            ? window.SessionSidebarDensity.currentMode()
+            : 'cozy';
+        let rows = this._rows;
+        let missing = [];
+        if (arrangement) {
+            const arranged = arrangement.arrange(this._rows);
+            rows = arranged.rows;
+            missing = arranged.missing;
+        }
+        this._missing = missing;
+        const state = arrangement ? arrangement.current() : null;
+        const sig = window.SessionSidebarRows.signature(rows, density, this._listing, missing)
+            + (state ? `|${state.status}` : '');
         if (sig === this._lastSig) return;
         this._lastSig = sig;
-        this.listEl.innerHTML = window.SessionSidebarRows.listHtml(rows);
+        this.listEl.setAttribute('data-listing-ok', this._listing.ok ? '1' : '0');
+        this.listEl.setAttribute('data-order-missing', String(missing.length));
+        this.listEl.setAttribute('data-arrangement-state', state ? state.status : 'default');
+        this.listEl.setAttribute('data-density', density);
+        this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
+            rows, density, this._listing, missing, state,
+        );
+        if (window.SessionSidebarReorder) window.SessionSidebarReorder.afterRender();
     }
 
     /**
-     * Row click: switch to that conversation. Reuses the same two paths
-     * the launchpad uses (return-to-active vs adopt-external) so the
-     * behavior is identical regardless of which surface the user
-     * clicked from.
-     *
-     * Inputs:
-     *   e (MouseEvent) - delegated click event from the list container.
+     * Description: legacy entry point kept so any caller that hands rows
+     *   in still works; stores them and repaints through the one path.
+     * Inputs: rows (Array<object>). Output: void.
+     */
+    render(rows) {
+        this._rows = Array.isArray(rows) ? rows : [];
+        this.repaint();
+    }
+
+    /**
+     * Description: route a click inside the list. Order matters: every
+     *   nested control must claim the click before the row-level switch
+     *   handler sees it, or clicking pin would also navigate.
+     * Inputs: e (MouseEvent).
      * Output: Promise<void>.
      */
     async _onRowClick(e) {
-        // The close/remove control takes priority over everything else
-        // below: it's a nested control inside the row, and clicking it
-        // must never ALSO trigger a conversation switch or mark-unread
-        // toggle.
+        if (window.SessionSidebarReorder && window.SessionSidebarReorder.onPinClick(e)) return;
+
         const actionEl = window.SessionRowActions
             ? e.target.closest(`[${window.SessionRowActions.ATTR_ACTION}]`)
             : null;
@@ -345,9 +335,6 @@ class SessionSidebarController {
             return;
         }
 
-        // Mark-unread toggle takes priority over the row-switch handler
-        // below - it's a nested control inside the row, and clicking it
-        // must never ALSO trigger a conversation switch.
         const toggleEl = e.target.closest('[data-mark-unread]');
         if (toggleEl) {
             e.stopPropagation();
@@ -355,23 +342,36 @@ class SessionSidebarController {
             return;
         }
 
+        // A click that landed on the grip was a drag gesture, not a
+        // switch - the pointer handlers own it.
+        if (e.target.closest('[data-grip-session]')) return;
+
         const rowEl = e.target.closest('.session-sidebar-row');
         if (!rowEl) return;
-        const name = rowEl.dataset.name;
+        await this.activateRow(rowEl);
+    }
+
+    /**
+     * Description: switch to the conversation a row names. Reuses the same
+     *   two paths the launchpad uses (return-to-active vs adopt-external)
+     *   so behaviour is identical regardless of the surface clicked from.
+     *   Public because the keyboard path (Enter on a focused row) needs
+     *   the same entry point a click takes.
+     * Inputs: rowEl (Element) - a `.session-sidebar-row`.
+     * Output: Promise<void>.
+     */
+    async activateRow(rowEl) {
+        const name = rowEl && rowEl.dataset.name;
         if (!name || name === this._activeTmuxName) {
-            // Clicking the already-attached session - nothing to do.
             this._closeAfterSwitch();
             return;
         }
         const sessionId = rowEl.dataset.sessionId || null;
-
         try {
             // A row carries session_id only when it came from
-            // GET /sessions/list - i.e. it's bound to a live backend
-            // (this tab's or another browser tab's) and can be rejoined
-            // directly. No session_id means it's attachable-only (a
-            // detached-but-alive or externally-started tmux session) and
-            // must go through the adopt flow instead.
+            // GET /sessions/list - it is bound to a live backend and can
+            // be rejoined directly. No session_id means attachable-only
+            // and must go through the adopt flow instead.
             if (sessionId) {
                 const info = await window.API.getSession(sessionId, { includeScrollback: true });
                 if (info) {
@@ -380,11 +380,6 @@ class SessionSidebarController {
                 }
                 return;
             }
-            // Not yet attached anywhere - adopt it. Mirrors
-            // launchpad._handleAttachRunningSession's core path; the
-            // sidebar skips the auto-add-to-recent-projects step since
-            // that's a launchpad-specific convenience, not part of
-            // "switch conversations".
             const response = await window.API.adoptSession(name, true);
             const session = response.session || response;
             this._closeAfterSwitch();
@@ -405,14 +400,10 @@ class SessionSidebarController {
     }
 
     /**
-     * Toggle the manual unread flag for one row and re-render immediately
-     * (optimistic - the next poll tick reconciles with the server either
-     * way, but waiting a full POLL_MS for visual feedback on a click
-     * would feel broken).
-     *
-     * Inputs:
-     *   toggleEl (Element) - the `[data-mark-unread]` span that was
-     *     clicked, carrying the tmux name and current state as data-*.
+     * Description: toggle the manual unread flag for one row and re-render
+     *   immediately (optimistic - the next poll tick reconciles either
+     *   way, but a full POLL_MS with no visual feedback feels broken).
+     * Inputs: toggleEl (Element) - the `[data-mark-unread]` span clicked.
      * Output: Promise<void>.
      */
     async _onMarkUnreadClick(toggleEl) {
@@ -429,25 +420,19 @@ class SessionSidebarController {
     }
 
     /**
-     * Run a sidebar row's destructive action - close a running session
-     * (X) or remove a stopped one from the list (trash). Which action the
-     * row painted is read back off the button, so the confirm always
-     * matches the control the user clicked.
+     * Description: run a row's destructive action - close a running
+     *   session (X) or remove a stopped one (trash). Which action the row
+     *   painted is read back off the button, so the confirm always matches
+     *   the control the user clicked.
      *
-     * THIS tab's own active session delegates straight to
-     * `TerminalController.destroySession(action)` - avoids a double
-     * confirm dialog and a stale-WS state only that method knows how to
-     * avoid. The row's action is PASSED THROUGH rather than dropped: this
-     * branch used to call it with no argument, so an own-tab row painted
-     * with a trash still confirmed with the close copy and claimed a
-     * process was about to be terminated when it had already exited. Any
-     * OTHER row confirms here via `SessionRowActions.confirm()` then
-     * destroys via the API, mirroring
-     * `LaunchpadController._handleSessionRowAction()` so both surfaces
-     * behave identically; only the sidebar list re-renders.
-     *
-     * Inputs:
-     *   btnEl (Element) - the clicked `[data-session-action]` button.
+     *   THIS tab's own active session delegates straight to
+     *   `TerminalController.destroySession(action)` - avoids a double
+     *   confirm and a stale-WS state only that method knows how to avoid.
+     *   The row's action is PASSED THROUGH rather than dropped: this
+     *   branch used to call it with no argument, so an own-tab row painted
+     *   with a trash still confirmed with the close copy and claimed a
+     *   process was about to be terminated when it had already exited.
+     * Inputs: btnEl (Element) - the clicked `[data-session-action]` button.
      * Output: Promise<void>. No-op if the user cancels.
      */
     async _onRowActionClick(btnEl) {
@@ -481,7 +466,6 @@ class SessionSidebarController {
             alert(`Error: failed to ${action} conversation: ${err.message || err}`);
         }
     }
-
 }
 
 window.SessionSidebar = new SessionSidebarController();

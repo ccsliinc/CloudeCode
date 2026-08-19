@@ -155,10 +155,23 @@ test('every row carries exactly one destructive control, from the shared module'
         const html = Rows.rowHtml(row({ status }));
         const buttons = (html.match(new RegExp(RowActions.BASE_CLASS, 'g')) || []).length;
         assert.ok(buttons >= 1, `status ${status} must paint the shared row control`);
+        // Exactly one DESTRUCTIVE control, never two. The row also carries
+        // a pin button now, so counting <button> alone stopped measuring
+        // this; count the destructive contract attribute instead, which is
+        // what "exactly one of close-or-remove" actually means.
         assert.equal(
-            (html.match(/<button/g) || []).length, 1,
-            `status ${status} must paint exactly one button`,
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 1,
+            `status ${status} must paint exactly one destructive control`,
         );
+        assert.equal(
+            (html.match(/data-pin-session=/g) || []).length, 1,
+            `status ${status} must paint exactly one pin toggle`,
+        );
+        // AND NEVER A RESTART. Sidebar rows come from the attachable
+        // probe, which carries no `lifecycle`, so this module cannot tell
+        // a stopped session from one whose state could not be determined -
+        // and restarting the latter is how you end up with two of it.
+        assert.ok(!/restart/i.test(html), `status ${status} must offer no restart control`);
     }
 });
 

@@ -62,6 +62,12 @@
     <!-- Session sidebar + status lights. Loaded after styles.css for the
          same token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <!-- Row density, the per-row reorder/pin controls, and the two
+         three-outcome blocks the list can render instead of rows. Its own
+         file so session-sidebar.css stays under the 500-line convention;
+         it must load AFTER it, because the density rules override the
+         base row padding there. -->
+    <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <!-- Session tools button + menu and the per-session theme picker.
          After styles.css so it inherits the theme vars, AND so its
          explicit width/height beat the bare `button` base rule there. -->
@@ -250,6 +256,22 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <!-- LAUNCHER HELP, top right of the header. The panel it
+                 opens does NOT live here: it stays where it always was,
+                 the first child of .launchpad-container, rendered by
+                 launchpad.js. This is only the control. Home screen only,
+                 gated on .header--home in styles.css rather than by a
+                 class toggle in app.js, so no screen-switch code has to
+                 remember it. Same "?" glyph as the in-pane summary it
+                 replaces: viewBox 0 0 24 24, stroke-width 1.8 as a
+                 presentation attribute. -->
+            <button type="button" id="launchpad-help-btn" aria-label="help" title="help" data-tooltip="Help" aria-expanded="false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
+                    <line x1="12" y1="17.5" x2="12" y2="17.5"/>
+                </svg>
+            </button>
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
                  never a header one - see .info near the end of this file
@@ -283,9 +305,49 @@
          slide over the full viewport; visibility is CSS-driven by the
          .session-sidebar-panel--open class (client/js/session-sidebar.js). -->
     <div class="session-sidebar-backdrop" id="session-sidebar-backdrop" hidden></div>
-    <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true" aria-label="Conversations">
+    <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true"
+           aria-label="Conversations" data-density="cozy">
         <div class="session-sidebar-header">
             <span class="session-sidebar-title">conversations</span>
+            <!-- Row detail (density). "a little icon dropdown for how
+                 verbose" - thin rows to see more, or more per row. The
+                 three modes and the persistence live in
+                 client/js/session-sidebar-density.js; the menu below is
+                 keyboard-operable (arrows move, Enter chooses, Escape
+                 leaves) because a control only reachable by mouse is not
+                 a control this list can rely on. -->
+            <div class="session-sidebar-density-wrap">
+                <button type="button" id="session-sidebar-density" class="session-sidebar-density"
+                        aria-haspopup="true" aria-expanded="false"
+                        aria-controls="session-sidebar-density-menu"
+                        aria-label="Row detail: cozy. Change how much each session row shows."
+                        title="row detail: cozy">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                        <line x1="4" y1="7" x2="20" y2="7"/>
+                        <line x1="4" y1="12" x2="20" y2="12"/>
+                        <line x1="4" y1="17" x2="20" y2="17"/>
+                    </svg>
+                </button>
+                <div id="session-sidebar-density-menu" class="session-sidebar-density-menu"
+                     role="menu" aria-label="Row detail" hidden>
+                    <button type="button" role="menuitemradio" aria-checked="false"
+                            data-density-mode="compact" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">compact</span>
+                        <span class="session-sidebar-density-item__hint">thinnest rows, most sessions on screen</span>
+                    </button>
+                    <button type="button" role="menuitemradio" aria-checked="true"
+                            data-density-mode="cozy" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">cozy</span>
+                        <span class="session-sidebar-density-item__hint">the default row</span>
+                    </button>
+                    <button type="button" role="menuitemradio" aria-checked="false"
+                            data-density-mode="detailed" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">detailed</span>
+                        <span class="session-sidebar-density-item__hint">adds agent family and age on a second line</span>
+                    </button>
+                </div>
+            </div>
             <!-- Pin the BAR open (docked, no backdrop, survives a
                  conversation switch). aria-pressed carries the real state;
                  the pushpin glyph is presentational. Hidden below 700px by
@@ -301,7 +363,17 @@
             </button>
             <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
         </div>
-        <div id="session-sidebar-list" class="session-sidebar-list"></div>
+        <!-- role=listbox + roving tabindex: the list is ONE tab stop and
+             arrows move inside it, which is what makes Alt+Arrow reorder
+             reachable without a mouse. See
+             client/js/session-sidebar-reorder.js. -->
+        <div id="session-sidebar-list" class="session-sidebar-list"
+             role="listbox" aria-label="Sessions" data-density="cozy"></div>
+        <!-- A reorder whose only feedback is visual is not operable
+             without a mouse in any sense that matters, so every move and
+             pin says what it did here. -->
+        <div id="session-sidebar-live" class="session-sidebar-live"
+             role="status" aria-live="polite"></div>
     </aside>
 
     <!-- FILE BROWSER - a right-hand DRAWER, and optionally a docked one.
@@ -573,6 +645,16 @@
          returnToExistingTerminal / showLaunchpad / showAuth call into
          window.SessionSidebar; script order below only needs it defined
          before those methods RUN, not before app.js parses). -->
+    <!-- Three-outcome verdict for a session probe (CANNOT DETERMINE vs an
+         honestly empty list). Must load BEFORE the fetch and row modules,
+         both of which call into it. -->
+    <script src="/static/js/session-listing-state.js"></script>
+    <!-- Which sessions are PINNED to the top and the order the user put
+         them in. Pure functions plus localStorage; no DOM. Must load
+         BEFORE session-sidebar.js runs. -->
+    <script src="/static/js/session-sidebar-arrangement.js"></script>
+    <!-- Two endpoints to one row list, plus whether the probe answered. -->
+    <script src="/static/js/session-sidebar-fetch.js"></script>
     <!-- Row markup for the sidebar list; must load BEFORE session-sidebar.js
          paints. -->
     <script src="/static/js/session-sidebar-rows.js"></script>
@@ -580,6 +662,10 @@
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
     <script src="/static/js/session-sidebar-pin.js"></script>
+    <!-- Row detail (density) and the reorder interactions. Both call back
+         into window.SessionSidebar, so both load AFTER it. -->
+    <script src="/static/js/session-sidebar-density.js"></script>
+    <script src="/static/js/session-sidebar-reorder.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the

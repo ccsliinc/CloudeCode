@@ -1,0 +1,341 @@
+/* =====================================================================
+ * Session sidebar - row DENSITY, the reorder controls, and the two
+ * three-outcome blocks the list can draw instead of rows.
+ * ---------------------------------------------------------------------
+ * Its own file so client/css/session-sidebar.css stays under the 500-line
+ * project convention. Loaded AFTER it, because the density rules override
+ * the base `.session-sidebar-row` padding declared there.
+ *
+ * EVERY COLOUR HERE IS AN EXISTING THEME TOKEN from styles.css's :root.
+ * This round is mechanics, not a visual language: nothing below invents a
+ * palette, and the cozy row is byte-for-byte the row that shipped before
+ * the density control existed.
+ *
+ * WHERE THE HEIGHT DIFFERENCE COMES FROM. Three levers, all declared and
+ * all measurable: row padding, line-height, and whether a second line
+ * exists at all. No inline styles and no JS-computed sizes, so
+ * scripts/verify_sidebar_sessions.py can measure the real boxes in a real
+ * Chromium and the numbers mean something.
+ * ===================================================================== */
+
+/* ---- Row shell -------------------------------------------------------
+ * The row is now a column: a main line, and (detailed only) a meta line.
+ * The base rule in session-sidebar.css still owns background, border and
+ * hover. */
+
+.session-sidebar-row {
+    display: block;
+    padding: 0;
+}
+
+.session-sidebar-row-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* THE PILL MUST NOT WRAP INSIDE A 320px BAR. "unknown family" is two
+ * words and the bar is narrow, so the pill wrapped to two lines and made
+ * the cozy row 59.34px tall - measured, in a real browser, against an
+ * expected ~44. The row is not a wrapping layout; the NAME is the element
+ * that gives way, and it already ellipsizes. Capping the pill's width
+ * keeps a long family name from eating the name column outright. */
+.session-sidebar-list .family-pill {
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-sidebar-row:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent-border);
+}
+
+/* A pinned row is not just sorted differently, it LOOKS different -
+ * otherwise "why is this one at the top" has no answer on screen. Inset
+ * rail rather than a border-left, matching the treatment the home
+ * screen's project rows already use. */
+.session-sidebar-row[data-pinned="1"] {
+    box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+/* ---- compact --------------------------------------------------------
+ * The "super thin bars so i can see more" end of the request. The badge
+ * is dropped by the row builder (it is the most redundant glyph on the
+ * row); the family pill is NOT, because its unknown state is the one the
+ * user most needs to see and hiding it here would be the false green this
+ * project keeps having to remove. */
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row {
+    margin-bottom: 1px;
+}
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row-main {
+    padding: 2px 8px;
+    gap: 5px;
+    line-height: 1.15;
+    font-size: 0.85em;
+}
+
+.session-sidebar-panel[data-density="compact"] .family-pill {
+    font-size: 0.6em;
+    padding: 0 3px;
+}
+
+.session-sidebar-panel[data-density="compact"] .mark-unread-toggle {
+    width: 16px;
+    height: 16px;
+}
+
+/* ---- cozy (default) -------------------------------------------------
+ * The row exactly as it shipped: 10px padding on both axes. */
+
+.session-sidebar-panel[data-density="cozy"] .session-sidebar-row-main {
+    padding: 10px 10px;
+    line-height: 1.4;
+}
+
+/* ---- detailed -------------------------------------------------------
+ * "or more detail": the second line carries the agent family and the
+ * session's age. */
+
+.session-sidebar-panel[data-density="detailed"] .session-sidebar-row-main {
+    padding: 10px 10px 2px 10px;
+    line-height: 1.4;
+}
+
+.session-sidebar-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 9px 34px;
+    min-height: 18px;
+}
+
+.session-sidebar-row-age {
+    font-size: 0.7em;
+    color: var(--color-fg-faint);
+}
+
+/* ---- Drag grip -------------------------------------------------------
+ * Its own control, not the whole row: the row's click already means
+ * "switch to this conversation". touch-action:none is what stops a
+ * touch-drag on the grip from scrolling the list instead of reordering. */
+
+.session-sidebar-row-grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    color: var(--color-fg-subtle);
+    cursor: grab;
+    flex-shrink: 0;
+    touch-action: none;
+}
+
+.session-sidebar-row-grip:hover {
+    color: var(--color-fg-strong);
+}
+
+.session-sidebar-list--dragging .session-sidebar-row-grip {
+    cursor: grabbing;
+}
+
+/* ---- Per-row pin -----------------------------------------------------
+ * Sized and coloured to match .session-sidebar-row-delete and
+ * .mark-unread-toggle, so the row's controls read as one set. */
+
+.session-sidebar-row-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--color-fg-faint);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-row-pin:hover,
+.session-sidebar-row-pin:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-row-pin[aria-pressed="true"] {
+    color: var(--color-accent);
+}
+
+/* ---- Density control (sidebar header) -------------------------------- */
+
+.session-sidebar-density-wrap {
+    position: relative;
+    margin-left: auto;
+    display: inline-flex;
+}
+
+.session-sidebar-density {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-density:hover,
+.session-sidebar-density:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-density[aria-expanded="true"] {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent-border);
+}
+
+/* The icon's three lines tighten as the mode gets denser, so the control
+ * shows its own state without needing a label beside it. */
+.session-sidebar-density[data-density="compact"] svg {
+    transform: scaleY(0.7);
+}
+
+.session-sidebar-density[data-density="detailed"] svg {
+    transform: scaleY(1.2);
+}
+
+.session-sidebar-density-menu {
+    position: absolute;
+    top: 32px;
+    right: 0;
+    z-index: 1120;
+    min-width: 210px;
+    padding: 4px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 6px 20px var(--color-bg-overlay-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.session-sidebar-density-menu[hidden] {
+    display: none;
+}
+
+.session-sidebar-density-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    cursor: pointer;
+    text-align: left;
+}
+
+.session-sidebar-density-item:hover,
+.session-sidebar-density-item:focus-visible {
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-density-item[aria-checked="true"] {
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent-border);
+}
+
+.session-sidebar-density-item[aria-checked="true"] .session-sidebar-density-item__label {
+    color: var(--color-accent);
+    font-weight: bold;
+}
+
+.session-sidebar-density-item__hint {
+    font-size: 0.7em;
+    color: var(--color-fg-faint);
+}
+
+/* ---- Three-outcome blocks --------------------------------------------
+ * Neither of these is a row, and neither carries an action control. A
+ * control against a session whose existence could not be confirmed either
+ * does nothing or does something to the wrong session. */
+
+.session-sidebar-attention,
+.session-sidebar-notice {
+    margin: 6px 4px 10px 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-warning);
+    border-radius: var(--radius-md);
+    background: var(--color-accent-bg-soft);
+}
+
+.session-sidebar-attention__head {
+    font-size: 0.65em;
+    letter-spacing: 0.6px;
+    color: var(--color-warning);
+    font-weight: bold;
+}
+
+.session-sidebar-attention__title,
+.session-sidebar-notice__title {
+    font-size: 0.8em;
+    color: var(--color-fg-strong);
+    font-weight: bold;
+    margin-top: 2px;
+}
+
+.session-sidebar-attention__detail,
+.session-sidebar-notice__detail {
+    font-size: 0.72em;
+    color: var(--color-fg-muted);
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+}
+
+/* A remembered slot whose session is not listed is not an error and not a
+ * silent drop, so it gets the quietest treatment on offer while still
+ * being on screen. */
+.session-sidebar-note {
+    margin: 6px 4px 2px 4px;
+    padding: 4px 6px;
+    font-size: 0.68em;
+    color: var(--color-fg-subtle);
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+/* Visually hidden, still announced. The reorder feedback has to reach a
+ * screen reader without adding a line of chrome for sighted users. */
+.session-sidebar-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}

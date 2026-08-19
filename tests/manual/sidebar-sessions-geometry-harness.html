@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sidebar sessions geometry harness</title>
+<!--
+  feat/sidebar-sessions - MEASURE IT, DO NOT ASSERT IT.
+
+  Same pattern as tests/manual/home-mechanics-geometry-harness.html: loads
+  the REAL stylesheets in the REAL shipped order, the REAL sidebar
+  modules, and the REAL sidebar markup fetched out of client/index.html at
+  load time (so this page cannot drift from the shipped panel the way a
+  pasted copy would), stubs window.API with one canned fixture, runs the
+  real render path, and reports real getBoundingClientRect numbers.
+
+  The fixture is his actual data shape, read out of a read-only copy of
+  the live cloude.db: nine sessions on the `cloude` socket, every one with
+  agent_family NULL and agent_family_source 'unknown', which is the
+  family-pill state the sidebar will really be drawing. Two rows are
+  overridden to the fact and guess states so all three are on screen at
+  once and all three can be measured.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/sidebar-sessions-geometry-harness.html
+  A file:// origin cannot fetch client/index.html for the panel markup.
+
+  Poll window.__sidebarReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+</head>
+<body>
+<div id="header-mount"></div>
+<div id="launchpad-screen" class="screen active">
+  <div class="launchpad-container"><h1>home</h1></div>
+</div>
+<div id="panel-mount"></div>
+
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script>
+/**
+ * The nine real session names, in the order the live database holds them.
+ * Copied from a read-only `sqlite3 .backup` of the shipped cloude.db.
+ * @type {Array<string>}
+ */
+const REAL_NAMES = [
+    'cloude_Test', 'cloude_asd', 'cloude_claude-config-sync-2',
+    'cloude_console-msw4z3m5', 'cloude_fs2', 'cloude_fstest',
+    'cloude_scrolltest', 'cloude_ses_ec5bf2a3', 'cloude_test pause',
+];
+
+/**
+ * Description: build the attachable-probe fixture. Every row matches the
+ *   live database (family NULL, source 'unknown', all running) except two
+ *   deliberately promoted so the fact and guess pill states are also on
+ *   screen and therefore also measurable.
+ * Inputs: none.
+ * Output: Array<object> - attachable rows.
+ */
+function fixtureRows() {
+    return REAL_NAMES.map((name, i) => ({
+        name,
+        created_by_cloude: i % 3 !== 0,
+        created_at_epoch: Math.floor(Date.now() / 1000) - (3600 * (i + 1)),
+        window_count: 1,
+        status: i === 5 ? 'idle' : 'working',
+        unread: false,
+        agent_family: i === 1 ? 'claude' : (i === 2 ? 'codex' : null),
+        agent_family_source: i === 1 ? 'wrapper' : (i === 2 ? 'fingerprint' : 'unknown'),
+        pinned_theme: null,
+    }));
+}
+
+let failNextListing = false;
+
+/**
+ * Description: flip the attachable probe into a structured 503, the shape
+ *   the server really answers with when it cannot read tmux.
+ * Inputs: on (boolean). Output: void.
+ */
+window.__setListingFails = function (on) { failNextListing = on; };
+
+window.API = {
+    async listAttachableSessions() {
+        if (failNextListing) {
+            const err = new Error('the server could not read the tmux session list');
+            err.status = 503;
+            err.detail = {
+                listing_ok: false,
+                listing_reason: 'tmux_missing',
+                listing_detail: 'tmux is not installed on the server',
+            };
+            throw err;
+        }
+        return fixtureRows();
+    },
+    async listSessions() { return []; },
+    async getSession() { return null; },
+    async adoptSession() { return {}; },
+    async setSessionUnread() { return {}; },
+    async destroySession() { return {}; },
+    async destroyExternalSession() { return {}; },
+};
+window.App = { returnToExistingTerminal() {} };
+window.TerminalController = { async destroySession() {} };
+</script>
+<script src="../../client/js/session-listing-state.js"></script>
+<script src="../../client/js/session-sidebar-arrangement.js"></script>
+<script src="../../client/js/session-sidebar-fetch.js"></script>
+<script src="../../client/js/session-sidebar-rows.js"></script>
+<script src="../../client/js/session-sidebar.js"></script>
+<script src="../../client/js/session-sidebar-pin.js"></script>
+<script src="../../client/js/session-sidebar-density.js"></script>
+<script src="../../client/js/session-sidebar-reorder.js"></script>
+<script>
+/**
+ * Description: pull the real sidebar markup out of the shipped
+ *   client/index.html rather than pasting a copy here, so a change to the
+ *   panel cannot leave this harness measuring a page the app no longer
+ *   serves.
+ * Inputs: none.
+ * Output: Promise<void>.
+ */
+async function mountRealMarkup() {
+    const html = await (await fetch('../../client/index.html')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const mount = document.getElementById('panel-mount');
+    for (const sel of ['#session-sidebar-backdrop', '#session-sidebar-panel']) {
+        const node = doc.querySelector(sel);
+        if (node) mount.appendChild(document.importNode(node, true));
+    }
+    const header = doc.querySelector('.header');
+    if (header) {
+        document.getElementById('header-mount').appendChild(document.importNode(header, true));
+    }
+}
+
+/**
+ * Description: the geometry of every rendered row plus the list-level
+ *   three-outcome attributes, all read from the live layout.
+ * Inputs: none.
+ * Output: object - the measurement payload the verifier asserts on.
+ */
+window.__sidebarMeasure = function () {
+    const list = document.getElementById('session-sidebar-list');
+    const panel = document.getElementById('session-sidebar-panel');
+    const rows = Array.prototype.slice.call(list.querySelectorAll('.session-sidebar-row'));
+    return {
+        innerWidth: window.innerWidth,
+        density: panel.getAttribute('data-density'),
+        listingOk: list.getAttribute('data-listing-ok'),
+        arrangementState: list.getAttribute('data-arrangement-state'),
+        orderMissing: list.getAttribute('data-order-missing'),
+        attention: !!list.querySelector('.session-sidebar-attention'),
+        attentionText: (list.querySelector('.session-sidebar-attention__title') || {}).textContent || '',
+        notice: !!list.querySelector('.session-sidebar-notice'),
+        noticeText: (list.querySelector('.session-sidebar-notice__detail') || {}).textContent || '',
+        emptyState: !!list.querySelector('.session-sidebar-empty'),
+        noteText: (list.querySelector('.session-sidebar-note') || {}).textContent || '',
+        restartControls: list.querySelectorAll('[data-session-action="restart"]').length
+            + (/restart/i.test(list.innerHTML) ? 1 : 0),
+        live: (document.getElementById('session-sidebar-live') || {}).textContent || '',
+        pills: Array.prototype.slice.call(list.querySelectorAll('.family-pill')).map((p) => ({
+            cls: p.className,
+            text: p.textContent,
+            source: p.getAttribute('data-family-source'),
+            box: p.getBoundingClientRect().height,
+        })),
+        rows: rows.map((r) => {
+            const box = r.getBoundingClientRect();
+            return {
+                name: r.dataset.name,
+                pinned: r.dataset.pinned,
+                tabindex: r.getAttribute('tabindex'),
+                height: box.height,
+                top: box.top,
+                bottom: box.bottom,
+                pills: r.querySelectorAll('.family-pill').length,
+                badges: r.querySelectorAll('.session-sidebar-row-badge').length,
+                meta: r.querySelectorAll('.session-sidebar-row-meta').length,
+                grips: r.querySelectorAll('[data-grip-session]').length,
+                pins: r.querySelectorAll('[data-pin-session]').length,
+            };
+        }),
+        focused: document.activeElement && document.activeElement.dataset
+            ? (document.activeElement.dataset.name || null) : null,
+        bodyPinned: document.body.classList.contains('session-sidebar-pinned'),
+        screenPadLeft: getComputedStyle(document.querySelector('#launchpad-screen')).paddingLeft,
+    };
+};
+
+/**
+ * Description: focus one row by name so a real key event can be aimed at
+ *   it. Returns false when no such row is rendered, rather than silently
+ *   dispatching into nothing.
+ * Inputs: name (string). Output: boolean.
+ */
+window.__focusRow = function (name) {
+    const row = document.querySelector(`.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
+    if (!row) return false;
+    row.focus();
+    return document.activeElement === row;
+};
+
+/**
+ * Description: re-run the whole load path from scratch, the way a page
+ *   reload does - re-reading localStorage rather than reusing the
+ *   in-memory arrangement, which is the only version of "survives a
+ *   reload" worth asserting.
+ * Inputs: none. Output: Promise<void>.
+ */
+window.__reload = async function () {
+    window.SessionSidebarArrangement.load();
+    window.SessionSidebarDensity.init();
+    window.SessionSidebar._lastSig = null;
+    await window.SessionSidebar._fetchAndRender();
+};
+
+(async function boot() {
+    await mountRealMarkup();
+    window.SessionSidebar.show();
+    window.SessionSidebar.open();
+    await window.SessionSidebar._fetchAndRender();
+    window.__sidebarReady = true;
+})();
+</script>
+</body>
+</html>

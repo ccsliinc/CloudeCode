@@ -96,6 +96,20 @@ body.session-sidebar-pinned .screen {
     transition: padding-left 160ms ease;
 }
 
+/* THE HOME SCREEN NEEDS ITS OWN RULE, and it is not a duplicate.
+ * `#launchpad-screen` is an ID selector carrying `padding: 20px`, so it
+ * outranks the class-only rule above and the docked offset never reached
+ * the home screen: with the bar docked at 320px, the home screen's
+ * measured padding-left was still 20px and the bar simply covered the
+ * content. Found by measuring the box, not by reading the stylesheet -
+ * the generic rule is right there above and looks like it applies.
+ * The screen's own padding is a token so this can ADD to it rather than
+ * replace it, which is what keeps the content off the bar's border at
+ * every breakpoint instead of only at the one somebody hardcoded. */
+body.session-sidebar-pinned #launchpad-screen {
+    padding-left: calc(var(--sidebar-dock-w) + var(--screen-pad-x));
+}
+
 /* THE HEADER PAYS THE DOCK WIDTH *PLUS* ITS OWN SIDE PADDING.
  *
  * `.screen` can take the bare dock width because everything inside it
