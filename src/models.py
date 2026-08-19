@@ -1196,6 +1196,20 @@ class ThemeManifest(BaseModel):
         None,
         description="Optional filename of an effects.js module relative to the theme dir",
     )
+    themeCss: Optional[str] = Field(
+        None,
+        description=(
+            "Optional filename of a theme.css stylesheet relative to the theme "
+            "dir. The client never wires this up to a <link href> - all visual "
+            "theming ships through cssVars and effects.js instead, verified "
+            "2026-08-19 (removed dead client/css/themes/*/theme.css files and "
+            "the unused #theme-css <link> in client/index.html). This field is "
+            "kept only so a manifest that still declares one and does not ship "
+            "the file fails loudly in _load_manifest instead of the file being "
+            "silently dropped by response_model serialization - the same class "
+            "of bug that once ate every theme's audio block."
+        ),
+    )
     audio: Optional[ThemeAudioManifest] = Field(
         None,
         description="Optional background music block; absent means a silent theme",
