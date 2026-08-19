@@ -188,6 +188,14 @@
      * against the docked bar's border when that rule paid the sidebar
      * width alone. Restated per breakpoint below, same as --header-pad-y. */
     --header-pad-x: 20px;
+    /* Horizontal padding inside #launchpad-screen. A token rather than a
+     * literal because the docked-sidebar rule in session-sidebar.css has
+     * to ADD to it: `#launchpad-screen` is an ID selector and outranks
+     * `body.session-sidebar-pinned .screen`, so the generic docked rule
+     * lost to it and the home screen paid no layout for a pinned bar at
+     * all - the bar simply covered the content. Measured, not guessed:
+     * padding-left read back as 20px with the bar docked at 320px wide. */
+    --screen-pad-x: 20px;
     --header-border: 2px;
     /* HOME-HEADER-CONSOLIDATION: the launchpad's second header row
      * (`.home-subheader`) adds real height that fixed-position consumers
@@ -1171,7 +1179,7 @@ body.home-header-active {
 /* Launchpad screen styles */
 #launchpad-screen {
     flex-direction: column;
-    padding: 20px;
+    padding: var(--screen-pad-x);
 }
 
 .launchpad-container {

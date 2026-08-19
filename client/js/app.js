@@ -644,7 +644,18 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
-        if (window.SessionSidebar) window.SessionSidebar.hide();
+        // THE SIDEBAR IS AVAILABLE ON THE HOME SCREEN TOO, and pinnable
+        // there. It used to be hidden here, which meant a pinned bar
+        // vanished the moment you went home and (because hide() closed it
+        // and close() persisted '0') came back CLOSED on the next session.
+        // The home screen keeps its own project-to-session tree; this bar
+        // is the working set of sessions, not a project browser.
+        // `#launchpad-screen` already carries `.screen`, so the docked
+        // layout offset in session-sidebar.css applies here unchanged.
+        if (window.SessionSidebar) {
+            window.SessionSidebar.setActiveSession(null, null);
+            window.SessionSidebar.show();
+        }
         this.currentScreen = 'launchpad';
         // Leaving the terminal: drop the session theme so the launchpad
         // chrome renders under pure global-theme rules and so the next

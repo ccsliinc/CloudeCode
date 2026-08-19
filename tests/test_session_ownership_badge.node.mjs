@@ -143,6 +143,12 @@ function makeContext({ attachable, live }) {
 
 const launchpadSrc = read('client', 'js', 'launchpad.js');
 const sidebarSrc = read('client', 'js', 'session-sidebar.js');
+// The two-endpoint merge moved out of session-sidebar.js into its own
+// module (client/js/session-sidebar-fetch.js) when pinning, ordering and
+// density landed in the controller. The merge under test is the same
+// code; it just lives one file over, so the sandbox loads both. Its
+// ownership rule is unchanged and deliberately still asserted here.
+const sidebarFetchSrc = read('client', 'js', 'session-sidebar-fetch.js');
 
 /**
  * Run launchpad.js's /sessions merge for real and return its merged rows.
@@ -165,12 +171,15 @@ async function mergeLaunchpad(payloads) {
  */
 async function mergeSidebar(payloads) {
     const { context } = makeContext(payloads);
+    vm.runInContext(sidebarFetchSrc, context, { filename: 'session-sidebar-fetch.js' });
     vm.runInContext(sidebarSrc, context, { filename: 'session-sidebar.js' });
     const sb = context.window.SessionSidebar;
-    let captured = [];
-    sb.render = (rows) => { captured = rows; };
+    // Painting needs the whole row/arrangement stack; this test is about
+    // the MERGE, so the paint is stubbed and the merged rows are read off
+    // the controller where the fetch leaves them.
+    sb.repaint = () => {};
     await sb._fetchAndRender();
-    return captured;
+    return sb._rows;
 }
 
 const MERGES = [['launchpad.js', mergeLaunchpad], ['session-sidebar.js', mergeSidebar]];
