@@ -150,17 +150,31 @@ test('.btn-icon pins the round header icon controls to a control-size square', (
     assert.equal(decl(reset[0].body, 'height'), 'var(--control-size)');
 });
 
-test('.btn-icon is applied to exactly #configEditorBtn in the static markup', () => {
+test('.btn-icon is applied to exactly the two static buttons that need it', () => {
     // header-menu-toggle is built at runtime by header-menu.js, not
     // present in index.html, so it is not part of this static check.
     assert.match(indexHtml, /id="configEditorBtn"[^>]*class="btn-icon hidden"/,
         '#configEditorBtn should carry the btn-icon class');
-    // Nothing else in the static markup should carry it - every other
-    // button already owns its full box via its own class.
+    // #launchpad-help-btn JOINED THIS SET in fix/header-icons-and-menu, and
+    // the count below went 1 -> 2 for a real reason rather than to make a
+    // test pass. This rule replaced a bare `button {}` element reset that
+    // was deleted deliberately; the help button was written AFTER that
+    // deletion and opted into nothing, so it fell through to the
+    // user-agent stylesheet and painted as a near-white square (measured:
+    // background rgb(239, 239, 239), 2px outset border, border-radius 0).
+    // Adding the class is what makes it match its siblings again.
+    assert.match(indexHtml, /id="launchpad-help-btn"[^>]*class="btn-icon"/,
+        '#launchpad-help-btn should carry the btn-icon class');
+    // Nothing ELSE in the static markup should carry it - every other
+    // button already owns its full box via its own class. This is still an
+    // exact-set assertion, not a floor: a third one appearing means
+    // somebody styled a button by borrowing the header treatment instead
+    // of giving it its own, and that should be a deliberate edit here.
     const withClass = [...indexHtml.matchAll(/<button[^>]*class="([^"]*)"[^>]*>/g)]
         .filter((m) => m[1].split(/\s+/).includes('btn-icon'));
-    assert.equal(withClass.length, 1,
-        'btn-icon should be on exactly one static <button> (#configEditorBtn)');
+    assert.equal(withClass.length, 2,
+        'btn-icon should be on exactly two static <button>s '
+        + '(#configEditorBtn and #launchpad-help-btn)');
 });
 
 test('box-sizing is border-box, which is why the reset eats padding', () => {

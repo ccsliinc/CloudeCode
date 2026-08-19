@@ -207,6 +207,34 @@
                  real mark and skip re-writing it. -->
             <span id="header-icon" class="header-icon" aria-hidden="true"><img data-brand-icon src="/static/assets/icons/header-icon.png" srcset="/static/assets/icons/header-icon.png 1x, /static/assets/icons/header-icon@2x.png 2x" alt="" /></span>
             <span id="header-title-text">Cloude Code</span>
+            <!-- LAUNCHER HELP, BESIDE THE TITLE. Moved here out of
+                 `.controls` (see the note there). It toggles the SAME
+                 help div it always did - the <details> that is still the
+                 first child of `.launchpad-container`, still rendered by
+                 launchpad.js, still exactly where it was on screen. Only
+                 the control moved; the panel did not.
+                 WHY INSIDE THE h1 RATHER THAN A SIBLING OF IT: `#appTitle`
+                 is the flex box that `.header--home` centres, so a child
+                 of it rides that centring for free and stays glued to the
+                 title text at every width. A sibling would be centred
+                 independently and would drift away from the text as the
+                 title shrank.
+                 `flex-shrink: 0` in styles.css keeps it off the title's
+                 elision budget, and header-title-fit.js subtracts every
+                 non-shrinking element inside `#appTitle` from that budget
+                 (see its slotWidth()), so the text still middle-elides at
+                 the right width instead of being silently clipped.
+                 Carries `.btn-icon` - see the white-square note in
+                 styles.css. Home screen only, still gated on
+                 `.header--home` there, so no screen-switch code has to
+                 remember it. -->
+            <button type="button" id="launchpad-help-btn" class="btn-icon" aria-label="help" title="help" data-tooltip="Help" aria-expanded="false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
+                    <line x1="12" y1="17.5" x2="12" y2="17.5"/>
+                </svg>
+            </button>
             <!-- NO VERSION CHIP HERE ANY MORE. It moved to the home
                  screen's bottom bar (client/css/home-bar.css). It was a
                  fixed-width, flex-shrink: 0 sibling of the title, so every
@@ -263,22 +291,19 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <!-- LAUNCHER HELP, top right of the header. The panel it
-                 opens does NOT live here: it stays where it always was,
-                 the first child of .launchpad-container, rendered by
-                 launchpad.js. This is only the control. Home screen only,
-                 gated on .header--home in styles.css rather than by a
-                 class toggle in app.js, so no screen-switch code has to
-                 remember it. Same "?" glyph as the in-pane summary it
-                 replaces: viewBox 0 0 24 24, stroke-width 1.8 as a
-                 presentation attribute. -->
-            <button type="button" id="launchpad-help-btn" aria-label="help" title="help" data-tooltip="Help" aria-expanded="false">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="10"/>
-                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
-                    <line x1="12" y1="17.5" x2="12" y2="17.5"/>
-                </svg>
-            </button>
+            <!-- THE LAUNCHER HELP BUTTON IS NOT IN THIS ROW ANY MORE.
+                 It now sits inside #appTitle, immediately right of the
+                 title text - see there. It was moved out of .controls on
+                 purpose and must not be put back: .controls is the
+                 header's RIGHT flank, and .header--home sizes
+                 #header-home-spacer to mirror that flank's width so the
+                 title lands on the real centre. The flank token
+                 (--home-header-flank-w) budgets TWO inline controls
+                 (#configEditorBtn and the kebab #header-menu-toggle);
+                 a third inline child here on the home screen made the
+                 right flank wider than the spacer it was supposed to
+                 equal, which pushed the title off centre by half the
+                 difference. -->
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
                  never a header one - see .info near the end of this file

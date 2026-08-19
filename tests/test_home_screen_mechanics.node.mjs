@@ -179,18 +179,33 @@ await test('ITEM 42: the section is called "projects"', async () => {
 // ITEM 48 - the help CONTROL moves; the help PANEL does not.
 // =====================================================================
 
-await test('ITEM 48: the header carries the help control, in the right-hand controls cluster', async () => {
-    const controlsIdx = INDEX.indexOf('<div class="controls">');
+// SUPERSEDED BY ITEM 61b, and rewritten rather than deleted so the
+// history stays readable. This assertion used to require the help button
+// to be the LAST child of `.controls`, i.e. the top-right corner of the
+// header. The user revised that instruction: he wants the control beside
+// the centred title instead. The panel it toggles is unchanged and is
+// still asserted below, which was always the substantive half of item 48.
+//
+// The right-hand cluster is now explicitly asserted NOT to contain it,
+// because putting it back there is not merely a style regression: the
+// `.header--home` flank arithmetic sizes `#header-home-spacer` to mirror
+// `.controls`, and that token budgets TWO inline controls, so a third one
+// there pushes the title off centre.
+await test('ITEM 61b: the help control sits beside the title, not in the controls cluster', async () => {
     const btnIdx = INDEX.indexOf('id="launchpad-help-btn"');
-    assert.ok(controlsIdx !== -1 && btnIdx > controlsIdx,
-        'the help button must live inside the header controls cluster');
-    const closeIdx = INDEX.indexOf('</div>', INDEX.indexOf('NO CONNECTION LIGHT'));
-    assert.ok(btnIdx < closeIdx, 'and before that cluster closes');
-    const cluster = INDEX.slice(controlsIdx, closeIdx);
-    const order = ['id="logoutBtn"', 'id="settingsBtn"', 'id="configEditorBtn"', 'id="launchpad-help-btn"']
-        .map((s) => cluster.indexOf(s));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b),
-        'help is the last control, so it sits at the top RIGHT of the header');
+    assert.ok(btnIdx !== -1, 'the help button is gone entirely');
+
+    const h1 = INDEX.match(/<h1 id="appTitle">[\s\S]*?<\/h1>/);
+    assert.ok(h1, '#appTitle is gone');
+    assert.ok(h1[0].includes('id="launchpad-help-btn"'),
+        'the help button must be a child of #appTitle so it rides the title centring');
+    assert.ok(h1[0].indexOf('id="header-title-text"') < h1[0].indexOf('id="launchpad-help-btn"'),
+        'and must come after the title text, i.e. to its right');
+
+    const controls = INDEX.match(/<div class="controls">[\s\S]*?\n        <\/div>/);
+    assert.ok(controls, '.controls block is gone');
+    assert.ok(!controls[0].includes('id="launchpad-help-btn"'),
+        'the help button must NOT be back in the right-hand controls cluster');
 });
 
 await test('ITEM 48: the help panel is still the FIRST child of the launchpad container', async () => {
