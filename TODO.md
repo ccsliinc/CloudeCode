@@ -23,16 +23,16 @@ Let a cloudecode session launch against the local LM Studio box the same way `cl
 - `config.json` gains `providers.local_host` (default `192.168.1.167:1234`)
 
 ## Checklist
-- [ ] Backend: `local_host` on ProvidersConfig + getter (`src/config.py`)
-- [ ] Backend: `cldl` branch in `get_agent_command()` keyed on `provider == "local"`
-- [ ] Backend: `GET /api/v1/providers/local/models` proxy route, embeddings filtered
-- [ ] Backend: `provider` field on CreateSessionRequest + Session record
-- [ ] Client: local section in provider modal, live fetch, unreachable state
-- [ ] Client: `api.js` wrapper + pass `provider` on session create
-- [ ] pytest green
-- [ ] validator-agent confirms picker renders + local launch works
-- [ ] Commit on DEV
-- [ ] Bump `macOS/package.json`, `cd macOS && npm run package`, install DMG
+- [x] Backend: `local_host` on ProvidersConfig + getter (`src/config.py`)
+- [x] Backend: `cldl` branch in `get_agent_command()` keyed on `provider == "local"`
+- [x] Backend: `GET /api/v1/providers/local/models` proxy route, embeddings filtered
+- [x] Backend: `provider` field on CreateSessionRequest + Session record
+- [x] Client: local section in provider modal, live fetch, unreachable state
+- [x] Client: `api.js` wrapper + pass `provider` on session create
+- [x] pytest green
+- [x] validator-agent confirms picker renders + local launch works
+- [x] Commit on DEV
+- [x] Bump `macOS/package.json`, `cd macOS && npm run package`, install DMG
 - [ ] NOT DOING: rsync to PROD, public push, GitHub releases
 
 ## Sub-agent findings
