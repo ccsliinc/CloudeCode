@@ -2,6 +2,7 @@
 
 import os
 import json
+import logging
 import mimetypes
 import structlog
 import asyncio
@@ -87,13 +88,26 @@ To fix:
     _sys.exit(1)
 
 # Configure structlog
+#
+# wrapper_class is a FILTERING bound logger gated on settings.log_level
+# (default "INFO"). Before this, BoundLogger applied no level filter at
+# all - every logger.debug() call (e.g. idle_watcher.poll_suppressed,
+# emitted roughly once per second per open session) was printed
+# unconditionally, and under launchd that sink is launchd.log with no
+# rotation, so debug-level polling noise was the dominant contributor to
+# its growth. Filtering here keeps debug output available for local dev
+# (LOG_LEVEL=DEBUG in .env) while keeping the production sink to
+# info-and-above by default. Log FILE rotation itself is handled
+# separately, at the OS level, by newsyslog.d - see
+# scripts/launchd/newsyslog-cloude-code.conf.
+_structlog_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.add_log_level,
         structlog.processors.JSONRenderer()
     ],
-    wrapper_class=structlog.BoundLogger,
+    wrapper_class=structlog.make_filtering_bound_logger(_structlog_level),
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
 )
