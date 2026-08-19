@@ -145,6 +145,19 @@
     }
 
     /**
+     * True only while this module is dispatching its own synthetic
+     * mousedown. See handleMouseDown() for why this cannot be omitted.
+     */
+    var dispatching = false;
+
+    /**
+     * True between a mousedown this module forced into a local selection
+     * and the mouseup that ends it. See handleMouseUp() for why the up of
+     * a forced gesture must not reach xterm's report listener.
+     */
+    var forcedGesture = false;
+
+    /**
      * Replace a real mousedown with an equivalent synthetic one that
      * forces xterm's local-selection bypass, on both platforms.
      *
@@ -152,6 +165,11 @@
      * of this synchronous dispatch (xterm reads it synchronously inside
      * the event listener chain triggered by dispatchEvent) so this module
      * never permanently changes the option the user may have set.
+     *
+     * `dispatching` is raised for exactly the same window, and for the
+     * same reason: everything xterm does with this event happens INSIDE
+     * dispatchEvent(), synchronously, so a flag cleared in `finally` is
+     * cleared no earlier than the last listener that could see it.
      *
      * @param {object} term - an xterm.js Terminal instance.
      * @param {Element} screenEl - `.xterm-screen`, the node xterm's own
@@ -164,6 +182,7 @@
         var opts = term.options;
         var prevForce = opts.macOptionClickForcesSelection;
         opts.macOptionClickForcesSelection = true;
+        dispatching = true;
         try {
             screenEl.dispatchEvent(new MouseEvent('mousedown', {
                 bubbles: true,
@@ -178,6 +197,7 @@
                 altKey: true,
             }));
         } finally {
+            dispatching = false;
             opts.macOptionClickForcesSelection = prevForce;
         }
     }
@@ -186,11 +206,48 @@
      * Capture-phase mousedown handler. Intercepts and replaces only the
      * gestures that would otherwise be misinterpreted - see file header.
      *
+     * THE RE-ENTRANCY GUARD IS LOAD-BEARING, NOT DEFENSIVE POLISH.
+     *
+     * This listener is registered on `#terminal`, and the replacement is
+     * dispatched on `.xterm-screen`, a DESCENDANT of it, with
+     * `bubbles: true`. The capture phase runs from the window DOWN to the
+     * target, so `#terminal` sits on the synthetic event's capture path
+     * too. Without this guard the handler therefore re-enters on its own
+     * replacement, calls `stopPropagation()` on it, and dispatches
+     * another one - so the forced mousedown NEVER reaches xterm's
+     * SelectionService, and the gesture recurses instead.
+     *
+     * That is not a theory. Measured 2026-08-19 against a live
+     * `tui: fullscreen` claude 2.1.199 on the alternate screen, scrolled
+     * into the transcript view (`detectState() === 'transcript'`,
+     * `isScrolledUp() === true`, `areMouseEventsActive === true`), with
+     * listeners spying on every stage of the path: ONE real mousedown
+     * produced FORTY-FOUR synthetic `mousedown` events at `#terminal`,
+     * every one of them `isTrusted: false`, `shiftKey: true`,
+     * `altKey: true`, `defaultPrevented: true` - and ZERO events at
+     * `.xterm-screen`, ZERO calls to `SelectionService.shouldForceSelection`
+     * and ZERO calls to `SelectionService._onMouseDown`. `getSelection()`
+     * came back empty and `hasSelection()` was false.
+     *
+     * This is why the v2 fix measured correct and behaved broken: its
+     * gate was firing exactly as designed. The gate was never the
+     * problem. The replacement event was being eaten by the very handler
+     * that created it, one layer below where anyone was looking.
+     *
+     * The guard is a flag rather than an `isTrusted` test on purpose.
+     * `isTrusted === false` would also reject touch-select.js's
+     * long-press synthesis, which is a legitimate caller that needs this
+     * same forcing on a phone. The flag is true for exactly the window in
+     * which WE are dispatching, and for nothing else.
+     *
      * @param {object} term - an xterm.js Terminal instance.
-     * @param {MouseEvent} ev - the real, trusted mousedown.
+     * @param {MouseEvent} ev - the mousedown, real or synthetic.
      * @returns {void}
      */
     function handleMouseDown(term, ev) {
+        // Our own replacement, on its way down to xterm. Touching it here
+        // is the whole bug: let it through untouched.
+        if (dispatching) return;
         if (!term || !ev || ev.button !== 0) return;
         if (!areMouseEventsActive(term)) return; // normal path already works
         if (!isScrolledUp(term)) return;         // live bottom: leave the app in control
@@ -198,7 +255,152 @@
         if (!screenEl) return;
         ev.preventDefault();
         ev.stopPropagation();
+        forcedGesture = true;
         dispatchForcedMouseDown(term, screenEl, ev);
+    }
+
+    /**
+     * Capture-phase mouseup handler for a gesture this module forced.
+     *
+     * WHY THE UP MATTERS AS MUCH AS THE DOWN.
+     *
+     * xterm gives the DOWN an escape hatch and the UP none. Its own
+     * mousedown listener reads
+     * `areMouseEventsActive && !shouldForceSelection(e)` before reporting,
+     * so a forced mousedown is correctly NOT sent, and the document-level
+     * drag/up report listeners are only attached inside that same
+     * branch - so they are never attached for a forced gesture either.
+     * But the protocol-change handler ALSO binds a STANDING `mouseup`
+     * listener on `term.element` whenever the active protocol carries UP
+     * events, and that one consults nothing at all. It reports every
+     * mouseup unconditionally.
+     *
+     * `CoreMouseService.triggerMouseEvent` sends through
+     * `CoreService.triggerDataEvent(encoded, true)` - user input - and
+     * `SelectionService`'s constructor registers
+     * `this._coreService.onUserInput(() => this.hasSelection && this.clearSelection())`.
+     * So that one unconditional report DESTROYS the selection the drag
+     * just finished making.
+     *
+     * Measured 2026-08-19 on a live fullscreen claude in the transcript
+     * view, sampling the selection model at each stage of one drag:
+     *
+     *   MODEL@down  start=[10,6] end=null            termSel=""
+     *   MODEL@mid   start=[10,6] end=[20,6]          termSel="HLV3MARKER"
+     *   MODEL@end   start=[10,6] end=[30,6]          termSel="HLV3MARKER%03g-alpha"
+     *   MODEL@up    start=null   end=null            termSel=""
+     *
+     * The selection was built perfectly, at exactly the pressed
+     * coordinates, and then wiped on release. The stack captured at the
+     * wipe named the mechanism outright:
+     * `CoreMouseService.triggerMouseEvent -> CoreService.triggerDataEvent
+     * -> EventEmitter.fire -> SelectionService.clearSelection`.
+     *
+     * WHY A RE-DISPATCH ONTO `document` AND NOT JUST stopPropagation().
+     *
+     * The two listeners that must be separated sit at different nodes:
+     * xterm's report listener is on `term.element`, and
+     * SelectionService's own mouseup is on `document` (attached by
+     * `_addMouseDownListeners`). Cancelling propagation at `#terminal` in
+     * the capture phase stops the event before `term.element` - which is
+     * what we want - but it also stops it ever bubbling back up to
+     * `document`, which would starve SelectionService of the mouseup that
+     * calls `_removeMouseDownListeners()`. Its document mousemove handler
+     * would stay attached and the selection would keep following the
+     * pointer after release.
+     *
+     * Re-dispatching on `document` separates them cleanly with no vendor
+     * patching: an event dispatched AT `document` has `document` as its
+     * whole propagation path, so SelectionService's listener runs and
+     * `term.element` - a descendant, not an ancestor - is never on the
+     * path and never reports.
+     *
+     * @param {MouseEvent} ev - the real mouseup.
+     * @returns {void}
+     */
+    function handleMouseUp(ev) {
+        if (!forcedGesture) return;
+        forcedGesture = false;
+        if (!ev) return;
+        ev.stopPropagation();
+        document.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: false,
+            cancelable: true,
+            view: window,
+            button: ev.button,
+            buttons: 0,
+            detail: ev.detail || 1,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+        }));
+    }
+
+    /**
+     * Capture-phase mousemove handler that protects a finished selection.
+     *
+     * WHY A FINISHED SELECTION IS NOT YET A SAFE SELECTION.
+     *
+     * claude turns on `?1003h` - ANY-motion tracking - so xterm reports
+     * every pointer move over the terminal, button or no button. Each of
+     * those reports is `triggerDataEvent(..., true)`, each one is user
+     * input, and user input clears the selection (see handleMouseUp for
+     * the full chain). So fixing the mouseup alone buys a selection that
+     * survives release and then dies on the very next twitch of the
+     * mouse - which is indistinguishable, to the person using it, from
+     * the selection never having worked.
+     *
+     * Measured 2026-08-19, immediately after the mouseup fix landed and
+     * before this one, on the same live fullscreen claude:
+     *
+     *   MODEL@up         start=[10,6] end=[30,6]  termSel="HLV3MARKER%03g-alpha"
+     *   MODEL@aftermove  start=null   end=null    termSel=""
+     *
+     * One pointer move, and the finished selection was gone. Worth
+     * stating plainly because it is the trap this whole exercise keeps
+     * falling into: an automated drag that never moves the pointer
+     * afterwards reports PASS on that state. A human never does that.
+     *
+     * THE GATE IS DELIBERATELY NARROW. Motion is suppressed only when all
+     * of these hold, so the blast radius is exactly the broken case:
+     *
+     *   - a gesture is NOT in flight. During the drag itself xterm's own
+     *     standing mousemove handler is `e.buttons || send(e)` and
+     *     already declines to report while a button is held, so there is
+     *     nothing to suppress - and suppressing anyway would starve
+     *     SelectionService's document-level mousemove and stop the drag
+     *     from extending.
+     *   - the terminal actually HAS a selection. With nothing to protect
+     *     this does nothing at all, so claude's hover UI in the
+     *     transcript behaves exactly as before until the user selects.
+     *   - the view is scrolled away from the live bottom. This is the
+     *     module's founding premise: a screen-relative mouse report
+     *     cannot mean what the application thinks it means while the user
+     *     is looking at scrollback, so withholding it costs the
+     *     application nothing it could have used correctly.
+     *   - mouse tracking is on. Otherwise the normal path already works.
+     *
+     * There is no deadlock: the state is left by the user's next
+     * mousedown, which is not suppressed and which replaces or clears the
+     * selection in the ordinary way.
+     *
+     * @param {object} term - an xterm.js Terminal instance.
+     * @param {MouseEvent} ev - the real mousemove.
+     * @returns {void}
+     */
+    function handleMouseMove(term, ev) {
+        if (forcedGesture) return;
+        if (!term || !ev) return;
+        if (!areMouseEventsActive(term)) return;
+        var has = false;
+        try {
+            has = !!(typeof term.hasSelection === 'function' && term.hasSelection());
+        } catch (err) {
+            console.warn('TerminalSelectScrolled: selection read failed', err);
+            return;
+        }
+        if (!has) return;
+        if (!isScrolledUp(term)) return;
+        ev.stopPropagation();
     }
 
     /**
@@ -219,18 +421,48 @@
         container.addEventListener('mousedown', function (ev) {
             handleMouseDown(termGetter(), ev);
         }, { capture: true });
+        container.addEventListener('mouseup', function (ev) {
+            handleMouseUp(ev);
+        }, { capture: true });
+        container.addEventListener('mousemove', function (ev) {
+            handleMouseMove(termGetter(), ev);
+        }, { capture: true });
     }
 
     /** Test seam: reset module state between assertions. */
     function _reset() {
         wired = false;
+        dispatching = false;
+        forcedGesture = false;
+    }
+
+    /**
+     * Test seam: is the re-entrancy guard currently raised?
+     *
+     * @returns {boolean} true only inside dispatchForcedMouseDown().
+     */
+    function _isDispatching() {
+        return dispatching;
+    }
+
+    /**
+     * Test seam: is a forced gesture currently in flight?
+     *
+     * @returns {boolean} true between a forced mousedown and its mouseup.
+     */
+    function _isForcedGesture() {
+        return forcedGesture;
     }
 
     window.TerminalSelectScrolled = {
         init: init,
         handleMouseDown: handleMouseDown,
+        handleMouseUp: handleMouseUp,
+        handleMouseMove: handleMouseMove,
         areMouseEventsActive: areMouseEventsActive,
         isScrolledUp: isScrolledUp,
-        _reset: _reset
+        _reset: _reset,
+        _isDispatching: _isDispatching,
+        _isForcedGesture: _isForcedGesture
     };
 })();
