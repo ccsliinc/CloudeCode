@@ -293,6 +293,13 @@ test('terminal.js wires TerminalSelectScrolled from initTerminal', () => {
     const body = terminalSrc.slice(at, at + 500);
     assert.match(body, /window\.TerminalSelectScrolled\.init\(/,
         'the hook must actually call TerminalSelectScrolled.init');
+    // Asserting only that the CALL TEXT is present lets a disabled call
+    // site pass: `if (false) window.TerminalSelectScrolled.init(...)`
+    // still matches the line above, and a mutation that did exactly that
+    // survived this suite. The guard must be the module's own presence.
+    assert.match(body, /if\s*\(\s*window\.TerminalSelectScrolled\s*\)\s*window\.TerminalSelectScrolled\.init\(/,
+        'the call must be guarded on the module being loaded, and on nothing else - '
+        + 'a constant-false guard disables the whole feature while still reading as wired');
 });
 
 test('index.html loads terminal-select-scrolled.js after terminal-scroll.js, before terminal.js', () => {
@@ -305,6 +312,264 @@ test('index.html loads terminal-select-scrolled.js after terminal-scroll.js, bef
         'it reads window.TerminalScroll.isPinnedToBottom() and must load after it');
     assert.ok(selectScrolled < term,
         'terminal.js calls it from initTerminal() and must load after it');
+});
+
+/* ================= 5. the three defects found in the REAL app ================= */
+//
+// READ THIS BEFORE TRUSTING ANYTHING ABOVE.
+//
+// Every assertion in sections 1-4 passed while the feature was completely
+// broken in the running application, three separate times. They passed
+// because the fake `screenEl.dispatchEvent` above is a RECORDER: it drops
+// the synthetic event into an array and returns. A real browser does not
+// do that. It runs the synthetic event down the real capture path - and
+// `#terminal`, where this module's own listener lives, IS on that path,
+// because `.xterm-screen` is its descendant.
+//
+// So the module re-entered on its own replacement, cancelled it, and
+// dispatched another one; the forced mousedown never reached xterm at all.
+// The recorder could not express that, so it reported success.
+//
+// The three defects, all measured 2026-08-19 against a live `tui:
+// fullscreen` claude 2.1.199 on the alternate screen, scrolled into its
+// transcript view (detectState 'transcript', isScrolledUp true,
+// areMouseEventsActive true):
+//
+//   1. RE-ENTRANCY. One real mousedown produced 44 synthetic mousedowns at
+//      `#terminal` and ZERO events at `.xterm-screen`. getSelection() was
+//      empty.
+//   2. THE MOUSEUP IS REPORTED ANYWAY. xterm gives the DOWN a
+//      `shouldForceSelection` escape hatch and binds a STANDING mouseup
+//      report listener that consults nothing. That report is user input,
+//      and SelectionService clears the selection on user input. Sampled
+//      across one drag: MODEL@end held "HLV3MARKER%03g-alpha", MODEL@up
+//      held null/null.
+//   3. THE FIRST POINTER MOVE AFTER RELEASE KILLS IT. claude enables
+//      ?1003h any-motion tracking, so every move is a report and every
+//      report is user input. MODEL@up held the selection; MODEL@aftermove
+//      was empty again.
+//
+// The tests below use a dispatcher that RE-ENTERS, so defect 1 makes them
+// fail rather than pass. That property is the point of this section.
+
+/**
+ * Build the module with a dispatcher that behaves like a real browser:
+ * the synthetic mousedown is fed back through handleMouseDown, exactly as
+ * the capture-phase listener on `#terminal` would see it.
+ *
+ * @param {{pinned: boolean, mouseActive: boolean, altScreenState?: string,
+ *          hasSelection?: boolean}} state - terminal state to simulate.
+ * @returns {{api: object, term: object, dispatched: object[],
+ *            docEvents: object[]}} the module plus every event it produced.
+ */
+function loadModuleReentrant(state) {
+    const dispatched = [];
+    const docEvents = [];
+    const holder = {};
+    const screenEl = {
+        dispatchEvent(ev) {
+            dispatched.push(ev);
+            // THE REAL BROWSER DOES THIS. #terminal is an ancestor of
+            // .xterm-screen, so its capture listener sees this event too.
+            holder.api.handleMouseDown(holder.term, ev);
+            return true;
+        },
+    };
+    const term = {
+        options: { macOptionClickForcesSelection: false },
+        rows: 24,
+        _core: { coreMouseService: { areMouseEventsActive: state.mouseActive } },
+        element: { querySelector: (sel) => (sel === '.xterm-screen' ? screenEl : null) },
+        hasSelection: () => !!state.hasSelection,
+    };
+    const windowObj = { TerminalScroll: { isPinnedToBottom: () => state.pinned } };
+    if (state.altScreenState !== undefined) {
+        windowObj.AltScreenScroll = { detectState: () => state.altScreenState };
+    }
+    const sandbox = {
+        window: windowObj,
+        document: { dispatchEvent(ev) { docEvents.push(ev); return true; } },
+        console: { warn() {}, log() {} },
+        MouseEvent: FakeMouseEvent,
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+    holder.api = sandbox.window.TerminalSelectScrolled;
+    holder.term = term;
+    return { api: holder.api, term, dispatched, docEvents };
+}
+
+/** A recording mouseup, shaped like the real event the browser delivers. */
+function realMouseUp(overrides) {
+    let stopped = false;
+    return Object.assign({
+        button: 0, buttons: 0, detail: 1, clientX: 42, clientY: 77,
+        stopPropagation() { stopped = true; },
+        get propagationStopped() { return stopped; },
+    }, overrides);
+}
+
+/** A recording mousemove, shaped like the real event the browser delivers. */
+function realMouseMove(overrides) {
+    let stopped = false;
+    return Object.assign({
+        button: 0, buttons: 0, clientX: 100, clientY: 120,
+        stopPropagation() { stopped = true; },
+        get propagationStopped() { return stopped; },
+    }, overrides);
+}
+
+test('DEFECT 1: the synthetic mousedown is dispatched EXACTLY once, not recursively', () => {
+    const { api, term, dispatched } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    api.handleMouseDown(term, realMouseDown());
+    assert.equal(dispatched.length, 1,
+        'without the re-entrancy guard this recurses - measured at 44 synthetic events '
+        + 'for one real click, with zero of them ever reaching xterm');
+});
+
+test('DEFECT 1: the replacement reaches xterm uncancelled', () => {
+    const { api, term, dispatched } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    api.handleMouseDown(term, realMouseDown());
+    const synth = dispatched[0];
+    assert.equal(synth.propagationStopped, undefined,
+        'the module must not call stopPropagation on its own replacement - doing so is '
+        + 'exactly what stopped SelectionService from ever seeing the forced mousedown');
+    assert.equal(synth.shiftKey, true);
+    assert.equal(synth.altKey, true);
+});
+
+test('DEFECT 1: the guard is lowered again once dispatch returns', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    api.handleMouseDown(term, realMouseDown());
+    assert.equal(api._isDispatching(), false,
+        'a guard left raised would swallow every subsequent click');
+});
+
+test('DEFECT 2: the mouseup of a forced gesture is withheld from xterm', () => {
+    const { api, term, docEvents } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    api.handleMouseDown(term, realMouseDown());
+    assert.equal(api._isForcedGesture(), true, 'the gesture must be marked in flight');
+    const up = realMouseUp();
+    api.handleMouseUp(up);
+    assert.equal(up.propagationStopped, true,
+        'xterm binds a STANDING mouseup report listener with no force-selection check; '
+        + 'letting it fire sends a report, and a report is user input, and user input '
+        + 'clears the selection the drag just made');
+    assert.equal(docEvents.length, 1,
+        'SelectionService listens on document and still needs the mouseup, or its '
+        + 'document mousemove handler is never removed and the selection keeps '
+        + 'following the pointer after release');
+    assert.equal(docEvents[0].type, 'mouseup');
+    assert.equal(docEvents[0].clientX, 42);
+    assert.equal(docEvents[0].clientY, 77);
+    assert.equal(api._isForcedGesture(), false, 'the gesture must be marked finished');
+});
+
+test('DEFECT 2: a mouseup with no forced gesture in flight is left completely alone', () => {
+    const { api, docEvents } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'live',
+    });
+    const up = realMouseUp();
+    api.handleMouseUp(up);
+    assert.equal(up.propagationStopped, false,
+        'an ordinary click on a live app must reach that app');
+    assert.equal(docEvents.length, 0, 'and must not be duplicated onto document');
+});
+
+test('DEFECT 3: motion is withheld while a selection exists in a scrolled transcript', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript', hasSelection: true,
+    });
+    const mv = realMouseMove();
+    api.handleMouseMove(term, mv);
+    assert.equal(mv.propagationStopped, true,
+        'claude enables ?1003h, so an unsuppressed move is a report, and the report '
+        + 'clears the finished selection on the very next twitch of the mouse');
+});
+
+test('DEFECT 3: motion is NOT withheld when there is no selection to protect', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript', hasSelection: false,
+    });
+    const mv = realMouseMove();
+    api.handleMouseMove(term, mv);
+    assert.equal(mv.propagationStopped, false,
+        'with nothing to protect this must do nothing, so claude\'s own hover UI in the '
+        + 'transcript behaves exactly as it did before');
+});
+
+test('DEFECT 3: motion is NOT withheld at the live bottom, even with a selection', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'live', hasSelection: true,
+    });
+    const mv = realMouseMove();
+    api.handleMouseMove(term, mv);
+    assert.equal(mv.propagationStopped, false,
+        'a live view is exactly the case where the app\'s own mouse handling is correct '
+        + 'and must not be interfered with - vim and htop live here');
+});
+
+test('DEFECT 3: motion is NOT withheld mid-drag, or the drag could not extend', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript', hasSelection: true,
+    });
+    api.handleMouseDown(term, realMouseDown());
+    const mv = realMouseMove({ buttons: 1 });
+    api.handleMouseMove(term, mv);
+    assert.equal(mv.propagationStopped, false,
+        'SelectionService extends the selection from its own document-level mousemove; '
+        + 'cancelling propagation during the drag would starve it. xterm already '
+        + 'declines to report a move while a button is held, so there is nothing to '
+        + 'suppress here anyway');
+});
+
+test('DEFECT 3: motion is NOT withheld when mouse tracking is off', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: false, mouseActive: false, hasSelection: true,
+    });
+    const mv = realMouseMove();
+    api.handleMouseMove(term, mv);
+    assert.equal(mv.propagationStopped, false,
+        'no tracking means no report means nothing that could clear the selection');
+});
+
+test('a term whose hasSelection() throws fails closed rather than swallowing motion', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript', hasSelection: true,
+    });
+    term.hasSelection = () => { throw new Error('renderer gone'); };
+    const mv = realMouseMove();
+    assert.doesNotThrow(() => api.handleMouseMove(term, mv));
+    assert.equal(mv.propagationStopped, false);
+});
+
+test('init wires all three capture-phase listeners on the container', () => {
+    const { api, term } = loadModuleReentrant({
+        pinned: true, mouseActive: true, altScreenState: 'transcript',
+    });
+    api._reset();
+    const wired = [];
+    const container = {
+        id: 'terminal',
+        addEventListener(type, fn, opts) { wired.push({ type, capture: !!(opts && opts.capture) }); },
+    };
+    api.init(container, () => term);
+    const types = wired.map((w) => w.type).sort();
+    assert.deepEqual(types, ['mousedown', 'mousemove', 'mouseup'],
+        'all three stages of the gesture must be handled - the down alone was the '
+        + 'incomplete fix that shipped twice');
+    assert.ok(wired.every((w) => w.capture),
+        'every one must be capture-phase: the whole point is to run before xterm\'s '
+        + 'own listeners on the descendant .xterm element');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

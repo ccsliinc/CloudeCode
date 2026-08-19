@@ -8,17 +8,29 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/client/js/altscreen-scroll.js"
+# The per-gesture row cap USED to live in altscreen-scroll.js and now lives
+# in altscreen-keys.js, which decomposes a distance into PageUp/PageDown
+# plus arrows. This suite kept mutating the old location, so its cap check
+# reported "target moved" and the whole run exited non-zero for a reason
+# that had nothing to do with the code under test. A mutation suite that is
+# permanently red is furniture: people stop reading it, and it stops
+# killing anything. Both files are mutable here so the cap is checked where
+# it actually is.
+KEYS="$ROOT/client/js/altscreen-keys.js"
 BAK="$(mktemp)"
+BAK_KEYS="$(mktemp)"
 cp "$SRC" "$BAK"
-trap 'cp "$BAK" "$SRC"; rm -f "$BAK"' EXIT
+cp "$KEYS" "$BAK_KEYS"
+trap 'cp "$BAK" "$SRC"; cp "$BAK_KEYS" "$KEYS"; rm -f "$BAK" "$BAK_KEYS"' EXIT
 
 survived=0
 
-# mutate <name> <python-expression-on-text>
+# mutate <name> <python-expression-on-text> [file, default altscreen-scroll.js]
 mutate() {
-  local name="$1" py="$2"
+  local name="$1" py="$2" target="${3:-$SRC}"
   cp "$BAK" "$SRC"
-  python3 - "$SRC" "$py" <<'PY'
+  cp "$BAK_KEYS" "$KEYS"
+  python3 - "$target" "$py" <<'PY'
 import sys
 path, expr = sys.argv[1], sys.argv[2]
 text = open(path, encoding='utf-8').read()
@@ -67,8 +79,18 @@ mutate "arrows ride along in the same write as the toggle" \
 mutate "exitTranscript toggles blind" \
   "if (detectState(term) !== 'transcript') return false;||=>||if (false) return false;"
 
-mutate "per-gesture arrow cap removed" \
-  "var n = Math.min(Math.abs(rows), MAX_ROWS_PER_GESTURE);||=>||var n = Math.abs(rows);"
+mutate "per-gesture row cap removed (now enforced in altscreen-keys.js)" \
+  "var n = Math.min(Math.abs(Math.trunc(rows)), cap);||=>||var n = Math.abs(Math.trunc(rows));" \
+  "$KEYS"
+
+# NOT MUTATED, deliberately: replacing the `maxRows` argument with the
+# MAX_ROWS default is an EQUIVALENT MUTANT here. altscreen-scroll.js's
+# MAX_ROWS_PER_GESTURE and altscreen-keys.js's MAX_ROWS are both 240, and
+# that is the only production caller, so honouring the argument and
+# ignoring it are observationally identical. It was tried, it survived, and
+# the correct response was to delete the mutation rather than invent a test
+# for a distinction the product does not make. If a second caller ever
+# passes a different cap, add it back - it stops being equivalent that day.
 
 mutate "prompt frame accepts one rule instead of two" \
   "if (isRule(rows[j]) && isPromptLine(rows[j + 1]) && isRule(rows[j + 2])) {||=>||if (isPromptLine(rows[j + 1])) {"
