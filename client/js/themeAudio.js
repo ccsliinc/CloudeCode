@@ -2,54 +2,55 @@
  * ThemeAudio - per-theme background music.
  *
  * Ships dormant: nothing plays until a theme manifest carries an `audio`
- * block AND the user opts the session in from the session editor FAB
- * menu ("play music"), which is also the user gesture browsers require.
+ * block AND the global audio control (client/js/globalAudioToggle.js, in
+ * the bottom bar) is on, which is also the user gesture browsers require.
  * The manifest block is src, srcFallback, volume and fadeMs; the
- * authoritative definition is ThemeAudioManifest in src/models.py, because
- * that model decides which fields survive the API.
+ * authoritative definition is ThemeAudioManifest in src/models.py.
  *
  * FORMAT ORDER IS FIXED, m4a first: iOS returns "probably" for Ogg Vorbis
  * from canPlayType and then fails to decode it, so the fallback is driven
- * by a real load ERROR rather than a capability probe. The measurements
- * are in ThemeAudioNode.candidates() in themeAudioNode.js.
+ * by a real load ERROR, not a capability probe - see
+ * ThemeAudioNode.candidates() in themeAudioNode.js.
  *
  * GAIN BUDGET (read before lowering any of these numbers). The clips are
  * loudnorm'd to about -24 LUFS. The master and the per-theme volume
  * MULTIPLY: the original 0.28 x 0.3 was a linear gain of 0.084, roughly
  * -45 LUFS at the speaker and inaudible on a phone. The master now
  * defaults to 1.0 and manifests carry 0.45..0.60. A THIRD multiplier, the
- * element's own `.volume`, attenuates UPSTREAM of the Web Audio graph -
- * see ThemeAudioNode.makeNode() for the measurement.
+ * element's own `.volume`, attenuates UPSTREAM of the graph - see
+ * ThemeAudioNode.makeNode().
  *
- * `src` MUST be same-origin. src/main.py declares no `media-src`, so media
- * falls back to `default-src 'self'` and any remote URL is blocked.
+ * `src` MUST be same-origin: src/main.py declares no `media-src`, so media
+ * falls back to `default-src 'self'`, and any remote URL is blocked.
  *
- * ONE GATE, AND IT IS SESSION-SCOPED. Sound requires a tmux session to be
- * in scope AND that session to have opted into music from the session
- * editor FAB. Both halves live in a single expression, `_gateOpen()`.
+ * ONE GATE. Sound requires a tmux session to be in scope AND the `on`
+ * half to be true, in a single expression, `_gateOpen()`. `sessionName`
+ * is per-session (attach/detach set/clear it, not a user control);
+ * `sessionOn` now comes from ONE global on/off (globalAudioToggle.js)
+ * instead of a per-session stored choice - setSessionAudio()'s contract
+ * did not change, only who calls it, and with what.
  *
- * There used to be a SECOND gate in front of it: an app sound master
- * switch in the header kebab, persisted and defaulting to OFF, which
- * outranked every per-session control. Two controls each able to veto the
- * other is why this feature stayed silent through five fixes, so it was
- * deleted and its stored key is dropped by the settings migration
- * (themeAudioSettings.js, v2 -> v3). Do not reintroduce an app-scoped mute.
+ * READ BEFORE CHANGING EITHER FILE AGAIN: this used to warn against
+ * reintroducing an app-scoped mute, which is literally what the global
+ * toggle is. That warning was never really about scope - the bug was TWO
+ * independently stored booleans (an old master switch AND a per-session
+ * opt-in) each able to veto the other silently, five silent-audio bugs'
+ * worth. Both eras have exactly one stored boolean; a second one
+ * anywhere here reintroduces the real bug.
  *
- * NO AUDIO ON THE HOME SCREEN, by construction rather than by a mute:
- * with no session in scope `sessionName` is null and `_gateOpen()` is
- * false whatever the opt-in flag says.
+ * NO AUDIO ON THE HOME SCREEN, by construction rather than a mute: with
+ * no session in scope `sessionName` is null and `_gateOpen()` is false.
  *
  * Public surface (singleton on window.ThemeAudio): init(), setTheme(cfg|null)
  * from the themes registry, setSessionAudio(name, on) / isSessionEnabled() /
  * getSessionName() for the gate, isMuted(), getLastPlayError(), getStatus()
- * for diagnosis, and getVolume()/setVolume()/getMinVolume(), which the
- * settings slider (settings-audio.js) drives and themeAudioVolume.js
- * owns - an ATTENUATOR, floored above zero, never an on/off.
+ * for diagnosis, and getVolume()/setVolume()/getMinVolume() (settings-audio.js
+ * drives it, themeAudioVolume.js owns it) - an ATTENUATOR, floored above
+ * zero, never an on/off.
  *
  * Persistence and the upgrade migration live in themeAudioSettings.js. A
- * `cloude:audio-state` CustomEvent fires on `document` whenever either gate
- * changes, so the header button repaints when something other than its own
- * click moved the state.
+ * `cloude:audio-state` CustomEvent fires on `document` on any gate change,
+ * so globalAudioToggle.js repaints on changes its own click did not cause.
  *
  * Engine: MediaElementAudioSourceNode -> GainNode -> destination, for clean
  * linearRampToValueAtTime crossfades; a requestAnimationFrame ramp is the
@@ -59,18 +60,17 @@
  * unmuted) because browsers do not universally pause backgrounded tabs.
  * setTheme() only preloads, never plays; the AudioContext is built by
  * makeNode() outside any gesture so it starts suspended, and the first
- * unmute resumes it from inside the gesture.
+ * unmute resumes it from the gesture.
  *
  * WHERE THE MANIFEST COMES FROM, and why this module was dead code until
- * 2026-08-16. setTheme() is fed from GET /api/v1/themes, NOT from
- * theme.json on disk, and that endpoint's Pydantic response_model dropped
- * the `audio` block, so this module received null for every theme and
- * correctly played nothing. If sound disappears again, check the API
- * payload before anything in here.
+ * 2026-08-16. setTheme() is fed from GET /api/v1/themes, NOT theme.json on
+ * disk, and that endpoint's Pydantic response_model dropped the `audio`
+ * block, so this module received null for every theme and correctly played
+ * nothing. If sound disappears again, check the API payload first.
  *
  * REPORTING FAILURE. Every audio bug this feature has shipped was silent.
- * getStatus() exposes the raw facts and themeAudioStatus.js turns them into
- * the sentence the music control shows the user.
+ * getStatus() exposes the raw facts; themeAudioStatus.js turns them into
+ * the sentence the audio control shows the user.
  */(function () {
     'use strict';
 
@@ -84,11 +84,11 @@
     var Volume = window.ThemeAudioVolume;
     // ---- State ----
     var initialized = false;
-    // The session in scope, or null on the home screen. In-memory:
-    // session-theme-menu.js sets it on attach and clears it on leave.
+    // The session in scope, or null on the home screen. In-memory, set by
+    // app.js's screen transitions via Themes.setActiveSession.
     var sessionName = null;
-    // The in-scope session's music opt-in. In-memory; session-theme-menu.js
-    // owns the persisted per-session key.
+    // The global audio on/off, applied to the session in scope. In-memory;
+    // globalAudioToggle.js owns the one persisted key.
     var sessionOn = false;
     // Derived from the gate below - never assigned directly.
     var muted = true;
@@ -333,20 +333,20 @@
     }
 
     /**
-     * Set the one gate: which session is in scope, and whether it opted
-     * into music. MUST be called from a user-gesture handler the FIRST
-     * time it turns sound on - that is the only way the autoplay grant
-     * reaches the AudioContext.
+     * Set the one gate: which session is in scope, and whether audio is
+     * on. MUST be called from a user-gesture handler the FIRST time it
+     * turns sound on - that is the only way the autoplay grant reaches
+     * the AudioContext.
      *
-     * Not persisted here: session-theme-menu.js owns the per-session key,
-     * because it is the thing that knows what a session is.
-     *
-     * A null name is how the home screen is expressed. It is not a mute:
-     * nothing is in scope for music to belong to, so the gate cannot open
-     * whatever `on` says.
+     * Not persisted here: globalAudioToggle.js owns the one stored key
+     * (cloude.audio.enabled) and calls this on every session change too,
+     * not only on a user tap - see that file's syncForSession(). A null
+     * name is how the home screen is expressed, not a mute: nothing is
+     * in scope for music to belong to, so the gate stays closed whatever
+     * `on` says.
      *
      * @param {string|null} name - the tmux session in scope, or null.
-     * @param {boolean} on - true if that session opted into music.
+     * @param {boolean} on - the global audio on/off.
      * @returns {boolean} the new EFFECTIVE muted state.
      */
     function setSessionAudio(name, on) {

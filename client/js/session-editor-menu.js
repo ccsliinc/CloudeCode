@@ -1,10 +1,18 @@
 /**
  * Session editor - everything that acts on THIS SESSION.
  * ----------------------------------------------------------------------
- * THREE ROWS: session theme, session music, detach session. None of them
- * moves content; all of them act on the session you are looking at. That
- * is the distinction from the terminal tools menu, whose three rows all
- * move content across the terminal's boundary.
+ * TWO ROWS: session theme, detach session. Neither moves content; both
+ * act on the session you are looking at. That is the distinction from
+ * the terminal tools menu, whose rows all move content across the
+ * terminal's boundary.
+ *
+ * THE MUSIC ROW THAT USED TO BE HERE IS GONE. "play music" / "stop
+ * music" was the per-session background-music opt-in
+ * (session-theme-menu.js), buried two taps deep inside this dropdown.
+ * It has been replaced by a single global on/off living in the bottom
+ * bar on every screen (client/js/globalAudioToggle.js) - see that
+ * file's doc comment for the reasoning. Do not add a music row back
+ * here; the control now lives elsewhere on purpose.
  *
  * WHY DETACH IS HERE AND NOT IN THE TOOLS MENU. It was in the header
  * kebab, which is APP-scoped and mounts on the launchpad where there is
@@ -15,10 +23,9 @@
  * So it lands here, and the split the user corrected us on once still
  * holds: one menu for content, one for the session.
  *
- * Detach is also the only row here that is DESTRUCTIVE-ADJACENT (the
- * tmux session survives, but this tab stops owning it), so it is last,
- * separated, and styled as a danger row rather than sitting flush
- * against "play music".
+ * Detach is also DESTRUCTIVE-ADJACENT (the tmux session survives, but
+ * this tab stops owning it), so it is last, separated, and styled as a
+ * danger row.
  *
  * WHY IT IS ITS OWN CONTROL AND NOT A ROW OF SOMETHING ELSE.
  *
@@ -36,9 +43,8 @@
  * So: its own FAB, its own glyph, on the top-right rail above the
  * terminal, hidden on every screen with no session attached.
  *
- * The rows delegate to session-theme-menu.js, which still owns the theme
- * picker, the per-session music opt-in and its persistence. This module
- * is the control surface only.
+ * The theme row delegates to session-theme-menu.js, which still owns
+ * the theme picker. This module is the control surface only.
  */
 
 console.log('[SessionEditorMenu Module] Loading...');
@@ -49,7 +55,6 @@ console.log('[SessionEditorMenu Module] Loading...');
     /** Stable ids for the menu rows, in declaration order. Read by tests. */
     var ENTRY_IDS = [
         'sessionThemeRow',
-        'sessionMusicRow',
         'sessionDetachRow'
     ];
 
@@ -69,9 +74,6 @@ console.log('[SessionEditorMenu Module] Loading...');
             '<circle cx="5.25" cy="6" r="0.9" fill="currentColor"/>' +
             '<circle cx="8" cy="4.5" r="0.9" fill="currentColor"/>' +
             '<circle cx="10.75" cy="6" r="0.9" fill="currentColor"/>',
-        music:
-            '<path d="M6.5 5.5 9.5 3v10L6.5 10.5H4a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5h2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
-            '<path d="M11.75 6.25a2.5 2.5 0 0 1 0 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
         // The header's detach glyph, carried over unchanged: a box with
         // its top-right corner left open and a diagonal arrow shooting
         // out through the gap. Kept identical so the control is still
@@ -90,22 +92,6 @@ console.log('[SessionEditorMenu Module] Loading...');
      */
     function buildIcon(name) {
         return window.FabMenu ? window.FabMenu.buildIcon(ICONS, name) : null;
-    }
-
-    /**
-     * True when this session's music opt-in is on. Defaults to false, and
-     * says so honestly when the theme layer is not loaded.
-     *
-     * @returns {boolean}
-     */
-    function musicIsOn() {
-        var themeMenu = window.SessionThemeMenu;
-        if (!themeMenu || typeof themeMenu.isAudioOn !== 'function') return false;
-        var themes = window.Themes;
-        var name = themes && typeof themes.getActiveSession === 'function'
-            ? themes.getActiveSession()
-            : null;
-        return !!themeMenu.isAudioOn(name);
     }
 
     /** The controller. Its plumbing is shared; its rows are not. */
@@ -135,72 +121,28 @@ console.log('[SessionEditorMenu Module] Loading...');
     }
 
     /**
-     * Why the music is not audible right now, or null when it is playing
-     * or the answer is not yet knowable.
-     *
-     * A `settling` verdict deliberately returns null: a track that is still
-     * opening is not a fault, and labelling it as one would make the row
-     * cry wolf on every open.
-     *
-     * @returns {string|null} a lowercase reason, or null.
-     */
-    function notPlayingReason() {
-        var Status = window.ThemeAudioStatus;
-        if (!Status || typeof Status.current !== 'function') return null;
-        var v = Status.current();
-        if (v.playing || v.settling) return null;
-        return v.reason;
-    }
-
-    /**
-     * The three rows, in order. Built per open so the music row reports
-     * the live per-session opt-in rather than one captured at wire time.
+     * The two rows, in order. Built per open, matching every other
+     * FabMenu-backed menu in this app even though nothing here is
+     * per-open state any more (that was the music row's job).
      *
      * @param {object} ctl - the FabMenu controller building them.
      * @returns {HTMLButtonElement[]}
      */
     function buildItems(ctl) {
         var c = ctl || menu;
-        var musicOn = musicIsOn();
         var rows = [
             c.item(ENTRY_IDS[0], buildIcon('theme'), 'session theme', function () {
                 var anchor = c.trigger();
                 if (window.SessionThemeMenu && anchor) {
                     window.SessionThemeMenu.open(anchor);
                 }
-            }),
-            // Short label, one line. The full sentence lives in the
-            // title/aria-label so the row stays a 44px list row.
-            c.item(ENTRY_IDS[1], buildIcon('music'),
-                musicOn ? 'stop music' : 'play music',
-                function () {
-                    if (window.SessionThemeMenu &&
-                        typeof window.SessionThemeMenu.toggleAudio === 'function') {
-                        window.SessionThemeMenu.toggleAudio(termWrapper);
-                    }
-                })
+            })
         ];
-        if (musicOn) rows[1].classList.add('is-on');
-        rows[1].setAttribute('aria-pressed', musicOn ? 'true' : 'false');
-        var label = musicOn
-            ? 'turn off music for this session'
-            : 'play music for this session';
-        // A row that says "stop music" while nothing is playing is the
-        // exact lie this feature kept shipping. When the opt-in is on but
-        // no sound is reaching the speaker, the row says why, every time
-        // the menu is opened - not only on the tap that turned it on.
-        var reason = musicOn ? notPlayingReason() : null;
-        if (reason) {
-            label = 'no sound: ' + reason;
-            rows[1].classList.add('fab-menu__item--warn');
-        }
-        rows[1].setAttribute('aria-label', label);
-        rows[1].setAttribute('title', label);
 
         // Last, and marked. Detach ends this tab's ownership of the
-        // session, so it must not sit flush against a music toggle where
+        // session, so it must not sit flush against the theme row where
         // a mis-tap costs nothing.
-        var detachRow = c.item(ENTRY_IDS[2], buildIcon('detach'),
+        var detachRow = c.item(ENTRY_IDS[1], buildIcon('detach'),
             'detach session', detachSession);
         detachRow.classList.add('fab-menu__item--separated');
         detachRow.classList.add('fab-menu__item--danger');
