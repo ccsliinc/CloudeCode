@@ -113,22 +113,46 @@ test('the three roots are declared in order, workdir collapsed by default', () =
 });
 
 test('a SessionInfo WRAPPER resolves working_dir from .session', () => {
-    const tc = { _currentSession: { session: { id: 'ses_1', working_dir: WORKDIR }, tmux_session: 'x' } };
+    const tc = { sessionActive: true, _currentSession: { session: { id: 'ses_1', working_dir: WORKDIR }, tmux_session: 'x' } };
     assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: WORKDIR, reason: 'ok' });
 });
 
 test('a BARE Session resolves working_dir from the top level', () => {
-    const tc = { _currentSession: { id: 'ses_1', working_dir: WORKDIR } };
+    const tc = { sessionActive: true, _currentSession: { id: 'ses_1', working_dir: WORKDIR } };
     assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: WORKDIR, reason: 'ok' });
 });
 
 test('no attached session reports reason no-session, not a bare null', () => {
-    assert.deepEqual(plain(Roots.resolveProjectContext({ _currentSession: null })), { path: null, reason: 'no-session' });
+    assert.deepEqual(plain(Roots.resolveProjectContext({ _currentSession: null, sessionActive: false })), { path: null, reason: 'no-session' });
     assert.deepEqual(plain(Roots.resolveProjectContext(null)), { path: null, reason: 'no-session' });
 });
 
+test('REGRESSION: a stale _currentSession from a detached session is not a project context on the launcher', () => {
+    // detachSession() (terminal.js) and every path back to the launchpad
+    // set sessionActive = false but deliberately leave _currentSession in
+    // place for other readers (launchpad self-adopt filter, debug). A
+    // stale session object with sessionActive false must NOT resolve a
+    // working directory - that was the bug: the sidebar showed
+    // "project .claude: not present in /Users/.../scrolltest" while the
+    // user sat on the launcher, nowhere near a project, because the
+    // resolver only checked `_currentSession` truthiness.
+    const tc = {
+        sessionActive: false,
+        _currentSession: { session: { id: 'ses_1', working_dir: WORKDIR } },
+    };
+    assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: null, reason: 'no-session' });
+});
+
+test('an attached, active session resolves normally', () => {
+    const tc = {
+        sessionActive: true,
+        _currentSession: { session: { id: 'ses_1', working_dir: WORKDIR } },
+    };
+    assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: WORKDIR, reason: 'ok' });
+});
+
 test('an attached session with no working_dir is its OWN reason', () => {
-    const tc = { _currentSession: { session: { id: 'ses_1' } } };
+    const tc = { sessionActive: true, _currentSession: { session: { id: 'ses_1' } } };
     assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: null, reason: 'no-working-dir' });
 });
 
@@ -139,16 +163,23 @@ test('REGRESSION: a resolved working dir plans all three roots, no notice', () =
     assert.deepEqual(notices(plan), [], 'nothing to explain when every root is listed');
 });
 
-test('REGRESSION: dropping the project roots is never silent (no session)', () => {
+test('REGRESSION: no session on the launcher is a MEASURED absence - silent, no notice', () => {
+    // Flipped deliberately from this suite's earlier contract. 'no-session'
+    // is the ORDINARY state of the launcher (the user has no project open,
+    // on the one screen whose whole point is not being in one) - narrating
+    // it is itself the noise the user reported ("on the launcher screen
+    // ... but I'm not even in a project"). A short plan here is not a bug
+    // to explain; it is the correct plan.
     const plan = Roots.planRoots({ path: null, reason: 'no-session' });
     assert.deepEqual(rootIds(plan), ['user']);
-    const msgs = notices(plan);
-    assert.equal(msgs.length, 1, 'a short plan MUST carry exactly one explanation');
-    assert.match(msgs[0], /no session attached/);
-    assert.match(msgs[0], /project files/, 'the message must name what is missing');
+    assert.deepEqual(notices(plan), [], 'the launcher with no project needs no explanation at all');
 });
 
-test('REGRESSION: an unresolvable working dir is never silent either', () => {
+test('REGRESSION: an unresolvable working dir on an ATTACHED session is never silent', () => {
+    // Different in kind from 'no-session': a session IS attached (the
+    // user really is in a project) and it reports no working directory
+    // anyway - that should never happen in ordinary use, so unlike
+    // 'no-session' it stays could-not-evaluate and keeps its notice.
     const plan = Roots.planRoots({ path: null, reason: 'no-working-dir' });
     assert.deepEqual(rootIds(plan), ['user']);
     const msgs = notices(plan);
@@ -157,35 +188,55 @@ test('REGRESSION: an unresolvable working dir is never silent either', () => {
     assert.match(msgs[0], /project \.claude and project files/);
 });
 
-test('every short plan carries a notice, for every non-ok reason', () => {
-    for (const reason of ['no-session', 'no-working-dir']) {
-        const plan = Roots.planRoots({ path: null, reason });
-        assert.equal(notices(plan).length, 1, `reason ${reason} planned no explanation`);
-    }
+test('only the could-not-evaluate reason carries a notice; the measured-absence reason does not', () => {
+    assert.deepEqual(notices(Roots.planRoots({ path: null, reason: 'no-session' })), []);
+    assert.equal(notices(Roots.planRoots({ path: null, reason: 'no-working-dir' })).length, 1);
 });
 
-test('a missing root notice names the root and the directory', () => {
-    const absent = Roots.missingRootNotice('project .claude', 'unavailable', WORKDIR);
-    assert.match(absent, /project \.claude/);
-    assert.match(absent, /not present/);
-    assert.ok(absent.includes(WORKDIR), 'the notice must say WHERE it looked');
-    const empty = Roots.missingRootNotice('project files', 'empty', WORKDIR);
-    assert.match(empty, /nothing to list/);
+test('workdirUnavailableNotice names the root and the directory, and reads as could-not-evaluate', () => {
+    const msg = Roots.workdirUnavailableNotice('project files', WORKDIR);
+    assert.match(msg, /project files/);
+    assert.ok(msg.includes(WORKDIR), 'the notice must say WHERE it looked');
+    assert.match(msg, /could not reach/, 'must read as could-not-evaluate, not a measured absence');
+});
+
+test('REGRESSION: no notice function narrates a project with no .claude/ or an empty root', () => {
+    // The two strings the user reported as noise ("project .claude: not
+    // present in X" / "project files: nothing to list in X") must not be
+    // producible by ANY exported function any more - those are measured
+    // absences and the panel renders nothing for them (see
+    // config-editor-panel.js's _buildRootEl). Only workdirUnavailableNotice
+    // survives, and it is reserved for the could-not-evaluate case.
+    assert.equal(Roots.missingRootNotice, undefined, 'missingRootNotice must be removed, not just unused');
+    for (const key of Object.keys(Roots)) {
+        const fn = Roots[key];
+        if (typeof fn !== 'function' || fn.length === 0) continue;
+        let sample;
+        try {
+            sample = key === 'workdirUnavailableNotice'
+                ? fn('project files', WORKDIR)
+                : key === 'projectRootsNotice' ? fn('no-working-dir')
+                    : key === 'listErrorNotice' ? fn('Permission denied')
+                        : null;
+        } catch (_) { sample = null; }
+        if (typeof sample !== 'string') continue;
+        assert.ok(!/not present in/.test(sample), `${key} must never produce the removed "not present in" copy`);
+        assert.ok(!/nothing to list in/.test(sample), `${key} must never produce the removed "nothing to list in" copy`);
+    }
 });
 
 test('copy stays in the lowercase UI voice, with no dashes or emoji', () => {
     const strings = [
-        Roots.projectRootsNotice('no-session'),
         Roots.projectRootsNotice('no-working-dir'),
-        Roots.missingRootNotice('project files', 'unavailable', WORKDIR),
-        Roots.missingRootNotice('project files', 'empty', WORKDIR),
+        Roots.workdirUnavailableNotice('project files', WORKDIR),
     ];
     for (const s of strings) {
-        assert.ok(s, 'every non-ok state needs a sentence');
+        assert.ok(s, 'every could-not-evaluate state needs a sentence');
         assert.ok(!/[–—]/.test(s), `no en/em dashes: ${s}`);
         assert.ok(!/[A-Z]/.test(s.replace(WORKDIR, '')), `lowercase copy: ${s}`);
     }
     assert.equal(Roots.projectRootsNotice('ok'), null, 'ok has nothing to say');
+    assert.equal(Roots.projectRootsNotice('no-session'), null, 'no-session is a measured absence, not a sentence');
 });
 
 test('the panel reads its root table and plan from this module', () => {

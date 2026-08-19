@@ -226,12 +226,18 @@ class ConfigEditorPanelController {
      * failure/emptiness doesn't block the others) and render them as one
      * flat top-level list, each root a collapsible node.
      *
-     * A root is NEVER dropped in silence. When the working directory does
-     * not resolve, ConfigEditorRoots.planRoots() returns a notice in the
-     * project roots' place; when the server has nothing for a root that
-     * WAS asked for, a notice row names it. A tree that is short must say
-     * why, or it reads as a complete tree with the user's files missing -
-     * which is exactly how this failed in the field.
+     * A COULD-NOT-EVALUATE root is never dropped in silence. When the
+     * working directory does not resolve at all, ConfigEditorRoots
+     * .planRoots() returns a notice in the project roots' place; when a
+     * root the panel DID ask for turns out to be genuinely unreachable
+     * (see _buildRootEl - workdir vanishing out from under an attached
+     * session, or a real 401/403/5xx/network failure), that renders as a
+     * named error row too. A MEASURED ABSENCE is the opposite case and is
+     * intentionally silent: a project with no .claude/ subfolder, or a
+     * root that resolved to zero entries, renders no row and no message
+     * at all - the user is not told about a file that was never there,
+     * only about a file the panel could not find out about one way or
+     * the other.
      * Inputs: none. Output: Promise<void>.
      */
     async _loadTree() {
@@ -246,14 +252,15 @@ class ConfigEditorPanelController {
                 list.appendChild(this._noticeLi(step.message));
                 continue;
             }
-            const result = await this._buildRootEl(step.def, projectPath);
-            if (result.el) {
-                list.appendChild(result.el);
-            } else {
-                list.appendChild(this._noticeLi(window.ConfigEditorRoots.missingRootNotice(
-                    step.def.label, result.missingReason, projectPath,
-                )));
-            }
+            const el = await this._buildRootEl(step.def, projectPath);
+            // A null element means the root is a MEASURED ABSENCE (no
+            // .claude/ subfolder, or a root the server listed zero
+            // entries for) - _buildRootEl already decided that needs no
+            // row and no message, so there is nothing left to append
+            // here. A could-not-evaluate case (e.g. workdir vanished)
+            // always comes back as a populated element instead; see
+            // _buildRootEl's own doc for the split.
+            if (el) list.appendChild(el);
         }
 
         this.treeEl.innerHTML = '';
@@ -263,15 +270,24 @@ class ConfigEditorPanelController {
     /**
      * Fetch one root's tree and build it as a collapsible depth-0 node,
      * indistinguishable in interaction from a directory node inside it.
+     *
+     * THREE OUTCOMES, but only two ever produce visible output. A root
+     * that resolves - even to zero entries - renders as a normal node:
+     * the path/label, and whatever is underneath it (nothing, if that's
+     * the truth). A root that is a MEASURED ABSENCE (the project has no
+     * .claude/ subfolder at all) renders NOTHING - no row, no message;
+     * the user never asked to be told about a folder that was never
+     * there. A root the server could not even evaluate (workdir's own
+     * directory vanished out from under an attached session, or any
+     * other real failure - 401/403/5xx, network error) DOES render,
+     * as a named error row, because that is the one case a short tree
+     * cannot be allowed to explain by staying silent.
+     *
      * Inputs: rootDef (object) - one entry of CONFIG_EDITOR_ROOTS;
      *   projectPath (string|null).
-     * Output: Promise<{el: Element|null, missingReason: string|null}> -
-     *   `el` is the <li> (including the error row for a real failure);
-     *   when `el` is null the root exists in the plan but had nothing to
-     *   show, and `missingReason` says which case that was
-     *   ('unavailable' - server has no such root, e.g. a project with no
-     *   .claude/; 'empty' - the root resolved but listed nothing). The
-     *   caller renders a notice for it; it is never just skipped.
+     * Output: Promise<Element|null> - the <li> to append, or null when
+     *   this root is a measured absence and the caller should render
+     *   nothing for it at all.
      */
     async _buildRootEl(rootDef, projectPath) {
         let nodes;
@@ -284,26 +300,37 @@ class ConfigEditorPanelController {
             // resolve_roots() only registers the "project" root when the
             // directory exists, so list_tree() raises "unknown or
             // unavailable root" (HTTP 400) for every project that simply
-            // hasn't got project-scoped config yet - report that as a
-            // named absence rather than an error node.
-            // Any OTHER status (401/403/5xx, or no status for a network
-            // failure) is a real failure and surfaces as an error row.
-            if (err.status === 400 && rootDef.id !== 'user') {
-                return { el: null, missingReason: 'unavailable' };
+            // hasn't got project-scoped config yet. That is a measured
+            // absence - render nothing for it, the same as an empty root.
+            if (err.status === 400 && rootDef.id === 'project') {
+                return null;
             }
+            // "workdir" is different: resolve_roots() only registers it
+            // when the session's own working directory still exists on
+            // disk, and a session always has one when it starts. A 400
+            // here means that directory was deleted, unmounted, or
+            // renamed out from under a still-attached session - could
+            // not evaluate, not a normal absence - so it gets a named
+            // row instead of being dropped.
+            if (err.status === 400 && rootDef.id === 'workdir') {
+                const li = document.createElement('li');
+                li.appendChild(this._errorEl(
+                    window.ConfigEditorRoots.workdirUnavailableNotice(rootDef.label, projectPath),
+                ));
+                return li;
+            }
+            // Any other status (401/403/5xx, or no status for a network
+            // failure) is a real failure and surfaces as an error row.
             const li = document.createElement('li');
             li.appendChild(this._errorEl(`failed to load ${rootDef.label}: ${err.message || err}`));
-            return { el: li, missingReason: null };
-        }
-        if (rootDef.id !== 'user' && nodes.length === 0) {
-            return { el: null, missingReason: 'empty' };
+            return li;
         }
 
+        // Zero entries is a successfully-read, genuinely empty root - not
+        // a failure and not worth a sentence. Render it exactly like any
+        // other root: the path/label, with nothing underneath.
         const rootNode = { name: rootDef.label, rel_path: '', is_dir: true, children: nodes };
-        return {
-            el: this._buildNodeEl(rootDef.id, rootNode, 0, { isRoot: true, defaultExpanded: rootDef.defaultExpanded }),
-            missingReason: null,
-        };
+        return this._buildNodeEl(rootDef.id, rootNode, 0, { isRoot: true, defaultExpanded: rootDef.defaultExpanded });
     }
 
     /**
