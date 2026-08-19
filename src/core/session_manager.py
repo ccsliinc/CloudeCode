@@ -1435,6 +1435,7 @@ class SessionManager:
         project_name: Optional[str] = None,
         agent_type: Optional[str] = None,
         model: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -1466,6 +1467,12 @@ class SessionManager:
         resulting ``Session`` alongside ``agent_type`` regardless of
         ``auto_start_claude``, so it survives for the life of the session
         even on a manual/no-autostart create.
+
+        ``provider`` (local-inference support) picks WHICH wrapper
+        ``model`` is handed to: ``"local"`` -> ``cldl <model>`` against
+        ``providers.local_host``; ``"openrouter"`` or None -> the
+        pre-existing ``cldor`` / ``cld`` behavior. Persisted on the
+        ``Session`` next to ``model`` under the same rules.
         """
         # Clean up a zombie entry for this exact id (stale metadata / dead
         # backend) — but leave any OTHER live sessions alone.
@@ -1625,7 +1632,9 @@ class SessionManager:
                 # default config this yields the same string the old
                 # ``f"{claude_cli} --dangerously-skip-permissions"`` did
                 # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
-                command = settings.get_agent_command(resolved_agent_type, model=model)
+                command = settings.get_agent_command(
+                    resolved_agent_type, model=model, provider=provider
+                )
                 await backend.start(
                     command=command,
                     env=spawn_env,
@@ -1657,6 +1666,7 @@ class SessionManager:
                 last_activity=datetime.utcnow(),
                 agent_type=resolved_agent_type,
                 model=model,
+                provider=provider,
                 pinned_theme=prior_pin,
                 # PIN-FIX-EXECUTE — carry the bare tmux name on the inner
                 # Session so frontend can use it as the pin-key handle

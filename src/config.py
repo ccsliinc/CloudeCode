@@ -17,7 +17,12 @@ import json
 import shlex
 import socket
 
-from src.models import is_valid_model_id, MODEL_ID_PATTERN
+from src.models import (
+    is_valid_model_id,
+    MODEL_ID_PATTERN,
+    LOCAL_HOST_PATTERN,
+    normalize_local_host,
+)
 
 
 class ProjectConfig(BaseModel):
@@ -77,6 +82,12 @@ _DEFAULT_PROVIDER_MODELS: List[str] = [
     "openai/gpt-5.6-sol",
 ]
 
+# Local-inference (LM Studio) box the ``cldl`` zsh function targets by
+# default. Kept identical to ``cldl``'s own ``CLDL_HOST`` fallback so a
+# config.json with no ``providers.local_host`` key behaves the same
+# whether the session is launched from cloudecode or from a shell.
+_DEFAULT_LOCAL_HOST: str = "192.168.1.167:1234"
+
 
 class ProvidersConfig(BaseModel):
     """OpenRouter model catalog for the provider-selector modal.
@@ -88,6 +99,41 @@ class ProvidersConfig(BaseModel):
     ``_DEFAULT_PROVIDER_MODELS``.
     """
     models: List[str] = Field(default_factory=lambda: list(_DEFAULT_PROVIDER_MODELS))
+    # Local-inference (LM Studio) endpoint. Purely additive: config.json
+    # files written before this key existed deserialize to the default,
+    # and ``models`` is untouched. Scheme optional — see
+    # ``normalize_local_host``.
+    local_host: str = Field(default=_DEFAULT_LOCAL_HOST)
+
+    @field_validator("local_host")
+    @classmethod
+    def _validate_local_host(cls, v: str) -> str:
+        """Reject anything that isn't a plain host/IP (+ optional port).
+
+        Same threat model as ``_drop_invalid_model_ids`` below, one step
+        more dangerous: this value is BOTH interpolated into the ``zsh -c``
+        launch string (as ``CLDL_HOST=<host>``, shlex-quoted) AND
+        concatenated into an outbound URL by the
+        ``/providers/local/models`` proxy. A hand-edited config.json is
+        the only way a bad value gets here, and this is where it stops —
+        no path, query, userinfo, or shell metacharacter survives
+        ``normalize_local_host``.
+
+        Fail-soft to the default rather than raising, matching the
+        drop-with-a-warning philosophy of the models validator: one bad
+        key should not hard-brick startup.
+        """
+        normalized = normalize_local_host(v)
+        if normalized is None:
+            import structlog
+            structlog.get_logger().warning(
+                "invalid_providers_local_host_using_default",
+                supplied=v,
+                default=_DEFAULT_LOCAL_HOST,
+                pattern=LOCAL_HOST_PATTERN,
+            )
+            return _DEFAULT_LOCAL_HOST
+        return normalized
 
     @field_validator("models")
     @classmethod
@@ -454,7 +500,10 @@ class Settings(BaseSettings):
         return "claude"
 
     def get_agent_command(
-        self, agent_type: Optional[str], model: Optional[str] = None
+        self,
+        agent_type: Optional[str],
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> str:
         """Resolve the shell command string for a given agent_type.
 
@@ -475,6 +524,14 @@ class Settings(BaseSettings):
         ``claude-cldor-openrouter``). Neither secret ever passes through
         this app — the Keychain lookup happens inside the zsh function, in
         the spawned tmux pane, not here.
+
+        Local-inference route — ``provider="local"`` (with a model) selects
+        the ``cldl`` zsh function instead of ``cldor``, pinned to
+        ``providers.local_host`` via an inline ``CLDL_HOST=`` assignment.
+        ``provider=None`` / ``"openrouter"`` produce byte-identical output
+        to the pre-local behavior, so older clients are unaffected.
+        ``provider="local"`` WITHOUT a model raises ValueError rather than
+        falling through to ``cld`` (see the branch comment below).
 
         Why the wrapper: tmux's spawned pane shell does NOT source
         ``~/.zshrc`` (non-interactive, non-login — see TmuxBackend.start /
@@ -532,6 +589,35 @@ class Settings(BaseSettings):
             return agents.shell_command
 
         # claude (or unknown → fall back to claude).
+        if provider == "local":
+            # Local-inference route. ``cldl`` takes the model as its first
+            # positional arg exactly like ``cldor``, and self-preflights
+            # the box + self-validates the id, so the wrapper shape and
+            # the double-shlex.quote nesting are identical to the cldor
+            # branch below. ``CLDL_HOST`` is exported inline (still inside
+            # the quoted inner string, so it is one shell assignment, not
+            # a second command) to pin the spawn to the SAME box the
+            # /providers/local/models picker enumerated — otherwise a
+            # config.json host that differs from cldl's own default would
+            # silently launch against a different machine than the one the
+            # user chose the model from. Its value is regex-restricted to
+            # a plain host/IP+port at config-load time AND shlex-quoted
+            # here, same belt-and-braces as ``model``.
+            if not model:
+                # Never silently degrade to plain ``cld`` (a completely
+                # different provider than the caller asked for). The
+                # create-session route rejects this combination with an
+                # explicit 400 before reaching here; this is the
+                # defense-in-depth guard for any other caller.
+                raise ValueError(
+                    "provider 'local' requires a model id"
+                )
+            inner = (
+                f"source ~/.zshrc >/dev/null 2>&1; "
+                f"CLDL_HOST={shlex.quote(self.get_local_host())} "
+                f"cldl {shlex.quote(model)}"
+            )
+            return f"zsh -c {shlex.quote(inner)}"
         if model:
             inner = f"source ~/.zshrc >/dev/null 2>&1; cldor {shlex.quote(model)}"
             return f"zsh -c {shlex.quote(inner)}"
@@ -979,6 +1065,25 @@ class Settings(BaseSettings):
         ``ProvidersConfig``'s pydantic default).
         """
         return list(self.load_auth_config().providers.models)
+
+    def get_local_host(self) -> str:
+        """Return the configured LM Studio host (``providers.local_host``).
+
+        Always a validated, normalized ``host[:port]`` (optionally
+        scheme-prefixed) — ``ProvidersConfig._validate_local_host`` has
+        already rejected anything else. A missing "providers" block, a
+        missing key, or an unloadable auth config all yield
+        ``_DEFAULT_LOCAL_HOST``.
+
+        The load_auth_config guard (which ``get_provider_models`` above
+        doesn't need) exists because this getter is on the SESSION-LAUNCH
+        path via ``get_agent_command``, which deliberately tolerates a
+        degraded/missing config.json rather than failing the spawn.
+        """
+        try:
+            return self.load_auth_config().providers.local_host
+        except Exception:
+            return _DEFAULT_LOCAL_HOST
 
     def add_provider_model(self, model: str) -> List[str]:
         """

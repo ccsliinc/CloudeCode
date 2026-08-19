@@ -1527,6 +1527,12 @@ class Launchpad {
             if (providerChoice.model) {
                 payload.model = providerChoice.model;
             }
+            // Only "local" is ever sent. claude and OpenRouter stay
+            // wire-identical to before (absent === the server's default),
+            // so nothing regresses if the field is ignored.
+            if (providerChoice.provider === 'local') {
+                payload.provider = 'local';
+            }
             const session = await window.API.createSession(payload);
 
             console.log('Launchpad: New project created:', session);
@@ -2354,7 +2360,7 @@ class Launchpad {
     /**
      * Select and open existing project.
      * @param {object} project
-     * @param {{model: string|null}|undefined} [providerChoice] - Pass a
+     * @param {{model: string|null, provider: string|null}|undefined} [providerChoice] - Pass a
      *   already-resolved choice when the caller gated its own pre-session
      *   side effect (e.g. persisting a new project entry) on the provider
      *   modal first — avoids prompting the user twice. Omit to have this
@@ -2392,6 +2398,12 @@ class Launchpad {
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
                 payload.model = providerChoice.model;
+            }
+            // Only "local" is ever sent. claude and OpenRouter stay
+            // wire-identical to before (absent === the server's default),
+            // so nothing regresses if the field is ignored.
+            if (providerChoice.provider === 'local') {
+                payload.provider = 'local';
             }
             const session = await window.API.createSession(payload);
 

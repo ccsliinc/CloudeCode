@@ -1,5 +1,6 @@
 """REST API routes for Claude Code Controller."""
 
+import asyncio
 import base64
 import json
 import os
@@ -7,6 +8,7 @@ import re
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from typing import List, Optional
+import httpx
 import structlog
 
 from datetime import datetime
@@ -41,6 +43,7 @@ from src.models import (
     SessionRenamedMessage,
     ProviderModelsResponse,
     AddProviderModelRequest,
+    LocalProviderModelsResponse,
     is_valid_model_id,
     MODEL_ID_PATTERN,
 )
@@ -77,6 +80,20 @@ async def create_session(request: Request, body: CreateSessionRequest):
     """
     session_manager = request.app.state.session_manager
 
+    # Local-inference route needs an explicit model — ``cldl`` is a
+    # model-selection wrapper, and silently degrading to plain ``cld``
+    # would launch a completely different provider than the client asked
+    # for. Explicit 400 (not FastAPI's generic 422) for the same reason
+    # ``POST /providers/models`` validates in its handler: a precise,
+    # human-readable REST contract. Raised OUTSIDE the try below on
+    # purpose — that block's blanket ``except Exception`` would otherwise
+    # rewrite this HTTPException into a 500.
+    if body.provider == "local" and not body.model:
+        raise HTTPException(
+            status_code=400,
+            detail="provider 'local' requires a model id",
+        )
+
     try:
         # Generate session ID
         import uuid
@@ -97,6 +114,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             rows=body.rows,
             agent_type=body.agent_type,
             model=body.model,
+            provider=body.provider,
         )
 
         session = await session_manager.create_session(
@@ -109,6 +127,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             project_name=body.project_name,
             agent_type=body.agent_type,
             model=body.model,
+            provider=body.provider,
         )
 
         # Move this project to the top of the list (most recently used)
@@ -1389,6 +1408,112 @@ async def make_directory(body: MkdirRequest):
 async def list_provider_models():
     """List the persisted OpenRouter model catalog for the provider modal."""
     return ProviderModelsResponse(models=settings.get_provider_models())
+
+
+_LOCAL_MODELS_TIMEOUT = httpx.Timeout(5.0, connect=5.0)
+# ``httpx.Timeout`` above only bounds a single connect/read/write/pool op —
+# a slow-drip sender (a byte or two just under the read timeout, forever)
+# would never trip it. ``asyncio.wait_for`` below is the real wall-clock
+# deadline for the whole request, matching ``cldl``'s ``curl --max-time 5``.
+_LOCAL_MODELS_TOTAL_DEADLINE = 5.0  # seconds
+_LOCAL_MODELS_MAX_BYTES = 1024 * 1024  # 1 MiB — a model list is a few hundred bytes
+
+
+class _LocalModelsResponseTooLarge(Exception):
+    """Internal signal: the LM Studio box's response exceeded the size cap."""
+
+
+@router.get(
+    "/providers/local/models",
+    response_model=LocalProviderModelsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def list_local_provider_models():
+    """Proxy the LM Studio box's currently-loaded chat models.
+
+    Mirrors what the ``cldl`` zsh function does at launch time: read
+    ``GET <local_host>/v1/models``, drop anything whose id looks like an
+    embedding model, and offer what's left. Nothing is persisted — the
+    picker must reflect what is loaded RIGHT NOW, so this is read live on
+    every request.
+
+    ALWAYS 200. An unreachable/slow/garbage-returning box yields
+    ``reachable=False`` + a short human ``error`` and an empty list,
+    because the provider modal renders that state inline; a 5xx would
+    break the picker instead of informing it. The request runs under a
+    5s total wall-clock deadline (``asyncio.wait_for``, matching ``cldl``'s
+    ``curl --max-time 5``) so a dead OR slow-drip box can't hang the modal
+    or the server, and the response body is streamed with a 1 MiB cap so a
+    hostile/MITM'd ``local_host`` can't grow server memory unbounded before
+    that deadline hits — both are enforced before any JSON parsing.
+
+    ``local_host`` was regex-restricted to a plain host/IP+port at
+    config-load time (``ProvidersConfig._validate_local_host``), so no
+    caller-controlled path/query can be smuggled into this outbound URL;
+    redirects are not followed (httpx default), closing the redirect
+    pivot too.
+    """
+    host = settings.get_local_host()
+    base = host if host.startswith(("http://", "https://")) else f"http://{host}"
+
+    async def _fetch_models_json():
+        async with httpx.AsyncClient(timeout=_LOCAL_MODELS_TIMEOUT) as client:
+            async with client.stream("GET", f"{base}/v1/models") as resp:
+                resp.raise_for_status()
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > _LOCAL_MODELS_MAX_BYTES:
+                        raise _LocalModelsResponseTooLarge()
+                return json.loads(bytes(body))
+
+    try:
+        data = await asyncio.wait_for(
+            _fetch_models_json(), timeout=_LOCAL_MODELS_TOTAL_DEADLINE
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        return LocalProviderModelsResponse(
+            host=host, reachable=False,
+            error=f"Timed out reaching LM Studio at {host}.",
+        )
+    except _LocalModelsResponseTooLarge:
+        return LocalProviderModelsResponse(
+            host=host, reachable=False,
+            error=f"LM Studio at {host} returned an unexpectedly large response.",
+        )
+    except httpx.HTTPStatusError as e:
+        return LocalProviderModelsResponse(
+            host=host, reachable=False,
+            error=f"LM Studio at {host} returned HTTP {e.response.status_code}.",
+        )
+    except httpx.HTTPError:
+        return LocalProviderModelsResponse(
+            host=host, reachable=False,
+            error=f"LM Studio is not reachable at {host}.",
+        )
+    except ValueError:
+        # json.loads() on a non-JSON body — something is listening there,
+        # but it isn't an OpenAI-compatible server.
+        return LocalProviderModelsResponse(
+            host=host, reachable=False,
+            error=f"{host} did not return a valid model list.",
+        )
+
+    entries = data.get("data") if isinstance(data, dict) else None
+    models: List[str] = []
+    for entry in entries or []:
+        mid = entry.get("id") if isinstance(entry, dict) else None
+        # ``is_valid_model_id`` because this id round-trips back to us on
+        # session create and is interpolated into a shell command there —
+        # never surface one the launch path would reject anyway.
+        if not isinstance(mid, str) or not is_valid_model_id(mid):
+            continue
+        if "embed" in mid.lower():
+            continue
+        if mid not in models:
+            models.append(mid)
+
+    return LocalProviderModelsResponse(host=host, models=models, reachable=True)
 
 
 @router.post(

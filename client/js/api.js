@@ -410,8 +410,21 @@ class API {
     }
 
     /**
+     * Providers: list the models currently loaded on the local LM Studio
+     * box. Read-only — the list is whatever LM Studio reports, so there is
+     * no add/remove counterpart to this call.
+     * Resolves 200 even when the box is down: an unreachable host comes
+     * back as {reachable: false, error: "..."} rather than an HTTP error,
+     * so callers render it as a normal state instead of catching one.
+     * @returns {Promise<{host: string, models: Array<string>, reachable: boolean, error: string|null}>}
+     */
+    async getLocalProviderModels() {
+        return await this.call('/providers/local/models');
+    }
+
+    /**
      * Sessions: Create new session
-     * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null}
+     * @param {object} params - {working_dir?: string, auto_start_claude?: boolean, copy_templates?: boolean, cols?: number, rows?: number, project_name?: string|null, provider?: "local"|null}
      * @returns {Promise<object>} - Session data
      */
     async createSession(params = {}) {

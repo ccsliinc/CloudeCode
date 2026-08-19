@@ -1749,6 +1749,39 @@ button[data-tooltip]:hover::after {
     box-shadow: 0 0 8px var(--color-accent-glow);
 }
 
+/* Local (LM Studio) section heading, inline in the same scrolling list as
+   the OpenRouter rows. Echoes .launchpad-section-title (accent, bold,
+   lowercase, ► glyph) at list scale. Row padding matches
+   .folder-picker-item exactly so the vertical rhythm never breaks. No
+   border-top: the row above already carries a border-bottom, and stacking
+   both would read as a 2px seam. */
+.provider-section-header {
+    padding: 10px 14px;
+    background: var(--color-bg-elevated);
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: bold;
+}
+
+/* The local section's loading / unreachable / empty line. Quiet by
+   design — a box that is simply switched off is normal, not an error, and
+   must never block the rest of the modal. */
+.provider-section-note {
+    padding: 12px 14px;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-style: italic;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.provider-section-note--warn {
+    color: var(--color-warning);
+}
+
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .slash-commands-modal-content {
@@ -1779,8 +1812,24 @@ button[data-tooltip]:hover::after {
         padding: 10px 12px;
     }
 
+    /* The provider list now carries two sections, so a flat 240px hid the
+       local rows behind a scroll on nearly every phone. 50vh shows roughly
+       twice as many rows on a portrait phone while still collapsing on a
+       short landscape viewport, where a fixed 240px would push the modal
+       past the fold. */
     .folder-picker-list {
-        max-height: 240px;
+        max-height: min(340px, 50vh);
+    }
+
+    /* 10px padding left these rows at ~40px — under the 44px touch-target
+       floor, on a UI that is driven from a phone. Applied to the shared
+       row class so every list (provider AND folder picker) moves together;
+       bumping only the local rows would break the vertical rhythm and make
+       that section read as bolted on. 12px still rounded a hair under 44px
+       for rows whose icon glyph has no line-height boost from a fallback
+       font (local/add rows) — 13px clears the floor for every row. */
+    .folder-picker-item {
+        padding: 13px 14px;
     }
 
     .provider-item-remove {

@@ -49,6 +49,71 @@ def is_valid_model_id(v: str) -> bool:
     return bool(_MODEL_ID_RE.fullmatch(v))
 
 
+# Local-inference provider (LM Studio) — validation for the operator-supplied
+# ``providers.local_host`` in config.json. That value has TWO dangerous exits:
+#   1. it is interpolated into the ``zsh -c '...'`` launch string as
+#      ``CLDL_HOST=<host>`` (shlex-quoted there, but quoted-garbage is still
+#      garbage — this regex is the primary gate, same role MODEL_ID_PATTERN
+#      plays for model ids), and
+#   2. it is concatenated into an outbound URL by
+#      ``GET /api/v1/providers/local/models``.
+# So it is restricted to a PLAIN host-or-IP with an optional port and an
+# optional http/https scheme — nothing else. No path, no query, no userinfo
+# (``@`` is outside the charset), no whitespace, no shell metacharacters.
+# That closes both request-forgery-by-path and command-injection at the door.
+LOCAL_HOST_PATTERN = (
+    r"^(?:https?://)?"
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?"
+    r"(?::\d{1,5})?$"
+)
+_LOCAL_HOST_RE = re.compile(
+    r"^(?P<scheme>https?://)?"
+    r"(?P<host>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?)"
+    r"(?::(?P<port>\d{1,5}))?$"
+)
+
+
+def normalize_local_host(v: str) -> Optional[str]:
+    """Validate + normalize a ``providers.local_host`` value.
+
+    Single source of truth, mirroring ``is_valid_model_id``'s role for
+    model ids — every call site goes through this rather than touching
+    the regex directly.
+
+    Accepts ``host``, ``host:port``, and either form with an ``http://``
+    or ``https://`` scheme (the ``cldl`` zsh function is equally lenient:
+    it prepends ``http://`` when no scheme is present). Normalizes by
+    stripping surrounding whitespace and any trailing slashes, and
+    preserving the scheme ONLY when one was explicitly given — so the
+    default ``192.168.1.167:1234`` round-trips bare, exactly as the REST
+    contract's ``host`` field is specified.
+
+    ``fullmatch`` for the same reason ``is_valid_model_id`` uses it: ``$``
+    would otherwise let a trailing newline through.
+
+    Returns:
+        The normalized value, or None if it isn't a plain host/IP+port.
+    """
+    if not isinstance(v, str):
+        return None
+    candidate = v.strip().rstrip("/")
+    if not candidate:
+        return None
+    m = _LOCAL_HOST_RE.fullmatch(candidate)
+    if not m:
+        return None
+    port = m.group("port")
+    if port is not None and not (1 <= int(port) <= 65535):
+        return None
+    return candidate
+
+
+# Which launch route a model id is served by. None (the field is always
+# Optional) means "legacy / unspecified" and preserves the pre-existing
+# behavior: a model with no provider is OpenRouter-routed via ``cldor``.
+ProviderKind = Literal["openrouter", "local"]
+
+
 # Plan v3.2 — replaces the old ``Tunnel`` model. Pure detection record:
 # the server discovers a dev port by sniffing pane output, validates that
 # something is actually listening, and surfaces the URL to the client.
@@ -116,6 +181,17 @@ class Session(BaseModel):
     model: Optional[str] = Field(
         None,
         description="OpenRouter model id this session was launched with (None = Claude direct via 'cld')",
+    )
+    # Local-inference provider. Persisted next to ``model`` so the launch
+    # ROUTE (not just the model id) survives for the life of the session:
+    # the same id could in principle be served by either backend, so the
+    # model alone is ambiguous. Optional + None default keeps legacy
+    # ``session_metadata.json`` files (written before the field existed)
+    # deserializing cleanly, and None preserves pre-existing behavior
+    # exactly — ``model`` set + no provider still means OpenRouter.
+    provider: Optional[ProviderKind] = Field(
+        None,
+        description="Launch route: 'openrouter' (cldor) | 'local' (cldl) | None (legacy/implicit)",
     )
 
     class Config:
@@ -245,6 +321,17 @@ class CreateSessionRequest(BaseModel):
         None,
         description="OpenRouter model id; None launches Claude directly via 'cld'",
     )
+    # Local-inference provider. Selects WHICH zsh wrapper ``model`` is fed
+    # to: "openrouter" (or None — the legacy/implicit case) => ``cldor``,
+    # "local" => ``cldl`` against ``providers.local_host``. Omitting it is
+    # byte-for-byte the pre-existing behavior, so older clients are
+    # unaffected. "local" REQUIRES a model id — enforced with an explicit
+    # 400 in the create-session route (see src/api/routes.py) rather than
+    # silently degrading to plain ``cld``.
+    provider: Optional[ProviderKind] = Field(
+        None,
+        description="'openrouter' | 'local'; None = legacy behavior (OpenRouter when model is set)",
+    )
 
     @field_validator("model")
     @classmethod
@@ -293,6 +380,28 @@ class AddProviderModelRequest(BaseModel):
     """
     model: str = Field(
         ..., description="OpenRouter model id to add, e.g. 'openai/gpt-5.6-sol'"
+    )
+
+
+class LocalProviderModelsResponse(BaseModel):
+    """Response for ``GET /api/v1/providers/local/models`` (LM Studio proxy).
+
+    Unlike the OpenRouter catalog above, this list is NEVER persisted — it
+    is whatever the box currently has loaded, read live on each request.
+
+    An unreachable box is NOT an error status: the route always answers
+    200 with ``reachable=False`` plus a short human ``error`` string,
+    because the provider modal renders that state inline. A 4xx/5xx here
+    would break the picker instead of informing it.
+    """
+    host: str = Field(..., description="Configured LM Studio host (providers.local_host)")
+    models: List[str] = Field(
+        default_factory=list,
+        description="Loaded chat model ids (embedding models filtered out)",
+    )
+    reachable: bool = Field(False, description="Whether the host answered /v1/models")
+    error: Optional[str] = Field(
+        None, description="Short human-readable reason when reachable is False"
     )
 
 
