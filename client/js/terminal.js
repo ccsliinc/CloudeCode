@@ -1,7 +1,4 @@
-/**
- * Terminal Module - Handles xterm.js terminal and WebSocket PTY connection
- */
-
+/** Terminal Module - Handles xterm.js terminal and WebSocket PTY connection */
 console.log('[Terminal Module] Loading...');
 
 /**
@@ -38,7 +35,7 @@ const DEFAULT_XTERM_THEME = {
     brightWhite: '#ffffff'
 };
 
-class Terminal {
+class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     constructor() {
         this.ws = null;
         this.term = null;
@@ -193,7 +190,7 @@ class Terminal {
             fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Mono", "Roboto Mono", "Courier New", monospace',
             fontWeight: 'normal',
             fontWeightBold: 'bold',
-            allowTransparency: false,
+            allowTransparency: true, // non-opaque theme.background needs this, see terminal-background-opacity.js
             theme: initialXtermTheme,
             allowProposedApi: true,
             convertEol: false,
@@ -203,6 +200,8 @@ class Terminal {
             windowsMode: false
         });
 
+        this._xtermOpacity = window.TerminalBackgroundOpacity && window.TerminalBackgroundOpacity.attach(this.term); // see terminal-background-opacity.js
+        if (this._xtermOpacity) this._xtermOpacity.apply(initialXtermTheme);
         console.log('Terminal: Terminal instance created', {
             term: this.term,
             hasLoadAddon: typeof this.term?.loadAddon,
@@ -269,7 +268,7 @@ class Terminal {
             this._unsubscribeXtermTheme = window.Themes.onXtermThemeChange((newXtermTheme) => {
                 if (!this.term || !newXtermTheme) return;
                 try {
-                    this.term.options.theme = newXtermTheme;
+                    if (this._xtermOpacity) this._xtermOpacity.apply(newXtermTheme); else this.term.options.theme = newXtermTheme;
                 } catch (e) {
                     console.warn('Terminal: failed to apply xterm theme', e);
                 }

@@ -121,3 +121,6 @@ macOS/node_modules/
 
 # Screenshots from scripts/verify/measure-theme-effect-visibility.py
 scripts/verify/.theme-effect-shots/
+
+# Screenshots from scripts/verify/measure-terminal-opacity.py
+scripts/verify/.terminal-opacity-shots/
