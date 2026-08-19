@@ -91,7 +91,6 @@
     "brightCyan": "#88ccdd",
     "brightWhite": "#ffe699"
   },
-  "themeCss": "theme.css",
   "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/out-there.m4a",

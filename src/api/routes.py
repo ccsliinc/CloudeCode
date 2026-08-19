@@ -1975,6 +1975,25 @@ def _load_manifest(theme_dir: Path, source: str) -> Optional[ThemeManifest]:
         )
         return None
 
+    # A declared-but-missing themeCss is a manifest error, not a silent
+    # no-op. Before 2026-08-19 ``ThemeManifest`` had no ``themeCss`` field
+    # at all, so a manifest could declare one and the value would just be
+    # dropped by pydantic as an unrecognized extra key - the exact same
+    # silent-loss shape as the audio-block bug documented on
+    # ``ThemeAudioManifest``. Now that the field exists, a theme that
+    # declares it must actually ship the file; skip + log loudly rather
+    # than let the theme through with a reference to nothing.
+    if manifest.themeCss:
+        theme_css_path = theme_dir / manifest.themeCss
+        if not theme_css_path.is_file():
+            logger.warning(
+                "theme_manifest_themecss_missing",
+                theme_id=manifest.id,
+                theme_css=manifest.themeCss,
+                path=str(theme_css_path),
+            )
+            return None
+
     return manifest
 
 

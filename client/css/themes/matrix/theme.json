@@ -91,7 +91,6 @@
     "brightCyan": "#66ffcc",
     "brightWhite": "#ccffcc"
   },
-  "themeCss": "theme.css",
   "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/scifi-drone.m4a",

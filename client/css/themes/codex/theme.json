@@ -91,7 +91,6 @@
     "brightCyan": "#0e7490",
     "brightWhite": "#1a1a1a"
   },
-  "themeCss": "theme.css",
   "effects": "effects.js",
   "audio": {
     "src": "/static/assets/audio/observing-the-star.m4a",
