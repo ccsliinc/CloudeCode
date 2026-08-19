@@ -101,6 +101,12 @@
          owns the .settings-field rules this builds on. -->
     <link rel="stylesheet" href="/static/css/settings-audio.css" />
 
+    <!-- The global audio on/off control (client/js/globalAudioToggle.js),
+         re-parented between .home-bar and .info by app.js. Self-contained:
+         it never edits home-bar.css/terminal-tools.css/styles.css, only
+         adds rules scoped under its own .global-audio-btn class. -->
+    <link rel="stylesheet" href="/static/css/global-audio.css" />
+
     <!-- The home bar's server-status panel. After styles.css, which owns
          the .modal-overlay / .modal-header / .modal-body chrome it rides
          on and the bare `button` reset its controls have to escape. -->
@@ -561,11 +567,17 @@
          AFTER themeAudio.js. It is what makes a silent failure speak: the
          music control asks it why nothing is playing and shows the answer. -->
     <script src="/static/js/themeAudioStatus.js"></script>
+    <!-- GlobalAudioToggle - the one audio on/off control, re-parented
+         between .home-bar and .info by app.js. AFTER themeAudio.js
+         (setSessionAudio) and themeAudioStatus.js (current()); BEFORE
+         app.js, which calls place()/syncForSession() from its
+         screen-transition methods. -->
+    <script src="/static/js/globalAudioToggle.js"></script>
 
-    <!-- Per-session theme picker + per-session music opt-in, mounted on
-         the terminal screen. Must load AFTER themes/registry.js
-         (window.Themes.getActiveSession / applyGlobal / listAll) and
-         AFTER themeAudio.js (window.ThemeAudio). -->
+    <!-- Per-session theme picker, mounted on the terminal screen. Must
+         load AFTER themes/registry.js (window.Themes.getActiveSession /
+         applyGlobal / listAll). The per-session music opt-in that used to
+         live here moved to globalAudioToggle.js above. -->
     <script src="/static/js/session-theme-menu.js"></script>
 
     <!-- Session sidebar - conversation switcher. Must load AFTER api.js

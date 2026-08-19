@@ -601,6 +601,7 @@ class AppController {
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         this._placeStatusLight('auth');
+        if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('auth');
         // Leaving the terminal: drop any session-scoped theme so xterm
         // and the terminal screen revert to the global theme on next entry.
         if (window.Themes && typeof window.Themes.clearSession === 'function') {
@@ -618,12 +619,12 @@ class AppController {
                 window.Themes.applyTheme(stored || 'claude', { persist: false });
             }
         }
-        // Leaving session scope re-opens the per-session music gate. Without
-        // this the detached session's opt-in (OFF by default) keeps vetoing
-        // the header "app sound" switch on the home screen, silently. Must
-        // run AFTER setActiveSession(null) - it reads the active session.
-        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
-            window.SessionThemeMenu.syncForSession();
+        // Leaving session scope closes the audio gate: with no session in
+        // scope ThemeAudio's sessionName is null and the gate cannot open
+        // whatever the global on/off says. Must run AFTER
+        // setActiveSession(null) - it reads the active session.
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
+            window.GlobalAudioToggle.syncForSession();
         }
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 - auth screen has no session context; reset tab title.
@@ -664,12 +665,12 @@ class AppController {
                 window.Themes.applyTheme(stored || 'claude', { persist: false });
             }
         }
-        // Leaving session scope re-opens the per-session music gate. Without
-        // this the detached session's opt-in (OFF by default) keeps vetoing
-        // the header "app sound" switch on the home screen, silently. Must
-        // run AFTER setActiveSession(null) - it reads the active session.
-        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
-            window.SessionThemeMenu.syncForSession();
+        // Leaving session scope closes the audio gate: with no session in
+        // scope ThemeAudio's sessionName is null and the gate cannot open
+        // whatever the global on/off says. Must run AFTER
+        // setActiveSession(null) - it reads the active session.
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
+            window.GlobalAudioToggle.syncForSession();
         }
         // HOME-HEADER-CONSOLIDATION: the launchpad title + prompt used to be
         // a standalone block at the top of .launchpad-container (see
@@ -711,6 +712,7 @@ class AppController {
         // which is why this is here and not beside the currentScreen
         // assignment above like the other two screens.
         this._placeStatusLight('launchpad');
+        if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('launchpad');
 
         // Reload projects
         window.Launchpad.loadProjects();
@@ -744,6 +746,7 @@ class AppController {
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
         this._placeStatusLight('terminal');
+        if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('terminal');
 
         // SESSION-IDENTITY-V2 - enter per-session theme scope. Subsequent
         // ThemeSelector swaps will PATCH the server-side pin instead of
@@ -776,11 +779,13 @@ class AppController {
             && typeof window.Themes.applyTheme === 'function') {
             window.Themes.applyTheme(session.pinned_theme, { persist: false, forXterm: true });
         }
-        // Per-session music: apply THIS session's opt-in (default off) so
-        // music never carries over from the session we just left. Must run
+        // Global audio: apply the stored on/off to THIS session's gate so
+        // music never carries over from the session we just left (the
+        // engine's sessionOn half is per session-name in memory even
+        // though the on/off itself is one global choice now). Must run
         // after setActiveSession above - it keys off the tmux session name.
-        if (window.SessionThemeMenu && typeof window.SessionThemeMenu.syncForSession === 'function') {
-            window.SessionThemeMenu.syncForSession();
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
+            window.GlobalAudioToggle.syncForSession();
         }
         // Header identity: brand icon + session name as title.
         setHeaderIdentity({
@@ -866,6 +871,7 @@ class AppController {
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
         this._placeStatusLight('terminal');
+        if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('terminal');
 
         // SESSION-IDENTITY-V2 - same wiring as showTerminal(). The session
         // arg here is typically a SessionInfo (carries tmux_session +
@@ -880,6 +886,17 @@ class AppController {
             || null;
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
+        }
+        // Global audio: re-apply the stored on/off to THIS session's gate.
+        // FIXED 2026-08-19: this path used to skip the sync entirely, so
+        // re-attaching to a running session (from the launchpad's
+        // active-session banner or the sidebar) left ThemeAudio's gate
+        // pointed at whatever session was last synced through
+        // showTerminal() - global audio could go silent on a plain
+        // re-attach with no toggle touched. Must run after
+        // setActiveSession above - it keys off the tmux session name.
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
+            window.GlobalAudioToggle.syncForSession();
         }
         // Outbound URL sync: same encoding Router.enterSession() shares
         // with build_deep_link() (server) and the inbound router parser.

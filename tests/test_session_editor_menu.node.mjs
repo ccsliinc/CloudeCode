@@ -1,23 +1,27 @@
 // Node test for client/js/session-editor-menu.js - the EDITOR half of
 // the two session-scoped FAB menus.
 //
-// Session theme and session music were briefly merged into the terminal
-// tools menu. They do not belong there: they configure the session's
-// appearance and sound rather than moving content across the terminal's
-// boundary. This suite pins the half of the split that owns them.
+// Session theme was briefly merged into the terminal tools menu. It does
+// not belong there: it configures the session's appearance rather than
+// moving content across the terminal's boundary. This suite pins the
+// half of the split that owns it.
+//
+// The music row that used to sit here (session-theme-menu.js's
+// per-session opt-in) is gone - replaced by a single global on/off in
+// the bottom bar (client/js/globalAudioToggle.js,
+// tests/test_global_audio_toggle.node.mjs). This suite asserts the row
+// stays removed alongside pinning what is left.
 //
 // The properties that matter:
-//   1. THREE ROWS - theme, music, detach - and the first two reach
-//      SessionThemeMenu, which still owns the picker, the opt-in and its
-//      persistence. Detach reaches TerminalController.detachSession(),
-//      the same method the deleted #detachSessionBtn called.
-//   2. THE MUSIC ROW REPORTS LIVE STATE. Rows are rebuilt per open, so
-//      the label and aria-pressed follow the per-session opt-in.
-//   3. THE THEME ROW ANCHORS TO THIS BUTTON, not to the tools button -
+//   1. TWO ROWS - theme, detach - and theme reaches SessionThemeMenu,
+//      which still owns the picker. Detach reaches
+//      TerminalController.detachSession(), the same method the deleted
+//      #detachSessionBtn called.
+//   2. THE THEME ROW ANCHORS TO THIS BUTTON, not to the tools button -
 //      a picker that pops out of the wrong control is the merge again.
-//   4. IT IS SESSION-SCOPED. Hidden on every screen with no session,
+//   3. IT IS SESSION-SCOPED. Hidden on every screen with no session,
 //      which is exactly why it is not a header-kebab row.
-//   5. THE TWO MENUS ARE INDEPENDENT. Opening one does not open, close
+//   4. THE TWO MENUS ARE INDEPENDENT. Opening one does not open, close
 //      or stack the other.
 //
 // Run with: node tests/test_session_editor_menu.node.mjs
@@ -55,8 +59,8 @@ function clientFile(...parts) {
     return fs.readFileSync(path.join(__dirname, '..', 'client', ...parts), 'utf8');
 }
 
-/** The three rows, in the order the editor declares them. */
-const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow', 'sessionDetachRow'];
+/** The two rows, in the order the editor declares them. */
+const ENTRY_IDS = ['sessionThemeRow', 'sessionDetachRow'];
 
 /**
  * Load the editor menu against a mini-DOM. fab-menu.js carries the
@@ -65,14 +69,13 @@ const ENTRY_IDS = ['sessionThemeRow', 'sessionMusicRow', 'sessionDetachRow'];
  * real second menu to check against.
  *
  * @param {object} [opts]
- * @param {boolean} [opts.musicOn] - the per-session opt-in to report.
  * @returns {{env: object, editor: object, tools: object, trigger: object,
  *   toolsTrigger: object, calls: object}}
  */
 function load(opts) {
     const options = opts || {};
     const env = createEnvironment({});
-    const calls = { themeOpen: 0, themeAnchor: null, audioToggle: 0, detach: 0 };
+    const calls = { themeOpen: 0, themeAnchor: null, detach: 0 };
 
     const trigger = env.document.createElement('button');
     trigger.setAttribute('id', 'sessionEditorBtn');
@@ -86,8 +89,6 @@ function load(opts) {
 
     env.window.SessionThemeMenu = {
         open: (anchor) => { calls.themeOpen++; calls.themeAnchor = anchor; },
-        toggleAudio: () => { calls.audioToggle++; return true; },
-        isAudioOn: () => !!options.musicOn,
     };
     env.window.Themes = { getActiveSession: () => 'demo-Main' };
     env.window.TerminalController = { detachSession: () => { calls.detach++; } };
@@ -154,7 +155,7 @@ test('the menu is closed on load and opens on its own trigger', () => {
     assert.equal(trigger.getAttribute('aria-expanded'), 'false');
 });
 
-test('THE SPLIT: exactly the three session-scoped rows, in order', () => {
+test('THE SPLIT: exactly the two session-scoped rows, in order', () => {
     const { env, editor } = load();
     editor.open();
     const ids = menusOf(env, 'fab-menu session-editor-menu')
@@ -182,7 +183,7 @@ test('DETACH MOVED HERE, and still calls the same method', () => {
     // It was #detachSessionBtn in the app-scoped header kebab, which
     // also mounts on the launchpad where there is no session to detach.
     // Detach acts on the SESSION, so it belongs to the session-scoped
-    // control - the same rule that kept theme and music out of the
+    // control - the same rule that kept theme out of the
     // tools menu. Only the surface moved; the behaviour did not.
     const { env, editor, calls } = load();
     editor.open();
@@ -191,7 +192,7 @@ test('DETACH MOVED HERE, and still calls the same method', () => {
         'the row must call TerminalController.detachSession()');
 });
 
-test('detach is fenced off and named, not flush against the music row', () => {
+test('detach is fenced off and named, not flush against the theme row', () => {
     const { env, editor } = load();
     editor.open();
     const r = row(env, 'sessionDetachRow');
@@ -221,16 +222,11 @@ test('a missing TerminalController does not throw', () => {
     row(env, 'sessionDetachRow').dispatchEvent('click');
 });
 
-test('each row reaches SessionThemeMenu, which still owns the behaviour', () => {
+test('the theme row reaches SessionThemeMenu, which still owns the behaviour', () => {
     const theme = load();
     theme.editor.open();
     row(theme.env, 'sessionThemeRow').dispatchEvent('click');
     assert.equal(theme.calls.themeOpen, 1);
-
-    const music = load();
-    music.editor.open();
-    row(music.env, 'sessionMusicRow').dispatchEvent('click');
-    assert.equal(music.calls.audioToggle, 1);
 });
 
 test('THE PICKER ANCHORS TO THIS BUTTON, not to the tools button', () => {
@@ -241,26 +237,20 @@ test('THE PICKER ANCHORS TO THIS BUTTON, not to the tools button', () => {
         'a picker popping out of the wrong FAB is the merge in disguise');
 });
 
-test('the music row reports the LIVE per-session opt-in on every open', () => {
-    const off = load({ musicOn: false });
-    off.editor.open();
-    const rOff = row(off.env, 'sessionMusicRow');
-    assert.equal(rOff.getAttribute('aria-pressed'), 'false');
-    assert.ok(!rOff.classList.contains('is-on'));
-
-    const on = load({ musicOn: true });
-    on.editor.open();
-    const rOn = row(on.env, 'sessionMusicRow');
-    assert.equal(rOn.getAttribute('aria-pressed'), 'true');
-    assert.ok(rOn.classList.contains('is-on'));
-    assert.equal(rOn.getAttribute('aria-label'),
-        'turn off music for this session');
+test('THE MUSIC ROW STAYS REMOVED: audio is the global bottom-bar control now', () => {
+    const { env, editor } = load();
+    editor.open();
+    const ids = menusOf(env, 'fab-menu session-editor-menu')
+        .flatMap((m) => m.children)
+        .map((r) => r.getAttribute('id'));
+    assert.ok(!ids.includes('sessionMusicRow'),
+        'audio moved to client/js/globalAudioToggle.js - see its own test file');
 });
 
 test('picking a row closes the menu, so it never sits over the terminal', () => {
     const { env, editor } = load();
     editor.open();
-    row(env, 'sessionMusicRow').dispatchEvent('click');
+    row(env, 'sessionThemeRow').dispatchEvent('click');
     assert.equal(editor.isOpen(), false);
 });
 
