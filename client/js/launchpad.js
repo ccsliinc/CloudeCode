@@ -65,6 +65,14 @@ class Launchpad {
         // literal "__no_project__"). Survives re-renders because it
         // lives on the instance, not in the DOM.
         this._collapsedProjectNodes = new Set();
+        // Three-outcome latch for GET /projects, the same shape as
+        // sessionAttributionListingOk above. null = never asked, true =
+        // the list was read (so an empty list really means "no
+        // projects"), false = the fetch failed and the empty list is an
+        // absence of evidence, not evidence of absence. The "new
+        // session" picker reads this so a failed fetch is never
+        // presented to the user as "you have no projects".
+        this.projectsListingOk = null;
     }
 
     /**
@@ -78,6 +86,7 @@ class Launchpad {
         // sessions" section heading row; the 6 sub-actions route back
         // into the same handlers the old inline "new project" section used.
         this.setupNewFab();
+        this.bindHeaderHelpToggle();
         // Note: loadProjects() will be called by App.showLaunchpad()
         this._startRunningSessionsPoller();
     }
@@ -113,12 +122,12 @@ class Launchpad {
         // Map the FAB's data-action attrs onto our existing handlers.
         // Wrapped so `this` resolves correctly inside the dispatch table.
         const actions = {
-            'new-project':      () => this.createNewSession(),
-            'open-folder':      () => this.openProjectFromFolder(),
-            'clone-github':     () => this.showCloneFromGithubModal(),
-            'connect-openclaw': () => this.createNewSessionWithAgent('openclaw'),
-            'connect-hermes':   () => this.createNewSessionWithAgent('hermes'),
-            'new-console':      () => this.createConsoleSession(),
+            'new-claude-project': () => this.startNewClaudeProject(),
+            'new-session':        () => this.startSessionInExistingProject(),
+            'open-folder':        () => this.openProjectFromFolder(),
+            'connect-openclaw':   () => this.createNewSessionWithAgent('openclaw'),
+            'connect-hermes':     () => this.createNewSessionWithAgent('hermes'),
+            'new-console':        () => this.createConsoleSession(),
         };
 
         trigger.addEventListener('click', (e) => {
@@ -162,6 +171,47 @@ class Launchpad {
 
         this._newFabWired = true;
         console.log('Launchpad: new-fab wired');
+    }
+
+    /**
+     * Wire the header's "?" control to the launchpad help disclosure.
+     *
+     * Description: item 48 moves the CONTROL to the top right of the
+     *   header; the help panel itself does not move - it stays the first
+     *   child of ``.launchpad-container`` where it already is, and stays
+     *   a native ``<details>``. The in-pane ``<summary>`` is still in the
+     *   markup (it is what makes the element a disclosure at all) but is
+     *   visually hidden by CSS, so there is exactly ONE control and it is
+     *   the header one. The button is bound once and resolves the
+     *   ``<details>`` at click time, because ``renderLaunchpadUI()``
+     *   replaces that element on every render while the header button
+     *   outlives all of them.
+     * Inputs: none (reads ``#launchpad-help-btn`` and the current
+     *   ``.adopt-disclosure``).
+     * Output: boolean - true when the control was found and wired, false
+     *   when the header button is absent (nothing is claimed either way
+     *   about the help panel).
+     * Example: lp.bindHeaderHelpToggle();
+     */
+    bindHeaderHelpToggle() {
+        const btn = document.getElementById('launchpad-help-btn');
+        if (!btn) {
+            console.warn('Launchpad: header help button missing - help control not wired');
+            return false;
+        }
+        if (btn.__boundHelpToggle) return true;
+        btn.__boundHelpToggle = true;
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const details = document.querySelector('#launchpad-screen .adopt-disclosure');
+            if (!details) return;
+            const next = !details.open;
+            details.open = next;
+            btn.setAttribute('aria-expanded', String(next));
+            if (next) details.scrollIntoView({ block: 'nearest' });
+        });
+        return true;
     }
 
     /**
@@ -314,6 +364,7 @@ class Launchpad {
     async loadProjects() {
         try {
             this.projects = await window.API.getProjects();
+            this.projectsListingOk = true;
             // Presence and authority are BOTH fetched before the first
             // paint so neither a missing project nor a degraded datastore
             // flashes as normal for one frame - renderProjectList() reads
@@ -325,6 +376,7 @@ class Launchpad {
             ]);
             this.renderProjectList();
         } catch (error) {
+            this.projectsListingOk = false;
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
         }
@@ -1782,14 +1834,35 @@ class Launchpad {
                                 </svg>
                             </button>
                             <div class="new-fab__menu" role="menu" aria-label="New session actions">
-                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-project" tabindex="-1">
+                                <!-- TOP ITEM. "create new project" was the
+                                     claude entrypoint without ever saying so.
+                                     It is named for what it makes, and it
+                                     carries the app's OWN icon file
+                                     (client/assets/icons/header-icon.png, the
+                                     same asset the header uses) rather than a
+                                     glyph traced by hand. Never redraw a mark
+                                     here; if an asset you need does not exist,
+                                     say so instead of approximating one. -->
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-claude-project" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <img class="new-fab__icon-img" src="/static/assets/icons/header-icon.png" srcset="/static/assets/icons/header-icon.png 1x, /static/assets/icons/header-icon@2x.png 2x" alt="" />
+                                    </span>
+                                    <span class="new-fab__label">new claude project</span>
+                                </button>
+                                <!-- SECOND ITEM. Adds a session to a project
+                                     that already exists. It never creates a
+                                     project, and with no projects to choose
+                                     from it says so rather than opening an
+                                     empty picker. -->
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-session" tabindex="-1">
                                     <span class="new-fab__icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M13 2L3 12l9 9 10-10V2z"/>
-                                            <circle cx="8.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>
+                                            <rect x="3" y="4" width="18" height="16" rx="2"/>
+                                            <line x1="12" y1="9" x2="12" y2="15"/>
+                                            <line x1="9" y1="12" x2="15" y2="12"/>
                                         </svg>
                                     </span>
-                                    <span class="new-fab__label">create new project</span>
+                                    <span class="new-fab__label">new session</span>
                                 </button>
                                 <button class="new-fab__item" type="button" role="menuitem" data-action="open-folder" tabindex="-1">
                                     <span class="new-fab__icon" aria-hidden="true">
@@ -1798,14 +1871,6 @@ class Launchpad {
                                         </svg>
                                     </span>
                                     <span class="new-fab__label">open from folder</span>
-                                </button>
-                                <button class="new-fab__item" type="button" role="menuitem" data-action="clone-github" tabindex="-1">
-                                    <span class="new-fab__icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.04 1.53 1.04.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/>
-                                        </svg>
-                                    </span>
-                                    <span class="new-fab__label">clone from github</span>
                                 </button>
                                 <button class="new-fab__item" type="button" role="menuitem" data-action="connect-openclaw" tabindex="-1">
                                     <span class="new-fab__icon" aria-hidden="true">
@@ -1866,7 +1931,7 @@ class Launchpad {
                     <div class="launchpad-section-title">
                         <button type="button" class="launchpad-section-toggle" id="projects-section-toggle" aria-expanded="true" aria-controls="project-list">
                             <span class="launchpad-section-chevron" aria-hidden="true">►</span>
-                            recent projects
+                            projects
                         </button>
                     </div>
                     <div id="project-list" class="project-list">
@@ -1928,8 +1993,8 @@ class Launchpad {
             `;
 
         // Event listeners
-        // Note: the 6 speed-dial actions (create / open-folder /
-        // clone-github / openclaw / hermes / console) are wired in
+        // Note: the 6 speed-dial actions (new claude project / new
+        // session / open-folder / openclaw / hermes / console) are wired in
         // setupNewFab() - the inline speed-dial sits to the right of the
         // "running sessions" section heading on the launchpad screen.
 
@@ -1990,7 +2055,7 @@ class Launchpad {
 
     /**
      * Wire up the two launchpad section headings ("running sessions" and
-     * "recent projects") as real collapsible disclosures. Collapsed state
+     * "projects") as real collapsible disclosures. Collapsed state
      * persists per-section in localStorage under
      * `cloude.launchpad.collapsed`, following the same convention as
      * `cloude.theme` / `cloude.audio.volume`.
@@ -2263,17 +2328,53 @@ class Launchpad {
             const key = toggle.getAttribute('data-node-key');
             if (!key) return;
             const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
-            toggle.setAttribute('aria-expanded', String(nowExpanded));
-            const sessionsEl = toggle.nextElementSibling;
-            if (sessionsEl && sessionsEl.classList.contains('project-node__sessions')) {
-                sessionsEl.style.display = nowExpanded ? '' : 'none';
-            }
+            this._applyProjectNodeCollapsed(toggle, !nowExpanded);
             if (nowExpanded) {
                 this._collapsedProjectNodes.delete(key);
             } else {
                 this._collapsedProjectNodes.add(key);
             }
         });
+    }
+
+    /**
+     * Show or hide one tree node's foldable parts, addressed from the
+     * node ROOT rather than by walking siblings off the toggle button.
+     *
+     * Description: this is the fix for the fold that did nothing. A
+     *   PROJECT node nests its toggle inside ``.project-node__row``, so
+     *   ``toggle.nextElementSibling`` was the ``.project-item`` card, not
+     *   the ``.project-node__sessions`` container one level up. The old
+     *   code guarded on the class, found the wrong element, and silently
+     *   changed nothing while still flipping ``aria-expanded`` and
+     *   recording the new state - so the sessions only appeared to fold
+     *   later, when the 5s poller happened to re-render. The synthetic
+     *   "no project" node DID fold, because there the toggle is the
+     *   header and the container really is its next sibling, which is
+     *   why the bug read as "sometimes works". Resolving from
+     *   ``closest('.project-node')`` makes both shapes take the same
+     *   path and removes the dependence on sibling order entirely.
+     *   Both foldable parts move together: the child session rows and
+     *   the project description.
+     * Inputs: toggle (HTMLElement) - the ``.project-node__toggle``
+     *   clicked or being re-applied; collapsed (boolean) - true to hide.
+     * Output: boolean - true when a ``.project-node`` root was found and
+     *   updated, false when the toggle sits outside one (nothing was
+     *   changed, and nothing is claimed to have been).
+     * Example: lp._applyProjectNodeCollapsed(btn, true);
+     */
+    _applyProjectNodeCollapsed(toggle, collapsed) {
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        const node = toggle.closest('.project-node');
+        if (!node) return false;
+        const display = collapsed ? 'none' : '';
+        node.querySelectorAll('.project-node__sessions').forEach((el) => {
+            el.style.display = display;
+        });
+        node.querySelectorAll('.project-description').forEach((el) => {
+            el.style.display = display;
+        });
+        return true;
     }
 
     /**
@@ -2339,7 +2440,17 @@ class Launchpad {
 
         // Render projects
         const projectNodesHtml = this.projects.map((project, index) => {
-            const description = project.description || 'no description';
+            // SLIM ROW. A project with no description used to render the
+            // literal filler "no description": a full line of type on
+            // every row that says nothing. All 9 projects in the live
+            // datastore have an empty description, so on the real screen
+            // the filler was the single largest avoidable cost. No
+            // description now means no element at all. The text is also
+            // escaped here - it was interpolated raw, and a description
+            // is user-supplied text that reaches this template.
+            const rawDescription = (project.description || '').trim();
+            const hasDescription = rawDescription.length > 0;
+            const description = this._escapeHtml(rawDescription);
             // feat/projects-table (S3) - presence badge. `presenceRow` is
             // undefined for a project the DB import has not seen yet
             // (created via config write after the one-time boot import);
@@ -2402,11 +2513,29 @@ class Launchpad {
             const nodeKey = `project:${project.name}`;
             const collapsed = this._collapsedProjectNodes.has(nodeKey);
             const hasChildren = children.length > 0;
-            const chevronHtml = hasChildren
-                ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle running sessions for ${this._escapeHtml(project.name)}" aria-controls="project-node-sessions-${this._escapeHtml(nodeKey)}"><span class="project-node__chevron" aria-hidden="true">►</span><span class="project-node__count">${children.length}</span></button>`
+            // The node is foldable when it has something to fold: child
+            // sessions, a description, or both. The count chip is drawn
+            // only when there ARE children, because a bare "0" would be
+            // a claim about sessions that the fold is not making.
+            const foldable = hasChildren || hasDescription;
+            const countHtml = hasChildren
+                ? `<span class="project-node__count">${children.length}</span>`
+                : '';
+            const controlsAttr = hasChildren
+                ? ` aria-controls="project-node-sessions-${this._escapeHtml(nodeKey)}"`
+                : '';
+            const chevronHtml = foldable
+                ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle details for ${this._escapeHtml(project.name)}"${controlsAttr}><span class="project-node__chevron" aria-hidden="true">►</span>${countHtml}</button>`
                 : '';
             const sessionsHtml = hasChildren
                 ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${children.map(s => this._renderTreeSessionRowHtml(s)).join('')}</div>`
+                : '';
+            // Item 43: the description is the part of the row that a
+            // collapsed node sheds. Rendered with the collapse already
+            // applied so a re-render (the 5s poller) repaints the same
+            // state the user last chose, exactly as sessionsHtml does.
+            const descriptionHtml = hasDescription
+                ? `<div class="project-description"${collapsed ? ' style="display:none;"' : ''}>${description}</div>`
                 : '';
 
             return `
@@ -2418,7 +2547,7 @@ class Launchpad {
                         <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
                         <div class="project-name">» ${project.name}</div>
                         <div class="project-path">${project.path}</div>
-                        <div class="project-description">${description}</div>
+                        ${descriptionHtml}
                         ${presenceBadge}
                     </div>
                   </div>
@@ -2759,6 +2888,206 @@ class Launchpad {
      */
     showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
         return window.App.showConfirmModal(title, message, details, primaryLabel, secondaryLabel);
+    }
+
+    /**
+     * Present a one-of-N choice as a modal and resolve the chosen key.
+     *
+     * Description: the shared list-picker behind "new claude project" and
+     *   "new session". Reuses the folder-picker visual language already
+     *   in this file (``.folder-picker-list`` / ``.folder-picker-item``)
+     *   rather than inventing a second kind of list. A row may be
+     *   DISABLED with a stated reason, which is how a project whose
+     *   presence is 'missing' or 'unreachable' stays VISIBLE and NAMED
+     *   while refusing to be opened, matching the row treatment on the
+     *   home screen itself. When there is nothing to choose from, the
+     *   caller's own message is shown instead of an empty box, because
+     *   "you have none" and "I could not find out" are different answers
+     *   and the caller is the only one that knows which it has.
+     * Inputs: options ({title: string, hint?: string, items:
+     *   Array<{key: string, label: string, sub?: string,
+     *   disabled?: boolean, reason?: string}>, emptyMessage?: string,
+     *   emptyKind?: string}).
+     * Output: Promise<?string> - the chosen item's key, or null when the
+     *   user cancelled or there was nothing selectable.
+     * Example: const how = await lp._showChoiceModal({title: 'new claude
+     *   project', items: [{key: 'empty', label: 'start empty'}]});
+     */
+    _showChoiceModal(options) {
+        const {
+            title = 'choose',
+            hint = 'up/down to move . enter to choose . esc to cancel',
+            items = [],
+            emptyMessage = null,
+            emptyKind = 'info',
+        } = options || {};
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            const rowsHtml = items.length
+                ? items.map((it, i) => {
+                    const cls = it.disabled
+                        ? 'folder-picker-item folder-picker-item-disabled'
+                        : 'folder-picker-item';
+                    const sub = it.disabled && it.reason
+                        ? `<div class="folder-picker-item-sub">${this._escapeHtml(it.reason)}</div>`
+                        : (it.sub ? `<div class="folder-picker-item-sub">${this._escapeHtml(it.sub)}</div>` : '');
+                    return `<div class="${cls}" data-choice-index="${i}"${it.disabled ? ' aria-disabled="true"' : ''}>`
+                        + `<div class="folder-picker-item-label">${this._escapeHtml(it.label)}</div>${sub}</div>`;
+                }).join('')
+                : `<div class="folder-picker-empty folder-picker-empty--${this._escapeHtml(emptyKind)}">${this._escapeHtml(emptyMessage || 'nothing to choose from')}</div>`;
+            overlay.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">&raquo; ${this._escapeHtml(title)}</div>
+                    <div class="modal-body">
+                        <div class="folder-picker-list" tabindex="-1">${rowsHtml}</div>
+                        <div class="modal-description">${this._escapeHtml(items.length ? hint : 'esc to close')}</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" data-choice-cancel>${items.length ? 'cancel' : 'ok'}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const rowEls = Array.from(overlay.querySelectorAll('.folder-picker-item'));
+            const selectable = rowEls
+                .map((el, i) => (items[i] && !items[i].disabled ? i : -1))
+                .filter((i) => i >= 0);
+            let active = selectable.length ? selectable[0] : -1;
+
+            const paint = () => {
+                rowEls.forEach((el, i) => {
+                    el.classList.toggle('folder-picker-item-active', i === active);
+                });
+                if (active >= 0 && rowEls[active]) {
+                    rowEls[active].scrollIntoView({ block: 'nearest' });
+                }
+            };
+            const close = (value) => {
+                document.removeEventListener('keydown', onKey, true);
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                resolve(value);
+            };
+            const step = (dir) => {
+                if (!selectable.length) return;
+                const at = selectable.indexOf(active);
+                const next = at < 0 ? 0 : (at + dir + selectable.length) % selectable.length;
+                active = selectable[next];
+                paint();
+            };
+            const onKey = (e) => {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(null); return; }
+                if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); step(1); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); step(-1); return; }
+                if (e.key === 'Enter') {
+                    e.preventDefault(); e.stopPropagation();
+                    if (active >= 0 && items[active] && !items[active].disabled) close(items[active].key);
+                }
+            };
+            document.addEventListener('keydown', onKey, true);
+            rowEls.forEach((el, i) => {
+                el.addEventListener('click', () => {
+                    if (!items[i] || items[i].disabled) return;
+                    close(items[i].key);
+                });
+            });
+            overlay.querySelector('[data-choice-cancel]').addEventListener('click', () => close(null));
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+            paint();
+        });
+    }
+
+    /**
+     * The "new claude project" entrypoint, with clone-from-github folded
+     * in as one of its options.
+     *
+     * Description: "create new project" never said which agent it was
+     *   creating for, and cloning a repo sat beside it as a peer even
+     *   though a clone IS a new claude project, just one whose contents
+     *   arrive from a remote. This asks how the project should start,
+     *   then routes into the two existing flows unchanged - no launch
+     *   logic is duplicated or reimplemented here.
+     * Inputs: none.
+     * Output: Promise<void> - resolves once the chosen flow finishes, or
+     *   immediately when the user cancels.
+     * Example: await lp.startNewClaudeProject();
+     */
+    async startNewClaudeProject() {
+        const how = await this._showChoiceModal({
+            title: 'new claude project',
+            items: [
+                { key: 'empty', label: 'start empty', sub: 'a fresh working folder' },
+                { key: 'clone', label: 'clone from github', sub: 'start from an existing repository' },
+            ],
+        });
+        if (how === 'empty') return this.createNewSession();
+        if (how === 'clone') return this.showCloneFromGithubModal();
+        return undefined;
+    }
+
+    /**
+     * The "new session" entrypoint: add a session to a project that
+     * ALREADY exists, and never create one.
+     *
+     * Description: three outcomes, kept distinct. If the project list was
+     *   never read successfully (``projectsListingOk === false``) it says
+     *   CANNOT DETERMINE and refuses, because an empty list after a failed
+     *   fetch is not evidence that there are no projects. If the list WAS
+     *   read and is genuinely empty, it says so and points at "new claude
+     *   project" instead of opening an empty picker. Otherwise it offers
+     *   the projects, with 'missing' and 'unreachable' rows visible,
+     *   named and refused exactly as they are on the home screen.
+     * Inputs: none.
+     * Output: Promise<void>.
+     * Example: await lp.startSessionInExistingProject();
+     */
+    async startSessionInExistingProject() {
+        if (this.projectsListingOk === false) {
+            await this._showChoiceModal({
+                title: 'new session',
+                items: [],
+                emptyMessage: 'CANNOT DETERMINE which projects you have: the project list could not be read. '
+                    + 'This is not a claim that you have none.',
+                emptyKind: 'unknown',
+            });
+            return;
+        }
+        const projects = this.projects || [];
+        if (projects.length === 0) {
+            await this._showChoiceModal({
+                title: 'new session',
+                items: [],
+                emptyMessage: 'no claude projects yet. use "new claude project" to make one first.',
+                emptyKind: 'info',
+            });
+            return;
+        }
+        const items = projects.map((p) => {
+            const presenceRow = (p.root && this.projectPresence.get(p.root))
+                || this.projectPresence.get(p.path);
+            const presence = presenceRow ? presenceRow.presence : 'unchecked';
+            const reason = presence === 'missing'
+                ? 'MISSING - folder not found'
+                : (presence === 'unreachable'
+                    ? `CANNOT DETERMINE - ${(presenceRow && presenceRow.presence_detail) || 'reason unknown'}`
+                    : null);
+            return {
+                key: p.name,
+                label: p.name,
+                sub: p.path,
+                disabled: presence === 'missing' || presence === 'unreachable',
+                reason,
+            };
+        });
+        const chosen = await this._showChoiceModal({
+            title: 'new session in which project',
+            items,
+        });
+        if (!chosen) return;
+        const project = projects.find((p) => p.name === chosen);
+        if (!project) return;
+        await this.selectProject(project);
     }
 
     /**

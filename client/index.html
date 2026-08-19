@@ -250,6 +250,22 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <!-- LAUNCHER HELP, top right of the header. The panel it
+                 opens does NOT live here: it stays where it always was,
+                 the first child of .launchpad-container, rendered by
+                 launchpad.js. This is only the control. Home screen only,
+                 gated on .header--home in styles.css rather than by a
+                 class toggle in app.js, so no screen-switch code has to
+                 remember it. Same "?" glyph as the in-pane summary it
+                 replaces: viewBox 0 0 24 24, stroke-width 1.8 as a
+                 presentation attribute. -->
+            <button type="button" id="launchpad-help-btn" aria-label="help" title="help" data-tooltip="Help" aria-expanded="false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
+                    <line x1="12" y1="17.5" x2="12" y2="17.5"/>
+                </svg>
+            </button>
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
                  never a header one - see .info near the end of this file

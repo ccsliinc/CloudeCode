@@ -1273,9 +1273,51 @@ body.home-header-active {
 }
 
 .project-item {
-    background: var(--color-accent-bg-soft);
+    /* ITEM 41 - AN 80 PERCENT FILL, NOT AN 8 PERCENT ONE. This was
+     * `var(--color-accent-bg-soft)`, an alpha 0.06 to 0.08 accent wash,
+     * so effectively the whole card was the animated theme canvas at
+     * z-index -1 with a hint of colour on top, and body text sat
+     * directly on moving pixels. The fill is now 80 percent of the
+     * theme's own card surface token, with the original accent wash
+     * kept as a background-IMAGE layer on top so the card still reads
+     * the same colour. Because the base is a theme token, a light theme
+     * fills with its light page colour (codex #f7f7fa, legacy_windows
+     * #C0C0C0) and a dark theme with its dark one - a single hardcoded
+     * fill tuned for near-black would be wrong on both of those.
+     * The base is --color-bg, the PAGE colour, deliberately not
+     * --color-bg-elevated: over a still backdrop an 80 percent page
+     * colour composites back to exactly the colour this card already
+     * was, so the look is unchanged and only the transparency moved.
+     * --color-bg-elevated was measured first and rejected: on dracula it
+     * is #44475a against a #282a36 page, which lifted the card and
+     * dropped the muted path line from 4.6:1 to 4.37:1. Every muted
+     * token in every theme was chosen against --color-bg, so that is the
+     * colour the fill has to land on.
+     * background-color and background-image are declared separately on
+     * purpose: any rule below that wants a different tint sets only the
+     * IMAGE and keeps this base, and any rule that uses the `background`
+     * shorthand would silently discard one of the two layers. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    /* ITEM 37 - ONE BORDER, ONE COLOUR. This box used to declare a 1px
+     * ring in --color-border and then override the LEFT edge to 3px in
+     * --color-accent. Two adjacent borders of different widths and
+     * colours are joined by the painting algorithm with a diagonal
+     * miter, and under `border-radius` that miter is drawn along the
+     * corner arc - which is the smeared two-tone wedge at the top-left
+     * and bottom-left corners, the "bleed on the left side of a
+     * different color". It is not an overlay and not a theme bug; it is
+     * what a mismatched border shorthand renders as. The ring is now
+     * uniform, and the accent rail is an inset shadow instead: shadows
+     * are clipped to the border radius rather than mitered into the
+     * neighbouring edge, so the rail keeps its exact former width,
+     * colour and position with no corner transition at all. Every rule
+     * below that changes the rail colour changes THIS shadow, never a
+     * border-left-color, and every rule that adds a glow must re-declare
+     * the inset rail alongside it (box-shadow is one property, not a
+     * list that accumulates). */
     border: 1px solid var(--color-border);
-    border-left: 3px solid var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
     padding: 14px 40px 14px 16px;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -1285,9 +1327,9 @@ body.home-header-active {
 }
 
 .project-item:hover {
-    background: var(--color-bg-hover);
+    background-color: color-mix(in srgb, var(--color-bg-hover, #323235) 80%, transparent);
     border-color: var(--color-accent);
-    box-shadow: 0 0 8px var(--color-accent-border-soft);
+    box-shadow: inset 3px 0 0 var(--color-accent), 0 0 8px var(--color-accent-border-soft);
 }
 
 .project-name {
@@ -1389,28 +1431,37 @@ body.home-header-active {
     cursor: not-allowed;
 }
 
+/* The rail colour is the presence signal, so it moves from the old
+ * border-left-color onto the same inset shadow the base rule now uses.
+ * The two states keep their two DIFFERENT colours - red for "this is
+ * gone", amber for "I could not tell" - which is the whole point of the
+ * four-state model; only the mechanism that paints them changed. The
+ * state tint keeps riding as a background-IMAGE over the 80 percent
+ * base, so a disabled row is as readable as a normal one. */
 .project-item.project-presence-missing {
-    border-left-color: var(--color-danger);
-    background: var(--color-danger-bg);
+    box-shadow: inset 3px 0 0 var(--color-danger);
+    background-image: linear-gradient(var(--color-danger-bg), var(--color-danger-bg));
     opacity: 0.75;
 }
 
 .project-item.project-presence-missing:hover {
-    background: var(--color-danger-bg);
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-danger-bg), var(--color-danger-bg));
     border-color: var(--color-border);
-    box-shadow: none;
+    box-shadow: inset 3px 0 0 var(--color-danger);
 }
 
 .project-item.project-presence-unreachable {
-    border-left-color: var(--color-warning);
-    background: var(--color-warning-bg);
+    box-shadow: inset 3px 0 0 var(--color-warning);
+    background-image: linear-gradient(var(--color-warning-bg), var(--color-warning-bg));
     opacity: 0.75;
 }
 
 .project-item.project-presence-unreachable:hover {
-    background: var(--color-warning-bg);
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-warning-bg), var(--color-warning-bg));
     border-color: var(--color-border);
-    box-shadow: none;
+    box-shadow: inset 3px 0 0 var(--color-warning);
 }
 
 .project-presence-disabled .project-edit-btn,
@@ -2571,14 +2622,23 @@ body.home-header-active {
     flex-direction: column;
     padding: 10px 12px;
     margin-bottom: 6px;
-    background: var(--color-accent-bg-soft);
+    /* ITEM 41, same two-layer fill as .project-item above: 80 percent of
+     * the theme's card surface, with the original accent wash kept as an
+     * image layer so the row's colour is unchanged. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease;
 }
 
+/* Hover changes the TINT layer only. Written as a `background` shorthand
+ * it would reset background-color too and drop the row back to a 14
+ * percent fill on hover, which is exactly the legibility problem item 41
+ * is about - and it would only show up while the pointer was down the
+ * list. */
 .running-session-row:hover {
-    background: rgba(215, 119, 87, 0.14); /* TODO: theme-token candidate (accent-bg-mid) */
+    background-image: linear-gradient(rgba(215, 119, 87, 0.14), rgba(215, 119, 87, 0.14)); /* TODO: theme-token candidate (accent-bg-mid) */
 }
 
 /* Ownership stripe - was --color-success / --color-warning, generic
@@ -4133,14 +4193,16 @@ body.home-header-active {
     align-items: center;
     gap: 8px;
     padding: 6px 10px;
-    background: var(--color-accent-bg-soft);
+    /* ITEM 41, same two-layer fill as .project-item / .running-session-row. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease;
 }
 
 .project-session-row:hover {
-    background: rgba(215, 119, 87, 0.14);
+    background-image: linear-gradient(rgba(215, 119, 87, 0.14), rgba(215, 119, 87, 0.14));
 }
 
 .project-session-row__name {
@@ -4221,6 +4283,9 @@ body.home-header-active {
 
 .project-session-row--attention {
     cursor: default;
+    /* Stays deliberately unfilled: NEEDS ATTENTION is an outlined,
+     * non-actionable row, not a card, and the 80 percent fill above is
+     * for surfaces that carry a clickable session. */
     background: transparent;
     border: 1px solid var(--color-border);
     flex-direction: column;
@@ -4277,4 +4342,124 @@ body.home-header-active {
     color: var(--color-warning);
     background: var(--color-warning-bg);
     border: 1px solid var(--color-warning-border);
+}
+
+/* ---------------------------------------------------------------------
+ * feat/home-screen-mechanics - home screen behaviour round. Mechanics
+ * only: no new palette, no new tokens, every colour below already
+ * existed and is read from the same theme variables it was read from
+ * before.
+ * --------------------------------------------------------------------- */
+
+/* ITEM 48 - THE HELP CONTROL MOVES, THE HELP PANEL DOES NOT.
+ * The panel is still the first child of `.launchpad-container`, still a
+ * native <details>, still rendered by launchpad.js. Only its control
+ * moved into the header's top-right cluster. The in-pane <summary> stays
+ * in the markup because that is what makes the element a disclosure at
+ * all, but it is taken out of the layout so there is exactly ONE control
+ * on screen rather than two that toggle the same thing.
+ * `visibility: hidden` would still cost its box; `display: none` on a
+ * <summary> leaves the <details> perfectly openable via its `open`
+ * property, which is what the header button sets. */
+#launchpad-screen .adopt-disclosure > summary {
+    display: none;
+}
+
+/* Home screen only, gated on the class app.js already stamps on the
+ * header for the launchpad, so no screen-switch code has to remember to
+ * show or hide this button. It inherits the shared header icon-button
+ * look from the `.controls button` rules far above - nothing is
+ * restyled here. */
+#launchpad-help-btn {
+    display: none;
+}
+
+.header--home #launchpad-help-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ITEM 37, THE SECOND INSTANCE - a themed session row's LEFT EDGE.
+ * `client/css/session-theme-tint.css` paints a themed row with two inset
+ * shadows: a 1px ring (session identity, all four sides) and a 3px
+ * inline-start rail. On the home screen that rail lands immediately
+ * inside the 3px `border-left` that `.running-session-row.owned` /
+ * `.external` already draw in the ownership colour, so the left edge is
+ * SIX pixels of two unrelated colours while every other edge is one.
+ * That is the "2 colors" on the left. The tint module documents it as an
+ * intentional two-tone edge; on screen it reads as a bleed, so the home
+ * row now keeps the ring and drops the rail. Nothing is lost: ownership
+ * still has its own 3px edge AND its TMUX / EXTERNAL text badge in the
+ * same row (which that module names as the primary cue), and session
+ * identity still has the ring in its own colour on all four sides.
+ * The sidebar row is untouched - it has no ownership border to collide
+ * with, so its rail is the only thing on that edge and reads correctly.
+ * Specificity, not order, is what makes this win: session-theme-tint.css
+ * loads AFTER this file, so the extra `.launchpad-container` is doing
+ * real work here and must not be "simplified" away. */
+.launchpad-container .running-session-row[data-session-theme] {
+    box-shadow: inset 0 0 0 1px var(--session-theme-ring);
+}
+
+/* ITEMS 51/52/53 - the speed-dial's first item now carries the app's own
+ * icon FILE rather than a drawn glyph. Sized to the same 18px box every
+ * sibling <svg> uses so the icon column stays one width. */
+.new-fab__icon-img {
+    width: 18px;
+    height: 18px;
+    display: block;
+    object-fit: contain;
+}
+
+/* The shared choice modal (`_showChoiceModal`) reuses
+ * `.folder-picker-list` / `.folder-picker-item` verbatim. These three
+ * rules only add what a two-line row and a refused row need; no colour
+ * here is new. */
+.folder-picker-item {
+    /* Rows in the choice modal stack a label over a subtitle. The picker
+     * this borrows from has single-line rows, so it centres them; column
+     * direction with a left alignment is the only change a two-line row
+     * needs, and a single-line row renders identically under it. */
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.folder-picker-item-sub {
+    font-size: 0.78rem;
+    color: var(--color-fg-muted);
+    word-break: break-all;
+}
+
+/* A project whose presence is 'missing' or 'unreachable' stays VISIBLE
+ * and NAMED in the picker and refuses to be chosen, the same treatment
+ * its row gets on the home screen. Hiding it would be the quieter bug:
+ * the user would think the project was gone from the launcher. */
+.folder-picker-item-disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.folder-picker-item-disabled:hover {
+    background: transparent;
+    color: var(--color-fg);
+}
+
+/* "you have none" and "I could not find out" are different answers and
+ * must not look the same. The second one is a WARNING colour because it
+ * is an unmeasured state, not a clean empty list. */
+.folder-picker-empty--unknown {
+    color: var(--color-warning);
+    font-style: normal;
+}
+
+/* ITEM 43 - a project node with a description but no running sessions is
+ * foldable too, and its toggle carries no count chip. Without a chip the
+ * button is chevron-only, so it needs its own minimum width to stay a
+ * real hit target and to keep the project cards left-aligned with each
+ * other whether or not they have children. */
+.project-node__toggle {
+    min-width: 24px;
+    justify-content: center;
 }

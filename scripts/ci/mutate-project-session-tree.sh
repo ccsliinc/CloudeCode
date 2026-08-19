@@ -112,7 +112,7 @@ mutate "child session rows are never rendered under their project, even when mat
 
 mutate "the toggle chevron is never rendered, so a populated project looks like it has no sessions" \
   "client/js/launchpad.js" \
-  "            const chevronHtml = hasChildren||=>||            const chevronHtml = false && hasChildren"
+  "            const chevronHtml = foldable||=>||            const chevronHtml = false && foldable"
 
 echo "--- BLOCK 4: attribution listing failure must force NEEDS ATTENTION, never a guess ---"
 
