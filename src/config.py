@@ -410,6 +410,13 @@ class Settings(BaseSettings):
     # Logging Configuration
     log_buffer_size: int = 1000  # lines to keep in memory
     log_file_retention: int = 7  # days
+    # Minimum structlog level printed to stdout/stderr (captured by launchd
+    # into launchd.log under production - see cloude-code.sh). "INFO" is the
+    # production default: per-poll-cycle debug events like
+    # idle_watcher.poll_suppressed fire roughly once a second per open
+    # session and are the dominant contributor to that file's growth.
+    # Set LOG_LEVEL=DEBUG in .env for local troubleshooting.
+    log_level: str = "INFO"
     # LEGACY (feat/state-directory) - no longer the write target for
     # application state. See get_state_dir(). Optional now: a fresh
     # install never needs to set this. Kept ONLY as the "old location"
