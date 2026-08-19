@@ -124,6 +124,11 @@
          source order is what decides whether the wash survives a hover. -->
     <link rel="stylesheet" href="/static/css/session-theme-tint.css" />
 
+    <!-- Terminal surface translucency (matches the animated theme
+         background's status attribute; see the file for why this wins
+         over styles.css's `#terminal` rule by specificity, not order). -->
+    <link rel="stylesheet" href="/static/css/terminal-opacity.css" />
+
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
     <link rel="stylesheet" id="theme-css" />
@@ -585,6 +590,12 @@
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
     <script src="/static/js/terminal-layout.js"></script>
+    <!-- Must load BEFORE terminal.js: terminal.js's withTerminalBackgroundOpacity
+         wrapper reads window.TerminalBackgroundOpacity at call time, but
+         it is only meaningfully absent (falls through to the raw theme)
+         if this tag is missing or fails - load order still matters so the
+         translucency is live from the very first theme applied. -->
+    <script src="/static/js/terminal-background-opacity.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
