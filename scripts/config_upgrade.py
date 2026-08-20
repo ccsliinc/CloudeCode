@@ -65,6 +65,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.core.config_defaults import (  # noqa: E402
+    effective_shipped_defaults,
+    supported_keys as model_supported_keys,
+)
 from src.core.config_merge import (  # noqa: E402
     CANNOT_DETERMINE,
     CONFLICT,
@@ -267,7 +271,24 @@ def main(argv: list[str] | None = None) -> int:
         # produce confidently wrong classifications.
         base = None
 
-    result = merge_config(mine, theirs, base)
+    # config.example.json is a hand-maintained SAMPLE of the shipped defaults,
+    # not the defaults themselves. Two live settings (terminal_commands,
+    # config_version) had already fallen out of it, and merging straight
+    # against it reported both as REMOVED UPSTREAM - a confident verdict about
+    # something never measured. The real defaults live in the Python model, so
+    # fill the example's gaps from there and tell the merge that absence from
+    # the example proves nothing on its own.
+    supported = model_supported_keys()
+    effective_theirs = effective_shipped_defaults(theirs, mine)
+    stale_roots = frozenset(k for k in effective_theirs if k not in theirs)
+
+    result = merge_config(
+        mine,
+        effective_theirs,
+        base,
+        supported_keys=supported,
+        stale_roots=stale_roots,
+    )
 
     selected = {p: result.importable[p] for p in args.imports if p in result.importable}
     unknown_imports = [p for p in args.imports if p not in result.importable]
@@ -316,7 +337,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Record the defaults this merge was resolved against, so the NEXT upgrade
     # can classify instead of reporting CANNOT DETERMINE.
-    base_path.write_text(json.dumps(theirs, indent=2) + "\n", encoding="utf-8")
+    # Record the EFFECTIVE defaults, not the raw example. Recording the
+    # example would mean the next run has a base that is missing exactly the
+    # keys this one had to repair, so the same fields would report
+    # CANNOT DETERMINE forever instead of resolving once.
+    base_path.write_text(
+        json.dumps(effective_theirs, indent=2) + "\n", encoding="utf-8"
+    )
 
     print("")
     print(f"Wrote {config_path}")

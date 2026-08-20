@@ -32,6 +32,7 @@ from src.core.agent_wrappers import (
     render_wrapper_invocation,
     wrapper_scripts_dir,
 )
+from src.core import auth_defaults
 from src.core.terminal_commands import (
     TERMINAL_COMMANDS_KEY,
     TerminalCommand,
@@ -326,19 +327,19 @@ class AuthConfig(BaseModel):
     # config.json written before this feature; treated as 0 (see
     # src/core/config_migration.py). Not itself consulted by
     # get_agent_command - purely a migration bookkeeping field.
-    config_version: int = 0
+    config_version: int = auth_defaults.CONFIG_VERSION
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
     jwt_secret: Optional[str] = None   # Populated from Settings (.env)
-    jwt_expiry_minutes: int = 30       # Legacy - used only if access TTL unset.
+    jwt_expiry_minutes: int = auth_defaults.JWT_EXPIRY_MINUTES  # Legacy - used only if access TTL unset.
     # Item 5: access/refresh token pair. Access is short-lived (15m default)
     # so a leaked token has a tight blast radius; refresh is long-lived
     # (7d default) but stored server-side with rotation + reuse detection.
-    access_token_ttl_seconds: int = 14400     # 4 hours
-    refresh_token_ttl_seconds: int = 604800   # 7 days
+    access_token_ttl_seconds: int = auth_defaults.ACCESS_TOKEN_TTL_SECONDS  # 4 hours
+    refresh_token_ttl_seconds: int = auth_defaults.REFRESH_TOKEN_TTL_SECONDS  # 7 days
     # Grace window during which a just-rotated refresh token can still be
     # used. Tolerates near-simultaneous requests (client fires two refreshes
     # at once) without tripping reuse-detection.
-    refresh_grace_seconds: int = 10
+    refresh_grace_seconds: int = auth_defaults.REFRESH_GRACE_SECONDS
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
     # Entries are EITHER a bare command string ("/clear", the historical

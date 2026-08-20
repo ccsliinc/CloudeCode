@@ -495,6 +495,10 @@ function currentTrayInput() {
     sessions: traySignals.sessions,
     sessionsReachable: traySignals.sessionsReachable,
     updateStatus: traySignals.updateStatus,
+    // The server's own setup verdict, straight from GET /health. Null until
+    // it has been asked; tray-status treats null as unknown, never as
+    // complete, so an unpolled instance cannot render as set up.
+    setupStatus: serverManager ? serverManager.getSetupStatus() : null,
   };
 }
 
@@ -730,6 +734,66 @@ async function handleBindChange(ip) {
     // gets the instant visual feedback right after the restart settles.
     setTimeout(updateMenu, 2500);
   }
+}
+
+/**
+ * Label for the setup/config menu row, carrying an exclamation point when
+ * something needs a human.
+ *
+ * Derives the marker from trayStatus.deriveTrayState over the SAME input the
+ * icon uses, rather than from a second inspection of setup state. Two
+ * independent notions of "needs attention" drift apart, and the one nobody
+ * is looking at is the one that goes wrong.
+ *
+ * @returns {string} The menu item label.
+ */
+function setupMenuLabel() {
+  const derived = trayStatus.deriveTrayState(currentTrayInput());
+  const status = serverManager ? serverManager.getSetupStatus() : null;
+  // Only the setup-driven attention state earns the marker here. A session
+  // waiting on a human is real, but it is not a reason to point him at the
+  // configuration page.
+  const needsSetup = status === 'incomplete' || status === 'undetermined';
+  const marker = needsSetup && derived.state === 'attention' ? '(!)  ' : '';
+  return `${marker}Setup and Config...`;
+}
+
+/**
+ * Open the setup/upgrade wizard in the user's default browser.
+ *
+ * Uses shell.openExternal for the same reason 'Open in Browser' does: this is
+ * a menu-bar app with no window to host a page, and his own browser already
+ * holds the session the wizard needs once setup is complete.
+ *
+ * The URL comes from getPublishedUrl(), which prefers the address the server
+ * MEASURED itself onto. During the setup lockdown that is 127.0.0.1 while
+ * configuration may say something else, and opening the configured address
+ * would load nothing at all.
+ *
+ * @returns {void}
+ */
+function openSetupWizard() {
+  const base = serverManager.getPublishedUrl();
+  if (!base) {
+    dialog.showErrorBox(
+      'Cloude Code: unknown server port',
+      'Could not determine the configured port from .env (PORT= is set but ' +
+      'not a valid port number), so the setup page cannot be opened. Fix ' +
+      '.env and restart Cloude Code.'
+    );
+    return;
+  }
+  if (serverManager.getState() !== 'running') {
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Server not running',
+      message: 'The setup page is served by the Cloude Code server.',
+      detail: 'Start the server from this menu, then open Setup and Config again.',
+      buttons: ['OK'],
+    });
+    return;
+  }
+  shell.openExternal(`${base}/setup`);
 }
 
 /**
@@ -1093,44 +1157,18 @@ function updateMenu() {
           }
         },
         {
-          label: 'Check Config for New Defaults...',
-          click: () => {
-            // Runs the merge as a DRY RUN and shows the plan. Nothing is
-            // written from here. Applying is a separate, explicit step,
-            // because a conflict between a default he changed and a default
-            // that moved is his decision to make, not this menu's.
-            const { execFile } = require('child_process');
-            const root = serverManager.getProjectRoot();
-            const python = serverManager.pythonPath || 'python3';
-
-            execFile(
-              python,
-              [path.join(root, 'scripts', 'config_upgrade.py')],
-              { cwd: root },
-              (error, stdout, stderr) => {
-                // Exit 2 means "needs a human", which is a real answer, not a
-                // failure. Only a genuine error (exit 1) is reported as one.
-                const code = error && typeof error.code === 'number' ? error.code : 0;
-                if (code === 1) {
-                  dialog.showErrorBox(
-                    'Cloude Code: config check failed',
-                    String(stderr || (error && error.message) || 'unknown error')
-                  );
-                  return;
-                }
-                dialog.showMessageBox({
-                  type: code === 2 ? 'warning' : 'info',
-                  title: 'Config check',
-                  message:
-                    code === 2
-                      ? 'Some settings need your attention'
-                      : 'Your config is up to date with the shipped defaults',
-                  detail: String(stdout || '').slice(0, 4000),
-                  buttons: ['OK'],
-                });
-              }
-            );
-          }
+          // Replaces the old 'Check Config for New Defaults...' dialog, which
+          // shelled out to config_upgrade.py and dumped its stdout into an
+          // alert reading "Some settings need your attention". That told him
+          // which fields, and nothing about what any of them are, what his
+          // value means, or what changes if he picks either side.
+          //
+          // The exclamation point is not a second notion of "needs work" -
+          // it is the SAME tray signal machinery the icon above is derived
+          // from (trayStatus.deriveTrayState), read from the same snapshot,
+          // so the menu row can never contradict the icon.
+          label: setupMenuLabel(),
+          click: () => openSetupWizard()
         },
         { type: 'separator' },
         {
