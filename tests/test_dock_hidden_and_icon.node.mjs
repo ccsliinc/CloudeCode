@@ -36,6 +36,7 @@ const macDir = path.join(repoRoot, 'macOS');
 const assetsDir = path.join(macDir, 'assets');
 const mainJs = fs.readFileSync(path.join(macDir, 'main.js'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(macDir, 'package.json'), 'utf8'));
+const launcherJs = fs.readFileSync(path.join(macDir, 'terminal-launcher.js'), 'utf8');
 const icnsPath = path.join(assetsDir, 'icon.icns');
 
 let failures = 0;
@@ -163,12 +164,40 @@ test('every dialog fronts the app before it is displayed', () => {
     );
 });
 
-test('Open Terminal Logs activates Terminal', () => {
-    const m = mainJs.match(/osascript[^\n]*Terminal[^\n]*/);
-    assert.ok(m, 'the Open Terminal Logs osascript call is gone or was renamed');
+// UPDATED on the ship/round4 merge. This test used to assert that main.js
+// itself ran an osascript that activates Terminal.app. That code path no
+// longer exists: feat/menubar-status-and-config replaced it with an
+// executable .command document handed to shell.openPath, so Open Terminal
+// Logs routes to the user's DEFAULT terminal rather than hardcoding
+// Terminal.app. The AppleScript survives only as the fallback for when no
+// handler for .command is registered, and it lives in terminal-launcher.js
+// now. The requirement is unchanged and still asserted: whichever path runs,
+// an accessory app with no Dock tile must raise the window it just opened.
+test('Open Terminal Logs routes to the default terminal, not a hardcoded Terminal.app', () => {
     assert.ok(
-        m[0].includes('to activate'),
-        'without `activate` the Terminal window opens behind everything - already reported once'
+        /terminalLauncher\.openServerLogInDefaultTerminal\(/.test(mainJs),
+        'Open Terminal Logs must go through the .command launcher'
+    );
+    assert.ok(
+        !/osascript[^\n]*Terminal/.test(mainJs),
+        'main.js must not hardcode Terminal.app any more; that is the fallback\'s job'
+    );
+});
+
+test('the Terminal.app fallback still activates, after it opens the window', () => {
+    const script = launcherJs.match(/'tell application "Terminal"'[\s\S]*?\]\.join/);
+    assert.ok(script, 'the fallback AppleScript builder is gone or was renamed');
+    const body = script[0];
+    const doScriptAt = body.indexOf('do script');
+    const activateAt = body.indexOf('activate');
+    assert.ok(doScriptAt !== -1, 'the fallback must still open a window');
+    assert.ok(
+        activateAt !== -1,
+        'without activate the Terminal window opens behind everything - already reported once'
+    );
+    assert.ok(
+        activateAt > doScriptAt,
+        'activate must come AFTER do script so the window just created is the one raised'
     );
 });
 
