@@ -67,13 +67,26 @@ console.log('[SessionSidebarPin Module] Loading...');
     const BODY_CLASS = 'session-sidebar-pinned';
 
     /**
-     * How long the docked-layout padding takes to animate, per
-     * session-sidebar.css (`transition: padding-left 160ms ease`). The
-     * refit is requested after this so it measures the settled box, not
-     * a mid-transition one.
+     * Fallback ceiling, in ms, for TerminalLayout.requestFitAfterTransition
+     * when `transitionend` does not arrive - `prefers-reduced-motion` drops
+     * the transition to 0s and fires no event at all, being the one that
+     * matters here. Comfortably above session-sidebar.css's own
+     * `transition: padding-left 160ms ease` on #terminal-screen (via the
+     * shared `.screen` rule) so a real transitionend always wins the race
+     * and this is only ever the safety net, not the primary path.
      * @type {number}
      */
-    const LAYOUT_SETTLE_MS = 200;
+    const LAYOUT_SETTLE_MS = 250;
+
+    /**
+     * Element whose `padding-left` transition tracks the docked/undocked
+     * layout shift for the TERMINAL screen specifically (`.screen` in
+     * session-sidebar.css). `#launchpad-screen`'s own padding-left rule
+     * carries no transition of its own, so this module only needs to wait
+     * on the one screen that actually holds the terminal.
+     * @type {string}
+     */
+    const TERMINAL_SCREEN_ID = 'terminal-screen';
 
     let pinned = false;
     let btnEl = null;
@@ -147,15 +160,21 @@ console.log('[SessionSidebarPin Module] Loading...');
         // and tmux has to be told. The original version of this feature
         // relied on terminal.js's ResizeObserver noticing on its own and
         // said nothing; the user reported the terminal did not resize.
-        // An announced layout change gets an explicit refit - the
-        // observer stays as the net for changes nobody announces, and
-        // both routes share one debounce so this cannot double-send.
+        // An announced layout change gets an explicit refit, timed off the
+        // real CSS transition (requestFitAfterTransition) rather than a
+        // fixed delay guessed to outlast it - see terminal-layout.js for
+        // why that also makes a rapid double-toggle produce exactly one
+        // resize instead of racing two. The observer stays as the net for
+        // changes nobody announces, and both routes share one debounce so
+        // this cannot double-send.
         if (docked !== lastEffective) {
             lastEffective = docked;
             if (window.TerminalLayout) {
-                setTimeout(
-                    () => window.TerminalLayout.requestFit('sidebar-pin'),
+                window.TerminalLayout.requestFitAfterTransition(
+                    document.getElementById(TERMINAL_SCREEN_ID),
+                    'padding-left',
                     LAYOUT_SETTLE_MS,
+                    'sidebar-pin',
                 );
             }
         }

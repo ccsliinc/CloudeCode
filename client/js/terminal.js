@@ -727,23 +727,23 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * redundant frames when a layout event fires but the cell grid
      * didn't actually change (zoom-neutral pinch, background chrome
      * collapse that stays within the same cell count, etc.).
-     *
      * @param {string} source - Origin tag for the [TERM-RESIZE] log line.
-     *   Values: 'window.resize' | 'orientationchange' |
-     *   'visualViewport.resize' | 'ResizeObserver' | 'handshake' |
-     *   'ws.onopen'. Defaults to 'unknown' for callers that don't tag.
+     *   Values: 'window.resize' | 'orientationchange' | 'visualViewport.resize'
+     *   | 'ResizeObserver' | 'handshake' | 'ws.onopen' | 'sidebar-pin'.
+     *   Defaults to 'unknown' for callers that don't tag.
      * @param {boolean} force - Bypass the dedup gate. Used by the
      *   request_dims handshake so the server always gets a fresh frame
      *   on reconnect even if the grid happens to match the last send.
+     * @returns {{delivered: boolean, reason?: string, cols?: number, rows?: number}} named outcome (three-outcome rule) - never a silent no-op, 'no-session' means xterm shows a grid tmux was never told about.
      */
     sendResize(source = 'unknown', force = false) {
-        if (!(this.ws && this.ws.readyState === WebSocket.OPEN && this.term)) return;
+        if (!(this.ws && this.ws.readyState === WebSocket.OPEN && this.term)) { console.warn(`[TERM-RESIZE] not delivered: no session attached, source=${source}`); return { delivered: false, reason: 'no-session' }; }
 
         const cols = this.term.cols;
         const rows = this.term.rows;
 
         if (!force && cols === this.lastSentCols && rows === this.lastSentRows) {
-            return;
+            return { delivered: false, reason: 'unchanged', cols, rows };
         }
 
         this.ws.send(JSON.stringify({
@@ -756,6 +756,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         this.lastSentCols = cols;
         this.lastSentRows = rows;
+        return { delivered: true, cols, rows };
     }
 
     /**
