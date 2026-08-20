@@ -7,6 +7,7 @@ const terminalLauncher = require('./terminal-launcher');
 const trayStatus = require('./tray-status');
 const { TrayApiClient } = require('./tray-api');
 const { isTailscaleIp } = require('./network-interfaces');
+const tlsStatus = require('./tls-status');
 
 let tray = null;
 let serverManager = null;
@@ -543,6 +544,14 @@ function buildBindAndUrlItems() {
   const localIps = serverManager.getLocalInterfaceIps();
   const publishedUrl = serverManager.getPublishedUrl();
 
+  // No certificate is passed because the server terminates plaintext HTTP
+  // today. evaluateBinding sees an http scheme and returns insecure without
+  // needing one; when TLS lands, the observed certificate goes here and the
+  // same function starts doing name and expiry checks. Passing a fake
+  // "secure" here would be the padlock-without-a-measurement this module
+  // exists to refuse.
+  const security = tlsStatus.evaluateBinding({ url: publishedUrl });
+
   const bindSubmenu = [
     {
       label: '127.0.0.1  (localhost only)',
@@ -573,6 +582,15 @@ function buildBindAndUrlItems() {
     {
       label: `Bind IP: ${bindHost}`,
       submenu: bindSubmenu,
+    },
+    {
+      // Reports the CONNECTION, not the scheme. Today every binding is plain
+      // HTTP so this always reads "not secure", which is the honest answer;
+      // it becomes a real measurement the moment TLS is terminated, because
+      // evaluateBinding checks the certificate's NAME before its expiry.
+      label: security.label,
+      enabled: false,
+      toolTip: security.detail,
     },
     {
       label: `Copy URL: ${publishedUrl}`,
