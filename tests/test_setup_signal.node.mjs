@@ -248,6 +248,31 @@ test('a failed exposure read clears the cached bind rather than keeping it', () 
   assert.match(fn, /this\.reportedSetupStatus = null;/);
 });
 
+// --- the wizard's own client, pinned against the app it shares a session with
+
+const setupJs = fs.readFileSync(path.join(repoRoot, 'client', 'setup.js'), 'utf8');
+const apiJs = fs.readFileSync(path.join(repoRoot, 'client', 'js', 'api.js'), 'utf8');
+
+console.log('wizard client');
+
+test('the wizard reads the SAME token key the main web client writes', () => {
+  // Caught in review: the wizard originally invented 'access_token'. Nothing
+  // errors when this drifts - the wizard simply never finds the session the
+  // user already has, demands a TOTP code from somebody already logged in,
+  // and stores its own token where nothing else looks. A silent, plausible,
+  // entirely wrong login prompt.
+  const mine = setupJs.match(/const TOKEN_KEY = '([^']+)'/);
+  assert.ok(mine, 'the wizard does not declare a TOKEN_KEY');
+  const theirs = apiJs.match(/localStorage\.getItem\('([^']+)'\)/);
+  assert.ok(theirs, 'could not find the main client token key in api.js');
+  assert.equal(mine[1], theirs[1], `wizard uses ${mine[1]}, app uses ${theirs[1]}`);
+});
+
+test('the wizard posts to the auth endpoint that actually exists', () => {
+  assert.ok(apiJs.includes('/auth/verify'));
+  assert.match(setupJs, /fetch\('\/api\/v1\/auth\/verify'/);
+});
+
 console.log('');
 console.log(`setup signal: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

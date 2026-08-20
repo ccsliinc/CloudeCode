@@ -17,8 +17,18 @@
 /** Endpoint returning everything the wizard renders. @type {string} */
 const STATE_URL = '/api/v1/setup/state';
 
-/** Key under which the main app stores its access token. @type {string} */
-const TOKEN_KEY = 'access_token';
+/**
+ * Key under which the main web client stores its access token.
+ *
+ * MUST match client/js/api.js. Using a different key here does not fail
+ * loudly - it just means the wizard never sees the session the user already
+ * has, so the upgrade-review mode demands a TOTP code from somebody who is
+ * already logged in, and the token it stores afterwards is invisible to the
+ * rest of the app. tests/test_setup_signal.node.mjs pins the two together.
+ *
+ * @type {string}
+ */
+const TOKEN_KEY = 'claude_tunnel_token';
 
 /**
  * Read the access token the main web client stored, if any.
@@ -203,6 +213,8 @@ async function submitLogin() {
       errorLine.textContent = data.detail || ('Login failed (HTTP ' + resp.status + ').');
       return;
     }
+    // AuthTokenResponse carries access_token, with `token` kept as a
+    // deprecated alias for pre-Item-5 clients. Prefer the real field.
     const token = data.access_token || data.token;
     if (!token) {
       errorLine.textContent = 'The server accepted the code but returned no token.';
