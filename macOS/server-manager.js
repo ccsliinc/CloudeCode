@@ -43,8 +43,14 @@ class ServerManager {
       this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = path.join(app.getAppPath(), '..');
     } else {
-      // In development: running from macOS/ folder
-      this.baseDir = path.join(__dirname, '..');
+      // In development (`npm start`): main.js's runBootstrap() always
+      // preps venv/.env/copied src+client under userData/server (see
+      // main.js's `serverDir` constant), regardless of app.isPackaged.
+      // baseDir must match that, or ensureServerFiles()/getPort() look
+      // for .env in the repo root, which bootstrap never touches, and
+      // startup fails with "Configuration validation failed: .env file
+      // not found" even though bootstrap just finished successfully.
+      this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = this.baseDir;
     }
 
