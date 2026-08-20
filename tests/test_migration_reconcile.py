@@ -36,6 +36,10 @@ import pytest
 from src.core import slash_favorites
 from src.core.db import connect, db_path_for, transaction
 from src.core.db_migration import ensure_db_migrated
+from src.core.db_models import (
+    META_PROJECT_TOMBSTONES_LEGACY_GAP,
+    META_PROJECT_TOMBSTONES_SINCE,
+)
 from src.core.db_steps import run_chain
 from src.core.project_reconcile import (
     RECONCILE_IMPORTED,
@@ -44,7 +48,11 @@ from src.core.project_reconcile import (
     reconcile_projects,
     reconcile_summary,
 )
-from src.core.project_store import list_projects, normalize_root
+from src.core.project_store import (
+    import_from_config,
+    list_projects,
+    normalize_root,
+)
 from src.core.project_tombstones import tombstoned_roots
 from src.core.project_writes import create_project, delete_project
 from src.core.session_import import run_first_run_import
@@ -77,6 +85,21 @@ def _legacy_v4_db(tmp_path):
     with closing(connect(db_path_for(tmp_path))) as c:
         with transaction(c):
             run_chain(c, 0, 4)
+            # run_chain here is THIS version's code, and its v0 -> v1 step
+            # stamps the deletion-tracking marker on a genuinely new file.
+            # A database actually created by the old code carries neither
+            # key, because the old code had never heard of them. Removing
+            # them is what makes this fixture a v4 database rather than a
+            # current database wearing a v4 label - without it the test
+            # would measure the fixture's own anachronism and pass for the
+            # wrong reason.
+            c.execute(
+                "DELETE FROM meta WHERE key IN (?, ?)",
+                (
+                    META_PROJECT_TOMBSTONES_SINCE,
+                    META_PROJECT_TOMBSTONES_LEGACY_GAP,
+                ),
+            )
 
 
 @pytest.fixture()
@@ -232,11 +255,10 @@ def test_a_pre_tombstone_deletion_is_UNDETERMINED_not_a_silent_import(
     _legacy_v4_db(tmp_path)
     with closing(connect(db_path_for(tmp_path))) as c:
         with transaction(c):
-            run_first_run_import(
-                c,
-                projects=[_cfg("kept", "/tmp/kept"), _cfg("hazy", "/tmp/hazy")],
-                listing=TmuxListing.answered([]),
+            import_from_config(
+                c, [_cfg("kept", "/tmp/kept"), _cfg("hazy", "/tmp/hazy")]
             )
+        # The pre-tombstone delete path: a hard DELETE leaving no trace.
         with transaction(c):
             c.execute("DELETE FROM projects WHERE root = ?",
                       (normalize_root("/tmp/hazy"),))
@@ -317,11 +339,7 @@ def test_the_summary_names_what_it_could_not_evaluate(tmp_path):
     _legacy_v4_db(tmp_path)
     with closing(connect(db_path_for(tmp_path))) as c:
         with transaction(c):
-            run_first_run_import(
-                c,
-                projects=[_cfg("hazy", "/tmp/hazy")],
-                listing=TmuxListing.answered([]),
-            )
+            import_from_config(c, [_cfg("hazy", "/tmp/hazy")])
         with transaction(c):
             c.execute("DELETE FROM projects")
     ensure_db_migrated(tmp_path, 4, "0.8.2")

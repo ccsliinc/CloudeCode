@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 4
+CURRENT_SCHEMA_VERSION: int = 5
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -491,6 +491,74 @@ DDL_V4: Tuple[str, ...] = (DDL_PROJECTS_ADD_LAST_OPENED_AT,)
 REVERSAL_SQL_V4: Tuple[str, ...] = ()
 
 
+# --- v4 -> v5: project_tombstones -----------------------------------------
+#
+# WHY THIS TABLE EXISTS. The projects import used to run once per install,
+# behind the sessions latch, so a project the OLD version created during a
+# downgrade never reached the table on re-upgrade and the next
+# snapshot_projects() deleted it from config.json too. The fix is to
+# reconcile config.json against the table on EVERY start - and that fix is
+# only safe if the reconcile can tell these two apart:
+#
+#   a root absent because it was NEVER IMPORTED      -> import it
+#   a root absent because the user DELETED it        -> leave it deleted
+#
+# Nothing in the v4 schema could. ``delete_project`` is a hard DELETE (see
+# its docstring for why, and that reasoning still holds), so a deleted row
+# leaves no trace anywhere: no ``deleted_at``, no trail entry, no archive.
+# The two cases are BYTE-IDENTICAL to a set comparison. A reconcile built
+# on the sets alone would resurrect every deleted project on the next
+# start, trading one silent data defect for another.
+#
+# WHY A SEPARATE TABLE AND NOT A SOFT DELETE. Reusing ``archived_at``
+# would leave the row in place, and the row holds the UNIQUE(root). A user
+# who deleted a project and then added the same folder back would hit
+# ProjectRootConflict from create_project() against a row nothing renders.
+# A tombstone keeps ``projects`` meaning exactly what it meant before -
+# every row is a live project - and keeps snapshot_projects() honest,
+# since it builds config.json from that table and must not learn a second
+# exclusion rule.
+#
+# root is the identity here for the same reason it is in ``projects``:
+# display names are mutable and were never unique.
+DDL_PROJECT_TOMBSTONES = """
+CREATE TABLE IF NOT EXISTS project_tombstones (
+  root         TEXT PRIMARY KEY,
+  display_name TEXT,
+  deleted_at   TEXT NOT NULL
+)
+"""
+
+#: When deletion tracking began on THIS database, ISO-8601. Written once,
+#: by the v4 -> v5 step.
+META_PROJECT_TOMBSTONES_SINCE = "project_tombstones_since"
+
+#: "1" when this database already held project history before the
+#: tombstone table existed, so deletions made before that point left no
+#: trace and CANNOT be told apart from a project that was never imported.
+#: "0" when the database was created at v5 or later, where no such
+#: deletion can exist and every absence is unambiguous.
+META_PROJECT_TOMBSTONES_LEGACY_GAP = "project_tombstones_legacy_gap"
+
+#: JSON list of roots the reconcile could not classify, captured on the
+#: FIRST reconcile after the legacy gap was recorded. Finite and bounded:
+#: a root outside this list appeared after tracking began and is therefore
+#: unambiguous. See src/core/project_reconcile.py.
+META_PROJECT_RECONCILE_UNDETERMINED = "project_reconcile_undetermined_roots"
+
+#: JSON summary of the last reconcile, for GET /projects/authority.
+META_PROJECT_RECONCILE_LAST = "project_reconcile_last"
+
+#: Ordered DDL for a v4 -> v5 database. One new table, nothing altered.
+DDL_V5: Tuple[str, ...] = (DDL_PROJECT_TOMBSTONES,)
+
+#: A REVERSE of v4 -> v5 drops the table, which is exactly the inverse of
+#: creating it. Unlike v3 and v4 this one CAN be stated, because the step
+#: adds an object rather than a column - and dropping it destroys only the
+#: record of which projects were deleted, never a project itself.
+REVERSAL_SQL_V5: Tuple[str, ...] = ("DROP TABLE IF EXISTS project_tombstones",)
+
+
 # What a REVERSE of v1 -> v2 would run. Dropping the table drops its
 # indexes with it; the index drops are listed anyway so the block reads
 # as the exact inverse of DDL_V2 rather than relying on a side effect.
@@ -515,4 +583,5 @@ REVERSAL_DESTROYS: dict = {
     ),
     2: ("sessions (whole table)",),
     3: ("sessions.tmux_session_id",),
+    5: ("project_tombstones (whole table)",),
 }

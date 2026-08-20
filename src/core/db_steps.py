@@ -23,13 +23,16 @@ from __future__ import annotations
 import sqlite3
 from typing import Callable, Dict, List
 
-from src.core.db import ensure_install_id, set_meta
+from src.core.db import ensure_install_id, get_meta, set_meta
 from src.core.db_models import (
     DDL_V1,
     DDL_V2,
     DDL_V3,
     DDL_V4,
+    DDL_V5,
     META_CREATED_AT,
+    META_PROJECT_TOMBSTONES_LEGACY_GAP,
+    META_PROJECT_TOMBSTONES_SINCE,
     META_SCHEMA_VERSION,
 )
 from src.core.migration_trail import utc_now
@@ -51,7 +54,20 @@ def _step_v0_to_v1(conn: sqlite3.Connection) -> None:
     if not conn.execute(
         "SELECT 1 FROM meta WHERE key=?", (META_CREATED_AT,)
     ).fetchone():
-        set_meta(conn, META_CREATED_AT, utc_now())
+        stamp = utc_now()
+        set_meta(conn, META_CREATED_AT, stamp)
+        # A DATABASE CREATED BY THIS CODE HAS DELETION TRACKING FROM BIRTH.
+        # It runs the whole chain 0 -> 5 in one transaction, so
+        # project_tombstones exists before any project row can be created,
+        # let alone deleted - there is no window in which a deletion could
+        # have left no trace. Recording it HERE, on the genuinely-new-file
+        # path, is what lets _step_v4_to_v5 read the ABSENCE of the marker
+        # as proof that the database predates this code. Row counts cannot
+        # do that job: a database whose projects were all deleted is
+        # indistinguishable from a fresh one by counting, which is the
+        # exact false-negative this replaces.
+        set_meta(conn, META_PROJECT_TOMBSTONES_SINCE, stamp)
+        set_meta(conn, META_PROJECT_TOMBSTONES_LEGACY_GAP, "0")
     ensure_install_id(conn)
 
 
@@ -141,6 +157,54 @@ def _step_v3_to_v4(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Add ``project_tombstones`` and record whether this DB has a legacy gap.
+
+    Description: the schema half of the every-start project reconcile.
+      Purely additive - one new table, nothing on ``projects`` altered -
+      and idempotent by the statement itself (``CREATE TABLE IF NOT
+      EXISTS``) rather than by inspection, so a retry after an
+      INTERRUPTED trail entry is safe.
+
+      THE SECOND THING THIS STEP DOES, AND WHY IT BELONGS HERE. The
+      reconcile can only tell "never imported" from "deliberately
+      deleted" for deletions that happened AFTER this table existed.
+      Deletions before it left no trace of any kind, so on a database
+      that already held project history those two causes are
+      indistinguishable - the third outcome, CANNOT EVALUATE.
+
+      That fact is measurable exactly once, at this instant, and never
+      again: a database with project rows or a stamped import latch
+      predates tracking, a database created at v5 cannot. So the step
+      records the answer rather than leaving a later reader to guess it.
+      ``project_reconcile`` reads it to decide whether an unexplained
+      absence is safe to import or has to be reported as unknown.
+
+      A fresh install runs the whole chain 0 -> 5 in one transaction with
+      no rows and no latch, so it records no gap and reconciles
+      automatically from its first start.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v4_to_v5(conn)  # after _step_v3_to_v4
+    """
+    for statement in DDL_V5:
+        conn.execute(statement)
+
+    if get_meta(conn, META_PROJECT_TOMBSTONES_SINCE):
+        return
+
+    # NO MARKER MEANS THIS DATABASE PREDATES THIS CODE, so it has a legacy
+    # gap - full stop, no heuristic. A file created by this version was
+    # stamped in _step_v0_to_v1 during its own 0 -> 5 chain and returned
+    # above; reaching this line means the file was created by an earlier
+    # version, which had no tombstone table and therefore deleted projects
+    # without leaving any trace. Whether it ACTUALLY deleted any is
+    # unknowable, and that is precisely the point: the gap records that the
+    # question cannot be answered, not that a deletion happened.
+    set_meta(conn, META_PROJECT_TOMBSTONES_SINCE, utc_now())
+    set_meta(conn, META_PROJECT_TOMBSTONES_LEGACY_GAP, "1")
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -150,6 +214,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _step_v1_to_v2,
     2: _step_v2_to_v3,
     3: _step_v3_to_v4,
+    4: _step_v4_to_v5,
 }
 
 

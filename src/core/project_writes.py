@@ -34,6 +34,7 @@ import structlog
 from src.core.db import table_exists, transaction
 from src.core.db_models import PROJECT_SOURCE_USER
 from src.core.project_store import PROJECTS_TABLE, normalize_root
+from src.core.project_tombstones import clear_tombstone, record_tombstone
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
@@ -250,6 +251,11 @@ def create_project(
             ),
         )
         new_id = cursor.lastrowid
+        # THE USER HAS JUST ASKED FOR THIS FOLDER BACK, which supersedes
+        # any earlier deletion of it. Leaving the tombstone in place would
+        # make the next reconcile treat this row's config entry as a
+        # deliberate deletion and drop it again.
+        clear_tombstone(conn, root)
 
     logger.info("project_created_in_db", project_id=new_id, root=root)
     return dict(
@@ -326,6 +332,14 @@ def delete_project(conn: sqlite3.Connection, project_id: int) -> Dict[str, Any]:
       went, rather than echoing back the identifier it was given.
 
       The folder on disk is not touched.
+
+      A TOMBSTONE IS WRITTEN IN THE SAME TRANSACTION. The row leaves no
+      other trace by design, and ``project_reconcile`` now re-reads
+      config.json on every start - so without a record of the deletion it
+      would see a config entry with no row, conclude the project had
+      never been imported, and put it straight back. The tombstone is the
+      only thing that separates "the user deleted this" from "this was
+      never imported". Same transaction, so the two can never disagree.
     Inputs: conn (sqlite3.Connection) - opens its own transaction.
       project_id (int).
     Output: dict - the row as it was immediately before deletion.
@@ -340,6 +354,7 @@ def delete_project(conn: sqlite3.Connection, project_id: int) -> Dict[str, Any]:
             raise ProjectNotFound(str(project_id))
         removed = dict(row)
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        record_tombstone(conn, removed["root"], removed["display_name"])
 
     logger.info("project_deleted_from_db", project_id=project_id, root=removed["root"])
     return removed
