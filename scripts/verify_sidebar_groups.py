@@ -373,16 +373,30 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
     open_panel = page.evaluate(
         "document.getElementById('session-sidebar-panel').getAttribute('aria-hidden')")
     rep.check(open_panel != "true",
-              "ITEM 66: the first click of the double-click did NOT switch conversation",
+              "ITEM 66: the panel is still open after the double-click",
               f"panel aria-hidden={open_panel}")
+    # COUNTED, not inferred from the panel. A broken deferral switches AND
+    # still opens the editor, so the editor's presence proves nothing; only
+    # the switch count distinguishes "deferred" from "switched anyway".
+    rep.check(g2["switchCount"] == 0,
+              "ITEM 66: the first click of the double-click did NOT switch conversation",
+              f"switches={g2['switchCount']}")
 
-    # ---- ESCAPE CANCELS and restores the name.
+    # ---- ESCAPE CANCELS. THE TEXT MUST ACTUALLY BE CHANGED FIRST, or
+    # this proves nothing: an Escape that secretly committed an UNCHANGED
+    # name is indistinguishable from a cancel. Typing a different name is
+    # what makes the two outcomes different.
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.type("escape_should_discard")
     page.keyboard.press("Escape")
-    page.wait_for_timeout(120)
+    page.wait_for_timeout(200)
     g3 = page.evaluate("window.__sidebarMeasure()")
     rep.check(g3["rename"] is None, "ITEM 66: Escape closes the editor", "")
     rep.check(any(r["name"] == "cloude_fstest" for r in g3["rows"]),
-              "ITEM 66: and the original name is restored, not the typed one", "")
+              "ITEM 66: and the original name is restored",
+              f"names={[r['name'] for r in g3['rows']][:3]}")
+    rep.check(not any(r["name"] == "escape_should_discard" for r in g3["rows"]),
+              "ITEM 66: Escape DISCARDS the typed name rather than committing it", "")
     page.close()
 
     # ---- ENTER COMMITS.
@@ -415,10 +429,20 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
               f"names={[r['name'] for r in g5['rows']][:3]}")
     rep.check(not any(r["name"] == "taken_name" for r in g5["rows"]),
               "ITEM 66: and the rejected name is nowhere on screen", "")
-    said = (g5["rename"] or {}).get("error", "") or g5["live"]
-    rep.check(bool(said),
-              "ITEM 66: the failure is STATED, not swallowed",
-              f"said={said!r}")
+    # THE EDITOR STAYS OPEN, WITH THE TEXT STILL IN IT. Closing it and
+    # only announcing the failure would make the user retype rather than
+    # correct, and would be invisible to a check that only reads the live
+    # region - the announcement survives either way.
+    rep.check(g5["rename"] is not None,
+              "ITEM 66: a failed rename leaves the editor OPEN to be corrected",
+              f"rename={g5['rename']}")
+    if g5["rename"]:
+        rep.check(g5["rename"]["value"] == "taken_name",
+                  "ITEM 66: with the rejected text still in it, not cleared",
+                  f"value={g5['rename']['value']!r}")
+        rep.check("rename failed" in g5["rename"]["error"],
+                  "ITEM 66: and the reason shown NEXT TO the input, not only announced",
+                  f"error={g5['rename']['error']!r}")
     page.close()
 
     # ---- A ROW THAT CANNOT BE RENAMED OPENS NO EDITOR. Last, because it

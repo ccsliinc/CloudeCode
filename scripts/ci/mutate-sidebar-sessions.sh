@@ -26,17 +26,24 @@ NODE_TESTS=(
   "tests/test_session_sidebar_rows.node.mjs"
   "tests/test_session_sidebar_pin.node.mjs"
   "tests/test_session_ownership_badge.node.mjs"
+  "tests/test_sidebar_groups_rename.node.mjs"
 )
 
 FILES=(
   "client/js/session-sidebar.js"
   "client/js/session-sidebar-rows.js"
   "client/js/session-sidebar-arrangement.js"
+  "client/js/session-sidebar-store.js"
+  "client/js/session-sidebar-groups.js"
+  "client/js/session-sidebar-rename.js"
+  "client/js/session-sidebar-clicks.js"
+  "client/css/session-sidebar-groups.css"
   "client/js/session-sidebar-density.js"
   "client/js/session-sidebar-reorder.js"
   "client/js/session-sidebar-fetch.js"
   "client/js/session-listing-state.js"
   "client/js/app.js"
+  "client/js/launchpad.js"
   "client/css/session-sidebar.css"
   "client/css/session-sidebar-density.css"
   "client/css/styles.css"
@@ -119,30 +126,27 @@ mutate "pinning stops partitioning at all - one band, pin is cosmetic" \
   "            (row.is_pinned ? pinnedBand : restBand).push(row);||=>||            restBand.push(row);"
 
 mutate "the pin is never written to storage, so it dies on reload" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                v: VERSION, pinned: nextPinned, order: nextOrder,
+                v: VERSION,
+                pinned: nextPinned,
+                order: nextOrder,
+                collapsed: nextCollapsed,
             }));||=>||            void nextOrder;"
 
 mutate "togglePin always pins, so nothing can be unpinned" \
   "client/js/session-sidebar-arrangement.js" \
-  "        const next = !isPinned(name);||=>||        const next = true;"
+  "        const next = !S.isPinned(name);||=>||        const next = true;"
 
 mutate "the row never carries its pin, so the markup cannot draw it" \
   "client/js/session-sidebar-arrangement.js" \
-  "            row.is_pinned = isPinned(row.name);||=>||            row.is_pinned = false;"
+  "            row.is_pinned = S.isPinned(row.name);||=>||            row.is_pinned = false;"
 
 echo "--- BLOCK 2: the user order must survive the poll, the reload, and new rows ---"
 
 mutate "the stored order is ignored and the incoming poll order wins" \
   "client/js/session-sidebar-arrangement.js" \
-  "        const known = new Set(state.order);
-        const ordered = [];
-        for (const name of state.order) {
-            const row = byName.get(name);
-            if (row) ordered.push(row);
-        }||=>||        const known = new Set();
-        const ordered = [];"
+  "        const known = new Set(S.current().order);||=>||        const known = new Set();"
 
 mutate "a session the user never arranged jumps to the TOP instead of the tail" \
   "client/js/session-sidebar-arrangement.js" \
@@ -154,33 +158,51 @@ mutate "a session the user never arranged jumps to the TOP instead of the tail" 
 
 mutate "a move is applied in memory but never persisted" \
   "client/js/session-sidebar-arrangement.js" \
-  "        save(state.pinned, mergeOrder(next));
-        return next;
-    }
+  "        S.save(pinnedSet, mergeOrder(next));
+        return { order: next, crossed, pinned: nowPinned };||=>||        return { order: next, crossed, pinned: nowPinned };"
 
-    /**
-     * Description: place \`name\` immediately before||=>||        return next;
-    }
+# ITEM 65 REVERSED THE BAND-EDGE RULE, so the three mutations that used
+# to live here are gone: they asserted a refusal the user has since asked
+# us to remove. Reintroducing that refusal is now itself the defect, and
+# the replacements below say so. The protection did not disappear with
+# the rule - it MOVED, from "refuse the crossing" to "perform it and say
+# so out loud", and each of the three ways that can silently fail gets a
+# mutant.
 
-    /**
-     * Description: place \`name\` immediately before"
-
-mutate "a move may cross the pinned boundary, silently unpinning a row" \
+mutate "a move REFUSES to cross the band edge again, so pinning is pointer-only" \
   "client/js/session-sidebar-arrangement.js" \
-  "        if (isPinned(names[target]) !== band) return null;||=>||"
+  "        const crossed = neighbourBand !== band;||=>||        const crossed = false;
+        if (neighbourBand !== band) return null;"
 
-mutate "a DROP may cross the boundary downward, silently unpinning" \
+mutate "a crossing move reorders but never moves the PIN, so the row snaps back" \
   "client/js/session-sidebar-arrangement.js" \
-  "        if (band && before !== null && !isPinned(before)) return null;||=>||"
+  "        const pinnedSet = crossed
+            ? (nowPinned ? S.current().pinned.concat([name]) : S.current().pinned.filter((n) => n !== name))
+            : S.current().pinned;||=>||        const pinnedSet = S.current().pinned;"
 
-mutate "a DROP may cross the boundary upward, silently pinning" \
+mutate "a DROP ignores the band it landed in, so dragging across does nothing" \
   "client/js/session-sidebar-arrangement.js" \
-  "        if (!band && after !== null && isPinned(after)) return null;||=>||"
+  "        const want = !!targetPinned;||=>||        const want = isPinnedNow(name);
+        function isPinnedNow(n) { return S.isPinned(n); }"
+
+mutate "a DROP always pins, so dragging OUT of the pinned group cannot unpin" \
+  "client/js/session-sidebar-arrangement.js" \
+  "        const pinnedSet = want
+            ? S.current().pinned.concat([name])
+            : S.current().pinned.filter((n) => n !== name);||=>||        const pinnedSet = S.current().pinned.concat([name]);"
+
+# THE TWO DRAG MUTANTS THAT USED TO SIT HERE HAVE MOVED to
+# scripts/ci/mutate-sidebar-groups.sh, which uses the real-Chromium
+# verifier as its detector. They cannot be killed by a node suite: what
+# they break is which BAND a pointer is over, and there is no pointer
+# here. Leaving them in this file would have reported two survivors that
+# are in fact covered - a false RED, which erodes the suite's credibility
+# exactly as fast as a false green.
 
 mutate "the slot-preserving merge is dropped, so a gone session loses its place" \
   "client/js/session-sidebar-arrangement.js" \
   "        let i = 0;
-        for (const name of state.order) {
+        for (const name of S.current().order) {
             if (visible.has(name)) {
                 if (i < incoming.length) out.push(incoming[i++]);
             } else {
@@ -193,7 +215,7 @@ mutate "the slot-preserving merge is dropped, so a gone session loses its place"
 echo "--- BLOCK 3: three outcomes on the stored arrangement ---"
 
 mutate "unparseable JSON is treated as 'nothing stored', so the loss is silent" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "            state = {
                 status: 'unreadable',
                 reason: 'stored value is not valid JSON',||=>||            state = {
@@ -201,15 +223,15 @@ mutate "unparseable JSON is treated as 'nothing stored', so the loss is silent" 
                 reason: null,"
 
 mutate "a wrong-shaped pin/order list is accepted rather than refused" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "        if (!isNameArray(parsed.pinned) || !isNameArray(parsed.order)) {||=>||        if (false) {"
 
 mutate "a future schema version is guessed at instead of being refused" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "        if (parsed.v !== VERSION) {||=>||        if (false) {"
 
 mutate "storage that throws reports 'nothing stored' rather than 'could not read'" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "            state = {
                 status: 'unreadable',
                 reason: 'storage unavailable',||=>||            state = {
@@ -217,7 +239,7 @@ mutate "storage that throws reports 'nothing stored' rather than 'could not read
                 reason: null,"
 
 mutate "the unreadable value is overwritten on load, destroying the evidence" \
-  "client/js/session-sidebar-arrangement.js" \
+  "client/js/session-sidebar-store.js" \
   "        if (raw === null || raw === undefined || raw === '') {||=>||        if (true) { localStorage.setItem(STORAGE_KEY, ''); }
         if (raw === null || raw === undefined || raw === '') {"
 
@@ -241,7 +263,7 @@ mutate "remembered names with no row are silently dropped" \
 
 mutate "only the order is checked for gone names, so a gone PINNED one vanishes" \
   "client/js/session-sidebar-arrangement.js" \
-  "        const remembered = dedupe(state.order.concat(state.pinned));||=>||        const remembered = dedupe(state.order);"
+  "        const remembered = S.dedupe(S.current().order.concat(S.current().pinned));||=>||        const remembered = S.dedupe(S.current().order);"
 
 mutate "the held-slot count is never rendered, so nothing is observable" \
   "client/js/session-sidebar-rows.js" \
@@ -291,37 +313,42 @@ echo "--- BLOCK 6: density really changes the row, and never drops a pill state 
 
 mutate "every density draws the same row - the control does nothing" \
   "client/js/session-sidebar-rows.js" \
-  "        const badgeHtml = mode === 'compact'
-            ? ''
-            : \`<span class=\"session-sidebar-row-badge\">\${badge}</span>\`;||=>||        const badgeHtml = \`<span class=\"session-sidebar-row-badge\">\${badge}</span>\`;"
+  "        const inlineBadge = (mode === 'cozy') ? badgeHtml : '';||=>||        const inlineBadge = badgeHtml;"
 
 mutate "detailed loses its second line, collapsing into cozy" \
   "client/js/session-sidebar-rows.js" \
   "        const secondLine = mode === 'detailed'||=>||        const secondLine = false"
 
-mutate "the family pill is dropped from compact, hiding the unknown state" \
-  "client/js/session-sidebar-rows.js" \
-  "        const inlinePill = mode === 'detailed' ? '' : pill;||=>||        const inlinePill = mode === 'compact' ? '' : (mode === 'detailed' ? '' : pill);"
+# ITEM 63 REMOVED THE PILL FROM THIS SURFACE, so the six pill mutations
+# that lived here no longer have a target. They are replaced by the
+# mutants for what the removal has to preserve: the pill must stay gone
+# from the sidebar, the badge must be emitted exactly once wherever it
+# sits, and the HOME SCREEN's pill - a different builder that this change
+# must not touch - must keep rendering a SINGLE tilde.
 
-mutate "the pill is emitted TWICE at detailed" \
+mutate "the badge is emitted on BOTH lines at detailed, so the row draws it twice" \
   "client/js/session-sidebar-rows.js" \
-  "        const inlinePill = mode === 'detailed' ? '' : pill;||=>||        const inlinePill = pill;"
+  "        const inlineBadge = (mode === 'cozy') ? badgeHtml : '';||=>||        const inlineBadge = (mode === 'compact') ? '' : badgeHtml;"
 
-mutate "a guessed family renders identically to a known one" \
+mutate "detailed's second line loses the badge, so the line is about nothing" \
   "client/js/session-sidebar-rows.js" \
-  "        const isGuess = src === 'fingerprint' || src === 'derived_deepest';||=>||        const isGuess = false;"
+  "            ? ('<div class=\"session-sidebar-row-meta\">'
+                + badgeHtml||=>||            ? ('<div class=\"session-sidebar-row-meta\">'
+                + ''"
 
-mutate "an unknown family renders as nothing rather than saying so" \
-  "client/js/session-sidebar-rows.js" \
-  "        const label = known ? (isGuess ? \`~\${family}\` : family) : 'unknown family';||=>||        const label = known ? (isGuess ? \`~\${family}\` : family) : '';"
+mutate "the home screen's pill builder adds a literal tilde back, rendering ~~claude" \
+  "client/js/launchpad.js" \
+  "        const label = known ? agentFamily : 'unknown family';||=>||        const label = known ? \`~\${agentFamily}\` : 'unknown family';"
 
-mutate "the guess loses its leading tilde, so only a hover tells them apart" \
-  "client/js/session-sidebar-rows.js" \
-  "        const label = known ? (isGuess ? \`~\${family}\` : family) : 'unknown family';||=>||        const label = known ? family : 'unknown family';"
+mutate "the stylesheet drops the guess tilde, so a guess and a fact read alike" \
+  "client/css/styles.css" \
+  ".family-pill--guess::before {
+    content: \"~\";||=>||.family-pill--guess::before {
+    content: \"\";"
 
-mutate "derived_deepest is called a FACT - the shape every real row is in" \
+mutate "the sidebar row starts drawing a family pill again" \
   "client/js/session-sidebar-rows.js" \
-  "        const isGuess = src === 'fingerprint' || src === 'derived_deepest';||=>||        const isGuess = src === 'fingerprint';"
+  "            inlineBadge +||=>||            inlineBadge + '<span class=\"family-pill\" data-family-source=\"x\">x</span>' +"
 
 mutate "compact and cozy get the same declared padding" \
   "client/css/session-sidebar-density.css" \
@@ -393,7 +420,7 @@ mutate "Enter no longer activates a row, so the keyboard cannot switch conversat
 
 mutate "a refused move says nothing, so the user keeps pressing a dead key" \
   "client/js/session-sidebar-reorder.js" \
-  "            announce(\`\${name} is already at the \${delta < 0 ? 'top' : 'bottom'} of its group\`);||=>||"
+  "            announce(\`\${name} is already at the \${delta < 0 ? 'top' : 'bottom'} of the list\`);||=>||"
 
 mutate "a poll tick repaints mid-drag, reordering under the user's finger" \
   "client/js/session-sidebar.js" \

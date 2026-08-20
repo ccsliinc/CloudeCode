@@ -155,13 +155,29 @@ window.API = {
         renamed.cloude_fstest = name;
         return { session: { id, tmux_session: name } };
     },
-    async getSession() { return null; },
-    async adoptSession() { return {}; },
+    // MUST RETURN SOMETHING TRUTHY. activateRow only calls
+    // returnToExistingTerminal when getSession resolves to a session, so
+    // a null here makes every switch a silent no-op - and a switch that
+    // does nothing cannot be counted, which hid a broken click-deferral
+    // from the rename checks entirely.
+    async getSession() {
+        return { session: { id: 'sess-fstest-0001' }, tmux_session: 'cloude_fstest' };
+    },
+    async adoptSession() { window.__switchCount += 1; return {}; },
     async setSessionUnread() { return {}; },
     async destroySession() { return {}; },
     async destroyExternalSession() { return {}; },
 };
-window.App = { returnToExistingTerminal() {} };
+// HOW MANY TIMES THE APP WAS ASKED TO SWITCH CONVERSATION. The inline
+// rename's whole difficulty is that the first click of a double-click
+// arrives BEFORE the double-click, so a broken deferral switches away
+// from the row a moment before the user finishes asking to edit it. That
+// failure still leaves an editor open, so it is invisible unless the
+// switch itself is counted.
+window.__switchCount = 0;
+window.App = {
+    returnToExistingTerminal() { window.__switchCount += 1; },
+};
 window.TerminalController = { async destroySession() {} };
 </script>
 <script src="../../client/js/session-listing-state.js"></script>
@@ -291,6 +307,7 @@ window.__sidebarMeasure = function () {
             };
         }()),
         renameStates: rows.map((r) => r.dataset.renameState),
+        switchCount: window.__switchCount,
         focused: document.activeElement && document.activeElement.dataset
             ? (document.activeElement.dataset.name || null) : null,
         bodyPinned: document.body.classList.contains('session-sidebar-pinned'),
