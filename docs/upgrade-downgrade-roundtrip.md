@@ -82,12 +82,97 @@ already-current by this one, and whatever migration that future version
 would have needed never runs. Contrast `src/core/db_version_gate.py`,
 which does exactly this check for the database.
 
-### Not measured
+### 5. Session metadata does NOT survive the round trip
 
-Session metadata continuity across the downgrade. v0.8.1 has no
-`get_state_dir` and reads `session_metadata.json` from `LOG_DIRECTORY`,
-while the new version writes it into the state directory with a fallback
-read from the old location. The harness runs with zero live sessions, so
-this is CANNOT DETERMINE, not "fine". `cloude.db` itself is inert to the
-old version - it lives in a directory v0.8.1 never opens, and step 04
-started cleanly with it present.
+Measured 2026-08-20. This was the previous run's one CANNOT DETERMINE
+step; it is now a real step, and the answer is **ABSENT**.
+
+`v0.8.1` reads `session_metadata.json` from `LOG_DIRECTORY` and nowhere
+else. The current version resolves it through
+`Settings._resolve_state_file()`, which prefers the state directory and
+falls back to the old location. Both sides of every assertion below run
+the version's OWN code: the old side is `v0.8.1`'s real
+`get_session_metadata_path`, read out of the tag and compiled at run
+time, not a paraphrase of it.
+
+**The upgrade alone is safe.** With the file only at `LOG_DIRECTORY`,
+the resolver returns the old path for reads AND writes. The new version
+loaded the seeded session, rehydrated it against the live tmux session,
+and kept writing to the old location. A user who upgrades and does
+nothing else can drop back to `v0.8.1` and lose nothing.
+
+**One ordinary action moves the file, permanently.**
+`SessionManager.detach_session` unlinks the RESOLVED metadata path and
+then, when another session is still live, calls
+`_save_session_metadata()` - which re-resolves. After the unlink the old
+location no longer exists, so the resolver returns the NEW path and the
+file MOVES to the state directory. Nothing copies it back.
+`_clear_stale_metadata` has the same shape, so a startup that finds the
+persisted session's tmux slug gone does it too. Measured end to end:
+after the detach sequence the state dir holds the metadata and
+`LOG_DIRECTORY` holds only `refresh_tokens.db`.
+
+**What the user loses on the downgrade.** `v0.8.1` starts clean and logs
+`no_existing_session_metadata`. Gone with the file: the
+most-recently-active session's id, its working directory, its agent type
+and its pinned theme, plus `owned_tmux_sessions` - the set that tells the
+app which tmux sessions are ITS OWN. The tmux sessions themselves keep
+running; the old version no longer claims them, so they present as
+strangers to be re-adopted rather than as the user's own sessions.
+
+**Stale is possible too, and it is worse.** When the file exists in BOTH
+places the resolver prefers the new one, logs
+`state_file_present_in_both_locations`, and leaves the old copy on disk
+untouched forever. A downgrade then rehydrates a session that is no
+longer the live one - a wrong answer rather than a missing one, and
+nothing on screen says so. `restore_backup()` in
+`scripts/upgrade_lib/upgrade_rollback_common.sh` creates exactly this
+state by construction: it restores state files to `resolve_state_dir()`
+regardless of which location they were backed up FROM, so a backup taken
+from `LOG_DIRECTORY` is restored to the state dir and the original is
+left behind as the stale twin.
+
+The unit-level version of all of this is
+`tests/test_session_meta_continuity.py` (7 tests, no tmux, runs in the
+normal suite). The end-to-end version is the `meta-*` steps of the
+harness, which write the metadata with the OLD install's code, run the
+NEW version's real detach sequence, and read the result back with the
+OLD version's own resolver.
+
+The harness step DECLARES `ABSENT` (`artifacts/meta.expect`), the same
+way step 08 declares FAIL. If a fix lands, the step goes UNEXPECTED and
+someone reads it rather than the guard quietly agreeing with whatever it
+finds.
+
+### Two traps that manufactured this finding three times before it was real
+
+Both produced a clean, plausible ABSENT out of the fixture rather than
+the product, and both are guarded now.
+
+`TmuxBackend.discover_existing()` lists only `cloude_`-prefixed names,
+and the reconciler prunes the owned set against exactly that list. Bare
+session names read as dead, so the owned set was pruned empty and the
+metadata deleted.
+
+The reconciler then builds its backend from `persisted.id` and matches
+`cloude_<id>`; it never reads the `tmux_session` field. A persisted id
+that is not the bare tmux name gets its metadata deleted as stale before
+the relocation path is reached. The harness now reads the upgrade's own
+server log and reports CANNOT DETERMINE when it sees
+`stale_session_metadata_deleted` without a matching rehydrate, instead of
+scoring the rejection as a finding.
+
+### A safety defect in the harness itself
+
+The seed fixture carried `tmux_socket_name: "cloude"` - the socket a real
+install runs on, with the user's live work on it. Every server the
+harness started reconciled against that socket while the script's header
+claimed it touched nothing real. It is now pinned to a per-run throwaway
+socket and re-asserted before EVERY server start, not once, because a
+later step can rewrite `config.json`.
+
+### Still not measured
+
+Whether the DOWNGRADED old version, once running, writes metadata back to
+`LOG_DIRECTORY` in a way the next upgrade then treats as the both-present
+ambiguous case. The steps above stop at the read.

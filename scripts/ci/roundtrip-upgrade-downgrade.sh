@@ -135,6 +135,10 @@ teardown_tmux() {
     [ -n "${TMUX_BIN}" ] || return 0
     [ "${META_SOCKET}" = "cloude" ] && return 0
     "${TMUX_BIN}" -L "${META_SOCKET}" kill-server >/dev/null 2>&1
+    # kill-server leaves the socket FILE behind when no server was ever
+    # started on it, which accumulates one dead entry per run. Removed by
+    # exact path, and only ever the throwaway name.
+    rm -f "${TMUX_TMPDIR:-/private/tmp}/tmux-$(id -u)/${META_SOCKET}" 2>/dev/null
     return 0
 }
 trap teardown_tmux EXIT
