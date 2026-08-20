@@ -986,6 +986,46 @@ function updateMenu() {
             exec(`open -R "${configPath}"`);
           }
         },
+        {
+          label: 'Check Config for New Defaults...',
+          click: () => {
+            // Runs the merge as a DRY RUN and shows the plan. Nothing is
+            // written from here. Applying is a separate, explicit step,
+            // because a conflict between a default he changed and a default
+            // that moved is his decision to make, not this menu's.
+            const { execFile } = require('child_process');
+            const root = serverManager.getProjectRoot();
+            const python = serverManager.pythonPath || 'python3';
+
+            execFile(
+              python,
+              [path.join(root, 'scripts', 'config_upgrade.py')],
+              { cwd: root },
+              (error, stdout, stderr) => {
+                // Exit 2 means "needs a human", which is a real answer, not a
+                // failure. Only a genuine error (exit 1) is reported as one.
+                const code = error && typeof error.code === 'number' ? error.code : 0;
+                if (code === 1) {
+                  dialog.showErrorBox(
+                    'Cloude Code: config check failed',
+                    String(stderr || (error && error.message) || 'unknown error')
+                  );
+                  return;
+                }
+                dialog.showMessageBox({
+                  type: code === 2 ? 'warning' : 'info',
+                  title: 'Config check',
+                  message:
+                    code === 2
+                      ? 'Some settings need your attention'
+                      : 'Your config is up to date with the shipped defaults',
+                  detail: String(stdout || '').slice(0, 4000),
+                  buttons: ['OK'],
+                });
+              }
+            );
+          }
+        },
         { type: 'separator' },
         {
           label: 'Uninstall',
