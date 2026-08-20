@@ -20,14 +20,11 @@ const DEFAULT_BIND_HOST = '0.0.0.0';
 // value - see getPort() below.
 const DEFAULT_PORT = 8000;
 
-// macOS pseudo-interfaces that should NEVER appear in the Bind IP submenu.
-// awdl/llw = AirDrop/Apple Wireless Direct Link (link-local IPv6 only).
-// utun = VPN tunnels (link-local IPv6 usually; user-bound VPN, not a LAN
-// binding target). anpi/ap1 = internal radios on Apple Silicon. Skip them
-// wholesale by name — they never carry routable IPv4 even if one shows up.
-const PSEUDO_IFACE_PATTERNS = [
-  /^awdl/i, /^llw/i, /^utun/i, /^anpi/i, /^ap\d/i,
-];
+const { listBindableIps, isTailscaleIp } = require('./network-interfaces');
+
+// Interface selection lives in network-interfaces.js. Interfaces are chosen
+// by the ADDRESS they carry, not by a blocklist of names; see that file for
+// why the old name-based filter was wrong and what it cost.
 
 class ServerManager {
   constructor() {
@@ -36,6 +33,16 @@ class ServerManager {
     this.ownedProcess = false; // true if we spawned the server, false if adopted
     this.logStream = null;
 
+    // Crash tracking. `state` stays a three-value machine
+    // (stopped/starting/running) so no existing menu logic changes; the
+    // question "was the last exit OUR idea" is tracked separately here and
+    // read by the tray to tell a deliberate stop apart from a crash. Without
+    // it, a server that died on its own shows the same calm icon as one the
+    // user stopped himself.
+    this.stopRequested = false;
+    this.lastExitUnexpected = false;
+    this.lastExit = null;
+
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
       // In production: Store server files in Application Support
@@ -43,8 +50,14 @@ class ServerManager {
       this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = path.join(app.getAppPath(), '..');
     } else {
-      // In development: running from macOS/ folder
-      this.baseDir = path.join(__dirname, '..');
+      // In development (`npm start`): main.js's runBootstrap() always
+      // preps venv/.env/copied src+client under userData/server (see
+      // main.js's `serverDir` constant), regardless of app.isPackaged.
+      // baseDir must match that, or ensureServerFiles()/getPort() look
+      // for .env in the repo root, which bootstrap never touches, and
+      // startup fails with "Configuration validation failed: .env file
+      // not found" even though bootstrap just finished successfully.
+      this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = this.baseDir;
     }
 
@@ -192,28 +205,12 @@ class ServerManager {
    * Returns: [{iface: 'en0', ip: '192.168.1.250'}, ...]
    */
   getLocalInterfaceIps() {
-    const results = [];
-    let ifaces;
     try {
-      ifaces = os.networkInterfaces();
+      return listBindableIps();
     } catch (err) {
       console.warn('[bind-host] networkInterfaces() failed:', err.message);
       return [];
     }
-    for (const [name, addrs] of Object.entries(ifaces || {})) {
-      if (PSEUDO_IFACE_PATTERNS.some((rx) => rx.test(name))) continue;
-      if (!Array.isArray(addrs)) continue;
-      for (const a of addrs) {
-        if (!a || a.family !== 'IPv4') continue;
-        if (a.internal) continue;
-        if (typeof a.address !== 'string') continue;
-        if (a.address.startsWith('169.254.')) continue; // link-local
-        results.push({ iface: name, ip: a.address });
-      }
-    }
-    // Stable ordering by interface name (en0 before en13 etc.)
-    results.sort((a, b) => a.iface.localeCompare(b.iface));
-    return results;
   }
 
   /**
@@ -692,6 +689,11 @@ class ServerManager {
     console.log(`Python path: ${this.pythonPath}`);
     console.log(`Log file: ${this.logFile}`);
 
+    // A new start clears any previous crash, so the tray shows the
+    // current attempt rather than the last failure forever. A flag that
+    // never clears is furniture, not a signal.
+    this.lastExitUnexpected = false;
+    this.stopRequested = false;
     this.state = 'starting';
 
     // Create log file stream
@@ -780,6 +782,14 @@ class ServerManager {
         this.logStream = null;
       }
 
+      // An exit we did not ask for is a crash, whatever the code says. A
+      // uvicorn that loses its port exits non-zero; one the OOM killer takes
+      // exits on a signal. Both matter to the user, and neither is
+      // distinguishable from a clean stop once state collapses to 'stopped'.
+      this.lastExit = { code, signal, at: Date.now() };
+      this.lastExitUnexpected = !this.stopRequested;
+      this.stopRequested = false;
+
       this.process = null;
       this.processPid = null;
       this.ownedProcess = false;
@@ -797,6 +807,11 @@ class ServerManager {
         this.logStream.end();
         this.logStream = null;
       }
+
+      // Failing to spawn at all is never something the user asked for.
+      this.lastExit = { code: null, signal: null, error: err.message, at: Date.now() };
+      this.lastExitUnexpected = true;
+      this.stopRequested = false;
 
       this.process = null;
       this.processPid = null;
@@ -874,6 +889,12 @@ class ServerManager {
    */
   async stop() {
     console.log('Stopping server...');
+
+    // Everything from here on is a deliberate stop, so the exit handler must
+    // not report it as a crash. Set BEFORE any kill is issued, because the
+    // exit event can land before this function returns.
+    this.stopRequested = true;
+    this.lastExitUnexpected = false;
 
     // Adopted server: we didn't start it, we don't stop it.
     if (!this.ownedProcess) {

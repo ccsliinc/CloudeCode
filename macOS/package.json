@@ -38,12 +38,16 @@
       {
         "from": "../src",
         "to": "src",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../client",
         "to": "client",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../requirements.txt",
@@ -97,5 +101,8 @@
       "iconTextSize": 14,
       "format": "UDZO"
     }
+  },
+  "allowScripts": {
+    "electron@28.3.3": true
   }
 }
