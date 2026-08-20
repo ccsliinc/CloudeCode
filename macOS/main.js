@@ -9,6 +9,112 @@ const { TrayApiClient } = require('./tray-api');
 const { isTailscaleIp } = require('./network-interfaces');
 const tlsStatus = require('./tls-status');
 
+// ---------------------------------------------------------------------------
+// Menu-bar-only presence (no Dock icon)
+//
+// Two halves, and BOTH are required:
+//   * `LSUIElement` in macOS/package.json build.mac.extendInfo stops a PACKAGED
+//     build from ever registering a Dock tile. Without it the tile appears at
+//     launch and only disappears once JS runs, which is a visible bounce.
+//   * `app.dock.hide()` here covers a dev run (`electron .`), where the plist
+//     that applies is Electron's own, not ours.
+//
+// Cost of hiding: the process becomes NSApplicationActivationPolicyAccessory,
+// which is NOT a normal activatable app. A window it opens can land behind
+// whatever the user was using, and a modeless dialog can do the same. Electron
+// gives no automatic activation for an accessory app, so every surface that
+// becomes visible has to ask for the app to be brought forward explicitly.
+//
+// This is done in ONE place rather than at each of the ~13 call sites so that
+// a surface added later cannot forget it. `browser-window-created` catches
+// every BrowserWindow, and the dialog wrappers catch every dialog, including
+// ones this file does not yet contain.
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove the Dock tile for this process. macOS only; a no-op elsewhere.
+ *
+ * Inputs: none
+ * Outputs: boolean - true if the Dock tile was hidden, false if there was no
+ *          Dock to hide (non-darwin) or the call failed.
+ */
+function hideFromDock() {
+  if (process.platform !== 'darwin' || !app.dock) return false;
+  try {
+    app.dock.hide();
+    return true;
+  } catch (err) {
+    // Not fatal: the app still works, it just keeps a Dock tile. Say so
+    // rather than swallowing it, because the symptom (a Dock icon) looks
+    // like the feature was never implemented.
+    console.warn('[dock] could not hide Dock tile:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Bring this process to the front. Required before showing any window or
+ * dialog once the Dock tile is gone, because an accessory app is never
+ * activated for you.
+ *
+ * Inputs: none
+ * Outputs: void
+ */
+function activateForForeground() {
+  try {
+    app.focus({ steal: true });
+  } catch (err) {
+    console.warn('[dock] could not activate app:', err.message);
+  }
+}
+
+/**
+ * Wrap dialog.showErrorBox / showMessageBox / showMessageBoxSync so each one
+ * activates the app first. Mutates the properties of the shared `dialog`
+ * object, so later `require('electron').dialog` destructures in this file see
+ * the wrapped versions too (same object, resolved at call time).
+ *
+ * Inputs: none
+ * Outputs: void
+ */
+function installDialogActivation() {
+  for (const name of ['showErrorBox', 'showMessageBox', 'showMessageBoxSync']) {
+    const original = dialog[name];
+    if (typeof original !== 'function' || original.__frontsApp) continue;
+    const wrapped = function (...args) {
+      activateForForeground();
+      return original.apply(dialog, args);
+    };
+    wrapped.__frontsApp = true;
+    dialog[name] = wrapped;
+  }
+}
+
+/**
+ * Make every BrowserWindow front the app when it becomes visible.
+ *
+ * Inputs: none
+ * Outputs: void
+ */
+function installWindowActivation() {
+  app.on('browser-window-created', (_event, win) => {
+    win.on('show', () => {
+      activateForForeground();
+      try {
+        win.moveTop();
+        win.focus();
+      } catch (err) {
+        console.warn('[dock] could not front window:', err.message);
+      }
+    });
+  });
+}
+
+hideFromDock();
+installDialogActivation();
+installWindowActivation();
+
+
 let tray = null;
 let serverManager = null;
 let launchAgentInstaller = null;
