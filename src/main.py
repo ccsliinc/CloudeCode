@@ -241,6 +241,15 @@ async def lifespan(app: FastAPI):
     # presence means "session import has not run yet", and its absence is
     # NOT proof it has (read meta.imported_from_json_at for that).
     app.state.session_import_notice = None
+    # WHAT THE PROJECT RECONCILE DID ON THIS START. Distinct from the
+    # session notice above: that one means "the import has not run yet",
+    # this one means "your project list was repaired, or could not be
+    # fully explained". The reconcile runs on EVERY start now (see
+    # src/core/project_reconcile.py), so its absence here means the
+    # startup block did not reach it, never that it found nothing - the
+    # same distinction GET /projects/authority carries in its own
+    # reconcile block.
+    app.state.project_reconcile_notice = None
     if datastore_state.healthy:
         from src.core.db import connect, db_path_for, transaction
         from src.core.session_attribution import backfill_attribution
@@ -290,6 +299,10 @@ async def lifespan(app: FastAPI):
                 app.state.session_import_notice = (
                     _import_result.home_screen_notice()
                 )
+                if _import_result.projects is not None:
+                    app.state.project_reconcile_notice = (
+                        _import_result.projects.notice()
+                    )
                 logger.info(
                     "first_run_import",
                     outcome=_import_result.outcome,

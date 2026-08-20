@@ -351,3 +351,53 @@ def test_the_summary_names_what_it_could_not_evaluate(tmp_path):
     assert summary["outcomes"][RECONCILE_UNDETERMINED] == 1
     assert summary["cannot_determine"] is True
     assert normalize_root("/tmp/hazy") in summary["notice"]
+
+
+def test_the_authority_block_carries_what_the_reconcile_did(tmp_path):
+    """GET /projects/authority is where the wizard can see the repair.
+
+    The reconcile block travels with the mode and the diff, so a client
+    cannot render the project list without also being handed the account
+    of what was done to it.
+    """
+    from src.core.project_authority import resolve_projects
+
+    ensure_db_migrated(tmp_path, 4, "0.8.2")
+    with closing(connect(db_path_for(tmp_path))) as c:
+        with transaction(c):
+            run_first_run_import(
+                c,
+                projects=[_cfg("alpha", "/tmp/alpha")],
+                listing=TmuxListing.answered([]),
+            )
+        with transaction(c):
+            reconcile_projects(
+                c,
+                [_cfg("alpha", "/tmp/alpha"), _cfg("restored", "/tmp/restored")],
+            )
+
+    block = resolve_projects(
+        tmp_path, [_cfg("alpha", "/tmp/alpha"), _cfg("restored", "/tmp/restored")]
+    ).to_dict()
+
+    assert block["reconcile"]["state"] == "ok"
+    assert block["reconcile"]["outcomes"][RECONCILE_IMPORTED] == 1
+    assert block["reconcile"]["cannot_determine"] is False
+    assert "restored" in block["reconcile"]["notice"]
+
+
+def test_a_reconcile_that_never_ran_is_NOT_reported_as_a_clean_one(tmp_path):
+    """NEVER RUN must not render as a zeroed all-clear.
+
+    A fabricated tally of zeros is exactly the false green this whole
+    subsystem keeps having to undo: it answers a question nobody asked
+    the database, and it reads identically to a healthy result.
+    """
+    from src.core.project_authority import resolve_projects
+
+    ensure_db_migrated(tmp_path, 4, "0.8.2")
+    block = resolve_projects(tmp_path, []).to_dict()
+
+    assert block["reconcile"]["state"] == "never_run"
+    assert block["reconcile"]["outcomes"] is None
+    assert block["reconcile"]["cannot_determine"] is None
