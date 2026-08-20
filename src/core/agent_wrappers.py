@@ -349,9 +349,18 @@ def render_wrapper_invocation(
 # deviation from verbatim: EXAMPLE_WRAPPER_CLDOR originally invoked claude
 # via the hardcoded absolute path "$HOME/.local/bin/claude", which only
 # resolves on the machine it was authored on. It now resolves "claude" from
-# PATH via `command -v` and fails with a named message when absent, instead
-# of a raw shell "no such file or directory". Nothing else in either body
-# was changed.
+# PATH and fails with a named message when absent, instead of a raw shell
+# "no such file or directory".
+#
+# That PATH resolution deliberately steps past a shell ALIAS or FUNCTION
+# named "claude" before looking up the binary. A bare `command -v claude`
+# reports the alias DEFINITION TEXT, not a path, whenever such an alias is
+# defined - measured 2026-08-20 on the author's Mac mini, where
+# `alias claude=...` makes `command -v claude` return
+# "alias claude='security unlock-keychain ... && /opt/homebrew/bin/claude'".
+# The unalias/unset run inside a command-substitution subshell, so the
+# caller's own alias and function are left intact. Nothing else in either
+# body was changed.
 # ---------------------------------------------------------------------------
 
 EXAMPLE_WRAPPER_CLD = """cld() (
@@ -393,10 +402,16 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
     return 1
   }
 
-  claude_bin="$(command -v claude)" || {
+  # Resolve the real claude binary, stepping past any shell-level alias or
+  # function of the same name. A bare `command -v claude` reports the ALIAS
+  # DEFINITION TEXT when an alias exists, which is not a path and is not
+  # executable. The unalias/unset run inside this command substitution's own
+  # subshell, so the caller's alias and function survive untouched.
+  claude_bin="$(unalias claude 2>/dev/null; unset -f claude 2>/dev/null; command -v claude)"
+  if [[ ! -x "$claude_bin" ]]; then
     echo "claude not found on PATH."
     return 1
-  }
+  fi
 
   # Treat the first non-option argument as the model name
   if [[ $# -gt 0 && "$1" != -* ]]; then
