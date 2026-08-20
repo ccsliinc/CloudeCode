@@ -364,13 +364,22 @@ capture_step "old-after-write" noserver
 # so the starting state is genuinely what v0.8.1 leaves behind, not this
 # script's idea of it. The tmux sessions are real, on the throwaway socket.
 
+# THE NAMES MATTER, and getting them wrong manufactures the finding.
+# TmuxBackend.discover_existing() lists only ``cloude_``-prefixed names
+# (SESSION_PREFIX), and the startup reconciler prunes the owned set
+# against exactly that list. A first run of this step used bare names,
+# so both live sessions read as dead, the owned set was pruned to empty
+# and the metadata file was deleted - a perfect ABSENT verdict produced
+# entirely by the fixture rather than by the product. Keep the prefix.
 say "--- creating real tmux sessions on ${META_SOCKET}"
 if [ -n "${TMUX_BIN}" ]; then
-    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s roundtrip-a -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
-    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s roundtrip-b -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
+    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s cloude_roundtrip-a -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
+    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s cloude_roundtrip-b -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
     "${TMUX_BIN}" -L "${META_SOCKET}" list-sessions -F '#{session_name}' \
         > "${WORK_DIR}/artifacts/meta-tmux-sessions.txt" 2>&1
     say "sessions: $(tr '\n' ' ' < "${WORK_DIR}/artifacts/meta-tmux-sessions.txt")"
+    grep -q '^cloude_' "${WORK_DIR}/artifacts/meta-tmux-sessions.txt" \
+        || setup_fail "seeded tmux sessions are not cloude_-prefixed - the reconciler would read them as dead and this step would measure its own fixture"
 else
     say "tmux not found - the metadata steps still run, tmux liveness is CANNOT DETERMINE"
     printf 'tmux-unavailable\n' > "${WORK_DIR}/artifacts/meta-tmux-sessions.txt"
@@ -380,8 +389,8 @@ say "--- OLD version writes session_metadata.json at its own resolved path"
 (
     cd "${INSTALL}" || exit 1
     "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label old-writes \
-        --write roundtrip-session-1 --name roundtrip-a \
-        --working-dir "${PROJ_DIR}" --owned roundtrip-a --owned roundtrip-b
+        --write roundtrip-session-1 --name cloude_roundtrip-a \
+        --working-dir "${PROJ_DIR}" --owned cloude_roundtrip-a --owned cloude_roundtrip-b
 ) > "${WORK_DIR}/artifacts/meta-01-old-writes.json" 2>&1
 cat "${WORK_DIR}/artifacts/meta-01-old-writes.json"
 
@@ -415,9 +424,9 @@ mgr._load_session_metadata()
 before = mgr.current_session()
 mgr._clear_stale_metadata()
 survivor = Session(id="roundtrip-session-2", working_dir="/tmp",
-                   tmux_session="roundtrip-b")
+                   tmux_session="cloude_roundtrip-b")
 mgr._register_session(survivor, backend=None)
-mgr.owned_tmux_sessions = {"roundtrip-b"}
+mgr.owned_tmux_sessions = {"cloude_roundtrip-b"}
 mgr._save_session_metadata()
 print(json.dumps({
     "rehydrated_before_detach": None if before is None else before.id,
