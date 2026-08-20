@@ -11,9 +11,12 @@
  * palette, and the cozy row is byte-for-byte the row that shipped before
  * the density control existed.
  *
- * WHERE THE HEIGHT DIFFERENCE COMES FROM. Three levers, all declared and
- * all measurable: row padding, line-height, and whether a second line
- * exists at all. No inline styles and no JS-computed sizes, so
+ * WHERE THE HEIGHT DIFFERENCE COMES FROM. Four levers, all declared and
+ * all measurable: row padding, line-height, whether a second line exists
+ * at all, and - added this round - an explicit per-mode `min-height` that
+ * makes the three numbers a stated contract rather than an accident of
+ * whichever controls currently ride the line. See THE DENSITY CONTRACT at
+ * the foot of this file. No inline styles and no JS-computed sizes, so
  * scripts/verify_sidebar_sessions.py can measure the real boxes in a real
  * Chromium and the numbers mean something.
  * ===================================================================== */
@@ -26,6 +29,10 @@
 .session-sidebar-row {
     display: block;
     padding: 0;
+    /* Every mode below states its own height. See THE DENSITY CONTRACT
+     * at the foot of this file for why that is a min-height and not a
+     * fixed height. */
+    box-sizing: border-box;
 }
 
 .session-sidebar-row-main {
@@ -64,13 +71,20 @@
 
 /* ---- compact --------------------------------------------------------
  * The "super thin bars so i can see more" end of the request. The badge
- * is dropped by the row builder (it is the most redundant glyph on the
- * row); the family pill is NOT, because its unknown state is the one the
- * user most needs to see and hiding it here would be the false green this
- * project keeps having to remove. */
+ * is dropped by the row builder, being the most redundant glyph on the
+ * row.
+ *
+ * THIS COMMENT USED TO DEFEND KEEPING THE FAMILY PILL HERE, on the
+ * reasoning that its unknown state was the one the user most needed to
+ * see. That reasoning was about a density mode quietly deleting
+ * information nobody asked to lose. It does not survive the user asking
+ * for the pill to go ("i dont think we need the pills in the sidebare
+ * take out for now"), so the pill is gone from all three modes and the
+ * home screen keeps its own. */
 
 .session-sidebar-panel[data-density="compact"] .session-sidebar-row {
     margin-bottom: 1px;
+    min-height: 24px;
 }
 
 .session-sidebar-panel[data-density="compact"] .session-sidebar-row-main {
@@ -93,14 +107,23 @@
 /* ---- cozy (default) -------------------------------------------------
  * The row exactly as it shipped: 10px padding on both axes. */
 
+.session-sidebar-panel[data-density="cozy"] .session-sidebar-row {
+    min-height: 46px;
+}
+
 .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-main {
     padding: 10px 10px;
     line-height: 1.4;
 }
 
 /* ---- detailed -------------------------------------------------------
- * "or more detail": the second line carries the agent family and the
- * session's age. */
+ * "or more detail": the second line carries the tmux/external badge,
+ * moved down off the first line, plus the session's age. The agent
+ * family pill used to sit here and no longer exists on this surface. */
+
+.session-sidebar-panel[data-density="detailed"] .session-sidebar-row {
+    min-height: 66px;
+}
 
 .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-main {
     padding: 10px 10px 2px 10px;
@@ -339,3 +362,33 @@
     white-space: nowrap;
     border: 0;
 }
+
+/* =====================================================================
+ * THE DENSITY CONTRACT
+ *
+ * compact 24px, cozy 46px, detailed 66px, measured on the ROW, in a real
+ * browser, by scripts/verify_sidebar_sessions.py and by the geometry
+ * suite in tests/.
+ *
+ * WHY THE NUMBERS ARE STATED HERE RATHER THAN LEFT TO ADD UP. Before
+ * this block the three heights were whatever the padding, the
+ * line-height and the tallest control on the line happened to produce.
+ * That is not a contract, it is an outcome: removing the family pill
+ * this round would have silently shortened every mode, and adding any
+ * control taller than the current tallest would silently lengthen them.
+ * A number that moves when an unrelated control is added or removed
+ * cannot be asserted against.
+ *
+ * WHY min-height AND NOT height. A row must still be allowed to grow
+ * when its own content genuinely needs the space - a long name that
+ * wraps, or a browser at a larger base font. Pinning `height` would clip
+ * that instead of showing it, which trades a visible layout stretch for
+ * an invisible truncation. The floor is the contract; the ceiling is the
+ * content's business.
+ *
+ * DETAILED'S SECOND LINE is `.session-sidebar-row-meta`, which carries
+ * the tmux/external badge (moved down off the first line) and the
+ * session's age. It holds its own `min-height: 18px` for the same reason
+ * this block exists: the family pill used to sit there, and the line had
+ * to keep its height when the pill left it.
+ * ===================================================================== */

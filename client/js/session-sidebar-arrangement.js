@@ -1,218 +1,47 @@
 /**
- * Session sidebar ARRANGEMENT - which sessions are pinned to the top, and
- * the order the user put them in.
+ * Session sidebar ARRANGEMENT - the ordering algebra. How a list of
+ * session rows is sorted into the user's arrangement, and the four
+ * operations that change it: pin, move, place, and merge.
  *
- * WHICH "PIN" THIS IS. There are now two, and they are different features
- * with different storage keys. client/js/session-sidebar-pin.js pins the
- * BAR (docked open, no backdrop). This module pins a SESSION (it sorts to
- * the top of the list and stays there). The user asked for both, in two
- * separate sentences, so neither name is available to mean the other.
+ * Everything about WHAT IS REMEMBERED lives one file down, in
+ * client/js/session-sidebar-store.js: the localStorage envelope, its
+ * three load outcomes, and the pin membership. This file was 524 lines
+ * with both jobs in it, over the project's 500-line budget, and they are
+ * genuinely different jobs. The dependency runs one way - this reads and
+ * writes through the store, the store knows nothing about ordering.
  *
- * WHY ONE KEY FOR TWO CAPABILITIES. A pin is not independent of an order:
- * it is a partition of the same list into a top band and a bottom band.
- * Storing them apart lets one half parse and the other half not, which
- * would leave the list half-arranged and no honest way to describe it.
- * One key, one parse, one verdict.
- *
- * THREE OUTCOMES ON LOAD, and they are not the same thing:
- *   'default'    nothing stored yet. Not a failure. The list falls back
- *                to its built-in sort and says nothing, because there is
- *                nothing the user arranged for it to have lost.
- *   'ok'         parsed, and it is his.
- *   'unreadable' a value IS stored and could not be read or did not have
- *                the right shape (or localStorage itself threw). The list
- *                falls back to the built-in sort AND SAYS SO. Presenting
- *                the default order silently would tell the user that this
- *                is the arrangement he chose. It is not.
- * The stored bytes are deliberately NOT overwritten on 'unreadable' - the
- * value stays on disk, inspectable, until the user's next deliberate
- * arrangement change replaces it with a good one.
+ * THE PUBLIC SURFACE IS UNCHANGED. `window.SessionSidebarArrangement`
+ * still carries every name it did before the split, including the ones
+ * that now live in the store, because a refactor that makes every caller
+ * change is not a refactor. Callers and tests use the same API.
  *
  * A REMEMBERED NAME WHOSE SESSION IS GONE KEEPS ITS SLOT. It is not an
  * error and it is not dropped: the entry stays in storage at the same
- * index, renders no row, and is counted out loud (see `arrange()`'s
- * `missing`, which the list renders as a note and stamps on the list
- * element as a data attribute). A session that stops overnight and comes
- * back lands back where the user left it. The remembered list is capped
- * at MAX_REMEMBERED so it cannot grow without bound.
+ * index, renders no row, and is counted out loud by `arrange()`. So a
+ * conversation that comes back lands back where the user left it,
+ * instead of at the bottom as if it were new.
  *
- * No DOM in this file, no storage reads outside load()/save(). It is a
- * pure ordering function plus a persistence pair, which is what makes it
- * testable without a browser.
+ * THE INCOMING ORDER IS ONLY A FALLBACK. `arrange()` receives the
+ * sidebar's built-in sort (this tab, then live, then newest) and uses it
+ * ONLY for names the user has never arranged. A user-defined position is
+ * never silently overridden by it, which is the whole requirement.
  *
- * Must load BEFORE session-sidebar.js runs.
+ * Pure functions over plain objects, so it is testable without a
+ * browser.
+ *
+ * Must load AFTER session-sidebar-store.js and BEFORE session-sidebar.js.
  */
 
 console.log('[SessionSidebarArrangement Module] Loading...');
 
 (function () {
     /**
-     * localStorage key for the pinned set + user order. Follows the app's
-     * `cloude.*` convention, and sits beside the two flags the same panel
-     * already owns (`cloude.session.sidebar`, `...sidebar.pinned`).
-     * @type {string}
+     * The persistence layer. Aliased once rather than reached through
+     * `window` at every call site, so the dependency is stated at the top
+     * of the file instead of being scattered through it.
+     * @type {object}
      */
-    const STORAGE_KEY = 'cloude.session.sidebar.arrangement';
-
-    /**
-     * Schema version stamped into the stored envelope. A value carrying
-     * any other version is treated as unreadable rather than guessed at.
-     * @type {number}
-     */
-    const VERSION = 1;
-
-    /**
-     * Most remembered names kept across saves. Slots for sessions that no
-     * longer exist are retained on purpose (see the file docblock); this
-     * is the bound that stops "retained on purpose" becoming "forever".
-     * @type {number}
-     */
-    const MAX_REMEMBERED = 200;
-
-    /** Live state, replaced wholesale by load(). @type {object} */
-    let state = { status: 'default', reason: null, pinned: [], order: [] };
-
-    /**
-     * Description: true when `value` is an array of non-empty strings.
-     * Inputs: value (any).
-     * Output: boolean.
-     */
-    function isNameArray(value) {
-        return Array.isArray(value)
-            && value.every((n) => typeof n === 'string' && n.length > 0);
-    }
-
-    /**
-     * Description: drop duplicates from a name list, keeping first wins.
-     * Inputs: names (Array<string>).
-     * Output: Array<string>.
-     */
-    function dedupe(names) {
-        const seen = new Set();
-        const out = [];
-        for (const n of names) {
-            if (seen.has(n)) continue;
-            seen.add(n);
-            out.push(n);
-        }
-        return out;
-    }
-
-    /**
-     * Description: read the stored arrangement and classify the result as
-     *   one of the three outcomes described in the file docblock. Never
-     *   throws; a storage backend that refuses to answer is 'unreadable',
-     *   which is a verdict, not a crash.
-     * Inputs: none (reads localStorage).
-     * Output: object - {status, reason, pinned, order}. Also replaces the
-     *   module's live state.
-     * Example: SessionSidebarArrangement.load().status // 'default'
-     */
-    function load() {
-        let raw = null;
-        try {
-            raw = localStorage.getItem(STORAGE_KEY);
-        } catch (err) {
-            state = {
-                status: 'unreadable',
-                reason: 'storage unavailable',
-                pinned: [],
-                order: [],
-            };
-            return state;
-        }
-        if (raw === null || raw === undefined || raw === '') {
-            state = { status: 'default', reason: null, pinned: [], order: [] };
-            return state;
-        }
-        let parsed = null;
-        try {
-            parsed = JSON.parse(raw);
-        } catch (err) {
-            state = {
-                status: 'unreadable',
-                reason: 'stored value is not valid JSON',
-                pinned: [],
-                order: [],
-            };
-            return state;
-        }
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            state = {
-                status: 'unreadable',
-                reason: 'stored value is not an arrangement object',
-                pinned: [],
-                order: [],
-            };
-            return state;
-        }
-        if (parsed.v !== VERSION) {
-            state = {
-                status: 'unreadable',
-                reason: `stored arrangement is version ${JSON.stringify(parsed.v)}, this app writes version ${VERSION}`,
-                pinned: [],
-                order: [],
-            };
-            return state;
-        }
-        if (!isNameArray(parsed.pinned) || !isNameArray(parsed.order)) {
-            state = {
-                status: 'unreadable',
-                reason: 'stored pin or order list is not a list of session names',
-                pinned: [],
-                order: [],
-            };
-            return state;
-        }
-        state = {
-            status: 'ok',
-            reason: null,
-            pinned: dedupe(parsed.pinned).slice(0, MAX_REMEMBERED),
-            order: dedupe(parsed.order).slice(0, MAX_REMEMBERED),
-        };
-        return state;
-    }
-
-    /**
-     * Description: the last loaded/updated arrangement, without re-reading
-     *   storage.
-     * Inputs: none.
-     * Output: object - {status, reason, pinned, order}.
-     */
-    function current() { return state; }
-
-    /**
-     * Description: persist a pin set + order, and mark the live state 'ok'.
-     *   A deliberate write is what clears an 'unreadable' verdict: the
-     *   user has now told us an arrangement, so there is no longer a lost
-     *   one to warn about.
-     * Inputs: pinned (Array<string>), order (Array<string>).
-     * Output: boolean - true when the write landed, false when storage
-     *   refused it (the in-memory arrangement still applies for this page).
-     */
-    function save(pinned, order) {
-        const nextPinned = dedupe(pinned).slice(0, MAX_REMEMBERED);
-        const nextOrder = dedupe(order).slice(0, MAX_REMEMBERED);
-        state = {
-            status: 'ok', reason: null, pinned: nextPinned, order: nextOrder,
-        };
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                v: VERSION, pinned: nextPinned, order: nextOrder,
-            }));
-            return true;
-        } catch (err) {
-            console.warn('SessionSidebarArrangement: could not persist arrangement:', err);
-            return false;
-        }
-    }
-
-    /**
-     * Description: true when this session name is pinned to the top band.
-     * Inputs: name (string).
-     * Output: boolean.
-     */
-    function isPinned(name) { return state.pinned.indexOf(name) !== -1; }
+    const S = window.SessionSidebarStore;
 
     /**
      * Description: sort rows into the user's arrangement: the pinned band
@@ -237,9 +66,9 @@ console.log('[SessionSidebarArrangement Module] Loading...');
             if (row && typeof row.name === 'string') byName.set(row.name, row);
         }
 
-        const known = new Set(state.order);
+        const known = new Set(S.current().order);
         const ordered = [];
-        for (const name of state.order) {
+        for (const name of S.current().order) {
             const row = byName.get(name);
             if (row) ordered.push(row);
         }
@@ -250,11 +79,11 @@ console.log('[SessionSidebarArrangement Module] Loading...');
         const pinnedBand = [];
         const restBand = [];
         for (const row of ordered) {
-            row.is_pinned = isPinned(row.name);
+            row.is_pinned = S.isPinned(row.name);
             (row.is_pinned ? pinnedBand : restBand).push(row);
         }
 
-        const remembered = dedupe(state.order.concat(state.pinned));
+        const remembered = S.dedupe(S.current().order.concat(S.current().pinned));
         const missing = remembered.filter((n) => !byName.has(n));
         return { rows: pinnedBand.concat(restBand), missing };
     }
@@ -271,11 +100,11 @@ console.log('[SessionSidebarArrangement Module] Loading...');
      * Output: Array<string> - the merged order to persist.
      */
     function mergeOrder(visibleNames) {
-        const incoming = dedupe(visibleNames);
+        const incoming = S.dedupe(visibleNames);
         const visible = new Set(incoming);
         const out = [];
         let i = 0;
-        for (const name of state.order) {
+        for (const name of S.current().order) {
             if (visible.has(name)) {
                 if (i < incoming.length) out.push(incoming[i++]);
             } else {
@@ -283,7 +112,7 @@ console.log('[SessionSidebarArrangement Module] Loading...');
             }
         }
         while (i < incoming.length) out.push(incoming[i++]);
-        return dedupe(out).slice(0, MAX_REMEMBERED);
+        return S.dedupe(out).slice(0, S.MAX_REMEMBERED);
     }
 
     /**
@@ -295,78 +124,144 @@ console.log('[SessionSidebarArrangement Module] Loading...');
      * Output: boolean - the new pinned state of `name`.
      */
     function togglePin(name, visibleNames) {
-        const next = !isPinned(name);
+        const next = !S.isPinned(name);
         const pinned = next
-            ? state.pinned.concat([name])
-            : state.pinned.filter((n) => n !== name);
-        save(pinned, mergeOrder(visibleNames));
+            ? S.current().pinned.concat([name])
+            : S.current().pinned.filter((n) => n !== name);
+        S.save(pinned, mergeOrder(visibleNames));
         return next;
     }
 
     /**
-     * Description: move one session up or down WITHIN ITS OWN BAND and
-     *   persist. Confining the move to the band is what stops an
-     *   ArrowUp at the top of the unpinned band from silently unpinning
-     *   or leapfrogging a pinned row - a move must never change a pin.
+     * Description: move one session one slot up or down, CROSSING THE
+     *   PINNED BOUNDARY when it reaches its band's edge - which pins or
+     *   unpins it. This is the keyboard twin of dragging a row into or out
+     *   of the pinned group, and it exists so that capability is not
+     *   pointer-only.
+     *
+     *   THIS REVERSES AN EARLIER RULE ON PURPOSE. The band edge used to be
+     *   a hard refusal, on the reasoning that a move must never change a
+     *   pin the user could not see themselves perform. The user has since
+     *   asked for exactly that crossing, so the protection moves rather
+     *   than disappearing: a crossing move RETURNS `crossed: true`, and
+     *   the caller announces the pin change in words (see
+     *   client/js/session-sidebar-reorder.js). An invisible unpin was the
+     *   thing being prevented, not the unpin itself.
+     *
+     *   THE LIST EDGES ARE STILL HARD REFUSALS. Alt+Up on the very first
+     *   row has no row above it to cross past, so it does nothing rather
+     *   than pinning into an empty band - `p` is the gesture for
+     *   "pin where you are", and overloading Alt+Up with it would make the
+     *   top row's behaviour depend on invisible state.
      * Inputs: name (string), delta (number) - -1 up, +1 down.
      *   visibleNames (Array<string>) - current top-to-bottom visible order.
-     * Output: Array<string>|null - the new visible order, or null when the
-     *   move was refused (row not found, or already at its band edge).
+     * Output: object|null - {order (Array<string>), crossed (boolean),
+     *   pinned (boolean) - the row's pin state AFTER the move}, or null
+     *   when the move was refused (row not found, or at a list edge).
      */
     function move(name, delta, visibleNames) {
-        const names = dedupe(visibleNames);
+        const names = S.dedupe(visibleNames);
         const idx = names.indexOf(name);
         if (idx === -1) return null;
-        const band = isPinned(name);
         const step = delta < 0 ? -1 : 1;
         const target = idx + step;
         if (target < 0 || target >= names.length) return null;
-        if (isPinned(names[target]) !== band) return null;
+        const band = S.isPinned(name);
+        const neighbourBand = S.isPinned(names[target]);
         const next = names.slice();
         next[idx] = names[target];
         next[target] = name;
-        save(state.pinned, mergeOrder(next));
-        return next;
+        // Crossing means adopting the neighbour's band. The swap above
+        // already puts the row on the far side of the boundary in the
+        // visible sequence; arrange() re-partitions from the pin set, so
+        // the pin has to move with it or the row snaps straight back.
+        const crossed = neighbourBand !== band;
+        const nowPinned = crossed ? neighbourBand : band;
+        const pinnedSet = crossed
+            ? (nowPinned ? S.current().pinned.concat([name]) : S.current().pinned.filter((n) => n !== name))
+            : S.current().pinned;
+        S.save(pinnedSet, mergeOrder(next));
+        return { order: next, crossed, pinned: nowPinned };
     }
 
     /**
      * Description: place `name` immediately before `beforeName` (or at the
-     *   end when `beforeName` is null), refusing any move that would cross
-     *   a band boundary, and persist. This is the pointer-drag commit.
-     * Inputs: name (string), beforeName (string|null),
-     *   visibleNames (Array<string>).
-     * Output: Array<string>|null - the new visible order, or null when the
-     *   move was refused.
+     *   end of the list when `beforeName` is null) AND set which band it
+     *   lands in, then persist. This is the pointer-drag commit, and the
+     *   one function that can pin or unpin by position.
+     *
+     *   The caller decides the band from what the pointer is OVER (the
+     *   group container, not the neighbouring row), because a drop into an
+     *   empty pinned group has no neighbouring row to infer a band from
+     *   and inferring one from the nearest row would make the empty group
+     *   undroppable - which is exactly the case the feature is for.
+     *
+     *   `next` is not required to be band-contiguous. `arrange()`
+     *   re-partitions it into the two bands and preserves relative order
+     *   inside each, so this only has to get the within-band sequence
+     *   right, which is why there is no boundary arithmetic left here.
+     * Inputs: name (string) - the row being placed.
+     *   targetPinned (boolean) - the band it should end up in.
+     *   beforeName (string|null) - the visible row to sit above, or null
+     *   for the end.
+     *   visibleNames (Array<string>) - current top-to-bottom visible order.
+     * Output: object|null - {order (Array<string>), crossed (boolean),
+     *   pinned (boolean)}, or null when the placement is a no-op or the
+     *   row is not visible.
+     * Example: placeAt('cloude_fs2', true, 'cloude_asd', names).crossed
      */
-    function moveBefore(name, beforeName, visibleNames) {
-        const names = dedupe(visibleNames);
+    function placeAt(name, targetPinned, beforeName, visibleNames) {
+        const names = S.dedupe(visibleNames);
         if (names.indexOf(name) === -1) return null;
-        if (beforeName !== null && names.indexOf(beforeName) === -1) return null;
         if (beforeName === name) return null;
-        const band = isPinned(name);
+        if (beforeName !== null && beforeName !== undefined
+            && names.indexOf(beforeName) === -1) return null;
+        const want = !!targetPinned;
         const rest = names.filter((n) => n !== name);
-        let at = beforeName === null ? rest.length : rest.indexOf(beforeName);
+        let at = (beforeName === null || beforeName === undefined)
+            ? rest.length
+            : rest.indexOf(beforeName);
         if (at === -1) at = rest.length;
-        // A drop is legal exactly when it leaves the two bands contiguous
-        // with the pinned band on top. Requiring BOTH neighbours to match
-        // the row's own band was too strict and refused a legal move: it
-        // rejected dropping an unpinned row into the FIRST unpinned slot,
-        // whose upper neighbour is necessarily pinned. So each band is
-        // constrained only on the side that faces the boundary - a pinned
-        // row must not have an unpinned row above it, and an unpinned row
-        // must not have a pinned row below it.
-        const before = at > 0 ? rest[at - 1] : null;
-        const after = at < rest.length ? rest[at] : null;
-        if (band && before !== null && !isPinned(before)) return null;
-        if (!band && after !== null && isPinned(after)) return null;
         const next = rest.slice(0, at).concat([name], rest.slice(at));
-        save(state.pinned, mergeOrder(next));
-        return next;
+        const wasPinned = S.isPinned(name);
+        const crossed = wasPinned !== want;
+        // A drop that changes neither the band nor the sequence is not a
+        // move. Returning null for it keeps the live drag from writing
+        // storage and repainting on every pointer sample.
+        if (!crossed && sameOrder(next, names)) return null;
+        const pinnedSet = want
+            ? S.current().pinned.concat([name])
+            : S.current().pinned.filter((n) => n !== name);
+        S.save(pinnedSet, mergeOrder(next));
+        return { order: next, crossed, pinned: want };
     }
 
+    /**
+     * Description: true when two name lists are identical, same order.
+     * Inputs: a (Array<string>), b (Array<string>).
+     * Output: boolean.
+     */
+    function sameOrder(a, b) {
+        return a.length === b.length && a.every((n, i) => n === b[i]);
+    }
+
+    // The store's own surface is re-exported here so
+    // `window.SessionSidebarArrangement` still answers every call it did
+    // before the split. See the file docblock: the split is internal, the
+    // API is not.
     window.SessionSidebarArrangement = {
-        load, current, save, arrange, isPinned, togglePin, move, moveBefore,
-        mergeOrder, STORAGE_KEY, VERSION, MAX_REMEMBERED,
+        load: S.load,
+        current: S.current,
+        save: S.save,
+        isPinned: S.isPinned,
+        isCollapsed: S.isCollapsed,
+        toggleCollapsed: S.toggleCollapsed,
+        readCollapsed: S.readCollapsed,
+        STORAGE_KEY: S.STORAGE_KEY,
+        VERSION: S.VERSION,
+        MAX_REMEMBERED: S.MAX_REMEMBERED,
+        GROUP_KEYS: S.GROUP_KEYS,
+        arrange, mergeOrder, togglePin, move, placeAt, sameOrder,
     };
     console.log('[SessionSidebarArrangement Module] Exported as window.SessionSidebarArrangement');
 })();

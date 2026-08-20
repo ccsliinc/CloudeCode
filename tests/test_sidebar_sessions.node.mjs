@@ -74,7 +74,7 @@ function row(over = {}) {
  */
 function loadArrangement(seed, throws = false) {
     const storage = fakeStorage(seed === null ? {} : { [ARRANGEMENT_KEY]: seed }, throws);
-    const { window } = loadModules(['session-sidebar-arrangement.js'], { storage });
+    const { window } = loadModules(['session-sidebar-store.js', 'session-sidebar-arrangement.js'], { storage });
     return { A: window.SessionSidebarArrangement, storage };
 }
 
@@ -131,7 +131,7 @@ await test('ITEM 46: a reload re-reads the pin from storage, it is not in-memory
     const { A, storage } = loadArrangement(null);
     A.togglePin('b', ['a', 'b', 'c']);
     // A "reload" is a fresh module against the SAME bytes.
-    const { window } = loadModules(['session-sidebar-arrangement.js'], { storage });
+    const { window } = loadModules(['session-sidebar-store.js', 'session-sidebar-arrangement.js'], { storage });
     const fresh = window.SessionSidebarArrangement;
     fresh.load();
     assert.equal(fresh.isPinned('b'), true);
@@ -162,32 +162,116 @@ await test('ITEM 46: a session the arrangement has never seen lands at the END o
         'a brand new session must not jump above one the user placed');
 });
 
-await test('ITEM 46: a move refuses to cross the pinned boundary', () => {
+// ITEM 65 REVERSES ITEM 46'S BAND-EDGE RULE ON PURPOSE. The edge used to
+// be a hard refusal, on the reasoning that a move must never change a pin
+// the user could not see themselves perform. The user has since asked for
+// exactly that crossing ("not sure how hard to be able to drag the items
+// in and our of pinned group"), so the protection MOVES rather than
+// disappearing: a crossing move reports `crossed: true` and the caller
+// announces the pin change in words. An invisible unpin was the thing
+// being prevented, not the unpin itself.
+//
+// The tests below are the old ITEM 46 pair, inverted. They are kept in
+// place and re-argued rather than deleted, so the history of the rule is
+// legible to whoever reads this next.
+
+await test('ITEM 65: a move ACROSS the band edge pins or unpins, and says it did', () => {
     const { A } = loadArrangement(null);
     A.save(['p'], ['p', 'a', 'b']);
-    assert.equal(A.move('a', -1, ['p', 'a', 'b']), null,
-        'moving up out of the unpinned band would be an unpin nobody asked for');
-    assert.deepEqual(plain(A.move('b', -1, ['p', 'a', 'b'])), ['p', 'b', 'a']);
-    assert.equal(A.move('p', -1, ['p', 'a', 'b']), null, 'already at the top of its band');
-    assert.equal(A.move('p', 1, ['p', 'a', 'b']), null,
-        'moving down out of the pinned band would be an unpin nobody asked for');
+
+    // Up out of the unpinned band: this now PINS.
+    const up = plain(A.move('a', -1, ['p', 'a', 'b']));
+    assert.deepEqual(up.order, ['a', 'p', 'b']);
+    assert.equal(up.crossed, true, 'a crossing move must report that it crossed');
+    assert.equal(up.pinned, true, 'moving up past the boundary pins the row');
+    assert.equal(A.isPinned('a'), true, 'and the pin is actually applied, not just reported');
 });
 
-await test('ITEM 46: a drag drop refuses to cross the pinned boundary too', () => {
+await test('ITEM 65: a move DOWN out of the pinned band unpins, the other direction', () => {
     const { A } = loadArrangement(null);
     A.save(['p'], ['p', 'a', 'b']);
-    assert.equal(A.moveBefore('b', 'p', ['p', 'a', 'b']), null,
-        'dropping an unpinned row above the pinned one must be refused');
-    assert.deepEqual(plain(A.moveBefore('b', 'a', ['p', 'a', 'b'])), ['p', 'b', 'a']);
-    assert.deepEqual(plain(A.moveBefore('a', null, ['p', 'a', 'b'])), ['p', 'b', 'a'],
-        'dropping at the end lands at the end of the list');
-    // AND THE OTHER DIRECTION. Dragging the PINNED row down past an
-    // unpinned one would be an unpin the user never asked for and could
-    // not see themselves perform, so it is refused just as hard.
-    assert.equal(A.moveBefore('p', 'b', ['p', 'a', 'b']), null,
-        'dropping a pinned row below an unpinned one must be refused');
-    assert.equal(A.moveBefore('p', null, ['p', 'a', 'b']), null,
-        'dropping a pinned row at the very bottom must be refused too');
+    const down = plain(A.move('p', 1, ['p', 'a', 'b']));
+    assert.deepEqual(down.order, ['a', 'p', 'b']);
+    assert.equal(down.crossed, true);
+    assert.equal(down.pinned, false, 'moving down past the boundary unpins the row');
+    assert.equal(A.isPinned('p'), false);
+});
+
+await test('ITEM 65: a move WITHIN a band is not a crossing and changes no pin', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    const within = plain(A.move('b', -1, ['p', 'a', 'b']));
+    assert.deepEqual(within.order, ['p', 'b', 'a']);
+    assert.equal(within.crossed, false,
+        'or every ordinary reorder would announce a pin change that did not happen');
+    assert.equal(within.pinned, false);
+});
+
+await test('ITEM 65: the LIST edges are still hard refusals, unlike the band edge', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    assert.equal(A.move('p', -1, ['p', 'a', 'b']), null,
+        'there is no row above the first one to cross past');
+    assert.equal(A.move('b', 1, ['p', 'a', 'b']), null,
+        'nor below the last one');
+    assert.equal(A.isPinned('p'), true, 'a refused move must not have changed a pin either');
+});
+
+// The drag twin of the four tests above. `placeAt` replaces `moveBefore`:
+// the BAND IS NOW AN EXPLICIT ARGUMENT rather than something inferred
+// from the neighbouring row. That is not a style choice - a drop into an
+// EMPTY pinned group has no neighbouring row to infer a band from, and
+// inferring one from the nearest row would make the empty group
+// undroppable, which is precisely the case the feature exists for.
+
+await test('ITEM 65: a drag INTO the pinned group pins the row', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    const res = plain(A.placeAt('b', true, 'p', ['p', 'a', 'b']));
+    assert.deepEqual(res.order, ['b', 'p', 'a']);
+    assert.equal(res.crossed, true);
+    assert.equal(res.pinned, true);
+    assert.equal(A.isPinned('b'), true);
+});
+
+await test('ITEM 65: a drag OUT of the pinned group unpins it, the other direction', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    const res = plain(A.placeAt('p', false, null, ['p', 'a', 'b']));
+    assert.deepEqual(res.order, ['a', 'b', 'p']);
+    assert.equal(res.crossed, true);
+    assert.equal(res.pinned, false);
+    assert.equal(A.isPinned('p'), false, 'dragging to the bottom of the other group unpins');
+});
+
+await test('ITEM 65: a drag into an EMPTY pinned group still pins', () => {
+    const { A } = loadArrangement(null);
+    A.save([], ['a', 'b']);
+    // No pinned row exists, so there is no neighbour to infer a band
+    // from. The band comes from the DROP TARGET, which is the only reason
+    // this can work at all.
+    const res = plain(A.placeAt('b', true, null, ['a', 'b']));
+    assert.equal(res.pinned, true);
+    assert.equal(res.crossed, true);
+    assert.equal(A.isPinned('b'), true);
+});
+
+await test('ITEM 65: a drag WITHIN a band reorders and changes no pin', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    const res = plain(A.placeAt('b', false, 'a', ['p', 'a', 'b']));
+    assert.deepEqual(res.order, ['p', 'b', 'a']);
+    assert.equal(res.crossed, false);
+    assert.equal(A.isPinned('b'), false);
+});
+
+await test('ITEM 65: a drop that changes NEITHER band nor sequence is not a move', () => {
+    const { A } = loadArrangement(null);
+    A.save(['p'], ['p', 'a', 'b']);
+    assert.equal(A.placeAt('a', false, 'b', ['p', 'a', 'b']), null,
+        'or a live drag writes storage and repaints on every pointer sample');
+    assert.equal(A.placeAt('a', false, 'a', ['p', 'a', 'b']), null,
+        'a row dropped on itself is not a move either');
 });
 
 await test('ITEM 46: a move is PERSISTED, not just applied in memory', () => {
@@ -325,14 +409,26 @@ await test('ITEM 47: each density draws a DIFFERENT row, and the difference is i
     assert.ok(cozy.includes('session-sidebar-row-badge'), 'cozy keeps the badge');
     assert.ok(!cozy.includes('session-sidebar-row-meta'), 'cozy has no second line');
     assert.ok(detailed.includes('session-sidebar-row-meta'), 'detailed adds the second line');
+
+    // ITEM 63: NO FAMILY PILL, AT ANY DENSITY. This loop used to assert
+    // the pill appeared exactly once in each mode; it now asserts it does
+    // not appear at all. Counting the pill's unique data attribute rather
+    // than the class token is still the right check either way: the class
+    // list is `family-pill family-pill--unknown`, so a naive
+    // /family-pill/ count reads 2 for one pill.
     for (const [name, html] of [['compact', compact], ['cozy', cozy], ['detailed', detailed]]) {
-        // Count the pill's unique data attribute, not the class token:
-        // the class list is `family-pill family-pill--unknown`, so a
-        // naive /family-pill/ count reads 2 for one pill and would have
-        // hidden a real duplicate behind a false one.
-        assert.equal((html.match(/data-family-source=/g) || []).length, 1,
-            `${name} must draw the family pill exactly once`);
+        assert.equal((html.match(/data-family-source=/g) || []).length, 0,
+            `${name} must draw no family pill`);
+        assert.ok(!html.includes('family-pill'), `${name} must not emit the pill class either`);
     }
+
+    // AND THE BADGE IS EMITTED EXACTLY ONCE PER ROW, wherever it sits.
+    // Detailed moves it to the second line rather than drawing it twice,
+    // which is the specific way this refactor could have gone wrong.
+    assert.equal((detailed.match(/session-sidebar-row-badge/g) || []).length, 1,
+        'detailed moves the badge down, it does not duplicate it');
+    assert.equal((cozy.match(/session-sidebar-row-badge/g) || []).length, 1);
+    assert.equal((compact.match(/session-sidebar-row-badge/g) || []).length, 0);
 });
 
 await test('ITEM 47: the stylesheet really declares three different row paddings', () => {
@@ -354,32 +450,65 @@ await test('ITEM 47: the stylesheet really declares three different row paddings
 // THE FAMILY PILL - three states, every density.
 // =====================================================================
 
-await test('the family pill keeps all THREE states in EVERY density', () => {
+// =====================================================================
+// ITEM 63 - THE PILL IS GONE FROM THE SIDEBAR, AND STILL RIGHT AT HOME.
+//
+// "i dont think we need the pills in the sidebare take out for now."
+//
+// Removing it also removed a real defect, and the shape of that defect is
+// why the tests below assert what they do. The sidebar's builder put a
+// LITERAL `~` in front of a guessed family, and `.family-pill--guess`
+// carries a `::before { content: "~" }` in client/css/styles.css that
+// adds another. So a guessed family RENDERED as `~~claude` while every
+// DOM assertion read a single, correct `~claude`. A test that reads DOM
+// text cannot see a `::before`. The home screen's builder never added the
+// literal, so only the sidebar was ever wrong - which is exactly why
+// deleting the sidebar's pill must not be allowed to disturb the home
+// screen's.
+// =====================================================================
+
+await test('ITEM 63: the sidebar builder no longer exposes a pill builder at all', () => {
     const Rows = loadRows();
-    const cases = [
-        [{ agent_family: 'codex', agent_family_source: 'wrapper' }, 'family-pill--fact', 'codex'],
-        [{ agent_family: 'claude', agent_family_source: 'fingerprint' }, 'family-pill--guess', '~claude'],
-        [{ agent_family: 'claude', agent_family_source: 'derived_deepest' }, 'family-pill--guess', '~claude'],
-        [{ agent_family: null, agent_family_source: 'unknown' }, 'family-pill--unknown', 'unknown family'],
-        [{ agent_family: 'x', agent_family_source: null }, 'family-pill--unknown', 'unknown family'],
-    ];
-    for (const density of ['compact', 'cozy', 'detailed']) {
-        for (const [over, cls, label] of cases) {
-            const html = Rows.rowHtml(row(over), density);
-            assert.ok(html.includes(cls), `${density}/${over.agent_family_source}: expected ${cls}`);
-            assert.ok(html.includes(`>${label}<`),
-                `${density}/${over.agent_family_source}: expected the label ${label}`);
-        }
+    assert.equal(typeof Rows.familyPillHtml, 'undefined',
+        'a removed feature should not leave a live builder behind for the next caller');
+    // CODE LINES ONLY. The file's docblock explains the `~~claude` defect
+    // by name, and prose ABOUT a construct is not a use of it - the same
+    // distinction this repo's own portability lint had to learn. Stripping
+    // comments first is what keeps this assertion about the markup.
+    const src = repoFile('client', 'js', 'session-sidebar-rows.js')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '');
+    assert.ok(!/family-pill/.test(src),
+        'no remaining reference to the pill class in the sidebar row MARKUP');
+});
+
+await test('ITEM 63: the HOME SCREEN still draws the pill, in all three states', () => {
+    // The launcher owns its own builder and nothing in the sidebar feeds
+    // it, so this is the regression guard on the blast radius of item 63.
+    const src = repoFile('client', 'js', 'launchpad.js');
+    for (const cls of ['family-pill--fact', 'family-pill--guess', 'family-pill--unknown']) {
+        assert.ok(src.includes(cls), `the home screen must still render ${cls}`);
     }
 });
 
-await test('a guess and a fact are told apart by CLASS, not only by a hover title', () => {
-    const Rows = loadRows();
-    const fact = Rows.familyPillHtml('codex', 'wrapper');
-    const guess = Rows.familyPillHtml('codex', 'fingerprint');
-    assert.notEqual(fact, guess);
-    assert.ok(fact.includes('family-pill--fact') && !fact.includes('~codex'));
-    assert.ok(guess.includes('family-pill--guess') && guess.includes('~codex'));
+await test('ITEM 63: the home screen renders a SINGLE tilde, and the CSS is the only source', () => {
+    // THE PIXEL-LEVEL FORM OF THIS ASSERTION. The tilde a user sees comes
+    // from exactly one place. If the builder ever adds a literal one back
+    // while the stylesheet keeps its `::before`, this fails - which is the
+    // check the `~~claude` defect needed and did not have.
+    const js = repoFile('client', 'js', 'launchpad.js');
+    const css = repoFile('client', 'css', 'styles.css');
+
+    const guessRule = css.match(/\.family-pill--guess::before\s*\{([^}]*)\}/);
+    assert.ok(guessRule, 'the stylesheet must still carry the guess tilde');
+    assert.match(guessRule[1], /content:\s*"~"/, 'and it is a tilde');
+
+    // The builder must NOT prepend its own. `~${' + '...}` in a template
+    // literal, or a '~' + concat, are the two shapes this can take.
+    const label = js.match(/const label = known \? ([^;]+);/);
+    assert.ok(label, 'the launchpad label expression must still be findable');
+    assert.ok(!label[1].includes('~'),
+        'the builder must not add a second tilde on top of the stylesheet one');
 });
 
 // =====================================================================
@@ -517,7 +646,7 @@ function mountList(pinned = [], order = ['a', 'b', 'c']) {
         [ARRANGEMENT_KEY]: JSON.stringify({ v: 1, pinned, order }),
     });
     const { window } = loadModules(
-        ['session-sidebar-arrangement.js', 'session-sidebar-reorder.js'],
+        ['session-sidebar-store.js', 'session-sidebar-arrangement.js', 'session-sidebar-reorder.js'],
         { storage, document: doc },
     );
     window.SessionSidebarArrangement.load();

@@ -30,6 +30,7 @@
 <link rel="stylesheet" href="../../client/css/styles.css" />
 <link rel="stylesheet" href="../../client/css/session-sidebar.css" />
 <link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-groups.css" />
 <link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
 </head>
 <body>
@@ -64,7 +65,7 @@ const REAL_NAMES = [
  * Output: Array<object> - attachable rows.
  */
 function fixtureRows() {
-    return REAL_NAMES.map((name, i) => ({
+    const rows = REAL_NAMES.map((name, i) => ({
         name,
         created_by_cloude: i % 3 !== 0,
         created_at_epoch: Math.floor(Date.now() / 1000) - (3600 * (i + 1)),
@@ -75,9 +76,30 @@ function fixtureRows() {
         agent_family_source: i === 1 ? 'wrapper' : (i === 2 ? 'fingerprint' : 'unknown'),
         pinned_theme: null,
     }));
+    // ROW 4 HAS GENUINELY UNKNOWN OWNERSHIP. `created_by_cloude` is
+    // nullable on the wire: the server fills it from an ownership map
+    // that can simply have no entry for a name. Leaving every fixture row
+    // with a true/false answer would mean the rename gate's third state
+    // ('unknown', CANNOT DETERMINE) is never on screen and never measured
+    // - and that is the state most likely to be quietly folded into
+    // "external" by a `!r.x` somewhere.
+    rows[4].created_by_cloude = null;
+    for (const r of rows) {
+        if (renamed[r.name]) r.name = renamed[r.name];
+    }
+    return rows;
 }
 
 let failNextListing = false;
+
+/**
+ * Renames the fake server has accepted, old name -> new name. The stub
+ * has to APPLY a rename it accepted, or the list re-renders the old name
+ * and a working commit measures as a failure - the harness would be
+ * reporting on itself rather than on the app.
+ * @type {Object<string, string>}
+ */
+const renamed = {};
 
 /**
  * Description: flip the attachable probe into a structured 503, the shape
@@ -100,20 +122,72 @@ window.API = {
         }
         return fixtureRows();
     },
-    async listSessions() { return []; },
-    async getSession() { return null; },
-    async adoptSession() { return {}; },
+    // ONE LIVE SESSION, so exactly one row carries a `session_id` and is
+    // therefore 'renameable'. Without it every row is 'unavailable' and
+    // the inline editor's open/commit/cancel path cannot be measured at
+    // all - which the verifier reported as CANNOT DETERMINE rather than
+    // passing, and this is the fix for that gap.
+    async listSessions() {
+        // WHEN THE ATTACHABLE PROBE IS FORCED TO FAIL, the live list is
+        // empty too. The two endpoints answer different questions and a
+        // real server can genuinely fail one and not the other - but the
+        // scenario this flag exists to set up is "nothing could be
+        // listed", and a live row surviving it would turn that scenario
+        // into a different one without saying so.
+        if (failNextListing) return [];
+        return [{
+            tmux_session: renamed.cloude_fstest || 'cloude_fstest',
+            session: { id: 'sess-fstest-0001' },
+            activity_status: 'idle',
+            unread: false,
+            created_by_cloude: true,
+            agent_family: null,
+            agent_family_source: 'unknown',
+            pinned_theme: null,
+        }];
+    },
+    async renameSession(id, name) {
+        if (window.__renameShouldFail) {
+            const err = new Error('that name is already taken');
+            err.status = 409;
+            throw err;
+        }
+        renamed.cloude_fstest = name;
+        return { session: { id, tmux_session: name } };
+    },
+    // MUST RETURN SOMETHING TRUTHY. activateRow only calls
+    // returnToExistingTerminal when getSession resolves to a session, so
+    // a null here makes every switch a silent no-op - and a switch that
+    // does nothing cannot be counted, which hid a broken click-deferral
+    // from the rename checks entirely.
+    async getSession() {
+        return { session: { id: 'sess-fstest-0001' }, tmux_session: 'cloude_fstest' };
+    },
+    async adoptSession() { window.__switchCount += 1; return {}; },
     async setSessionUnread() { return {}; },
     async destroySession() { return {}; },
     async destroyExternalSession() { return {}; },
 };
-window.App = { returnToExistingTerminal() {} };
+// HOW MANY TIMES THE APP WAS ASKED TO SWITCH CONVERSATION. The inline
+// rename's whole difficulty is that the first click of a double-click
+// arrives BEFORE the double-click, so a broken deferral switches away
+// from the row a moment before the user finishes asking to edit it. That
+// failure still leaves an editor open, so it is invisible unless the
+// switch itself is counted.
+window.__switchCount = 0;
+window.App = {
+    returnToExistingTerminal() { window.__switchCount += 1; },
+};
 window.TerminalController = { async destroySession() {} };
 </script>
 <script src="../../client/js/session-listing-state.js"></script>
+<script src="../../client/js/session-sidebar-store.js"></script>
 <script src="../../client/js/session-sidebar-arrangement.js"></script>
 <script src="../../client/js/session-sidebar-fetch.js"></script>
+<script src="../../client/js/session-sidebar-rename.js"></script>
 <script src="../../client/js/session-sidebar-rows.js"></script>
+<script src="../../client/js/session-sidebar-groups.js"></script>
+<script src="../../client/js/session-sidebar-clicks.js"></script>
 <script src="../../client/js/session-sidebar.js"></script>
 <script src="../../client/js/session-sidebar-pin.js"></script>
 <script src="../../client/js/session-sidebar-density.js"></script>
@@ -188,6 +262,52 @@ window.__sidebarMeasure = function () {
                 pins: r.querySelectorAll('[data-pin-session]').length,
             };
         }),
+        // ITEM 64: the section headers, measured as real boxes. `count`
+        // is read off the rendered badge rather than off the model, so a
+        // header that claims a different number than it hides fails here.
+        groups: Array.prototype.slice.call(
+            list.querySelectorAll('.session-sidebar-group')
+        ).map((gEl) => {
+            const head = gEl.querySelector('.session-sidebar-group__header');
+            const hb = head.getBoundingClientRect();
+            return {
+                key: gEl.getAttribute('data-group'),
+                collapsed: gEl.getAttribute('data-collapsed'),
+                declaredCount: Number(gEl.getAttribute('data-count')),
+                renderedCount: gEl.querySelectorAll('.session-sidebar-row').length,
+                badgeCount: Number(
+                    (gEl.querySelector('.session-sidebar-group__count') || {}).textContent
+                ),
+                label: (gEl.querySelector('.session-sidebar-group__label') || {}).textContent,
+                expanded: head.getAttribute('aria-expanded'),
+                controls: head.getAttribute('aria-controls'),
+                bodyId: (gEl.querySelector('.session-sidebar-group__body') || {}).id,
+                headerHeight: hb.height,
+                headerTop: hb.top,
+                // The chevron's real rotation, so the glyph is verified to
+                // MOVE rather than merely to carry an attribute.
+                chevronTransform: getComputedStyle(
+                    gEl.querySelector('.session-sidebar-group__chevron')
+                ).transform,
+            };
+        }),
+        // ITEM 66: the inline editor, if one is open.
+        rename: (function () {
+            const input = list.querySelector('.session-sidebar-rename-input');
+            if (!input) return null;
+            const box = input.getBoundingClientRect();
+            const rowEl = input.closest('.session-sidebar-row');
+            return {
+                value: input.value,
+                width: box.width,
+                height: box.height,
+                rowHeight: rowEl ? rowEl.getBoundingClientRect().height : null,
+                focused: document.activeElement === input,
+                error: (list.querySelector('.session-sidebar-rename-error') || {}).textContent || '',
+            };
+        }()),
+        renameStates: rows.map((r) => r.dataset.renameState),
+        switchCount: window.__switchCount,
         focused: document.activeElement && document.activeElement.dataset
             ? (document.activeElement.dataset.name || null) : null,
         bodyPinned: document.body.classList.contains('session-sidebar-pinned'),

@@ -68,6 +68,7 @@
          it must load AFTER it, because the density rules override the
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
+    <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
     <!-- Session tools button + menu and the per-session theme picker.
          After styles.css so it inherits the theme vars, AND so its
          explicit width/height beat the bare `button` base rule there. -->
@@ -340,7 +341,27 @@
     <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true"
            aria-label="Conversations" data-density="cozy">
         <div class="session-sidebar-header">
-            <span class="session-sidebar-title">conversations</span>
+            <!-- THE HEADING IS A CLUSTER, NOT A TITLE PLUS STRAYS.
+                 "we need to push it closer to the title conversations we
+                 will probably add more icons later on." The density
+                 control used to carry `margin-left: auto` and float away
+                 to the far right beside the panel's own pin and close
+                 buttons, so it read as panel chrome rather than as a
+                 control over the list. It now sits inside
+                 `.session-sidebar-tools`, immediately after the title.
+
+                 ADDING THE NEXT CONTROL IS ONE ELEMENT, NOT A LAYOUT
+                 CHANGE: append another sibling inside
+                 `.session-sidebar-tools`. The cluster is a flex row with
+                 its own gap, the heading owns `min-width: 0` so the title
+                 gives way before the tools do, and `.session-sidebar-
+                 actions` on the right takes the leftover space - so no
+                 `margin-left: auto` has to be moved from one control to
+                 another the way it did last time. See
+                 client/css/session-sidebar-groups.css. -->
+            <div class="session-sidebar-heading">
+                <span class="session-sidebar-title">conversations</span>
+                <div class="session-sidebar-tools" role="group" aria-label="List controls">
             <!-- Row detail (density). "a little icon dropdown for how
                  verbose" - thin rows to see more, or more per row. The
                  three modes and the persistence live in
@@ -354,11 +375,24 @@
                         aria-controls="session-sidebar-density-menu"
                         aria-label="Row detail: cozy. Change how much each session row shows."
                         title="row detail: cozy">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                         stroke-width="2" stroke-linecap="round" aria-hidden="true">
-                        <line x1="4" y1="7" x2="20" y2="7"/>
-                        <line x1="4" y1="12" x2="20" y2="12"/>
-                        <line x1="4" y1="17" x2="20" y2="17"/>
+                    <!-- A DENSITY GLYPH, NOT A SECOND HAMBURGER. This was
+                         three evenly stroked lines - byte-for-byte the
+                         same mark as #session-sidebar-toggle, the button
+                         that OPENS this panel, sitting 300px away in the
+                         same viewport. Two different controls drawn
+                         identically is not a weak icon, it is a wrong
+                         one.
+                         This is three FILLED bars of decreasing height:
+                         rows getting thinner, which is literally what the
+                         control does. Authored here, generic, and
+                         deliberately not a trace of anyone's mark. Filled
+                         rather than stroked so it cannot be confused with
+                         the stroked hamburger even at a glance. -->
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"
+                         aria-hidden="true">
+                        <rect x="3" y="4" width="18" height="5" rx="1.5"/>
+                        <rect x="3" y="11.25" width="18" height="3.5" rx="1.2"/>
+                        <rect x="3" y="17" width="18" height="2" rx="1"/>
                     </svg>
                 </button>
                 <div id="session-sidebar-density-menu" class="session-sidebar-density-menu"
@@ -380,6 +414,14 @@
                     </button>
                 </div>
             </div>
+                </div>
+            </div>
+            <!-- PANEL CHROME, a separate cluster from the list controls
+                 above. These act on the BAR (dock it, close it); the
+                 tools cluster acts on the LIST. Keeping them apart is
+                 what stops the next list control from being dropped in
+                 beside the close button again. -->
+            <div class="session-sidebar-actions">
             <!-- Pin the BAR open (docked, no backdrop, survives a
                  conversation switch). aria-pressed carries the real state;
                  the pushpin glyph is presentational. Hidden below 700px by
@@ -394,6 +436,7 @@
                 </svg>
             </button>
             <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
+            </div>
         </div>
         <!-- role=listbox + roving tabindex: the list is ONE tab stop and
              arrows move inside it, which is what makes Alt+Arrow reorder
@@ -694,14 +737,25 @@
          both of which call into it. -->
     <script src="/static/js/session-listing-state.js"></script>
     <!-- Which sessions are PINNED to the top and the order the user put
-         them in. Pure functions plus localStorage; no DOM. Must load
-         BEFORE session-sidebar.js runs. -->
+         them in, split into two files at the seam between persistence and
+         ordering. The STORE owns the localStorage envelope, its three load
+         outcomes and the pin membership; ARRANGEMENT owns the ordering
+         algebra and reads/writes through the store. Pure functions plus
+         localStorage; no DOM. The store must load FIRST, and both must
+         load BEFORE session-sidebar.js runs. -->
+    <script src="/static/js/session-sidebar-store.js"></script>
     <script src="/static/js/session-sidebar-arrangement.js"></script>
     <!-- Two endpoints to one row list, plus whether the probe answered. -->
     <script src="/static/js/session-sidebar-fetch.js"></script>
     <!-- Row markup for the sidebar list; must load BEFORE session-sidebar.js
          paints. -->
+    <script src="/static/js/session-sidebar-rename.js"></script>
     <script src="/static/js/session-sidebar-rows.js"></script>
+    <script src="/static/js/session-sidebar-groups.js"></script>
+    <!-- Click routing for the list, split out of session-sidebar.js to
+         keep that file under the 500-line budget. Must load BEFORE it:
+         the controller's handlers delegate straight into this. -->
+    <script src="/static/js/session-sidebar-clicks.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
