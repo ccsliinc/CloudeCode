@@ -3,6 +3,7 @@ const path = require('path');
 const ServerManager = require('./server-manager');
 const LaunchAgentInstaller = require('./launchagent-installer');
 const { bootstrapIfNeeded } = require('./bootstrap');
+const terminalLauncher = require('./terminal-launcher');
 
 let tray = null;
 let serverManager = null;
@@ -521,14 +522,51 @@ function updateMenu() {
     {
       label: 'Open Terminal Logs',
       click: () => {
-        const { exec } = require('child_process');
         const fs = require('fs');
         const logPath = serverManager.logFile;
 
         // Check if log file exists (it only exists if app spawned the server)
         if (fs.existsSync(logPath)) {
-          // Open Terminal and tail the server logs
-          exec(`osascript -e 'tell application "Terminal" to do script "tail -f \\"${logPath}\\""'`);
+          // Routes to the user's DEFAULT terminal via a .command document,
+          // the same way Open in Browser routes to the default browser.
+          // Falls back to Terminal.app (with an activate, so the window is
+          // actually raised) and says so rather than silently substituting.
+          const scriptPath = path.join(
+            path.dirname(logPath),
+            terminalLauncher.DEFAULT_SCRIPT_BASENAME
+          );
+          terminalLauncher.openServerLogInDefaultTerminal(
+            logPath,
+            scriptPath,
+            (result) => {
+              if (!result.opened) {
+                dialog.showErrorBox(
+                  'Cloude Code: could not open the log',
+                  'The server log could not be opened in a terminal.\n\n' +
+                    String(
+                      (result.error && result.error.message) ||
+                        result.error ||
+                        ''
+                    ) +
+                    '\n\nThe log file itself is at:\n' +
+                    logPath
+                );
+                return;
+              }
+              if (result.usedFallback) {
+                dialog.showMessageBox({
+                  type: 'info',
+                  title: 'Opened in Terminal',
+                  message: 'Opened the log in Terminal',
+                  detail:
+                    'No default handler for .command files could be ' +
+                    'determined, so Terminal was used instead of your ' +
+                    'default terminal app.',
+                });
+              }
+            },
+            { fs, shell, execFile: require('child_process').execFile }
+          );
         } else {
           // Server was adopted, logs not captured by app
           const { dialog } = require('electron');
