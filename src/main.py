@@ -31,6 +31,8 @@ from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
+from src.core.setup_state import current_exposure, current_setup_state
+from src.api.setup_routes import router as setup_router, page_router as setup_page_router
 from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
@@ -587,6 +589,8 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
+app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes
 
 # Mount static files
@@ -817,11 +821,36 @@ async def apple_touch_icon():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    Also reports the exposure in force, because the menu bar has to show the
+    address the server is ACTUALLY on. Reading the configured value and
+    displaying that would show an aspiration as a fact - the exact thing the
+    bind lockdown makes possible, since a locked-down server is not on the
+    address its own configuration names.
+
+    This endpoint is unauthenticated, and reporting the bind here does not
+    leak anything: whoever is reading the response already reached the socket.
+
+    Returns:
+        The usual health fields plus ``bind``: the effective and configured
+        addresses, whether the lockdown is in force, and whether a restart is
+        needed before the configured address applies.
+    """
+    exposure = current_exposure()
+    setup_state = current_setup_state()
     return {
         "status": "healthy",
         "session_active": session_manager.has_active_session() if session_manager else False,
-        "monitoring": log_monitor.is_monitoring if log_monitor else False
+        "monitoring": log_monitor.is_monitoring if log_monitor else False,
+        "setup_status": setup_state.status,
+        "bind": {
+            "effective_host": exposure.bind_host,
+            "configured_host": exposure.configured_bind_host,
+            "locked_down": exposure.locked_down,
+            "restart_required": exposure.restart_required_to_apply,
+            "reason": exposure.reason,
+        },
     }
 
 
@@ -847,9 +876,36 @@ if __name__ == "__main__":
             ),
         )
 
+    # THE BIND LOCKDOWN. This is the only place in the Python server where a
+    # listening socket's address is chosen, so it is the only place the
+    # decision can be enforced. While setup is incomplete the setup wizard
+    # answers without authentication - there is no credential to authenticate
+    # WITH yet - so the server must not be reachable off this machine during
+    # that window, no matter what HOST says. src/core/setup_state.py decides
+    # both halves at once and refuses to return an open wizard on a reachable
+    # address; see its module docstring.
+    #
+    # Note what this deliberately does NOT consult: any flag in config.json.
+    # Setup completeness is read from the filesystem residue of setup having
+    # happened, so editing configuration cannot lift the lockdown.
+    exposure = current_exposure()
+    if exposure.locked_down:
+        logger.warning(
+            "bind_locked_down_pending_setup",
+            configured_host=exposure.configured_bind_host,
+            effective_host=exposure.bind_host,
+            reason=exposure.reason,
+        )
+    else:
+        logger.info(
+            "bind_resolved",
+            effective_host=exposure.bind_host,
+            reason=exposure.reason,
+        )
+
     uvicorn.run(
         "src.main:app",
-        host=settings.host,
+        host=exposure.bind_host,
         port=settings.port,
         reload=settings.dev_reload,
         log_level="info"
