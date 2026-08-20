@@ -117,11 +117,23 @@ class HeaderMenu {
         toggle.setAttribute('aria-haspopup', 'true');
         toggle.setAttribute('aria-expanded', 'false');
         toggle.setAttribute('aria-controls', 'header-menu-panel');
+        // GLYPH WEIGHT IS LOAD BEARING. The original kebab drew three
+        // r=1.5 dots into a 16px box: 3 CSS pixels each, about 7 percent
+        // of the button's interior in ink, against 16 percent for the
+        // file-editor icon beside it and 37 percent for the conversations
+        // toggle. It was the faintest control in the header by a factor
+        // of two to five, and the user reported it as "an empty button" -
+        // which it very nearly is at that weight. Rendering the same
+        // 16-unit viewBox into a 20px box at r=2 roughly doubles the ink
+        // and puts the kebab in the same visual band as its siblings,
+        // with the dots still separated. scripts/verify_login_chrome.py
+        // measures that ink against a floor so this cannot silently
+        // regress back to a bordered blank square.
         toggle.innerHTML =
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
-            '<circle cx="8" cy="3" r="1.5" fill="currentColor"/>' +
-            '<circle cx="8" cy="8" r="1.5" fill="currentColor"/>' +
-            '<circle cx="8" cy="13" r="1.5" fill="currentColor"/>' +
+            '<svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+            '<circle cx="8" cy="3" r="2" fill="currentColor"/>' +
+            '<circle cx="8" cy="8" r="2" fill="currentColor"/>' +
+            '<circle cx="8" cy="13" r="2" fill="currentColor"/>' +
             '</svg>';
 
         const panel = document.createElement('div');

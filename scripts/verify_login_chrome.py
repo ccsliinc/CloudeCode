@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import io
 import socketserver
 import sys
 import threading
@@ -78,6 +79,24 @@ AUTH_ONLY_MOBILE = [
 # Present on BOTH screens. Without this the whole suite would pass on a
 # header that renders nothing at all.
 ALWAYS = [("appTitle", "app title")]
+
+# GLYPH INK. The user's second report was that the top-right button
+# rendered EMPTY - present, sized, bordered, with nothing in it. Every
+# assertion above is about whether a box occupies space, and a bordered
+# blank square occupies exactly as much space as a button with an icon
+# in it, so none of them can see this. This measures the button's
+# INTERIOR: screenshot the element, crop the border ring off, take the
+# modal background colour, and count the pixels that differ from it.
+#
+# The floor is set from measurement, not from taste. On this header the
+# file-editor icon reads about 16 percent interior ink and the
+# conversations toggle about 37. The original kebab read 7.4, which is
+# what "empty" looked like. 10 percent sits above the defect and well
+# under both healthy siblings, so it catches a glyph that vanished or
+# collapsed without pinning the design to one exact icon.
+GLYPH_FLOOR_PCT = 10.0
+GLYPH_INSET_PX = 7
+GLYPH_TARGETS = [("header-menu-toggle", "top-right menu button (kebab)")]
 
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):
@@ -176,6 +195,107 @@ def check(auth: dict, launch: dict, launch_menu: dict,
                 )
 
 
+def interior_ink_pct(png: bytes, inset: int = GLYPH_INSET_PX):
+    """Percentage of a button's interior pixels that are not background.
+
+    Crops `inset` pixels off every edge so the button's own border and
+    its antialiasing cannot be mistaken for a glyph, takes the most
+    common remaining colour as the background, and counts pixels far
+    enough from it to be ink.
+
+    Inputs: png (bytes) - a PNG screenshot of one element.
+            inset (int) - pixels to crop from each edge.
+    Output: float percentage, or None if the crop left nothing to
+            measure (which is a CANNOT DETERMINE, never a pass).
+    Example: interior_ink_pct(el.screenshot()) -> 13.4
+    """
+    from collections import Counter
+
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(png)).convert("RGB")
+    w, h = im.size
+    if w <= 2 * inset or h <= 2 * inset:
+        return None
+    im = im.crop((inset, inset, w - inset, h - inset))
+    px = list(im.getdata())
+    if not px:
+        return None
+    bg = Counter(px).most_common(1)[0][0]
+    n = sum(1 for p in px
+            if abs(p[0] - bg[0]) + abs(p[1] - bg[1]) + abs(p[2] - bg[2]) > 40)
+    return 100.0 * n / len(px)
+
+
+def measure_glyphs(page, failures: list, unknown: list) -> None:
+    """Assert every authenticated header glyph actually paints ink.
+
+    Runs on an authenticated page. Each target is also run against a
+    POSITIVE CONTROL - the same button with its contents removed - so a
+    measurement function that can only ever return a passing number is
+    caught here rather than trusted. Without the control this check has
+    the shape hazard 39 warns about: a verification step that cannot
+    fail.
+
+    Inputs: page - playwright Page on the authenticated screen.
+            failures (list) - accumulator of failure strings.
+            unknown (list) - accumulator of could-not-evaluate strings.
+    Output: None.
+    """
+    for eid, label in GLYPH_TARGETS:
+        el = page.query_selector("#" + eid)
+        if el is None:
+            unknown.append("GLYPH %s (%s): element absent, nothing measured"
+                           % (eid, label))
+            continue
+        box = page.evaluate(
+            "id => { const r = document.getElementById(id)"
+            ".getBoundingClientRect(); return [r.width, r.height]; }", eid)
+        if not box or box[0] < 1 or box[1] < 1:
+            unknown.append("GLYPH %s (%s): zero-area box, nothing measured"
+                           % (eid, label))
+            continue
+        try:
+            live = interior_ink_pct(el.screenshot())
+        except ImportError:
+            unknown.append("GLYPH %s (%s): Pillow not importable, ink could "
+                           "not be measured" % (eid, label))
+            continue
+        if live is None:
+            unknown.append("GLYPH %s (%s): interior too small to crop"
+                           % (eid, label))
+            continue
+
+        # Positive control: blank the button, remeasure, restore. If the
+        # blanked button does not read as good as empty, the measurement
+        # is not measuring ink and its passing number means nothing.
+        saved = page.evaluate(
+            "id => { const t = document.getElementById(id);"
+            " const h = t.innerHTML; t.innerHTML = ''; return h; }", eid)
+        try:
+            blank = interior_ink_pct(el.screenshot())
+        finally:
+            page.evaluate(
+                "([id, h]) => { document.getElementById(id).innerHTML = h; }",
+                [eid, saved])
+        if blank is None or blank >= GLYPH_FLOOR_PCT:
+            unknown.append(
+                "GLYPH %s (%s): positive control did not fall below the "
+                "floor (blanked reads %s), so the live reading of %.1f%% "
+                "proves nothing"
+                % (eid, label, "None" if blank is None else "%.1f%%" % blank,
+                   live))
+            continue
+
+        print("glyph ink     : %s = %.1f%% interior (floor %.1f%%, blanked "
+              "control %.1f%%)" % (eid, live, GLYPH_FLOOR_PCT, blank))
+        if live < GLYPH_FLOOR_PCT:
+            failures.append(
+                "EMPTY: %s (%s) paints only %.1f%% interior ink, below the "
+                "%.1f%% floor - it renders as a bordered blank square"
+                % (eid, label, live, GLYPH_FLOOR_PCT))
+
+
 def main() -> int:
     """Run the measurement. Output: process exit code (0/1/2)."""
     try:
@@ -186,6 +306,8 @@ def main() -> int:
 
     httpd, port = serve(ROOT)
     url = "http://127.0.0.1:%d%s" % (port, HARNESS)
+    glyph_failures: list = []
+    glyph_unknown: list = []
 
     def measure(page):
         """Drive one page through launchpad then auth.
@@ -233,6 +355,11 @@ def main() -> int:
                 return 2
             launch, launch_menu, auth = measure(desktop)
 
+            # Glyph ink is measured on the AUTHENTICATED screen, which is
+            # the only screen the kebab is supposed to appear on at all.
+            desktop.evaluate("window.__setScreen('launchpad')")
+            measure_glyphs(desktop, glyph_failures, glyph_unknown)
+
             mobile = open_page(browser, 390, 844)
             if mobile is None:
                 print("CANNOT DETERMINE: mobile harness never became "
@@ -245,6 +372,7 @@ def main() -> int:
 
     failures: list = []
     check(auth, launch, launch_menu, m_auth, m_launch, failures)
+    failures.extend(glyph_failures)
 
     every = AUTH_ONLY + AUTH_ONLY_IN_MENU
     print("login screen  :", ", ".join(
@@ -266,7 +394,13 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         return 1
-    print("\nPASS: no authenticated-only chrome renders on the login screen")
+    if glyph_unknown:
+        print("\nCANNOT DETERMINE")
+        for u in glyph_unknown:
+            print("  -", u)
+        return 2
+    print("\nPASS: no authenticated-only chrome renders on the login screen,"
+          "\n      and every header glyph measured paints real ink")
     return 0
 
 
