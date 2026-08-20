@@ -32,6 +32,7 @@ would raise if one tried to reach the production ``cloude`` socket.
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import subprocess
@@ -330,3 +331,79 @@ def test_detector_reports_stale_when_the_old_copy_diverges(dirs):
     _write_old_metadata(log_dir, "sess-yesterday", "work-a", ["work-a"])
     assert downgrade_verdict(log_dir, "sess-today") == STALE
     assert downgrade_verdict(log_dir, "sess-yesterday") == INTACT
+
+
+# ---- the rollback path, measured rather than read ---------------------
+
+
+COMMON_SH = ROOT / "scripts" / "upgrade_lib" / "upgrade_rollback_common.sh"
+
+
+def test_rollback_relocates_state_files_out_of_the_old_location(tmp_path: Path):
+    """The project's OWN rollback tool moves the file the old version reads.
+
+    ``restore_backup()`` places every state file at
+    ``resolve_state_dir()`` regardless of where ``take_backup()`` found
+    it. Backing up an install whose metadata is still at
+    ``LOG_DIRECTORY`` therefore RESTORES it to the state directory and
+    leaves the old location empty - so a downgrade performed with
+    scripts/rollback.sh cannot find it, which is the opposite of what a
+    rollback is for. Measured by running the real bash functions.
+    """
+    if not COMMON_SH.exists():
+        pytest.skip(f"CANNOT DETERMINE: {COMMON_SH} not present in this tree")
+
+    install = tmp_path / "install"
+    logs = tmp_path / "logs"
+    state = tmp_path / "state"
+    for d in (install, logs, state):
+        d.mkdir()
+    (install / ".env").write_text(
+        f"LOG_DIRECTORY={logs}\nCLOUDE_STATE_DIR={state}\n"
+    )
+    (install / "config.json").write_text("{}")
+    # refresh_tokens.db is a REQUIRED backup file and take_backup copies
+    # it with sqlite3's own .backup, which REFUSES a file that merely
+    # starts with the SQLite magic bytes. It has to be a real database.
+    import sqlite3 as _sqlite3
+    with contextlib.closing(_sqlite3.connect(str(logs / "refresh_tokens.db"))) as c:
+        c.execute("CREATE TABLE t (a)")
+        c.commit()
+    (logs / "session_metadata.json").write_text(
+        json.dumps({"id": "sess-from-old", "owned_tmux_sessions": ["cloude_a"]})
+    )
+
+    script = (
+        f"source '{COMMON_SH}'; "
+        f"take_backup '{install}' '{tmp_path}/bk' >/dev/null 2>&1; "
+        f"rm -f '{logs}/session_metadata.json' '{logs}/refresh_tokens.db'; "
+        f"restore_backup '{install}' '{tmp_path}/bk' >/dev/null 2>&1"
+    )
+    # resolve_state_dir() prefers the INHERITED ``CLOUDE_STATE_DIR`` env
+    # var over the .env file, and tests/conftest.py sets that var for the
+    # whole suite. Left in place, restore_backup would place the files in
+    # the conftest temp dir and this test would report a relocation that
+    # its own environment caused. Dropped explicitly.
+    env = {k: v for k, v in os.environ.items() if k != "CLOUDE_STATE_DIR"}
+    proc = subprocess.run(
+        ["/bin/bash", "-c", script], capture_output=True, text=True, env=env
+    )
+    manifest = tmp_path / "bk" / ".manifest"
+    backed_up_meta = (
+        manifest.exists()
+        and "BACKED_UP\tstate\tsession_metadata.json" in manifest.read_text()
+    )
+    if not backed_up_meta:
+        pytest.skip(
+            "CANNOT DETERMINE: take_backup did not back up "
+            f"session_metadata.json (rc={proc.returncode}, stderr="
+            f"{proc.stderr[-300:]!r}) - the rollback path was not exercised"
+        )
+
+    assert (state / "session_metadata.json").exists(), (
+        "restore did not place the file at the new state dir"
+    )
+    assert not (logs / "session_metadata.json").exists(), (
+        "the file was expected to have been RELOCATED out of LOG_DIRECTORY"
+    )
+    assert downgrade_verdict(logs, "sess-from-old") == ABSENT

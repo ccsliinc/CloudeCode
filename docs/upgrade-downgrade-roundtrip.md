@@ -125,12 +125,24 @@ places the resolver prefers the new one, logs
 `state_file_present_in_both_locations`, and leaves the old copy on disk
 untouched forever. A downgrade then rehydrates a session that is no
 longer the live one - a wrong answer rather than a missing one, and
-nothing on screen says so. `restore_backup()` in
-`scripts/upgrade_lib/upgrade_rollback_common.sh` creates exactly this
-state by construction: it restores state files to `resolve_state_dir()`
-regardless of which location they were backed up FROM, so a backup taken
-from `LOG_DIRECTORY` is restored to the state dir and the original is
-left behind as the stale twin.
+nothing on screen says so. **And the project's own rollback tool relocates the file too.** Measured,
+not read: `take_backup()` in
+`scripts/upgrade_lib/upgrade_rollback_common.sh` finds
+`session_metadata.json` at `LOG_DIRECTORY`, says so
+(`found at the pre-feat/state-directory location ... backing up from
+there`), and `restore_backup()` then places it at `resolve_state_dir()` -
+the NEW directory - because it restores every state file there
+regardless of where it was backed up FROM. After a real
+take-then-restore cycle `LOG_DIRECTORY` was EMPTY and the state dir held
+both `session_metadata.json` and `refresh_tokens.db`. So `rollback.sh`,
+the thing a user runs specifically to go back, is itself a step that
+makes the old version unable to find its state. Guarded by
+`test_rollback_relocates_state_files_out_of_the_old_location`, which runs
+the two real bash functions.
+
+If the old file survives instead of being moved - a partial restore, a
+hand copy - the both-present case applies and the old copy is the stale
+twin.
 
 The unit-level version of all of this is
 `tests/test_session_meta_continuity.py` (7 tests, no tmux, runs in the
