@@ -1,0 +1,257 @@
+/* =====================================================================
+ * Session sidebar GROUPS, the HEADING CLUSTER, and the INLINE RENAME
+ * editor. Three things in one file because they are one round of work
+ * on one strip of UI, and splitting them would put three 60-line files
+ * where the shared context is the thing worth keeping.
+ *
+ * WHY THIS FILE EXISTS AT ALL, recorded because the gap was invisible:
+ * client/index.html linked it and every class below was already being
+ * EMITTED by the JS, so every DOM assertion in the suite passed while
+ * the browser rendered an unstyled pile. A class with no rule is not a
+ * missing style, it is a missing FEATURE that tests reading DOM text
+ * cannot see. Same family as the `~~claude` defect this round removed.
+ *
+ * Load order: AFTER session-sidebar.css and session-sidebar-density.css.
+ * It overrides the header layout in the first and depends on the row
+ * metrics in the second.
+ *
+ * EVERY COLOUR HERE IS AN EXISTING THEME TOKEN. Nothing new is invented
+ * and no literal colour appears below, so a theme that redefines its
+ * palette redefines this strip with it. Radius uses the same tokens,
+ * which is why the `terminal` theme renders these square: it zeroes all
+ * five radius tokens on purpose, and that is correct there.
+ * ===================================================================== */
+
+/* ---- The heading cluster --------------------------------------------
+ * "we need to push it closer to the title conversations we will probably
+ * add more icons later on."
+ *
+ * THE POINT OF THIS BLOCK IS THAT THE NEXT CONTROL IS ONE ELEMENT, NOT A
+ * LAYOUT CHANGE. The density button used to carry `margin-left: auto`
+ * and float to the far right, landing next to the panel's pin and close
+ * buttons, so it read as panel chrome rather than as a control over the
+ * list. Moving it by hand-editing that one `auto` is what makes the next
+ * control another hand-edit.
+ *
+ * Instead there are two clusters with different jobs. `.heading` holds
+ * the title and the controls that act on the LIST; `.actions` holds the
+ * controls that act on the BAR. The gap between them is the `auto`, and
+ * it lives on the container split rather than on any single button, so
+ * adding a third list control is appending a sibling inside `.tools`
+ * and nothing else moves. */
+
+.session-sidebar-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* The title gives way before the controls do. Without this the flex
+     * default of min-width:auto lets a long title push the tools out of
+     * the panel entirely rather than ellipsing itself. */
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.session-sidebar-heading .session-sidebar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The control cluster. `gap` is the only spacing between controls, so a
+ * new sibling is spaced correctly by existing it. */
+.session-sidebar-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* Panel chrome, pushed to the far edge. This is where the `auto` lives
+ * now: on the cluster boundary, not on a button. */
+.session-sidebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* The density control sits in the tools cluster now, so its own
+ * `margin-left: auto` in session-sidebar-density.css would fight the
+ * cluster and shove it back to the right edge. Neutralised here rather
+ * than deleted there so the two files stay independently readable. */
+.session-sidebar-tools .session-sidebar-density-wrap {
+    margin-left: 0;
+}
+
+/* ---- Section headers -------------------------------------------------
+ * Headers are ROWS of the list, not captions floating above it, which is
+ * the Claude Code sidebar shape the user pointed at. They read as
+ * structure: muted, smaller, letter-spaced, and never competing with a
+ * session name for attention. */
+
+.session-sidebar-group {
+    display: block;
+}
+
+.session-sidebar-group__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    /* The 8px left inset lines the chevron up with the row grips below
+     * it, so the header reads as the same column of content. */
+    padding: 4px 10px 4px 8px;
+    margin: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.72em;
+    font-weight: bold;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+    /* DECLARED, not emergent. The header's height is part of the list
+     * geometry the density contract is measured against, so it is stated
+     * rather than left to whatever the chevron happens to be. */
+    min-height: 22px;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.session-sidebar-group__header:hover,
+.session-sidebar-group__header:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-group__header:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: -1px;
+}
+
+/* The chevron points right when shut and down when open. It is driven
+ * off `aria-expanded`, which is the SAME attribute a screen reader
+ * reads, so the glyph cannot disagree with the announced state. Keying
+ * it off a separate class is how those two drift apart. */
+.session-sidebar-group__chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    transition: transform 120ms ease;
+}
+
+.session-sidebar-group__header[aria-expanded="true"] .session-sidebar-group__chevron {
+    transform: rotate(90deg);
+}
+
+.session-sidebar-group__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A folded section still says how much it hides. The count is the only
+ * thing standing between "collapsed" and "empty" once the rows are gone,
+ * and those must not look the same. */
+.session-sidebar-group__count {
+    margin-left: auto;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-overlay-soft);
+    color: var(--color-fg-faint);
+    font-size: 0.9em;
+    font-weight: normal;
+    letter-spacing: 0;
+    flex-shrink: 0;
+}
+
+.session-sidebar-group__body {
+    display: block;
+}
+
+/* A COLLAPSED BODY IS EMPTY, NOT HIDDEN. The element stays so
+ * `aria-controls` resolves and a drag still has a drop target, but the
+ * rows are not in it: client/js/session-sidebar-reorder.js reads the
+ * visible order off the DOM and would happily count rows nobody can see.
+ * This rule only removes the leftover box. */
+.session-sidebar-group[data-collapsed="1"] .session-sidebar-group__body {
+    min-height: 0;
+}
+
+/* The pinned band gets a hairline under it so the seam between the two
+ * groups is visible even when both are open and the labels have scrolled
+ * past. Bottom border on the group, not a top border on the next header,
+ * so it disappears with the group rather than orphaning itself. */
+.session-sidebar-group[data-group="pinned"] {
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* WHILE A DRAG IS IN FLIGHT the empty pinned group is drawn as a drop
+ * target, and an empty target has to be big enough to hit. Steady state
+ * never sees this rule because the empty group is not rendered at all
+ * outside a drag. */
+.session-sidebar-list--dragging .session-sidebar-group[data-group="pinned"][data-count="0"]
+.session-sidebar-group__body {
+    min-height: 28px;
+    border: 1px dashed var(--color-accent-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-bg-faint);
+}
+
+/* ---- Inline rename ---------------------------------------------------
+ * The editor replaces the name IN PLACE and must not resize the row: a
+ * row that grows when you double-click it shoves every row below it
+ * down, and the pointer is already moving. Matching the name's own type
+ * and box is what keeps the row height identical between the two
+ * states. */
+
+.session-sidebar-rename-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.session-sidebar-rename-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0 4px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    /* `inherit` on all three is the whole trick: the input is the same
+     * type as the label it replaced, so the row does not reflow. */
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.session-sidebar-rename-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+/* A REJECTED RENAME SAYS SO AND KEEPS THE TEXT. This is the only place
+ * the reason is shown, and it is shown next to the input the user is
+ * about to correct rather than in a toast that has already gone. */
+.session-sidebar-rename-error {
+    color: var(--color-danger);
+    font-size: 0.7em;
+    line-height: 1.3;
+    word-break: break-word;
+}
