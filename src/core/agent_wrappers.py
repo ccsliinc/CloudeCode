@@ -344,8 +344,14 @@ def render_wrapper_invocation(
 # Offered example wrappers - NOT auto-installed anywhere. Served only via
 # GET /api/v1/agents/wrappers/examples for a user to explicitly import into
 # their own config.json (see the settings-panel "import example" action).
-# EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL,
-# VERBATIM function bodies, as supplied for this feature.
+# EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL
+# function bodies, as supplied for this feature, with one deliberate
+# deviation from verbatim: EXAMPLE_WRAPPER_CLDOR originally invoked claude
+# via the hardcoded absolute path "$HOME/.local/bin/claude", which only
+# resolves on the machine it was authored on. It now resolves "claude" from
+# PATH via `command -v` and fails with a named message when absent, instead
+# of a raw shell "no such file or directory". Nothing else in either body
+# was changed.
 # ---------------------------------------------------------------------------
 
 EXAMPLE_WRAPPER_CLD = """cld() (
@@ -375,6 +381,7 @@ EXAMPLE_WRAPPER_CLD = """cld() (
 EXAMPLE_WRAPPER_CLDOR = """cldor() (
   local openrouter_key
   local selected_model=""
+  local claude_bin
 
   openrouter_key="$(
     security find-generic-password \\
@@ -383,6 +390,11 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
       -w 2>/dev/null
   )" || {
     echo "OpenRouter API key not found in macOS Keychain."
+    return 1
+  }
+
+  claude_bin="$(command -v claude)" || {
+    echo "claude not found on PATH."
     return 1
   }
 
@@ -420,7 +432,7 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
 
     echo "OpenRouter model: $selected_model"
 
-    "$HOME/.local/bin/claude" \\
+    "$claude_bin" \\
       --dangerously-skip-permissions \\
       --model "$selected_model" \\
       "$@"
@@ -431,7 +443,7 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="~anthropic/claude-haiku-latest"
     export CLAUDE_CODE_SUBAGENT_MODEL="~anthropic/claude-opus-latest"
 
-    "$HOME/.local/bin/claude" \\
+    "$claude_bin" \\
       --dangerously-skip-permissions \\
       "$@"
   fi
