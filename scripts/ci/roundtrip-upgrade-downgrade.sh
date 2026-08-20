@@ -526,6 +526,11 @@ print(json.dumps({
 }, indent=2, sort_keys=True))
 PYVERDICT
 cat "${WORK_DIR}/artifacts/meta-verdict.json"
+# DECLARED, like step 08's expected FAIL. ABSENT is what this currently
+# measures; declaring it makes the step a guard that notices a CHANGE
+# rather than a check that quietly agrees with whatever it finds. If a
+# fix makes this INTACT, this step goes UNEXPECTED and someone reads it.
+printf 'ABSENT\n' > "${WORK_DIR}/artifacts/meta.expect"
 
 # --- 5. OLD writes again, post-upgrade ---------------------------------------
 #

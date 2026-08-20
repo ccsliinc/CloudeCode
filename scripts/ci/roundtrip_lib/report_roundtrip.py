@@ -204,6 +204,61 @@ def main() -> int:
         )
         prev_config, prev_name = cfg, name
 
+    # --- session-metadata continuity ------------------------------------
+    #
+    # Produced by the harness's meta-* steps, which measure it with both
+    # versions' real code rather than reading the migration's promises.
+    # It carries its own DECLARED expectation (artifacts/meta.expect) for
+    # the same reason step 08 does: the current answer is a finding, not
+    # a healthy state, so the guard's job is to notice when it CHANGES.
+    # Its three values are INTACT / STALE / ABSENT, plus CANNOT-DETERMINE
+    # when the step could not exercise the path at all - and that third
+    # one reaches this roll-up rather than being folded into a neighbour.
+    meta = load_json(art / "meta-verdict.json")
+    if meta is not None:
+        expect_file = art / "meta.expect"
+        expected = expect_file.read_text().strip() if expect_file.exists() else "INTACT"
+        got = meta.get("verdict", CANNOT)
+        if got == "CANNOT-DETERMINE":
+            agreement = CANNOT
+        elif got == expected:
+            agreement = "AS-EXPECTED"
+        else:
+            agreement = "UNEXPECTED"
+        results.append(
+            {
+                "step": "meta session-metadata-continuity",
+                "verdict": got,
+                "expected": expected,
+                "agreement": agreement,
+                "reason": meta.get("why", ""),
+                "config_diff_vs_prev": {"added": [], "removed": [], "changed": []},
+                "config_sha256": CANNOT,
+                "server": {"status": "n/a", "detail": ""},
+                "seen": {
+                    "old_resolved": meta.get("old_resolved_after_downgrade"),
+                    "new_resolved": meta.get("new_resolved_after_upgrade"),
+                    "old_sees_session_id": meta.get("old_sees_session_id"),
+                    "new_last_persisted": meta.get("new_last_persisted"),
+                },
+            }
+        )
+    else:
+        results.append(
+            {
+                "step": "meta session-metadata-continuity",
+                "verdict": CANNOT,
+                "expected": "INTACT",
+                "agreement": CANNOT,
+                "reason": ("no meta-verdict.json - the metadata steps did not "
+                           "run, which is not the same as metadata surviving"),
+                "config_diff_vs_prev": {"added": [], "removed": [], "changed": []},
+                "config_sha256": CANNOT,
+                "server": {"status": CANNOT, "detail": ""},
+                "seen": {},
+            }
+        )
+
     fails = [r for r in results if r["agreement"] == "UNEXPECTED"]
     unknowns = [r for r in results if r["agreement"] == CANNOT]
     overall = FAIL if fails else (CANNOT if unknowns else PASS)
