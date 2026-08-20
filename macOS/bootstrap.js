@@ -620,15 +620,41 @@ async function bootstrapIfNeeded({
   //   - A changed client/ needs to land even when everything else is already
   //     provisioned (.env, venv, config.json all exist from prior launch).
   //
-  // Dev mode is a no-op (don't clobber live source tree with stale bundle).
+  // DEV MODE RESYNCS TOO, and the comment that used to sit here claiming
+  // otherwise had the direction of the copy backwards. It read "don't
+  // clobber live source tree with stale bundle" - but in dev
+  // `bundleResourcesDir` IS the live source tree (main.js: `path.join
+  // (__dirname, '..')`, the repo root) and serverDir is the DERIVED copy
+  // under Application Support. The rsync runs repo -> derived. It cannot
+  // reach the source tree at all.
+  //
+  // What the skip actually did: the only thing landing files in dev was
+  // the first-run `copyRecursive` below, which SKIPS any file that
+  // already exists at the destination. So a NEW file appeared on the next
+  // launch and a CHANGED file never did, forever. Measured 2026-08-20:
+  // the user was testing a serverDir client/ whose index.html predated
+  // the merge, with none of the new screen-chrome files present, while
+  // the checkout on disk was correct - so half his UI was one build and
+  // half was another, and nothing anywhere errored. He reported it as a
+  // rendering defect, which is exactly what it looked like.
+  //
+  // The version stamp stays packaged-only: it records which RELEASE
+  // provisioned serverDir, and a dev launch is not a release.
   // -------------------------------------------------------------------------
-  if (packaged) {
+  {
     emit('syncing-assets');
     // Ensure serverDir exists before rsync so we never hit a missing-parent
     // race on a brand-new install where the fast-path check below would
     // normally create it via 'preparing'.
     fs.mkdirSync(serverDir, { recursive: true });
-    const sync = syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged: true });
+    // `isPackaged: true` is passed unconditionally on purpose. Inside
+    // syncBundledAssets that flag means only "do the resync"; the dev
+    // launch wants exactly the same resync, from the repo root instead
+    // of from Contents/Resources. It is not a claim about how the app
+    // was launched, and nothing downstream reads it as one.
+    const sync = syncBundledAssets({
+      serverDir, bundleResourcesDir, isPackaged: true
+    });
     if (!sync.ok) {
       // A failed resync is NOT recoverable — a half-synced client/ dir will
       // serve a mix of old + new files and break the app in confusing ways.
@@ -641,7 +667,9 @@ async function bootstrapIfNeeded({
     }
     // Stamp AFTER the resync: the resync does not carry a VERSION file, and
     // an upgrade must overwrite the previous release's stamp.
-    writeVersionStamp(serverDir, appVersion);
+    if (packaged) {
+      writeVersionStamp(serverDir, appVersion);
+    }
   }
 
   // -------------------------------------------------------------------------
