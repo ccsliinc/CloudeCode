@@ -1,15 +1,33 @@
-const { app, Tray, Menu, shell, nativeImage, clipboard, dialog } = require('electron');
+const { app, Tray, Menu, shell, nativeImage, clipboard, dialog, nativeTheme } = require('electron');
 const path = require('path');
 const ServerManager = require('./server-manager');
 const LaunchAgentInstaller = require('./launchagent-installer');
 const { bootstrapIfNeeded } = require('./bootstrap');
 const terminalLauncher = require('./terminal-launcher');
+const trayStatus = require('./tray-status');
+const { TrayApiClient } = require('./tray-api');
 
 let tray = null;
 let serverManager = null;
 let launchAgentInstaller = null;
 let statsUpdateInterval = null;
 let currentStats = null;
+
+// Tray status-light state (see tray-status.js). `traySignals` holds the last
+// answers from the server. sessionsReachable STARTS FALSE on purpose: before
+// the first successful poll the app has not measured anything, and an
+// unmeasured tray must not render as healthy.
+let trayApi = null;
+let trayPollInterval = null;
+let currentTrayState = null;
+const traySignals = {
+  sessions: null,
+  sessionsReachable: false,
+  sessionsError: 'not polled yet',
+  updateStatus: null,
+  updateReachable: false,
+  latestVersion: null,
+};
 
 // Human-readable labels for each bootstrap state, surfaced via tray tooltip.
 // Keep these concise — the tooltip is the ONLY UI surface during first-run
@@ -331,6 +349,7 @@ app.whenReady().then(async () => {
 
   // Start polling for stats
   startStatsPolling();
+  startTraySignalPolling();
 
   // Fresh install: auto-pop the TOTP QR so the user pairs their authenticator
   // before they ever need to log in. Fire-and-forget; server health poll has
@@ -352,6 +371,128 @@ app.whenReady().then(async () => {
 /**
  * Create the menu bar tray icon
  */
+/**
+ * Gather everything the tray status light is derived from.
+ *
+ * Kept as one function so the icon, the tooltip and the menu rows all read
+ * from exactly the same snapshot. Deriving them separately is how a tooltip
+ * ends up disagreeing with the icon beside it.
+ *
+ * @returns {object} Input shaped for tray-status.deriveTrayState.
+ */
+function currentTrayInput() {
+  return {
+    serverState: serverManager ? serverManager.getState() : 'stopped',
+    lastExitUnexpected: Boolean(serverManager && serverManager.lastExitUnexpected),
+    sessions: traySignals.sessions,
+    sessionsReachable: traySignals.sessionsReachable,
+    updateStatus: traySignals.updateStatus,
+  };
+}
+
+/**
+ * Apply the derived status light to the tray icon and tooltip.
+ *
+ * The healthy state loads the ORIGINAL asset as a real template image, so it
+ * adapts to the menu bar exactly as it always has. Every other state needs a
+ * coloured dot, and AppKit discards colour from a template image, so those
+ * are non-template and come in a light and a dark variant chosen from
+ * nativeTheme.
+ *
+ * If the state has not changed since the last call, the image is not
+ * reloaded: setImage on every 5 second poll is wasted work and can make the
+ * icon visibly flicker.
+ *
+ * @param {boolean} [force] - Reapply even when the state is unchanged, used
+ *   when the system appearance flips and the same state needs a different
+ *   variant.
+ * @returns {void}
+ */
+function applyTrayStatus(force) {
+  if (!tray) return;
+
+  const input = currentTrayInput();
+  const derived = trayStatus.deriveTrayState(input);
+
+  tray.setToolTip(trayStatus.buildTooltip(input));
+
+  if (!force && derived.state === currentTrayState) return;
+  currentTrayState = derived.state;
+
+  const asset = trayStatus.resolveIconAsset(
+    derived.state,
+    nativeTheme.shouldUseDarkColors,
+    path.join(__dirname, 'assets')
+  );
+
+  const image = nativeImage.createFromPath(asset.path);
+  if (image.isEmpty()) {
+    // A missing generated asset must not leave the previous state's icon on
+    // screen pretending to be current. Fall back to the base mark, which is
+    // honest about being the plain glyph.
+    console.warn('Tray asset missing, falling back to base mark:', asset.path);
+    const base = nativeImage.createFromPath(
+      path.join(__dirname, 'assets', 'iconTemplate.png')
+    );
+    base.setTemplateImage(true);
+    tray.setImage(base);
+    return;
+  }
+
+  image.setTemplateImage(asset.isTemplate);
+  tray.setImage(image);
+}
+
+/**
+ * Poll the authenticated endpoints that back the session and update signals.
+ *
+ * Failure is recorded as "could not determine" with a reason, never as an
+ * empty session list. An empty list is a real measurement meaning the server
+ * was asked and has nothing running; a failed poll is the absence of a
+ * measurement, and rendering the two the same way is the false green this
+ * whole feature exists to prevent.
+ *
+ * @returns {Promise<void>} Resolves once the snapshot has been refreshed.
+ */
+async function pollTraySignals() {
+  if (!serverManager) return;
+
+  if (serverManager.getState() !== 'running') {
+    traySignals.sessions = null;
+    traySignals.sessionsReachable = false;
+    traySignals.sessionsError = 'server is not running';
+    traySignals.updateReachable = false;
+    traySignals.updateStatus = null;
+    return;
+  }
+
+  const apiUrl = serverManager.getLocalApiUrl();
+  if (!apiUrl) {
+    traySignals.sessionsReachable = false;
+    traySignals.sessionsError = 'server address could not be determined';
+    return;
+  }
+
+  if (!trayApi) {
+    trayApi = new TrayApiClient({
+      baseUrl: apiUrl,
+      getOtp: () => serverManager.getCurrentOtp(),
+    });
+  } else {
+    trayApi.setBaseUrl(apiUrl);
+  }
+
+  const sessions = await trayApi.fetchSessions();
+  traySignals.sessions = sessions.sessions;
+  traySignals.sessionsReachable = sessions.reachable;
+  traySignals.sessionsError = sessions.error;
+
+  const update = await trayApi.fetchUpdateStatus();
+  traySignals.updateReachable = update.reachable;
+  traySignals.updateStatus = update.reachable ? update.status : null;
+  traySignals.latestVersion = update.latestVersion;
+}
+
 function createTray() {
   // Try to load icon, fall back to default if not found
   let iconPath = path.join(__dirname, 'assets', 'iconTemplate.png');
@@ -371,6 +512,14 @@ function createTray() {
 
   tray = new Tray(icon);
   tray.setToolTip('Cloude Code');
+
+  // A non-template status icon carries its own colours, so the same state
+  // needs a different file when the menu bar flips between light and dark.
+  // Force a reapply on that event, since the STATE has not changed and the
+  // normal short-circuit would skip it.
+  nativeTheme.on('updated', () => applyTrayStatus(true));
+
+  applyTrayStatus(true);
 
   // Build initial menu
   updateMenu();
@@ -460,6 +609,10 @@ function updateMenu() {
   const state = serverManager.getState();
   const health = currentStats;
 
+  // Read the signal verdicts from the SAME snapshot the icon is derived
+  // from, so a menu row can never contradict the icon sitting above it.
+  const traySignalLabels = trayStatus.describeSignals(currentTrayInput());
+
   const sessionName = health?.session_name || 'None';
   const tunnelCount = health?.tunnel_count || 0;
 
@@ -516,6 +669,17 @@ function updateMenu() {
     },
     {
       label: `Tunnels: ${tunnelCount}`,
+      enabled: false
+    },
+    {
+      // Each signal states its OWN verdict, including "cannot determine".
+      // The single tray icon has to prioritise one of them; these rows are
+      // where nothing gets to hide behind that prioritisation.
+      label: `Sessions: ${traySignalLabels.sessions}`,
+      enabled: false
+    },
+    {
+      label: `Update: ${traySignalLabels.update}`,
       enabled: false
     },
     { type: 'separator' },
@@ -949,11 +1113,48 @@ function updateMenu() {
   const menu = Menu.buildFromTemplate(menuItems);
 
   tray.setContextMenu(menu);
+
+  // Cheap: applyTrayStatus reloads the image only when the state actually
+  // changed, so calling it on every menu rebuild keeps icon and menu in
+  // step without repainting on every poll.
+  applyTrayStatus();
 }
 
 /**
  * Start polling server for stats updates
  */
+/**
+ * Poll the authenticated session and update signals on their own timer.
+ *
+ * Deliberately slower than the 5 second health poll. These are authenticated
+ * round trips, and the server rate limits TOTP verification, so hammering
+ * them buys nothing: a session needing attention is not a sub-minute
+ * emergency. An immediate first run means the tray stops showing "not polled
+ * yet" as soon as the server is up rather than waiting a full interval.
+ *
+ * @returns {void}
+ */
+function startTraySignalPolling() {
+  const INTERVAL_MS = 20000;
+
+  const tick = async () => {
+    try {
+      await pollTraySignals();
+    } catch (error) {
+      // A thrown poll must not leave the previous snapshot in place looking
+      // current. Record it as could-not-determine with the reason.
+      traySignals.sessionsReachable = false;
+      traySignals.sessionsError = String((error && error.message) || error);
+    }
+    applyTrayStatus();
+    updateMenu();
+  };
+
+  if (trayPollInterval) clearInterval(trayPollInterval);
+  trayPollInterval = setInterval(tick, INTERVAL_MS);
+  tick();
+}
+
 function startStatsPolling() {
   let pollInterval = 5000; // Default 5 seconds
   let fastPollCount = 0;

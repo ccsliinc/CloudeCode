@@ -36,6 +36,16 @@ class ServerManager {
     this.ownedProcess = false; // true if we spawned the server, false if adopted
     this.logStream = null;
 
+    // Crash tracking. `state` stays a three-value machine
+    // (stopped/starting/running) so no existing menu logic changes; the
+    // question "was the last exit OUR idea" is tracked separately here and
+    // read by the tray to tell a deliberate stop apart from a crash. Without
+    // it, a server that died on its own shows the same calm icon as one the
+    // user stopped himself.
+    this.stopRequested = false;
+    this.lastExitUnexpected = false;
+    this.lastExit = null;
+
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
       // In production: Store server files in Application Support
@@ -698,6 +708,11 @@ class ServerManager {
     console.log(`Python path: ${this.pythonPath}`);
     console.log(`Log file: ${this.logFile}`);
 
+    // A new start clears any previous crash, so the tray shows the
+    // current attempt rather than the last failure forever. A flag that
+    // never clears is furniture, not a signal.
+    this.lastExitUnexpected = false;
+    this.stopRequested = false;
     this.state = 'starting';
 
     // Create log file stream
@@ -786,6 +801,14 @@ class ServerManager {
         this.logStream = null;
       }
 
+      // An exit we did not ask for is a crash, whatever the code says. A
+      // uvicorn that loses its port exits non-zero; one the OOM killer takes
+      // exits on a signal. Both matter to the user, and neither is
+      // distinguishable from a clean stop once state collapses to 'stopped'.
+      this.lastExit = { code, signal, at: Date.now() };
+      this.lastExitUnexpected = !this.stopRequested;
+      this.stopRequested = false;
+
       this.process = null;
       this.processPid = null;
       this.ownedProcess = false;
@@ -803,6 +826,11 @@ class ServerManager {
         this.logStream.end();
         this.logStream = null;
       }
+
+      // Failing to spawn at all is never something the user asked for.
+      this.lastExit = { code: null, signal: null, error: err.message, at: Date.now() };
+      this.lastExitUnexpected = true;
+      this.stopRequested = false;
 
       this.process = null;
       this.processPid = null;
@@ -880,6 +908,12 @@ class ServerManager {
    */
   async stop() {
     console.log('Stopping server...');
+
+    // Everything from here on is a deliberate stop, so the exit handler must
+    // not report it as a crash. Set BEFORE any kill is issued, because the
+    // exit event can land before this function returns.
+    this.stopRequested = true;
+    this.lastExitUnexpected = false;
 
     // Adopted server: we didn't start it, we don't stop it.
     if (!this.ownedProcess) {
