@@ -116,6 +116,56 @@ PY
 [ -n "${PORT}" ] || setup_fail "no free port found from ${BASE_PORT}"
 say "port:         ${PORT} (bound successfully before use)"
 
+# --- a throwaway tmux socket, and a refusal to ever use the real one --------
+#
+# The seed fixture used to carry tmux_socket_name "cloude" - the socket a
+# real install runs on, with the user's live work on it. Every server this
+# harness starts reconciles against whatever that key names, so the harness
+# was reading (and one code path away from writing) the user's own sessions
+# while its header claimed it touched nothing real. Pinned here instead,
+# and asserted before every single server start rather than once at setup:
+# a step that rewrites config.json could otherwise put "cloude" back.
+TMUX_BIN="${TMUX_BIN:-/opt/homebrew/bin/tmux}"
+[ -x "${TMUX_BIN}" ] || TMUX_BIN="$(command -v tmux 2>/dev/null)"
+META_SOCKET="roundtrip-meta-$$"
+[ "${META_SOCKET}" = "cloude" ] && setup_fail "refusing to run on the production tmux socket"
+say "tmux socket:  ${META_SOCKET} (throwaway; NEVER 'cloude')"
+
+teardown_tmux() {
+    [ -n "${TMUX_BIN}" ] || return 0
+    [ "${META_SOCKET}" = "cloude" ] && return 0
+    "${TMUX_BIN}" -L "${META_SOCKET}" kill-server >/dev/null 2>&1
+    return 0
+}
+trap teardown_tmux EXIT
+
+# Description: pin config.json's tmux socket to the throwaway one and
+#   refuse to continue if it names the production socket. Called before
+#   every server start, not once - see the note above.
+# Inputs: none (reads ${INSTALL}/config.json, ${META_SOCKET}).
+# Output: 0 when pinned; exits 3 when it cannot be made safe.
+assert_socket_safe() {
+    [ -f "${INSTALL}/config.json" ] || return 0
+    python3 - "${INSTALL}/config.json" "${META_SOCKET}" <<'PYSOCK'
+import json, sys
+path, socket = sys.argv[1], sys.argv[2]
+if socket == "cloude":
+    sys.exit("refusing: throwaway socket name resolved to the production socket")
+try:
+    d = json.load(open(path))
+except Exception as exc:
+    sys.exit("could not read config.json to pin the tmux socket: %s" % exc)
+sess = d.setdefault("session", {})
+if sess.get("tmux_socket_name") != socket:
+    sess["tmux_socket_name"] = socket
+    open(path, "w").write(json.dumps(d, indent=2) + "\n")
+if json.load(open(path))["session"]["tmux_socket_name"] != socket:
+    sys.exit("config.json still does not name the throwaway socket")
+PYSOCK
+    [ $? -eq 0 ] || setup_fail "could not pin config.json to the throwaway tmux socket"
+    return 0
+}
+
 # --- clone the source repo once ---------------------------------------------
 
 git clone -q "${SOURCE_REPO}" "${INSTALL}" || setup_fail "clone of ${SOURCE_REPO} failed"
@@ -177,6 +227,7 @@ checkout_ref() {
 start_stop_server() {
     local out="$1.server.json"
     local log="$1.server.log"
+    assert_socket_safe
     (
         cd "${INSTALL}" || exit 1
         exec "${PY_BIN}" -m src.main
@@ -300,13 +351,140 @@ capture_step "old-after-write" noserver
 # That startup sequence IS the migration, and starting the server is how
 # this harness runs it.
 
+# --- 2b. SESSION METADATA: seed it the way the OLD version writes it --------
+#
+# The step the first executed round trip could not evaluate. It ran with
+# zero sessions, so nothing exercised the one file whose LOCATION the two
+# versions disagree about: v0.8.1 reads session_metadata.json from
+# LOG_DIRECTORY and nowhere else, while the new version resolves it
+# through _resolve_state_file(), which prefers the state directory.
+#
+# The metadata is written by the OLD install's own code (session_meta_probe
+# imports src.config from the checkout, which is at ${OLD_REF} right now),
+# so the starting state is genuinely what v0.8.1 leaves behind, not this
+# script's idea of it. The tmux sessions are real, on the throwaway socket.
+
+say "--- creating real tmux sessions on ${META_SOCKET}"
+if [ -n "${TMUX_BIN}" ]; then
+    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s roundtrip-a -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
+    "${TMUX_BIN}" -L "${META_SOCKET}" new-session -d -s roundtrip-b -c "${PROJ_DIR}" "sleep 900" 2>/dev/null
+    "${TMUX_BIN}" -L "${META_SOCKET}" list-sessions -F '#{session_name}' \
+        > "${WORK_DIR}/artifacts/meta-tmux-sessions.txt" 2>&1
+    say "sessions: $(tr '\n' ' ' < "${WORK_DIR}/artifacts/meta-tmux-sessions.txt")"
+else
+    say "tmux not found - the metadata steps still run, tmux liveness is CANNOT DETERMINE"
+    printf 'tmux-unavailable\n' > "${WORK_DIR}/artifacts/meta-tmux-sessions.txt"
+fi
+
+say "--- OLD version writes session_metadata.json at its own resolved path"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label old-writes \
+        --write roundtrip-session-1 --name roundtrip-a \
+        --working-dir "${PROJ_DIR}" --owned roundtrip-a --owned roundtrip-b
+) > "${WORK_DIR}/artifacts/meta-01-old-writes.json" 2>&1
+cat "${WORK_DIR}/artifacts/meta-01-old-writes.json"
+
 checkout_ref "${NEW_REF}" || setup_fail "could not check out ${NEW_REF}"
 capture_step "upgraded-new"
+
+say "--- where the NEW version resolves session metadata after the upgrade"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label new-after-upgrade
+) > "${WORK_DIR}/artifacts/meta-02-new-after-upgrade.json" 2>&1
+cat "${WORK_DIR}/artifacts/meta-02-new-after-upgrade.json"
+
+# --- 3b. the detach sequence, run with the NEW version's real methods -------
+#
+# SessionManager.detach_session unlinks the RESOLVED metadata path and
+# then, when another session is still live, calls _save_session_metadata()
+# - which re-resolves. After the unlink the old location is gone, so the
+# resolver returns the NEW path and the file MOVES. Nothing copies it
+# back. Those two real methods are called here in that real order.
+say "--- exercising the NEW version's detach metadata sequence"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" - <<'PYDETACH'
+import json, sys
+sys.path.insert(0, ".")
+from src.core.session_manager import SessionManager
+from src.models import Session
+mgr = SessionManager()
+mgr._load_session_metadata()
+before = mgr.current_session()
+mgr._clear_stale_metadata()
+survivor = Session(id="roundtrip-session-2", working_dir="/tmp",
+                   tmux_session="roundtrip-b")
+mgr._register_session(survivor, backend=None)
+mgr.owned_tmux_sessions = {"roundtrip-b"}
+mgr._save_session_metadata()
+print(json.dumps({
+    "rehydrated_before_detach": None if before is None else before.id,
+    "persisted_after_detach": "roundtrip-session-2",
+}, indent=2))
+PYDETACH
+) > "${WORK_DIR}/artifacts/meta-03-new-after-detach.json" 2>&1
+cat "${WORK_DIR}/artifacts/meta-03-new-after-detach.json"
 
 # --- 4. DOWNGRADE - the step that answers the question -----------------------
 
 checkout_ref "${OLD_REF}" || setup_fail "could not check back out ${OLD_REF}"
 capture_step "downgraded-old"
+
+# --- 4b. THE VERDICT: what the OLD version finds after all of that ----------
+#
+# Three outcomes, and STALE is named separately from ABSENT on purpose. An
+# absent file makes the old version start clean, which the user can see. A
+# stale one silently rehydrates a session that is no longer the live one.
+say "--- what the OLD version resolves after the round trip"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label old-after-downgrade
+) > "${WORK_DIR}/artifacts/meta-04-old-after-downgrade.json" 2>&1
+cat "${WORK_DIR}/artifacts/meta-04-old-after-downgrade.json"
+
+"${PY_BIN}" - "${WORK_DIR}" <<'PYVERDICT' > "${WORK_DIR}/artifacts/meta-verdict.json"
+import json, os, sys
+run = sys.argv[1]
+art = os.path.join(run, "artifacts")
+
+def load(name):
+    try:
+        return json.load(open(os.path.join(art, name)))
+    except Exception as exc:
+        return {"_unreadable": str(exc)}
+
+old_w = load("meta-01-old-writes.json")
+new_u = load("meta-02-new-after-upgrade.json")
+old_d = load("meta-04-old-after-downgrade.json")
+
+live_id = "roundtrip-session-2"
+if "_unreadable" in old_d:
+    verdict, why = "CANNOT-DETERMINE", "the post-downgrade probe produced no readable JSON"
+elif not old_d.get("present"):
+    verdict, why = ("ABSENT",
+        "the old version resolves %s and there is no file there - every "
+        "persisted session, its working dir and the owned-tmux set are gone"
+        % old_d.get("resolved"))
+elif old_d.get("session_id") == live_id:
+    verdict, why = "INTACT", "the old version reads the session the new version last persisted"
+else:
+    verdict, why = ("STALE",
+        "the old version reads %r while the new version last persisted %r - "
+        "a wrong answer, not a missing one" % (old_d.get("session_id"), live_id))
+
+print(json.dumps({
+    "verdict": verdict,
+    "why": why,
+    "old_wrote_at": old_w.get("resolved"),
+    "new_resolved_after_upgrade": new_u.get("resolved"),
+    "old_resolved_after_downgrade": old_d.get("resolved"),
+    "old_sees_session_id": old_d.get("session_id"),
+    "new_last_persisted": live_id,
+}, indent=2, sort_keys=True))
+PYVERDICT
+cat "${WORK_DIR}/artifacts/meta-verdict.json"
 
 # --- 5. OLD writes again, post-upgrade ---------------------------------------
 #

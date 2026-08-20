@@ -3,7 +3,7 @@
   "template_path": "claude-template",
   "session": {
     "backend": "auto",
-    "tmux_socket_name": "cloude",
+    "tmux_socket_name": "roundtrip-harness-throwaway",
     "scrollback_lines": 3000
   },
   "auth_rate_limits": {
