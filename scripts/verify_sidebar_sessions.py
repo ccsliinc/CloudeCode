@@ -215,20 +215,46 @@ def measure_density_menu_placement(browser, port: int, rep: Report) -> None:
     heights; none of them opened the menu and looked at where IT landed,
     which is exactly why "the list goes off to the left" shipped uncaught.
 
-    Two things are asserted, at every density (the menu's own DOM does not
-    depend on density, but the row list next to it does, and this is
-    where a reader would look for a density-menu check):
-      1. The open menu's box is fully inside the PANEL's box - never past
-         its left edge, never past its right edge.
+    Three things are asserted:
+      1. At every density, the open menu's box is fully inside the
+         PANEL's box - never past its left edge, never past its right
+         edge - AND wide enough to be usable. Bounding-box containment
+         alone is not enough: a containing block that collapses to a
+         sliver (e.g. `left` and `right` both resolving against the
+         28px button instead of the panel) reports a "contained" rect
+         while being unreadable, so a minimum width is asserted too.
       2. The same holds after a SIBLING control is added ahead of the
          density button in .session-sidebar-tools, simulating the cluster
          gaining another icon. A fix that just flips `right: 0` to
          `left: 0` passes (1) today and fails this the moment the cluster
          changes shape again; this is here so that class of regression
          cannot ship quietly a second time.
+      3. The same holds on a viewport narrow enough that
+         --sidebar-dock-w's `85vw` clamp makes the panel narrower than
+         the menu's normal 210px width. This is the case where the menu
+         MUST shrink to fit rather than simply choosing a side, so it is
+         the only scenario that actually exercises a `right` inset that
+         is tighter than `left ... + max-width` would produce on its
+         own - on a full-width panel the two are redundant and a broken
+         `right` value can hide behind a `max-width` that alone would
+         still keep the box in bounds.
 
     Inputs: browser; port (int); rep (Report). Output: None.
     """
+    MIN_USABLE_WIDTH = 100  # well under the 210px design width, far above a collapsed sliver
+
+    def _assert_menu_in_panel(label: str, panel: dict, menu: dict) -> None:
+        left_ok = menu["x"] >= panel["x"] - 0.5
+        right_ok = menu["x"] + menu["width"] <= panel["x"] + panel["width"] + 0.5
+        wide_ok = menu["width"] >= MIN_USABLE_WIDTH
+        rep.check(left_ok, f"{label}: density menu left edge is inside the panel",
+                  f"menu.left={menu['x']:.2f} panel.left={panel['x']:.2f}")
+        rep.check(right_ok, f"{label}: density menu right edge is inside the panel",
+                  f"menu.right={menu['x'] + menu['width']:.2f} "
+                  f"panel.right={panel['x'] + panel['width']:.2f}")
+        rep.check(wide_ok, f"{label}: density menu is wide enough to be usable, not a collapsed sliver",
+                  f"menu.width={menu['width']:.2f} want>={MIN_USABLE_WIDTH}")
+
     for mode in ("compact", "cozy", "detailed"):
         page = open_page(browser, port, {DENSITY_KEY: mode})
         assert_viewport(page, rep)
@@ -236,13 +262,7 @@ def measure_density_menu_placement(browser, port: int, rep: Report) -> None:
         page.wait_for_selector("#session-sidebar-density-menu:not([hidden])")
         panel = page.eval_on_selector(".session-sidebar-panel", "el => el.getBoundingClientRect()")
         menu = page.eval_on_selector("#session-sidebar-density-menu", "el => el.getBoundingClientRect()")
-        left_ok = menu["x"] >= panel["x"] - 0.5
-        right_ok = menu["x"] + menu["width"] <= panel["x"] + panel["width"] + 0.5
-        rep.check(left_ok, f"{mode}: density menu left edge is inside the panel",
-                  f"menu.left={menu['x']:.2f} panel.left={panel['x']:.2f}")
-        rep.check(right_ok, f"{mode}: density menu right edge is inside the panel",
-                  f"menu.right={menu['x'] + menu['width']:.2f} "
-                  f"panel.right={panel['x'] + panel['width']:.2f}")
+        _assert_menu_in_panel(mode, panel, menu)
         page.close()
 
     # Same check again, but with a sibling control inserted ahead of the
@@ -261,13 +281,23 @@ def measure_density_menu_placement(browser, port: int, rep: Report) -> None:
     panel = page.eval_on_selector(".session-sidebar-panel", "el => el.getBoundingClientRect()")
     wrap = page.eval_on_selector(".session-sidebar-density-wrap", "el => el.getBoundingClientRect()")
     menu = page.eval_on_selector("#session-sidebar-density-menu", "el => el.getBoundingClientRect()")
-    left_ok = menu["x"] >= panel["x"] - 0.5
-    right_ok = menu["x"] + menu["width"] <= panel["x"] + panel["width"] + 0.5
-    rep.check(left_ok, "with an added sibling control: density menu left edge is inside the panel",
-              f"wrap.x={wrap['x']:.2f} menu.left={menu['x']:.2f} panel.left={panel['x']:.2f}")
-    rep.check(right_ok, "with an added sibling control: density menu right edge is inside the panel",
-              f"wrap.x={wrap['x']:.2f} menu.right={menu['x'] + menu['width']:.2f} "
-              f"panel.right={panel['x'] + panel['width']:.2f}")
+    _assert_menu_in_panel("with an added sibling control", panel, menu)
+    rep.note(f"sibling-added wrap.x={wrap['x']:.2f}")
+    page.close()
+
+    # Narrow viewport: forces --sidebar-dock-w's `min(320px, 85vw)` clamp
+    # below the menu's normal 210px width, so the menu MUST shrink via
+    # `right` rather than just picking a side via `left` + `max-width`.
+    page = browser.new_page(viewport={"width": 260, "height": 900})
+    page.goto(f"http://127.0.0.1:{port}{HARNESS}")
+    page.wait_for_function("window.__sidebarReady === true", timeout=15000)
+    page.click("#session-sidebar-density")
+    page.wait_for_selector("#session-sidebar-density-menu:not([hidden])")
+    panel = page.eval_on_selector(".session-sidebar-panel", "el => el.getBoundingClientRect()")
+    menu = page.eval_on_selector("#session-sidebar-density-menu", "el => el.getBoundingClientRect()")
+    rep.check(panel["width"] < 250, "narrow-viewport case actually narrows the panel below the menu's design width",
+              f"panel.width={panel['width']:.2f}")
+    _assert_menu_in_panel("narrow viewport (85vw panel clamp)", panel, menu)
     page.close()
 
 
