@@ -6,6 +6,7 @@ const { bootstrapIfNeeded } = require('./bootstrap');
 const terminalLauncher = require('./terminal-launcher');
 const trayStatus = require('./tray-status');
 const { TrayApiClient } = require('./tray-api');
+const { isTailscaleIp } = require('./network-interfaces');
 
 let tray = null;
 let serverManager = null;
@@ -550,7 +551,12 @@ function buildBindAndUrlItems() {
       click: () => handleBindChange('127.0.0.1'),
     },
     ...localIps.map(({ iface, ip }) => ({
-      label: `${ip}  (${iface})`,
+      // Name the Tailscale address for what it is. The interface is called
+      // utun4, which tells the user nothing, and this is the address that
+      // used to be missing from this menu entirely.
+      label: isTailscaleIp(ip)
+        ? `${ip}  (${iface}, Tailscale)`
+        : `${ip}  (${iface})`,
       type: 'radio',
       checked: bindHost === ip,
       click: () => handleBindChange(ip),

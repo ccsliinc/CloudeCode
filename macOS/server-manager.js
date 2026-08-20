@@ -20,14 +20,11 @@ const DEFAULT_BIND_HOST = '0.0.0.0';
 // value - see getPort() below.
 const DEFAULT_PORT = 8000;
 
-// macOS pseudo-interfaces that should NEVER appear in the Bind IP submenu.
-// awdl/llw = AirDrop/Apple Wireless Direct Link (link-local IPv6 only).
-// utun = VPN tunnels (link-local IPv6 usually; user-bound VPN, not a LAN
-// binding target). anpi/ap1 = internal radios on Apple Silicon. Skip them
-// wholesale by name — they never carry routable IPv4 even if one shows up.
-const PSEUDO_IFACE_PATTERNS = [
-  /^awdl/i, /^llw/i, /^utun/i, /^anpi/i, /^ap\d/i,
-];
+const { listBindableIps, isTailscaleIp } = require('./network-interfaces');
+
+// Interface selection lives in network-interfaces.js. Interfaces are chosen
+// by the ADDRESS they carry, not by a blocklist of names; see that file for
+// why the old name-based filter was wrong and what it cost.
 
 class ServerManager {
   constructor() {
@@ -208,28 +205,12 @@ class ServerManager {
    * Returns: [{iface: 'en0', ip: '192.168.1.250'}, ...]
    */
   getLocalInterfaceIps() {
-    const results = [];
-    let ifaces;
     try {
-      ifaces = os.networkInterfaces();
+      return listBindableIps();
     } catch (err) {
       console.warn('[bind-host] networkInterfaces() failed:', err.message);
       return [];
     }
-    for (const [name, addrs] of Object.entries(ifaces || {})) {
-      if (PSEUDO_IFACE_PATTERNS.some((rx) => rx.test(name))) continue;
-      if (!Array.isArray(addrs)) continue;
-      for (const a of addrs) {
-        if (!a || a.family !== 'IPv4') continue;
-        if (a.internal) continue;
-        if (typeof a.address !== 'string') continue;
-        if (a.address.startsWith('169.254.')) continue; // link-local
-        results.push({ iface: name, ip: a.address });
-      }
-    }
-    // Stable ordering by interface name (en0 before en13 etc.)
-    results.sort((a, b) => a.iface.localeCompare(b.iface));
-    return results;
   }
 
   /**
