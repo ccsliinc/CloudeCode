@@ -193,6 +193,51 @@ window.__sidebarMeasure = function () {
                 pins: r.querySelectorAll('[data-pin-session]').length,
             };
         }),
+        // ITEM 64: the section headers, measured as real boxes. `count`
+        // is read off the rendered badge rather than off the model, so a
+        // header that claims a different number than it hides fails here.
+        groups: Array.prototype.slice.call(
+            list.querySelectorAll('.session-sidebar-group')
+        ).map((gEl) => {
+            const head = gEl.querySelector('.session-sidebar-group__header');
+            const hb = head.getBoundingClientRect();
+            return {
+                key: gEl.getAttribute('data-group'),
+                collapsed: gEl.getAttribute('data-collapsed'),
+                declaredCount: Number(gEl.getAttribute('data-count')),
+                renderedCount: gEl.querySelectorAll('.session-sidebar-row').length,
+                badgeCount: Number(
+                    (gEl.querySelector('.session-sidebar-group__count') || {}).textContent
+                ),
+                label: (gEl.querySelector('.session-sidebar-group__label') || {}).textContent,
+                expanded: head.getAttribute('aria-expanded'),
+                controls: head.getAttribute('aria-controls'),
+                bodyId: (gEl.querySelector('.session-sidebar-group__body') || {}).id,
+                headerHeight: hb.height,
+                headerTop: hb.top,
+                // The chevron's real rotation, so the glyph is verified to
+                // MOVE rather than merely to carry an attribute.
+                chevronTransform: getComputedStyle(
+                    gEl.querySelector('.session-sidebar-group__chevron')
+                ).transform,
+            };
+        }),
+        // ITEM 66: the inline editor, if one is open.
+        rename: (function () {
+            const input = list.querySelector('.session-sidebar-rename-input');
+            if (!input) return null;
+            const box = input.getBoundingClientRect();
+            const rowEl = input.closest('.session-sidebar-row');
+            return {
+                value: input.value,
+                width: box.width,
+                height: box.height,
+                rowHeight: rowEl ? rowEl.getBoundingClientRect().height : null,
+                focused: document.activeElement === input,
+                error: (list.querySelector('.session-sidebar-rename-error') || {}).textContent || '',
+            };
+        }()),
+        renameStates: rows.map((r) => r.dataset.renameState),
         focused: document.activeElement && document.activeElement.dataset
             ? (document.activeElement.dataset.name || null) : null,
         bodyPinned: document.body.classList.contains('session-sidebar-pinned'),
