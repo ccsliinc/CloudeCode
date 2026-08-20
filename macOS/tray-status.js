@@ -236,11 +236,18 @@ function buildTooltip(input) {
 /**
  * Resolve which image file backs a tray state.
  *
- * The healthy state reuses the ORIGINAL shipped asset as a real macOS
- * template image, so it adapts to the menu bar exactly as before. Every other
- * state needs a coloured dot, and a template image cannot carry colour
- * (AppKit discards the RGB), so those are non-template images generated per
- * appearance by scripts/generate-tray-icons.py.
+ * EVERY state, including the healthy one, resolves to a generated
+ * non-template image. That is deliberate and was arrived at by measurement.
+ * A coloured status dot cannot survive a template image (AppKit discards the
+ * RGB), so the non-healthy states had to be ordinary images. Leaving "ok" on
+ * the template path meant the healthy state rendered through a DIFFERENT
+ * AppKit path than every other state, and the two paths do not agree on
+ * weight: measured in a real menu bar, the template glyph landed at p90
+ * luminance 70 while a full-opacity ordinary glyph landed at 166, and
+ * "stopped" came out BRIGHTER than "ok". A stopped server was
+ * indistinguishable from a healthy one, which is the precise false green this
+ * icon exists to prevent. One path for all states makes them consistent by
+ * construction rather than by coincidence.
  *
  * The @2x variants sit beside each file and AppKit picks them up from the
  * filename convention, so only the 1x path is returned.
@@ -250,16 +257,11 @@ function buildTooltip(input) {
  *   nativeTheme.shouldUseDarkColors.
  * @param {string} assetsDir - Absolute path of macOS/assets.
  * @returns {{path: string, isTemplate: boolean}} The image to load and
- *   whether it must be flagged as a template image.
+ *   whether it must be flagged as a template image. isTemplate is always
+ *   false; it is still returned so the caller has one place to change if a
+ *   future state ever goes back to being a template.
  */
 function resolveIconAsset(state, isDarkMenuBar, assetsDir) {
-  if (state === 'ok') {
-    return {
-      path: path.join(assetsDir, 'iconTemplate.png'),
-      isTemplate: true,
-    };
-  }
-
   const appearance = isDarkMenuBar ? 'dark' : 'light';
   return {
     path: path.join(assetsDir, 'tray', `tray-${state}-${appearance}.png`),

@@ -246,23 +246,25 @@ await test('the tooltip names server, sessions and update on separate lines', ()
 
 console.log('tray-status: icon assets');
 
-await test('the healthy state uses the ORIGINAL asset as a template image', () => {
-  const asset = trayStatus.resolveIconAsset('ok', false, assetsDir);
-  assert.equal(path.basename(asset.path), 'iconTemplate.png');
-  assert.equal(
-    asset.isTemplate,
-    true,
-    'the plain glyph must stay a template image so macOS recolours it'
-  );
-});
-
-await test('coloured states are NOT template images', () => {
-  for (const state of ['attention', 'unknown', 'update', 'starting', 'crashed', 'stopped']) {
+await test('EVERY state renders through the same non-template path', () => {
+  // Measured, not assumed. Leaving "ok" on AppKit's template path while the
+  // dotted states used the ordinary image path put the healthy state through
+  // a different renderer, and the two disagreed on weight: in a real menu bar
+  // the template glyph measured p90 luminance 70 and a full-opacity ordinary
+  // glyph measured 166, so "stopped" came out BRIGHTER than "ok". A stopped
+  // server looked healthy. One path for all states removes that by
+  // construction.
+  for (const state of trayStatus.TRAY_STATES) {
     const asset = trayStatus.resolveIconAsset(state, false, assetsDir);
     assert.equal(
       asset.isTemplate,
       false,
-      state + ' must not be a template image; AppKit would discard its colour'
+      state + ' must not be a template image; AppKit would discard its colour ' +
+        'and it would render at a different weight than its siblings'
+    );
+    assert.ok(
+      asset.path.includes(path.sep + 'tray' + path.sep),
+      state + ' must resolve into the generated tray asset directory'
     );
   }
 });

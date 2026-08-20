@@ -20,11 +20,17 @@ original asset as a template image, untouched.
 
 But it also means a template image CANNOT carry a coloured status dot. The
 colour would be discarded and every state would render identically. So the
-non-healthy states are emitted as ordinary (non-template) images, which
-forces this script to supply the glyph colour itself, which in turn means one
-variant per menu-bar appearance: near-black for a light menu bar, white for a
-dark one. The app picks between them from ``nativeTheme.shouldUseDarkColors``
-and re-picks when the theme changes.
+states are emitted as ordinary (non-template) images, which forces this script
+to supply the glyph colour itself, and that means one variant per menu-bar
+appearance: near-black for a light menu bar, white for a dark one. The app
+picks between them from ``nativeTheme.shouldUseDarkColors`` and re-picks when
+the theme changes.
+
+EVERY state is generated here, including the healthy one. Leaving "ok" on
+AppKit's template path while the rest went through the ordinary image path was
+tried first and measured wrong: the two paths render at different weights, so
+"stopped" came out BRIGHTER than "ok" and a stopped server looked identical to
+a healthy one. See NORMAL_GLYPH_ALPHA below.
 
 STATE VOCABULARY
 ----------------
@@ -35,7 +41,7 @@ as an absent one. A state meaning "could not determine" must never look like
 a state meaning "healthy", and must not look like a definite alarm either.
 
     state       glyph        dot
-    ok          normal       none          (uses the original template asset)
+    ok          normal       none
     update      normal       blue filled
     attention   normal       red filled
     unknown     normal       grey hollow ring
@@ -81,6 +87,31 @@ GLYPH_COLORS: dict[str, tuple[int, int, int]] = {
     "dark": (255, 255, 255),
 }
 
+#: Glyph opacity for the NORMAL (undimmed) states, per appearance.
+#:
+#: This is calibrated, not chosen. A template image and an ordinary image do
+#: not render at the same weight in the menu bar: AppKit draws a template
+#: glyph muted, and the bar is translucent so everything composites over the
+#: wallpaper. Measured on a dark menu bar with the tray harness, native system
+#: icons and the template-rendered mark both land at p90 luminance 70 against
+#: a background of 32, while a FULL opacity white glyph lands at 166. Left
+#: uncalibrated, every non-healthy state renders more than twice as heavy as
+#: the healthy one and as every neighbouring system icon.
+#:
+#: The dark value is fitted from that measurement (rendered = 32 + 135.4 * a,
+#: so a = 0.28 reproduces the native 70) and then verified by re-measuring.
+#:
+#: THE LIGHT VALUE IS NOT VERIFIED. Confirming it means flipping the system
+#: appearance, which is not something to do to a machine somebody is working
+#: on. It is set to the symmetric construction and errs toward the lighter,
+#: less harsh side. To calibrate it properly, switch the menu bar to light and
+#: re-run the harness comparison described in
+#: tests/test_tray_status.node.mjs.
+NORMAL_GLYPH_ALPHA: dict[str, float] = {
+    "light": 0.85,
+    "dark": 0.28,
+}
+
 #: Status dot colours, taken from the macOS system palette so they sit
 #: correctly next to native menu-bar items.
 RED = (255, 59, 48)
@@ -88,14 +119,26 @@ AMBER = (255, 159, 10)
 BLUE = (10, 132, 255)
 GREY = (142, 142, 147)
 
-#: state -> (glyph alpha multiplier, dot colour or None, filled?)
+#: state -> (glyph dim multiplier, dot colour or None, filled?)
+#:
+#: The multiplier is applied ON TOP of NORMAL_GLYPH_ALPHA, so 1.0 means "the
+#: same weight as a native system icon" rather than "fully opaque".
+#:
+#: "ok" is generated here too, even though it carries no dot. That is the
+#: point: when the healthy state went through AppKit's template path while
+#: every other state went through the ordinary image path, the two paths
+#: disagreed by more than 2x and "stopped" came out BRIGHTER than "ok" - a
+#: stopped server was indistinguishable from a healthy one, which is the
+#: exact false green this icon exists to prevent. Rendering every state
+#: through one path makes them consistent by construction instead of by luck.
 STATES: dict[str, tuple[float, tuple[int, int, int] | None, bool]] = {
+    "ok": (1.0, None, True),
     "update": (1.0, BLUE, True),
     "attention": (1.0, RED, True),
     "unknown": (1.0, GREY, False),
-    "starting": (0.55, AMBER, True),
-    "crashed": (0.55, RED, True),
-    "stopped": (0.35, None, True),
+    "starting": (0.62, AMBER, True),
+    "crashed": (0.62, RED, True),
+    "stopped": (0.38, None, True),
 }
 
 #: Dot geometry as a fraction of the icon's edge length, so @1x and @2x stay
@@ -193,7 +236,8 @@ def build_icon(
     Returns:
         A new RGBA image ready to be written as a PNG.
     """
-    alpha_scale, dot_color, filled = STATES[state]
+    dim, dot_color, filled = STATES[state]
+    alpha_scale = NORMAL_GLYPH_ALPHA[appearance] * dim
     icon = recolor_glyph(source, GLYPH_COLORS[appearance], alpha_scale)
     if dot_color is not None:
         draw_status_dot(icon, dot_color, filled)
