@@ -50,6 +50,10 @@ class SessionSidebarController {
         this._listing = { ok: true, reason: null, detail: null };
         this._missing = [];
 
+        // True only while a pointer drag is in flight. Drawn state, not
+        // bookkeeping - see setDragging().
+        this._dragging = false;
+
         this._activeSessionId = null;
         this._activeTmuxName = null;
     }
@@ -101,6 +105,9 @@ class SessionSidebarController {
             this.close();
         });
         this.listEl.addEventListener('click', (e) => this._onRowClick(e));
+        this.listEl.addEventListener('dblclick', (e) => {
+            if (window.SessionSidebarRename) window.SessionSidebarRename.onDblClick(e);
+        });
         // Keyboard activation (Enter/Space) for the mark-unread toggle -
         // it's a `role="button"` span, not a real <button>, so it needs
         // explicit key handling to be operable without a mouse.
@@ -118,6 +125,7 @@ class SessionSidebarController {
         if (window.SessionSidebarPin) window.SessionSidebarPin.init();
         if (window.SessionSidebarDensity) window.SessionSidebarDensity.init();
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.init();
+        if (window.SessionSidebarRename) window.SessionSidebarRename.init();
         console.log('SessionSidebar: wired');
     }
 
@@ -292,8 +300,19 @@ class SessionSidebarController {
         }
         this._missing = missing;
         const state = arrangement ? arrangement.current() : null;
-        const sig = window.SessionSidebarRows.signature(rows, density, this._listing, missing)
-            + (state ? `|${state.status}` : '');
+        // A DRAG IN FLIGHT CHANGES WHAT IS ON SCREEN, so it is part of
+        // the paint, not a flag on the side: an empty pinned group is
+        // drawn as a drop target only while a row is being dragged (see
+        // client/js/session-sidebar-groups.js). It has to reach the
+        // signature too, or the drop target does not appear until some
+        // unrelated field happens to differ.
+        const groups = {
+            collapsed: (state && Array.isArray(state.collapsed)) ? state.collapsed : [],
+            dragging: !!this._dragging,
+        };
+        const sig = window.SessionSidebarRows.signature(
+            rows, density, this._listing, missing, groups,
+        ) + (state ? `|${state.status}` : '');
         if (sig === this._lastSig) return;
         this._lastSig = sig;
         this.listEl.setAttribute('data-listing-ok', this._listing.ok ? '1' : '0');
@@ -301,9 +320,26 @@ class SessionSidebarController {
         this.listEl.setAttribute('data-arrangement-state', state ? state.status : 'default');
         this.listEl.setAttribute('data-density', density);
         this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
-            rows, density, this._listing, missing, state,
+            rows, density, this._listing, missing, state, groups,
         );
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.afterRender();
+        if (window.SessionSidebarRename) window.SessionSidebarRename.afterRender();
+    }
+
+    /**
+     * Description: turn the drag-in-flight flag on or off and repaint, so
+     *   the empty pinned group appears as a drop target for exactly the
+     *   duration of a drag. Called by
+     *   client/js/session-sidebar-reorder.js, which owns the gesture but
+     *   does not own the paint.
+     * Inputs: on (boolean).
+     * Output: void.
+     */
+    setDragging(on) {
+        const next = !!on;
+        if (next === !!this._dragging) return;
+        this._dragging = next;
+        this.repaint();
     }
 
     /**
@@ -324,6 +360,21 @@ class SessionSidebarController {
      * Output: Promise<void>.
      */
     async _onRowClick(e) {
+        // A SECTION HEADER IS A ROW OF THIS LIST, so its click arrives
+        // here and has to be claimed before anything row-shaped runs. It
+        // is not inside a `.session-sidebar-row`, so nothing below would
+        // have matched it - but claiming it explicitly is what keeps a
+        // future header control from falling through to the switch path.
+        const groupToggle = e.target.closest && e.target.closest('[data-group-toggle]');
+        if (groupToggle) {
+            e.stopPropagation();
+            this._onGroupToggleClick(groupToggle);
+            return;
+        }
+        // An edit in progress owns every click inside itself. Without
+        // this the click that puts the caret in the input also reaches
+        // the row handler and switches conversation out from under it.
+        if (window.SessionSidebarRename && window.SessionSidebarRename.onListClick(e)) return;
         if (window.SessionSidebarReorder && window.SessionSidebarReorder.onPinClick(e)) return;
 
         const actionEl = window.SessionRowActions
@@ -348,7 +399,39 @@ class SessionSidebarController {
 
         const rowEl = e.target.closest('.session-sidebar-row');
         if (!rowEl) return;
+
+        // THE NAME IS THE ONE TARGET WHERE A CLICK HAS TO WAIT.
+        // Double-click on the name means rename, and a browser delivers
+        // the first click of a double-click before it delivers the
+        // double-click, so an instant switch here would navigate away
+        // from the row the user was about to edit. The wait is scoped as
+        // tightly as it can be: only on the NAME, and only on a row that
+        // is actually renameable. Every other part of the row, and every
+        // row that has nothing to edit, still activates immediately.
+        if (window.SessionSidebarRename
+            && window.SessionSidebarRename.deferActivation(e, rowEl, () => this.activateRow(rowEl))) {
+            return;
+        }
         await this.activateRow(rowEl);
+    }
+
+    /**
+     * Description: fold or unfold one section, persist it, and repaint.
+     *   The fold lives in the arrangement envelope, so it survives a
+     *   reload alongside the pins and the order it describes.
+     * Inputs: btnEl (Element) - the clicked `[data-group-toggle]` button.
+     * Output: void.
+     */
+    _onGroupToggleClick(btnEl) {
+        const key = btnEl.getAttribute('data-group-toggle');
+        const arrangement = window.SessionSidebarArrangement;
+        if (!key || !arrangement) return;
+        const nowCollapsed = arrangement.toggleCollapsed(key);
+        this.repaint();
+        const region = document.getElementById('session-sidebar-live');
+        if (region) {
+            region.textContent = `${key} group ${nowCollapsed ? 'collapsed' : 'expanded'}`;
+        }
     }
 
     /**

@@ -25,11 +25,35 @@
  * and pen are one code path - HTML5 drag-and-drop would have been less
  * code and silently dead on a phone.
  *
- * A MOVE NEVER CHANGES A PIN. Both interactions refuse a move that would
- * cross the pinned/unpinned boundary (the refusal itself lives in
- * client/js/session-sidebar-arrangement.js, so the two interactions cannot
- * disagree about it). Dragging a row out of the pinned band would be an
- * unpin the user never asked for and could not see themselves perform.
+ * A MOVE ACROSS THE BOUNDARY NOW PINS OR UNPINS, AND THAT REVERSES THE
+ * RULE THIS FILE USED TO STATE. It used to read "a move never changes a
+ * pin", and both interactions refused to cross. The user has since asked
+ * for the crossing ("not sure how hard to be able to drag the items in
+ * and our of pinned group"), so the protection MOVES rather than
+ * disappearing: the thing being prevented was an unpin the user could not
+ * see themselves perform, not the unpin itself. So every crossing move is
+ * ANNOUNCED in words in the live region, and the row's pin button changes
+ * its pressed state in the same paint. The crossing arithmetic still
+ * lives in exactly one place (client/js/session-sidebar-arrangement.js),
+ * so the pointer and the keyboard cannot disagree about it.
+ *
+ * KEYBOARD PARITY IS NOT OPTIONAL HERE. A pointer-only pin/unpin would
+ * make the pinned group unreachable without a mouse, so there are TWO
+ * keyboard routes to it and both work: `p` toggles the focused row's pin
+ * where it stands, and Alt+Arrow past a band edge crosses the boundary
+ * exactly as a drag does. The LIST edges are still hard refusals - Alt+Up
+ * on the very first row has nothing above it to cross past, and
+ * overloading it with "pin into the empty band" would make the top row's
+ * behaviour depend on state that is not on screen.
+ *
+ * WHICH BAND A DROP LANDS IN IS READ OFF THE GROUP UNDER THE POINTER, not
+ * off the nearest row. Those differ in the one case that matters: an
+ * EMPTY pinned group has no rows to be near, and inferring the band from
+ * the nearest row would make it permanently undroppable - which is the
+ * case the whole feature exists for. That is also why
+ * client/js/session-sidebar-groups.js draws the empty pinned group while
+ * and only while a drag is in flight: a drop target that appears after
+ * you hit it cannot be hit.
  *
  * FOCUS SURVIVES THE REPAINT. Every move rewrites the list's innerHTML,
  * which destroys the focused element; without restoring focus onto the
@@ -162,14 +186,20 @@ console.log('[SessionSidebarReorder Module] Loading...');
     function moveRow(name, delta) {
         const arrangement = window.SessionSidebarArrangement;
         if (!arrangement) return false;
-        const next = arrangement.move(name, delta, visibleNames());
-        if (!next) {
-            announce(`${name} is already at the ${delta < 0 ? 'top' : 'bottom'} of its group`);
+        const result = arrangement.move(name, delta, visibleNames());
+        if (!result) {
+            announce(`${name} is already at the ${delta < 0 ? 'top' : 'bottom'} of the list`);
             return false;
         }
         repaintKeepingFocus(name);
         const rows = visibleNames();
-        announce(`${name} moved to position ${rows.indexOf(name) + 1} of ${rows.length}`);
+        const where = `position ${rows.indexOf(name) + 1} of ${rows.length}`;
+        // A CROSSING SAYS SO. The position alone would describe the move
+        // accurately and still hide the part the user most needs to know,
+        // which is that the pin changed.
+        announce(result.crossed
+            ? `${name} ${result.pinned ? 'pinned' : 'unpinned'}, now at ${where}`
+            : `${name} moved to ${where}`);
         return true;
     }
 
@@ -201,6 +231,12 @@ console.log('[SessionSidebarReorder Module] Loading...');
         const name = row.dataset.name;
         const rows = rowEls();
         const idx = rows.indexOf(row);
+
+        // F2 is the platform's rename key and it is handed off whole, so
+        // the gate on the three renameability states lives in exactly one
+        // place rather than being restated here.
+        if (window.SessionSidebarRename
+            && window.SessionSidebarRename.onRowKeydown(e, row)) return;
 
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault();
@@ -260,11 +296,44 @@ console.log('[SessionSidebarReorder Module] Loading...');
             name: grip.getAttribute('data-grip-session'),
             startY: e.clientY,
             active: false,
+            // undefined until a placement actually crosses the boundary,
+            // so "did not cross" and "crossed into unpinned" stay
+            // distinguishable - false would collapse them.
+            crossed: undefined,
             pointerId: e.pointerId,
         };
         if (grip.setPointerCapture) {
             try { grip.setPointerCapture(e.pointerId); } catch (_) { /* not captured */ }
         }
+    }
+
+    /**
+     * Description: which band the pointer is currently over, decided by
+     *   the GROUP CONTAINER it falls inside rather than by the nearest
+     *   row. Returns null when the list is ungrouped (nothing pinned and
+     *   no drag has forced the pinned group into existence yet), which
+     *   the caller reads as "leave the band alone".
+     *
+     *   The header counts as part of its own group, so dropping onto the
+     *   word "pinned" pins - which is what the gesture looks like it
+     *   should do. A pointer below every group lands in the last one.
+     * Inputs: clientY (number) - the pointer's viewport Y.
+     * Output: boolean|null - true pinned, false unpinned, null unknown.
+     */
+    function bandAt(clientY) {
+        const list = listEl();
+        if (!list) return null;
+        const groups = Array.prototype.slice.call(
+            list.querySelectorAll('.session-sidebar-group[data-group]'),
+        );
+        if (!groups.length) return null;
+        let last = null;
+        for (const g of groups) {
+            const box = g.getBoundingClientRect();
+            last = g;
+            if (clientY < box.bottom) return g.getAttribute('data-group') === 'pinned';
+        }
+        return last ? last.getAttribute('data-group') === 'pinned' : null;
     }
 
     /**
@@ -280,6 +349,10 @@ console.log('[SessionSidebarReorder Module] Loading...');
             drag.active = true;
             const list = listEl();
             if (list) list.classList.add('session-sidebar-list--dragging');
+            // Repaint FIRST, so an empty pinned group exists to be
+            // dropped into before the pointer can reach it.
+            const sidebar = window.SessionSidebar;
+            if (sidebar) sidebar.setDragging(true);
         }
         const arrangement = window.SessionSidebarArrangement;
         if (!arrangement) return;
@@ -293,8 +366,16 @@ console.log('[SessionSidebarReorder Module] Loading...');
                 break;
             }
         }
-        const next = arrangement.moveBefore(drag.name, beforeName, visibleNames());
-        if (!next) return;
+        // The band comes from the GROUP under the pointer; only when the
+        // list is ungrouped does it fall back to the row's current band,
+        // which in that case is the only band there is.
+        const overBand = bandAt(e.clientY);
+        const targetPinned = overBand === null ? arrangement.isPinned(drag.name) : overBand;
+        const result = arrangement.placeAt(
+            drag.name, targetPinned, beforeName, visibleNames(),
+        );
+        if (!result) return;
+        if (result.crossed) drag.crossed = result.pinned;
         repaintKeepingFocus(drag.name);
     }
 
@@ -307,12 +388,22 @@ console.log('[SessionSidebarReorder Module] Loading...');
         if (!drag) return;
         const wasActive = drag.active;
         const name = drag.name;
+        const crossed = drag.crossed;
         drag = null;
         const list = listEl();
         if (list) list.classList.remove('session-sidebar-list--dragging');
+        // Drop the drag flag LAST, and unconditionally: an empty pinned
+        // group that was drawn as a drop target has to disappear again
+        // even when the drag never moved anything, or a cancelled drag
+        // leaves a header standing over nothing.
+        const sidebar = window.SessionSidebar;
+        if (sidebar) sidebar.setDragging(false);
         if (!wasActive) return;
         const rows = visibleNames();
-        announce(`${name} moved to position ${rows.indexOf(name) + 1} of ${rows.length}`);
+        const where = `position ${rows.indexOf(name) + 1} of ${rows.length}`;
+        announce(crossed === undefined
+            ? `${name} moved to ${where}`
+            : `${name} ${crossed ? 'pinned' : 'unpinned'}, now at ${where}`);
     }
 
     /**
@@ -335,7 +426,7 @@ console.log('[SessionSidebarReorder Module] Loading...');
 
     window.SessionSidebarReorder = {
         init, afterRender, moveRow, togglePinRow, onPinClick, isDragging,
-        setFocusRow, visibleNames, DRAG_SLOP_PX,
+        setFocusRow, visibleNames, bandAt, DRAG_SLOP_PX,
     };
     console.log('[SessionSidebarReorder Module] Exported as window.SessionSidebarReorder');
 })();

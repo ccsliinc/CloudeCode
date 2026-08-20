@@ -11,16 +11,40 @@
  *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, family pill, pin, mark-unread, delete
+ *   compact   grip, dot, name, pin, mark-unread, delete
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
- *   detailed  the above plus a second line: family pill and age
- * The FAMILY PILL is built by ONE function and emitted in ALL THREE, with
- * identical classes and identical text. Its three states must stay
- * distinguishable everywhere: `family-pill--fact` solid, `--guess` dashed
- * with a leading `~`, `--unknown` dotted italic reading "unknown family".
- * A density mode that dropped the unknown state would be hiding the one
- * the user most needs, and every session in the shipped database is
- * currently in exactly that state.
+ *   detailed  the above, with the badge moved DOWN to a second line that
+ *             also carries the session's age
+ *
+ * NO AGENT-FAMILY PILL, AT ANY DENSITY, SINCE THIS ROUND. "i dont think
+ * we need the pills in the sidebar take out for now." The pill is still
+ * drawn on the HOME screen by client/js/launchpad.js, which owns its own
+ * builder; nothing here feeds that one, so removing this row's pill
+ * cannot change what the home screen renders.
+ *
+ * REMOVING IT ALSO REMOVED A REAL DEFECT, which is worth recording
+ * because the shape of it recurs. This module's builder put a literal
+ * `~` in front of a guessed family, AND `.family-pill--guess::before` in
+ * client/css/styles.css adds another one - so a guessed family rendered
+ * as `~~claude` on screen while every DOM assertion about the label read
+ * a single, correct `~claude`. The launcher's builder never added the
+ * literal, so only this surface was wrong. A test that reads DOM text
+ * cannot see a `::before`; only a rendered pixel or a computed style can,
+ * which is why the pill assertions in scripts/verify_sidebar_sessions.py
+ * were the ones that could have caught it.
+ *
+ * WHAT NOW FILLS DETAILED'S SECOND LINE: the tmux/external badge, moved
+ * down off the first line, plus the age it already carried. The badge is
+ * emitted exactly once per row at every density either way - line one at
+ * cozy, line two at detailed, and not at all at compact, which is
+ * unchanged. The second line is therefore still a line about where the
+ * session came from and how old it is, which is what it always was.
+ *
+ * THE ROW HEIGHTS ARE DECLARED, NOT EMERGENT. Removing a glyph from a
+ * row would otherwise shorten it by however tall that glyph happened to
+ * be, so `client/css/session-sidebar-density.css` now pins a `min-height`
+ * per density. The density contract is a number the stylesheet states,
+ * not an accident of whichever controls currently ride the line.
  *
  * NO RESTART CONTROL IS EMITTED HERE, AT ANY DENSITY. Sidebar rows come
  * from the attachable probe, which carries an activity status and no
@@ -48,36 +72,56 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: the agent-family pill, with the three states kept
-     *   visually distinct. A GUESS AND A FACT MUST NOT LOOK IDENTICAL:
-     *   `fingerprint` and `derived_deepest` mean the family was inferred,
-     *   and render dashed with a leading `~`; `wrapper` and
-     *   `reserved_name` were read off a stored choice and render solid.
-     *   Anything else is not a family we know, and renders dotted italic
-     *   saying so in words rather than rendering nothing.
-     *   Mirrors LaunchpadController._renderFamilyPillHtml so the same
-     *   session reads the same on both surfaces.
-     * Inputs: family (string|null|undefined) - resolved family name.
-     *   source (string|null|undefined) - 'wrapper' | 'reserved_name' |
-     *   'fingerprint' | 'derived_deepest' | 'unknown'.
-     * Output: string - one `<span class="family-pill ...">`.
-     * Example: familyPillHtml('codex', 'wrapper')
-     *   -> '<span class="family-pill family-pill--fact" ...>codex</span>'
+     * Description: whether this row's session can be renamed, as THREE
+     *   states rather than a boolean, plus the sentence that says why.
+     *
+     *   This mirrors LaunchpadController._renderRenamePencilHtml exactly,
+     *   on the same two fields, because a session must not be renameable
+     *   on one surface and not on the other. The two fields answer
+     *   DIFFERENT questions and neither one alone is the answer:
+     *   `session_id` is only populated by the /sessions/list merge, so it
+     *   really means "is there a live backend for this right now", while
+     *   `created_by_cloude` is about ORIGIN and is genuinely NULLABLE -
+     *   the server fills it from an ownership map that can simply have no
+     *   entry for a name.
+     *
+     *     'renameable'  a session id is known. The rename endpoint is
+     *                   keyed on it, so the edit can actually be sent.
+     *     'unavailable' no session id, but ownership IS known, so the
+     *                   precondition can be stated precisely: open it
+     *                   (ours) or adopt it (external).
+     *     'unknown'     no session id AND ownership is null. CANNOT
+     *                   DETERMINE. `== null` catches null and undefined
+     *                   and nothing else, deliberately - `!r.x` would
+     *                   fold the genuine unknown into "external" and
+     *                   invent an answer nobody measured.
+     *
+     *   The state is stamped on the row as `data-rename-state`, which is
+     *   what client/js/session-sidebar-rename.js gates the inline editor
+     *   on. A row that cannot be renamed must not silently accept an edit
+     *   that is going to fail.
+     * Inputs: r (object) - one merged session row.
+     * Output: object - {state (string), reason (string)}.
+     * Example: renameState({session_id: null, created_by_cloude: null})
+     *   // {state: 'unknown', reason: 'CANNOT DETERMINE ...'}
      */
-    function familyPillHtml(family, source) {
-        const src = source || 'unknown';
-        const isGuess = src === 'fingerprint' || src === 'derived_deepest';
-        const known = !!family && src !== 'unknown';
-        const label = known ? (isGuess ? `~${family}` : family) : 'unknown family';
-        const kindClass = !known
-            ? 'family-pill--unknown'
-            : (isGuess ? 'family-pill--guess' : 'family-pill--fact');
-        const title = known
-            ? (isGuess
-                ? `guessed from session output (${src})`
-                : `agent family: ${family}`)
-            : 'could not determine which agent this session is running';
-        return `<span class="family-pill ${kindClass}" data-family-source="${esc(src)}" title="${esc(title)}">${esc(label)}</span>`;
+    function renameState(r) {
+        if (r && r.session_id) {
+            return { state: 'renameable', reason: 'double-click to rename (or F2)' };
+        }
+        if (!r || r.created_by_cloude == null) {
+            return {
+                state: 'unknown',
+                reason: 'cannot rename: CANNOT DETERMINE whether this session is yours,'
+                    + ' so whether it can be renamed is unknown',
+            };
+        }
+        return {
+            state: 'unavailable',
+            reason: r.created_by_cloude
+                ? 'cannot rename until this session is open - click the row to open it'
+                : 'cannot rename until this session is adopted - click the row to adopt it',
+        };
     }
 
     /**
@@ -128,12 +172,24 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   leaving any of them out means a change the user just made does
      *   not paint until something unrelated happens to move.
      * Inputs: rows (Array<object>), density (string), listing (object|null),
-     *   missing (Array<string>).
+     *   missing (Array<string>), groups (object|null) - {collapsed
+     *   (Array<string>), dragging (boolean)}, both of which change what
+     *   is on screen and therefore both of which must be in here.
      * Output: string.
      */
-    function signature(rows, density, listing, missing) {
+    function signature(rows, density, listing, missing, groups) {
         return JSON.stringify({
             density: density || 'cozy',
+            // A FOLDED SECTION DRAWS NO ROWS AT ALL, so folding one is
+            // the largest change this list can make to itself. It has to
+            // be in the signature or the fold does not paint until a poll
+            // tick happens to differ for some other reason. Same for the
+            // drag flag, which is what makes an empty pinned group appear
+            // as a drop target.
+            collapsed: (groups && Array.isArray(groups.collapsed))
+                ? groups.collapsed.slice()
+                : [],
+            dragging: !!(groups && groups.dragging),
             listing: listing && !listing.ok
                 ? ['unavailable', listing.reason || '', listing.detail || '']
                 : ['ok'],
@@ -156,8 +212,17 @@ console.log('[SessionSidebarRows Module] Loading...');
                 thisTab: !!r.is_this_tab,
                 unread: !!r.unread,
                 pinned: !!r.is_pinned,
-                fam: r.agent_family || null,
-                famSrc: r.agent_family_source || null,
+                // The row DRAWS its rename state, in the title on the
+                // name and in a data attribute the editor gates on, so a
+                // session gaining or losing a live backend has to repaint
+                // the row. Leaving it out meant a session that had just
+                // opened kept telling the user it could not be renamed
+                // until something unrelated happened to change.
+                rename: renameState(r).state,
+                // The BADGE is drawn at cozy and detailed, so a change of
+                // ownership has to repaint. It used to be implied by
+                // fields the family pill carried; those are gone.
+                badge: !!r.created_by_cloude,
                 // The age is only DRAWN at detailed density, and what is
                 // drawn is the coarse label ("3h"), not the epoch. Keying
                 // on the epoch would repaint every poll tick for a field
@@ -237,10 +302,13 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   rendering from the same failed probe at the same moment.
      * Inputs: rows (Array<object>), density (string), listing (object|null)
      *   - {ok, reason, detail}, missing (Array<string>),
-     *   arrangement (object|null) - {status, reason}.
+     *   arrangement (object|null) - {status, reason, collapsed},
+     *   opts (object|null) - {dragging (boolean)}, passed straight
+     *   through to client/js/session-sidebar-groups.js, which is the only
+     *   thing that reads it.
      * Output: string - HTML.
      */
-    function listHtml(rows, density, listing, missing, arrangement) {
+    function listHtml(rows, density, listing, missing, arrangement, opts) {
         const attention = window.SessionListingState
             ? window.SessionListingState.attentionHtml(listing)
             : '';
@@ -249,7 +317,9 @@ console.log('[SessionSidebarRows Module] Loading...');
             if (listing && !listing.ok) return notice + attention;
             return notice + '<div class="session-sidebar-empty">no other conversations</div>';
         }
-        const body = rows.map((r) => rowHtml(r, density)).join('');
+        const body = window.SessionSidebarGroups
+            ? window.SessionSidebarGroups.bodyHtml(rows, density, arrangement, opts)
+            : rows.map((r) => rowHtml(r, density)).join('');
         return notice + attention + body + missingNoteHtml(missing);
     }
 
@@ -278,36 +348,35 @@ console.log('[SessionSidebarRows Module] Loading...');
         const rowAction = window.SessionRowActions
             ? window.SessionRowActions.html(r.status, r.name, 'session-sidebar-row-delete')
             : '';
-        const pill = familyPillHtml(r.agent_family, r.agent_family_source);
+        const rename = renameState(r);
         // The badge is the first thing to go when the user asks for thin
         // rows: "tmux" vs "external" is already carried by the row's
         // ownership styling, so at compact it is the most redundant glyph
-        // on the row. The family pill is not redundant with anything.
-        const badgeHtml = mode === 'compact'
-            ? ''
-            : `<span class="session-sidebar-row-badge">${badge}</span>`;
+        // on the row. At DETAILED it moves to the second line rather than
+        // being dropped, which is what keeps that line about something -
+        // the family pill used to sit there and no longer exists.
+        const badgeHtml = `<span class="session-sidebar-row-badge">${badge}</span>`;
         const age = ageLabel(r.created_at_epoch);
         const secondLine = mode === 'detailed'
             ? ('<div class="session-sidebar-row-meta">'
-                + pill
+                + badgeHtml
                 + (age ? `<span class="session-sidebar-row-age">${esc(age)}</span>` : '')
                 + '</div>')
             : '';
-        // At detailed the pill lives on the second line; at the other two
-        // it rides the first. Emitted exactly once either way.
-        const inlinePill = mode === 'detailed' ? '' : pill;
+        const inlineBadge = (mode === 'cozy') ? badgeHtml : '';
         return (
             `<div class="session-sidebar-row" data-name="${name}" ` +
             `data-active="${r.is_this_tab ? '1' : '0'}" ` +
             `data-pinned="${r.is_pinned ? '1' : '0'}" ` +
+            `data-rename-state="${rename.state}" ` +
             `role="option" aria-selected="${r.is_this_tab ? 'true' : 'false'}" ` +
             `tabindex="-1"${sidAttr}${themeAttrs}>` +
             '<div class="session-sidebar-row-main">' +
             gripHtml(r.name) +
             dot +
-            `<span class="session-sidebar-row-name">${name}</span>` +
-            inlinePill +
-            badgeHtml +
+            `<span class="session-sidebar-row-name" data-row-name="${name}" ` +
+            `title="${esc(rename.reason)}">${name}</span>` +
+            inlineBadge +
             pinButtonHtml(r.name, !!r.is_pinned) +
             markUnread +
             rowAction +
@@ -318,7 +387,7 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     window.SessionSidebarRows = {
-        listHtml, rowHtml, signature, esc, familyPillHtml, gripHtml,
+        listHtml, rowHtml, signature, esc, gripHtml, renameState,
         pinButtonHtml, ageLabel, missingNoteHtml, arrangementNoticeHtml,
     };
     console.log('[SessionSidebarRows Module] Exported as window.SessionSidebarRows');

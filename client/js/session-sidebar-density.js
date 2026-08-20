@@ -13,24 +13,29 @@
  *
  *   compact   one tight line. Smallest row this list can draw.
  *   cozy      the row as it has always been. DEFAULT.
- *   detailed  two lines: the row, plus a second line carrying the agent
- *             family and the session's age.
+ *   detailed  two lines: the row, plus a second line carrying the
+ *             tmux/external badge and the session's age.
  *
- * THE FAMILY PILL IS DRAWN IN ALL THREE, from the one builder in
- * client/js/session-sidebar-rows.js, with identical markup and identical
- * classes. Its three states (`--fact` solid, `--guess` dashed with a
- * leading `~`, `--unknown` dotted italic reading "unknown family") are a
- * distinction the user has to be able to make at a glance, and a density
- * control that quietly deleted one of them in its smallest mode would be
- * hiding exactly the state that matters most. Compact shrinks the pill's
- * type; it does not change what the pill says.
+ * NO AGENT-FAMILY PILL IN ANY OF THE THREE, since "i dont think we need
+ * the pills in the sidebar take out for now". This docblock used to
+ * insist the pill was drawn in all three modes and that dropping it from
+ * the smallest one would be hiding the state that matters most. That
+ * reasoning was about a density control quietly deleting information the
+ * user never asked to lose; it does not survive the user asking for the
+ * pill to go. The home screen still draws its own pill from its own
+ * builder in client/js/launchpad.js.
  *
- * WHERE THE HEIGHT DIFFERENCE ACTUALLY COMES FROM: row padding,
- * line-height and the presence of the second line, all in
- * client/css/session-sidebar-density.css keyed off `data-density` on the
- * panel. No inline styles, so the numbers are measurable from the
- * stylesheet the browser actually loads - and they ARE measured, in a
- * real Chromium, by scripts/verify_sidebar_sessions.py.
+ * WHERE THE HEIGHT DIFFERENCE COMES FROM, AND WHY IT IS NOW DECLARED:
+ * row padding, line-height, the presence of the second line, and - new
+ * this round - an explicit `min-height` per mode in
+ * client/css/session-sidebar-density.css. The min-height is the point:
+ * without it, the three numbers were whatever the tallest control on the
+ * line happened to be, so REMOVING a glyph silently resized the mode.
+ * A density contract that moves when an unrelated control is added or
+ * removed is not a contract. No inline styles either way, so the numbers
+ * are measurable from the stylesheet the browser actually loads - and
+ * they ARE measured, in a real Chromium, by
+ * scripts/verify_sidebar_sessions.py.
  *
  * Persistence follows the `cloude.*` localStorage convention. A stored
  * value that is not one of the three modes falls back to the default and
@@ -82,7 +87,7 @@ console.log('[SessionSidebarDensity Module] Loading...');
     const HINTS = {
         compact: 'thinnest rows, most sessions on screen',
         cozy: 'the default row',
-        detailed: 'adds agent family and age on a second line',
+        detailed: 'moves the tmux badge onto a second line with the age',
     };
 
     let mode = DEFAULT_MODE;
