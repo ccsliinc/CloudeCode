@@ -344,8 +344,23 @@ def render_wrapper_invocation(
 # Offered example wrappers - NOT auto-installed anywhere. Served only via
 # GET /api/v1/agents/wrappers/examples for a user to explicitly import into
 # their own config.json (see the settings-panel "import example" action).
-# EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL,
-# VERBATIM function bodies, as supplied for this feature.
+# EXAMPLE_WRAPPER_CLD and EXAMPLE_WRAPPER_CLDOR are both the author's REAL
+# function bodies, as supplied for this feature, with one deliberate
+# deviation from verbatim: EXAMPLE_WRAPPER_CLDOR originally invoked claude
+# via the hardcoded absolute path "$HOME/.local/bin/claude", which only
+# resolves on the machine it was authored on. It now resolves "claude" from
+# PATH and fails with a named message when absent, instead of a raw shell
+# "no such file or directory".
+#
+# That PATH resolution deliberately steps past a shell ALIAS or FUNCTION
+# named "claude" before looking up the binary. A bare `command -v claude`
+# reports the alias DEFINITION TEXT, not a path, whenever such an alias is
+# defined - measured 2026-08-20 on the author's Mac mini, where
+# `alias claude=...` makes `command -v claude` return
+# "alias claude='security unlock-keychain ... && /opt/homebrew/bin/claude'".
+# The unalias/unset run inside a command-substitution subshell, so the
+# caller's own alias and function are left intact. Nothing else in either
+# body was changed.
 # ---------------------------------------------------------------------------
 
 EXAMPLE_WRAPPER_CLD = """cld() (
@@ -375,6 +390,7 @@ EXAMPLE_WRAPPER_CLD = """cld() (
 EXAMPLE_WRAPPER_CLDOR = """cldor() (
   local openrouter_key
   local selected_model=""
+  local claude_bin
 
   openrouter_key="$(
     security find-generic-password \\
@@ -385,6 +401,17 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
     echo "OpenRouter API key not found in macOS Keychain."
     return 1
   }
+
+  # Resolve the real claude binary, stepping past any shell-level alias or
+  # function of the same name. A bare `command -v claude` reports the ALIAS
+  # DEFINITION TEXT when an alias exists, which is not a path and is not
+  # executable. The unalias/unset run inside this command substitution's own
+  # subshell, so the caller's alias and function survive untouched.
+  claude_bin="$(unalias claude 2>/dev/null; unset -f claude 2>/dev/null; command -v claude)"
+  if [[ ! -x "$claude_bin" ]]; then
+    echo "claude not found on PATH."
+    return 1
+  fi
 
   # Treat the first non-option argument as the model name
   if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -420,7 +447,7 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
 
     echo "OpenRouter model: $selected_model"
 
-    "$HOME/.local/bin/claude" \\
+    "$claude_bin" \\
       --dangerously-skip-permissions \\
       --model "$selected_model" \\
       "$@"
@@ -431,7 +458,7 @@ EXAMPLE_WRAPPER_CLDOR = """cldor() (
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="~anthropic/claude-haiku-latest"
     export CLAUDE_CODE_SUBAGENT_MODEL="~anthropic/claude-opus-latest"
 
-    "$HOME/.local/bin/claude" \\
+    "$claude_bin" \\
       --dangerously-skip-permissions \\
       "$@"
   fi
