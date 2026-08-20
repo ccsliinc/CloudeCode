@@ -175,6 +175,7 @@ def _classify(
     mine: Any,
     theirs: Any,
     had_base: bool,
+    removal_provable: bool = True,
 ) -> Decision:
     """Classify one leaf field into exactly one outcome.
 
@@ -184,6 +185,11 @@ def _classify(
         mine: User value, or MISSING.
         theirs: New default, or MISSING.
         had_base: Whether a base document was supplied at all.
+        removal_provable: Whether "absent from the new defaults" is real
+            evidence that upstream removed this setting. False when the
+            defaults document is known to be an incomplete account of what
+            upstream ships, in which case absence proves nothing and the
+            honest answer is CANNOT_DETERMINE. See ``merge_config``.
 
     Returns:
         The Decision for this field, including the value to write.
@@ -192,6 +198,29 @@ def _classify(
     theirs_present = theirs is not MISSING
 
     if not theirs_present:
+        if not removal_provable:
+            # THREE-OUTCOME RULE. The defaults document does not enumerate
+            # every setting the running code supports, so this key being
+            # absent from it is equally consistent with "upstream removed it"
+            # and "the defaults document never listed it". Saying REMOVED
+            # UPSTREAM here would be a verdict nobody measured - which is
+            # precisely what this tool reported for `terminal_commands` and
+            # `config_version`, two settings that are fully live.
+            return Decision(
+                path=path,
+                outcome=CANNOT_DETERMINE,
+                mine=mine,
+                theirs=None,
+                base=None if base is MISSING else base,
+                chosen=mine,
+                note=(
+                    "This setting is not listed in the shipped defaults, but "
+                    "the defaults file is not a complete list of what this "
+                    "version supports, so it cannot be determined whether the "
+                    "setting was removed or was simply never listed. Your "
+                    "value was kept."
+                ),
+            )
         return Decision(
             path=path,
             outcome=REMOVED_UPSTREAM,
@@ -279,6 +308,58 @@ def _classify(
     )
 
 
+def _removal_provable(
+    path: str,
+    supported_keys: Optional[frozenset],
+    stale_roots: frozenset,
+) -> bool:
+    """Whether absence from the new defaults is EVIDENCE of an upstream removal.
+
+    Absence is only evidence when the defaults document is a complete account
+    of what upstream ships. Two situations break that, and both must produce
+    CANNOT_DETERMINE rather than a confident removal:
+
+    * The caller told us which keys the running code actually supports
+      (``supported_keys``) and this one is not among the settings whose
+      subtree the defaults document is known to describe.
+    * The top-level key's value had to be supplied from the model because the
+      defaults document omitted it entirely (``stale_roots``). Nothing about
+      that subtree can be concluded from a document that never mentioned it.
+
+    Args:
+        path: Dotted path being classified.
+        supported_keys: Top-level keys the loader honours, or None when the
+            caller asserts the defaults document is complete.
+        stale_roots: Top-level keys the defaults document omitted.
+
+    Returns:
+        True when a REMOVED_UPSTREAM verdict is supported by evidence.
+
+    Example:
+        >>> _removal_provable("terminal_commands", frozenset({"agents"}), frozenset())
+        True
+        >>> _removal_provable("agents.x", frozenset({"agents"}), frozenset({"agents"}))
+        False
+    """
+    if supported_keys is None:
+        # The caller asserts the defaults document is complete, so absence
+        # from it is a measurement, not a gap.
+        return True
+    root = path.split(".", 1)[0]
+    if root in stale_roots:
+        # The defaults document never mentioned this setting at all. It has
+        # nothing to say about the setting or anything under it.
+        return False
+    if root not in supported_keys:
+        # Positive evidence, and the only kind that justifies the verdict:
+        # the config loader does not read this key, so the running code
+        # genuinely no longer supports it.
+        return True
+    # The defaults document does describe this subtree, so a child missing
+    # from it is evidence about that child.
+    return True
+
+
 def _walk(
     base: Any,
     mine: Any,
@@ -287,6 +368,8 @@ def _walk(
     prefix: str,
     decisions: list[Decision],
     importable: dict[str, list],
+    supported_keys: Optional[frozenset] = None,
+    stale_roots: frozenset = frozenset(),
 ) -> Any:
     """Recursively merge one level of the configuration.
 
@@ -308,7 +391,14 @@ def _walk(
     """
     both_maps = isinstance(mine, dict) and isinstance(theirs, dict)
     if not both_maps:
-        decision = _classify(prefix, base, mine, theirs, had_base)
+        decision = _classify(
+            prefix,
+            base,
+            mine,
+            theirs,
+            had_base,
+            removal_provable=_removal_provable(prefix, supported_keys, stale_roots),
+        )
         decisions.append(decision)
 
         if isinstance(mine, list) and isinstance(theirs, list) and mine != theirs:
@@ -346,6 +436,8 @@ def _walk(
             child_path,
             decisions,
             importable,
+            supported_keys,
+            stale_roots,
         )
 
     return merged
@@ -355,6 +447,8 @@ def merge_config(
     mine: dict,
     theirs: dict,
     base: Optional[dict] = None,
+    supported_keys: Optional[frozenset] = None,
+    stale_roots: frozenset = frozenset(),
 ) -> MergeResult:
     """Three-way merge the user's config against new shipped defaults.
 
@@ -364,6 +458,15 @@ def merge_config(
         base: The defaults that shipped with the user's current version. None
             means no base was recorded, which makes every differing field
             CANNOT_DETERMINE rather than a guess.
+        supported_keys: Top-level keys the running code actually honours, when
+            the caller knows them. Passing None asserts that ``theirs`` is a
+            COMPLETE account of what upstream ships, which licenses a
+            REMOVED_UPSTREAM verdict for anything missing from it. Callers
+            merging against ``config.example.json`` must NOT assert that: the
+            example is a hand-maintained sample and has repeatedly gone stale,
+            which is how two live settings came to be reported as removed.
+        stale_roots: Top-level keys ``theirs`` omitted entirely, so nothing
+            about those subtrees can be concluded from it.
 
     Returns:
         A MergeResult holding the merged mapping, one Decision per field, and
@@ -386,6 +489,8 @@ def merge_config(
         "",
         decisions,
         importable,
+        supported_keys,
+        stale_roots,
     )
 
     return MergeResult(
