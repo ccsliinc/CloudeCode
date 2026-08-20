@@ -385,11 +385,18 @@ else
     printf 'tmux-unavailable\n' > "${WORK_DIR}/artifacts/meta-tmux-sessions.txt"
 fi
 
+# AND THE ID MATTERS TOO. The reconciler builds the backend from
+# ``persisted.id`` and matches ``cloude_<id>`` against the live listing -
+# it does NOT read the ``tmux_session`` field. A second run of this step
+# persisted id "roundtrip-session-1", so the reconciler looked for
+# "cloude_roundtrip-session-1", found nothing, and deleted the metadata
+# as stale: another ABSENT verdict manufactured by the fixture. The id
+# must be the bare tmux name.
 say "--- OLD version writes session_metadata.json at its own resolved path"
 (
     cd "${INSTALL}" || exit 1
     "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label old-writes \
-        --write roundtrip-session-1 --name cloude_roundtrip-a \
+        --write roundtrip-a --name cloude_roundtrip-a \
         --working-dir "${PROJ_DIR}" --owned cloude_roundtrip-a --owned cloude_roundtrip-b
 ) > "${WORK_DIR}/artifacts/meta-01-old-writes.json" 2>&1
 cat "${WORK_DIR}/artifacts/meta-01-old-writes.json"
@@ -423,14 +430,14 @@ mgr = SessionManager()
 mgr._load_session_metadata()
 before = mgr.current_session()
 mgr._clear_stale_metadata()
-survivor = Session(id="roundtrip-session-2", working_dir="/tmp",
+survivor = Session(id="roundtrip-b", working_dir="/tmp",
                    tmux_session="cloude_roundtrip-b")
 mgr._register_session(survivor, backend=None)
 mgr.owned_tmux_sessions = {"cloude_roundtrip-b"}
 mgr._save_session_metadata()
 print(json.dumps({
     "rehydrated_before_detach": None if before is None else before.id,
-    "persisted_after_detach": "roundtrip-session-2",
+    "persisted_after_detach": "roundtrip-b",
 }, indent=2))
 PYDETACH
 ) > "${WORK_DIR}/artifacts/meta-03-new-after-detach.json" 2>&1
@@ -464,13 +471,36 @@ def load(name):
     except Exception as exc:
         return {"_unreadable": str(exc)}
 
+def logged(fname, needle):
+    try:
+        return needle in open(os.path.join(art, fname)).read()
+    except Exception:
+        return None
+
+# Did the upgrade's own startup DELETE the metadata as stale? If so this
+# step measured the reconciler rejecting the fixture, not the relocation
+# it exists to measure. That is CANNOT DETERMINE, not a finding.
+cleared = logged("03-upgraded-new.server.log", "stale_session_metadata_deleted")
+rehydrated = logged("03-upgraded-new.server.log", "session_re_registered_from_backend")
+
 old_w = load("meta-01-old-writes.json")
 new_u = load("meta-02-new-after-upgrade.json")
 old_d = load("meta-04-old-after-downgrade.json")
 
-live_id = "roundtrip-session-2"
+live_id = "roundtrip-b"
 if "_unreadable" in old_d:
     verdict, why = "CANNOT-DETERMINE", "the post-downgrade probe produced no readable JSON"
+elif cleared is None:
+    verdict, why = ("CANNOT-DETERMINE",
+        "the upgrade server log could not be read, so it is unknown whether "
+        "the reconciler rejected the seeded session before the relocation "
+        "path was ever reached")
+elif cleared and not rehydrated:
+    verdict, why = ("CANNOT-DETERMINE",
+        "the new version deleted the seeded metadata as stale at startup "
+        "(no cloude_<id> match on the socket), so the upgrade->downgrade "
+        "relocation path was never exercised - this measures the fixture, "
+        "not the product")
 elif not old_d.get("present"):
     verdict, why = ("ABSENT",
         "the old version resolves %s and there is no file there - every "
@@ -491,6 +521,8 @@ print(json.dumps({
     "old_resolved_after_downgrade": old_d.get("resolved"),
     "old_sees_session_id": old_d.get("session_id"),
     "new_last_persisted": live_id,
+    "upgrade_cleared_metadata_as_stale": cleared,
+    "upgrade_rehydrated_seeded_session": rehydrated,
 }, indent=2, sort_keys=True))
 PYVERDICT
 cat "${WORK_DIR}/artifacts/meta-verdict.json"
