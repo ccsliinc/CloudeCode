@@ -223,10 +223,12 @@ STEP_N=0
 capture_step() {
     local name="$1"
     local mode="${2:-server}"
+    local expect="${3:-PASS}"
     STEP_N=$((STEP_N + 1))
     local prefix
     prefix="$(printf '%s/artifacts/%02d-%s' "${WORK_DIR}" "${STEP_N}" "${name}")"
     : > "${prefix}.step"
+    printf '%s\n' "${expect}" > "${prefix}.expect"
     say "--- step $(printf '%02d' ${STEP_N}): ${name}"
     if [ "${mode}" != "noserver" ]; then
         start_stop_server "${prefix}"
@@ -339,7 +341,95 @@ capture_step "downgraded-old-after-write" noserver
 checkout_ref "${NEW_REF}" || setup_fail "could not re-check-out ${NEW_REF}"
 capture_step "re-upgraded-new"
 
-# --- 7. report ---------------------------------------------------------------
+# --- 7. does the DB agree with config.json after the round trip? -------------
+#
+# The verdict this harness exists for is not "did the app start". The
+# projects table is AUTHORITATIVE in the new version
+# (src/core/project_authority.py), so a project that config.json has and
+# the table does not is invisible to the user with NO degraded banner -
+# mode reports plain "db". Measured here rather than reasoned about.
+
+say "--- measuring DB-vs-config project agreement on the re-upgraded install"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" - <<'PY'
+import json, sys
+sys.path.insert(0, ".")
+from contextlib import closing
+from src.config import Settings
+from src.api import projects_service
+from src.core.db import connect, db_path_for
+s = Settings()
+cfg = json.load(open(s.auth_config_file))
+config_names = [p["name"] for p in cfg.get("projects", [])]
+with closing(connect(db_path_for(s.get_state_dir()))) as conn:
+    db_names = [r[0] for r in conn.execute("SELECT display_name FROM projects")]
+view = projects_service.current_view(s)
+missing = [n for n in config_names if n not in db_names]
+print(json.dumps({
+    "config_projects": config_names,
+    "db_projects": db_names,
+    "served_mode": view.mode,
+    "served_degraded": view.degraded,
+    "in_config_but_not_in_db": missing,
+    "silent_loss": bool(missing) and not view.degraded,
+}, indent=2, ensure_ascii=False))
+PY
+) > "${WORK_DIR}/artifacts/db-vs-config.json" 2> "${WORK_DIR}/artifacts/db-vs-config.err"
+cat "${WORK_DIR}/artifacts/db-vs-config.json"
+
+# --- 8. forward-version guard ------------------------------------------------
+#
+# There is no "this config is NEWER than I understand" check anywhere:
+# migrate_config_dict compares `existing_version >= CURRENT_CONFIG_VERSION`
+# and returns unchanged. Measured by handing it a version from the future.
+
+say "--- measuring what the migration does with a FUTURE config_version"
+(
+    cd "${INSTALL}" || exit 1
+    "${PY_BIN}" - <<'PY'
+import json, sys
+sys.path.insert(0, ".")
+from src.core.config_migration import migrate_config_dict, CURRENT_CONFIG_VERSION
+future = {"config_version": 99, "projects": [], "agents": {}}
+out, changed = migrate_config_dict(dict(future), False, False)
+print(json.dumps({
+    "current_config_version": CURRENT_CONFIG_VERSION,
+    "input_version": 99,
+    "changed": changed,
+    "raised_or_refused": False,
+    "output_version": out.get("config_version"),
+    "verdict": ("a config from the future is silently accepted as current"
+                if not changed else "the migration altered a future config"),
+}, indent=2))
+PY
+) > "${WORK_DIR}/artifacts/future-version.json" 2>&1
+cat "${WORK_DIR}/artifacts/future-version.json"
+
+# --- 9. object-form slash command: the shape the OLD version cannot parse ----
+#
+# AuthConfig.common_slash_commands is List[str] at ${OLD_REF} and
+# List[Union[str, Dict]] at ${NEW_REF}. Any object-form entry - a shape
+# the new version accepts and the user's real config already carries -
+# makes the OLD version's load_auth_config raise. This step is EXPECTED
+# TO FAIL; that failure is the finding.
+
+say "--- injecting an object-form common_slash_commands entry (new-version-legal)"
+"${PY_BIN}" - "${INSTALL}/config.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+cmds = d.get("common_slash_commands") or []
+cmds.append({"command": "/diff", "description": "review changes"})
+d["common_slash_commands"] = cmds
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+print("injected object-form entry; list length now", len(cmds))
+PY
+capture_step "new-with-object-slash-entry"
+checkout_ref "${OLD_REF}" || setup_fail "could not check out ${OLD_REF} for the object-form step"
+capture_step "downgraded-old-with-object-slash-entry" server FAIL
+
+# --- 10. report ---------------------------------------------------------------
 
 "${PY_BIN}" "${LIB_DIR}/report_roundtrip.py" --run-dir "${WORK_DIR}"
 RC=$?

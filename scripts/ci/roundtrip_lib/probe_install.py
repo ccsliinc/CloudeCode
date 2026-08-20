@@ -105,6 +105,18 @@ def probe_settings(out: dict) -> None:
         return
     out["settings_constructible"] = True
 
+    # Where this version thinks its durable state lives. Read BEFORE the
+    # config load, because a version that cannot load config.json still
+    # has (or lacks) a state directory concept, and reporting that as
+    # null would be a measurement this probe never took.
+    if hasattr(settings, "get_state_dir"):
+        try:
+            out["state_dir"] = str(settings.get_state_dir())
+        except Exception as e:
+            out["state_dir"] = f"{CANNOT_DETERMINE}: {e}"
+    else:
+        out["state_dir"] = NOT_SUPPORTED
+
     try:
         auth = settings.load_auth_config()
     except Exception as e:
@@ -175,15 +187,6 @@ def probe_settings(out: dict) -> None:
             except Exception as e:
                 cmds[family] = f"{CANNOT_DETERMINE}: {e}"
         out["agent_commands"] = cmds
-
-    # Where this version thinks its durable state lives.
-    if hasattr(settings, "get_state_dir"):
-        try:
-            out["state_dir"] = str(settings.get_state_dir())
-        except Exception as e:
-            out["state_dir"] = f"{CANNOT_DETERMINE}: {e}"
-    else:
-        out["state_dir"] = NOT_SUPPORTED
 
 
 def probe_db(state_dir: Path, out: dict) -> None:

@@ -177,10 +177,24 @@ def main() -> int:
         probe = load_json(art / f"{prefix}-{name}.probe.json")
         server = load_json(art / f"{prefix}-{name}.server.json")
         verdict, reason = step_verdict(name, probe, server)
+        # A step may DECLARE the outcome it expects. A step expected to
+        # fail is a regression guard: its failing is the pass condition,
+        # and its passing means the defect it guards has changed shape
+        # and the guard now measures nothing.
+        expect_file = art / f"{prefix}-{name}.expect"
+        expected = expect_file.read_text().strip() if expect_file.exists() else PASS
+        if verdict == CANNOT:
+            agreement = CANNOT
+        elif verdict == expected:
+            agreement = "AS-EXPECTED"
+        else:
+            agreement = "UNEXPECTED"
         results.append(
             {
                 "step": f"{prefix} {name}",
                 "verdict": verdict,
+                "expected": expected,
+                "agreement": agreement,
                 "reason": reason,
                 "config_diff_vs_prev": diff_configs(prev_config, cfg),
                 "config_sha256": (probe or {}).get("config_sha256", CANNOT),
@@ -190,8 +204,8 @@ def main() -> int:
         )
         prev_config, prev_name = cfg, name
 
-    fails = [r for r in results if r["verdict"] == FAIL]
-    unknowns = [r for r in results if r["verdict"] == CANNOT]
+    fails = [r for r in results if r["agreement"] == "UNEXPECTED"]
+    unknowns = [r for r in results if r["agreement"] == CANNOT]
     overall = FAIL if fails else (CANNOT if unknowns else PASS)
 
     out = {"overall": overall, "steps": results}
@@ -201,7 +215,7 @@ def main() -> int:
     print(f"ROUND TRIP VERDICT: {overall}")
     print("=" * 74)
     for r in results:
-        print(f"\n[{r['verdict']:<17}] {r['step']}")
+        print(f"\n[{r['verdict']:<17}] {r['step']}   (expected {r['expected']}: {r['agreement']})")
         print(f"    why:      {r['reason']}")
         print(f"    server:   {r['server'].get('status')} {r['server'].get('detail','')}")
         s = r["seen"]
