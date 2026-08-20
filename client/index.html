@@ -737,8 +737,13 @@
          both of which call into it. -->
     <script src="/static/js/session-listing-state.js"></script>
     <!-- Which sessions are PINNED to the top and the order the user put
-         them in. Pure functions plus localStorage; no DOM. Must load
-         BEFORE session-sidebar.js runs. -->
+         them in, split into two files at the seam between persistence and
+         ordering. The STORE owns the localStorage envelope, its three load
+         outcomes and the pin membership; ARRANGEMENT owns the ordering
+         algebra and reads/writes through the store. Pure functions plus
+         localStorage; no DOM. The store must load FIRST, and both must
+         load BEFORE session-sidebar.js runs. -->
+    <script src="/static/js/session-sidebar-store.js"></script>
     <script src="/static/js/session-sidebar-arrangement.js"></script>
     <!-- Two endpoints to one row list, plus whether the probe answered. -->
     <script src="/static/js/session-sidebar-fetch.js"></script>

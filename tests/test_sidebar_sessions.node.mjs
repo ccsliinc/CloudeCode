@@ -74,7 +74,7 @@ function row(over = {}) {
  */
 function loadArrangement(seed, throws = false) {
     const storage = fakeStorage(seed === null ? {} : { [ARRANGEMENT_KEY]: seed }, throws);
-    const { window } = loadModules(['session-sidebar-arrangement.js'], { storage });
+    const { window } = loadModules(['session-sidebar-store.js', 'session-sidebar-arrangement.js'], { storage });
     return { A: window.SessionSidebarArrangement, storage };
 }
 
@@ -131,7 +131,7 @@ await test('ITEM 46: a reload re-reads the pin from storage, it is not in-memory
     const { A, storage } = loadArrangement(null);
     A.togglePin('b', ['a', 'b', 'c']);
     // A "reload" is a fresh module against the SAME bytes.
-    const { window } = loadModules(['session-sidebar-arrangement.js'], { storage });
+    const { window } = loadModules(['session-sidebar-store.js', 'session-sidebar-arrangement.js'], { storage });
     const fresh = window.SessionSidebarArrangement;
     fresh.load();
     assert.equal(fresh.isPinned('b'), true);
@@ -517,7 +517,7 @@ function mountList(pinned = [], order = ['a', 'b', 'c']) {
         [ARRANGEMENT_KEY]: JSON.stringify({ v: 1, pinned, order }),
     });
     const { window } = loadModules(
-        ['session-sidebar-arrangement.js', 'session-sidebar-reorder.js'],
+        ['session-sidebar-store.js', 'session-sidebar-arrangement.js', 'session-sidebar-reorder.js'],
         { storage, document: doc },
     );
     window.SessionSidebarArrangement.load();
