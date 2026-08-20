@@ -125,6 +125,12 @@
          source order is what decides whether the wash survives a hover. -->
     <link rel="stylesheet" href="/static/css/session-theme-tint.css" />
 
+    <!-- Authenticated-only chrome, hidden by default. Deliberately near
+         the end so nothing later in the app's own stylesheets can win at
+         equal specificity; see the file for why the default is inverted
+         rather than enumerated in app.js. -->
+    <link rel="stylesheet" href="/static/css/screen-chrome.css" />
+
     <!-- Terminal surface translucency (matches the animated theme
          background's status attribute; see the file for why this wins
          over styles.css's `#terminal` rule by specificity, not order). -->
@@ -181,6 +187,7 @@
              aria-expanded/aria-controls per the accessibility pattern
              already established for header controls in this file. -->
         <button type="button" id="session-sidebar-toggle" class="session-sidebar-toggle hidden"
+                data-auth-only
                 aria-expanded="false" aria-controls="session-sidebar-panel"
                 aria-label="Conversations" title="conversations">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -690,6 +697,10 @@
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>
+
+    <!-- Screen-state marker for the authenticated-only chrome. Must load
+         BEFORE app.js, whose show*() methods call ScreenChrome.apply(). -->
+    <script src="/static/js/screen-chrome.js"></script>
 
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->

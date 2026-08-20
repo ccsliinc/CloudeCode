@@ -176,6 +176,14 @@ class SlashCommandsModal {
         this.button.className = 'slash-commands-btn';
         this.button.setAttribute('aria-label', 'Open Slash Commands');
         this.button.setAttribute('title', 'Open Slash Commands');
+        // AUTHENTICATED-ONLY. show() below sets an inline
+        // `display: flex`, which used to survive a logout because
+        // App.showAuth() named the controls it hid and this one was not
+        // on that list - so the slash button sat on the LOGIN screen.
+        // This token puts it under the fail-closed rule in
+        // client/css/screen-chrome.css instead, which is `!important`
+        // precisely so it beats that inline style.
+        this.button.setAttribute('data-auth-only', '');
         this.button.style.display = 'none'; // Hidden by default
 
         // Set initial icon (slash)
