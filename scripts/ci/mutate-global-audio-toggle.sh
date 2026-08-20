@@ -13,24 +13,24 @@
 # suite red. The source file is restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 TARGET="$ROOT/client/js/globalAudioToggle.js"
 TEST="$ROOT/tests/test_global_audio_toggle.node.mjs"
-BAK="$(mktemp)"
-cp "$TARGET" "$BAK"
-trap 'cp "$BAK" "$TARGET"; rm -f "$BAK"' EXIT
+mutate_arm_trap "$ROOT" "$TARGET"
 
 survived=0
+cannot_determine=0
 total=0
 
 restore() {
-  cp "$BAK" "$TARGET"
+  mutate_restore_files
 }
 
 # Baseline gate: the real (unmutated) source must pass before any mutant is
 # meaningful. A mutation "kill count" measured against a red baseline is
 # not evidence of anything.
 restore
-if ! node "$TEST" >/dev/null 2>&1; then
+if ! mutate_run node "$TEST" >/dev/null 2>&1; then
   echo "BASELINE FAILED: tests/test_global_audio_toggle.node.mjs does not pass against the unmutated source."
   echo "MUTATION CHECK ABORTED (baseline must be green first)"
   exit 1
@@ -52,11 +52,11 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
   if [ $? -ne 0 ]; then
-    echo "SKIP $name (target moved)"
-    survived=1
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=1
     return
   fi
-  if node "$TEST" >/dev/null 2>&1; then
+  if mutate_run node "$TEST" >/dev/null 2>&1; then
     echo "SURVIVED  $name"
     survived=1
   else
@@ -117,7 +117,7 @@ mutate "launchpad and terminal targets are swapped" \
 mutate "the deleted header id sneaks back in as the button's id" \
   "btn.id = 'globalAudioBtn';||=>||btn.id = 'audioToggleBtn';"
 
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED ($total mutants, some survived)"
   exit 1
 fi

@@ -11,36 +11,32 @@
 # re-runs only the node test, not pytest.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 NODE_TEST="tests/test_project_session_tree.node.mjs"
 
 FILES=(
   "client/js/launchpad.js"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 # BASELINE GATE. A mutation run measures the DIFFERENCE between a green
 # suite and a mutated one; a red baseline would make every mutant read as
 # killed for free.
 echo "--- baseline: the suite must be GREEN before anything is mutated ---"
-if ! (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1); then
+if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
   echo "BASELINE IS RED. Every mutant would read as killed. Refusing to run."
   exit 2
 fi
 echo "baseline green"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Apply one textual mutation, run the node suite, expect RED.
@@ -59,11 +55,11 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
-  if ! (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1); then
+  if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
     killed=$((killed + 1))
     echo "killed   $name"
     return
@@ -149,7 +145,7 @@ mutate "a node collapsed by the user renders expanded again on the next render" 
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

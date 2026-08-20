@@ -17,26 +17,26 @@
 # file is restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 TARGET="$ROOT/src/core/agent_fingerprint.py"
 TEST="$ROOT/tests/test_agent_fingerprint.py"
 PYTEST="$ROOT/venv/bin/python3"
-BAK="$(mktemp)"
-cp "$TARGET" "$BAK"
-trap 'cp "$BAK" "$TARGET"; rm -f "$BAK"' EXIT
+mutate_arm_trap "$ROOT" "$TARGET"
 
 survived=0
+cannot_determine=0
 killed=0
 total=0
 
 restore() {
-  cp "$BAK" "$TARGET"
+  mutate_restore_files
 }
 
 # Baseline gate: the real (unmutated) source must pass before any mutant is
 # meaningful. A mutation "kill count" measured against a red baseline is
 # not evidence of anything.
 restore
-if ! "$PYTEST" -m pytest "$TEST" >/dev/null 2>&1; then
+if ! mutate_run "$PYTEST" -m pytest "$TEST" >/dev/null 2>&1; then
   echo "BASELINE FAILED: tests/test_agent_fingerprint.py does not pass against the unmutated source."
   echo "MUTATION CHECK ABORTED (baseline must be green first)"
   exit 1
@@ -58,11 +58,11 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
   if [ $? -ne 0 ]; then
-    echo "SKIP $name (target moved)"
-    survived=1
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=1
     return
   fi
-  if "$PYTEST" -m pytest "$TEST" >/dev/null 2>&1; then
+  if mutate_run "$PYTEST" -m pytest "$TEST" >/dev/null 2>&1; then
     echo "SURVIVED  $name"
     survived=1
   else
@@ -146,7 +146,7 @@ mutate "first-pass window widened past 50 (masks the tail-vs-full distinction th
 mutate "empty/None guard removed entirely (detect_agent_type(None) now raises instead of returning None)" \
   $'    if not scrollback:\n        return None\n    lines = scrollback.splitlines()||=>||    lines = scrollback.splitlines()'
 
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo ""
   echo "$killed/$total mutants killed"
   echo "MUTATION CHECK FAILED"

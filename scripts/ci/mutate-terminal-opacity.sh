@@ -13,18 +13,17 @@
 # on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 OPACITY_JS="$ROOT/client/js/terminal-background-opacity.js"
 TERM_JS="$ROOT/client/js/terminal.js"
 OPACITY_CSS="$ROOT/client/css/terminal-opacity.css"
-BAK_OPACITY="$(mktemp)"; BAK_TERM="$(mktemp)"; BAK_CSS="$(mktemp)"
-cp "$OPACITY_JS" "$BAK_OPACITY"; cp "$TERM_JS" "$BAK_TERM"; cp "$OPACITY_CSS" "$BAK_CSS"
-trap 'cp "$BAK_OPACITY" "$OPACITY_JS"; cp "$BAK_TERM" "$TERM_JS"; cp "$BAK_CSS" "$OPACITY_CSS";
-      rm -f "$BAK_OPACITY" "$BAK_TERM" "$BAK_CSS"' EXIT
+mutate_arm_trap "$ROOT" "$OPACITY_JS" "$TERM_JS" "$OPACITY_CSS"
 
 survived=0
+cannot_determine=0
 
 restore_all() {
-  cp "$BAK_OPACITY" "$OPACITY_JS"; cp "$BAK_TERM" "$TERM_JS"; cp "$BAK_CSS" "$OPACITY_CSS"
+  mutate_restore_files
 }
 
 # mutate <name> <file> <old||=>||new>
@@ -40,8 +39,8 @@ if old not in text:
     sys.exit('mutation target not found: ' + old[:80])
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
-  if [ $? -ne 0 ]; then echo "SKIP $name (target moved)"; survived=1; return; fi
-  if node "$ROOT/tests/test_terminal_opacity.node.mjs" >/dev/null 2>&1; then
+  if [ $? -ne 0 ]; then echo "CANNOT_DETERMINE $name (target moved)"; cannot_determine=1; return; fi
+  if mutate_run node "$ROOT/tests/test_terminal_opacity.node.mjs" >/dev/null 2>&1; then
     echo "SURVIVED $name"
     survived=1
   else
@@ -117,8 +116,8 @@ mutate "CSS override sets the wrong property value" "$OPACITY_CSS" \
 
 restore_all
 echo
-if [ "$survived" -eq 1 ]; then
-  echo "MUTATION CHECK FAILED: at least one mutation survived (see SURVIVED/SKIP above)"
+if [ "$survived" -eq 1 ] || [ "$cannot_determine" -eq 1 ]; then
+  echo "MUTATION CHECK FAILED: at least one mutation survived or could not be evaluated (see SURVIVED/CANNOT_DETERMINE above)"
   exit 1
 fi
 echo "MUTATION CHECK PASSED: every mutation was killed"

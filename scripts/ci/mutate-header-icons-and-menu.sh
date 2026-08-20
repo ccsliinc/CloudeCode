@@ -24,6 +24,8 @@
 # not pytest.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 NODE_TEST="tests/test_header_help_and_toggle.node.mjs"
 VERIFIER="scripts/verify_header_icons_and_menu.py"
 
@@ -51,26 +53,20 @@ FILES=(
   "client/index.html"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Run both checkers. Returns 0 when BOTH are green.
 run_suite() {
-  (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1) || return 1
-  (cd "$ROOT" && "$PYBIN" "$VERIFIER" >/dev/null 2>&1) || return 1
+  mutate_run node "$NODE_TEST" >/dev/null 2>&1 || return 1
+  mutate_run "$PYBIN" "$VERIFIER" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -78,11 +74,11 @@ run_suite() {
 # suite and a mutated one; a red baseline would make every mutant read as
 # killed for free.
 echo "--- baseline: both checkers must be GREEN before anything is mutated ---"
-if ! (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1); then
+if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
   echo "BASELINE IS RED (node suite). Refusing to run."
   exit 2
 fi
-if ! (cd "$ROOT" && "$PYBIN" "$VERIFIER" >/dev/null 2>&1); then
+if ! mutate_run "$PYBIN" "$VERIFIER" >/dev/null 2>&1; then
   echo "BASELINE IS RED (browser verifier). Refusing to run."
   exit 2
 fi
@@ -104,8 +100,8 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   if ! run_suite; then
@@ -233,8 +229,9 @@ restore_all
 echo
 echo "killed:   $killed"
 echo "survived: $survived"
-if [ "$survived" -ne 0 ]; then
-  echo "RESULT: FAIL - $survived mutant(s) survived"
+echo "cannot determine: $cannot_determine"
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
+  echo "RESULT: FAIL - $survived mutant(s) survived, $cannot_determine could not be evaluated"
   exit 1
 fi
 echo "RESULT: PASS - every mutant was killed"

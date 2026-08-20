@@ -14,6 +14,8 @@
 # pytest.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 NODE_TEST="tests/test_home_screen_mechanics.node.mjs"
 
 FILES=(
@@ -22,30 +24,24 @@ FILES=(
   "client/index.html"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 # BASELINE GATE. A mutation run measures the DIFFERENCE between a green
 # suite and a mutated one; a red baseline would make every mutant read as
 # killed for free.
 echo "--- baseline: the suite must be GREEN before anything is mutated ---"
-if ! (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1); then
+if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
   echo "BASELINE IS RED. Every mutant would read as killed. Refusing to run."
   exit 2
 fi
 echo "baseline green"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Apply one textual mutation, run the node suite, expect RED.
@@ -64,11 +60,11 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
-  if ! (cd "$ROOT" && node "$NODE_TEST" >/dev/null 2>&1); then
+  if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
     killed=$((killed + 1))
     echo "killed   $name"
     return
@@ -177,10 +173,26 @@ mutate "the help button is shown on every screen, not just home" \
 
 echo "--- BLOCK 5: the add menu ---"
 
-mutate "clone from github goes back to being a peer of new project" \
-  "client/js/launchpad.js" \
-  "                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"open-folder\" tabindex=\"-1\">||=>||                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"clone-github\" tabindex=\"-1\"><span class=\"new-fab__label\">clone from github</span></button>
-                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"open-folder\" tabindex=\"-1\">"
+# REMOVED 2026-08-20: "clone from github goes back to being a peer of new
+# project" used to live here, targeting a top-level
+# data-action="open-folder" <button> as the anchor to reintroduce a
+# sibling data-action="clone-github" <button> next to it. That anchor was
+# rewritten when both "open from folder" and "clone from github" were
+# folded out of the top-level add menu and into the New Claude Project
+# chooser's item list - there is no more peer-level open-folder button to
+# anchor on, so this mutant's sed target has been permanently stale since
+# that refactor. Per the target-moved handling above it reported
+# CANNOT_DETERMINE, not SURVIVED, but a mutant that can never again find
+# its target is not "could not evaluate this run" - it is dead code.
+# Deleted rather than repaired: the exact regression it was written to
+# catch (clone-github reappearing as a top-level menu peer) is already
+# covered by scripts/verify_home_mechanics.py ITEM 53, which asserts
+# directly against the rendered DOM that no top-level item has
+# data-action="clone-github"; and the symmetrical case for the other
+# folded-in item is exercised live by
+# scripts/ci/mutate-header-icons-and-menu.sh's "'open from folder' comes
+# back as a top-level add-menu item" mutant. Repairing this target to
+# match the current markup would only duplicate that existing coverage.
 
 mutate "the top item goes back to the unexplained 'create new project' name" \
   "client/js/launchpad.js" \
@@ -267,7 +279,7 @@ mutate "the fill is hardcoded for a dark theme instead of read from the theme to
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

@@ -21,6 +21,8 @@
 # Client-only change, so this mutates and re-runs only the node suites.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 NODE_TESTS=(
   "tests/test_sidebar_sessions.node.mjs"
   "tests/test_session_sidebar_rows.node.mjs"
@@ -43,21 +45,17 @@ FILES=(
   "client/index.html"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 # Run every node suite; non-zero from ANY of them is a kill.
 run_suites() {
   local t
   for t in "${NODE_TESTS[@]}"; do
-    (cd "$ROOT" && node "$t" >/dev/null 2>&1) || return 1
+    mutate_run node "$t" >/dev/null 2>&1 || return 1
   done
   return 0
 }
@@ -73,9 +71,7 @@ fi
 echo "baseline green"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Apply one textual mutation, run the suites, expect RED.
@@ -95,8 +91,8 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   if ! run_suites; then
@@ -494,7 +490,7 @@ mutate "the density stylesheet is never linked, so no density has a box" \
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi
