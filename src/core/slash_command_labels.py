@@ -228,6 +228,62 @@ def append_missing_commands(raw: Any, commands: List[str]) -> List[Any]:
     return out
 
 
+def storage_form(raw: Any) -> List[Any]:
+    """Render entries into the NARROWEST form that still carries their meaning.
+
+    An entry whose description is empty, whitespace-only or absent
+    becomes a BARE STRING. An entry with a real description keeps the
+    ``{"command", "description"}`` object.
+
+    WHY THIS EXISTS - a downgrade break, measured. ``AuthConfig
+    .common_slash_commands`` is ``List[str]`` at v0.8.1 and
+    ``List[Union[str, Dict[str, Any]]]`` on the new tip. ONE object-form
+    entry makes the old version's ``load_auth_config`` raise a pydantic
+    ValidationError and the server EXIT at startup - not a degraded mode,
+    it does not start. An object entry carrying no description holds
+    nothing the object form exists to hold, so writing it that way breaks
+    the old version in exchange for nothing.
+
+    WHAT THIS DELIBERATELY DOES NOT DO. It does not strip a real
+    description to make a config downgrade-safe. That wording is the
+    user's data; a config that uses descriptions stays downgrade-unsafe
+    as a consequence of HIS choice. This narrows the blast radius to
+    those configs, it does not eliminate it.
+
+    Collapsing an empty-description object to a bare string is invisible
+    to every reader, because ``normalize()`` fills a bare string's
+    description in from the built-in table - which is where an empty one
+    would have got its label anyway.
+
+    Inputs:
+        raw: the existing ``common_slash_commands`` value; a non-list is
+            treated as an empty list. Entries carrying no usable command
+            are dropped, matching ``normalize()``.
+    Returns:
+        A NEW list of bare strings and/or ``{"command", "description"}``
+        dicts. Idempotent: passing its own output back returns an equal
+        list.
+    Example:
+        >>> storage_form([{"command": "/x", "description": ""}, "/clear"])
+        ['/x', '/clear']
+    """
+    out: List[Any] = []
+    for entry in raw if isinstance(raw, list) else []:
+        command = entry_command(entry)
+        if not command:
+            continue
+        if isinstance(entry, dict):
+            description = entry.get("description")
+            description = "" if description is None else str(description).strip()
+        else:
+            description = ""
+        if description:
+            out.append({"command": command, "description": description})
+        else:
+            out.append(command)
+    return out
+
+
 def commands_only(details: List[Dict[str, str]]) -> List[str]:
     """Project normalized entries back down to bare command strings.
 

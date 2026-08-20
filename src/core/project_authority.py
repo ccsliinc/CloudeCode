@@ -55,6 +55,7 @@ import structlog
 
 from src.core.db import DatastoreUnreadableError, connect, db_path_for
 from src.core.project_diff import ProjectDiff, diff_projects
+from src.core.project_reconcile import reconcile_summary
 from src.core.project_snapshot import SnapshotResult, snapshot_projects
 from src.core.project_writes import list_projects_ordered
 
@@ -102,7 +103,10 @@ class ProjectsView:
       a config entry has no row), message (str - one sentence for a
       user), detail (str | None - the underlying error, when there is
       one), diff (ProjectDiff | None - None when the comparison could not
-      be made, never an empty diff standing in for "agreed").
+      be made, never an empty diff standing in for "agreed"),
+      reconcile (dict | None - what the last startup project reconcile
+      did; None only when the database could not be read, since a
+      reconcile record is written on every start).
     Output: a ProjectsView instance.
     """
 
@@ -111,6 +115,7 @@ class ProjectsView:
     message: str = ""
     detail: Optional[str] = None
     diff: Optional[ProjectDiff] = None
+    reconcile: Optional[Dict[str, Any]] = None
 
     @property
     def writable(self) -> bool:
@@ -151,6 +156,14 @@ class ProjectsView:
             "project_count": len(self.projects),
             "diff": self.diff.to_dict() if self.diff is not None else None,
             "diff_state": "known" if self.diff is not None else "cannot_determine",
+            # WHAT THE LAST STARTUP RECONCILE DID. A repair the user
+            # cannot see is the same shape as the defect it fixes: a
+            # correct-looking screen and no account of what happened to
+            # his projects. Carries its own "state" and
+            # "cannot_determine", so a client can tell "nothing needed
+            # doing" from "this has never run" from "some projects could
+            # not be classified" without inferring any of the three.
+            "reconcile": self.reconcile,
         }
 
 
@@ -247,6 +260,7 @@ def resolve_projects(state_dir: Path, config_projects: Any) -> ProjectsView:
     try:
         with closing(connect(db_file, create=False)) as conn:
             rows = list_projects_ordered(conn)
+            reconcile = reconcile_summary(conn)
     except DatastoreUnreadableError as exc:
         return _fallback(config_list, str(exc), db_file)
     except Exception as exc:  # noqa: BLE001 - a read surface must not 500
@@ -267,6 +281,7 @@ def resolve_projects(state_dir: Path, config_projects: Any) -> ProjectsView:
             ),
             detail=f"db_projects=0 config_projects={len(config_list)}",
             diff=diff,
+            reconcile=reconcile,
         )
 
     return ProjectsView(
@@ -274,6 +289,7 @@ def resolve_projects(state_dir: Path, config_projects: Any) -> ProjectsView:
         projects=[_row_to_view(row) for row in rows],
         message="projects are served from cloude.db, which is authoritative.",
         diff=diff,
+        reconcile=reconcile,
     )
 
 

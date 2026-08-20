@@ -81,7 +81,7 @@ from src.core.session_import_mapping import (
     _row_fields,
     _stopped_epoch,
 )
-from src.core.project_store import ImportResult, import_from_config
+from src.core.project_reconcile import ReconcileResult, reconcile_projects
 from src.core.session_identity import RECORD_INSERTED, record_instance
 from src.core.session_store import count_sessions, observed_origin_for
 from src.core.tmux_listing import TmuxListing
@@ -109,7 +109,11 @@ class FirstRunImportResult:
 
     Inputs (constructor): outcome (str) - one of ``IMPORT_COMPLETED``,
       ``IMPORT_ALREADY_DONE``, ``IMPORT_PENDING_LISTING_UNAVAILABLE``.
-      sessions_imported (int). projects (ImportResult | None).
+      sessions_imported (int). projects (ReconcileResult | None) - what
+      the config-projects reconcile did on THIS start. Never None on a
+      completed or already-done outcome: the projects stage runs on every
+      start, so a caller that sees None is looking at a pass that could
+      not reach it at all.
       listing_reason (str | None) - the tmux probe's own reason token,
       carried verbatim on the pending outcome so the UI can say WHAT
       could not be measured rather than showing a blank. refusals
@@ -121,7 +125,7 @@ class FirstRunImportResult:
 
     outcome: str
     sessions_imported: int = 0
-    projects: Optional[ImportResult] = None
+    projects: Optional[ReconcileResult] = None
     listing_reason: Optional[str] = None
     refusals: List[Dict[str, Any]] = field(default_factory=list)
     unmatched: List[Dict[str, Any]] = field(default_factory=list)
@@ -344,14 +348,30 @@ def run_first_run_import(
     Output: FirstRunImportResult.
     Example: run_first_run_import(conn, projects=[], listing=listing).outcome
     """
-    if sessions_stage_done(conn):
-        return FirstRunImportResult(outcome=IMPORT_ALREADY_DONE)
-
     stamp = now or utc_now()
     owned = set(owned_tmux_names or ())
 
-    # --- step 2: config projects -----------------------------------------
-    project_result = import_from_config(conn, projects, now=stamp)
+    # --- step 2: config projects. RUNS ON EVERY START, ABOVE THE LATCH. ---
+    #
+    # It used to sit BELOW the sessions gate, so a project the OLD version
+    # created while the user was downgraded never reached the table on
+    # re-upgrade and the next snapshot_projects() then deleted it from
+    # config.json too. Silent, and unrecoverable one write later.
+    #
+    # The latch is correct for SESSIONS and wrong for PROJECTS, and the
+    # difference is the input, not the caller: sessions come from a live
+    # tmux process table that is gone by tomorrow, projects come from a
+    # durable file that says the same thing every time it is read. So the
+    # sessions latch below is untouched and this stage moved out from
+    # behind it. See src/core/project_reconcile.py for how the reconcile
+    # tells "never imported" from "the user deleted it" - and for the
+    # third answer, when it can tell neither.
+    project_result = reconcile_projects(conn, projects, now=stamp)
+
+    if sessions_stage_done(conn):
+        return FirstRunImportResult(
+            outcome=IMPORT_ALREADY_DONE, projects=project_result
+        )
 
     # --- step 3: THE GATE ------------------------------------------------
     # ok=False is the ABSENCE of an answer. It carries no rows and must
@@ -484,7 +504,7 @@ def run_first_run_import(
     logger.info(
         "session_import_completed",
         sessions_imported=imported,
-        projects_imported=project_result.imported,
+        projects_imported=len(project_result.imported),
         refusals=len(refusals),
         total_rows=count_sessions(conn),
     )

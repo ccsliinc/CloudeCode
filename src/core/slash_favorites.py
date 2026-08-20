@@ -183,6 +183,16 @@ def write(config_path: Path, entries: List[Any]) -> None:
       ``terminal_commands.replace_terminal_commands`` and
       ``Settings._write_wrappers`` already use, so a crash mid-write can
       never leave a truncated config.
+      NORMALIZED ON EVERY SAVE, NOT ONCE BY A MIGRATION. Entries go
+      through ``slash_command_labels.storage_form``, which emits a BARE
+      STRING for any entry with no real description and keeps the object
+      form only where a description actually exists. One object-form
+      entry makes v0.8.1's ``load_auth_config`` raise and the server exit
+      at startup, so an object carrying an empty description breaks a
+      downgrade in exchange for nothing. A one-time migration would not
+      hold: this is the path that WRITES the shape, so it is the path
+      that has to keep it narrow. A real description is preserved
+      verbatim - see ``storage_form`` for why that is deliberate.
     Inputs: config_path (Path); entries (list) - the complete new value.
     Output: None.
     Raises:
@@ -191,6 +201,8 @@ def write(config_path: Path, entries: List[Any]) -> None:
     """
     if not config_path.exists():
         raise FileNotFoundError(f"Auth config file not found: {config_path}")
+
+    entries = slash_command_labels.storage_form(entries)
 
     with open(config_path) as f:
         existing_raw = f.read()
