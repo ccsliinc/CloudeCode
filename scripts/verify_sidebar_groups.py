@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from verify_sidebar_rename import measure_inline_rename  # noqa: E402
 from verify_sidebar_sessions import (  # noqa: E402
     ARRANGEMENT_KEY,
     DENSITY_KEY,
@@ -59,6 +60,60 @@ def _arrangement(pinned: list[str], order: list[str], collapsed: list[str] | Non
     if collapsed is not None:
         body["collapsed"] = collapsed
     return json.dumps(body)
+
+
+def measure_heading_cluster(browser, port: int, rep: Report) -> None:
+    """ITEM 62: the density control sits WITH the title, not with the panel chrome.
+
+    "we need a better icon for the density in the sidebar, and we need to
+    push it closer to the title conversations we will probably add more
+    icons later on."
+
+    Measured as a distance, because "closer to the title" is a claim about
+    a gap. The control used to carry margin-left:auto and land beside the
+    pin and close buttons, so it read as panel chrome rather than as a
+    control over the list.
+
+    Inputs: browser; port (int); rep (Report). Output: None.
+    """
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    assert_viewport(page, rep)
+    m = page.evaluate("""() => {
+      const q = (s) => document.querySelector(s);
+      const r = (e) => e.getBoundingClientRect();
+      const title = q('.session-sidebar-title');
+      const dens = q('#session-sidebar-density');
+      const tools = q('.session-sidebar-tools');
+      const acts = q('.session-sidebar-actions');
+      return {
+        toTitle: r(dens).left - r(title).right,
+        toActions: r(acts).left - r(dens).right,
+        inTools: tools.contains(dens),
+        inActions: acts.contains(dens),
+        toolsKids: tools.children.length,
+        bars: dens.querySelectorAll('rect').length,
+        lines: dens.querySelectorAll('line').length,
+      };
+    }""")
+    rep.check(m["inTools"] and not m["inActions"],
+              "ITEM 62: the density control lives in the LIST tools cluster, not panel chrome",
+              f"inTools={m['inTools']} inActions={m['inActions']}")
+    rep.check(0 < m["toTitle"] <= 16,
+              "ITEM 62: it sits right next to the title, not pushed to the far edge",
+              f"gap to title={m['toTitle']:.1f}px")
+    rep.check(m["toActions"] > m["toTitle"],
+              "ITEM 62: and is measurably FARTHER from the pin/close pair than from the title",
+              f"to title={m['toTitle']:.1f}px vs to actions={m['toActions']:.1f}px")
+    # THE GLYPH IS NOT A SECOND HAMBURGER. The old mark was three evenly
+    # stroked lines, byte-for-byte the same as #session-sidebar-toggle -
+    # the button that OPENS this panel, in the same viewport. Filled bars
+    # of differing height cannot be confused with it at a glance.
+    rep.check(m["bars"] == 3 and m["lines"] == 0,
+              "ITEM 62: the density glyph is filled bars, not the stroked hamburger",
+              f"rects={m['bars']} lines={m['lines']}")
+    rep.note(f"the tools cluster holds {m['toolsKids']} control(s); "
+             "adding another is one appended sibling")
+    page.close()
 
 
 def measure_empty_pinned_group(browser, port: int, rep: Report) -> None:
@@ -311,159 +366,6 @@ def measure_drag_across_boundary(browser, port: int, rep: Report) -> None:
     page.close()
 
 
-def measure_inline_rename(browser, port: int, rep: Report) -> None:
-    """Double-click opens an editor; Enter commits, Escape cancels, failure restores.
-
-    EACH CASE GETS ITS OWN PAGE. A double-click on a row that CANNOT be
-    renamed correctly falls through to activating the row, which closes
-    the panel - so running the blocked case first left every later
-    measurement pointing at a hidden list. That is a real behaviour, not a
-    harness quirk, which is exactly why it must not be allowed to
-    contaminate the next assertion.
-
-    Inputs: browser; port (int); rep (Report). Output: None.
-    """
-    name_sel = '.session-sidebar-row[data-name="cloude_fstest"] .session-sidebar-row-name'
-
-    # ---- THE THREE STATES ARE ALL ON SCREEN.
-    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
-    assert_viewport(page, rep)
-    g = page.evaluate("window.__sidebarMeasure()")
-    states = set(g["renameStates"])
-    rep.check(states == {"renameable", "unavailable", "unknown"},
-              "ITEM 66: all THREE rename states are rendered, including CANNOT DETERMINE",
-              f"states={sorted(states)}")
-    rep.note(f"rename states on screen: {sorted(states)}")
-    # 'unknown' must not be folded into 'unavailable'. The row whose
-    # ownership is genuinely null is the one a `!r.x` test would silently
-    # reclassify as external, inventing an answer nobody measured.
-    unknown_rows = [r for r, s in zip(g["rows"], g["renameStates"]) if s == "unknown"]
-    rep.check(len(unknown_rows) == 1,
-              "ITEM 66: a null ownership stays UNKNOWN rather than becoming 'external'",
-              f"unknown rows={[r['name'] for r in unknown_rows]}")
-    page.close()
-
-    # ---- OPEN, and the row must not change height doing it.
-    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
-    before = page.evaluate("window.__sidebarMeasure()")
-    before_h = [r for r in before["rows"] if r["name"] == "cloude_fstest"][0]["height"]
-    page.dblclick(name_sel)
-    page.wait_for_timeout(150)
-    g2 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(g2["rename"] is not None,
-              "ITEM 66: double-click on a renameable row opens the editor", "")
-    if g2["rename"]:
-        rep.check(g2["rename"]["focused"] is True,
-                  "ITEM 66: the editor takes real DOM focus", "")
-        rep.check(g2["rename"]["value"] == "cloude_fstest",
-                  "ITEM 66: and starts with the current name in it",
-                  f"value={g2['rename']['value']!r}")
-        # A ROW THAT GROWS WHEN YOU DOUBLE-CLICK IT shoves every row below
-        # it down while the pointer is still moving.
-        rep.check(abs(g2["rename"]["rowHeight"] - before_h) < 1.0,
-                  "ITEM 66: opening the editor does NOT change the row height",
-                  f"before={before_h:.2f} during={g2['rename']['rowHeight']:.2f}")
-        rep.check(g2["rename"]["width"] > 40,
-                  "ITEM 66: the input has real painted width",
-                  f"width={g2['rename']['width']:.2f}")
-    # A SINGLE CLICK MUST NOT HAVE SWITCHED. If the deferral were broken
-    # the panel would already be closed and there would be no editor at
-    # all, which the assertions above would catch - but the panel state is
-    # checked directly so the reason is legible.
-    open_panel = page.evaluate(
-        "document.getElementById('session-sidebar-panel').getAttribute('aria-hidden')")
-    rep.check(open_panel != "true",
-              "ITEM 66: the panel is still open after the double-click",
-              f"panel aria-hidden={open_panel}")
-    # COUNTED, not inferred from the panel. A broken deferral switches AND
-    # still opens the editor, so the editor's presence proves nothing; only
-    # the switch count distinguishes "deferred" from "switched anyway".
-    rep.check(g2["switchCount"] == 0,
-              "ITEM 66: the first click of the double-click did NOT switch conversation",
-              f"switches={g2['switchCount']}")
-
-    # ---- ESCAPE CANCELS. THE TEXT MUST ACTUALLY BE CHANGED FIRST, or
-    # this proves nothing: an Escape that secretly committed an UNCHANGED
-    # name is indistinguishable from a cancel. Typing a different name is
-    # what makes the two outcomes different.
-    page.keyboard.press("ControlOrMeta+a")
-    page.keyboard.type("escape_should_discard")
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(200)
-    g3 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(g3["rename"] is None, "ITEM 66: Escape closes the editor", "")
-    rep.check(any(r["name"] == "cloude_fstest" for r in g3["rows"]),
-              "ITEM 66: and the original name is restored",
-              f"names={[r['name'] for r in g3['rows']][:3]}")
-    rep.check(not any(r["name"] == "escape_should_discard" for r in g3["rows"]),
-              "ITEM 66: Escape DISCARDS the typed name rather than committing it", "")
-    page.close()
-
-    # ---- ENTER COMMITS.
-    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
-    page.dblclick(name_sel)
-    page.wait_for_timeout(150)
-    page.keyboard.press("ControlOrMeta+a")
-    page.keyboard.type("renamed_ok")
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(250)
-    g4 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(g4["rename"] is None, "ITEM 66: Enter closes the editor", "")
-    rep.check(any(r["name"] == "renamed_ok" for r in g4["rows"]),
-              "ITEM 66: Enter COMMITS the new name into the row",
-              f"names={[r['name'] for r in g4['rows']][:3]}")
-    page.close()
-
-    # ---- A REJECTED RENAME SAYS SO AND RESTORES THE PREVIOUS NAME.
-    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
-    page.evaluate("window.__renameShouldFail = true")
-    page.dblclick(name_sel)
-    page.wait_for_timeout(150)
-    page.keyboard.press("ControlOrMeta+a")
-    page.keyboard.type("taken_name")
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(300)
-    g5 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(any(r["name"] == "cloude_fstest" for r in g5["rows"]),
-              "ITEM 66: a FAILED rename restores the previous name",
-              f"names={[r['name'] for r in g5['rows']][:3]}")
-    rep.check(not any(r["name"] == "taken_name" for r in g5["rows"]),
-              "ITEM 66: and the rejected name is nowhere on screen", "")
-    # THE EDITOR STAYS OPEN, WITH THE TEXT STILL IN IT. Closing it and
-    # only announcing the failure would make the user retype rather than
-    # correct, and would be invisible to a check that only reads the live
-    # region - the announcement survives either way.
-    rep.check(g5["rename"] is not None,
-              "ITEM 66: a failed rename leaves the editor OPEN to be corrected",
-              f"rename={g5['rename']}")
-    if g5["rename"]:
-        rep.check(g5["rename"]["value"] == "taken_name",
-                  "ITEM 66: with the rejected text still in it, not cleared",
-                  f"value={g5['rename']['value']!r}")
-        rep.check("rename failed" in g5["rename"]["error"],
-                  "ITEM 66: and the reason shown NEXT TO the input, not only announced",
-                  f"error={g5['rename']['error']!r}")
-    page.close()
-
-    # ---- A ROW THAT CANNOT BE RENAMED OPENS NO EDITOR. Last, because it
-    # activates the row and closes the panel.
-    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
-    g6 = page.evaluate("window.__sidebarMeasure()")
-    blocked = [(r, s) for r, s in zip(g6["rows"], g6["renameStates"]) if s != "renameable"]
-    row, state = blocked[0]
-    page.dblclick(
-        f'.session-sidebar-row[data-name="{row["name"]}"] .session-sidebar-row-name')
-    page.wait_for_timeout(200)
-    g7 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(g7["rename"] is None,
-              "ITEM 66: a row that cannot be renamed opens NO editor",
-              f"state={state}")
-    rep.check(bool(g7["live"]),
-              "ITEM 66: and it SAYS why rather than doing nothing",
-              f"live={g7['live']!r}")
-    page.close()
-
-
 def main() -> int:
     """Run every measurement. Output: int - 0 pass, 1 fail, 2 cannot determine."""
     try:
@@ -484,6 +386,7 @@ def main() -> int:
                 print(f"CANNOT DETERMINE: chromium would not launch: {exc}")
                 return 2
             try:
+                measure_heading_cluster(browser, port, rep)
                 measure_empty_pinned_group(browser, port, rep)
                 measure_grouped_layout(browser, port, rep)
                 measure_collapse(browser, port, rep)
