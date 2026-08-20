@@ -312,82 +312,131 @@ def measure_drag_across_boundary(browser, port: int, rep: Report) -> None:
 
 
 def measure_inline_rename(browser, port: int, rep: Report) -> None:
-    """Double-click opens an editor; Escape cancels; the three states are respected.
+    """Double-click opens an editor; Enter commits, Escape cancels, failure restores.
+
+    EACH CASE GETS ITS OWN PAGE. A double-click on a row that CANNOT be
+    renamed correctly falls through to activating the row, which closes
+    the panel - so running the blocked case first left every later
+    measurement pointing at a hidden list. That is a real behaviour, not a
+    harness quirk, which is exactly why it must not be allowed to
+    contaminate the next assertion.
 
     Inputs: browser; port (int); rep (Report). Output: None.
     """
+    name_sel = '.session-sidebar-row[data-name="cloude_fstest"] .session-sidebar-row-name'
+
+    # ---- THE THREE STATES ARE ALL ON SCREEN.
     page = open_page(browser, port, {DENSITY_KEY: "cozy"})
     assert_viewport(page, rep)
-
     g = page.evaluate("window.__sidebarMeasure()")
-    # THE THREE RENAMEABILITY STATES ARE ON THE ROWS. The fixture has no
-    # session_id on any row, so every row is 'unavailable' or 'unknown'
-    # depending on whether ownership is known - which is exactly the
-    # distinction that must not be collapsed.
     states = set(g["renameStates"])
-    rep.check(states.issubset({"renameable", "unavailable", "unknown"}),
-              "ITEM 66: every row carries one of the three rename states",
+    rep.check(states == {"renameable", "unavailable", "unknown"},
+              "ITEM 66: all THREE rename states are rendered, including CANNOT DETERMINE",
               f"states={sorted(states)}")
     rep.note(f"rename states on screen: {sorted(states)}")
+    # 'unknown' must not be folded into 'unavailable'. The row whose
+    # ownership is genuinely null is the one a `!r.x` test would silently
+    # reclassify as external, inventing an answer nobody measured.
+    unknown_rows = [r for r, s in zip(g["rows"], g["renameStates"]) if s == "unknown"]
+    rep.check(len(unknown_rows) == 1,
+              "ITEM 66: a null ownership stays UNKNOWN rather than becoming 'external'",
+              f"unknown rows={[r['name'] for r in unknown_rows]}")
+    page.close()
 
-    # A ROW THAT CANNOT BE RENAMED MUST NOT OPEN AN EDITOR. An edit box
-    # that accepts text and then fails is worse than no edit box.
-    blocked = [i for i, s in enumerate(g["renameStates"]) if s != "renameable"]
-    if blocked:
-        name = g["rows"][blocked[0]]["name"]
-        page.dblclick(
-            f'.session-sidebar-row[data-name="{name}"] .session-sidebar-row-name')
-        page.wait_for_timeout(150)
-        after = page.evaluate("window.__sidebarMeasure()")
-        rep.check(after["rename"] is None,
-                  "ITEM 66: a row that cannot be renamed opens NO editor",
-                  f"state={g['renameStates'][blocked[0]]}")
-        rep.check(bool(after["live"]),
-                  "ITEM 66: and it SAYS why rather than doing nothing",
-                  f"live={after['live']!r}")
-    else:
-        rep.check(False, "ITEM 66: the fixture produced no non-renameable row to test",
-                  "CANNOT DETERMINE: no blocked row on screen")
-
-    # A RENAMEABLE ROW OPENS ONE, and the row does not change height doing
-    # it: a row that grows when you double-click it shoves every row below
-    # it down while the pointer is still moving.
-    page.evaluate("window.__forceRenameable && window.__forceRenameable()")
-    page.wait_for_timeout(100)
+    # ---- OPEN, and the row must not change height doing it.
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    before = page.evaluate("window.__sidebarMeasure()")
+    before_h = [r for r in before["rows"] if r["name"] == "cloude_fstest"][0]["height"]
+    page.dblclick(name_sel)
+    page.wait_for_timeout(150)
     g2 = page.evaluate("window.__sidebarMeasure()")
-    if "renameable" in (g2["renameStates"] or []):
-        idx = g2["renameStates"].index("renameable")
-        name = g2["rows"][idx]["name"]
-        before_h = g2["rows"][idx]["height"]
-        page.dblclick(
-            f'.session-sidebar-row[data-name="{name}"] .session-sidebar-row-name')
-        page.wait_for_timeout(150)
-        g3 = page.evaluate("window.__sidebarMeasure()")
-        rep.check(g3["rename"] is not None,
-                  "ITEM 66: double-click on a renameable row opens the editor", "")
-        if g3["rename"]:
-            rep.check(g3["rename"]["focused"] is True,
-                      "ITEM 66: the editor takes real DOM focus", "")
-            rep.check(g3["rename"]["value"] == name,
-                      "ITEM 66: and starts with the current name in it",
-                      f"value={g3['rename']['value']!r}")
-            rep.check(abs(g3["rename"]["rowHeight"] - before_h) < 1.0,
-                      "ITEM 66: opening the editor does NOT change the row height",
-                      f"before={before_h:.2f} during={g3['rename']['rowHeight']:.2f}")
-            rep.check(g3["rename"]["width"] > 40,
-                      "ITEM 66: the input has real painted width",
-                      f"width={g3['rename']['width']:.2f}")
+    rep.check(g2["rename"] is not None,
+              "ITEM 66: double-click on a renameable row opens the editor", "")
+    if g2["rename"]:
+        rep.check(g2["rename"]["focused"] is True,
+                  "ITEM 66: the editor takes real DOM focus", "")
+        rep.check(g2["rename"]["value"] == "cloude_fstest",
+                  "ITEM 66: and starts with the current name in it",
+                  f"value={g2['rename']['value']!r}")
+        # A ROW THAT GROWS WHEN YOU DOUBLE-CLICK IT shoves every row below
+        # it down while the pointer is still moving.
+        rep.check(abs(g2["rename"]["rowHeight"] - before_h) < 1.0,
+                  "ITEM 66: opening the editor does NOT change the row height",
+                  f"before={before_h:.2f} during={g2['rename']['rowHeight']:.2f}")
+        rep.check(g2["rename"]["width"] > 40,
+                  "ITEM 66: the input has real painted width",
+                  f"width={g2['rename']['width']:.2f}")
+    # A SINGLE CLICK MUST NOT HAVE SWITCHED. If the deferral were broken
+    # the panel would already be closed and there would be no editor at
+    # all, which the assertions above would catch - but the panel state is
+    # checked directly so the reason is legible.
+    open_panel = page.evaluate(
+        "document.getElementById('session-sidebar-panel').getAttribute('aria-hidden')")
+    rep.check(open_panel != "true",
+              "ITEM 66: the first click of the double-click did NOT switch conversation",
+              f"panel aria-hidden={open_panel}")
 
-        # ESCAPE CANCELS and restores the name.
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(120)
-        g4 = page.evaluate("window.__sidebarMeasure()")
-        rep.check(g4["rename"] is None, "ITEM 66: Escape closes the editor", "")
-        rep.check(any(r["name"] == name for r in g4["rows"]),
-                  "ITEM 66: and the original name is still there", "")
-    else:
-        rep.note("no renameable row in the fixture: the open/cancel path was "
-                 "NOT measured here (see tests/test_sidebar_rename.node.mjs)")
+    # ---- ESCAPE CANCELS and restores the name.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(120)
+    g3 = page.evaluate("window.__sidebarMeasure()")
+    rep.check(g3["rename"] is None, "ITEM 66: Escape closes the editor", "")
+    rep.check(any(r["name"] == "cloude_fstest" for r in g3["rows"]),
+              "ITEM 66: and the original name is restored, not the typed one", "")
+    page.close()
+
+    # ---- ENTER COMMITS.
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    page.dblclick(name_sel)
+    page.wait_for_timeout(150)
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.type("renamed_ok")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(250)
+    g4 = page.evaluate("window.__sidebarMeasure()")
+    rep.check(g4["rename"] is None, "ITEM 66: Enter closes the editor", "")
+    rep.check(any(r["name"] == "renamed_ok" for r in g4["rows"]),
+              "ITEM 66: Enter COMMITS the new name into the row",
+              f"names={[r['name'] for r in g4['rows']][:3]}")
+    page.close()
+
+    # ---- A REJECTED RENAME SAYS SO AND RESTORES THE PREVIOUS NAME.
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    page.evaluate("window.__renameShouldFail = true")
+    page.dblclick(name_sel)
+    page.wait_for_timeout(150)
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.type("taken_name")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    g5 = page.evaluate("window.__sidebarMeasure()")
+    rep.check(any(r["name"] == "cloude_fstest" for r in g5["rows"]),
+              "ITEM 66: a FAILED rename restores the previous name",
+              f"names={[r['name'] for r in g5['rows']][:3]}")
+    rep.check(not any(r["name"] == "taken_name" for r in g5["rows"]),
+              "ITEM 66: and the rejected name is nowhere on screen", "")
+    said = (g5["rename"] or {}).get("error", "") or g5["live"]
+    rep.check(bool(said),
+              "ITEM 66: the failure is STATED, not swallowed",
+              f"said={said!r}")
+    page.close()
+
+    # ---- A ROW THAT CANNOT BE RENAMED OPENS NO EDITOR. Last, because it
+    # activates the row and closes the panel.
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    g6 = page.evaluate("window.__sidebarMeasure()")
+    blocked = [(r, s) for r, s in zip(g6["rows"], g6["renameStates"]) if s != "renameable"]
+    row, state = blocked[0]
+    page.dblclick(
+        f'.session-sidebar-row[data-name="{row["name"]}"] .session-sidebar-row-name')
+    page.wait_for_timeout(200)
+    g7 = page.evaluate("window.__sidebarMeasure()")
+    rep.check(g7["rename"] is None,
+              "ITEM 66: a row that cannot be renamed opens NO editor",
+              f"state={state}")
+    rep.check(bool(g7["live"]),
+              "ITEM 66: and it SAYS why rather than doing nothing",
+              f"live={g7['live']!r}")
     page.close()
 
 

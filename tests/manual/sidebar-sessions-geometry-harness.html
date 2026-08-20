@@ -65,7 +65,7 @@ const REAL_NAMES = [
  * Output: Array<object> - attachable rows.
  */
 function fixtureRows() {
-    return REAL_NAMES.map((name, i) => ({
+    const rows = REAL_NAMES.map((name, i) => ({
         name,
         created_by_cloude: i % 3 !== 0,
         created_at_epoch: Math.floor(Date.now() / 1000) - (3600 * (i + 1)),
@@ -76,9 +76,30 @@ function fixtureRows() {
         agent_family_source: i === 1 ? 'wrapper' : (i === 2 ? 'fingerprint' : 'unknown'),
         pinned_theme: null,
     }));
+    // ROW 4 HAS GENUINELY UNKNOWN OWNERSHIP. `created_by_cloude` is
+    // nullable on the wire: the server fills it from an ownership map
+    // that can simply have no entry for a name. Leaving every fixture row
+    // with a true/false answer would mean the rename gate's third state
+    // ('unknown', CANNOT DETERMINE) is never on screen and never measured
+    // - and that is the state most likely to be quietly folded into
+    // "external" by a `!r.x` somewhere.
+    rows[4].created_by_cloude = null;
+    for (const r of rows) {
+        if (renamed[r.name]) r.name = renamed[r.name];
+    }
+    return rows;
 }
 
 let failNextListing = false;
+
+/**
+ * Renames the fake server has accepted, old name -> new name. The stub
+ * has to APPLY a rename it accepted, or the list re-renders the old name
+ * and a working commit measures as a failure - the harness would be
+ * reporting on itself rather than on the app.
+ * @type {Object<string, string>}
+ */
+const renamed = {};
 
 /**
  * Description: flip the attachable probe into a structured 503, the shape
@@ -101,7 +122,39 @@ window.API = {
         }
         return fixtureRows();
     },
-    async listSessions() { return []; },
+    // ONE LIVE SESSION, so exactly one row carries a `session_id` and is
+    // therefore 'renameable'. Without it every row is 'unavailable' and
+    // the inline editor's open/commit/cancel path cannot be measured at
+    // all - which the verifier reported as CANNOT DETERMINE rather than
+    // passing, and this is the fix for that gap.
+    async listSessions() {
+        // WHEN THE ATTACHABLE PROBE IS FORCED TO FAIL, the live list is
+        // empty too. The two endpoints answer different questions and a
+        // real server can genuinely fail one and not the other - but the
+        // scenario this flag exists to set up is "nothing could be
+        // listed", and a live row surviving it would turn that scenario
+        // into a different one without saying so.
+        if (failNextListing) return [];
+        return [{
+            tmux_session: renamed.cloude_fstest || 'cloude_fstest',
+            session: { id: 'sess-fstest-0001' },
+            activity_status: 'idle',
+            unread: false,
+            created_by_cloude: true,
+            agent_family: null,
+            agent_family_source: 'unknown',
+            pinned_theme: null,
+        }];
+    },
+    async renameSession(id, name) {
+        if (window.__renameShouldFail) {
+            const err = new Error('that name is already taken');
+            err.status = 409;
+            throw err;
+        }
+        renamed.cloude_fstest = name;
+        return { session: { id, tmux_session: name } };
+    },
     async getSession() { return null; },
     async adoptSession() { return {}; },
     async setSessionUnread() { return {}; },
