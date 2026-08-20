@@ -595,9 +595,20 @@ class AppController {
         console.log('App: Showing auth screen');
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
-        this.logoutBtn.classList.add('hidden');
-        if (this.settingsBtn) this.settingsBtn.classList.add('hidden');
-        if (this.configEditorBtn) this.configEditorBtn.classList.add('hidden');
+        // NO PER-BUTTON HIDE LIST HERE ANY MORE. Three
+        // classList.add('hidden') calls used to sit on this line,
+        // naming logoutBtn/settingsBtn/configEditorBtn, and every header
+        // control that was not on that list rendered on the login
+        // screen - which is how the slash-commands button and the header
+        // kebab both leaked. The marker below flips the default: CSS
+        // hides the authenticated-only chrome whenever it is absent, so
+        // a control nobody remembers is hidden rather than shown. See
+        // client/js/screen-chrome.js. Deliberately NOT guarded with an
+        // `if (window.ScreenChrome)` the way the optional collaborators
+        // below are: this is the gate, and a missing gate must fail
+        // loudly here rather than quietly leave the login screen
+        // showing controls again.
+        window.ScreenChrome.apply('auth');
         if (window.SessionSidebar) window.SessionSidebar.hide();
         this.currentScreen = 'auth';
         this._placeStatusLight('auth');
@@ -642,6 +653,9 @@ class AppController {
         console.log('App: Showing launchpad screen');
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
+        // These three ship `class="hidden"` in index.html so they are
+        // absent on first paint; stripping it is a one-way opt-in, not
+        // the screen gate. The screen gate is the marker below.
         this.logoutBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
@@ -658,6 +672,7 @@ class AppController {
             window.SessionSidebar.show();
         }
         this.currentScreen = 'launchpad';
+        window.ScreenChrome.apply('launchpad');
         // Leaving the terminal: drop the session theme so the launchpad
         // chrome renders under pure global-theme rules and so the next
         // session entry re-applies cleanly from a known baseline.
@@ -752,10 +767,14 @@ class AppController {
         var cameFromTerminal = this.currentScreen === 'terminal';
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
+        // These three ship `class="hidden"` in index.html so they are
+        // absent on first paint; stripping it is a one-way opt-in, not
+        // the screen gate. The screen gate is the marker below.
         this.logoutBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+        window.ScreenChrome.apply('terminal');
         this._placeStatusLight('terminal');
         if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('terminal');
 
@@ -877,10 +896,14 @@ class AppController {
         var cameFromTerminal = this.currentScreen === 'terminal';
         this.hideAllScreens();
         document.getElementById('terminal-screen').classList.add('active');
+        // These three ship `class="hidden"` in index.html so they are
+        // absent on first paint; stripping it is a one-way opt-in, not
+        // the screen gate. The screen gate is the marker below.
         this.logoutBtn.classList.remove('hidden');
         if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
         if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+        window.ScreenChrome.apply('terminal');
         this._placeStatusLight('terminal');
         if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('terminal');
 

@@ -58,6 +58,11 @@ class DPad {
         this.floatingButton.type = 'button';
         this.floatingButton.setAttribute('aria-label', 'Open d-pad');
         this.floatingButton.setAttribute('title', 'Open d-pad');
+        // AUTHENTICATED-ONLY - same class of leak as the slash button:
+        // shown on the terminal screen, hidden again only on the
+        // launchpad, so a logout straight from a session left it on the
+        // login screen. See client/css/screen-chrome.css.
+        this.floatingButton.setAttribute('data-auth-only', '');
         this.floatingButton.innerHTML = `
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <path d="M8 4H12V8H16V12H12V16H8V12H4V8H8V4Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
