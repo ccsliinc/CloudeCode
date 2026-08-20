@@ -46,7 +46,7 @@ from src.models import (
     TerminalCommandListResponse,
     AddProviderModelRequest,
     is_valid_model_id,
-    MODEL_ID_PATTERN,
+    describe_model_id_rejection,
     WrapperListResponse,
     WrapperExamplesResponse,
     SessionRecord,
@@ -1659,13 +1659,14 @@ async def add_provider_model(body: AddProviderModelRequest):
     """Add an OpenRouter model id to the provider catalog.
 
     Raises:
-        HTTPException(400): model id doesn't match ``MODEL_ID_PATTERN``.
+        HTTPException(400): model id doesn't match ``MODEL_ID_PATTERN`` - the
+            detail names the specific reason, not a generic pattern dump.
         HTTPException(409): model id already present.
     """
     if not is_valid_model_id(body.model):
         raise HTTPException(
             status_code=400,
-            detail=f"model must match {MODEL_ID_PATTERN}",
+            detail=describe_model_id_rejection(body.model),
         )
 
     try:
