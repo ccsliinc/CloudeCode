@@ -82,6 +82,18 @@ class ServerManager {
     // Lives in userData root — small, atomic-written, one object deep.
     this.settingsPath = path.join(app.getPath('userData'), 'menubar-settings.json');
     this._settings = this._loadSettings();
+
+    // What the SERVER says it is actually bound to, and its setup verdict,
+    // both read from GET /health. Null means "not asked yet", which is a
+    // third outcome and never rendered as either answer.
+    //
+    // These exist because the configured bind host and the real one can
+    // legitimately disagree: while setup is incomplete the server pins
+    // itself to 127.0.0.1 regardless of configuration (see
+    // src/core/setup_state.py). Showing the configured value in that window
+    // would put an address in the menu that nothing is listening on.
+    this.reportedBind = null;
+    this.reportedSetupStatus = null;
   }
 
   // ---------------------------------------------------------------------
@@ -242,7 +254,10 @@ class ServerManager {
       console.error(`[port] getPublishedUrl: ${err.message}`);
       return null;
     }
-    const host = this.getBindHost();
+    // The MEASURED bind wins over the configured one whenever the server has
+    // told us. During the setup lockdown they differ, and handing the browser
+    // the configured address would open a URL nothing is listening on.
+    const host = this.getEffectiveBindHost() || this.getBindHost();
     if (host === '0.0.0.0') {
       const lan = this.getPrimaryLanIp();
       return `http://${lan || '127.0.0.1'}:${port}`;
@@ -281,6 +296,21 @@ class ServerManager {
    * obviously-broken one, which is the correct outcome here: it must
    * never silently probe DEFAULT_PORT and let a caller believe that
    * probe result describes the user's actual configuration.
+   */
+  probeHostCandidates() {
+    const candidates = [this.getLocalProbeHost()];
+    // The setup lockdown can put the server on loopback while configuration
+    // names a LAN address. Probing only the configured address in that state
+    // returns ECONNREFUSED forever and the tray reports a healthy server as
+    // dead - a false negative manufactured by our own security feature.
+    if (!candidates.includes('127.0.0.1')) candidates.push('127.0.0.1');
+    return candidates;
+  }
+
+  /**
+   * Base URL the Electron app should use for internal probes.
+   *
+   * @returns {string|null} The URL, or null when the port is undeterminable.
    */
   getLocalApiUrl() {
     let port;
@@ -962,18 +992,78 @@ class ServerManager {
    * @returns {Promise<Object|null>} Server stats or null if unhealthy
    */
   async getHealth() {
+    let port;
     try {
-      // Probe the actual bound interface, not a hardcoded 127.0.0.1 —
-      // uvicorn binds exclusively, so loopback is unreachable when the
-      // user picks a specific LAN IP. See getLocalProbeHost() for rule.
-      const response = await axios.get(`${this.getLocalApiUrl()}/api/v1/health`, {
-        timeout: 3000
-      });
-      return response.data;
+      port = this.getPort();
     } catch (err) {
-      // Server not responding
+      console.error(`[port] getHealth: ${err.message}`);
       return null;
     }
+
+    // Probe the actual bound interface, not a hardcoded 127.0.0.1 - uvicorn
+    // binds exclusively, so loopback is unreachable when the user picks a
+    // specific LAN IP. But the setup lockdown can also put the server on
+    // loopback while configuration names a LAN address, so both are tried.
+    for (const host of this.probeHostCandidates()) {
+      const base = `http://${host}:${port}`;
+      let stats;
+      try {
+        const response = await axios.get(`${base}/api/v1/health`, { timeout: 3000 });
+        stats = response.data;
+      } catch (err) {
+        continue;
+      }
+
+      // Read the EFFECTIVE bind from the server's own mouth rather than
+      // inferring it from configuration. GET /health (the unauthenticated
+      // root one, not /api/v1/health) reports what it really bound.
+      try {
+        const exposure = await axios.get(`${base}/health`, { timeout: 3000 });
+        const bind = exposure.data && exposure.data.bind;
+        this.reportedBind = bind || null;
+        this.reportedSetupStatus =
+          (exposure.data && exposure.data.setup_status) || null;
+      } catch (err) {
+        // The health probe succeeded, so the server is up; only the exposure
+        // detail could not be read. Say we do not know rather than keeping a
+        // stale answer that would go on being displayed as current.
+        this.reportedBind = null;
+        this.reportedSetupStatus = null;
+      }
+      return stats;
+    }
+    return null;
+  }
+
+  /**
+   * The address the server is ACTUALLY listening on, when it has said.
+   *
+   * @returns {string|null} The effective host, or null when unknown. Never
+   *   falls back to the configured value: reporting an aspiration as a
+   *   measurement is the exact defect this method exists to prevent.
+   */
+  getEffectiveBindHost() {
+    return (this.reportedBind && this.reportedBind.effective_host) || null;
+  }
+
+  /**
+   * Whether the server is pinned to loopback because setup is unfinished.
+   *
+   * @returns {boolean|null} True/false when known, null when unmeasured.
+   */
+  isBindLockedDown() {
+    if (!this.reportedBind) return null;
+    return Boolean(this.reportedBind.locked_down);
+  }
+
+  /**
+   * The server's setup verdict, as it reported it.
+   *
+   * @returns {string|null} 'complete', 'incomplete', 'undetermined', or null
+   *   when the server has not been asked yet.
+   */
+  getSetupStatus() {
+    return this.reportedSetupStatus;
   }
 
   /**

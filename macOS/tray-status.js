@@ -110,7 +110,11 @@ function countSessionSignals(sessions) {
  *
  * @param {{serverState: string, lastExitUnexpected?: boolean,
  *   sessions?: (Array<object>|null), sessionsReachable?: boolean,
- *   updateStatus?: (string|null)}} input - Current knowledge.
+ *   updateStatus?: (string|null),
+ *   setupStatus?: (string|null)}} input - Current knowledge.
+ *   `setupStatus` is the server's own verdict ('complete', 'incomplete',
+ *   'undetermined') or null when it has not been asked. Null is NOT treated
+ *   as complete: an unpolled instance is unknown, not healthy.
  *   `sessions` null or `sessionsReachable` false both mean the session list
  *   could not be determined; they are NOT the same as an empty list, which
  *   means the server was asked and genuinely has no sessions.
@@ -126,6 +130,7 @@ function deriveTrayState(input) {
       : Array.isArray(input && input.sessions);
   const counts = countSessionSignals(input && input.sessions);
   const updateStatus = (input && input.updateStatus) || null;
+  const setupStatus = (input && input.setupStatus) || null;
 
   const base = {
     attentionCount: counts.attention,
@@ -149,6 +154,22 @@ function deriveTrayState(input) {
       ...base,
       state: 'unknown',
       reason: 'the session list could not be read',
+    };
+  }
+
+  // Setup comes before session attention, and reuses the SAME 'attention'
+  // state rather than introducing a second notion of "needs work". An
+  // instance that is not set up cannot be judged by its sessions - it has
+  // none - and it is pinned to loopback until somebody finishes it, so it is
+  // the more urgent of the two.
+  if (setupStatus === 'incomplete' || setupStatus === 'undetermined') {
+    return {
+      ...base,
+      state: 'attention',
+      reason:
+        setupStatus === 'incomplete'
+          ? 'setup is not finished'
+          : 'setup state could not be determined',
     };
   }
 
@@ -213,7 +234,18 @@ function describeSignals(input) {
   else if (rawUpdate === 'current') update = 'up to date';
   else update = 'cannot determine';
 
-  return { server, sessions, update };
+  // Three outcomes, and the third is not spelled like either of the others.
+  // `null` here means the server has not been asked yet, which is a different
+  // thing from the server answering "I could not tell" (`undetermined`);
+  // both are reported, neither is rendered as healthy.
+  const rawSetup = (input && input.setupStatus) || null;
+  let setup;
+  if (rawSetup === 'complete') setup = 'complete';
+  else if (rawSetup === 'incomplete') setup = 'not finished';
+  else if (rawSetup === 'undetermined') setup = 'cannot determine';
+  else setup = 'cannot determine (not polled yet)';
+
+  return { server, sessions, update, setup };
 }
 
 /**
@@ -230,6 +262,7 @@ function buildTooltip(input) {
     `Server: ${signals.server}`,
     `Sessions: ${signals.sessions}`,
     `Update: ${signals.update}`,
+    `Setup: ${signals.setup}`,
   ].join('\n');
 }
 
