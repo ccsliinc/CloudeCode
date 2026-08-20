@@ -48,6 +48,8 @@
 # restore-on-exit discipline.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 TESTS="tests/test_project_authority.py tests/test_project_writes.py \
 tests/test_project_snapshot.py tests/test_project_rollback.py \
@@ -65,25 +67,20 @@ FILES=(
   "client/js/launchpad.js"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  cp "${ROOT}/${f}" "${BAKDIR}/$(basename "$f")"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/$(basename "$f")" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/$(basename "$f")" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 run_suite() {
-  (cd "$ROOT" && "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1) || return 1
+  mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1 || return 1
   for t in $NODE_TESTS; do
-    (cd "$ROOT" && node "$t" >/dev/null 2>&1) || return 1
+    mutate_run node "$t" >/dev/null 2>&1 || return 1
   done
   return 0
 }
@@ -102,8 +99,8 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SKIP     $name (target moved - treat as SURVIVED)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   if run_suite; then
@@ -455,7 +452,7 @@ mutate "raw_path is normalised on write, discarding the user path spelling" \
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

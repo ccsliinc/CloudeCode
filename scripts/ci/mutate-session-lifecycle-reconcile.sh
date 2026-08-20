@@ -35,6 +35,8 @@
 # All mutated files are restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 TESTS="tests/test_session_lifecycle_reconcile.py \
 tests/test_session_lifecycle_structure.py \
@@ -49,20 +51,14 @@ FILES=(
   "src/core/tmux_listing.py"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # BASELINE GATE. A mutation run measures the DIFFERENCE between a green
@@ -71,7 +67,7 @@ restore_all() {
 # scripts/ci/mutate-adoption-attribution.sh for the incident that made
 # this mandatory.
 echo "--- baseline: the suite must be GREEN before anything is mutated ---"
-if ! (cd "$ROOT" && "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1); then
+if ! mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1; then
   echo "BASELINE IS RED. Every mutant would read as killed. Refusing to run."
   exit 2
 fi
@@ -94,11 +90,11 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
-  if (cd "$ROOT" && "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1); then
+  if mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1; then
     echo "SURVIVED $name"
     survived=$((survived + 1))
     return
@@ -282,7 +278,7 @@ mutate "the manager reconciles against the CONFIGURED socket, not the probed one
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

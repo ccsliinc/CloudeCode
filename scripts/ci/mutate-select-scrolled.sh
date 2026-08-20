@@ -16,19 +16,18 @@
 # The mutated file is restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 SEL="$ROOT/client/js/terminal-select-scrolled.js"
 TERM_JS="$ROOT/client/js/terminal.js"
 HTML="$ROOT/client/index.html"
 SUITE="$ROOT/tests/test_terminal_select_scrolled.node.mjs"
-BAK_SEL="$(mktemp)"; BAK_TERM="$(mktemp)"; BAK_HTML="$(mktemp)"
-cp "$SEL" "$BAK_SEL"; cp "$TERM_JS" "$BAK_TERM"; cp "$HTML" "$BAK_HTML"
-trap 'cp "$BAK_SEL" "$SEL"; cp "$BAK_TERM" "$TERM_JS"; cp "$BAK_HTML" "$HTML";
-      rm -f "$BAK_SEL" "$BAK_TERM" "$BAK_HTML"' EXIT
+mutate_arm_trap "$ROOT" "$SEL" "$TERM_JS" "$HTML"
 
 survived=0
+cannot_determine=0
 
 restore_all() {
-  cp "$BAK_SEL" "$SEL"; cp "$BAK_TERM" "$TERM_JS"; cp "$BAK_HTML" "$HTML"
+  mutate_restore_files
 }
 
 # mutate <name> <file> <old||=>||new>
@@ -44,8 +43,8 @@ if old not in text:
     sys.exit('mutation target not found: ' + old[:70])
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
-  if [ $? -ne 0 ]; then echo "SKIP $name (target moved)"; survived=1; return; fi
-  if node "$SUITE" >/dev/null 2>&1; then
+  if [ $? -ne 0 ]; then echo "CANNOT_DETERMINE $name (target moved)"; cannot_determine=1; return; fi
+  if mutate_run node "$SUITE" >/dev/null 2>&1; then
     echo "SURVIVED $name"
     survived=1
   else
@@ -145,7 +144,7 @@ mutate "terminal.js stops wiring the module at all" "$TERM_JS" \
 mutate "terminal-select-scrolled.js is not loaded" "$HTML" \
   '<script src="/static/js/terminal-select-scrolled.js"></script>||=>||'
 
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

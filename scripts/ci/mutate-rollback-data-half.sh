@@ -30,6 +30,8 @@
 # All mutated files are restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 PYTESTS="tests/test_rollback_trail_select.py tests/test_version_data_trail_paused.py"
 SHTEST="tests/test_rollback_data_half.sh"
@@ -43,24 +45,18 @@ FILES=(
   "src/core/db_state.py"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  cp "${ROOT}/${f}" "${BAKDIR}/$(basename "$f")"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/$(basename "$f")" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/$(basename "$f")" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Description: run the whole suite for this branch, quietly.
 # Inputs: none.
 # Output: returns 0 when every test passes, non-zero otherwise.
 run_suite() {
-  (cd "$ROOT" && "$PY" -m pytest $PYTESTS -q -p no:randomly >/dev/null 2>&1) || return 1
-  (cd "$ROOT" && bash "$SHTEST" >/dev/null 2>&1) || return 1
+  mutate_run "$PY" -m pytest $PYTESTS -q -p no:randomly >/dev/null 2>&1 || return 1
+  mutate_run bash "$SHTEST" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -75,6 +71,7 @@ else
 fi
 
 survived=0
+cannot_determine=0
 killed=0
 
 # mutate <name> <file> <old||=>||new>
@@ -91,8 +88,8 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SKIP     $name (target moved - treat as SURVIVED)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   if run_suite; then
@@ -245,5 +242,6 @@ echo ""
 echo "=================================================="
 echo "killed:   ${killed}"
 echo "survived: ${survived}"
+echo "cannot_determine: ${cannot_determine}"
 echo "=================================================="
-[ "${survived}" -eq 0 ] || exit 1
+[ "${survived}" -eq 0 ] && [ "${cannot_determine}" -eq 0 ] || exit 1

@@ -25,6 +25,8 @@
 # All mutated files are restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 TESTS="tests/test_s9_recent_and_pills.py tests/test_tmux_listing_consumers.py \
 tests/test_agent_family_display.py"
@@ -36,14 +38,10 @@ FILES=(
   "client/js/launchpad.js"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 # BASELINE GATE. A mutation run measures the DIFFERENCE between a green
@@ -51,12 +49,12 @@ killed=0
 # killed for free. See scripts/ci/mutate-adoption-attribution.sh for the
 # incident that made this mandatory.
 echo "--- baseline: the suites must be GREEN before anything is mutated ---"
-if ! (cd "$ROOT" && "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1); then
+if ! mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1; then
   echo "BASELINE IS RED (python). Every mutant would read as killed. Refusing to run."
   exit 2
 fi
 for nt in $NODE_TESTS; do
-  if ! (cd "$ROOT" && node "$nt" >/dev/null 2>&1); then
+  if ! mutate_run node "$nt" >/dev/null 2>&1; then
     echo "BASELINE IS RED ($nt). Refusing to run."
     exit 2
   fi
@@ -64,9 +62,7 @@ done
 echo "baseline green"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Apply one textual mutation, run the suites, expect RED.
@@ -85,12 +81,12 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   local red=1
-  if (cd "$ROOT" && "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1); then
+  if mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1; then
     red=0
   fi
   if [ "$red" -eq 1 ]; then
@@ -100,7 +96,7 @@ PYEOF
   fi
   # Python was green. The client mutants are only observable in node.
   for nt in $NODE_TESTS; do
-    if ! (cd "$ROOT" && node "$nt" >/dev/null 2>&1); then
+    if ! mutate_run node "$nt" >/dev/null 2>&1; then
       killed=$((killed + 1))
       echo "killed   $name"
       return
@@ -182,7 +178,7 @@ mutate "a probe_unavailable/never_probed response still paints the stored rows" 
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

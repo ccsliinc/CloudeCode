@@ -15,6 +15,8 @@
 # two node tests, not pytest.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+cd "$ROOT" || exit 1
 NODE_TESTS=(
   "tests/test_config_editor_roots.node.mjs"
   "tests/test_files_sidebar_render.node.mjs"
@@ -25,19 +27,15 @@ FILES=(
   "client/js/config-editor-panel.js"
 )
 
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do
-  mkdir -p "${BAKDIR}/$(dirname "$f")"
-  cp "${ROOT}/${f}" "${BAKDIR}/${f}"
-done
-trap 'for f in "${FILES[@]}"; do cp "${BAKDIR}/${f}" "${ROOT}/${f}"; done; rm -rf "${BAKDIR}"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 survived=0
+cannot_determine=0
 killed=0
 
 run_suites() {
   for t in "${NODE_TESTS[@]}"; do
-    if ! (cd "$ROOT" && node "$t" >/dev/null 2>&1); then
+    if ! mutate_run node "$t" >/dev/null 2>&1; then
       return 1
     fi
   done
@@ -55,9 +53,7 @@ fi
 echo "baseline green"
 
 restore_all() {
-  for f in "${FILES[@]}"; do
-    cp "${BAKDIR}/${f}" "${ROOT}/${f}"
-  done
+    mutate_restore_files
 }
 
 # Apply one textual mutation, run both node suites, expect at least one RED.
@@ -76,8 +72,8 @@ if old not in text:
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PYEOF
   if [ $? -ne 0 ]; then
-    echo "SURVIVED $name (target moved - the mutant tests nothing now)"
-    survived=$((survived + 1))
+    echo "CANNOT_DETERMINE $name (target moved - anchor stale, mutant not evaluated)"
+    cannot_determine=$((cannot_determine + 1))
     return
   fi
   if ! run_suites; then
@@ -164,7 +160,7 @@ mutate "a null root element (measured absence) gets appended anyway instead of b
 restore_all
 echo
 echo "killed ${killed}, survived ${survived}"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

@@ -17,6 +17,7 @@
 # Every mutated file is restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 LISTING="$ROOT/src/core/tmux_listing.py"
 BACKEND="$ROOT/src/core/tmux_backend.py"
 MANAGER="$ROOT/src/core/session_manager.py"
@@ -26,27 +27,30 @@ LAUNCHPAD="$ROOT/client/js/launchpad.js"
 STDERR="$ROOT/src/core/tmux_stderr.py"
 
 FILES=("$LISTING" "$STDERR" "$BACKEND" "$MANAGER" "$ROUTES" "$LAUNCHPAD")
-BAKDIR="$(mktemp -d)"
-for f in "${FILES[@]}"; do cp "$f" "$BAKDIR/$(basename "$f")"; done
-trap 'for f in "${FILES[@]}"; do cp "$BAKDIR/$(basename "$f")" "$f"; done; rm -rf "$BAKDIR"' EXIT
+mutate_arm_trap "$ROOT" "${FILES[@]}"
 
 PY="$ROOT/venv/bin/python3"
 if [ ! -x "$PY" ]; then PY="/Users/jsugamele/Development/CloudeCode/venv/bin/python3"; fi
 
 survived=0
+cannot_determine=0
 killed=0
 
 restore_all() {
-  for f in "${FILES[@]}"; do cp "$BAKDIR/$(basename "$f")" "$f"; done
+  mutate_restore_files
 }
 
 # Runs the two suites that own this behaviour. A mutant is KILLED if either
 # goes red. Scoped to these two files on purpose: the point is whether THESE
 # tests can detect the bug, not whether the repo happens to notice elsewhere.
+# Each suite runs through mutate_run so a signal that reaches only this
+# script's own PID can still interrupt a suite that is mid-run (see
+# scripts/ci/lib/mutate-trap.sh for why a plain foreground call cannot be
+# interrupted that way).
 run_suites() {
-  "$PY" -m pytest "$ROOT/tests/test_tmux_listing.py" \
+  mutate_run "$PY" -m pytest "$ROOT/tests/test_tmux_listing.py" \
     "$ROOT/tests/test_tmux_listing_consumers.py" -q >/dev/null 2>&1 || return 1
-  node "$ROOT/tests/test_running_sessions_unknown.node.mjs" >/dev/null 2>&1 || return 1
+  mutate_run node "$ROOT/tests/test_running_sessions_unknown.node.mjs" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -63,7 +67,7 @@ if old not in text:
     sys.exit('mutation target not found: ' + old[:70])
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
-  if [ $? -ne 0 ]; then echo "SKIP     $name (target moved)"; survived=$((survived + 1)); return; fi
+  if [ $? -ne 0 ]; then echo "CANNOT_DETERMINE $name (target moved)"; cannot_determine=$((cannot_determine + 1)); return; fi
   if run_suites; then
     echo "SURVIVED $name"
     survived=$((survived + 1))
@@ -133,7 +137,7 @@ mutate "the failed live merge is swallowed again" "$LAUNCHPAD" \
 restore_all
 echo
 echo "killed $killed, survived $survived"
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi

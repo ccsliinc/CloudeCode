@@ -7,6 +7,7 @@
 # on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/ci/lib/mutate-trap.sh"
 SRC="$ROOT/client/js/altscreen-scroll.js"
 # The per-gesture row cap USED to live in altscreen-scroll.js and now lives
 # in altscreen-keys.js, which decomposes a distance into PageUp/PageDown
@@ -17,19 +18,15 @@ SRC="$ROOT/client/js/altscreen-scroll.js"
 # killing anything. Both files are mutable here so the cap is checked where
 # it actually is.
 KEYS="$ROOT/client/js/altscreen-keys.js"
-BAK="$(mktemp)"
-BAK_KEYS="$(mktemp)"
-cp "$SRC" "$BAK"
-cp "$KEYS" "$BAK_KEYS"
-trap 'cp "$BAK" "$SRC"; cp "$BAK_KEYS" "$KEYS"; rm -f "$BAK" "$BAK_KEYS"' EXIT
+mutate_arm_trap "$ROOT" "$SRC" "$KEYS"
 
 survived=0
+cannot_determine=0
 
 # mutate <name> <python-expression-on-text> [file, default altscreen-scroll.js]
 mutate() {
   local name="$1" py="$2" target="${3:-$SRC}"
-  cp "$BAK" "$SRC"
-  cp "$BAK_KEYS" "$KEYS"
+  mutate_restore_files
   python3 - "$target" "$py" <<'PY'
 import sys
 path, expr = sys.argv[1], sys.argv[2]
@@ -39,8 +36,8 @@ if old not in text:
     sys.exit('mutation target not found: ' + old[:60])
 open(path, 'w', encoding='utf-8').write(text.replace(old, new, 1))
 PY
-  if [ $? -ne 0 ]; then echo "SKIP $name (target moved)"; survived=1; return; fi
-  if node "$ROOT/tests/test_altscreen_scroll.node.mjs" >/dev/null 2>&1; then
+  if [ $? -ne 0 ]; then echo "CANNOT_DETERMINE $name (target moved)"; cannot_determine=1; return; fi
+  if mutate_run node "$ROOT/tests/test_altscreen_scroll.node.mjs" >/dev/null 2>&1; then
     echo "SURVIVED $name"
     survived=1
   else
@@ -107,7 +104,7 @@ mutate "gate goes back to the buffer label instead of scrollback" \
 mutate "existing scrollback is hijacked instead of left to scrollLines" \
   "if (baseY > 0) return 'main';||=>||if (baseY < 0) return 'main';"
 
-if [ "$survived" -ne 0 ]; then
+if [ "$survived" -ne 0 ] || [ "$cannot_determine" -ne 0 ]; then
   echo "MUTATION CHECK FAILED"
   exit 1
 fi
