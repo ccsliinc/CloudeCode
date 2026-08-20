@@ -202,6 +202,75 @@ def measure_density(browser, port: int, rep: Report) -> None:
               f"delta={heights['detailed'] - heights['cozy']:.2f}px")
 
 
+def measure_density_menu_placement(browser, port: int, rep: Report) -> None:
+    """Measure where the density MENU lands when opened, not just the button.
+
+    The regression this closes: the density control moved from the far
+    right of the header (session-sidebar-groups.css) into the tools
+    cluster next to the title, and the menu's CSS still anchored itself to
+    that control's own 28px box (`right: 0` on
+    .session-sidebar-density-menu, relative to .session-sidebar-density-wrap)
+    - correct only while the control sat flush against the panel's right
+    edge. Every prior check here measured the BUTTON's box and the row
+    heights; none of them opened the menu and looked at where IT landed,
+    which is exactly why "the list goes off to the left" shipped uncaught.
+
+    Two things are asserted, at every density (the menu's own DOM does not
+    depend on density, but the row list next to it does, and this is
+    where a reader would look for a density-menu check):
+      1. The open menu's box is fully inside the PANEL's box - never past
+         its left edge, never past its right edge.
+      2. The same holds after a SIBLING control is added ahead of the
+         density button in .session-sidebar-tools, simulating the cluster
+         gaining another icon. A fix that just flips `right: 0` to
+         `left: 0` passes (1) today and fails this the moment the cluster
+         changes shape again; this is here so that class of regression
+         cannot ship quietly a second time.
+
+    Inputs: browser; port (int); rep (Report). Output: None.
+    """
+    for mode in ("compact", "cozy", "detailed"):
+        page = open_page(browser, port, {DENSITY_KEY: mode})
+        assert_viewport(page, rep)
+        page.click("#session-sidebar-density")
+        page.wait_for_selector("#session-sidebar-density-menu:not([hidden])")
+        panel = page.eval_on_selector(".session-sidebar-panel", "el => el.getBoundingClientRect()")
+        menu = page.eval_on_selector("#session-sidebar-density-menu", "el => el.getBoundingClientRect()")
+        left_ok = menu["x"] >= panel["x"] - 0.5
+        right_ok = menu["x"] + menu["width"] <= panel["x"] + panel["width"] + 0.5
+        rep.check(left_ok, f"{mode}: density menu left edge is inside the panel",
+                  f"menu.left={menu['x']:.2f} panel.left={panel['x']:.2f}")
+        rep.check(right_ok, f"{mode}: density menu right edge is inside the panel",
+                  f"menu.right={menu['x'] + menu['width']:.2f} "
+                  f"panel.right={panel['x'] + panel['width']:.2f}")
+        page.close()
+
+    # Same check again, but with a sibling control inserted ahead of the
+    # density button - the shape change that breaks a fix anchored to the
+    # button's own position rather than the panel's.
+    page = open_page(browser, port, {})
+    assert_viewport(page, rep)
+    page.evaluate(
+        "() => { const tools = document.querySelector('.session-sidebar-tools'); "
+        "const sib = document.createElement('button'); sib.textContent = 'X'; "
+        "sib.style.width = '80px'; sib.style.height = '28px'; "
+        "tools.insertBefore(sib, tools.firstChild); }"
+    )
+    page.click("#session-sidebar-density")
+    page.wait_for_selector("#session-sidebar-density-menu:not([hidden])")
+    panel = page.eval_on_selector(".session-sidebar-panel", "el => el.getBoundingClientRect()")
+    wrap = page.eval_on_selector(".session-sidebar-density-wrap", "el => el.getBoundingClientRect()")
+    menu = page.eval_on_selector("#session-sidebar-density-menu", "el => el.getBoundingClientRect()")
+    left_ok = menu["x"] >= panel["x"] - 0.5
+    right_ok = menu["x"] + menu["width"] <= panel["x"] + panel["width"] + 0.5
+    rep.check(left_ok, "with an added sibling control: density menu left edge is inside the panel",
+              f"wrap.x={wrap['x']:.2f} menu.left={menu['x']:.2f} panel.left={panel['x']:.2f}")
+    rep.check(right_ok, "with an added sibling control: density menu right edge is inside the panel",
+              f"wrap.x={wrap['x']:.2f} menu.right={menu['x'] + menu['width']:.2f} "
+              f"panel.right={panel['x'] + panel['width']:.2f}")
+    page.close()
+
+
 def measure_pin_and_order(browser, port: int, rep: Report) -> None:
     """Measure pinning and reordering: persistence, geometry, and real keys.
 
@@ -520,6 +589,8 @@ def main() -> int:
             try:
                 rep.lines.append("--- ITEM 47: density ---")
                 measure_density(browser, port, rep)
+                rep.lines.append("--- ITEM 47b: density MENU placement ---")
+                measure_density_menu_placement(browser, port, rep)
                 rep.lines.append("--- ITEM 46: pin and reorder ---")
                 measure_pin_and_order(browser, port, rep)
                 rep.lines.append("--- three-outcome obligations ---")

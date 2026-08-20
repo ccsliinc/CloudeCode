@@ -201,7 +201,12 @@
 /* ---- Density control (sidebar header) -------------------------------- */
 
 .session-sidebar-density-wrap {
-    position: relative;
+    /* NOT position:relative. The menu below used to anchor here, which
+     * anchored it to a 28px box instead of the panel - correct only while
+     * this control sat pinned to the header's far right (its old
+     * `margin-left: auto`, now neutralised by session-sidebar-groups.css).
+     * The menu's containing block is .session-sidebar-header instead (see
+     * session-sidebar.css), so this wrap stays a plain flex item. */
     margin-left: auto;
     display: inline-flex;
 }
@@ -246,11 +251,34 @@
 }
 
 .session-sidebar-density-menu {
+    /* Positioned against .session-sidebar-header (session-sidebar.css),
+     * not against .session-sidebar-density-wrap - the wrap is only the
+     * 28px button, and anchoring there is what let the menu run off the
+     * panel the moment the button wasn't at the header's far edge any
+     * more (right:0 undershot left; a plain left:0 would have just moved
+     * the same bug to the right edge, since 210px does not fit between
+     * this button and either edge of a 320px panel).
+     *
+     * `left` and `right` are both set relative to the HEADER, i.e. to the
+     * panel itself, so the box is geometrically incapable of overflowing
+     * either edge no matter where the triggering button sits or how many
+     * siblings join it in .session-sidebar-tools - this no longer tracks
+     * the button's x position at all. `max-width` keeps it from
+     * stretching edge-to-edge on a normal-width panel; it only shrinks
+     * below that on a panel narrowed by the `85vw` clamp in
+     * --sidebar-dock-w, which is strictly better than overflowing.
+     *
+     * `top: 46px` = the header's own 14px top padding + the button's 28px
+     * height + a 4px gap, i.e. "just under the control row" - the same
+     * vertical spot the old wrap-relative `top: 32px` produced (wrap's
+     * top already equalled the header's 14px padding), just expressed
+     * against the new containing block. */
     position: absolute;
-    top: 32px;
-    right: 0;
+    top: 46px;
+    left: 16px;
+    right: 16px;
+    max-width: 210px;
     z-index: 1120;
-    min-width: 210px;
     padding: 4px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
