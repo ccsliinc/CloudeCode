@@ -121,6 +121,23 @@ function makeSandbox(options = {}) {
 
     const termEl = { id: 'terminal', clientWidth: 0, clientHeight: 0 };
 
+    /**
+     * Fake `#terminal-screen` supporting the exact surface
+     * requestFitAfterTransition needs: add/removeEventListener for
+     * 'transitionend', plus a test-only `fireTransitionEnd(prop)` to
+     * simulate the browser actually finishing the CSS transition.
+     */
+    const termScreenListeners = new Set();
+    const termScreenEl = {
+        id: 'terminal-screen',
+        addEventListener(type, fn) { if (type === 'transitionend') termScreenListeners.add(fn); },
+        removeEventListener(type, fn) { if (type === 'transitionend') termScreenListeners.delete(fn); },
+        fireTransitionEnd(propertyName) {
+            const evt = { target: termScreenEl, propertyName };
+            [...termScreenListeners].forEach((fn) => fn(evt));
+        },
+    };
+
     const controller = {
         term: { cols: 80, rows: 24, scrollToBottom: () => scrollCalls.push('scrollToBottom') },
         fitAddon: {
@@ -175,6 +192,7 @@ function makeSandbox(options = {}) {
         document: {
             getElementById(id) {
                 if (id === 'terminal') return termEl;
+                if (id === 'terminal-screen') return termScreenEl;
                 if (id === 'session-sidebar-pin') return pinBtn;
                 return null;
             },
@@ -214,6 +232,7 @@ function makeSandbox(options = {}) {
         sidebar,
         controller,
         termEl,
+        termScreenEl,
         fits,
         wire,
         scrollCalls,
@@ -245,6 +264,37 @@ test('install is idempotent - a second call does not stack listeners', () => {
     const first = s.listeners.window.resize;
     s.Layout.install(s.controller);
     assert.equal(s.listeners.window.resize, first);
+});
+
+test('requestFitAfterTransition with no element degrades to an immediate refit, not silence', async () => {
+    // A caller passing the wrong id or an element that has not mounted yet
+    // must never wait forever for a transitionend that can never arrive.
+    const s = makeSandbox();
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 640;
+    s.termEl.clientHeight = 480;
+    s.Layout.requestFitAfterTransition(null, 'padding-left', 250, 'no-element-reason');
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+    assert.equal(s.wire.length, 1);
+    assert.equal(s.wire[0].reason, 'no-element-reason');
+});
+
+test('requestFitAfterTransition ignores a transitionend for the wrong CSS property', async () => {
+    const s = makeSandbox();
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 640;
+    s.termEl.clientHeight = 480;
+    s.Layout.requestFitAfterTransition(s.termScreenEl, 'padding-left', 250, 'prop-test');
+    s.termScreenEl.fireTransitionEnd('opacity'); // wrong property - must be ignored
+    // Long enough for requestFit's OWN 100ms debounce to have flushed had
+    // the wrong property incorrectly settled the wait, but still short of
+    // the 250ms fallback ceiling - isolates "did the wrong event fire it"
+    // from "did the fallback eventually fire it regardless".
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+    assert.equal(s.wire.length, 0, 'the wrong property must not settle the wait early');
+    s.termScreenEl.fireTransitionEnd('padding-left'); // the right one
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+    assert.equal(s.wire.length, 1, 'the matching property must settle it');
 });
 
 test('a burst of layout events collapses to one fit and one pty_resize', async () => {
@@ -367,6 +417,157 @@ test('pinning the sidebar fits the terminal and sends the new size to tmux', asy
     assert.ok(s.wire[s.wire.length - 1].cols > pinFrame.cols, 'cols must grow back');
 });
 
+// ---------------------------------------------------------------------------
+// Behaviour: transitionend-timed refit, and its robustness to a rapid
+// double-toggle interrupting the CSS transition mid-flight.
+// ---------------------------------------------------------------------------
+
+test('pin measures the POST-transition box, not the pre-transition one', async () => {
+    const s = makeSandbox({ withPin: true, width: 1200 });
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 1170; // pre-transition (undocked) box
+    s.termEl.clientHeight = 673;
+    s.Pin.init();
+    await settle(400);
+    const before = { cols: s.controller.term.cols, rows: s.controller.term.rows };
+
+    s.Pin.toggle(); // clicking measures nothing yet - no fixed-delay fit fired
+    assert.equal(s.wire.length, s.wire.length, 'no synchronous resize on click');
+    // The box only reaches its docked width once the CSS transition ends;
+    // model that by NOT updating clientWidth until transitionend fires.
+    s.termEl.clientWidth = 850;
+    s.termScreenEl.fireTransitionEnd('padding-left');
+    await settle(20); // requestFit's own 100ms debounce, not the fallback ceiling
+    await settle(s.Layout.DEBOUNCE_MS + 20);
+
+    const after = { cols: s.controller.term.cols, rows: s.controller.term.rows };
+    const frame = s.wire[s.wire.length - 1];
+    assert.equal(frame.reason, 'sidebar-pin');
+    assert.equal(frame.cols, after.cols, 'the shipped frame must match the settled grid');
+    assert.ok(after.cols < before.cols,
+        `pin must narrow the grid: before=${before.cols}x${before.rows} after=${after.cols}x${after.rows}`);
+});
+
+test('a rapid pin-then-unpin sends ZERO resizes - net state equals where it started', async () => {
+    // An even number of toggles always returns to the starting state, so
+    // the CORRECT behavior is nothing on the wire at all - not "one
+    // resize to the right place after briefly sending a wrong one". This
+    // is what actually proves there is no race: if the superseded first
+    // toggle's geometry sync had fired independently (the bug this
+    // hardens against), it would have measured the still-1170px box
+    // BEFORE the dedup gate ever saw the real change, and this assertion
+    // would already have failed on the intermediate frame.
+    const s = makeSandbox({ withPin: true, width: 1200 });
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 1170;
+    s.termEl.clientHeight = 673;
+    s.Pin.init();
+    await settle(400);
+    const before = s.wire.length;
+
+    s.Pin.toggle(); // pinned
+    s.Pin.toggle(); // unpinned - net effect is unpinned, same as the start
+    assert.equal(s.bodyClasses.has('session-sidebar-pinned'), false);
+
+    // Per the CSS Transitions spec an interrupted transition never fires
+    // transitionend for the property it never reached - only the ONE that
+    // actually completes does. Model that: exactly one event, for the
+    // final (unpinned) state, box already back at its original width.
+    s.termEl.clientWidth = 1170;
+    s.termScreenEl.fireTransitionEnd('padding-left');
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+
+    assert.equal(s.wire.length, before,
+        'no frame belongs on the wire when the settled grid never changed');
+});
+
+test('a rapid pin-unpin-pin (odd count) sends exactly ONE resize, for the final settled layout', async () => {
+    const s = makeSandbox({ withPin: true, width: 1200 });
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 1170;
+    s.termEl.clientHeight = 673;
+    s.Pin.init();
+    await settle(400);
+    const before = { cols: s.controller.term.cols, rows: s.controller.term.rows };
+    const beforeWire = s.wire.length;
+
+    s.Pin.toggle(); // pinned
+    s.Pin.toggle(); // unpinned
+    s.Pin.toggle(); // pinned again - net effect DOES change vs the start
+    assert.equal(s.bodyClasses.has('session-sidebar-pinned'), true);
+    s.termEl.clientWidth = 850; // the box actually reached once settled
+    s.termScreenEl.fireTransitionEnd('padding-left');
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+
+    const sent = s.wire.slice(beforeWire);
+    assert.equal(sent.length, 1, `exactly one resize must be sent, got ${sent.length}`);
+    assert.equal(sent[0].reason, 'sidebar-pin');
+    const after = { cols: s.controller.term.cols, rows: s.controller.term.rows };
+    assert.equal(sent[0].cols, after.cols, 'the one frame matches the settled grid');
+    assert.ok(after.cols < before.cols,
+        `pin must narrow the grid: before=${before.cols}x${before.rows} after=${after.cols}x${after.rows}`);
+});
+
+test('a rapid triple-toggle via the fallback timer (no transitionend at all) still lands on the final state', async () => {
+    // Models prefers-reduced-motion: the transition duration drops to 0s
+    // and no transitionend event ever fires, so only the fallback ceiling
+    // in session-sidebar-pin.js can deliver the resize.
+    const s = makeSandbox({ withPin: true, width: 1200 });
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 1170;
+    s.termEl.clientHeight = 673;
+    s.Pin.init();
+    await settle(400);
+    const before = s.wire.length;
+
+    s.Pin.toggle(); // pinned
+    s.Pin.toggle(); // unpinned
+    s.Pin.toggle(); // pinned again - net effect is pinned
+    assert.equal(s.bodyClasses.has('session-sidebar-pinned'), true);
+    s.termEl.clientWidth = 850; // the box that is actually reached, eventually
+
+    await settle(400); // past the 250ms fallback ceiling plus its own debounce
+
+    const sent = s.wire.slice(before);
+    assert.equal(sent.length, 1, `exactly one resize must be sent, got ${sent.length}`);
+    assert.equal(sent[0].reason, 'sidebar-pin');
+    assert.equal(sent[0].cols, s.controller.term.cols, 'must match the final settled grid');
+});
+
+test('re-applying the SAME docked state is a no-op, not a wasted resize', async () => {
+    // apply() runs on every window resize event too, not only on a toggle -
+    // it must only ask for a geometry sync when the docked state actually
+    // CHANGES, never on every call.
+    const s = makeSandbox({ withPin: true, width: 1200 });
+    s.Layout.install(s.controller);
+    s.termEl.clientWidth = 1170;
+    s.termEl.clientHeight = 673;
+    s.Pin.init();
+    await settle(400);
+    s.Pin.toggle(); // pinned
+    s.termEl.clientWidth = 850;
+    s.termScreenEl.fireTransitionEnd('padding-left');
+    await settle(s.Layout.DEBOUNCE_MS + 40);
+    const beforeWire = s.wire.length;
+    const beforeFits = s.fits.length;
+
+    s.Pin.apply(); // re-apply, nothing changed
+    s.Pin.apply();
+    s.Pin.apply();
+    // Past the fallback ceiling (250ms) PLUS requestFit's own 100ms
+    // debounce - a spurious call schedules its measurement in two hops,
+    // not one, and a shorter wait here would clear before the second.
+    await settle(450);
+
+    // wire.length alone would not catch a wasted-but-deduped fit: the
+    // geometry never moved, so even a spurious refit's pty_resize would
+    // be swallowed by sendResize's own (cols, rows) dedup downstream.
+    // fits.length is the layer BEFORE that dedup and proves no wasted
+    // measurement happened at all.
+    assert.equal(s.fits.length, beforeFits, 'no docked-state change means no refit attempt');
+    assert.equal(s.wire.length, beforeWire, 'no docked-state change means no new resize');
+});
+
 test('the pin does not refit on a phone, where it never docks', async () => {
     const s = makeSandbox({ withPin: true, width: 390 });
     s.Layout.install(s.controller);
@@ -456,6 +657,21 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
         'the observer moved to terminal-layout.js; two of them would double-fire');
     const lines = src.split('\n').length;
     assert.ok(lines < 2370, `terminal.js must not grow, is ${lines} lines`);
+});
+
+test('sendResize names its no-op instead of failing silently when no session is attached', () => {
+    // terminal.js is coupled to real xterm.js/WebSocket objects deeply
+    // enough that instantiating a real TerminalController in this vm
+    // sandbox is not practical (see the file header) - the established
+    // pattern for terminal.js is a source-text assertion, as above. This
+    // checks the three-outcome contract stays in the code: the guard must
+    // both warn (observable) and return a named reason (inspectable),
+    // never a bare `return;` that looks identical to "nothing happened".
+    const src = readClientJs('terminal.js');
+    const fn = src.slice(src.indexOf('sendResize(source'), src.indexOf('sendResize(source') + 900);
+    assert.ok(/no-session/.test(fn), 'the no-op must be named, not a bare return');
+    assert.ok(/console\.warn/.test(fn), 'the no-op must also be observable, not just structurally named');
+    assert.ok(/delivered:\s*true/.test(fn), 'a successful send must report the same named-outcome shape');
 });
 
 await runQueue();

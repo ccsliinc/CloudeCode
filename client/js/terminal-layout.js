@@ -70,6 +70,15 @@ console.log('[TerminalLayout Module] Loading...');
     let retries = 0;
 
     /**
+     * Per-element bookkeeping for requestFitAfterTransition: which "wait
+     * for this element's transition to settle" request is still current,
+     * plus the fallback timer and transitionend listener it owns so a
+     * newer call can cancel both before they fire.
+     * @type {WeakMap<Element, {gen: number, timer: ?number, listener: ?function}>}
+     */
+    const transitionWaiters = new WeakMap();
+
+    /**
      * Refit the terminal to its container and ship the new geometry to
      * the backend. Runs at most once per debounce window.
      *
@@ -170,6 +179,78 @@ console.log('[TerminalLayout Module] Loading...');
     }
 
     /**
+     * Queue a refit that waits for a docking/undocking CSS transition on
+     * `el` to actually finish before measuring, instead of guessing a fixed
+     * delay against a box that might still be mid-animation.
+     *
+     * WHY transitionend FIRST. Firing on click measures the PRE-transition
+     * box - the bug this exists to fix. `transitionend` measures the real
+     * settled box, and it is naturally immune to a second toggle
+     * interrupting the first: per the CSS Transitions spec, an interrupted
+     * transition never fires `transitionend` for the property it never
+     * reached, only the transition that actually completes does. So a
+     * rapid pin/unpin/pin sequence fires this callback at most once, for
+     * whichever toggle's transition is the one that actually finishes.
+     *
+     * WHY A FALLBACK TIMER TOO. `transitionend` can be legitimately absent:
+     * `prefers-reduced-motion` (or any stylesheet) can drop the transition
+     * to 0s, which fires no event at all, and a caller can mis-name the
+     * property or element. `fallbackMs` is a safety-net ceiling, not the
+     * primary mechanism - whichever of the two fires first wins, and the
+     * other is cancelled.
+     *
+     * COALESCING. Calling this again for the same `el` before it has fired
+     * bumps a per-element generation counter and tears down the previous
+     * listener/timer, so only the LATEST call's settle can ever call
+     * requestFit. This is what makes a rapid double-toggle produce exactly
+     * one resize instead of one per click.
+     *
+     * A future second panel (a right-hand dock) reuses this unchanged: call
+     * it with that panel's own element/property/reason, no new module.
+     *
+     * @param {?Element} el - element carrying the transitioned property. A
+     *   missing element (wrong id, not yet in the DOM) degrades to an
+     *   immediate requestFit rather than waiting forever for an event that
+     *   can never fire on nothing.
+     * @param {string} propertyName - CSS property to wait on, e.g.
+     *   'padding-left'. Must match `event.propertyName` exactly.
+     * @param {number} fallbackMs - safety-net delay in ms if transitionend
+     *   never arrives.
+     * @param {string} reason - forwarded to requestFit for the log line.
+     * @returns {void}
+     */
+    function requestFitAfterTransition(el, propertyName, fallbackMs, reason) {
+        if (!el) { requestFit(reason); return; }
+
+        let waiter = transitionWaiters.get(el);
+        if (!waiter) {
+            waiter = { gen: 0, timer: null, listener: null };
+            transitionWaiters.set(el, waiter);
+        }
+        if (waiter.timer) clearTimeout(waiter.timer);
+        if (waiter.listener) el.removeEventListener('transitionend', waiter.listener);
+
+        waiter.gen += 1;
+        const myGen = waiter.gen;
+
+        const settle = () => {
+            if (waiter.gen !== myGen) return; // superseded by a newer call
+            if (waiter.timer) { clearTimeout(waiter.timer); waiter.timer = null; }
+            if (waiter.listener) {
+                el.removeEventListener('transitionend', waiter.listener);
+                waiter.listener = null;
+            }
+            requestFit(reason);
+        };
+
+        waiter.listener = (evt) => {
+            if (evt.target === el && evt.propertyName === propertyName) settle();
+        };
+        el.addEventListener('transitionend', waiter.listener);
+        waiter.timer = setTimeout(settle, fallbackMs);
+    }
+
+    /**
      * Wire the pipeline to a TerminalController and start listening.
      * Idempotent: a second call re-points the controller but does not
      * stack a second set of listeners.
@@ -212,6 +293,7 @@ console.log('[TerminalLayout Module] Loading...');
     window.TerminalLayout = {
         install,
         requestFit,
+        requestFitAfterTransition,
         DEBOUNCE_MS,
         MAX_FIT_RETRIES,
         RETRY_MS,
