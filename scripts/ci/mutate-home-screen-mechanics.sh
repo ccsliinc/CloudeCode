@@ -173,10 +173,26 @@ mutate "the help button is shown on every screen, not just home" \
 
 echo "--- BLOCK 5: the add menu ---"
 
-mutate "clone from github goes back to being a peer of new project" \
-  "client/js/launchpad.js" \
-  "                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"open-folder\" tabindex=\"-1\">||=>||                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"clone-github\" tabindex=\"-1\"><span class=\"new-fab__label\">clone from github</span></button>
-                                <button class=\"new-fab__item\" type=\"button\" role=\"menuitem\" data-action=\"open-folder\" tabindex=\"-1\">"
+# REMOVED 2026-08-20: "clone from github goes back to being a peer of new
+# project" used to live here, targeting a top-level
+# data-action="open-folder" <button> as the anchor to reintroduce a
+# sibling data-action="clone-github" <button> next to it. That anchor was
+# rewritten when both "open from folder" and "clone from github" were
+# folded out of the top-level add menu and into the New Claude Project
+# chooser's item list - there is no more peer-level open-folder button to
+# anchor on, so this mutant's sed target has been permanently stale since
+# that refactor. Per the target-moved handling above it reported
+# CANNOT_DETERMINE, not SURVIVED, but a mutant that can never again find
+# its target is not "could not evaluate this run" - it is dead code.
+# Deleted rather than repaired: the exact regression it was written to
+# catch (clone-github reappearing as a top-level menu peer) is already
+# covered by scripts/verify_home_mechanics.py ITEM 53, which asserts
+# directly against the rendered DOM that no top-level item has
+# data-action="clone-github"; and the symmetrical case for the other
+# folded-in item is exercised live by
+# scripts/ci/mutate-header-icons-and-menu.sh's "'open from folder' comes
+# back as a top-level add-menu item" mutant. Repairing this target to
+# match the current markup would only duplicate that existing coverage.
 
 mutate "the top item goes back to the unexplained 'create new project' name" \
   "client/js/launchpad.js" \
