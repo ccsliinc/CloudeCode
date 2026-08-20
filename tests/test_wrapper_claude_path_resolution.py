@@ -95,11 +95,23 @@ def test_regression_guard_is_not_vacuous_against_the_shipped_defect():
 
 def test_cldor_resolves_claude_via_path_lookup_not_a_literal_path():
     """Directional check on the chosen mechanism: PATH resolution via the
-    `command -v` builtin, stored once and reused for both invocations."""
+    `command -v` builtin, stored once and reused for both invocations.
+
+    Updated by fix/wrapper-resolves-past-alias: resolution now steps past
+    a shell alias/function first (see
+    tests/test_wrapper_resolves_past_shell_alias.py for why), and a -x
+    guard was added, so "$claude_bin" now appears three times rather than
+    two. The count is therefore taken over INVOCATION SITES specifically -
+    a line whose first token is the variable - which is what this
+    assertion always meant, rather than over every textual occurrence."""
     assert "command -v claude" in EXAMPLE_WRAPPER_CLDOR
     assert '"$HOME/.local/bin/claude"' not in EXAMPLE_WRAPPER_CLDOR
-    # both real invocations must use the resolved variable
-    assert EXAMPLE_WRAPPER_CLDOR.count('"$claude_bin"') == 2
+    invocation_sites = [
+        line.strip()
+        for line in EXAMPLE_WRAPPER_CLDOR.splitlines()
+        if line.strip().startswith('"$claude_bin"')
+    ]
+    assert len(invocation_sites) == 2, invocation_sites
 
 
 # --------------------------------------------------------------------- #
