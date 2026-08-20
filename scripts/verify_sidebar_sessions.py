@@ -160,25 +160,26 @@ def measure_density(browser, port: int, rep: Report) -> None:
                   f"min={min(hs):.2f} max={max(hs):.2f}")
         heights[mode] = hs[0]
         rep.note(f"{mode} row heights: " + ", ".join(f"{h:.2f}" for h in hs))
-        # THE FAMILY PILL IS IN EVERY DENSITY, all three states intact.
-        rep.check(all(r["pills"] == 1 for r in rows),
-                  f"{mode}: every row draws exactly one family pill",
+        # ITEM 63: NO FAMILY PILL, IN ANY DENSITY. This block used to
+        # assert the pill rendered in all three states. The user asked for
+        # it to go, and this is the RENDERED-PIXEL form of that check: a
+        # zero count here means nothing is painted, which is a stronger
+        # statement than the DOM-text assertions that let `~~claude` ship.
+        rep.check(all(r["pills"] == 0 for r in rows),
+                  f"{mode}: no row draws a family pill",
                   f"pills={[r['pills'] for r in rows]}")
-        classes = {p["cls"] for p in g["pills"]}
-        for want in ("family-pill--fact", "family-pill--guess", "family-pill--unknown"):
-            rep.check(any(want in c for c in classes),
-                      f"{mode}: the {want.split('--')[1]} pill state renders", "")
-        guess = [p for p in g["pills"] if "family-pill--guess" in p["cls"]]
-        rep.check(bool(guess) and guess[0]["text"].startswith("~"),
-                  f"{mode}: a guessed family keeps its leading tilde",
-                  f"text={guess[0]['text'] if guess else 'none'}")
-        unknown = [p for p in g["pills"] if "family-pill--unknown" in p["cls"]]
-        rep.check(bool(unknown) and unknown[0]["text"] == "unknown family",
-                  f"{mode}: an unknown family says so in words",
-                  f"text={unknown[0]['text'] if unknown else 'none'}")
-        rep.check(all(p["box"] > 0 for p in g["pills"]),
-                  f"{mode}: every pill has non-zero painted height",
-                  f"min={min(p['box'] for p in g['pills']):.2f}")
+        rep.check(len(g["pills"]) == 0,
+                  f"{mode}: no pill element is painted anywhere in the list",
+                  f"painted={len(g['pills'])}")
+        # THE DENSITY CONTRACT, MEASURED. These are the three numbers the
+        # stylesheet declares as a per-mode min-height. Asserting them by
+        # name rather than only asserting they DIFFER is the point: before
+        # the min-height existed, removing a glyph silently resized a mode
+        # and a "they differ" check would have stayed green through it.
+        want = {"compact": 24.0, "cozy": 46.0, "detailed": 66.0}[mode]
+        rep.check(all(abs(h - want) < 0.5 for h in hs),
+                  f"{mode}: every row measures the declared {want:.0f}px",
+                  f"want={want:.0f} got min={min(hs):.2f} max={max(hs):.2f}")
         # NO RESTART CONTROL, at any density. Every row here is a session
         # whose lifecycle the attachable probe does not report.
         rep.check(g["restartControls"] == 0,
@@ -268,21 +269,63 @@ def measure_pin_and_order(browser, port: int, rep: Report) -> None:
     page.wait_for_timeout(60)
     g3 = page.evaluate("window.__sidebarMeasure()")
     names3 = [r["name"] for r in g3["rows"]]
-    rep.check(names3.index(moving) == 1,
-              "a second Alt+ArrowUp REFUSES to cross into the pinned band",
-              f"index stays {names3.index(moving)} under pinned {names3[0]}")
+    # ITEM 65: A SECOND Alt+ArrowUp NOW CROSSES, AND PINS. This used to
+    # assert a refusal. The user asked for the crossing, so what is checked
+    # is no longer "did nothing happen" but "did the right thing happen AND
+    # was it said out loud" - an invisible pin change was the thing being
+    # prevented, not the pin change itself.
+    rep.check(names3.index(moving) == 0,
+              "ITEM 65: a second Alt+ArrowUp CROSSES into the pinned band",
+              f"index 1 -> {names3.index(moving)}")
+    rep.check(g3["rows"][0]["pinned"] == "1",
+              "ITEM 65: and the crossing row really renders as pinned",
+              f"top row {names3[0]} pinned={g3['rows'][0]['pinned']}")
+    rep.check("pin" in (g3["live"] or "").lower(),
+              "ITEM 65: the pin change is ANNOUNCED, not silently applied",
+              f"live={g3['live']!r}")
+
+    # AND BACK THE OTHER WAY, from the keyboard alone. A crossing that only
+    # works in one direction is a trap door, not a control.
+    #
+    # THE PINNED BAND NOW HOLDS TWO ROWS, so this takes two presses, and
+    # the first one is the interesting assertion: a step DOWN onto another
+    # PINNED row is a within-band reorder and must NOT unpin. Only the
+    # step off the band's bottom edge crosses. Checking the intermediate
+    # state is what distinguishes "the boundary is where we think it is"
+    # from "any Alt+ArrowDown eventually unpins".
+    page.evaluate(f"window.__focusRow({moving!r})")
+    page.keyboard.press("Alt+ArrowDown")
+    page.wait_for_timeout(60)
+    g3a = page.evaluate("window.__sidebarMeasure()")
+    row_a = [r for r in g3a["rows"] if r["name"] == moving][0]
+    rep.check(row_a["pinned"] == "1" and [r["name"] for r in g3a["rows"]].index(moving) == 1,
+              "ITEM 65: a step onto another PINNED row reorders and does NOT unpin",
+              f"pinned={row_a['pinned']} index={[r['name'] for r in g3a['rows']].index(moving)}")
+
+    page.keyboard.press("Alt+ArrowDown")
+    page.wait_for_timeout(60)
+    g3b = page.evaluate("window.__sidebarMeasure()")
+    names3b = [r["name"] for r in g3b["rows"]]
+    moved_row = [r for r in g3b["rows"] if r["name"] == moving][0]
+    rep.check(moved_row["pinned"] == "0",
+              "ITEM 65: the step off the band's bottom edge UNPINS",
+              f"pinned={moved_row['pinned']} at index {names3b.index(moving)}")
+    rep.check("unpin" in (g3b["live"] or "").lower(),
+              "ITEM 65: the unpin is ANNOUNCED too, not only the pin",
+              f"live={g3b['live']!r}")
 
     # ---- ArrowDown moves FOCUS, not the row.
-    order_before = names3[:]
+    order_before = names3b[:]
     page.evaluate(f"window.__focusRow({moving!r})")
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(60)
     g4 = page.evaluate("window.__sidebarMeasure()")
     rep.check([r["name"] for r in g4["rows"]] == order_before,
               "a bare ArrowDown moves focus and does NOT reorder", "")
-    rep.check(g4["focused"] == order_before[2],
+    idx_before = order_before.index(g4["focusedBefore"]) if g4.get("focusedBefore") else None
+    rep.check(g4["focused"] == order_before[order_before.index(moving) + 1],
               "a bare ArrowDown moved focus to the next row",
-              f"focused={g4['focused']}")
+              f"focused={g4['focused']} expected={order_before[order_before.index(moving) + 1]}")
 
     # ---- 'p' toggles the pin from the keyboard alone.
     page.evaluate(f"window.__focusRow({order_before[2]!r})")
