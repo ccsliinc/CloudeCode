@@ -747,6 +747,10 @@
     <script src="/static/js/session-sidebar-rename.js"></script>
     <script src="/static/js/session-sidebar-rows.js"></script>
     <script src="/static/js/session-sidebar-groups.js"></script>
+    <!-- Click routing for the list, split out of session-sidebar.js to
+         keep that file under the 500-line budget. Must load BEFORE it:
+         the controller's handlers delegate straight into this. -->
+    <script src="/static/js/session-sidebar-clicks.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->

@@ -353,201 +353,47 @@ class SessionSidebarController {
     }
 
     /**
-     * Description: route a click inside the list. Order matters: every
-     *   nested control must claim the click before the row-level switch
-     *   handler sees it, or clicking pin would also navigate.
-     * Inputs: e (MouseEvent).
-     * Output: Promise<void>.
+     * CLICK ROUTING LIVES IN client/js/session-sidebar-clicks.js. These
+     * five methods are thin delegations to it, kept on the controller so
+     * every existing caller, listener wiring and test keeps the same
+     * entry point it always had. See that file's docblock for why the
+     * split is free functions taking the controller rather than a mixin.
      */
-    async _onRowClick(e) {
-        // A SECTION HEADER IS A ROW OF THIS LIST, so its click arrives
-        // here and has to be claimed before anything row-shaped runs. It
-        // is not inside a `.session-sidebar-row`, so nothing below would
-        // have matched it - but claiming it explicitly is what keeps a
-        // future header control from falling through to the switch path.
-        const groupToggle = e.target.closest && e.target.closest('[data-group-toggle]');
-        if (groupToggle) {
-            e.stopPropagation();
-            this._onGroupToggleClick(groupToggle);
-            return;
-        }
-        // An edit in progress owns every click inside itself. Without
-        // this the click that puts the caret in the input also reaches
-        // the row handler and switches conversation out from under it.
-        if (window.SessionSidebarRename && window.SessionSidebarRename.onListClick(e)) return;
-        if (window.SessionSidebarReorder && window.SessionSidebarReorder.onPinClick(e)) return;
 
-        const actionEl = window.SessionRowActions
-            ? e.target.closest(`[${window.SessionRowActions.ATTR_ACTION}]`)
-            : null;
-        if (actionEl) {
-            e.stopPropagation();
-            await this._onRowActionClick(actionEl);
-            return;
-        }
-
-        const toggleEl = e.target.closest('[data-mark-unread]');
-        if (toggleEl) {
-            e.stopPropagation();
-            await this._onMarkUnreadClick(toggleEl);
-            return;
-        }
-
-        // A click that landed on the grip was a drag gesture, not a
-        // switch - the pointer handlers own it.
-        if (e.target.closest('[data-grip-session]')) return;
-
-        const rowEl = e.target.closest('.session-sidebar-row');
-        if (!rowEl) return;
-
-        // THE NAME IS THE ONE TARGET WHERE A CLICK HAS TO WAIT.
-        // Double-click on the name means rename, and a browser delivers
-        // the first click of a double-click before it delivers the
-        // double-click, so an instant switch here would navigate away
-        // from the row the user was about to edit. The wait is scoped as
-        // tightly as it can be: only on the NAME, and only on a row that
-        // is actually renameable. Every other part of the row, and every
-        // row that has nothing to edit, still activates immediately.
-        if (window.SessionSidebarRename
-            && window.SessionSidebarRename.deferActivation(e, rowEl, () => this.activateRow(rowEl))) {
-            return;
-        }
-        await this.activateRow(rowEl);
-    }
+    /**
+     * Description: route a click inside the list.
+     * Inputs: e (MouseEvent). Output: Promise<void>.
+     */
+    async _onRowClick(e) { await window.SessionSidebarClicks.onRowClick(this, e); }
 
     /**
      * Description: fold or unfold one section, persist it, and repaint.
-     *   The fold lives in the arrangement envelope, so it survives a
-     *   reload alongside the pins and the order it describes.
-     * Inputs: btnEl (Element) - the clicked `[data-group-toggle]` button.
-     * Output: void.
+     * Inputs: btnEl (Element). Output: void.
      */
-    _onGroupToggleClick(btnEl) {
-        const key = btnEl.getAttribute('data-group-toggle');
-        const arrangement = window.SessionSidebarArrangement;
-        if (!key || !arrangement) return;
-        const nowCollapsed = arrangement.toggleCollapsed(key);
-        this.repaint();
-        const region = document.getElementById('session-sidebar-live');
-        if (region) {
-            region.textContent = `${key} group ${nowCollapsed ? 'collapsed' : 'expanded'}`;
-        }
-    }
+    _onGroupToggleClick(btnEl) { window.SessionSidebarClicks.onGroupToggleClick(this, btnEl); }
 
     /**
-     * Description: switch to the conversation a row names. Reuses the same
-     *   two paths the launchpad uses (return-to-active vs adopt-external)
-     *   so behaviour is identical regardless of the surface clicked from.
-     *   Public because the keyboard path (Enter on a focused row) needs
-     *   the same entry point a click takes.
-     * Inputs: rowEl (Element) - a `.session-sidebar-row`.
-     * Output: Promise<void>.
+     * Description: switch to the conversation a row names. Public because
+     *   the keyboard path (Enter on a focused row) needs the same entry
+     *   point a click takes.
+     * Inputs: rowEl (Element). Output: Promise<void>.
      */
-    async activateRow(rowEl) {
-        const name = rowEl && rowEl.dataset.name;
-        if (!name || name === this._activeTmuxName) {
-            this._closeAfterSwitch();
-            return;
-        }
-        const sessionId = rowEl.dataset.sessionId || null;
-        try {
-            // A row carries session_id only when it came from
-            // GET /sessions/list - it is bound to a live backend and can
-            // be rejoined directly. No session_id means attachable-only
-            // and must go through the adopt flow instead.
-            if (sessionId) {
-                const info = await window.API.getSession(sessionId, { includeScrollback: true });
-                if (info) {
-                    this._closeAfterSwitch();
-                    window.App.returnToExistingTerminal(info);
-                }
-                return;
-            }
-            const response = await window.API.adoptSession(name, true);
-            const session = response.session || response;
-            this._closeAfterSwitch();
-            window.dispatchEvent(new CustomEvent('session-created', {
-                detail: {
-                    session,
-                    initialScrollbackB64: response.initial_scrollback_b64 || '',
-                    fifoStartOffset: typeof response.fifo_start_offset === 'number'
-                        ? response.fifo_start_offset
-                        : null,
-                    adopted: true,
-                },
-            }));
-        } catch (err) {
-            console.error('SessionSidebar: switch failed:', err);
-            alert(`Error: failed to switch conversation: ${err.message || err}`);
-        }
-    }
+    async activateRow(rowEl) { await window.SessionSidebarClicks.activateRow(this, rowEl); }
 
     /**
-     * Description: toggle the manual unread flag for one row and re-render
-     *   immediately (optimistic - the next poll tick reconciles either
-     *   way, but a full POLL_MS with no visual feedback feels broken).
-     * Inputs: toggleEl (Element) - the `[data-mark-unread]` span clicked.
-     * Output: Promise<void>.
+     * Description: toggle the manual unread flag for one row.
+     * Inputs: toggleEl (Element). Output: Promise<void>.
      */
     async _onMarkUnreadClick(toggleEl) {
-        const tmuxName = toggleEl.dataset.markUnread;
-        if (!tmuxName) return;
-        const next = toggleEl.dataset.unreadCurrent !== 'true';
-        try {
-            await window.API.setSessionUnread(tmuxName, next);
-            this._lastSig = null; // force a repaint even if the poll sig matches
-            await this._fetchAndRender();
-        } catch (err) {
-            console.error('SessionSidebar: mark-unread failed:', err);
-        }
+        await window.SessionSidebarClicks.onMarkUnreadClick(this, toggleEl);
     }
 
     /**
-     * Description: run a row's destructive action - close a running
-     *   session (X) or remove a stopped one (trash). Which action the row
-     *   painted is read back off the button, so the confirm always matches
-     *   the control the user clicked.
-     *
-     *   THIS tab's own active session delegates straight to
-     *   `TerminalController.destroySession(action)` - avoids a double
-     *   confirm and a stale-WS state only that method knows how to avoid.
-     *   The row's action is PASSED THROUGH rather than dropped: this
-     *   branch used to call it with no argument, so an own-tab row painted
-     *   with a trash still confirmed with the close copy and claimed a
-     *   process was about to be terminated when it had already exited.
-     * Inputs: btnEl (Element) - the clicked `[data-session-action]` button.
-     * Output: Promise<void>. No-op if the user cancels.
+     * Description: run a row's destructive action (close or remove).
+     * Inputs: btnEl (Element). Output: Promise<void>.
      */
     async _onRowActionClick(btnEl) {
-        const actions = window.SessionRowActions;
-        const name = btnEl.getAttribute(actions.ATTR_NAME);
-        if (!name) return;
-        const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        const rowEl = btnEl.closest('.session-sidebar-row');
-        const isThisTab = !!rowEl && rowEl.dataset.active === '1';
-
-        if (isThisTab) {
-            this.close();
-            await window.TerminalController.destroySession(action);
-            return;
-        }
-
-        const confirmed = await actions.confirm(action, name);
-        if (!confirmed) return;
-
-        try {
-            const sessionId = rowEl ? (rowEl.dataset.sessionId || null) : null;
-            if (sessionId) {
-                await window.API.destroySession(sessionId);
-            } else {
-                await window.API.destroyExternalSession(name);
-            }
-            this._lastSig = null; // force a repaint even if the poll sig matches
-            await this._fetchAndRender();
-        } catch (err) {
-            console.error(`SessionSidebar: ${action} failed:`, err);
-            alert(`Error: failed to ${action} conversation: ${err.message || err}`);
-        }
+        await window.SessionSidebarClicks.onRowActionClick(this, btnEl);
     }
 }
 
