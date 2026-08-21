@@ -29,11 +29,7 @@ interpreter that has it, e.g.
 
 from __future__ import annotations
 
-import functools
-import http.server
-import socketserver
 import sys
-import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,33 +40,13 @@ HARNESS = "/tests/manual/header-icons-and-menu-harness.html"
 UA_BUTTON_BG = "rgb(239, 239, 239)"
 
 
-class _Quiet(http.server.SimpleHTTPRequestHandler):
-    """Repo-root static handler that mirrors the app's own /static mount.
-
-    src/main.py mounts client/ at /static, so every asset URL in the
-    shipped markup is /static/... . Serving the bare repo root would 404
-    those, and an <img> that 404s still exists in the DOM.
-    """
-
-    def translate_path(self, path: str) -> str:  # noqa: D102
-        if path.startswith("/static/"):
-            path = "/client/" + path[len("/static/"):]
-        return super().translate_path(path)
-
-    def log_message(self, fmt: str, *args: object) -> None:  # noqa: D102
-        return
-
-
-def serve(root: Path) -> tuple[socketserver.TCPServer, int]:
-    """Start a background static server rooted at the repo.
-
-    Inputs: root (Path) - directory to serve.
-    Output: (server, port) - the running server and the port it bound.
-    """
-    handler = functools.partial(_Quiet, directory=str(root))
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, httpd.server_address[1]
+# The static server stamps the application's REAL security headers
+# (src/security_headers.py, imported not copied). A harness with no CSP
+# cannot represent a CSP-dependent defect at all - see
+# scripts/lib_csp_static_server.py for the four-month dead logout button
+# that proved the class is real and shippable.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib_csp_static_server import serve  # noqa: E402,F401
 
 
 def _fail(msg: str, failures: list[str]) -> None:
@@ -254,7 +230,7 @@ def main() -> int:
             browser = pw.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.goto(f"http://127.0.0.1:{port}{HARNESS}")
-            page.wait_for_function("window.__headerReady === true", timeout=20000)
+            page.wait_for_function("() => window.__headerReady === true", timeout=20000)
             # Never trust a viewport the tool merely claims to have set.
             if page.evaluate("window.innerWidth") != 1280:
                 print("CANNOT DETERMINE: viewport did not take effect.",

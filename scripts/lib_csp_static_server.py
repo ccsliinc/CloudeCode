@@ -105,6 +105,22 @@ class CSPStaticHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:  # noqa: D102
         return
 
+    def translate_path(self, path: str) -> str:
+        """Map /static/ onto client/, the way src/main.py mounts it.
+
+        Inputs: path (str) - the request path.
+        Output: str - a filesystem path.
+
+        src/main.py mounts client/ at /static, so every asset URL in the
+        shipped markup is /static/... . A server rooted at the bare repo
+        404s all of them, and an <img> that 404s is still present in the
+        DOM - precisely the check that passes while the user looks at a
+        broken icon. This lets a harness assert naturalWidth and mean it.
+        """
+        if path.startswith("/static/"):
+            path = "/client/" + path[len("/static/"):]
+        return super().translate_path(path)
+
     def _stamp(self, csp: str | None = None) -> None:
         """Emit every security header, optionally overriding the CSP.
 
