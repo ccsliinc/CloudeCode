@@ -14,8 +14,21 @@ still there: `cloude.db`, the migration trail and the state directory's
 token store. This release removes them; the old one did not, whatever it
 printed.
 
-Read the important caveat under "Known issues" before assuming the fix is
-live on an existing install.
+This reaches upgraded installs, not just fresh ones. The release candidate
+shipped the fixed script without shipping it to the place the app runs it
+from; that delivery gap is closed here.
+
+**The uninstaller fix now actually reaches an upgraded install.** This was
+listed as a known issue in the release candidate and is fixed. `nuke.sh` was
+excluded from the per-launch asset resync so that a customized copy would
+survive, and the tray menu executes the copy in the derived server directory
+- so every upgrade paired the NEW confirmation window with the OLD
+destructive script, and looked fixed while behaving exactly as before.
+`nuke.sh` is now resynced from the bundle on every launch like every other
+build artifact. A test derives the set of scripts the app executes by path
+straight from the source and fails if any of them is not covered by the
+resync allowlist, so a script added later is caught without anyone
+remembering to update a list.
 
 **The uninstaller now makes you type the word NUKE.** The tray menu used to
 show a message box with a "NUKE IT" button, one mis-aimed click away from an
@@ -81,16 +94,14 @@ you have chosen. Cosmetic, long-standing, unchanged here.
 Reported by inspection of the code path, not measured against the running
 app. If you see two dialogs, that is this.
 
-**The uninstaller fix does not reach an existing install by itself.**
-`nuke.sh` is deliberately excluded from the asset resync, first-run copy
-only, so that anyone who customized it keeps their version. The consequence
-is that the copy the tray menu actually executes, under
-`~/Library/Application Support/cloude-code-menubar/server/nuke.sh`, is
-whatever landed there on first run. On an existing install that is still the
-old script that leaves the database and the tokens behind. The new typed-
-NUKE confirmation window will appear, because that code does ship, and it
-will then run the old script. To pick up the fix, replace that file with
-`nuke.sh` from the release, or reinstall into a clean state directory.
+**The in-app "reset server" button does not work on a packaged install.**
+`POST /api/v1/server/reset` runs `reset.sh` from the server's own directory,
+and `reset.sh` has never been included in the app bundle, so the endpoint
+returns a 500 that names the missing file. It fails loudly and changes
+nothing, which is the right way to fail, but it does not work. Delivering it
+also means delivering `start.sh` and `stop.sh`, whose fallback path starts a
+server the app does not own - that is its own change, not a rider on this
+one. Restart the app from the tray menu instead.
 
 **The type-NUKE confirmation window has been verified as rendered markup,
 not as a live Electron window.** Its HTML was rendered in a browser at the
