@@ -258,7 +258,23 @@
                  with an arrow passing all the way THROUGH and past it — the
                  near-universal "log out" glyph. Deliberately different from
                  detach above (see its comment). -->
-            <button onclick="App.logout()" id="logoutBtn" class="hidden" aria-label="Logout" title="logout" data-tooltip="Logout">
+            <!-- NO INLINE onclick HERE, AND ADDING ONE BACK BREAKS THE
+                 BUTTON SILENTLY. src/main.py stamps
+                 `script-src 'self'` on every response, which forbids
+                 inline event handlers. This button carried
+                 `onclick="App.logout()"` from the initial commit and
+                 kept it when CSP landed, so from that day the click did
+                 nothing at all: the browser refused to run the handler
+                 and logged a CSP violation, which is not an exception,
+                 not a visible error, and not something any DOM test can
+                 see. The element was present, sized, visible and
+                 unobstructed the whole time. It is wired in
+                 client/js/app.js's setupEventListeners() now, exactly
+                 like #settingsBtn and #configEditorBtn beside it.
+                 scripts/verify_logout_chrome.py drives this against the
+                 REAL server so the CSP header is actually present - a
+                 static harness has no CSP and passes either way. -->
+            <button id="logoutBtn" class="hidden" aria-label="Logout" title="logout" data-tooltip="Logout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M7 2.5H3.75C3.05964 2.5 2.5 3.05964 2.5 3.75V12.25C2.5 12.9404 3.05964 13.5 3.75 13.5H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     <path d="M6.25 8H13.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
