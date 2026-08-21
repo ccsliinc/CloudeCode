@@ -269,6 +269,10 @@ function generateEnvFile({ envExamplePath, envOutPath, defaultWorkingDir, logDir
  * packaged launch we rsync these from <bundle>/Resources/<name> into
  * <serverDir>/<name>, deleting orphans from within those paths.
  *
+ * The test for membership is NOT "is it a file we shipped" but "does the
+ * running app depend on this being the CURRENT version" - which includes
+ * every script the app executes by path (see nuke.sh below).
+ *
  * EVERYTHING ELSE in serverDir is user-owned state and MUST NOT be touched:
  *   - .env                      (user secrets + config)
  *   - config.json               (user-customized runtime config)
@@ -294,6 +298,17 @@ const RESYNC_ALLOWLIST = [
   { name: 'setup_auth.py', isDir: false },
   { name: 'config.example.json', isDir: false },
   { name: '.env.example', isDir: false },
+  // nuke.sh is EXECUTED from the derived tree by macOS/main.js
+  // (path.join(serverManager.getProjectRoot(), 'nuke.sh')), so it is a build
+  // artifact of the running version, not user state. It used to be first-run
+  // copy only, on the theory that a user might have customized their copy.
+  // That traded a hypothetical customization against a real one: every
+  // UPGRADE got the NEW typed-NUKE confirmation window wired to the OLD
+  // destructive script - the one that missed the state directory and left
+  // cloude.db and refresh_tokens.db on disk while reporting a full reset.
+  // Anything the app invokes by path must track the app. Guarded by
+  // tests/test_runtime_script_delivery.py.
+  { name: 'nuke.sh', isDir: false },
 ];
 
 /**
@@ -380,6 +395,12 @@ function syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged }) {
       // small config files. We don't preserve the prior content because
       // these are all example/template files the user shouldn't edit
       // in-place anyway (they edit config.json / .env derived from them).
+      //
+      // The executable bit survives: on macOS copyFileSync goes through
+      // copyfile(3) and applies the SOURCE mode even when the destination
+      // already exists with a different one. Measured 2026-08-21, not
+      // assumed - nuke.sh and setup_auth.py both have to stay 0755 here or
+      // main.js's exec of the copied path fails with EACCES.
       try {
         fs.copyFileSync(src, dst);
         synced.push(item.name);
@@ -714,26 +735,22 @@ async function bootstrapIfNeeded({
     //   - DEV-mode first-run copy (resync is skipped in dev — we still need
     //     the artifacts landed the first time the dev launches into a clean
     //     serverDir, otherwise the venv/deps/env steps have nothing to key off).
-    //   - nuke.sh — deliberately NOT in the resync allowlist; first-run copy
-    //     only so users who've customized it keep their version.
+    //
+    // nuke.sh USED to be handled here and only here (first-run copy, never
+    // refreshed). It is now in RESYNC_ALLOWLIST like every other executed
+    // artifact, so this list is simply the allowlist itself - one declaration,
+    // not two that can drift apart.
     emit('copying-files');
-    const firstRunResources = [
-      // In packaged mode these six are already resynced above; copyRecursive
-      // with its skip-if-exists behavior makes this a no-op in that case.
-      // In dev mode, this is the first-run landing.
-      { name: 'src', isDir: true },
-      { name: 'client', isDir: true },
-      { name: 'requirements.txt', isDir: false },
-      { name: 'setup_auth.py', isDir: false },
-      { name: 'config.example.json', isDir: false },
-      { name: '.env.example', isDir: false },
-      { name: 'nuke.sh', isDir: false },
-    ];
+    // In packaged mode these are already resynced above; copyRecursive and the
+    // skip-if-exists file branch make this a no-op in that case. In dev mode,
+    // this is the first-run landing.
+    const firstRunResources = RESYNC_ALLOWLIST;
     for (const item of firstRunResources) {
       const src = path.join(bundleResourcesDir, item.name);
       const dst = path.join(serverDir, item.name);
       if (!fs.existsSync(src)) {
-        // Some items (nuke.sh) may be optional. Skip if not bundled.
+        // A bundled resource can legitimately be absent in a partial dev
+        // checkout. Skip rather than abort; the resync path is authoritative.
         console.warn(`[bootstrap] bundled resource missing (skipping): ${src}`);
         continue;
       }
