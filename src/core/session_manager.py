@@ -841,10 +841,42 @@ class SessionManager:
         wiped too; if None, the current session (if any) is wiped.
         """
         metadata_path = settings.get_session_metadata_path()
+        # DROP THE SESSION POINTER, KEEP THE OWNED SET. This file is the
+        # only durable home of ``owned_tmux_sessions``, and that set is
+        # about EVERY session the app created - not about the one session
+        # whose slug we are discarding here. Unlinking the file outright
+        # (what this used to do) threw away N sessions' ownership record
+        # to clean up 1, and the trigger is the ORDINARY case, not an
+        # error path: ``session_metadata_slug_not_in_backend`` fires
+        # whenever the last-active tmux session is simply gone by the next
+        # start. Measured on the live install - four load/delete pairs
+        # ~40ms apart, then the file never returned, and from that point
+        # every launcher-created session resolved EXTERNAL because
+        # ``resolve_ownership`` fell past its empty tier-3 legacy set.
+        #
+        # An owned-set-only payload (no ``id``) is written instead, which
+        # ``_load_session_metadata`` reads back without rehydrating a
+        # session - so the dead pointer stays dead and surfaces in the
+        # Adopt list exactly as before.
+        # ORDERING IS DELIBERATE: unlink FIRST, then re-write. The unlink
+        # of the RESOLVED path is left exactly as it was so this change
+        # does not disturb the state-dir migration semantics - the file
+        # still relocates out of the legacy ``log_directory`` on the next
+        # write, which ``tests/test_session_meta_continuity.py`` measures.
+        # ``_write_metadata_atomic`` re-resolves after the unlink, which is
+        # the same thing ``_save_session_metadata`` would have done.
         try:
             if metadata_path.exists():
                 metadata_path.unlink()
                 logger.info("stale_session_metadata_deleted")
+            if self.owned_tmux_sessions:
+                self._write_metadata_atomic(
+                    {"owned_tmux_sessions": sorted(self.owned_tmux_sessions)}
+                )
+                logger.info(
+                    "stale_session_metadata_owned_set_kept",
+                    owned_count=len(self.owned_tmux_sessions),
+                )
         except Exception as exc:
             logger.error("failed_to_delete_stale_metadata", error=str(exc))
         sid = session_id
@@ -906,6 +938,23 @@ class SessionManager:
             # ``Session(**)``, which would reject unknown keys with
             # ``extra='forbid'`` if we ever tightened it.
             owned = raw.pop("owned_tmux_sessions", None)
+
+            # OWNED-SET-ONLY PAYLOAD. Written by ``_clear_stale_metadata``
+            # when it drops an un-rehydratable session pointer but has an
+            # ownership record worth keeping. There is no session to
+            # rehydrate, and that is the whole point - handing this to
+            # ``Session(**raw)`` would raise and the except below would
+            # swallow the owned set along with it, which is the exact loss
+            # the owned-set-only payload exists to prevent.
+            if not raw.get("id"):
+                self.owned_tmux_sessions = set(owned or [])
+                self._legacy_metadata_needs_backfill = False
+                logger.info(
+                    "session_metadata_owned_set_only_loaded",
+                    owned_count=len(self.owned_tmux_sessions),
+                    note="no persisted session to rehydrate",
+                )
+                return
 
             loaded = Session(**raw)
             # Register the persisted session into the per-session dicts
