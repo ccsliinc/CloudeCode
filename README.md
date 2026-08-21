@@ -594,8 +594,36 @@ git checkout baseline/adoom-2026-08-14 -- src/
 
 ```bash
 python3 setup_auth.py --rotate-topic   # regenerate the push topic without a full re-setup
+./nuke.sh                              # full teardown, asks you to type NUKE
+./nuke.sh --dry-run                    # print every target, delete nothing
 ./nuke.sh --skip-confirm               # non-interactive full teardown
 ```
+
+#### What `nuke.sh` removes, and how to rehearse it
+
+It removes `.env`, `config.json`, `venv/`, the log and projects directories,
+the `/tmp` artifacts, the LaunchAgent, the Electron app-support directory,
+and **the state directory** - `cloude.db`, `refresh_tokens.db` and
+`migration_trail.jsonl`. That last one is resolved by calling
+`resolve_state_dir()`, the same shell mirror of `Settings.get_state_dir()`
+that `upgrade.sh` uses, so `CLOUDE_STATE_DIR` is honoured and no path is
+restated in shell. If the path cannot be resolved the script exits non-zero
+having deleted nothing, rather than skipping a target it could not find.
+
+It does **not** kill the tmux server. A socket is keyed on (user, socket
+name) and carries no record of which checkout started a session, so sessions
+on it cannot be attributed to this install. The script names the socket and
+prints the exact `kill-server` command instead. `CLOUDE_NUKE_KILL_TMUX=true`
+opts in.
+
+Every destructive target is redirectable, which is what makes
+`tests/test_nuke_sandbox.py` able to run the real script end to end against a
+temp directory: `CLOUDE_NUKE_HOME`, `CLOUDE_NUKE_TMP_DIR`,
+`CLOUDE_NUKE_LAUNCHCTL`, `CLOUDE_NUKE_PGREP_PATTERN` (empty disables the
+machine-wide process match), `CLOUDE_NUKE_TMUX_BIN`,
+`CLOUDE_NUKE_TMUX_SOCKET`, `CLOUDE_NUKE_KILL_TMUX`, `CLOUDE_NUKE_DRY_RUN`.
+Each defaults to the real production value, so plain `./nuke.sh` behaves
+exactly as documented above.
 
 ---
 

@@ -10,8 +10,14 @@
 #   executing anything.
 #
 # Inputs:
-#   $1 (string, optional) - directory to scan. Defaults to CLIENT_JS_DIR
-#                           below, resolved relative to the repo root.
+#   $1 (string, optional) - single directory to scan. When omitted, every
+#                           directory in DEFAULT_SCAN_DIRS below is scanned,
+#                           resolved relative to the repo root.
+#
+#   macOS/ is in that list deliberately. It was not until 2026-08-21, so the
+#   Electron main process - which spawns the uninstaller - was the one JS
+#   tree in this repo that CI never parsed. A syntax error there breaks the
+#   tray app at launch exactly the way one in client/js breaks the browser.
 #
 # Outputs:
 #   Exit code 0 - every file parsed cleanly.
@@ -25,32 +31,47 @@
 #
 set -uo pipefail
 
-readonly CLIENT_JS_DIR="client/js"
+DEFAULT_SCAN_DIRS=("client/js" "macOS")
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-target="${1:-${repo_root}/${CLIENT_JS_DIR}}"
 
-if [ ! -d "${target}" ]; then
-    echo "check-js-syntax: not a directory: ${target}" >&2
-    exit 2
+targets=()
+if [ "$#" -gt 0 ]; then
+    targets+=("$1")
+else
+    for d in "${DEFAULT_SCAN_DIRS[@]}"; do
+        targets+=("${repo_root}/${d}")
+    done
 fi
+
+for target in "${targets[@]}"; do
+    if [ ! -d "${target}" ]; then
+        echo "check-js-syntax: not a directory: ${target}" >&2
+        exit 2
+    fi
+done
 
 checked=0
 failed=0
 
-while IFS= read -r -d '' file; do
-    checked=$((checked + 1))
-    if ! node --check "${file}"; then
-        echo "check-js-syntax: SYNTAX ERROR in ${file}" >&2
-        failed=$((failed + 1))
-    fi
-done < <(find "${target}" -type f -name '*.js' -print0 | sort -z)
+for target in "${targets[@]}"; do
+    while IFS= read -r -d '' file; do
+        checked=$((checked + 1))
+        if ! node --check "${file}"; then
+            echo "check-js-syntax: SYNTAX ERROR in ${file}" >&2
+            failed=$((failed + 1))
+        fi
+    done < <(
+        find "${target}" -type f -name '*.js' \
+            -not -path '*/node_modules/*' -print0 | sort -z
+    )
+done
 
 if [ "${checked}" -eq 0 ]; then
     # An empty result almost always means a moved directory or a bad path
     # argument, not a genuinely empty client. Fail loudly rather than
     # reporting a vacuous pass.
-    echo "check-js-syntax: no .js files found under ${target}" >&2
+    echo "check-js-syntax: no .js files found under ${targets[*]}" >&2
     exit 2
 fi
 

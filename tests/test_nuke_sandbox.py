@@ -452,3 +452,27 @@ def test_gui_warning_names_what_is_destroyed_and_nothing_it_does_not():
     assert "refresh tokens" in confirm_src
     assert "Cloudflare" not in confirm_src
     assert "DNS records" not in confirm_src
+
+
+def test_nuke_then_fresh_install_is_genuinely_fresh(sandbox):
+    """The point of an uninstaller: the next install must start from zero.
+
+    Two independent facts, because either one alone is a false green. The
+    wizard's first-run path must engage (config.json and the secrets are
+    gone, so setup evaluates INCOMPLETE), AND no prior database or refresh
+    tokens may remain. The old script satisfied the first and failed the
+    second, which is exactly why "the wizard came up" was never proof.
+    """
+    from src.core.setup_state import evaluate_setup_state
+
+    _run_nuke(sandbox)
+
+    state = evaluate_setup_state(sandbox["install"] / "config.json", None, None)
+    assert not state.is_complete, "setup wizard would not engage after a nuke"
+    assert state.status == "incomplete"
+
+    for leftover in ("cloude.db", "refresh_tokens.db", "migration_trail.jsonl"):
+        assert not (sandbox["state"] / leftover).exists()
+    assert not (sandbox["install"] / "config.json").exists()
+    assert not (sandbox["install"] / ".env").exists()
+    assert not (sandbox["install"] / "venv").exists()
