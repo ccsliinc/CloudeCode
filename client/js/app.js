@@ -540,6 +540,20 @@ class AppController {
             }
         });
 
+        // Logout - click wiring only; visibility is toggled alongside
+        // settingsBtn in showAuth/showLaunchpad/showTerminal.
+        //
+        // THIS LISTENER IS THE FIX, NOT A TIDY-UP. The button used to
+        // carry `onclick="App.logout()"` in client/index.html, and
+        // src/main.py's `script-src 'self'` has forbidden inline event
+        // handlers since the CSP landed - so the click ran nothing and
+        // reported nothing the user could see. Wiring it here is what
+        // makes the button work at all; see the comment on the element
+        // in index.html before moving it back.
+        if (this.logoutBtn) {
+            this.logoutBtn.addEventListener('click', () => this.logout());
+        }
+
         // Settings gear - click wiring only; visibility is toggled
         // alongside logoutBtn in showAuth/showLaunchpad/showTerminal.
         if (this.settingsBtn) {
