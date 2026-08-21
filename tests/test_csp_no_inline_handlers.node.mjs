@@ -115,11 +115,54 @@ test('the CSP that makes this matter is still in force', () => {
     // If someone relaxes script-src, this test is measuring a rule that
     // no longer exists and should be reconsidered rather than silently
     // kept passing.
-    const main = fs.readFileSync(path.join(ROOT, 'src', 'main.py'), 'utf8');
-    assert.ok(/script-src\s+'self'/.test(main),
-        "src/main.py no longer stamps script-src 'self' - this test's premise is gone");
-    assert.ok(!/script-src[^;]*unsafe-inline/.test(main),
+    //
+    // The policy moved out of src/main.py into src/security_headers.py so
+    // the static test servers under scripts/ can serve the SAME headers the
+    // app serves - a harness with no CSP cannot represent a CSP-dependent
+    // defect at all, which is how this bug survived every harness ever
+    // pointed at it. Both halves are asserted here: the policy still says
+    // what it must, AND main.py still applies it. A policy nothing stamps
+    // is not a policy.
+    const hdrs = fs.readFileSync(
+        path.join(ROOT, 'src', 'security_headers.py'), 'utf8');
+    assert.ok(/\("script-src",\s*"'self'"\)/.test(hdrs),
+        "src/security_headers.py no longer declares script-src 'self' - "
+        + "this test's premise is gone");
+    // Scoped to the DIRECTIVE TABLE, not the whole file. These modules
+    // carry a lot of prose ABOUT 'unsafe-inline' and 'unsafe-hashes' -
+    // explaining why they are absent - and a whole-file grep reads that
+    // prose as the policy. Comments are not code, in either direction.
+    const table = (hdrs.match(/CSP_DIRECTIVES[\s\S]*?^\)/m) || [''])[0];
+    assert.ok(table.includes('script-src'),
+        'could not locate the CSP_DIRECTIVES table to check');
+    assert.ok(!/unsafe-inline/.test(table.split('style-src')[0]),
         "script-src now allows 'unsafe-inline' - that needs its own argument");
+    assert.ok(!/unsafe-hashes/.test(table),
+        "'unsafe-hashes' would make inline event handlers legal again");
+
+    const main = fs.readFileSync(path.join(ROOT, 'src', 'main.py'), 'utf8');
+    assert.ok(/from\s+src\.security_headers\s+import\s+SECURITY_HEADERS/
+        .test(main), 'src/main.py no longer imports SECURITY_HEADERS');
+    assert.ok(/SECURITY_HEADERS\.items\(\)/.test(main),
+        'src/main.py no longer stamps SECURITY_HEADERS onto responses');
+});
+
+test('the static test server serves the app policy, not its own copy', () => {
+    // The harness half of the same premise. If scripts/lib_csp_static_server
+    // ever stops importing the app's headers - or starts granting
+    // 'unsafe-hashes' so inline handlers compile there - every pixel
+    // verifier silently returns to being blind to this whole class.
+    const lib = fs.readFileSync(
+        path.join(ROOT, 'scripts', 'lib_csp_static_server.py'), 'utf8');
+    assert.ok(/from\s+src\.security_headers\s+import/.test(lib),
+        'the static test server no longer imports the app security headers');
+    // Behavioural proof that inline handlers still fail in the harness is
+    // the positive control inside scripts/verify_login_chrome.py, which
+    // re-introduces one and watches the run go red. What is checked here is
+    // only the wiring: that the harness renders the app's policy through
+    // build_csp() rather than assembling a policy of its own.
+    assert.ok(/build_csp\(/.test(lib),
+        'the static test server no longer renders the policy via build_csp()');
 });
 
 test('the scanner finds files to scan', () => {
@@ -170,6 +213,69 @@ test('#logoutBtn is wired in app.js, not in markup', () => {
         'app.js does not attach a click listener to this.logoutBtn');
     assert.ok(/this\.logoutBtn\s*=\s*document\.getElementById\(\s*['"]logoutBtn['"]/
         .test(app), 'app.js does not resolve #logoutBtn');
+});
+
+/**
+ * Every .js file under client/, which is markup's other author. An
+ * innerHTML template that writes `onclick="..."` produces exactly the same
+ * dead control as a literal in index.html, and the HTML scan above cannot
+ * see it because the attribute never appears in a .html file.
+ * @returns {string[]} Absolute paths.
+ */
+function clientJsFiles() {
+    const out = [];
+    const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name === 'node_modules' || entry.name === 'vendor'
+                || entry.name.startsWith('.')) continue;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.name.endsWith('.js')) out.push(full);
+        }
+    };
+    walk(path.join(ROOT, 'client'));
+    return out;
+}
+
+/**
+ * Strip line and block comments so prose about inline handlers - of which
+ * this repo now has a fair amount - is not read as code.
+ * @param {string} text  Source.
+ * @returns {string} Source with comments blanked.
+ */
+function stripJsComments(text) {
+    return text
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+}
+
+test('the client JS scanner finds files to scan', () => {
+    assert.ok(clientJsFiles().length > 0,
+        'no client .js files found - the scan is vacuous');
+});
+
+test('the client JS scanner detects an emitted handler (positive control)', () => {
+    const sample = 'el.innerHTML = `<button onclick="App.logout()">x</button>`;';
+    assert.ok(new RegExp(INLINE_HANDLER.source, 'i').test(sample),
+        'the detector does not match a handler emitted from JS');
+});
+
+test('no client JS emits markup carrying an inline event handler', () => {
+    const offenders = [];
+    for (const file of clientJsFiles()) {
+        const code = stripJsComments(fs.readFileSync(file, 'utf8'));
+        code.split('\n').forEach((line, i) => {
+            const hits = line.match(new RegExp(INLINE_HANDLER.source, 'gi'));
+            if (hits) {
+                offenders.push(
+                    `${path.relative(ROOT, file)}:${i + 1}  ${hits.join(' ')}`);
+            }
+        });
+    }
+    assert.deepEqual(offenders, [],
+        'markup written from JS is subject to the same CSP as markup in a '
+        + '.html file - an inline handler here is just as dead, and the HTML '
+        + 'scan cannot see it:\n  ' + offenders.join('\n  '));
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

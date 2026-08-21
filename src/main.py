@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings, StateDirUnavailableError
+from src.security_headers import SECURITY_HEADERS
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
@@ -547,42 +548,21 @@ logger.info("CORS allowed origins", origins=settings.allowed_origins)
 # path it runs last, giving us a single place to stamp headers on
 # anything the app returns (including errors).
 #
-# Policy rationale for a local / LAN-only SPA:
-# - `default-src 'self'` - lock everything to same-origin by default.
-# - `script-src 'self'` - no inline or eval; all JS ships from /static.
-#   xterm.js and its addons used to load from cdn.jsdelivr.net; they are
-#   now vendored under client/vendor/xterm/ (see that dir's VERSION.md)
-#   and served same-origin, so the CDN host is no longer needed here.
-# - `style-src 'self' 'unsafe-inline'` - xterm addons (webgl, fit) inject
-#   inline style attributes on DOM nodes they manage. Without
-#   `'unsafe-inline'` the terminal renders blank. This is the smallest
-#   concession that keeps the terminal usable. cdn.jsdelivr.net dropped
-#   here too now that xterm.css is vendored same-origin.
-# - `connect-src 'self' ws: wss:` - WebSocket terminal stream runs on
-#   the same origin; allow ws:/wss: so future tunnels (Cloudflare named)
-#   with a different scheme can still connect.
-# - `img-src 'self' data:` - data: URIs are used for QR codes / emoji SVGs.
-# - `font-src 'self' data:` - xterm embeds icon fonts as data: URIs. This
-#   never actually needed cdn.jsdelivr.net (xterm.css references no
-#   remote font URL), so nothing changes here beyond the comment being
-#   made honest.
-# - `frame-ancestors 'none'` - clickjack defense; Cloude Code is never
-#   meant to be iframed.
+# Policy rationale, directive by directive, lives with the policy in
+# src/security_headers.py. It is NOT repeated here, because two copies of
+# a rationale drift and the stale one is the one someone trusts.
 @app.middleware("http")
 async def csp_headers(request: Request, call_next):
     """Stamp CSP + hardening headers on every response."""
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "connect-src 'self' ws: wss:; "
-        "img-src 'self' data:; "
-        "font-src 'self' data:; "
-        "frame-ancestors 'none';"
-    )
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # The values live in src/security_headers.py, NOT here, so the static
+    # test servers under scripts/ can stamp the identical policy. A harness
+    # that carries its own copy of a security policy is measuring a
+    # condition production may no longer have; see that module's docstring
+    # for the four-month dead logout button this arrangement exists to stop
+    # recurring.
+    for header, value in SECURITY_HEADERS.items():
+        response.headers[header] = value
     return response
 
 # Wire slowapi rate limiter. The Limiter instance is defined in

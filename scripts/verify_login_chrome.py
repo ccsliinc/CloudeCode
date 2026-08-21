@@ -34,13 +34,18 @@ interpreter that has it, e.g.
 
 from __future__ import annotations
 
-import functools
-import http.server
 import io
-import socketserver
 import sys
-import threading
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib_csp_static_server import (  # noqa: E402
+    assert_collector_live,
+    assert_policy_served,
+    collector_init_script,
+    serve,
+    violations,
+)
 
 # --legacy replicates the PRE-FIX App.showAuth() hide list in the
 # harness. With client/css/screen-chrome.css removed it reproduces the
@@ -99,23 +104,14 @@ GLYPH_INSET_PX = 7
 GLYPH_TARGETS = [("header-menu-toggle", "top-right menu button (kebab)")]
 
 
-class _Quiet(http.server.SimpleHTTPRequestHandler):
-    """Repo-root static handler, quiet."""
-
-    def log_message(self, fmt: str, *args: object) -> None:  # noqa: D102
-        return
-
-
-def serve(root: Path):
-    """Start a background static server rooted at the repo.
-
-    Inputs: root (Path) - directory to serve.
-    Output: (server, port) tuple.
-    """
-    handler = functools.partial(_Quiet, directory=str(root))
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, httpd.server_address[1]
+# The static server is NOT a plain SimpleHTTPRequestHandler any more. It
+# stamps the application's real security headers, imported from
+# src/security_headers.py rather than copied, because a harness with no CSP
+# cannot represent a CSP-dependent defect at all - which is exactly how the
+# four-month-dead logout button passed every harness ever pointed at it. See
+# scripts/lib_csp_static_server.py for the full reasoning and for why the
+# harness's own inline bootstrap is admitted by hash while inline EVENT
+# HANDLERS stay forbidden.
 
 
 def describe(m: dict) -> str:
@@ -296,6 +292,88 @@ def measure_glyphs(page, failures: list, unknown: list) -> None:
                 % (eid, label, live, GLYPH_FLOOR_PCT))
 
 
+# Enumerate every inline event-handler attribute in the MOUNTED shipped
+# markup, ask the browser whether each one actually compiled, and then
+# dispatch its event so the refusal is also recorded as a real CSP
+# violation. Returned as [{id, tag, attr, value, compiled}, ...].
+#
+# WHY BOTH HALVES. Chromium does NOT raise securitypolicyviolation when an
+# inline handler is merely parsed into the document - the refusal happens
+# when the handler is COMPILED, at invocation. So a harness that only serves
+# the CSP and waits for violations still reports a clean page on markup that
+# is provably dead. That was measured here: with `onclick="App.logout()"`
+# restored, the page loaded under the real policy and reported ZERO
+# violations until something clicked. The compile-state read is the
+# deterministic half (a refused handler leaves the attribute present and the
+# corresponding PROPERTY null); the dispatch is the half that produces the
+# browser's own witness.
+_INLINE_HANDLER_PROBE = """() => {
+    const found = [];
+    document.querySelectorAll('*').forEach(el => {
+        for (const a of Array.from(el.attributes)) {
+            if (!/^on[a-z]{2,24}$/i.test(a.name)) continue;
+            const prop = a.name.toLowerCase();
+            const compiled = typeof el[prop] === 'function';
+            found.push({id: el.id || '', tag: el.tagName,
+                        attr: a.name, value: a.value, compiled: compiled});
+            try {
+                el.dispatchEvent(new Event(prop.slice(2), {bubbles: false}));
+            } catch (e) { /* dispatch is a witness, not the verdict */ }
+        }
+    });
+    return found;
+}"""
+
+# Synthetic control for the probe itself. A probe that can only ever return
+# an empty list and a genuinely clean document are the same result, which is
+# the shape hazard 39 names: a verification step that cannot fail.
+_PROBE_CONTROL = """() => {
+    const el = document.createElement('button');
+    el.id = '__csp_probe_control__';
+    el.setAttribute('onclick', 'window.__cspProbeControlRan = true');
+    document.body.appendChild(el);
+    const compiled = typeof el.onclick === 'function';
+    el.remove();
+    return compiled;
+}"""
+
+
+def measure_inline_handlers(page, control_page, failures: list,
+                            unknown: list) -> None:
+    """Fail on any inline event handler in the mounted shipped markup.
+
+    Inputs: page - playwright Page with the shipped markup mounted.
+            control_page - a THROWAWAY page under the same policy, used only
+                for the positive control. It must not be the measured page:
+                the control necessarily trips the policy itself, and
+                securitypolicyviolation is delivered asynchronously, so its
+                violation lands on the collector AFTER any attempt to rewind
+                it and would read as a violation on a clean tree. Measured
+                that way once; isolating the control is the fix.
+            failures (list) - accumulator of failure strings.
+            unknown (list) - accumulator of could-not-evaluate strings.
+    Output: None.
+
+    An inline handler under `script-src 'self'` is not a future risk, it is
+    a control the browser is refusing to run right now while reporting
+    nothing a DOM, geometry or pixel assertion can see. That is a FAIL.
+    """
+    control = control_page.evaluate(_PROBE_CONTROL)
+    if control is not False:
+        unknown.append(
+            "inline-handler probe: the synthetic control compiled its "
+            "handler, so this page is NOT under `script-src 'self'` and a "
+            "clean result here would prove nothing")
+        return
+    for h in page.evaluate(_INLINE_HANDLER_PROBE):
+        failures.append(
+            "DEAD INLINE HANDLER: <%s id=%r> carries %s=%r and the browser "
+            "did NOT compile it under `script-src 'self'` - the control does "
+            "nothing, throws nothing and rejects nothing. Wire it with "
+            "addEventListener in its module."
+            % (h["tag"].lower(), h["id"], h["attr"], h["value"]))
+
+
 def main() -> int:
     """Run the measurement. Output: process exit code (0/1/2)."""
     try:
@@ -308,6 +386,9 @@ def main() -> int:
     url = "http://127.0.0.1:%d%s" % (port, HARNESS)
     glyph_failures: list = []
     glyph_unknown: list = []
+    csp_failures: list = []
+    csp_unknown: list = []
+    csp_proven: list = []
 
     def measure(page):
         """Drive one page through launchpad then auth.
@@ -328,22 +409,71 @@ def main() -> int:
 
         Inputs: browser, w (int), h (int).
         Output: page, or None if it never became ready.
+
+        The CSP violation collector is installed as an INIT script, before
+        anything on the page runs. That timing is load-bearing: the
+        violation raised by an inline event handler fires while the markup
+        is being parsed into the document, so a listener attached after
+        load would see nothing and report a clean page.
         """
         page = browser.new_page(viewport={"width": w, "height": h})
+        page.add_init_script(collector_init_script())
         if LEGACY:
             page.add_init_script("window.__legacyShowAuth = true")
-        page.goto(url)
+        response = page.goto(url)
         if page.evaluate("document.hidden"):
             return None
         # The tool's own success string is not evidence; ask the page.
         if page.evaluate("window.innerWidth") != w:
             return None
+        # Two positive controls before any CSP verdict is trusted. Without
+        # them, "no violations" from a header that never arrived and "no
+        # violations" from a genuinely clean page are the same empty list.
+        why = assert_policy_served(response) or assert_collector_live(page)
+        if why is None:
+            csp_proven.append(w)
+        else:
+            # Not a pass and not a fail. The geometry measurements below are
+            # unaffected and still run; only the CSP verdict is withheld.
+            csp_unknown.append("%dpx viewport: %s" % (w, why))
         try:
-            page.wait_for_function("window.__loginChromeReady === true",
+            # ARROW FUNCTION, NOT A STRING EXPRESSION. Playwright compiles a
+            # string predicate with eval() inside the page, and this page now
+            # carries the real `script-src 'self'`, which forbids eval. The
+            # string form fails with "Evaluating a string as JavaScript
+            # violates the following Content Security Policy directive" and
+            # the harness reads as never-ready - a CANNOT DETERMINE
+            # manufactured by the test tool, not by the code under test. The
+            # function form is delivered over the CDP callFunctionOn path and
+            # is not eval, so it runs under the policy unchanged.
+            page.wait_for_function("() => window.__loginChromeReady === true",
                                    timeout=15000)
         except Exception:  # noqa: BLE001
             return None
         return page
+
+
+    def collect_csp(page, w, failures: list) -> None:
+        """Record every CSP violation the page reported, as a failure.
+
+        Inputs: page - playwright Page. w (int) - viewport width, for the
+                message. failures (list) - accumulator.
+        Output: None.
+
+        A CSP violation in shipped markup is not a risk to schedule, it is
+        dead code the browser is refusing to run right now, silently. That
+        is a FAIL, not a warning.
+        """
+        if w not in csp_proven:
+            return
+        for v in violations(page):
+            failures.append(
+                "CSP VIOLATION (%dpx): %s refused %s%s - under "
+                "`script-src 'self'` the browser runs NOTHING here and "
+                "reports no exception, so this control is dead on the real "
+                "server no matter how it measures"
+                % (w, v.get("directive") or "?", v.get("blocked") or "?",
+                   (" near %r" % v["sample"]) if v.get("sample") else ""))
 
     try:
         with sync_playwright() as pw:
@@ -359,6 +489,14 @@ def main() -> int:
             # the only screen the kebab is supposed to appear on at all.
             desktop.evaluate("window.__setScreen('launchpad')")
             measure_glyphs(desktop, glyph_failures, glyph_unknown)
+            # Same screen, and it must run BEFORE collect_csp so the
+            # dispatched events have produced their violations.
+            control_page = browser.new_page(viewport={"width": 800,
+                                                       "height": 600})
+            control_page.goto(url)
+            measure_inline_handlers(desktop, control_page,
+                                    csp_failures, csp_unknown)
+            control_page.close()
 
             mobile = open_page(browser, 390, 844)
             if mobile is None:
@@ -366,6 +504,8 @@ def main() -> int:
                       "measurable", file=sys.stderr)
                 return 2
             m_launch, _m_menu, m_auth = measure(mobile)
+            collect_csp(desktop, 1280, csp_failures)
+            collect_csp(mobile, 390, csp_failures)
             browser.close()
     finally:
         httpd.shutdown()
@@ -373,6 +513,7 @@ def main() -> int:
     failures: list = []
     check(auth, launch, launch_menu, m_auth, m_launch, failures)
     failures.extend(glyph_failures)
+    failures.extend(csp_failures)
 
     every = AUTH_ONLY + AUTH_ONLY_IN_MENU
     print("login screen  :", ", ".join(
@@ -394,6 +535,13 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         return 1
+    if csp_proven:
+        print("csp           : policy served and collector proven live at "
+              + ", ".join("%dpx" % w for w in csp_proven)
+              + "; %d violation(s)" % len(csp_failures))
+
+    if glyph_unknown or csp_unknown:
+        glyph_unknown = list(glyph_unknown) + list(csp_unknown)
     if glyph_unknown:
         print("\nCANNOT DETERMINE")
         for u in glyph_unknown:
