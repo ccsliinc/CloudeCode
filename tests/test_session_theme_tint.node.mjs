@@ -331,8 +331,10 @@ test('the wash is a background-image, so hover and active survive it', () => {
 
 test('the rail and ring are inset shadows, not borders', () => {
     assert.match(tintCss, /box-shadow:\s*[\s\S]*inset 3px 0 0 var\(--session-theme-accent\)/,
-        'a border-left here would fight .running-session-row.owned/.external, '
-        + 'which already own that border to encode ownership');
+        'a border-left here would replace the row own border rather than '
+        + 'compose with it. NOTE: this rail is SIDEBAR ONLY on screen - '
+        + 'styles.css re-declares the home row shadow as the ring alone, so '
+        + 'the home card carries no left-side colour bar at all');
     assert.match(tintCss, /inset 0 0 0 1px var\(--session-theme-ring\)/);
 });
 

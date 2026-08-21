@@ -13,10 +13,15 @@
  * from the theme's OWN `--color-accent`:
  *
  *   1. a 3px inline-start rail and a 1px ring, both as inset box-shadows
- *      rather than borders, so they cost no layout and do not collide
- *      with the `.running-session-row.owned/.external` left border that
- *      already encodes ownership. On the home screen the two read as a
- *      two-tone edge: ownership outside, session theme inside.
+ *      rather than borders, so they cost no layout and compose with the
+ *      row's own border instead of replacing it. The rail is SIDEBAR
+ *      ONLY on screen: styles.css (~4534) re-declares the home row's
+ *      shadow as the ring alone, because the home screen's rows are not
+ *      to carry a left-side colour bar of any kind. (That request also
+ *      removed the `.running-session-row.owned/.external` ownership
+ *      border this rail used to sit inside; the row now has a uniform
+ *      --color-border ring on all four sides and nothing on its box
+ *      encodes session TYPE.)
  *   2. a low-alpha wash of the same accent over the row background - ON
  *      THE SIDEBAR ROW ONLY, see below - layered as a background-IMAGE
  *      so the row's existing background-color (hover, and the active-row

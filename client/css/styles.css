@@ -2726,6 +2726,16 @@ body.home-header-active {
      * image layer so the row's colour is unchanged. */
     background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
     background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    /* ONE BORDER, ONE COLOUR, FOUR SIDES - the same ring .project-item
+     * above already draws. This row used to have NO border at all except
+     * a 3px left edge in the session-TYPE colour (see the removed
+     * ownership-stripe block below), so three sides were bare and the
+     * fourth was a coloured bar. The border is now a theme token on all
+     * four edges, which is what "just the border and background based
+     * upon the theme" asks for: nothing on this box encodes what KIND of
+     * session it is any more, and the TMUX / EXTERNAL badge in the row
+     * is the single source of truth for that. */
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease;
@@ -2740,25 +2750,30 @@ body.home-header-active {
     background-image: linear-gradient(rgba(215, 119, 87, 0.14), rgba(215, 119, 87, 0.14)); /* TODO: theme-token candidate (accent-bg-mid) */
 }
 
-/* Ownership stripe - was --color-success / --color-warning, generic
- * status semantics with no relation to "owned vs external". In themes
- * where warning renders as flat yellow against an accent-tinted card
- * (e.g. Claude's coral card, Matrix's green card) the stripe read as a
- * stray caution light rather than an ownership marker. Now driven by
- * the SAME tokens as the badge pill in the same row
- * (.badge-tmux / .badge-external, styles.css ~2341) so the stripe and
- * the badge always agree, and each theme's own badge tuning (several
- * themes deliberately darken badge-external-fg for on-chip contrast)
- * carries through here too. Ownership is never color-only: the
- * TMUX / EXTERNAL text badge in the same row is the primary signal;
- * this stripe is a secondary reinforcement, never the only cue. */
-.running-session-row.owned {
-    border-left: 3px solid var(--color-badge-tmux-fg);
-}
-
-.running-session-row.external {
-    border-left: 3px solid var(--color-badge-external-fg);
-}
+/* THE OWNERSHIP STRIPE IS GONE, AND `.owned` / `.external` NOW PAINT
+ * NOTHING. Deliberately no rule here, so this comment is the record of
+ * why the selectors still exist in launchpad.js and carry no colour.
+ *
+ * It was a 3px `border-left` in --color-badge-tmux-fg /
+ * --color-badge-external-fg: the SAME tokens as the TMUX / EXTERNAL
+ * badge pill in the same row, chosen so the bar and the badge could
+ * never disagree. Keeping them in step is the problem, not the fix. Two
+ * places encoding one fact is two sources of truth, and the user hit the
+ * failure mode directly - a card whose left bar was the wrong colour for
+ * its badge. The badge is the cue that says the word out loud and is
+ * never colour-only, so it wins; the bar was a colour-only restatement
+ * of it and is the one that goes.
+ *
+ * What replaces it is nothing, on purpose. `.running-session-row` above
+ * now carries a uniform 1px --color-border ring, so the left edge is the
+ * same theme colour as the other three rather than a bare edge where a
+ * coloured bar used to be. Nothing on the row's box encodes session type
+ * any more.
+ *
+ * The `.owned` / `.external` classes are still written by
+ * launchpad.js:976 and still select correctly; they are simply not a
+ * paint hook. Do not reintroduce a colour here without also deciding
+ * which of the two signals is authoritative. */
 
 .running-session-top {
     display: flex;
@@ -4527,21 +4542,30 @@ body.home-header-active {
     margin-left: 8px;
 }
 
-/* ITEM 37, THE SECOND INSTANCE - a themed session row's LEFT EDGE.
+/* A THEMED SESSION ROW'S LEFT EDGE, ON THE HOME SCREEN ONLY.
  * `client/css/session-theme-tint.css` paints a themed row with two inset
  * shadows: a 1px ring (session identity, all four sides) and a 3px
- * inline-start rail. On the home screen that rail lands immediately
- * inside the 3px `border-left` that `.running-session-row.owned` /
- * `.external` already draw in the ownership colour, so the left edge is
- * SIX pixels of two unrelated colours while every other edge is one.
- * That is the "2 colors" on the left. The tint module documents it as an
- * intentional two-tone edge; on screen it reads as a bleed, so the home
- * row now keeps the ring and drops the rail. Nothing is lost: ownership
- * still has its own 3px edge AND its TMUX / EXTERNAL text badge in the
- * same row (which that module names as the primary cue), and session
- * identity still has the ring in its own colour on all four sides.
- * The sidebar row is untouched - it has no ownership border to collide
- * with, so its rail is the only thing on that edge and reads correctly.
+ * inline-start rail. The home row keeps the ring and drops the rail.
+ *
+ * THE REASON CHANGED, THE RULE DID NOT. This started as ITEM 37: the
+ * rail landed immediately inside the 3px ownership `border-left` that
+ * `.running-session-row.owned` / `.external` used to draw, making a
+ * six-pixel two-tone left edge against one-colour neighbours - the
+ * reported "2 colors on the left". That collision no longer exists; the
+ * ownership stripe was removed (see the block at ~2743) and the row now
+ * carries a uniform 1px --color-border ring on all four sides.
+ *
+ * The rail still stays off, for the simpler reason that replaced it:
+ * "no need for the left side color. just the border and background based
+ * upon the theme." A 3px inline-start rail is a left-side colour bar
+ * whatever it encodes, and restoring it here would put back the exact
+ * shape that was asked to go. Nothing is lost - session identity still
+ * has the ring, in its own colour, on all four edges.
+ *
+ * The SIDEBAR row is untouched and keeps its rail: it is a dense list
+ * where the ring alone is too thin to separate adjacent rows, and this
+ * request was about the home screen's session cards.
+ *
  * Specificity, not order, is what makes this win: session-theme-tint.css
  * loads AFTER this file, so the extra `.launchpad-container` is doing
  * real work here and must not be "simplified" away. */

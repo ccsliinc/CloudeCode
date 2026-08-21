@@ -15,13 +15,19 @@
  * =========================================================================== */
 
 /* THE EDGES. A 3px inline-start rail and a 1px ring, both inset shadows
- * rather than borders: they cost no layout box and do not fight
- * `.running-session-row.owned` / `.external`, which already own the
- * left border to encode ownership. On the home screen the result is a
- * two-tone left edge - ownership outside, session identity inside.
+ * rather than borders: they cost no layout box, so they compose with
+ * whatever border the row itself carries instead of replacing it.
+ *
+ * BOTH surfaces match this selector, but only the SIDEBAR gets the rail
+ * on screen. `.launchpad-container .running-session-row[data-session-theme]`
+ * in styles.css (~4534) is more specific and re-declares box-shadow with
+ * the ring alone, because the home screen's rows are not to carry a
+ * left-side colour bar at all - that is the request the ownership stripe
+ * was removed for, and a session-identity rail is the same shape. The
+ * sidebar keeps it: dense rows need more separation than a 1px ring.
  *
  * Edges sit behind no text, so neither cue can cost contrast anywhere,
- * which is why these two are the ones BOTH surfaces get. */
+ * which is why these two are the ones BOTH surfaces get declared. */
 .session-sidebar-row[data-session-theme],
 .running-session-row[data-session-theme] {
     box-shadow:

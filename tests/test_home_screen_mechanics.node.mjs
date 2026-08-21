@@ -430,7 +430,10 @@ await test('ITEM 37: a themed home session row keeps ONE inset edge layer, not a
     const body = ruleBody(STYLES, '.launchpad-container .running-session-row[data-session-theme]');
     assert.match(body, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/);
     assert.ok(!/inset 3px/.test(body),
-        'the 3px session rail is what sat beside the ownership border and read as two colours');
+        'the 3px session rail is a left-side colour bar. It was removed here when '
+        + 'it sat beside the ownership border and read as two colours; the ownership '
+        + 'border is now gone too, and the rail stays off because the home card is '
+        + 'not to carry a coloured left edge of any kind');
     // The selector carries an extra class ON PURPOSE: session-theme-tint.css
     // loads after styles.css, so only specificity can win here.
     assert.ok(STYLES.includes('.launchpad-container .running-session-row[data-session-theme]'));
