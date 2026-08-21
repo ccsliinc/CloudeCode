@@ -1178,29 +1178,28 @@ function updateMenu() {
               label: '☢️  Nuke it from Orbit!',
               click: async () => {
                 const { dialog } = require('electron');
+                const { promptForNukeConfirmation } = require('./nuke-confirm');
 
-                // Show confirmation dialog
-                const result = await dialog.showMessageBox({
-                  type: 'warning',
-                  title: 'Nuke it from Orbit!',
-                  message: 'Complete System Reset',
-                  detail:
-                    'This will completely remove ALL Cloude Code configuration:\n\n' +
-                    '✗ Cloudflare tunnel will be DELETED\n' +
-                    '✗ All DNS records will be DELETED\n' +
-                    '✗ All local configuration files\n' +
-                    '✗ Python virtual environment\n' +
-                    '✗ All logs and temporary files\n' +
-                    '✗ Cloudflared authentication\n' +
-                    '✗ macOS app settings\n\n' +
-                    'You will need to run setup.sh again to use Cloude Code.\n\n' +
-                    'Are you ABSOLUTELY SURE?',
-                  buttons: ['Cancel', 'NUKE IT'],
-                  defaultId: 0,
-                  cancelId: 0
-                });
+                // We invoke nuke.sh with --skip-confirm below, which bypasses
+                // the script's own typed-NUKE gate. That is deliberate (a
+                // shell prompt nobody can see is a hang, not a gate), but it
+                // means the ONLY confirmation is this one, so it has to carry
+                // the same weight: the user types the word NUKE. A button
+                // labelled "NUKE IT" is one mis-aimed click on an
+                // irreversible action. See macOS/nuke-confirm.js.
+                //
+                // The old dialog here also still listed Cloudflare tunnel and
+                // DNS deletion (demolished in plan v3.2) and never mentioned
+                // the state directory or the refresh tokens it destroys.
+                // No path is passed: the app does not resolve the state
+                // directory itself, and inventing one here would restate a
+                // fact that lives in src/config.py - exactly the duplication
+                // that produced the "Cloude Code" vs "CloudeCode" defect.
+                // nuke.sh resolves it, prints it, and refuses to run if it
+                // cannot. The dialog says so rather than guessing.
+                const confirmed = await promptForNukeConfirmation('');
 
-                if (result.response === 1) {
+                if (confirmed) {
                   console.log('Nuking system...');
 
                   // Stop server first
