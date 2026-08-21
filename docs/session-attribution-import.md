@@ -242,11 +242,54 @@ already exists**, and **ask the user about the residue**.
 
 ### Stage A - close the hole (all future sessions)
 
-1. **`create_session` writes its row.** `record_instance(origin='created')`
+1. **`create_session` writes its row. SHIPPED 2026-08-21.**
+   `src/core/session_create_persist.py` + `SessionManager.persist_creation`,
+   called at the end of `create_session`. `record_instance(origin='created')`
    with the socket, name and `#{session_created}` epoch, in the same
-   transaction shape `persist_adoption` already uses. This is the missing
-   write site and it is the whole root cause. Everything else in this document
-   is cleanup for sessions that predate it.
+   transaction shape `persist_adoption` already uses, minus the
+   `claim_instance` step - that function writes `origin='adopted'`
+   unconditionally, so running it here would rewrite our own authorship as
+   somebody else's claim. This was the missing write site and it is the whole
+   root cause. Everything else in this document is cleanup for sessions that
+   predate it.
+
+   Three things about the shape that are decisions, not incidentals.
+   **Ordering.** The row is keyed on `(socket, name, epoch)` and the epoch is
+   tmux's `#{session_created}`, which does not exist until the spawn has
+   succeeded, so the write cannot precede creation without inventing an
+   identity. It runs last, from a FRESH listing that must contain the name.
+   **Which side it fails toward.** A row claiming a session that does not
+   exist is therefore impossible; a live session that is briefly
+   unattributed is possible, and is what we accept. The second is repairable
+   by an adopt or by a re-record onto the same triple; a fabricated row is
+   repairable by nobody, because nothing downstream can tell it from a
+   measured one. **A failed write does not fail the creation.** By the time
+   it runs the session is live and working, and tearing it down over a
+   bookkeeping write would turn a wrong badge into lost work.
+   `persist_creation` never raises: six named outcomes (`recorded`,
+   `listing_unavailable`, `session_gone`, `refused`, `no_datastore`,
+   `not_tmux_backed`), each logged, and the outcome is carried on the
+   `session_created` log line as `origin_persist=` so a creation that the
+   authority never learned about cannot look identical to one it did.
+
+   **Promote-never-demote needed no new machinery.** `record_instance`
+   MERGEs onto an existing row without touching `origin` (design 4.6), so
+   the reconciler's `observed` re-sighting cannot demote a `created` row and
+   this path cannot overwrite a user's `adopted`. That latch already existed
+   and was already correct; it was simply never fed the word `created`.
+   Proved end to end in `tests/test_created_origin_write_site.py` by running
+   the real lifecycle reconciler over a real session after a simulated
+   restart, and again at the datastore.
+
+   **Tiers 3 and below are kept, as a genuine fallback, not a rival.** The
+   in-memory `owned_tmux_sessions` and `session_metadata.json` are NOT now
+   redundant, and the precedence between them and the DB is explicit rather
+   than silent: `resolve_ownership` tier 2 means any epoch-keyed DB opinion
+   about a name beats them outright, so they are consulted only when the DB
+   is silent about that name - which is exactly the `no_datastore` /
+   `listing_unavailable` third state above. Deleting them would leave that
+   state with nothing at all to answer from. What they may never again be is
+   the ONLY record, which is what they were.
 2. **The owned set stops being a rider on a session payload.** Move it to its
    own file, alongside `pinned_themes.json` and `unread_state.json`, which
    already solved this exact problem for the same reason (`session_manager.py:
@@ -397,14 +440,23 @@ in the Adopt list, which the second test asserts.
 assertion while its control test passed, then green after the change. Full
 suite: 2321 passed, 1 skipped, 0 failed.
 
-This closes the destruction, not the root cause. `origin='created'` still has
-no write site, so the badge is still wrong for created sessions until Stage A
-ships. Do not read the green suite as "session attribution is fixed".
+This closes the destruction, not the root cause.
+
+**SUPERSEDED 2026-08-21 in part:** Stage A item 1 has since shipped on
+`feat/created-origin-write-site`, so `origin='created'` now has a write site
+and FUTURE sessions badge correctly. It changes nothing for the ten sessions
+already in the live DB - five `observed`, five `adopted`, zero `created` - and
+nothing about Stages B, C and D, which remain design awaiting review. A green
+suite still does not mean "session attribution is fixed"; it means new
+sessions are recorded and old ones still need the import.
 
 ### Test obligations
 
-- A RED-first test that `create_session` writes `origin='created'`, asserting
-  against `owned_instances()`, not against the in-memory set.
+- ~~A RED-first test that `create_session` writes `origin='created'`,
+  asserting against `owned_instances()`, not against the in-memory set.~~
+  DONE 2026-08-21, `tests/test_created_origin_write_site.py`. Went red on the
+  BADGE (`created_by_cloude=False` from a real tmux session read by a fresh
+  manager) and on the row count (0), not on a missing import.
 - The ladder, tier by tier, including the both-pipes re-adopt case.
 - A test that a tier-4 `CLOUDECODE_ORIGIN` on a pre-Stage-A epoch is ignored.
 - A test that the versioned re-run promotes an `observed` row and refuses to

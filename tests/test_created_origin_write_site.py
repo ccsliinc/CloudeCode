@@ -21,10 +21,13 @@ WHY THE ASSERTIONS ARE SHAPED THE WAY THEY ARE.
   behind, so the only thing that can answer OWNED is the DB. Asserting
   that a row exists would not have caught this: rows existed the whole
   time, carrying the wrong origin.
-* The promote-never-demote tests run against the datastore directly,
-  because the property is a property of the write path, and the cheapest
-  honest way to simulate "a later reconcile sees this session again" is
-  to make the call a reconcile makes.
+* Promote-never-demote is proved twice, at two altitudes. Once END TO
+  END - create a real session, drop the manager, take a fresh listing and
+  run the real lifecycle reconciler over it - because that is the
+  sequence the live install performs and the one that was suspected. And
+  once at the datastore, calling ``record_instance`` the way the poll and
+  the reconciler call it, because the property belongs to the write path
+  and that is where a future regression would land.
 
 SAFETY. Every tmux call in this file lands on the suite's per-process
 guarded socket (see ``tests/socket_guard.py``); the autouse conftest
@@ -286,3 +289,103 @@ def test_an_adopted_row_is_not_demoted_by_a_later_created_sighting(conn):
         "SELECT origin FROM sessions WHERE tmux_name = ?", (name,)
     ).fetchone()
     assert row["origin"] == SESSION_ORIGIN_ADOPTED
+
+
+# --------------------------------------------------------------------------
+# 3. Promote-never-demote, end to end through a restart AND a reconcile.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_restart_and_reconcile_leave_a_created_session_ours(env, tmp_path):
+    """The full sequence the live install actually performs.
+
+    Create, drop the manager (the restart), take a fresh listing, run the
+    real lifecycle reconciler over it, and ask again. The reconciler
+    re-sights every live instance, which is the write most likely to
+    demote a row, so it is run against the real database rather than
+    simulated. Two assertions afterwards, not one: the stored ``origin``
+    still says who made the session, and the badge the user sees is still
+    OURS.
+    """
+    work = tmp_path / "wd"
+    work.mkdir()
+    token = uuid.uuid4().hex[:8]
+
+    mgr = SessionManager()
+    session = None
+    try:
+        session = await mgr.create_session(
+            session_id=f"ses_{token}",
+            working_dir=str(work),
+            auto_start_claude=False,
+            project_name=f"cow{token}",
+        )
+        name = session.tmux_session
+
+        # The restart: a brand-new manager with an empty owned set.
+        fresh = SessionManager()
+        fresh.owned_tmux_sessions.clear()
+
+        listing = fresh.list_attachable_sessions()
+        assert listing.ok, f"tmux listing did not run: {listing.reason}"
+        outcome = fresh.reconcile_lifecycle(listing)
+        assert outcome is not None
+
+        with closing(connect(db_path_for(env))) as handle:
+            rows = handle.execute(
+                "SELECT origin FROM sessions WHERE tmux_name = ?", (name,)
+            ).fetchall()
+        assert len(rows) == 1, f"the reconcile duplicated the row: {len(rows)}"
+        assert rows[0]["origin"] == SESSION_ORIGIN_CREATED, (
+            "the reconciler demoted a created session"
+        )
+
+        after = SessionManager()
+        after.owned_tmux_sessions.clear()
+        relisting = after.list_attachable_sessions()
+        assert relisting.ok
+        row = next(
+            (r for r in relisting.sessions if r.get("name") == name), None
+        )
+        assert row is not None and row["created_by_cloude"] is True
+    finally:
+        if session is not None:
+            await mgr.destroy_session(session.id)
+
+
+def test_an_adopted_row_survives_the_reconcile_write_verbatim(conn):
+    """An adoption is the user's decision and no automatic write may undo it.
+
+    Exercised at the datastore, because the property belongs to the write
+    path and the reconciler's only effect on an existing row is this call.
+    """
+    name = "cloude_adopt_survives"
+    record_instance(
+        conn,
+        socket=SOCKET,
+        name=name,
+        epoch=EPOCH,
+        origin=SESSION_ORIGIN_ADOPTED,
+        lifecycle_source="adopt",
+        session_id="$7",
+    )
+    conn.commit()
+
+    for source in ("reconcile", "poll", "create"):
+        record_instance(
+            conn,
+            socket=SOCKET,
+            name=name,
+            epoch=EPOCH,
+            origin=SESSION_ORIGIN_OBSERVED,
+            lifecycle_source=source,
+            session_id="$7",
+        )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT origin FROM sessions WHERE tmux_name = ?", (name,)
+    ).fetchone()
+    assert row["origin"] == SESSION_ORIGIN_ADOPTED
+    assert (name, EPOCH) in owned_instances(conn, socket=SOCKET)
