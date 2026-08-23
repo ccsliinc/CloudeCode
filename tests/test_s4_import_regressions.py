@@ -143,13 +143,37 @@ def test_BOTH_import_steps_use_the_SAME_origin_resolver():
     hardcoded a constant. A behavioural test catches today's divergence;
     this catches the reintroduction of ANY hardcoded origin on either
     write path.
+
+    STAGE B WIDENED WHAT IS ALLOWED, BY EXACTLY ONE VALUE, AND THIS TEST
+    NOW PINS THE WIDENING RATHER THAN BEING RELAXED FOR IT. Step 4 no
+    longer passes ``observed_origin_for(...)`` inline, because the
+    evidence ladder can now PROVE a session is ours from the created
+    pipe or an epoch-gated marker, not only from the legacy owned set.
+    So a NAME may be passed - but every assignment to that name is
+    enumerated here and must be one of exactly two forms:
+
+      * ``observed_origin_for(...)``  - the shared resolver, unchanged;
+      * ``SESSION_ORIGIN_CREATED``    - and ONLY inside a branch guarded
+        on the ladder verdict being LADDER_OURS.
+
+    ``SESSION_ORIGIN_OBSERVED`` is deliberately NOT on that list. A path
+    that hardcodes external is the original defect, and it stays
+    unrepresentable here.
     """
     import ast
 
     source = (ROOT / "src" / "core" / "session_import.py").read_text()
     tree = ast.parse(source)
 
+    def _is_shared_resolver(value_node):
+        """True when the expression is a call to the shared origin resolver."""
+        return (
+            isinstance(value_node, ast.Call)
+            and getattr(value_node.func, "id", None) == "observed_origin_for"
+        )
+
     hardcoded = []
+    indirect_names = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -158,19 +182,58 @@ def test_BOTH_import_steps_use_the_SAME_origin_resolver():
         for keyword in node.keywords:
             if keyword.arg != "origin":
                 continue
-            # the ONLY acceptable value is a call to observed_origin_for
-            if not (
-                isinstance(keyword.value, ast.Call)
-                and getattr(keyword.value.func, "id", None)
-                == "observed_origin_for"
-            ):
-                hardcoded.append(node.lineno)
+            if _is_shared_resolver(keyword.value):
+                continue
+            if isinstance(keyword.value, ast.Name):
+                indirect_names.add(keyword.value.id)
+                continue
+            hardcoded.append(node.lineno)
 
     assert hardcoded == [], (
-        "record_instance is called with an origin that is not "
-        f"observed_origin_for(...) at line(s) {hardcoded}. Every import "
-        "write path must resolve origin the same way, or the user's own "
-        "session gets badged external on one of them"
+        "record_instance is called with an origin that is neither "
+        "observed_origin_for(...) nor a name this test can audit, at "
+        f"line(s) {hardcoded}. Every import write path must resolve "
+        "origin the same way, or the user's own session gets badged "
+        "external on one of them"
+    )
+
+    # Every assignment to an indirect origin name must be one of the two
+    # allowed forms, and the CREATED form must sit inside a branch tested
+    # on the ladder verdict. That is what stops
+    # ``origin = SESSION_ORIGIN_CREATED`` being hoisted out of its guard.
+    ladder_guarded = set()
+    for outer in ast.walk(tree):
+        if isinstance(outer, ast.If) and "LADDER_OURS" in ast.dump(outer.test):
+            for inner in ast.walk(outer):
+                ladder_guarded.add(id(inner))
+
+    bad_assignments = []
+    for name in sorted(indirect_names):
+        seen = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets
+            ):
+                continue
+            seen += 1
+            value = node.value
+            if _is_shared_resolver(value):
+                continue
+            if (
+                isinstance(value, ast.Name)
+                and value.id == "SESSION_ORIGIN_CREATED"
+                and id(node) in ladder_guarded
+            ):
+                continue
+            bad_assignments.append((name, node.lineno, ast.dump(value)[:80]))
+        assert seen, f"origin name {name!r} is never assigned in this module"
+
+    assert bad_assignments == [], (
+        "an import write path resolves origin from something that is "
+        "neither the shared resolver nor a ladder-proved 'created': "
+        f"{bad_assignments}"
     )
 
 

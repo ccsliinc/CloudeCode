@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 import structlog
@@ -73,6 +74,10 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_STOPPED,
     SESSION_ORIGIN_OBSERVED,
 )
+from src.core.db_models import (
+    META_SESSION_IMPORT_UNATTRIBUTED,
+    SESSION_ORIGIN_CREATED,
+)
 from src.core.session_import_mapping import (
     attribute_working_dir,
     _merge_fields,
@@ -83,6 +88,17 @@ from src.core.session_import_mapping import (
 )
 from src.core.project_reconcile import ReconcileResult, reconcile_projects
 from src.core.session_identity import RECORD_INSERTED, record_instance
+from src.core.session_import_evidence import gather, live_sessions_from
+from src.core.session_import_ladder import (
+    LADDER_OURS,
+    REASON_COULD_NOT_EVALUATE,
+    classify,
+)
+from src.core.session_import_promote import (
+    PROMOTE_APPLIED,
+    promote_to_created,
+    reexaminable_instances,
+)
 from src.core.session_store import count_sessions, observed_origin_for
 from src.core.tmux_listing import TmuxListing
 from src.core.trail_entry import utc_now
@@ -93,6 +109,11 @@ logger = structlog.get_logger()
 IMPORT_COMPLETED = "completed"
 IMPORT_ALREADY_DONE = "already_done"
 IMPORT_PENDING_LISTING_UNAVAILABLE = "pending_listing_unavailable"
+#: A LATER build with a better ladder re-ran over rows still
+#: ``observed`` and undeclined. Its own outcome, never folded into
+#: COMPLETED: the two runs did different amounts of work and a report
+#: that cannot tell them apart cannot explain what changed.
+IMPORT_RERUN_COMPLETED = "rerun_completed"
 
 #: Key inside ``meta.imported_from_json_result`` marking the SESSIONS
 #: stage as finished. Held separately from the top-level latch so an
@@ -101,6 +122,21 @@ IMPORT_PENDING_LISTING_UNAVAILABLE = "pending_listing_unavailable"
 #: different, smaller job.
 RESULT_KEY_SESSIONS_STAGE = "sessions_imported_at"
 RESULT_KEY_SESSIONS_DETAIL = "sessions_import_detail"
+
+#: STAGE D. The latch is no longer one-way, it is VERSIONED. A build
+#: that adds an admissible tier bumps EVIDENCE_LADDER_VERSION and the
+#: import re-runs the ladder - but ONLY over rows still at
+#: ``origin='observed'`` with no ``user_declined_at``. A row already
+#: OURS is never re-examined and never downgraded; a row the user
+#: declined is never re-asked. Promote, never demote, is the only
+#: direction that is safe without asking the question again.
+RESULT_KEY_SESSIONS_EVIDENCE_VERSION = "sessions_import_evidence_version"
+
+#: Bump ONLY when a new tier becomes admissible, or an existing tier
+#: becomes admissible in more cases. Never bump for a bug fix that
+#: makes the ladder decide LESS often - that would re-run a ladder
+#: whose verdicts can only shrink, over rows it already left alone.
+EVIDENCE_LADDER_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -129,6 +165,19 @@ class FirstRunImportResult:
     listing_reason: Optional[str] = None
     refusals: List[Dict[str, Any]] = field(default_factory=list)
     unmatched: List[Dict[str, Any]] = field(default_factory=list)
+    #: STAGE B/C. One record per live session the evidence ladder could
+    #: NOT attribute: {tmux_name, epoch, hints, reason}. The reason
+    #: separates "we looked and found nothing" from "we could not look",
+    #: and the home-screen prompt renders both rather than averaging them
+    #: into a confidence number nobody can check.
+    unattributed: List[Dict[str, Any]] = field(default_factory=list)
+    #: STAGE D. Rows a re-run promoted from ``observed`` to ``created``.
+    #: Never negative and never a demotion - there is no code path that
+    #: can produce one.
+    promoted: int = 0
+    #: Which ladder produced this result, so a later report can say what
+    #: changed rather than only that something did.
+    evidence_version: int = EVIDENCE_LADDER_VERSION
 
     @property
     def pending(self) -> bool:
@@ -260,6 +309,36 @@ def sessions_stage_done(conn: sqlite3.Connection) -> bool:
     return bool(_load_result_blob(conn).get(RESULT_KEY_SESSIONS_STAGE))
 
 
+def sessions_stage_version(conn: sqlite3.Connection) -> Optional[int]:
+    """Which evidence-ladder version last imported sessions here, if any.
+
+    Description: THREE OUTCOMES, and they drive three different actions.
+      None means the sessions stage has NEVER run, so the full import
+      runs. A number BELOW :data:`EVIDENCE_LADDER_VERSION` means an older,
+      weaker ladder ran, so the re-run promotes what it can now prove. A
+      number at or above it means there is nothing new to say and the
+      import returns already-done.
+
+      A stamp with NO version key is version 0 - it was written by the
+      pre-ladder code, which is precisely the install whose nine sessions
+      all landed ``observed`` with no evidence. Reading it as "current"
+      would lock exactly the users this work exists to rescue.
+    Inputs: conn (sqlite3.Connection).
+    Output: int | None - None when the stage has never run.
+    Raises: ImportLatchUnreadable - the latch record cannot be read, so
+      this question CANNOT BE ANSWERED.
+    Example: sessions_stage_version(conn)  # 0, 1, or None
+    """
+    blob = _load_result_blob(conn)
+    if not blob.get(RESULT_KEY_SESSIONS_STAGE):
+        return None
+    raw = blob.get(RESULT_KEY_SESSIONS_EVIDENCE_VERSION)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _latch_sessions_stage(
     conn: sqlite3.Connection, stamp: str, detail: Dict[str, Any]
 ) -> None:
@@ -293,6 +372,7 @@ def _latch_sessions_stage(
         {
             RESULT_KEY_SESSIONS_STAGE: stamp,
             RESULT_KEY_SESSIONS_DETAIL: detail,
+            RESULT_KEY_SESSIONS_EVIDENCE_VERSION: EVIDENCE_LADDER_VERSION,
         },
     )
     set_meta(conn, META_IMPORTED_FROM_JSON_AT, stamp)
@@ -308,6 +388,9 @@ def run_first_run_import(
     socket: str = DEFAULT_TMUX_SOCKET,
     now: Optional[str] = None,
     working_dir_probe: Optional[Callable[[str], Optional[str]]] = None,
+    owned_set_readable: bool = True,
+    log_dir: Optional[Path] = None,
+    origin_probe: Optional[Callable[[str], Optional[str]]] = None,
 ) -> FirstRunImportResult:
     """Import config projects and live tmux sessions, once per install, ever.
 
@@ -368,7 +451,12 @@ def run_first_run_import(
     # third answer, when it can tell neither.
     project_result = reconcile_projects(conn, projects, now=stamp)
 
-    if sessions_stage_done(conn):
+    # --- STAGE D: the latch is versioned, not one-way --------------------
+    # None  never ran            -> full import
+    # < N   an older ladder ran  -> re-run, PROMOTE ONLY (below the gate)
+    # >= N  nothing new to say   -> already done
+    prior_version = sessions_stage_version(conn)
+    if prior_version is not None and prior_version >= EVIDENCE_LADDER_VERSION:
         return FirstRunImportResult(
             outcome=IMPORT_ALREADY_DONE, projects=project_result
         )
@@ -401,8 +489,39 @@ def run_first_run_import(
             listing_reason=listing.reason,
         )
 
-    # --- steps 4 and 7: live tmux sessions -------------------------------
+    # --- THE EVIDENCE LADDER (design Stage B) ----------------------------
+    # Gathered ONCE for the whole run, then applied per session. Every
+    # "could not read it" arrives as None or an explicit failure set, so
+    # the ladder can tell an empty owned set from an unreadable one - the
+    # exact collapse that made every launcher-created session EXTERNAL.
     roots = _project_roots(conn)
+    live = live_sessions_from(_row_fields(raw) for raw in listing.sessions)
+    evidence = gather(
+        conn,
+        live_names=[s.tmux_name for s in live],
+        owned_tmux_names=(sorted(owned) if owned_set_readable else None),
+        log_dir=log_dir,
+        project_roots=tuple(roots),
+        origin_probe=origin_probe,
+    )
+    ladder = classify(live, evidence)
+    verdict_by_name = {v.tmux_name: v for v in ladder.verdicts}
+
+    # STAGE D: a RE-RUN never re-imports and never re-asks. It promotes
+    # rows the new ladder can now prove, over the strictly narrower set
+    # the promote module gates in SQL, and returns before step 4's
+    # INSERTs - which would otherwise re-run a one-time import.
+    if prior_version is not None:
+        return _rerun_promote_only(
+            conn,
+            ladder=ladder,
+            socket=socket,
+            stamp=stamp,
+            prior_version=prior_version,
+            project_result=project_result,
+            listing=listing,
+        )
+
     persisted_by_name = {
         str(entry.get("tmux_session")): entry
         for entry in (persisted_sessions or ())
@@ -427,14 +546,29 @@ def run_first_run_import(
         if name in persisted_by_name:
             matched_names.add(name)
 
+        # THREE OUTCOMES, NEVER A DEFAULT. ``ours`` is written only when
+        # an ADMISSIBLE tier proved it (1, 3, or an epoch-gated 4).
+        # Everything else is written ``observed`` AND recorded in the
+        # unattributed list, so an unresolved session is a question we
+        # ask the user rather than a verdict we invented for him. The
+        # winning tier goes into lifecycle_source so the decision stays
+        # auditable long after the evidence on disk has rotated away.
+        verdict = verdict_by_name.get(name)
+        if verdict is not None and verdict.verdict == LADDER_OURS:
+            row_origin = SESSION_ORIGIN_CREATED
+            row_source = f"{SESSION_LIFECYCLE_SOURCE_IMPORT}:{verdict.reason}"
+        else:
+            row_origin = observed_origin_for(name, owned)
+            row_source = SESSION_LIFECYCLE_SOURCE_IMPORT
+
         result = record_instance(
             conn,
             socket=socket,
             name=name,
             epoch=epoch,
-            origin=observed_origin_for(name, owned),
+            origin=row_origin,
             lifecycle=SESSION_LIFECYCLE_RUNNING,
-            lifecycle_source=SESSION_LIFECYCLE_SOURCE_IMPORT,
+            lifecycle_source=row_source,
             session_id=row.get("tmux_session_id"),
             now=stamp,
             project_id=project_id,
@@ -491,6 +625,16 @@ def run_first_run_import(
 
     # --- step 8: the latch. THE ONLY STAMP SITE IN THIS MODULE. ----------
     # Reachable only from the listing.ok is True path above.
+    # STAGE C: THE THIRD OUTCOME, WRITTEN DOWN WHERE THE UI CAN READ IT.
+    # An empty list and an ABSENT key are different facts: absent means
+    # the ladder has never run here.
+    unattributed = ladder.unattributed_records()
+    set_meta(
+        conn,
+        META_SESSION_IMPORT_UNATTRIBUTED,
+        json.dumps(unattributed, sort_keys=True),
+    )
+
     _latch_sessions_stage(
         conn,
         stamp,
@@ -499,6 +643,9 @@ def run_first_run_import(
             "epoch_collisions_refused": refusals,
             "persisted_without_live_tmux": unmatched,
             "listing_reason": listing.reason,
+            "ladder_ours": len(ladder.ours),
+            "ladder_unknown_no_evidence": len(ladder.unknown_no_evidence),
+            "ladder_unknown_could_not_evaluate": len(ladder.unknown_unevaluated),
         },
     )
     logger.info(
@@ -515,6 +662,105 @@ def run_first_run_import(
         listing_reason=listing.reason,
         refusals=refusals,
         unmatched=unmatched,
+        unattributed=unattributed,
     )
 
 
+def _rerun_promote_only(
+    conn: sqlite3.Connection,
+    *,
+    ladder: Any,
+    socket: str,
+    stamp: str,
+    prior_version: int,
+    project_result: ReconcileResult,
+    listing: TmuxListing,
+) -> FirstRunImportResult:
+    """STAGE D. Re-apply a NEWER ladder to rows the old one left observed.
+
+    Description: the safe half of making a once-only import re-runnable.
+      It INSERTs nothing, so it cannot re-import a session the user has
+      since deleted, and it writes ``origin`` in exactly one direction.
+      The eligibility gate is not enforced here at all - it lives in the
+      UPDATE's WHERE clause inside
+      :func:`session_import_promote.promote_to_created`, so forgetting
+      the check in this function cannot cause a wrong write.
+
+      WHAT IT REFUSES TO TOUCH, and why each refusal matters:
+        - a row already ``created`` or ``adopted``: it is OURS and a
+          later run can only ever know less about it than the run that
+          proved it. Promote, never demote.
+        - a row with ``user_declined_at``: the user answered. Re-asking
+          on every boot is how a prompt becomes something people click
+          away without reading.
+
+      The unattributed list is REWRITTEN from the new ladder, minus the
+      instances that were just promoted and minus anything the user
+      declined - so the prompt shrinks as evidence improves and never
+      re-raises a closed question.
+    Inputs: conn (sqlite3.Connection). ladder (LadderReport). socket
+      (str). stamp (str) - ISO-8601. prior_version (int) - the ladder
+      version that ran before. project_result (ReconcileResult).
+      listing (TmuxListing).
+    Output: FirstRunImportResult with outcome IMPORT_RERUN_COMPLETED.
+    """
+    eligible = reexaminable_instances(conn, socket=socket)
+    promoted = 0
+    promoted_names = set()
+    for verdict in ladder.ours:
+        if verdict.epoch is None:
+            continue
+        if (verdict.tmux_name, int(verdict.epoch)) not in eligible:
+            continue
+        outcome = promote_to_created(
+            conn,
+            socket=socket,
+            name=verdict.tmux_name,
+            epoch=verdict.epoch,
+            now=stamp,
+            lifecycle_source=(
+                f"{SESSION_LIFECYCLE_SOURCE_IMPORT}:rerun:{verdict.reason}"
+            ),
+        )
+        if outcome == PROMOTE_APPLIED:
+            promoted += 1
+            promoted_names.add(verdict.tmux_name)
+
+    still_eligible = reexaminable_instances(conn, socket=socket)
+    unattributed = [
+        rec
+        for rec in ladder.unattributed_records()
+        if rec["tmux_name"] not in promoted_names
+        and rec.get("epoch") is not None
+        and (rec["tmux_name"], int(rec["epoch"])) in still_eligible
+    ]
+    set_meta(
+        conn,
+        META_SESSION_IMPORT_UNATTRIBUTED,
+        json.dumps(unattributed, sort_keys=True),
+    )
+    _latch_sessions_stage(
+        conn,
+        stamp,
+        {
+            "rerun_from_evidence_version": prior_version,
+            "promoted": promoted,
+            "still_unattributed": len(unattributed),
+            "listing_reason": listing.reason,
+        },
+    )
+    logger.info(
+        "session_import_rerun_completed",
+        from_version=prior_version,
+        to_version=EVIDENCE_LADDER_VERSION,
+        promoted=promoted,
+        still_unattributed=len(unattributed),
+    )
+    return FirstRunImportResult(
+        outcome=IMPORT_RERUN_COMPLETED,
+        sessions_imported=0,
+        projects=project_result,
+        listing_reason=listing.reason,
+        unattributed=unattributed,
+        promoted=promoted,
+    )

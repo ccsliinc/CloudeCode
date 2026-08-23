@@ -380,6 +380,37 @@ class API {
     }
 
     /**
+     * Sessions: the Stage C attribution prompt.
+     *
+     * Description: the sessions the evidence ladder could not attribute,
+     *   itemised with the hints spelled out in words. THREE STATES:
+     *   'none' (nothing to ask), 'pending' (ask these), 'unavailable'
+     *   (the datastore could not be read, so whether there is anything
+     *   to ask CANNOT BE DETERMINED - never rendered as an empty list).
+     * @returns {Promise<object>} - {state, sessions, notice}
+     */
+    async getSessionAttributionPrompt() {
+        return await this.call('/sessions/attribution-prompt');
+    }
+
+    /**
+     * Sessions: record "leave these as external", durably.
+     *
+     * Description: writes user_declined_at so the prompt does not return
+     *   on every boot. Reports per session rather than as a count: a name
+     *   whose row is not 'observed' comes back in not_eligible instead of
+     *   being counted as a success nobody measured.
+     * @param {string[]} tmuxNames - the sessions the user left external
+     * @returns {Promise<object>} - {declined, not_eligible, unknown}
+     */
+    async declineSessionAttribution(tmuxNames) {
+        return await this.call('/sessions/attribution-decline', {
+            method: 'POST',
+            body: { tmux_names: tmuxNames }
+        });
+    }
+
+    /**
      * Projects: Create new project
      * @param {object} params - {name: string, path: string, description?: string}
      * @returns {Promise<object>} - Project data

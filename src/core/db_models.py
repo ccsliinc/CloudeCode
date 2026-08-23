@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 5
+CURRENT_SCHEMA_VERSION: int = 6
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -570,6 +570,52 @@ REVERSAL_SQL_V2: Tuple[str, ...] = (
     "DROP TABLE IF EXISTS sessions",
 )
 
+# ---- schema v6: sessions.user_declined_at ---------------------------------
+#
+# THE ANSWER "LEAVE IT AS EXTERNAL" HAS TO BE DURABLE, OR IT IS NOT AN
+# ANSWER. Stage C asks the user about every session the evidence ladder
+# could not attribute. Two of the three answers write ``origin``, which
+# is already durable. The third - "leave as external" - writes the SAME
+# value the row already carries, so without a second field it is
+# indistinguishable from "never asked" and the prompt returns on every
+# boot until the user gives one of the other two answers. That is not a
+# prompt, it is a nag with no off switch.
+#
+# ONE NULLABLE COLUMN, ISO-8601, NULL MEANING "NEVER ASKED OR NEVER
+# ANSWERED". It is read by the Stage-D re-run gate, which re-examines
+# only rows still at ``origin='observed'`` with this column NULL - so a
+# later, better import can PROMOTE a row it can now prove, and can never
+# re-ask a question the user has already closed.
+DDL_SESSIONS_ADD_USER_DECLINED_AT = (
+    "ALTER TABLE sessions ADD COLUMN user_declined_at TEXT"
+)
+
+#: Ordered DDL for a v5 -> v6 database. Additive, one nullable column.
+#: ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite, so the step in
+#: db_steps.py inspects PRAGMA table_info first - that inspection is what
+#: makes it idempotent, not the statement.
+DDL_V6: Tuple[str, ...] = (DDL_SESSIONS_ADD_USER_DECLINED_AT,)
+
+#: SQLite cannot drop a column without rebuilding the table and this
+#: module is additive-only, so a REVERSE of v5 -> v6 is a RESTORE from the
+#: verified backup, exactly as v3 and v4 are. Stated rather than omitted
+#: so the absence is a decision on the record.
+REVERSAL_SQL_V6: Tuple[str, ...] = ()
+
+#: The evidence ladder's key inside ``meta``: a JSON list of
+#: ``{tmux_name, epoch, hints, reason}`` for every live session the ladder
+#: could not attribute. THE THIRD OUTCOME, WRITTEN DOWN. Empty list and
+#: absent key are different: absent means the ladder has never run.
+META_SESSION_IMPORT_UNATTRIBUTED = "session_import_unattributed"
+
+#: The unix epoch at or after which a tmux ``CLOUDECODE_ORIGIN`` marker is
+#: admissible on THIS install - the moment a build carrying the Stage-A
+#: create-path write site first ran here. Stamped once and never moved.
+#: ABSENT MEANS CANNOT DETERMINE, which makes tier 4 inadmissible rather
+#: than assumed valid; see src/core/session_stage_a_boundary.py.
+META_STAGE_A_BOUNDARY_EPOCH = "stage_a_origin_marker_boundary_epoch"
+
+
 # Columns a REVERSE of each step permanently destroys, keyed by the
 # to_version it undoes. Used to generate the typed-confirmation text in
 # section 9.5 ("permanently deletes the values stored in: ..."), which
@@ -584,4 +630,5 @@ REVERSAL_DESTROYS: dict = {
     2: ("sessions (whole table)",),
     3: ("sessions.tmux_session_id",),
     5: ("project_tombstones (whole table)",),
+    6: ("sessions.user_declined_at",),
 }

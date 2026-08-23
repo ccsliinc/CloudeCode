@@ -841,10 +841,42 @@ class SessionManager:
         wiped too; if None, the current session (if any) is wiped.
         """
         metadata_path = settings.get_session_metadata_path()
+        # DROP THE SESSION POINTER, KEEP THE OWNED SET. This file is the
+        # only durable home of ``owned_tmux_sessions``, and that set is
+        # about EVERY session the app created - not about the one session
+        # whose slug we are discarding here. Unlinking the file outright
+        # (what this used to do) threw away N sessions' ownership record
+        # to clean up 1, and the trigger is the ORDINARY case, not an
+        # error path: ``session_metadata_slug_not_in_backend`` fires
+        # whenever the last-active tmux session is simply gone by the next
+        # start. Measured on the live install - four load/delete pairs
+        # ~40ms apart, then the file never returned, and from that point
+        # every launcher-created session resolved EXTERNAL because
+        # ``resolve_ownership`` fell past its empty tier-3 legacy set.
+        #
+        # An owned-set-only payload (no ``id``) is written instead, which
+        # ``_load_session_metadata`` reads back without rehydrating a
+        # session - so the dead pointer stays dead and surfaces in the
+        # Adopt list exactly as before.
+        # ORDERING IS DELIBERATE: unlink FIRST, then re-write. The unlink
+        # of the RESOLVED path is left exactly as it was so this change
+        # does not disturb the state-dir migration semantics - the file
+        # still relocates out of the legacy ``log_directory`` on the next
+        # write, which ``tests/test_session_meta_continuity.py`` measures.
+        # ``_write_metadata_atomic`` re-resolves after the unlink, which is
+        # the same thing ``_save_session_metadata`` would have done.
         try:
             if metadata_path.exists():
                 metadata_path.unlink()
                 logger.info("stale_session_metadata_deleted")
+            if self.owned_tmux_sessions:
+                self._write_metadata_atomic(
+                    {"owned_tmux_sessions": sorted(self.owned_tmux_sessions)}
+                )
+                logger.info(
+                    "stale_session_metadata_owned_set_kept",
+                    owned_count=len(self.owned_tmux_sessions),
+                )
         except Exception as exc:
             logger.error("failed_to_delete_stale_metadata", error=str(exc))
         sid = session_id
@@ -906,6 +938,23 @@ class SessionManager:
             # ``Session(**)``, which would reject unknown keys with
             # ``extra='forbid'`` if we ever tightened it.
             owned = raw.pop("owned_tmux_sessions", None)
+
+            # OWNED-SET-ONLY PAYLOAD. Written by ``_clear_stale_metadata``
+            # when it drops an un-rehydratable session pointer but has an
+            # ownership record worth keeping. There is no session to
+            # rehydrate, and that is the whole point - handing this to
+            # ``Session(**raw)`` would raise and the except below would
+            # swallow the owned set along with it, which is the exact loss
+            # the owned-set-only payload exists to prevent.
+            if not raw.get("id"):
+                self.owned_tmux_sessions = set(owned or [])
+                self._legacy_metadata_needs_backfill = False
+                logger.info(
+                    "session_metadata_owned_set_only_loaded",
+                    owned_count=len(self.owned_tmux_sessions),
+                    note="no persisted session to rehydrate",
+                )
+                return
 
             loaded = Session(**raw)
             # Register the persisted session into the per-session dicts
@@ -2066,6 +2115,50 @@ class SessionManager:
 
             self._save_session_metadata(new_session)
 
+            # THE AUTHORITY. The two lines above are tiers 3 and below:
+            # a set that dies with this process, and a file the DB
+            # outranks. ``sessions`` is what the badge is computed from
+            # (src/models.py:346), and until this call it was never told
+            # that the launcher had made anything - which is why every
+            # launcher-created session read EXTERNAL after a restart.
+            #
+            # Runs LAST on purpose. It needs tmux's #{session_created}
+            # for the instance key, which does not exist until the spawn
+            # above succeeded, and it must not be able to fail the
+            # creation of a session that is already live and working.
+            # persist_creation never raises; it returns a named outcome,
+            # and an unrecorded session is a repairable degraded state
+            # while a fabricated row is not repairable by anyone.
+            create_persist_outcome = None
+            if owned_name:
+                persisted = self.persist_creation(
+                    owned_name, working_dir=str(work_path)
+                )
+                create_persist_outcome = persisted.outcome
+                if not persisted.recorded:
+                    logger.warning(
+                        "session_created_not_attributed",
+                        session_id=session_id,
+                        tmux_name=owned_name,
+                        outcome=persisted.outcome,
+                        detail=persisted.detail,
+                        note=(
+                            "the session is LIVE; only its ownership row "
+                            "is missing, so it will badge external until "
+                            "it is recorded or adopted"
+                        ),
+                    )
+            else:
+                # Not a tmux-backed session, so there is no instance
+                # triple for the sessions table to key on. Named rather
+                # than silent: "the question does not arise" is a
+                # different answer from "the write failed".
+                from src.core.session_create_persist import (
+                    CREATE_NOT_TMUX_BACKED,
+                )
+
+                create_persist_outcome = CREATE_NOT_TMUX_BACKED
+
             # Item 7: spin up the per-session IdleWatcher. Skipped silently
             # when the router hasn't been attached (e.g. in tests that
             # exercise SessionManager without a full app lifespan) so the
@@ -2093,6 +2186,11 @@ class SessionManager:
                 session_id=session_id,
                 pid=pid,
                 backend=type(backend).__name__.replace("Backend", "").lower(),
+                # Say on the same line whether the authority learned about
+                # this session. A `session_created` with no attribution
+                # outcome beside it is exactly the false green this fix
+                # exists to remove.
+                origin_persist=create_persist_outcome,
             )
 
             return new_session
@@ -2975,6 +3073,100 @@ class SessionManager:
             return AdoptPersistResult(
                 outcome=PERSIST_LISTING_UNAVAILABLE,
                 detail=f"could not record the claim: {exc}",
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
+    def persist_creation(self, name: str, working_dir: Optional[str] = None):
+        """Write ``origin='created'`` for one tmux session, durably.
+
+        Description: the sibling of :meth:`persist_adoption`, and the
+          write site ``SESSION_ORIGIN_CREATED`` did not have. Ownership of
+          a launcher-made session used to live only in
+          ``owned_tmux_sessions`` (in memory, dies with the process) and
+          ``session_metadata.json`` (tier 3, and outranked by any DB
+          opinion). The authority - the ``sessions`` table - was never
+          told, so ``session_store.owned_instances`` never held the
+          instance and the launcher badged the user's own session
+          EXTERNAL after every restart.
+
+          Takes a FRESH listing, for the same reason adoption does: the
+          row is keyed on ``(socket, name, epoch)`` and the epoch is
+          tmux's ``#{session_created}``, which only exists once tmux has
+          made the session. Nothing is written unless a probe that RAN
+          contains the name, so a row can never claim a session that is
+          not there.
+
+          NEVER RAISES, and a failure here must never fail the creation:
+          by the time this runs the session is live and usable, and
+          tearing it down over a bookkeeping write would turn a wrong
+          badge into lost work. Every failure is a named outcome the
+          caller logs, and the condition is repairable - a later adopt,
+          or a re-record onto the same triple, MERGEs onto the same row.
+        Inputs: name (str) - the tmux session name just created.
+          working_dir (str | None) - the directory it was created in,
+          which this path already knows and need not probe for.
+        Output: CreatePersistResult - ``recorded`` is True only when a
+          row now carries ``origin='created'``.
+        Example: mgr.persist_creation('cloude_a').recorded
+        """
+        from src.core.session_create_persist import (
+            CREATE_NO_DATASTORE,
+            CreatePersistResult,
+            persist_creation,
+        )
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            logger.warning(
+                "create_persist_no_datastore",
+                tmux_name=name,
+                note=(
+                    "the session is live but there is no datastore to "
+                    "record it in, so its ownership rests on the "
+                    "degraded in-memory tier until one exists"
+                ),
+            )
+            return CreatePersistResult(
+                outcome=CREATE_NO_DATASTORE,
+                detail="the datastore could not be opened to record the session",
+            )
+        try:
+            from src.core.db import transaction
+            from src.core.tmux_session_cwd import make_working_dir_probe
+
+            # The socket the probe ACTUALLY ran against, never the one
+            # settings says it should have. Same reasoning as
+            # persist_adoption: a row keyed on one socket and a listing
+            # taken from another agree with each other and with nothing
+            # else.
+            probe_socket, listing = self.list_attachable_sessions_with_socket()
+            socket = probe_socket or self._tmux_socket_name()
+            with transaction(conn):
+                return persist_creation(
+                    conn,
+                    socket=socket,
+                    name=name,
+                    listing=listing,
+                    working_dir=working_dir,
+                    working_dir_probe=make_working_dir_probe(socket),
+                )
+        except Exception as exc:  # noqa: BLE001 - creation must not crash
+            logger.warning(
+                "create_persist_failed",
+                session=name,
+                error=str(exc),
+                note=(
+                    "the session itself is unaffected; only its ownership "
+                    "record failed to write"
+                ),
+            )
+            return CreatePersistResult(
+                outcome=CREATE_NO_DATASTORE,
+                detail=f"could not record the new session: {exc}",
             )
         finally:
             try:

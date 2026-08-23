@@ -259,17 +259,71 @@ def test_NO_CODE_PATH_STAMPS_THE_LATCH_ON_THE_FAILED_PROBE_BRANCH():
             "this test does not constrain"
         )
 
-    # --- fact 2: the helper has exactly ONE call site ------------------
-    call_sites = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and (getattr(node.func, "id", None) == latch_helper)
-    ]
+    # --- fact 2: every call site sits in an ALLOWED function, and the
+    # one on the first-run path is unique.
+    #
+    # STAGE D ADDED A SECOND LATCH SITE ON PURPOSE. The versioned re-run
+    # completes real work and must record that it did, so "exactly one
+    # call site" is no longer the right shape of proof. What replaces it
+    # is STRICTLY STRONGER: the set of functions allowed to latch is
+    # enumerated here, the first-run site is still unique and still after
+    # the gate, and the re-run helper is itself proved to be reachable
+    # only from below that same gate. A third latching function fails
+    # this test rather than shipping.
+    allowed_latchers = {"run_first_run_import", "_rerun_promote_only"}
+    rerun_helper = "_rerun_promote_only"
+
+    def _sites(fn_name):
+        """Line numbers of every call to fn_name in the module."""
+        return [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == fn_name
+        ]
+
+    all_latch_sites = _sites(latch_helper)
+    assert all_latch_sites, f"found no call to {latch_helper} at all"
+    owners = {}
+    for lineno in all_latch_sites:
+        owner = _enclosing_function(
+            next(
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and n.lineno == lineno
+            )
+        )
+        owners.setdefault(owner, []).append(lineno)
+    assert set(owners) <= allowed_latchers, (
+        f"{latch_helper} is called from {sorted(set(owners) - allowed_latchers)}, "
+        f"which is not one of the functions allowed to mark the import "
+        f"complete ({sorted(allowed_latchers)})"
+    )
+
+    call_sites = owners.get("run_first_run_import", [])
     assert len(call_sites) == 1, (
-        f"expected exactly ONE call to {latch_helper}, found "
-        f"{len(call_sites)} at lines {call_sites}. Every extra one is a "
-        "path that can mark the import complete without having done it"
+        f"expected exactly ONE call to {latch_helper} inside "
+        f"run_first_run_import, found {len(call_sites)} at lines "
+        f"{call_sites}. Every extra one is a path that can mark the "
+        "import complete without having done it"
+    )
+
+    # The re-run helper latches too, so it must be reachable only from
+    # below the same gate. Proved by the same mechanism, not by reading.
+    rerun_sites = _sites(rerun_helper)
+    assert len(rerun_sites) == 1, (
+        f"expected exactly ONE call to {rerun_helper}, found {rerun_sites}"
+    )
+    rerun_owner = _enclosing_function(
+        next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and n.lineno == rerun_sites[0]
+        )
+    )
+    assert rerun_owner == "run_first_run_import", (
+        f"{rerun_helper} is called from {rerun_owner!r}; it latches the "
+        "import, so it must only be reachable from the guarded path"
     )
 
     # --- fact 3: that call site is after the failed-probe gate ---------
@@ -295,6 +349,12 @@ def test_NO_CODE_PATH_STAMPS_THE_LATCH_ON_THE_FAILED_PROBE_BRANCH():
         f"the latch call is at line {call_sites[0]}, which is NOT after "
         f"the failed-probe gate ending at line {gate_end}. It is "
         "reachable before the probe has been shown to have succeeded"
+    )
+    assert rerun_sites[0] > gate_end, (
+        f"the re-run helper is called at line {rerun_sites[0]}, which is "
+        f"NOT after the failed-probe gate ending at line {gate_end}. It "
+        "latches, so calling it above the gate would mark the import "
+        "complete on a probe that never answered"
     )
 
     # --- fact 4: nothing inside the gate's body writes a session row ---
