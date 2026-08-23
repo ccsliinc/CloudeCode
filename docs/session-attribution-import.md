@@ -478,3 +478,72 @@ That last row is the one the current code gets wrong and is worth calling out:
 `_load_session_metadata` logs `no_existing_session_metadata` and moves on with
 an empty set. Empty and unreadable then produce identical behaviour, and the
 identical behaviour is "everything you made is external."
+
+---
+
+## IMPLEMENTED 2026-08-23 - Stages B, C and D
+
+Branch `feat/session-import-ladder`, six commits on top of
+`feat/created-origin-write-site` (Stage A). Not deployed.
+
+**What landed, and where.**
+
+| Stage | Modules |
+|---|---|
+| B | `session_import_ladder{,_types}.py`, `session_import_tiers.py`, `session_import_evidence.py`, `session_stage_a_boundary.py`, wiring in `session_import.py` step 4 |
+| C | `GET /sessions/attribution-prompt`, `POST /sessions/attribution-decline`, `client/js/launchpad.js` card, `client/css/attribution-prompt.css` |
+| D | schema v6 `sessions.user_declined_at`, `session_import_promote.py`, `sessions_import_evidence_version`, `_rerun_promote_only` |
+
+**Tier 2 is structurally inadmissible**, not merely unused: `TierOutcome`
+refuses construction with `tier=2`. The both-pipes case is decided by the
+created pipe and only sets `readopted`.
+
+**Tier 4's Stage-A boundary** is a recorded meta stamp
+(`stage_a_origin_marker_boundary_epoch`), written once by `main.py` before
+the import reads it and never moved. Absent or unparseable reads as None,
+which makes the tier inadmissible rather than assumed valid. A session
+with NO marker still MISSES rather than going unevaluated, so a
+pre-Stage-A install does not report every session as a broken measurement.
+
+**Tiers 5 and 6** are produced by `collect_hints()`, whose output is not a
+parameter of `decide()`. A test pins that signature.
+
+**UNKNOWN is split by reason.** `no_admissible_evidence` means every tier
+was evaluated and none hit; `could_not_evaluate` means at least one could
+not be measured, and it names which. Both reach
+`meta.session_import_unattributed`; only the second claims a broken
+measurement.
+
+**Two things this does NOT do, stated plainly.**
+
+1. **Tier 4 cannot fire in production yet.** Nothing writes
+   `CLOUDECODE_ORIGIN` on the create path - Stage A item 3 has not
+   shipped - and `main.py` passes no `origin_probe`. The tier and its
+   epoch gate are implemented, tested and inert. When the marker write
+   site lands, pass a probe and bump `EVIDENCE_LADDER_VERSION`.
+2. **A re-run INSERTS nothing.** A live session with no stored row (one
+   created after the latch was stamped and before Stage A) is neither
+   promoted nor prompted, because the re-run only re-examines existing
+   `observed` rows. That is what this document specifies; widening it to
+   insert live-and-unrowed sessions would be safe (the input is the live
+   listing, so nothing deleted can be resurrected) but it is a design
+   change, not an implementation detail.
+
+**Expected effect on the measured 10-row install, derived without
+touching it.** The latch there is already stamped, so this takes the
+promote-only re-run path. The 5 `adopted` rows are already OURS and are
+never re-examined. The 5 `observed` rows are exactly the ones with only
+an `ext_` pipe and a user-typed name, so no admissible tier reaches them:
+**0 promoted, 5 prompted**, nothing silently external. Asserted in
+`tests/test_session_import_upgrade_fixture.py`, with a positive control
+proving the same re-run DOES promote when a created pipe exists.
+
+**Verification.** Full suite 2386 passed / 1 skipped against a 2328
+baseline (`test_nuke_sandbox.py` never run).
+`scripts/ci/mutate-session-import-ladder.sh`: 15 mutations, all killed -
+and it found a real hole while being written (an ABSENT log directory
+read as an empty one, i.e. tier 3 reported a MISS where nobody had
+looked). `scripts/verify_attribution_prompt.py`: 70 measurements in a
+real Chromium, ALL PASS, with a positive control and three watched
+failures (unstyled buttons, a zero-pixel card, an injected glyph in the
+rendered name).
