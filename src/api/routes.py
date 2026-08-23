@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from typing import List, Optional
@@ -50,7 +51,11 @@ from src.models import (
     WrapperListResponse,
     WrapperExamplesResponse,
     SessionRecord,
+    AttributionDeclineRequest,
+    AttributionDeclineResponse,
+    SessionAttributionPrompt,
     SessionImportStatus,
+    UnattributedSession,
     RecentSessionsResponse,
 )
 from src.core.tmux_listing import coerce_listing
@@ -2329,6 +2334,230 @@ async def list_recent_sessions(request: Request):
     return RecentSessionsResponse(
         state="ok",
         sessions=[_session_record_payload(row) for row in stopped_rows],
+    )
+
+
+@router.get(
+    "/sessions/attribution-prompt",
+    response_model=SessionAttributionPrompt,
+    dependencies=[Depends(require_auth)],
+)
+async def session_attribution_prompt(request: Request):
+    """The sessions the evidence ladder could not attribute, itemised.
+
+    Description: STAGE C. The import decides silently only where tiers 1
+      to 4 PROVE a session is ours. Everything else lands here, with the
+      hints spelled out in words, and the user answers once.
+
+      WHY THIS IS NOT FOLDED INTO GET /sessions/import-status. That route
+      answers "has the import run"; this one answers "is there anything
+      left to ask you". They can disagree in both directions - a
+      completed import can still leave questions, and a pending one
+      leaves none because it has not looked yet - so collapsing them
+      would make one of the two answers unreadable.
+
+      A row the user has already declined never appears here: the import
+      writes ``user_declined_at`` and drops it from the list, so the
+      prompt does not return on every boot.
+    Inputs: request (Request) - unused beyond auth.
+    Output: SessionAttributionPrompt. ``unavailable`` when the datastore
+      could not be read, which is NEVER rendered as an empty prompt: an
+      empty question set and an unreadable one look identical to a user
+      and mean opposite things.
+    """
+    import json as _json
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for, get_meta
+    from src.core.db_models import META_SESSION_IMPORT_UNATTRIBUTED
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return SessionAttributionPrompt(state="none")
+
+    def _read():
+        """Read the unattributed record on one pooled thread."""
+        with closing(connect(db_path, create=False)) as conn:
+            return get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
+
+    try:
+        raw = await run_in_threadpool(_read)
+    except DatastoreUnreadableError as exc:
+        return SessionAttributionPrompt(
+            state="unavailable",
+            notice=(
+                "Whether any sessions need attributing CANNOT BE "
+                f"DETERMINED: the datastore could not be read ({exc})."
+            ),
+        )
+
+    if not raw:
+        # ABSENT means the ladder has never run here, which is not the
+        # same as "it ran and found nothing" - but neither one has a
+        # question for the user, so both render as 'none'.
+        return SessionAttributionPrompt(state="none")
+
+    try:
+        records = _json.loads(raw)
+    except (TypeError, ValueError):
+        return SessionAttributionPrompt(
+            state="unavailable",
+            notice=(
+                "Whether any sessions need attributing CANNOT BE "
+                "DETERMINED: the stored record could not be parsed."
+            ),
+        )
+    if not isinstance(records, list) or not records:
+        return SessionAttributionPrompt(state="none")
+
+    sessions = [
+        UnattributedSession(
+            tmux_name=str(r.get("tmux_name", "")),
+            epoch=r.get("epoch"),
+            hints=[str(h) for h in (r.get("hints") or [])],
+            reason=str(r.get("reason", "no_admissible_evidence")),
+        )
+        for r in records
+        if r.get("tmux_name")
+    ]
+    if not sessions:
+        return SessionAttributionPrompt(state="none")
+
+    count = len(sessions)
+    plural = "session" if count == 1 else "sessions"
+    return SessionAttributionPrompt(
+        state="pending",
+        sessions=sessions,
+        notice=(
+            f"{count} {plural} we could not attribute. "
+            f"{'This was' if count == 1 else 'These were'} running on the "
+            "tmux socket when Cloude Code upgraded, and we have no record "
+            "of whether we started "
+            f"{'it' if count == 1 else 'them'}. Adopting a session lets "
+            "Cloude Code manage it; it does not change or restart "
+            "anything inside it."
+        ),
+    )
+
+
+@router.post(
+    "/sessions/attribution-decline",
+    response_model=AttributionDeclineResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def session_attribution_decline(
+    request: Request, body: AttributionDeclineRequest
+):
+    """Record "leave these as external" so the prompt does not come back.
+
+    Description: STAGE C's third answer, and the one that is easiest to
+      get wrong. It writes ``user_declined_at`` and leaves ``origin``
+      alone - the row already says ``observed``, so without the stamp
+      this answer is indistinguishable from never having been asked and
+      the prompt returns on every boot.
+
+      IT REPORTS PER SESSION, NOT AS A COUNT. A name whose row is not
+      ``observed``, or that has no row at all, comes back in its own list
+      rather than being counted as a success nobody measured.
+    Inputs: request (Request). body (AttributionDeclineRequest).
+    Output: AttributionDeclineResponse.
+    Raises: HTTPException 503 - the datastore could not be read or
+      written, so the answer WAS NOT RECORDED and must not be reported
+      as if it had been.
+    """
+    import json as _json
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core.db import (
+        DatastoreUnreadableError,
+        connect,
+        db_path_for,
+        get_meta,
+        set_meta,
+        transaction,
+    )
+    from src.core.db_models import META_SESSION_IMPORT_UNATTRIBUTED
+    from src.core.session_import_promote import (
+        PROMOTE_APPLIED,
+        PROMOTE_NO_ROW,
+        record_decline,
+    )
+    from src.core.trail_entry import utc_now
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "the datastore does not exist, so this answer WAS NOT "
+                "recorded"
+            ),
+        )
+    socket = request.app.state.session_manager.tmux_socket_name()
+    names = [str(n) for n in body.tmux_names if str(n).strip()]
+    stamp = utc_now()
+
+    def _write():
+        """Record every decline in ONE transaction, then rebuild the list."""
+        declined, not_eligible, unknown = [], [], []
+        with closing(connect(db_path, create=False)) as conn:
+            raw = get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
+            try:
+                records = _json.loads(raw) if raw else []
+            except (TypeError, ValueError):
+                records = []
+            epochs = {
+                str(r.get("tmux_name")): r.get("epoch")
+                for r in records
+                if isinstance(r, dict)
+            }
+            with transaction(conn):
+                for name in names:
+                    outcome = record_decline(
+                        conn,
+                        socket=socket,
+                        name=name,
+                        epoch=epochs.get(name),
+                        now=stamp,
+                    )
+                    if outcome == PROMOTE_APPLIED:
+                        declined.append(name)
+                    elif outcome == PROMOTE_NO_ROW:
+                        unknown.append(name)
+                    else:
+                        not_eligible.append(name)
+                remaining = [
+                    r
+                    for r in records
+                    if isinstance(r, dict)
+                    and str(r.get("tmux_name")) not in set(declined)
+                ]
+                set_meta(
+                    conn,
+                    META_SESSION_IMPORT_UNATTRIBUTED,
+                    _json.dumps(remaining, sort_keys=True),
+                )
+        return declined, not_eligible, unknown
+
+    try:
+        declined, not_eligible, unknown = await run_in_threadpool(_write)
+    except (DatastoreUnreadableError, sqlite3.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"this answer WAS NOT recorded: {exc}",
+        )
+    logger.info(
+        "api_attribution_declined",
+        declined=len(declined),
+        not_eligible=len(not_eligible),
+        unknown=len(unknown),
+    )
+    return AttributionDeclineResponse(
+        declined=declined, not_eligible=not_eligible, unknown=unknown
     )
 
 

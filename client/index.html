@@ -99,6 +99,10 @@
          env(safe-area-inset-bottom) and excludes #launchpad-screen from the
          generic `.screen` bottom inset. -->
     <link rel="stylesheet" href="/static/css/home-bar.css" />
+    <!-- STAGE C: the session-attribution prompt card. Loaded with the
+         other home-screen stylesheets, before the theme tint and the
+         screen chrome, so both can still win at equal specificity. -->
+    <link rel="stylesheet" href="/static/css/attribution-prompt.css" />
     <link rel="stylesheet" href="/static/css/ios-chrome.css" />
     <!-- Two-line common-command chips. After styles.css, which owns the
          base .command-button rule this narrows. -->

@@ -13,6 +13,17 @@ class Launchpad {
         // config.json agree. null means the check has not answered, which
         // the banner renders as CANNOT DETERMINE, never as healthy.
         this.projectAuthority = null;
+        // STAGE C - the sessions the evidence ladder could not attribute.
+        // null means the prompt has not been fetched yet, which renders
+        // as NOTHING rather than as "no questions": an unfetched prompt
+        // and an empty one are different facts and only one of them is
+        // safe to show as silence.
+        this.attributionPrompt = null;
+        // Set when the user closes the card WITHOUT answering. Deliberately
+        // NOT persisted: "leave as external" is the answer that is
+        // remembered, and remembering a silent close would make the
+        // questions vanish without anyone answering them.
+        this.attributionPromptClosed = false;
         // feat/projects-table (S3) - presence for each DB-tracked project,
         // keyed by the project's raw config path (matches config.json's
         // ProjectConfig.path, which is also what the DB import stored
@@ -391,6 +402,190 @@ class Launchpad {
         // not need the 5s running-sessions poller; refreshed here (home
         // screen load) and after any restart action.
         this.loadRecentSessions();
+        // STAGE C. Independent of the project load: a failure here must
+        // not stop the projects rendering, and a failure THERE must not
+        // swallow the question set.
+        this.loadAttributionPrompt();
+    }
+
+    /**
+     * STAGE C: fetch the sessions the evidence ladder could not attribute.
+     *
+     * Non-fatal. A failed fetch leaves this.attributionPrompt at null,
+     * which renders as nothing - not as "no questions". The two are
+     * different facts and showing the second for the first is the same
+     * false green this whole import exists to remove.
+     *
+     * @returns {Promise<void>}
+     */
+    async loadAttributionPrompt() {
+        try {
+            this.attributionPrompt = await window.API.getSessionAttributionPrompt();
+        } catch (error) {
+            console.error('Launchpad: attribution prompt fetch failed:', error);
+            this.attributionPrompt = null;
+        }
+        this.renderAttributionPrompt();
+    }
+
+    /**
+     * STAGE C: render the prompt card, itemised, with hints as words.
+     *
+     * Description: writes into #attribution-prompt. Renders NOTHING for
+     * state 'none', for a null prompt, and after the user closes the
+     * card. State 'unavailable' renders its own line: whether there is
+     * anything to ask CANNOT BE DETERMINED, which is not the same as
+     * there being nothing.
+     *
+     * @returns {void}
+     */
+    renderAttributionPrompt() {
+        const slot = document.getElementById('attribution-prompt');
+        if (!slot) return;
+        const p = this.attributionPrompt;
+        if (!p || this.attributionPromptClosed) { slot.innerHTML = ''; return; }
+
+        if (p.state === 'unavailable') {
+            slot.innerHTML = `<div class="attribution-prompt attribution-prompt--unknown" data-attribution-state="unavailable">${this._escapeHtml(p.notice || 'session attribution CANNOT BE DETERMINED')}</div>`;
+            return;
+        }
+        if (p.state !== 'pending' || !Array.isArray(p.sessions) || p.sessions.length === 0) {
+            slot.innerHTML = '';
+            return;
+        }
+
+        const rows = p.sessions.map((s) => {
+            const name = this._escapeHtml(s.tmux_name || '');
+            const started = s.epoch ? this._formatRelativeTime(s.epoch) : 'start time unknown';
+            // THE HINTS ARE SENTENCES, NOT A SCORE. Each one is rendered
+            // as its own line of prose so the user can weigh what was
+            // actually seen. A confidence number here would look
+            // authoritative and could not be checked by anyone.
+            const hints = (s.hints || []).map(
+                (h) => `<li class="attribution-prompt__hint">${this._escapeHtml(h)}</li>`
+            ).join('');
+            const why = s.reason === 'could_not_evaluate'
+                ? 'we could not complete the check for this one'
+                : 'we found no record either way';
+            return `
+                <li class="attribution-prompt__row" data-tmux-name="${name}">
+                    <label class="attribution-prompt__pick">
+                        <input type="checkbox" class="attribution-prompt__check" data-tmux-name="${name}" checked>
+                        <span class="attribution-prompt__name">${name}</span>
+                    </label>
+                    <span class="attribution-prompt__meta">started ${this._escapeHtml(started)}</span>
+                    <span class="attribution-prompt__why" data-reason="${this._escapeHtml(s.reason || '')}">${why}</span>
+                    ${hints ? `<ul class="attribution-prompt__hints">${hints}</ul>` : ''}
+                </li>`;
+        }).join('');
+
+        slot.innerHTML = `
+            <section class="attribution-prompt" data-attribution-state="pending" aria-label="sessions we could not attribute">
+                <button type="button" class="attribution-prompt__close" id="attribution-prompt-close" aria-label="close for now">x</button>
+                <p class="attribution-prompt__notice">${this._escapeHtml(p.notice || '')}</p>
+                <ul class="attribution-prompt__list">${rows}</ul>
+                <div class="attribution-prompt__actions attribution-prompt__actions--all">
+                    <button type="button" class="attribution-prompt__btn attribution-prompt__btn--primary" id="attribution-adopt-all">adopt all</button>
+                    <button type="button" class="attribution-prompt__btn" id="attribution-choose">choose individually</button>
+                    <button type="button" class="attribution-prompt__btn" id="attribution-decline-all">leave as external</button>
+                </div>
+                <div class="attribution-prompt__actions attribution-prompt__actions--picked" hidden>
+                    <button type="button" class="attribution-prompt__btn attribution-prompt__btn--primary" id="attribution-adopt-picked">adopt the ticked ones</button>
+                    <button type="button" class="attribution-prompt__btn" id="attribution-decline-picked">leave the ticked ones external</button>
+                </div>
+                <p class="attribution-prompt__footnote">closing this without answering brings it back next time. leaving them external is remembered.</p>
+            </section>`;
+        this._bindAttributionPrompt();
+    }
+
+    /**
+     * Wire the attribution prompt's four real actions.
+     *
+     * "choose individually" reveals the per session tick boxes and the
+     * second action row; it is not itself an answer.
+     *
+     * @returns {void}
+     */
+    _bindAttributionPrompt() {
+        const slot = document.getElementById('attribution-prompt');
+        if (!slot) return;
+        const names = () => Array.from(
+            slot.querySelectorAll('.attribution-prompt__row')
+        ).map((el) => el.getAttribute('data-tmux-name'));
+        const picked = () => Array.from(
+            slot.querySelectorAll('.attribution-prompt__check')
+        ).filter((el) => el.checked).map((el) => el.getAttribute('data-tmux-name'));
+
+        const close = slot.querySelector('#attribution-prompt-close');
+        if (close) close.addEventListener('click', () => {
+            this.attributionPromptClosed = true;
+            this.renderAttributionPrompt();
+        });
+
+        const choose = slot.querySelector('#attribution-choose');
+        if (choose) choose.addEventListener('click', () => {
+            slot.querySelector('.attribution-prompt')?.classList.add('attribution-prompt--picking');
+            const all = slot.querySelector('.attribution-prompt__actions--all');
+            const one = slot.querySelector('.attribution-prompt__actions--picked');
+            if (all) all.hidden = true;
+            if (one) one.hidden = false;
+        });
+
+        const adoptAll = slot.querySelector('#attribution-adopt-all');
+        if (adoptAll) adoptAll.addEventListener('click', () => this._adoptAttributed(names()));
+        const adoptPicked = slot.querySelector('#attribution-adopt-picked');
+        if (adoptPicked) adoptPicked.addEventListener('click', () => this._adoptAttributed(picked()));
+
+        const declineAll = slot.querySelector('#attribution-decline-all');
+        if (declineAll) declineAll.addEventListener('click', () => this._declineAttributed(names()));
+        const declinePicked = slot.querySelector('#attribution-decline-picked');
+        if (declinePicked) declinePicked.addEventListener('click', () => this._declineAttributed(picked()));
+    }
+
+    /**
+     * Adopt the named sessions through the EXISTING adopt path.
+     *
+     * Description: this records origin 'adopted', not 'created', and that
+     * distinction is deliberate. We did not create them as far as we can
+     * prove; we claimed them. An adopted session badges as ours for good,
+     * so the badge is right and no fact is invented.
+     *
+     * @param {string[]} tmuxNames - sessions to adopt.
+     * @returns {Promise<void>}
+     */
+    async _adoptAttributed(tmuxNames) {
+        if (!tmuxNames || tmuxNames.length === 0) return;
+        const failed = [];
+        for (const name of tmuxNames) {
+            try {
+                await window.API.adoptSession(name);
+            } catch (error) {
+                failed.push(name);
+                console.error('Launchpad: adopt failed for', name, error);
+            }
+        }
+        if (failed.length) this.showError('could not adopt: ' + failed.join(', '));
+        await this.loadAttributionPrompt();
+        this.loadRunningSessions();
+    }
+
+    /**
+     * Record "leave these as external", durably.
+     *
+     * @param {string[]} tmuxNames - sessions the user left external.
+     * @returns {Promise<void>}
+     */
+    async _declineAttributed(tmuxNames) {
+        if (!tmuxNames || tmuxNames.length === 0) return;
+        try {
+            const out = await window.API.declineSessionAttribution(tmuxNames);
+            const stuck = [...(out.not_eligible || []), ...(out.unknown || [])];
+            if (stuck.length) this.showError('not recorded for: ' + stuck.join(', '));
+        } catch (error) {
+            console.error('Launchpad: decline failed:', error);
+            this.showError('that answer was NOT recorded: ' + error.message);
+        }
+        await this.loadAttributionPrompt();
     }
 
     /**
@@ -1880,6 +2075,16 @@ class Launchpad {
                      backtick in a comment ends the string and takes the module
                      out with it. Also: no em dashes or en dashes in the rendered
                      copy itself (project style rule) - use a period or a colon. -->
+                <!-- STAGE C: the session-attribution prompt. Rendered
+                     into by renderAttributionPrompt(), which is called
+                     from loadProjects(). It sits ABOVE the help
+                     disclosure and above the project list because it is
+                     a question, not a status line, and a question below
+                     the fold is a question nobody answers. The container
+                     is always present and always EMPTY when there is
+                     nothing to ask, so an empty prompt costs no layout. -->
+                <div id="attribution-prompt" class="attribution-prompt-slot"></div>
+
                 <details class="adopt-disclosure">
                     <summary aria-label="help: adopting sessions, wrappers, and slash commands" title="help">
                         <svg class="adopt-disclosure__icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
