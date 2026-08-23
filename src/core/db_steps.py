@@ -30,6 +30,7 @@ from src.core.db_models import (
     DDL_V3,
     DDL_V4,
     DDL_V5,
+    DDL_V6,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -205,6 +206,38 @@ def _step_v4_to_v5(conn: sqlite3.Connection) -> None:
     set_meta(conn, META_PROJECT_TOMBSTONES_LEGACY_GAP, "1")
 
 
+def _step_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.user_declined_at``, the durable "leave as external".
+
+    Description: Stage C of the session-attribution import. Purely
+      additive - one nullable column, no index - so a v5 reader that has
+      not been upgraded keeps working against the same file and every
+      existing row simply carries NULL.
+
+      NULL IS "NEVER ANSWERED", NOT "SAID YES". The Stage-D re-run gate
+      reads this column together with ``origin``: it re-examines only
+      rows still at ``origin='observed'`` whose ``user_declined_at`` is
+      NULL. So a later import that adds an admissible tier can PROMOTE a
+      row it can now prove, can never demote one, and can never re-ask a
+      question the user has already answered.
+
+      IDEMPOTENT BY INSPECTION, NOT BY THE STATEMENT, exactly as v2 -> v3
+      and v3 -> v4 are: SQLite's ALTER TABLE ADD COLUMN has no
+      IF NOT EXISTS, so PRAGMA table_info is read first and the step
+      no-ops when the column is already there.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v5_to_v6(conn)  # after _step_v4_to_v5
+    """
+    existing = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(sessions)")
+    }
+    if "user_declined_at" in existing:
+        return
+    for statement in DDL_V6:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -215,6 +248,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     2: _step_v2_to_v3,
     3: _step_v3_to_v4,
     4: _step_v4_to_v5,
+    5: _step_v5_to_v6,
 }
 
 
