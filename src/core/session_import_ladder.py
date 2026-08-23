@@ -57,395 +57,61 @@ verdict this codebase keeps re-learning not to write.
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import structlog
 
+from src.core.session_import_ladder_types import (
+    AUTO_NAME_RE,
+    INADMISSIBLE_TIERS,
+    LADDER_OURS,
+    LADDER_THEIRS,
+    LADDER_UNKNOWN,
+    ORIGIN_MARKER_CREATED,
+    REASON_COULD_NOT_EVALUATE,
+    REASON_NO_EVIDENCE,
+    SESSION_PREFIX,
+    TIER_HIT,
+    TIER_MISS,
+    TIER_UNEVALUATED,
+    LadderEvidence,
+    LadderReport,
+    LiveSession,
+    SessionVerdict,
+    TierOutcome,
+)
+from src.core.session_import_tiers import (
+    _tier1_owned_set,
+    _tier3_created_pipe,
+    _tier4_origin_marker,
+    created_pipe_slug_for,
+)
+
+__all__ = [
+    "AUTO_NAME_RE",
+    "INADMISSIBLE_TIERS",
+    "LADDER_OURS",
+    "LADDER_THEIRS",
+    "LADDER_UNKNOWN",
+    "ORIGIN_MARKER_CREATED",
+    "REASON_COULD_NOT_EVALUATE",
+    "REASON_NO_EVIDENCE",
+    "SESSION_PREFIX",
+    "TIER_HIT",
+    "TIER_MISS",
+    "TIER_UNEVALUATED",
+    "LadderEvidence",
+    "LadderReport",
+    "LiveSession",
+    "SessionVerdict",
+    "TierOutcome",
+    "classify",
+    "collect_hints",
+    "created_pipe_slug_for",
+    "decide",
+]
+
 logger = structlog.get_logger()
-
-#: Verdicts. Exactly three, and the third is not a flavour of the others.
-LADDER_OURS = "ours"
-LADDER_THEIRS = "theirs"
-LADDER_UNKNOWN = "unknown"
-
-#: Why an UNKNOWN is unknown. The distinction is the point of the split.
-REASON_NO_EVIDENCE = "no_admissible_evidence"
-REASON_COULD_NOT_EVALUATE = "could_not_evaluate"
-
-#: One tier's result. UNEVALUATED is the third outcome at tier level and
-#: propagates upward: a session with any unevaluated tier can never be
-#: reported as "we looked and found nothing".
-TIER_HIT = "hit"
-TIER_MISS = "miss"
-TIER_UNEVALUATED = "unevaluated"
-
-#: Tiers that may NEVER appear in a verdict. See the module docstring.
-INADMISSIBLE_TIERS: Tuple[int, ...] = (2,)
-
-#: The tmux namespace prefix every session on our socket carries. Kept
-#: here rather than imported from tmux_backend so this module stays free
-#: of that import graph; a test pins the two together.
-SESSION_PREFIX = "cloude_"
-
-#: The app's auto-generated session-name form, ``cloude_ses_<8 hex>``.
-#: TIER 5 ONLY - a hint, never a verdict. A user can type this.
-AUTO_NAME_RE = re.compile(r"^cloude_ses_[0-9a-f]{8}$")
-
-#: The marker value tier 4 accepts. Anything else is not our stamp.
-ORIGIN_MARKER_CREATED = "created"
-
-
-@dataclass(frozen=True)
-class LiveSession:
-    """One live tmux session on our socket, as the ladder sees it.
-
-    Inputs (constructor): tmux_name (str). epoch (int | None) -
-      ``#{session_created}``; None means the instance cannot be dated,
-      which makes tier 4's epoch gate unevaluable rather than passable.
-      working_dir (str | None) - tier 6 hint input only.
-    Output: a LiveSession instance.
-    """
-
-    tmux_name: str
-    epoch: Optional[int] = None
-    working_dir: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class TierOutcome:
-    """What one tier measured, for one session.
-
-    Description: refuses construction for an inadmissible tier. That is
-      the structural half of the tier-2 rule - the prose half is in the
-      module docstring, and prose does not fail a build.
-    Inputs (constructor): tier (int). name (str) - stable token used in
-      reasons and in the unevaluated list. result (str) - TIER_HIT,
-      TIER_MISS or TIER_UNEVALUATED. detail (str | None) - what was
-      measured, or what could not be.
-    Output: a TierOutcome instance.
-    Raises: ValueError - tier is in INADMISSIBLE_TIERS.
-    Example: TierOutcome(tier=1, name='owned_set', result=TIER_HIT)
-    """
-
-    tier: int
-    name: str
-    result: str
-    detail: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        if self.tier in INADMISSIBLE_TIERS:
-            raise ValueError(
-                f"tier {self.tier} is INADMISSIBLE and may never appear in a "
-                "verdict: it records the app's own verdict, produced by the "
-                "bug this import exists to correct. See the module docstring."
-            )
-
-
-@dataclass(frozen=True)
-class LadderEvidence:
-    """Everything the ladder is allowed to reason from, already gathered.
-
-    Description: every "could not read it" is a None or an explicit
-      failure set, NEVER an empty collection - an empty owned set and an
-      unreadable one are the exact pair whose collapse causes today's
-      bug.
-    Inputs (constructor): owned_tmux_names (frozenset | None) - tier 1;
-      None means the owned-set file could not be read. created_pipe_slugs
-      (frozenset | None) - tier 3; slugs parsed out of
-      ``tmux_<slug>.pipe``; None means the log directory could not be
-      read. ext_pipe_names (frozenset) - tier 2, recorded for history and
-      admissible for nothing. origin_markers (Mapping[str, str]) - tier 4;
-      tmux name -> ``CLOUDECODE_ORIGIN`` value actually read.
-      origin_probe_failures (frozenset) - names whose env probe could not
-      be run. stage_a_boundary_epoch (int | None) - the unix epoch at or
-      after which a tier-4 marker is admissible on this install; None
-      means CANNOT DETERMINE and makes tier 4 inadmissible.
-      project_roots (tuple[str, ...]) - tier 6 hint input only.
-    Output: a LadderEvidence instance.
-    """
-
-    owned_tmux_names: Optional[frozenset] = None
-    created_pipe_slugs: Optional[frozenset] = None
-    ext_pipe_names: frozenset = frozenset()
-    origin_markers: Mapping[str, str] = field(default_factory=dict)
-    origin_probe_failures: frozenset = frozenset()
-    stage_a_boundary_epoch: Optional[int] = None
-    project_roots: Tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class SessionVerdict:
-    """The ladder's answer for one session, with its whole working shown.
-
-    Inputs (constructor): tmux_name (str). epoch (int | None). verdict
-      (str) - LADDER_OURS, LADDER_THEIRS or LADDER_UNKNOWN. reason (str) -
-      the winning tier's name on OURS, otherwise REASON_NO_EVIDENCE or
-      REASON_COULD_NOT_EVALUATE. tiers (tuple[TierOutcome, ...]) - every
-      tier evaluated, in order. hints (tuple[str, ...]) - tier 5/6
-      sentences, display only. unevaluated (tuple[str, ...]) - names of
-      the tiers that could not be measured. readopted (bool) - a created
-      pipe AND an ext pipe both exist, so this was ours and later
-      re-adopted.
-    Output: a SessionVerdict instance.
-    """
-
-    tmux_name: str
-    epoch: Optional[int]
-    verdict: str
-    reason: str
-    tiers: Tuple[TierOutcome, ...] = ()
-    hints: Tuple[str, ...] = ()
-    unevaluated: Tuple[str, ...] = ()
-    readopted: bool = False
-
-    @property
-    def could_not_evaluate(self) -> bool:
-        """True when at least one tier could not be measured."""
-        return self.reason == REASON_COULD_NOT_EVALUATE
-
-    def as_unattributed_record(self) -> Dict[str, Any]:
-        """The ``session_import_unattributed`` record for this session.
-
-        Inputs: none.
-        Output: dict with exactly tmux_name, epoch, hints, reason - the
-          shape the design doc names, and the shape the prompt renders.
-        """
-        return {
-            "tmux_name": self.tmux_name,
-            "epoch": self.epoch,
-            "hints": list(self.hints),
-            "reason": self.reason,
-        }
-
-
-@dataclass(frozen=True)
-class LadderReport:
-    """Every verdict from one run, bucketed so no bucket can absorb another.
-
-    Inputs (constructor): verdicts (tuple[SessionVerdict, ...]).
-    Output: a LadderReport instance.
-    """
-
-    verdicts: Tuple[SessionVerdict, ...] = ()
-
-    @property
-    def ours(self) -> List[SessionVerdict]:
-        """Sessions tiers 1-4 proved we created."""
-        return [v for v in self.verdicts if v.verdict == LADDER_OURS]
-
-    @property
-    def theirs(self) -> List[SessionVerdict]:
-        """Sessions proved to belong to someone else.
-
-        Description: empty under every current tier, by construction, and
-          reported as its own bucket so it can never be silently merged
-          into UNKNOWN if an admissible THEIRS tier is ever added.
-        """
-        return [v for v in self.verdicts if v.verdict == LADDER_THEIRS]
-
-    @property
-    def unknown(self) -> List[SessionVerdict]:
-        """Everything the ladder could not resolve, both reasons."""
-        return [v for v in self.verdicts if v.verdict == LADDER_UNKNOWN]
-
-    @property
-    def unknown_no_evidence(self) -> List[SessionVerdict]:
-        """We looked at every tier and none of them hit."""
-        return [v for v in self.unknown if v.reason == REASON_NO_EVIDENCE]
-
-    @property
-    def unknown_unevaluated(self) -> List[SessionVerdict]:
-        """We could not look. NEVER folded into the bucket above."""
-        return [v for v in self.unknown if v.could_not_evaluate]
-
-    def unattributed_records(self) -> List[Dict[str, Any]]:
-        """Records for ``meta.session_import_unattributed``, in order."""
-        return [v.as_unattributed_record() for v in self.unknown]
-
-
-def _tier1_owned_set(
-    session: LiveSession, evidence: LadderEvidence
-) -> TierOutcome:
-    """Tier 1: the persisted owned set names this session.
-
-    Description: our file, in our directory, written by us - not forgeable
-      by anything outside the app. An UNREADABLE owned set is UNEVALUATED
-      and not a miss, because today's defect is precisely that collapse.
-    Inputs: session (LiveSession). evidence (LadderEvidence).
-    Output: TierOutcome.
-    """
-    if evidence.owned_tmux_names is None:
-        return TierOutcome(
-            tier=1,
-            name="owned_set",
-            result=TIER_UNEVALUATED,
-            detail="the owned-set file could not be read",
-        )
-    try:
-        hit = session.tmux_name in evidence.owned_tmux_names
-    except (OSError, ValueError, TypeError) as exc:
-        return TierOutcome(
-            tier=1,
-            name="owned_set",
-            result=TIER_UNEVALUATED,
-            detail=f"the owned set could not be searched: {exc}",
-        )
-    return TierOutcome(
-        tier=1,
-        name="owned_set",
-        result=TIER_HIT if hit else TIER_MISS,
-        detail="named in the persisted owned set" if hit else "not in the owned set",
-    )
-
-
-def created_pipe_slug_for(tmux_name: str) -> Optional[str]:
-    """Map a live tmux name back to the created-pipe slug, or None.
-
-    Description: the created pipe is ``tmux_<slug>.pipe`` where slug is
-      the INTERNAL session id, and the tmux name is ``cloude_<slug>``
-      ONLY when the app auto-named it. A user-typed name overrides the
-      derivation, so no slug can be recovered from it - this returns None
-      and the tier misses. That asymmetry is documented in the design doc
-      and is the reason some sessions are unrecoverable rather than a gap
-      to be papered over with a guess.
-    Inputs: tmux_name (str).
-    Output: str | None.
-    Example: created_pipe_slug_for('cloude_ses_1a2b3c4d')  # 'ses_1a2b3c4d'
-    """
-    if not tmux_name.startswith(SESSION_PREFIX):
-        return None
-    slug = tmux_name[len(SESSION_PREFIX):]
-    return slug or None
-
-
-def _tier3_created_pipe(
-    session: LiveSession, evidence: LadderEvidence
-) -> TierOutcome:
-    """Tier 3: a ``tmux_<slug>.pipe`` exists whose slug is this session.
-
-    Description: the app writes that filename ONLY when it created the
-      backend, so its presence is a statement about authorship it made
-      about itself at creation time - unlike tier 2, which is a statement
-      it made about a session it had already misclassified.
-    Inputs: session (LiveSession). evidence (LadderEvidence).
-    Output: TierOutcome.
-    """
-    if evidence.created_pipe_slugs is None:
-        return TierOutcome(
-            tier=3,
-            name="created_pipe",
-            result=TIER_UNEVALUATED,
-            detail="the log directory could not be read",
-        )
-    slug = created_pipe_slug_for(session.tmux_name)
-    if slug is None:
-        return TierOutcome(
-            tier=3,
-            name="created_pipe",
-            result=TIER_MISS,
-            detail="the name carries no recoverable slug (user-typed name)",
-        )
-    try:
-        hit = slug in evidence.created_pipe_slugs
-    except (OSError, ValueError, TypeError) as exc:
-        return TierOutcome(
-            tier=3,
-            name="created_pipe",
-            result=TIER_UNEVALUATED,
-            detail=f"the pipe set could not be searched: {exc}",
-        )
-    return TierOutcome(
-        tier=3,
-        name="created_pipe",
-        result=TIER_HIT if hit else TIER_MISS,
-        detail=(
-            f"tmux_{slug}.pipe exists, which only the create path writes"
-            if hit
-            else f"no tmux_{slug}.pipe"
-        ),
-    )
-
-
-def _tier4_origin_marker(
-    session: LiveSession, evidence: LadderEvidence
-) -> TierOutcome:
-    """Tier 4: the tmux env marker ``CLOUDECODE_ORIGIN``, EPOCH GATED.
-
-    Description: the marker only proves anything on a session created
-      AFTER Stage A shipped on this install. On anything older it is
-      evidence of nothing and is IGNORED - not trusted, and not quietly
-      treated as absent either: the miss says why. When the install's
-      Stage-A boundary cannot be determined the tier is UNEVALUATED
-      rather than assumed valid.
-
-      A session with NO marker misses regardless of the boundary. There
-      is nothing to date, so an unknown boundary is not a failed
-      measurement - collapsing that into UNEVALUATED would put every
-      session on every pre-Stage-A install into could-not-evaluate and
-      drown the real signal.
-    Inputs: session (LiveSession). evidence (LadderEvidence).
-    Output: TierOutcome.
-    """
-    name = "origin_marker"
-    if session.tmux_name in evidence.origin_probe_failures:
-        return TierOutcome(
-            tier=4,
-            name=name,
-            result=TIER_UNEVALUATED,
-            detail="the tmux environment could not be read for this session",
-        )
-    marker = evidence.origin_markers.get(session.tmux_name)
-    if marker != ORIGIN_MARKER_CREATED:
-        return TierOutcome(
-            tier=4,
-            name=name,
-            result=TIER_MISS,
-            detail=(
-                "no CLOUDECODE_ORIGIN=created in the session environment"
-                if marker is None
-                else f"CLOUDECODE_ORIGIN is {marker!r}, not 'created'"
-            ),
-        )
-    if evidence.stage_a_boundary_epoch is None:
-        return TierOutcome(
-            tier=4,
-            name=name,
-            result=TIER_UNEVALUATED,
-            detail=(
-                "a CLOUDECODE_ORIGIN marker is present but this install's "
-                "Stage-A boundary is unknown, so the marker cannot be dated "
-                "and is INADMISSIBLE rather than assumed valid"
-            ),
-        )
-    if session.epoch is None:
-        return TierOutcome(
-            tier=4,
-            name=name,
-            result=TIER_UNEVALUATED,
-            detail=(
-                "a marker is present but the session has no creation epoch, "
-                "so it cannot be placed relative to the Stage-A boundary"
-            ),
-        )
-    if int(session.epoch) < int(evidence.stage_a_boundary_epoch):
-        return TierOutcome(
-            tier=4,
-            name=name,
-            result=TIER_MISS,
-            detail=(
-                f"a marker is present but the session epoch {session.epoch} "
-                f"predates this install's Stage-A boundary "
-                f"{evidence.stage_a_boundary_epoch}, so it is IGNORED"
-            ),
-        )
-    return TierOutcome(
-        tier=4,
-        name=name,
-        result=TIER_HIT,
-        detail="CLOUDECODE_ORIGIN=created, stamped after this install's Stage-A boundary",
-    )
 
 
 #: Admissible tiers, in the order they are evaluated and in the order a
