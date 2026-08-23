@@ -257,6 +257,7 @@ async def lifespan(app: FastAPI):
         from src.core.db import connect, db_path_for, transaction
         from src.core.session_attribution import backfill_attribution
         from src.core.session_import import run_first_run_import
+        from src.core.session_stage_a_boundary import record_boundary
         from src.core.tmux_listing import coerce_listing
         from src.core.tmux_session_cwd import make_working_dir_probe
 
@@ -266,6 +267,17 @@ async def lifespan(app: FastAPI):
                 connect(db_path_for(settings.get_state_dir()))
             ) as _import_conn:
                 with transaction(_import_conn):
+                    # THE STAGE-A BOUNDARY, STAMPED BEFORE THE IMPORT
+                    # READS IT. This build carries the create-path
+                    # ``origin='created'`` write site, so from this
+                    # moment on a tmux CLOUDECODE_ORIGIN marker means
+                    # something here. Everything already on the socket
+                    # predates the write site and its marker, if any, is
+                    # ignored by tier 4 - which is exactly right, because
+                    # nothing in this app could have stamped it. The
+                    # stamp is written once and never moves; a second
+                    # start reads back the first value.
+                    record_boundary(_import_conn)
                     _import_result = run_first_run_import(
                         _import_conn,
                         projects=auth_cfg.projects,
@@ -298,6 +310,14 @@ async def lifespan(app: FastAPI):
                         working_dir_probe=make_working_dir_probe(
                             session_manager.tmux_socket_name()
                         ),
+                        # THE EVIDENCE LADDER'S DISK INPUT. The app
+                        # already writes a per-session pipe file whose
+                        # NAME encodes whether it created the backend,
+                        # and that file is on every existing user's
+                        # machine today. Without this directory the
+                        # ladder reports tier 3 as UNEVALUATED for every
+                        # session rather than silently missing it.
+                        log_dir=settings.get_log_dir(),
                     )
                 app.state.session_import_notice = (
                     _import_result.home_screen_notice()
