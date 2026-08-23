@@ -422,3 +422,60 @@ def test_a_re_run_INSERTS_nothing(conn, tmp_path):
         log_dir=_logdir(tmp_path),
     )
     assert {r["tmux_name"] for r in list_sessions(conn)} == before
+
+
+def test_DEMOTION_IS_UNIMPLEMENTABLE_not_merely_unused():
+    """STRUCTURAL. No write in the promote module may set origin to
+    ``observed``.
+
+    A behavioural test can only prove that today's code paths do not
+    demote. This proves the module contains no way to, so a future edit
+    that adds one fails here rather than shipping a re-run that can
+    silently disown a session the user has already been told is his.
+    """
+    import ast
+
+    path = ROOT / "src" / "core" / "session_import_promote.py"
+    tree = ast.parse(path.read_text())
+
+    origin_writes = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", None) != "execute":
+            continue
+        sql = " ".join(
+            n.value
+            for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        )
+        if "SET origin" not in sql:
+            continue
+        names = {
+            n.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Name) and n.id.startswith("SESSION_ORIGIN_")
+        }
+        origin_writes.append((node.lineno, names))
+
+    assert origin_writes, "found no origin write at all; has the module moved?"
+    for lineno, names in origin_writes:
+        assert "SESSION_ORIGIN_CREATED" in names, (
+            f"the origin write at line {lineno} does not set "
+            f"SESSION_ORIGIN_CREATED; it uses {sorted(names)}. Promote is "
+            "the only direction this module may move a row"
+        )
+
+
+def test_NO_log_directory_at_all_is_could_not_evaluate(conn):
+    """A caller that cannot say where the pipe files are has not told us
+    they are absent. Tier 3 is UNEVALUATED, and the session is reported as
+    a measurement we could not take rather than one that found nothing."""
+    run_first_run_import(
+        conn,
+        projects=[],
+        listing=TmuxListing.answered([_live("cloude_a", 1000)]),
+        owned_tmux_names=set(),
+        log_dir=None,
+    )
+    assert _unattributed(conn)[0]["reason"] == REASON_COULD_NOT_EVALUATE
