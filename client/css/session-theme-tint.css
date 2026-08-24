@@ -1,64 +1,76 @@
 /* ===========================================================================
  * Session-theme tint for session rows, in the sidebar and on the home
- * screen. The three custom properties are written inline per row by
- * client/js/session-theme-tint.js, which is where the reasoning lives -
- * including why only ONE of these two surfaces gets the wash.
+ * screen. `--session-theme-accent` is written inline per row by
+ * client/js/session-theme-tint.js, which is where the reasoning lives.
  *
- * MUST LOAD AFTER styles.css AND session-sidebar.css. Both of those
- * declare row backgrounds at the same specificity as the selectors here
- * (`.session-sidebar-row:hover`, `.session-sidebar-row[data-active="1"]`,
- * `.running-session-row:hover`), so source order is what decides, and
- * this file has to be last for the wash to survive a hover.
+ * THE TINT IS NO LONGER ON THE ROW'S BOX AT ALL. It used to be an inset
+ * 1px ring plus (sidebar only) a low-alpha background wash. Both are
+ * gone, and the reason is that the row's box already belongs to a
+ * different fact.
  *
- * A row with no `data-session-theme` matches nothing in this file, which
- * is exactly what an unthemed session is meant to look like: untouched.
+ * TWO FACTS, ONE VISUAL LANGUAGE. `.session-sidebar-row[data-active="1"]`
+ * says "this is the session you are in" with an accent BACKGROUND, an
+ * accent 1px BORDER, and a bold accent NAME. The tint said "this session
+ * carries its own theme" with an accent ring and an accent wash. When the
+ * two accents are the same colour - a session pinned to the host theme,
+ * which is the ordinary case - a themed row that was NOT selected drew an
+ * accent edge and read as the selected one. Measured live: the selection
+ * border is rgba(215, 119, 87, 0.3) and a themed row's ring was
+ * rgba(215, 119, 87, 0.45). That same declaration is what produced the
+ * green outline reported as "the wrong color", and a 3px variant of it
+ * was twice mistaken for the active state.
+ *
+ * So the row's border and background now mean exactly one thing between
+ * them - selection - and the theme moved onto a carrier selection does
+ * not use: its own swatch. scripts/verify_session_theme_carrier.py
+ * measures that in BOTH directions in real pixels.
+ *
+ * WHY A DEDICATED ELEMENT RATHER THAN AN EXISTING ONE. Everything else on
+ * the row is already spoken for. The status dot carries seven activity
+ * states. The pin button carries pinned. The name's colour and weight
+ * carry selection. The badge carries tmux/external and is dropped
+ * entirely at compact density. The drag grip is the one glyph with no
+ * colour meaning, but it is a functional affordance with its own hover
+ * state, and a session accent close to the row background would render an
+ * invisible drag handle - degrading a control to label something else.
+ *
+ * WHY IT IS NOT CLUTTER. It is emitted ONLY on rows that have a theme, so
+ * a list of unthemed sessions is byte-for-byte the list that shipped. It
+ * costs 9px on a row that already carries five controls. And it is the
+ * first version of this cue that is not colour-only: the element carries
+ * an accessible name ("session theme: dracula"), which no border ever
+ * could.
+ *
+ * ONE RULE, BOTH SURFACES. The sidebar and the home screen render the
+ * same element, so there is nothing to keep in step and no per-surface
+ * override. This file no longer competes with any row background, so its
+ * load order is no longer load-bearing - but it is still loaded last, and
+ * a `:focus-visible` box-shadow it used to override at equal specificity
+ * now survives, because nothing here declares box-shadow at all.
  * =========================================================================== */
 
-/* THE EDGE. A 1px ring, an inset shadow rather than a border: it costs no
- * layout box, so it composes with whatever border the row itself carries
- * instead of replacing it. It sits behind no text, so it cannot cost
- * contrast anywhere, which is why this is the cue both surfaces get.
- *
- * THE 3px INLINE-START RAIL IS GONE FROM BOTH SURFACES. It used to be
- * declared here for both and then cancelled for the home screen alone by
- * a more specific `.launchpad-container .running-session-row[...]` rule
- * in styles.css, on the reasoning that the sidebar's dense rows needed
- * more separation than a 1px ring could give. That reasoning is spent:
- * `.session-sidebar-row` now carries its own 1px --color-border on all
- * four sides (session-sidebar.css), which is the same answer the home
- * screen already uses for the same problem, so the rail is no longer
- * doing the job it was kept for.
- *
- * What removed it is the request: "get rid of the thick left bar like on
- * the homepage and clean it like the homepage looks now". A 3px
- * inline-start rail is a left-side colour bar whatever it encodes, and
- * this one is the bar that was actually on screen - a themed row's rail,
- * not an active row's and not a pinned one's. Session identity is not
- * lost with it: the ring is still that session's own colour, on all four
- * edges, and the wash below is untouched.
- *
- * Because the rail is gone from the shared rule, the styles.css override
- * that existed only to cancel it is gone too. There is one rule for both
- * surfaces again. */
-.session-sidebar-row[data-session-theme],
-.running-session-row[data-session-theme] {
-    box-shadow: inset 0 0 0 1px var(--session-theme-ring);
-}
-
-/* THE WASH, SIDEBAR ONLY. This is the one cue that puts colour behind
- * text, and only the sidebar can afford it: its name is --color-fg, and
- * a 0.10 wash drops none of the 529 (host theme, session theme) pairs
- * below 4.5:1. The home row's name is --color-accent over
- * --color-accent-bg-soft and several themes already sit barely above
- * the floor there, so no alpha is safe. See the module docstring.
- *
- * A background-IMAGE, not a background-color: the row's own
- * background-color still carries hover and the active-row highlight, and
- * this layers over it instead of replacing it. A `background` shorthand
- * here would silently discard those. */
-.session-sidebar-row[data-session-theme] {
-    background-image: linear-gradient(
-        var(--session-theme-wash),
-        var(--session-theme-wash)
-    );
+.session-theme-swatch {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    background-color: var(--session-theme-accent);
+    /* THE HAIRLINE IS NOT TRIM, IT IS WHAT MAKES THE SWATCH LOCATABLE.
+     * The fill is an arbitrary theme's accent painted on an arbitrary
+     * other theme's row, so there is no pairing in which the fill alone
+     * is guaranteed to have contrast against the row behind it - a dark
+     * accent on a dark row is a swatch nobody can see. --color-fg-subtle
+     * is a FOREGROUND token, so every theme sets it to something legible
+     * against its own background, which is exactly the guarantee needed.
+     * tests/test_session_theme_tint.node.mjs sweeps all 529 (host theme,
+     * session theme) pairs and proves some of them fall below the 3:1
+     * non-text floor, so this is a constraint and not decoration. */
+    border: 1px solid var(--color-fg-subtle);
+    /* The theme's own radius token, deliberately. terminal, gameboy and
+     * legacy_apple zero it and the swatch becomes a square there, which
+     * is correct for those palettes and still unmistakably a swatch. A
+     * status dot cannot make that trade because a square dot stops being
+     * a dot; a colour chip is a chip either way. */
+    border-radius: var(--radius-sm);
 }

@@ -1167,11 +1167,20 @@ class Launchpad {
             const themeAttrs = window.SessionThemeTint
                 ? window.SessionThemeTint.attrs(s.pinned_theme)
                 : '';
+            // The session-theme cue. The SAME element the sidebar row
+            // renders, in the same place relative to the name, because
+            // one rule used to paint both surfaces and moving the cue on
+            // one alone would relocate the collision rather than remove
+            // it. See client/js/session-theme-tint.js.
+            const themeSwatch = window.SessionThemeTint
+                ? window.SessionThemeTint.swatchHtml(s.pinned_theme)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}${themeAttrs}>
                   <div class="running-session-top">
                     ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>
+                    ${themeSwatch}
                     ${renamePencil}
                     ${markUnread}
                     ${rowAction}

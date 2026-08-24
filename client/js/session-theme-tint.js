@@ -9,76 +9,50 @@
  * where you are choosing which session to enter. This module carries the
  * identity out to the list.
  *
- * WHAT IT PAINTS, AND WHAT IT DELIBERATELY DOES NOT. Every cue is drawn
- * from the theme's OWN `--color-accent`:
+ * WHAT IT PAINTS, AND WHAT IT DELIBERATELY DOES NOT. One cue, drawn
+ * from the theme's OWN `--color-accent`: a small SWATCH element,
+ * rendered inside the row, on both surfaces, identically.
  *
- *   1. a 3px inline-start rail and a 1px ring, both as inset box-shadows
- *      rather than borders, so they cost no layout and compose with the
- *      row's own border instead of replacing it. The rail is SIDEBAR
- *      ONLY on screen: styles.css (~4534) re-declares the home row's
- *      shadow as the ring alone, because the home screen's rows are not
- *      to carry a left-side colour bar of any kind. (That request also
- *      removed the `.running-session-row.owned/.external` ownership
- *      border this rail used to sit inside; the row now has a uniform
- *      --color-border ring on all four sides and nothing on its box
- *      encodes session TYPE.)
- *   2. a low-alpha wash of the same accent over the row background - ON
- *      THE SIDEBAR ROW ONLY, see below - layered as a background-IMAGE
- *      so the row's existing background-color (hover, and the active-row
- *      highlight) still shows through underneath.
+ * WHY NOT THE ROW'S BOX ANY MORE. It used to be an inset 1px ring plus
+ * (sidebar only) a low-alpha background wash. The row's border and
+ * background already carry SELECTION - `[data-active="1"]` is an accent
+ * background, an accent border and a bold accent name - so a session
+ * pinned to the host theme drew an accent edge on a row that was not
+ * selected and read as the selected one. Measured live: selection border
+ * rgba(215, 119, 87, 0.3) against a themed row's ring
+ * rgba(215, 119, 87, 0.45). One fact per channel; the box is
+ * selection's, and the theme gets its own mark.
  *
- * It does NOT touch the row's text colour, its badges, its status dot or
- * its icons. Those keep the palette of the theme the USER IS LOOKING AT,
- * which is the only palette whose contrast against the surrounding page
- * anyone has reasoned about. A row that borrowed a light theme's
- * foreground into a dark app would be unreadable, and vice versa.
+ * WHY A NEW ELEMENT RATHER THAN AN EXISTING ONE. Everything else on the
+ * row is spoken for: the status dot carries seven activity states, the
+ * pin button carries pinned, the name's colour and weight carry
+ * selection, the badge carries tmux/external and is dropped at compact
+ * density. The drag grip is the only glyph with no colour meaning, and
+ * it is a functional affordance - a session accent close to the row
+ * background would render an invisible drag handle. The swatch is
+ * emitted ONLY on themed rows, so an unthemed list is unchanged, and it
+ * is the first version of this cue that is not colour-only: it carries
+ * an accessible name, which no border ever could.
  *
- * WHY THE HOME ROW GETS NO WASH. The wash is the only cue that puts
- * anything behind text, so it is the only one that can cost contrast,
- * and the two surfaces are not equally able to afford it. The sidebar
- * name is `--color-fg`, which every theme picks to sit on its own
- * background; sweeping all 23 x 23 (host theme, session theme) pairs, a
- * 0.10 wash drops NO pair below 4.5:1. The home row's name is
- * `--color-accent` over `--color-accent-bg-soft`, and several themes
- * already sit barely above the floor there - jagermeister is 5.66:1
- * before any wash at all. At alpha 0.10 that costs 44 of the 529 pairs
- * their 4.5:1; even at 0.03 it costs 6. There is no alpha at which the
- * home wash is safe, so the home row gets the rail and the ring, which
- * are edges and sit behind nothing. The sweep is re-run as an assertion
- * in tests/test_session_theme_tint.node.mjs.
+ * It still does NOT touch the row's text colour, its badges, its status
+ * dot or its icons. Those keep the palette of the theme the USER IS
+ * LOOKING AT, which is the only palette whose contrast against the
+ * surrounding page anyone has reasoned about.
  *
  * NO THEME, UNKNOWN THEME, REGISTRY NOT READY: all three render exactly
- * as the row does today. `attrs()` returns an empty string and the row
- * carries no `data-session-theme`, so not one declaration in
- * session-theme-tint.css can match it. Three outcomes, and the two that
- * are not "themed" are the same one: leave it alone. In particular the
- * registry is populated asynchronously by `Themes.init()`, so an early
- * paint must degrade to today's row rather than to a default colour.
+ * as the row does today. `attrs()` and `swatchHtml()` both return an
+ * empty string, the row carries no `data-session-theme` and no swatch.
+ * Three outcomes, and the two that are not "themed" are the same one:
+ * leave it alone. In particular the registry is populated asynchronously
+ * by `Themes.init()`, so an early paint must degrade to today's row
+ * rather than to a default colour.
  *
  * Loads BEFORE session-sidebar-rows.js and launchpad.js.
  */
 (function () {
     'use strict';
 
-    /**
-     * Alpha of the accent wash behind a sidebar row.
-     *
-     * 0.10 is not a taste value: it is the largest round alpha at which
-     * all 529 (host theme, session theme) pairs keep the sidebar name
-     * above the 4.5:1 body-text floor. Raising it is a contrast change,
-     * not a styling tweak - re-run the sweep in the test if you touch it.
-     */
-    var WASH_ALPHA = 0.10;
-
-    /**
-     * Alpha of the 1px ring around a themed row. It sits on the row's
-     * edge, behind no text, so it is free of the wash's constraint; it
-     * is under 1 only so the ring reads as trim rather than as a second
-     * border competing with the ownership one.
-     */
-    var RING_ALPHA = 0.45;
-
-    /** Cache of theme id -> {accent, wash}, or null for "not themeable". */
+    /** Cache of theme id -> {accent, label}, or null for "not themeable". */
     var cache = new Map();
 
     /**
@@ -125,11 +99,11 @@
     }
 
     /**
-     * The two colours a themed row is painted with.
+     * What a themed row is painted with, and what the swatch is called.
      *
      * @param {?string} themeId - the session's pinned theme id, or null.
-     * @returns {?{accent: string, wash: string, ring: string}} null
-     *   whenever the row must render as an unthemed row does.
+     * @returns {?{accent: string, label: string}} null whenever the row
+     *   must render as an unthemed row does.
      */
     function colorsFor(themeId) {
         if (!themeId) return null;
@@ -140,22 +114,57 @@
         if (!manifest || !manifest.cssVars) return null;
         var rgb = parseHex(manifest.cssVars['--color-accent']);
         if (!rgb) return null;
-        var channels = rgb.r + ', ' + rgb.g + ', ' + rgb.b;
         var value = {
-            accent: 'rgb(' + channels + ')',
-            wash: 'rgba(' + channels + ', ' + WASH_ALPHA + ')',
-            ring: 'rgba(' + channels + ', ' + RING_ALPHA + ')',
+            accent: 'rgb(' + rgb.r + ', ' + rgb.g + ', ' + rgb.b + ')',
+            // The manifest's own display name where it has one, so the
+            // accessible name reads "session theme: Dracula" rather than
+            // repeating an id. The id is the honest fallback.
+            label: (typeof manifest.name === 'string' && manifest.name.trim())
+                ? manifest.name.trim()
+                : String(themeId),
         };
         cache.set(themeId, value);
         return value;
     }
 
     /**
-     * The HTML attributes that turn a session row into a themed one.
+     * Scrub a theme id down to what is safe to write into markup.
+     *
+     * @param {?string} themeId - the session's pinned theme id.
+     * @returns {string} the id reduced to [A-Za-z0-9_-], or '' when
+     *   nothing survives - which yields an untinted row rather than a
+     *   partially-escaped one.
+     */
+    function safeThemeId(themeId) {
+        return String(themeId).replace(/[^a-zA-Z0-9_-]/g, '');
+    }
+
+    /**
+     * Escape text for an HTML attribute value.
+     *
+     * @param {string} text - untrusted text, e.g. a manifest display name.
+     * @returns {string} the same text with the five markup-significant
+     *   characters replaced by entities.
+     */
+    function escAttr(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * The HTML attributes that mark a session row as themed.
      *
      * Returns a leading-space-prefixed attribute fragment for splicing
      * straight into a row template, or `''` when the row must look
-     * exactly as it does today.
+     * exactly as an unthemed one does.
+     *
+     * Nothing in session-theme-tint.css matches the row itself any more -
+     * the attribute is what `swatchHtml()` is kept in step with, and what
+     * a future per-surface exception would hook on.
      *
      * @param {?string} themeId - the session's pinned theme id, or null.
      * @returns {string} e.g. ` data-session-theme="dracula" style="..."`.
@@ -163,20 +172,41 @@
     function attrs(themeId) {
         var colors = colorsFor(themeId);
         if (!colors) return '';
-        var safeId = String(themeId).replace(/[^a-zA-Z0-9_-]/g, '');
+        var safeId = safeThemeId(themeId);
         if (!safeId) return '';
         return (
             ' data-session-theme="' + safeId + '"' +
-            ' style="--session-theme-accent: ' + colors.accent + ';' +
-            ' --session-theme-wash: ' + colors.wash + ';' +
-            ' --session-theme-ring: ' + colors.ring + ';"'
+            ' style="--session-theme-accent: ' + colors.accent + ';"'
+        );
+    }
+
+    /**
+     * The swatch: the whole of what a themed row shows, on both surfaces.
+     *
+     * A dedicated element rather than a property of the row's box,
+     * because the box means selection - see the module docstring. It is
+     * `role="img"` with a name rather than `aria-hidden`, so this is the
+     * first version of the cue that is not colour-only.
+     *
+     * @param {?string} themeId - the session's pinned theme id, or null.
+     * @returns {string} the swatch markup, or `''` for all three
+     *   not-themed cases.
+     */
+    function swatchHtml(themeId) {
+        var colors = colorsFor(themeId);
+        if (!colors) return '';
+        if (!safeThemeId(themeId)) return '';
+        var label = 'session theme: ' + colors.label;
+        return (
+            '<span class="session-theme-swatch" role="img"' +
+            ' aria-label="' + escAttr(label) + '"' +
+            ' title="' + escAttr(label) + '"></span>'
         );
     }
 
     window.SessionThemeTint = {
         attrs: attrs,
+        swatchHtml: swatchHtml,
         colorsFor: colorsFor,
-        WASH_ALPHA: WASH_ALPHA,
-        RING_ALPHA: RING_ALPHA,
     };
 })();

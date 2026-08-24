@@ -342,6 +342,15 @@ console.log('[SessionSidebarRows Module] Loading...');
         const themeAttrs = window.SessionThemeTint
             ? window.SessionThemeTint.attrs(r.pinned_theme)
             : '';
+        // The session-theme cue, and the only thing that carries it. It
+        // used to be an accent ring on the row's own box, which is the
+        // box `[data-active="1"]` uses for selection - so a session
+        // pinned to the host theme read as the selected row. See
+        // client/js/session-theme-tint.js. Empty for all three
+        // not-themed cases.
+        const themeSwatch = window.SessionThemeTint
+            ? window.SessionThemeTint.swatchHtml(r.pinned_theme)
+            : '';
         const markUnread = window.SessionStatusUI
             ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
             : '';
@@ -376,6 +385,12 @@ console.log('[SessionSidebarRows Module] Loading...');
             dot +
             `<span class="session-sidebar-row-name" data-row-name="${name}" ` +
             `title="${esc(rename.reason)}">${name}</span>` +
+            // After the name, not before it: the name column starts at
+            // the same x on every row whether or not it is themed, so a
+            // themed row does not make the list ragged. It is also the
+            // full width of the name away from the status dot, which is
+            // the other coloured mark on the row.
+            themeSwatch +
             inlineBadge +
             pinButtonHtml(r.name, !!r.is_pinned) +
             markUnread +
