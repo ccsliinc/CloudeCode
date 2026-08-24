@@ -68,6 +68,29 @@ ABSENT = "ABSENT"
 # ---- the old version's own resolver, not a paraphrase of it -----------
 
 
+def _tag_is_present() -> bool:
+    """Is ``OLD_REF`` resolvable as a commit in THIS clone?
+
+    Description: separates the two reasons the extraction below can come
+      back empty. A shallow or tagless clone (which is what
+      ``actions/checkout`` produces by default, and what any
+      ``--depth=1`` clone produces) is an ENVIRONMENT shortfall - the
+      measurement was not possible. A tag that IS present but whose
+      ``src/config.py`` cannot be read or parsed is a REPOSITORY fault -
+      that must fail, not skip.
+    Inputs: none.
+    Output: bool.
+    """
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{OLD_REF}^{{commit}}"],
+            cwd=str(ROOT),
+            capture_output=True,
+        ).returncode == 0
+    except OSError:
+        return False
+
+
 def _extract_old_resolver() -> Tuple[Optional[Any], str]:
     """Compile ``v0.8.1``'s ``get_session_metadata_path`` from the tag.
 
@@ -117,6 +140,10 @@ def _extract_old_resolver() -> Tuple[Optional[Any], str]:
 
 
 _OLD_RESOLVER, _OLD_RESOLVER_REASON = _extract_old_resolver()
+# True only when the extraction failed BECAUSE the tag is not in this
+# clone. Everything else - tag present, method missing, source will not
+# parse - is a repository fault and must fail loudly.
+_OLD_RESOLVER_TAG_MISSING = _OLD_RESOLVER is None and not _tag_is_present()
 
 
 class _OldSettingsStub:
@@ -215,7 +242,26 @@ def _write_old_metadata(
 
 
 def test_old_version_resolver_was_really_loaded():
-    """Guard: without this, every comparison below silently becomes a skip."""
+    """Guard: without this, every comparison below silently becomes a skip.
+
+    Three outcomes, not two. The tag being absent from the clone is a
+    declared CANNOT DETERMINE - a shallow clone (``--depth=1``, which is
+    what ``actions/checkout`` does by default) has no tags at all, and
+    failing there would be reporting a repository fault that does not
+    exist. Any OTHER extraction failure - tag present but
+    ``Settings.get_session_metadata_path`` missing or unparseable - is a
+    real fault and fails.
+
+    The skip is not allowed to become CI's quiet normal state: the tests
+    workflow asserts ``git rev-parse v0.8.1`` succeeds BEFORE pytest
+    runs, and fails the job on a suite whose skips it did not expect.
+    """
+    if _OLD_RESOLVER_TAG_MISSING:
+        pytest.skip(
+            f"CANNOT DETERMINE: {_OLD_RESOLVER_REASON}. Tag {OLD_REF} is not "
+            "in this clone - fetch it (`git fetch --depth=1 origin tag "
+            f"{OLD_REF}`) to run this comparison."
+        )
     assert _OLD_RESOLVER is not None, _OLD_RESOLVER_REASON
     probe = _OLD_RESOLVER(_OldSettingsStub("/some/log/dir"))
     assert probe == Path("/some/log/dir/session_metadata.json")
