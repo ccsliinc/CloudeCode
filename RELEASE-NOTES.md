@@ -94,14 +94,19 @@ you have chosen. Cosmetic, long-standing, unchanged here.
 Reported by inspection of the code path, not measured against the running
 app. If you see two dialogs, that is this.
 
-**The in-app "reset server" button does not work on a packaged install.**
-`POST /api/v1/server/reset` runs `reset.sh` from the server's own directory,
-and `reset.sh` has never been included in the app bundle, so the endpoint
-returns a 500 that names the missing file. It fails loudly and changes
-nothing, which is the right way to fail, but it does not work. Delivering it
-also means delivering `start.sh` and `stop.sh`, whose fallback path starts a
-server the app does not own - that is its own change, not a rider on this
-one. Restart the app from the tray menu instead.
+**RESOLVED: the in-app "reset server" control was removed.** It called
+`POST /api/v1/server/reset`, which ran `reset.sh` from the server's own
+directory, and `reset.sh` has never been in the app bundle - so the control
+returned a 500 naming the missing file on every packaged install. Shipping
+the script would not have fixed it. Restarting a process belongs to whatever
+supervises that process, and this server never supervises itself: packaged,
+`macOS/server-manager.js` owns the python child and already has `restart()`;
+under launchd, `launchctl kickstart -k` is launchd's own job; from source,
+`./reset.sh` is still in the tree. `reset.sh`'s fallback branch is
+`stop.sh` + `start.sh`, which in a packaged install would kill the child the
+app owns (the tray would report a crash that did not happen) and leave a
+detached uvicorn holding the port after the app quits - a quiet wrong state
+in place of a loud correct error. **Restart the app from the tray menu.**
 
 **The type-NUKE confirmation window has been verified as rendered markup,
 not as a live Electron window.** Its HTML was rendered in a browser at the

@@ -1183,16 +1183,6 @@ class API {
     }
 
     /**
-     * Server: Reset server
-     * @returns {Promise<object>}
-     */
-    async resetServer() {
-        return await this.call('/server/reset', {
-            method: 'POST'
-        });
-    }
-
-    /**
      * Server: read-only snapshot of the host, this process and tmux.
      *
      * Backs the home bar's "server status" panel. Behind the same

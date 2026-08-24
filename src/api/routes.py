@@ -1431,48 +1431,34 @@ async def get_local_servers(request: Request, session_name: str):
     return local_servers.list_for_session(session_name)
 
 
-@router.post("/server/reset", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
-async def reset_server(request: Request):
-    """
-    Reset the server by running the reset.sh script.
-
-    Returns:
-        Success response
-
-    Raises:
-        HTTPException: If reset fails
-    """
-    import subprocess
-    import os
-
-    try:
-        logger.info("api_reset_server_request")
-
-        # Get the project root directory (where reset.sh is located)
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        reset_script = os.path.join(project_root, "reset.sh")
-
-        # Check if reset.sh exists
-        if not os.path.exists(reset_script):
-            raise HTTPException(status_code=500, detail="reset.sh script not found")
-
-        # Execute reset.sh in the background
-        subprocess.Popen(
-            [reset_script],
-            cwd=project_root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-
-        logger.info("api_reset_server_initiated")
-        return SuccessResponse(message="Server reset initiated")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("server_reset_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to reset server: {str(e)}")
+# POST /api/v1/server/reset was REMOVED here. It spawned reset.sh from the
+# server's own root, and reset.sh has never been in macOS/package.json's
+# build.extraResources, so on every packaged install the endpoint returned a
+# 500 naming the missing file - a control that has only ever taught the user
+# the app is broken.
+#
+# It was removed rather than shipped, because shipping the script would not
+# have made the button work. Restarting a process is the SUPERVISOR's job,
+# and this process is never its own supervisor:
+#
+#   - packaged: macOS/server-manager.js spawns and owns the python child and
+#     already has restart(). reset.sh's fallback branch is stop.sh + start.sh,
+#     which would kill that child (server-manager.js's exit handler flags any
+#     exit it did not request as lastExitUnexpected, so the tray would report
+#     a crash that did not happen) and spawn a detached uvicorn nothing owns,
+#     left holding the port after the app quits. A quiet wrong state in place
+#     of a loud correct error is the trade this repo's three-outcome rule
+#     exists to forbid.
+#   - launchd-managed: launchctl kickstart -k is launchd's own job, which is
+#     what reset.sh defers to when it can.
+#   - from source: ./reset.sh, still in the tree and still what
+#     scripts/upgrade_lib/upgrade_rollback_common.sh::start_service runs.
+#
+# reset.sh is therefore no longer INVOKED by the app, which is why its entry
+# in tests/test_runtime_script_delivery.py's ACCEPTED_UNDELIVERED register was
+# deleted rather than reworded - that register fails an entry that has become
+# permanently true. Re-adding this endpoint puts reset.sh back in the invoked
+# set and that guard will fail until it is genuinely delivered.
 
 
 def _build_browse_response(resolved: Path) -> BrowseResponse:

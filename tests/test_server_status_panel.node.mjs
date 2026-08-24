@@ -465,17 +465,22 @@ test('an existing call site passing no context gets its old copy back', () => {
 // menu wiring
 // ---------------------------------------------------------------------
 
-test('server status is a second ENTRY_ID, not a rewrite of the menu', () => {
+test('server status is an ENTRY_ID, not a rewrite of the menu', () => {
     assert.match(menuSrc, /'serverStatusRow'/);
-    assert.match(menuSrc, /'serverRestartRow'/);
-    assert.match(menuSrc, /return \[statusRow, restartRow\];/);
+    assert.match(menuSrc, /return \[statusRow\];/);
 });
 
-test('restart server keeps its honest copy and its row', () => {
-    assert.match(launchpadSrc,
-        /your tmux sessions keep running and re-attach afterwards/);
-    assert.match(menuSrc, /'restart server', restartServer/);
-    assert.match(menuSrc, /restart server, sessions keep running/);
+// The "restart server" row was WITHDRAWN together with
+// POST /api/v1/server/reset: that endpoint spawned a reset.sh the packaged
+// app has never shipped, so the row returned a 500 on every packaged
+// install. See the removal note in src/api/routes.py for why it was
+// withdrawn rather than shipped. Asserted as an absence here so the row
+// cannot reappear without the supervisor-owned action it needs.
+test('the menu carries no server-restart row', () => {
+    assert.ok(!/restartServer/.test(menuSrc));
+    assert.ok(!/'serverRestartRow'/.test(menuSrc));
+    assert.ok(!/restart server, sessions keep running/.test(menuSrc));
+    assert.ok(!/async restartServer\(\)/.test(launchpadSrc));
 });
 
 test('the panel and its stylesheet are both loaded, css after styles.css', () => {

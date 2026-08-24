@@ -3120,59 +3120,20 @@ class Launchpad {
         });
     }
 
-    /**
-     * Restart the web server process.
-     *
-     * WHY "RESTART" AND NOT "RESET". This was labelled "reset server",
-     * which reads like it clears state. Traced end to end, it does not:
-     * POST /api/v1/server/reset spawns reset.sh, which either asks launchd
-     * to kickstart its own managed job (`launchctl kickstart -k`, the
-     * macOS menu-bar app's setup) or falls back to stop.sh + start.sh.
-     * stop.sh kills whatever holds the configured port (PORT= in .env,
-     * default 8000); start.sh brings the FastAPI
-     * process back. Nothing in that path touches tmux, the config, the
-     * project list or anything on disk. It is a process restart, so the
-     * control says so. The API route keeps its `/server/reset` path - the
-     * name a user reads and the name on the wire are different contracts,
-     * and renaming the endpoint would be a breaking change for no gain.
-     *
-     * The confirmation copy is held to the same standard: the tmux
-     * sessions genuinely do keep running and re-attach, so it says that
-     * rather than inventing a scare or a reassurance.
-     *
-     * @returns {Promise<void>} resolves once the reload is scheduled, or
-     *   immediately if the user cancels.
-     */
-    async restartServer() {
-        try {
-            const confirmed = await this.showConfirmModal(
-                'restart server',
-                'restart the cloude code server?',
-                'the python web server stops and starts again. your tmux sessions keep running and re-attach afterwards, so nothing you have open is lost. this browser tab loses its connection for a few seconds and then reloads itself.'
-            );
-
-            if (!confirmed) {
-                return;
-            }
-
-            this.updateStatus('restarting server...');
-
-            await window.API.resetServer();
-
-            console.log('Launchpad: Server restart initiated');
-
-            this.updateStatus('server restarting - reconnecting...');
-
-            // Wait a moment for the server to come back, then reload.
-            setTimeout(() => {
-                window.location.reload();
-            }, 3000);
-
-        } catch (error) {
-            console.error('Launchpad: Failed to restart server:', error);
-            this.showError('failed to restart server: ' + error.message);
-        }
-    }
+    // THE SERVER-RESTART CONTROL WAS REMOVED HERE, deliberately.
+    //
+    // restartServer() called API.resetServer() -> POST /api/v1/server/reset
+    // -> reset.sh from the server's own root. reset.sh has never shipped in
+    // macOS/package.json's build.extraResources, so on a packaged install
+    // that endpoint returned a 500 naming the missing file, every time. The
+    // control existed only to teach the user the app was broken.
+    //
+    // Shipping the script would not have fixed it: a process restart belongs
+    // to whatever SUPERVISES the process, and the python server never
+    // supervises itself. The full argument, and where each install shape's
+    // real restart lives, is at the removal site in src/api/routes.py.
+    //
+    // If this comes back, it comes back as an action the supervisor performs.
 
     /**
      * Show confirmation modal.
