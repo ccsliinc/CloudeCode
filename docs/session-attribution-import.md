@@ -547,3 +547,74 @@ looked). `scripts/verify_attribution_prompt.py`: 70 measurements in a
 real Chromium, ALL PASS, with a positive control and three watched
 failures (unstyled buttons, a zero-pixel card, an injected glyph in the
 rendered name).
+
+---
+
+## Stage C follow-up, 2026-08-24: the card that would not go away
+
+**The report.** "i hit adopt all, it doesnt seem to have disappeared".
+
+**What was actually true.** Read off the live datastore: all five names in
+`meta.session_import_unattributed` were `origin='adopted'` with
+`adopted_at` stamped at `2026-08-24T13:32:31-32Z`, the second of the
+click. Every adopt call had succeeded. The bug was entirely in the
+display.
+
+`GET /sessions/attribution-prompt` returned the stored snapshot verbatim.
+That record is written ONCE, during the import, and nothing
+cross-referenced it against what the rows say now - so a refetch after a
+successful adoption returned the same five names and the card re-rendered
+identically. Running the base code against a copy of the live database
+reproduced it exactly (`state=pending`, all five names); the fixed code
+against the same copy returns `state=none`.
+
+**Only the adopt paths had it.** The decline route prunes the snapshot in
+the same transaction that stamps `user_declined_at`, so "leave as
+external" always cleared the card correctly. That asymmetry is why the
+bug read as intermittent, and it is measured rather than argued: the
+pixel verifier below fails the two adopt scenarios and PASSES the decline
+scenario against the unfixed code.
+
+**The fix.** The snapshot is the CANDIDATE SET, never the answer. The
+prompt derives its list on every request from
+`attribution_settled_instances`, which is the complement of
+`reexaminable_instances` over rows that exist. Pruning the snapshot on
+the adopt path instead would have worked today and required every future
+mutation path to remember - two sources of truth kept in sync by hand,
+and the drift invisible.
+
+Nothing is pruned that was not PROVED settled. A candidate with no epoch,
+no row, or no readable rows table stays in the list, because none of
+those is evidence a question was answered - and a candidate with no row
+is still adoptable, since the adopt path records its own sighting first.
+`attribution_settled_instances` returns `None`, not an empty set, on a
+pre-v2 database.
+
+**Verification.** Full suite 2404 passed / 0 failed against a 2396
+baseline at `2396cfb` (`test_nuke_sandbox.py` never run); the 8 new tests
+in `tests/test_attribution_prompt_reflects_live_state.py` are the whole
+difference, and 4 of them were watched FAILING against `2396cfb` first.
+`scripts/ci/mutate-adoption-attribution.sh`: 46 mutations, all killed.
+
+`scripts/verify_adopt_clears_prompt.py` is new and is the pixel half. It
+drives the REAL route and the REAL adoption write over a throwaway SQLite
+database, through the real `launchpad.js` and the shipped CSS, in a real
+Chromium - tmux is replaced by a synthetic listing, so it never opens a
+socket. 30 measured checks, ALL PASS on the fix. Against `2396cfb` it
+reports 5 FAILs, including `adopt-all/after: the prompt paints ZERO
+pixels [209588 sq px (was 209588)]`, which is the user's complaint
+expressed as an area. On the fix that reading is `0 sq px`, and a partial
+adoption shrinks the card from 209588 to 130419 sq px.
+
+Two traps met building that harness, both worth knowing:
+
+* **Wait for the ACTION, not the OUTCOME.** The first version waited for
+  the rows to disappear, so unfixed code TIMED OUT and reported CANNOT
+  DETERMINE - when what had happened was a card still painted, which is a
+  measurable FAIL. A verifier that degrades to "could not evaluate"
+  exactly when the defect is present cannot falsify anything.
+* **A Playwright `expose_binding` cannot be serviced while the driver
+  thread is blocked polling for its result.** The wait must happen inside
+  the page (`wait_for_function` on a page-side counter). The first version
+  deadlocked after exactly one of three adopt calls and looked like a
+  server fault.
