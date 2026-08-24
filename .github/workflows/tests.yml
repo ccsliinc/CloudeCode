@@ -112,10 +112,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends tmux zsh
 
-      - name: Install tmux (macos)
+      - name: Install tmux and librsvg (macos)
         if: runner.os == 'macOS'
-        # macOS ships zsh as the default login shell, so only tmux is missing.
-        run: brew install tmux
+        # macOS ships zsh as the default login shell, so tmux is the only
+        # shell dependency missing.
+        #
+        # librsvg supplies rsvg-convert, which
+        # tests/test_dmg_artwork.py::test_the_generator_runs_end_to_end needs.
+        # Without it that test skipped on BOTH platforms and the skip audit
+        # correctly failed the build (measured, run 32737804938). It is
+        # installed on macOS only and on purpose: the same test then calls
+        # tiffutil to prove the background carries both a 1x and a 2x
+        # representation, and tiffutil is macOS-only. Installing rsvg on Linux
+        # would move the failure rather than fix it. macOS is also the only
+        # platform that can build the .dmg this artwork goes into, so this is
+        # the platform where the check means something.
+        run: brew install tmux librsvg
 
       - name: Assert tmux indexes from zero
         # tmux_backend.py addresses panes as "<session>:0.0". A tmux config
