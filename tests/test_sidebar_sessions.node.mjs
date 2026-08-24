@@ -446,6 +446,52 @@ await test('ITEM 47: the stylesheet really declares three different row paddings
     assert.notEqual(z, d, 'cozy and detailed must not be the same box');
 });
 
+await test('no sidebar row paints an inline-start rail, in any stylesheet', () => {
+    // "also the border on the sidebar. get rid of the thick left bar like
+    // on the homepage and clean it like the homepage looks now."
+    //
+    // THREE stylesheets painted one, and they were three different bars:
+    // a 2px accent rail on [data-pinned="1"] here, a 3px session-accent
+    // rail on [data-session-theme] in session-theme-tint.css, and nothing
+    // at all on [data-active="1"] - the current session never had one, so
+    // it lost nothing.
+    //
+    // Matching the SHAPE rather than any one declaration: an inset shadow
+    // offset along X with a zero Y offset is a left-side bar whatever token
+    // it is written in, so a rail reintroduced in a different colour still
+    // trips this. Comment lines are stripped first, so the prose above
+    // explaining the rail is not itself a violation.
+    //
+    // THIS IS A TEXT GUARD AGAINST REINTRODUCTION, NOT THE PROOF. The
+    // proof is scripts/verify_sidebar_row_edges.py, which screenshots real
+    // pixels and requires each row's left edge band to MATCH its right -
+    // which no grep can do, because a grep cannot see what a later
+    // stylesheet paints.
+    const rail = /inset\s+[1-9]\d*px\s+0\s+0/;
+    for (const file of ['session-sidebar.css', 'session-sidebar-density.css',
+                        'session-sidebar-groups.css', 'session-theme-tint.css']) {
+        const live = repoFile('client', 'css', file).split('\n')
+            .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+            .join('\n');
+        assert.doesNotMatch(live, rail,
+            `${file} declares an inline-start rail on a sidebar row`);
+    }
+});
+
+await test('a sidebar row carries the home screen ONE border, four sides', () => {
+    // The rails were also doing separation work in a dense list. That job
+    // moved to the same ring `.running-session-row` already uses, so the
+    // list still reads without any edge encoding state.
+    const css = repoFile('client', 'css', 'session-sidebar.css');
+    const m = css.match(/\.session-sidebar-row\s*\{([^}]*)\}/);
+    assert.ok(m, 'no .session-sidebar-row rule');
+    assert.match(m[1], /border:\s*1px solid var\(--color-border\)/,
+        'a transparent border here would leave the dense list with no separation '
+        + 'at all once the rails are gone');
+    assert.ok(!/border-left/.test(m[1]),
+        'a border-left override is the same left-side bar wearing a different property');
+});
+
 // =====================================================================
 // THE FAMILY PILL - three states, every density.
 // =====================================================================

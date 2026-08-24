@@ -4542,36 +4542,28 @@ body.home-header-active {
     margin-left: 8px;
 }
 
-/* A THEMED SESSION ROW'S LEFT EDGE, ON THE HOME SCREEN ONLY.
- * `client/css/session-theme-tint.css` paints a themed row with two inset
- * shadows: a 1px ring (session identity, all four sides) and a 3px
- * inline-start rail. The home row keeps the ring and drops the rail.
+/* THE HOME SCREEN'S THEMED-ROW OVERRIDE IS GONE, because there is
+ * nothing left for it to override. Deliberately no rule here, so this
+ * comment is the record of why.
  *
- * THE REASON CHANGED, THE RULE DID NOT. This started as ITEM 37: the
- * rail landed immediately inside the 3px ownership `border-left` that
- * `.running-session-row.owned` / `.external` used to draw, making a
- * six-pixel two-tone left edge against one-colour neighbours - the
- * reported "2 colors on the left". That collision no longer exists; the
- * ownership stripe was removed (see the block at ~2743) and the row now
- * carries a uniform 1px --color-border ring on all four sides.
+ * It was `box-shadow: inset 0 0 0 1px var(--session-theme-ring)` on
+ * `.launchpad-container .running-session-row[data-session-theme]`,
+ * existing for exactly one reason: session-theme-tint.css declared a 3px
+ * inline-start rail plus the ring for BOTH surfaces, and the home screen
+ * was not to carry a left-side colour bar, so this re-declared the ring
+ * alone and won on specificity. The sidebar kept the rail.
  *
- * The rail still stays off, for the simpler reason that replaced it:
- * "no need for the left side color. just the border and background based
- * upon the theme." A 3px inline-start rail is a left-side colour bar
- * whatever it encodes, and restoring it here would put back the exact
- * shape that was asked to go. Nothing is lost - session identity still
- * has the ring, in its own colour, on all four edges.
+ * The sidebar does not keep it any more ("get rid of the thick left bar
+ * like on the homepage and clean it like the homepage looks now"), so
+ * the shared rule in session-theme-tint.css is now ring-only for both
+ * and this rule would be a byte-for-byte duplicate of it. A rule that
+ * restates what it overrides is not a safety net, it is a second place
+ * to forget to change.
  *
- * The SIDEBAR row is untouched and keeps its rail: it is a dense list
- * where the ring alone is too thin to separate adjacent rows, and this
- * request was about the home screen's session cards.
- *
- * Specificity, not order, is what makes this win: session-theme-tint.css
- * loads AFTER this file, so the extra `.launchpad-container` is doing
- * real work here and must not be "simplified" away. */
-.launchpad-container .running-session-row[data-session-theme] {
-    box-shadow: inset 0 0 0 1px var(--session-theme-ring);
-}
+ * If a left-side rail is ever wanted on one surface and not the other,
+ * this is where the exception goes - but decide it here rather than
+ * declaring it for both and cancelling it in one place. */
+
 
 /* ITEMS 51/52/53 - the speed-dial's first item now carries the app's own
  * icon FILE rather than a drawn glyph. Sized to the same 18px box every

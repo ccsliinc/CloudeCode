@@ -61,13 +61,34 @@
     box-shadow: 0 0 0 2px var(--color-accent-border);
 }
 
-/* A pinned row is not just sorted differently, it LOOKS different -
- * otherwise "why is this one at the top" has no answer on screen. Inset
- * rail rather than a border-left, matching the treatment the home
- * screen's project rows already use. */
-.session-sidebar-row[data-pinned="1"] {
-    box-shadow: inset 2px 0 0 var(--color-accent);
-}
+/* THE PINNED RAIL IS GONE, AND `[data-pinned="1"]` NOW PAINTS NOTHING.
+ * Deliberately no rule here, so this comment is the record of why.
+ *
+ * It was `box-shadow: inset 2px 0 0 var(--color-accent)`, defended as
+ * the answer to "why is this one at the top". That question has three
+ * answers already, all of them in the markup and none of them
+ * colour-only: the `pinned` group HEADER the row sits under, with its
+ * own count (session-sidebar-groups.js renders it whenever anything is
+ * pinned, and nothing when nothing is); the row's POSITION in that band;
+ * and the row's own pin BUTTON, which is emitted in every density mode,
+ * carries `aria-pressed="true"`, and is drawn in --color-accent by
+ * `.session-sidebar-row-pin[aria-pressed="true"]` below. The rail was a
+ * fourth, colour-only restatement of a fact three other things say.
+ *
+ * It was also already unreliable, which is the part worth keeping in
+ * mind. session-theme-tint.css matches
+ * `.session-sidebar-row[data-session-theme]` at the SAME specificity as
+ * this selector and loads after it, so it replaced `box-shadow` outright:
+ * any pinned row that also carried a session theme had no pinned rail at
+ * all, and nobody could have told which rows those were by looking. A cue
+ * that silently vanishes for a subset of the rows it describes is not a
+ * cue.
+ *
+ * And it is the shape the request names: "get rid of the thick left bar
+ * like on the homepage and clean it like the homepage looks now". A 2px
+ * inline-start rail is a left-side colour bar whatever it encodes. Do not
+ * reintroduce one here without first deciding which of the four signals
+ * is authoritative. */
 
 /* ---- compact --------------------------------------------------------
  * The "super thin bars so i can see more" end of the request. The badge

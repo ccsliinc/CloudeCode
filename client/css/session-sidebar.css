@@ -252,7 +252,18 @@ body.session-sidebar-pinned .session-sidebar-panel {
     border-radius: var(--radius-md);
     cursor: pointer;
     background: transparent;
-    border: 1px solid transparent;
+    /* ONE BORDER, ONE COLOUR, FOUR SIDES - the same ring
+     * `.running-session-row` carries on the home screen (styles.css
+     * ~2733). This was `1px solid transparent`, so an ordinary row had no
+     * visible edge at all and the only thing separating rows in a dense
+     * list was the coloured left bar a pinned or session-themed row drew.
+     * "get rid of the thick left bar like on the homepage and clean it
+     * like the homepage looks now" removes that bar, so the separation
+     * job has to move somewhere, and the home screen already decided
+     * where: a neutral theme token on all four edges. The width is
+     * unchanged from the transparent border it replaces, so this costs no
+     * layout and no reflow - only the colour is new. */
+    border: 1px solid var(--color-border);
     transition: background 120ms ease, border-color 120ms ease;
 }
 
@@ -260,6 +271,23 @@ body.session-sidebar-pinned .session-sidebar-panel {
     background: var(--color-accent-bg-soft);
 }
 
+/* THE CURRENT SESSION, and the reason removing the left bars costs
+ * nothing here. `active` never had a rail: it has always been an accent
+ * BACKGROUND, an accent 1px border on all four sides, and a bold accent
+ * name below - three cues, none of them a left-side colour bar, plus
+ * `aria-selected="true"` on the row so it is not colour-only.
+ *
+ * A 3px inline-start rail WAS measured on the current row and read as
+ * this state; it was not. That rail is session-theme-tint.css painting
+ * `--session-theme-accent`, which happened to be the same orange as the
+ * host theme's accent, so the two were indistinguishable on screen. It
+ * marks which SESSION THEME a row carries, not which row you are in.
+ *
+ * What changes here is only that the neutral rows around it now draw
+ * their own --color-border, so `--color-accent-border` on this row is a
+ * different COLOUR of ring rather than the only ring on screen. That is
+ * the same way the home screen tells its rows apart, and it reads as one
+ * family with a 1px theme border where a 3px bar does not. */
 .session-sidebar-row[data-active="1"] {
     background: var(--color-accent-bg);
     border-color: var(--color-accent-border);

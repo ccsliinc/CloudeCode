@@ -4,9 +4,19 @@
 // sessions apart at a glance. Until now that only worked once you were
 // INSIDE a session - the sidebar list and the home screen rendered every
 // row identically, which is exactly where you are choosing which session
-// to enter. Themed rows now carry a 3px inline-start rail and a 1px ring
-// in the theme's own --color-accent, and sidebar rows additionally get a
-// low-alpha wash of it.
+// to enter. Themed rows carry a 1px ring in the theme's own
+// --color-accent, and sidebar rows additionally get a low-alpha wash of
+// it.
+//
+// THERE USED TO BE A 3px INLINE-START RAIL TOO, on both surfaces, and it
+// is gone: "get rid of the thick left bar like on the homepage and clean
+// it like the homepage looks now". It was the bar actually on screen -
+// the green outline reported on one sidebar row was this rule with a
+// green --session-theme-accent, not any row state. Identity is not lost
+// with it: the ring is still that session's own colour on all four
+// edges. The rail's other job, separating rows in a dense list, moved to
+// the 1px --color-border every .session-sidebar-row now carries, which
+// is the answer the home screen already used.
 //
 // THE THING THAT COULD GO WRONG, AND THE MEASUREMENT THAT GOVERNS IT.
 // The wash is the only cue that puts colour BEHIND text, so it is the
@@ -22,8 +32,8 @@
 //     several themes already sit barely above the floor with no wash at
 //     all (jagermeister: 5.66:1). Alpha 0.10 costs 44 of the 529 pairs
 //     their 4.5:1, and even 0.03 costs 6. There is no safe alpha.
-// So the home row gets the rail and the ring - which are edges, and sit
-// behind nothing - and no wash. That asymmetry is the finding, and the
+// So the home row gets the ring - which is an edge, and sits behind
+// nothing - and no wash. That asymmetry is the finding, and the
 // sweep below is re-run on every test run rather than trusted from this
 // comment.
 //
@@ -329,13 +339,48 @@ test('the wash is a background-image, so hover and active survive it', () => {
         'no background shorthand anywhere in this file');
 });
 
-test('the rail and ring are inset shadows, not borders', () => {
-    assert.match(tintCss, /box-shadow:\s*[\s\S]*inset 3px 0 0 var\(--session-theme-accent\)/,
-        'a border-left here would replace the row own border rather than '
-        + 'compose with it. NOTE: this rail is SIDEBAR ONLY on screen - '
-        + 'styles.css re-declares the home row shadow as the ring alone, so '
-        + 'the home card carries no left-side colour bar at all');
-    assert.match(tintCss, /inset 0 0 0 1px var\(--session-theme-ring\)/);
+test('the ring is an inset shadow, not a border', () => {
+    assert.match(tintCss, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/,
+        'a border here would replace the row own 1px --color-border rather '
+        + 'than compose with it, so the row would lose either its theme ring '
+        + 'or its neutral ring depending which stylesheet won');
+});
+
+test('no inline-start rail survives anywhere in this file', () => {
+    // THE RAIL IS GONE FROM BOTH SURFACES ("get rid of the thick left bar
+    // like on the homepage and clean it like the homepage looks now"). It
+    // was `inset 3px 0 0 var(--session-theme-accent)`, and it was the bar
+    // actually on screen - the green outline reported on one row was this
+    // rule with a green --session-theme-accent.
+    //
+    // Matching the SHAPE rather than that one declaration on purpose: an
+    // inset shadow with a non-zero X offset and a zero Y offset is a
+    // left-side bar whatever token it is written in, so this also catches
+    // a rail reintroduced in a different colour.
+    const rail = /inset\s+[1-9]\d*px\s+0\s+0/;
+    const live = tintCss.split('\n')
+        .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+        .join('\n');
+    assert.doesNotMatch(live, rail,
+        'an inset shadow offset along X and not Y is an inline-start rail');
+});
+
+test('styles.css no longer cancels a rail that is not declared', () => {
+    // The home screen used to re-declare box-shadow as the ring alone,
+    // purely to remove the rail this file gave both surfaces. With the
+    // rail gone from the shared rule that override would be a byte-for-
+    // byte duplicate, and a rule that restates what it overrides is a
+    // second place to forget to change.
+    const styles = fs.readFileSync(
+        path.join(ROOT, 'client', 'css', 'styles.css'), 'utf8');
+    const live = styles.split('\n')
+        .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+        .join('\n');
+    assert.doesNotMatch(
+        live,
+        /\.launchpad-container\s+\.running-session-row\[data-session-theme\]\s*\{/,
+        'the home-screen override exists only to cancel the rail; the rail '
+        + 'is gone, so there is one rule for both surfaces again');
 });
 
 test('the stylesheet loads last, which is what makes it win', () => {

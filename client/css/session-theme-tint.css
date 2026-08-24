@@ -14,25 +14,35 @@
  * is exactly what an unthemed session is meant to look like: untouched.
  * =========================================================================== */
 
-/* THE EDGES. A 3px inline-start rail and a 1px ring, both inset shadows
- * rather than borders: they cost no layout box, so they compose with
- * whatever border the row itself carries instead of replacing it.
+/* THE EDGE. A 1px ring, an inset shadow rather than a border: it costs no
+ * layout box, so it composes with whatever border the row itself carries
+ * instead of replacing it. It sits behind no text, so it cannot cost
+ * contrast anywhere, which is why this is the cue both surfaces get.
  *
- * BOTH surfaces match this selector, but only the SIDEBAR gets the rail
- * on screen. `.launchpad-container .running-session-row[data-session-theme]`
- * in styles.css (~4534) is more specific and re-declares box-shadow with
- * the ring alone, because the home screen's rows are not to carry a
- * left-side colour bar at all - that is the request the ownership stripe
- * was removed for, and a session-identity rail is the same shape. The
- * sidebar keeps it: dense rows need more separation than a 1px ring.
+ * THE 3px INLINE-START RAIL IS GONE FROM BOTH SURFACES. It used to be
+ * declared here for both and then cancelled for the home screen alone by
+ * a more specific `.launchpad-container .running-session-row[...]` rule
+ * in styles.css, on the reasoning that the sidebar's dense rows needed
+ * more separation than a 1px ring could give. That reasoning is spent:
+ * `.session-sidebar-row` now carries its own 1px --color-border on all
+ * four sides (session-sidebar.css), which is the same answer the home
+ * screen already uses for the same problem, so the rail is no longer
+ * doing the job it was kept for.
  *
- * Edges sit behind no text, so neither cue can cost contrast anywhere,
- * which is why these two are the ones BOTH surfaces get declared. */
+ * What removed it is the request: "get rid of the thick left bar like on
+ * the homepage and clean it like the homepage looks now". A 3px
+ * inline-start rail is a left-side colour bar whatever it encodes, and
+ * this one is the bar that was actually on screen - a themed row's rail,
+ * not an active row's and not a pinned one's. Session identity is not
+ * lost with it: the ring is still that session's own colour, on all four
+ * edges, and the wash below is untouched.
+ *
+ * Because the rail is gone from the shared rule, the styles.css override
+ * that existed only to cancel it is gone too. There is one rule for both
+ * surfaces again. */
 .session-sidebar-row[data-session-theme],
 .running-session-row[data-session-theme] {
-    box-shadow:
-        inset 3px 0 0 var(--session-theme-accent),
-        inset 0 0 0 1px var(--session-theme-ring);
+    box-shadow: inset 0 0 0 1px var(--session-theme-ring);
 }
 
 /* THE WASH, SIDEBAR ONLY. This is the one cue that puts colour behind

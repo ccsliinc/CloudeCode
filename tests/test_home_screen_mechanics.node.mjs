@@ -466,17 +466,37 @@ await test('ITEM 37: hover re-declares the rail, because box-shadow is one prope
         'a hover glow that forgets the rail would make the accent edge blink on hover');
 });
 
-await test('ITEM 37: a themed home session row keeps ONE inset edge layer, not a rail plus a ring', async () => {
-    const body = ruleBody(STYLES, '.launchpad-container .running-session-row[data-session-theme]');
-    assert.match(body, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/);
-    assert.ok(!/inset 3px/.test(body),
-        'the 3px session rail is a left-side colour bar. It was removed here when '
-        + 'it sat beside the ownership border and read as two colours; the ownership '
-        + 'border is now gone too, and the rail stays off because the home card is '
-        + 'not to carry a coloured left edge of any kind');
-    // The selector carries an extra class ON PURPOSE: session-theme-tint.css
-    // loads after styles.css, so only specificity can win here.
-    assert.ok(STYLES.includes('.launchpad-container .running-session-row[data-session-theme]'));
+await test('ITEM 37: a themed session row keeps ONE inset edge layer, on BOTH surfaces', async () => {
+    // This used to assert a `.launchpad-container` override in styles.css.
+    // That rule existed for exactly one reason: session-theme-tint.css
+    // declared a 3px rail plus a 1px ring for both surfaces, and the home
+    // card was not to carry a left-side colour bar, so the override
+    // re-declared the ring alone and won on specificity.
+    //
+    // The sidebar does not keep the rail either now ("get rid of the thick
+    // left bar like on the homepage and clean it like the homepage looks
+    // now"), so the SHARED rule is ring-only and the override would be a
+    // byte-for-byte duplicate of what it overrides. The assertion moves to
+    // where the fact now lives rather than being deleted: one rule, both
+    // surfaces, no rail.
+    const tint = fs.readFileSync(
+        path.join(ROOT, 'client', 'css', 'session-theme-tint.css'), 'utf8');
+    const body = ruleBody(
+        tint,
+        '.session-sidebar-row[data-session-theme],\n.running-session-row[data-session-theme]');
+    assert.match(body, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/,
+        'session identity is the 1px ring, in the session own colour, on all four edges');
+    assert.ok(!/inset\s+[1-9]\d*px\s+0\s+0/.test(body),
+        'an inset shadow offset along X and not Y is an inline-start rail, and a '
+        + 'left-side colour bar is the shape that was asked to go - on either surface');
+    const liveStyles = STYLES.split('\n')
+        .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+        .join('\n');
+    assert.ok(
+        !/\.launchpad-container\s+\.running-session-row\[data-session-theme\]\s*\{/
+            .test(liveStyles),
+        'the home-screen override cancelled a rail that no longer exists; a rule '
+        + 'that restates what it overrides is a second place to forget to change');
 });
 
 // =====================================================================
