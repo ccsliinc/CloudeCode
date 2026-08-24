@@ -414,6 +414,28 @@ def measure_none(page, rep: Report) -> int:
         f"slotHtmlLength={data['slotHtmlLength']}",
     )
     rep.check(data["card"] is None, "none: no card element exists")
+    # The slot is the FIRST child of .launchpad-container, ahead of the
+    # help disclosure. Empty innerHTML is not the same claim as zero
+    # height: a slot with padding or a border would still push the whole
+    # home screen down while reporting slotHtmlLength == 0. Measure the
+    # painted box, which is the invariant the two node tests were really
+    # guarding when they asserted markup order instead.
+    slot_box = data.get("slotBox")
+    if slot_box is None:
+        rep.check(False, "none: the empty slot could not be measured", "slotBox=None")
+        return data["slotHtmlLength"]
+    rep.check(
+        slot_box["height"] == 0 and slot_box["width"] == 0,
+        "none: the empty slot paints a ZERO box, so it adds no height "
+        "above the help disclosure",
+        f"{slot_box['width']:.1f}x{slot_box['height']:.1f} "
+        f"display={slot_box['display']}",
+    )
+    rep.check(
+        slot_box["display"] == "none",
+        "none: the empty slot is out of the layout entirely",
+        f"display={slot_box['display']}",
+    )
     return data["slotHtmlLength"]
 
 

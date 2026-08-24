@@ -157,6 +157,13 @@ function report() {
         fixture: fixtureName,
         slotPresent: !!slot,
         slotHtmlLength: slot ? slot.innerHTML.length : -1,
+        // The slot sits FIRST inside .launchpad-container, ahead of the
+        // help disclosure. Two node tests used to guard "nothing may sit
+        // there and add height back" by asserting the first tag was the
+        // <details> - a markup proxy that a legitimate zero-cost element
+        // breaks. What actually matters is measured here: when there is
+        // nothing to ask, the slot must paint NO box at all.
+        slotBox: box(slot),
         card: box(card),
         cardState: card ? card.getAttribute('data-attribution-state') : null,
         notice: card ? (card.querySelector('.attribution-prompt__notice') || {}).textContent || null : null,
