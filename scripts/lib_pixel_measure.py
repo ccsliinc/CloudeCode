@@ -117,7 +117,8 @@ def decode_1x1_png(data: bytes) -> tuple[int, int, int, int]:
     return px[0], px[1], px[2], px[3]
 
 
-def sample_pixel(page, x: float, y: float) -> tuple[int, int, int, int]:
+def sample_pixel(page, x: float, y: float,
+                 freeze_animations: bool = False) -> tuple[int, int, int, int]:
     """Screenshot exactly one device pixel and return its colour.
 
     This is the FINAL painted pixel, every layer included: it cannot be
@@ -125,10 +126,25 @@ def sample_pixel(page, x: float, y: float) -> tuple[int, int, int, int]:
     measurement that answers "how much of what is behind the card can you
     still see".
 
-    Inputs: page - a Playwright page; x, y (float) - CSS pixel coords.
+    freeze_animations exists for a specific defect class. Comparing TWO
+    pixels of one element takes two screenshots, and an element carrying
+    an infinite opacity animation is at a different point in its cycle in
+    each shot - so two pixels of the same solid dot come back different
+    and the element reads as hollow. That is a false verdict manufactured
+    inside the measurement. Passing True pins every CSS animation and
+    transition to a fixed frame for the duration of the shot, which makes
+    two shots of one element comparable. Leave it False when the sample
+    is a single pixel of a static element, which is every existing caller.
+
+    Inputs: page - a Playwright page; x, y (float) - CSS pixel coords;
+      freeze_animations (bool) - pin animations to a fixed frame.
     Output: (r, g, b, a) each 0..255.
     """
-    shot = page.screenshot(clip={"x": x, "y": y, "width": 1, "height": 1})
+    clip = {"x": x, "y": y, "width": 1, "height": 1}
+    if freeze_animations:
+        shot = page.screenshot(clip=clip, animations="disabled")
+    else:
+        shot = page.screenshot(clip=clip)
     return decode_1x1_png(shot)
 
 

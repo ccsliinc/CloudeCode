@@ -351,12 +351,48 @@ body.session-sidebar-pinned .session-sidebar-panel {
 
 .status-dot--idle {
     /* Nothing pending, already read - deliberately the lowest visual
-     * weight of any non-unknown state. */
+     * weight of any non-unknown state. FILLED, like every other state
+     * here, because idle is a DEFINITE answer: the session is alive and
+     * nothing is happening in it. */
     background: var(--color-fg-faint);
 }
 
 .status-dot--unknown {
-    background: var(--color-fg-subtle);
+    /* THE ONLY HOLLOW DOT, and the shape is the whole point.
+     *
+     * `idle` and `unknown` used to be two colour rules,
+     * --color-fg-faint and --color-fg-subtle. Under the `claude` theme
+     * those tokens are the SAME value (#959595), so the two dots were
+     * pixel-identical; under `terminal` they are 5 levels apart, which
+     * no eye would call a difference. So a could-not-determine was
+     * rendered as a definite answer - the exact collapse the
+     * THREE-OUTCOME RULE forbids, in the indicator read most often.
+     *
+     * WHY HOLLOW RATHER THAN A NEW COLOUR. `unknown` is not a new
+     * severity; it is not worse than `dead`, and any colour loud enough
+     * to separate it from `idle` would say it was. Shape separates the
+     * two without ranking them. It also matches the macOS tray, where
+     * `tray-unknown` is the one hollow glyph and every measured state is
+     * a filled one (macOS/tray-status.js), so both surfaces speak one
+     * vocabulary instead of two.
+     *
+     * WHY AN INSET SHADOW RATHER THAN A BORDER OR A RADIUS TRICK. The
+     * rim is spread inward from the border box, so it is hollow at ANY
+     * border-radius. `terminal`, `gameboy` and `legacy_apple` set
+     * --radius-full to 0 on purpose (a deliberate sharp-edged look, not
+     * a bug - see the note in CLAUDE.md), which turns every dot here
+     * into a 9px square. A ring built out of a radius would collapse
+     * into a filled square there and silently take the fix with it.
+     * This one becomes a hollow SQUARE, which is still unmistakably not
+     * a filled one. A `border` would also work but costs a layout box
+     * this inline element does not need.
+     *
+     * The ink stays --color-fg-subtle: same quiet weight it always had,
+     * so nothing about this reads as an escalation. The centre is
+     * genuinely transparent, so it composites onto whatever the row is,
+     * in light themes and dark alike. */
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--color-fg-subtle);
 }
 
 @keyframes status-dot-pulse {
