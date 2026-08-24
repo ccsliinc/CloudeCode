@@ -47,8 +47,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BOOTSTRAP_JS = REPO_ROOT / "macOS" / "bootstrap.js"
 PACKAGE_JSON = REPO_ROOT / "macOS" / "package.json"
@@ -250,8 +248,25 @@ def test_accepted_undelivered_register_cannot_hide_a_stale_shipped_script():
     )
 
 
-@pytest.mark.parametrize("name", sorted(ACCEPTED_UNDELIVERED))
-def test_accepted_undelivered_entries_carry_a_real_reason(name: str):
-    """An exemption without a stated reason is a suppression."""
-    reason = ACCEPTED_UNDELIVERED[name]
-    assert len(reason) > 80, f"{name}: exemption reason is too thin to audit"
+def test_accepted_undelivered_entries_carry_a_real_reason():
+    """An exemption without a stated reason is a suppression.
+
+    Deliberately NOT parametrized over ``ACCEPTED_UNDELIVERED``. The register
+    is empty and that is its finished state, and a parametrize over an empty
+    collection collects one placeholder case that pytest SKIPS on every
+    platform - a test that cannot go red, which the CI skip audit correctly
+    refuses. Iterating inside the test body keeps it running against an empty
+    register and still fails the moment a thin reason is added.
+
+    Inputs: none - reads the module-level ``ACCEPTED_UNDELIVERED`` register.
+    Outputs: none. Raises AssertionError naming every entry whose reason is
+    too short to audit.
+    """
+    thin = sorted(
+        name for name, reason in ACCEPTED_UNDELIVERED.items() if len(reason) <= 80
+    )
+    assert not thin, (
+        "These ACCEPTED_UNDELIVERED entries carry a reason too thin to audit. "
+        "An exemption without a stated reason is a suppression: "
+        + ", ".join(thin)
+    )

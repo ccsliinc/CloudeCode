@@ -1,12 +1,24 @@
 # Release notes
 
-## v1.0.0
+## v1.0.1
+
+**This is the v1 release. `v1.0.0` was tagged and immediately superseded** -
+its CI skip audit was red, and the tag is left in place rather than moved so
+the record stays honest. Do not install `v1.0.0`.
+
+What was wrong with it: removing the server reset endpoint emptied the
+`ACCEPTED_UNDELIVERED` register in `tests/test_runtime_script_delivery.py`,
+and a `parametrize` over an empty collection collects one placeholder case
+that pytest SKIPS on every platform. The CI skip audit exists to refuse
+exactly that - a test that cannot go red - and it did its job. The test now
+iterates the register inside its body, so it RUNS against an empty register
+and still fails the moment a thin exemption reason is added.
 
 Measured against `v0.8.1`. This is the first 1.0 and it is a version-string
 decision, not a claim that everything below is finished - the known issues
 are real and listed.
 
-Test suite at the release sha: **2527 passed, 1 skipped** (2528 collected),
+Test suite at the release sha: **2528 passed, 0 skipped** (2528 collected),
 run with `--ignore=tests/test_nuke_sandbox.py`, which executes the real
 `nuke.sh`. Node suite: 91 files, all green, run per file. JS syntax check:
 95 files parsed cleanly.
