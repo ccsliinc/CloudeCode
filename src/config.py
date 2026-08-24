@@ -33,6 +33,7 @@ from src.core.agent_wrappers import (
     wrapper_scripts_dir,
 )
 from src.core import auth_defaults
+from src.core.workspace_settings import SERVER_PREFS_KEY, WORKSPACE_KEY
 from src.core.terminal_commands import (
     TERMINAL_COMMANDS_KEY,
     TerminalCommand,
@@ -321,6 +322,62 @@ class StateDirUnavailableError(RuntimeError):
         )
 
 
+class WorkspaceConfig(BaseModel):
+    """Global preferences a NEW terminal is born with.
+
+    Every field defaults to the empty string, which means "not
+    configured" and reproduces exactly the behaviour that existed before
+    this block did - a config.json with no ``workspace`` key is not
+    missing anything, it is unconfigured. Validation of these values
+    lives in ``src/core/workspace_settings.py`` and runs at the API
+    boundary, not here: a pydantic validator that touched the filesystem
+    would make merely LOADING a config depend on whether a directory
+    still exists, so a removed development root would stop the server
+    from starting instead of showing the user a message.
+
+    Fields:
+        development_root: Base directory for projects. Reaches a spawned
+            terminal as ``CLOUDE_DEV_ROOT``.
+        default_shell: Absolute path to the shell new terminals run.
+            Reaches a spawned terminal as ``SHELL``.
+        default_editor: Command line that opens a file.
+        env: Arbitrary NAME=value pairs injected on spawn, layered UNDER
+            the app's own control vars.
+    """
+
+    development_root: str = ""
+    default_shell: str = ""
+    default_editor: str = ""
+    env: Dict[str, str] = Field(default_factory=dict)
+
+
+class ServerPrefsConfig(BaseModel):
+    """Bind address and TLS preference, remembered across restarts.
+
+    A PREFERENCE, not a decision. ``bind_host`` travels to the Python
+    process as the ``HOST`` environment variable and is then resolved -
+    exactly once, in ``src/core/setup_state.resolve_exposure`` - into the
+    address actually bound. That resolver pins loopback until setup is
+    complete and refuses to return an unauthenticated wizard on a
+    reachable socket, so nothing stored here can widen the exposure of an
+    un-set-up instance. Writing a preference and having it clamped is the
+    designed outcome, not a bug.
+
+    ``tls_preferred`` is recorded and NOT in force: this server terminates
+    plain HTTP and has no TLS path at all (see macOS/tls-status.js, which
+    refuses to draw a padlock it did not measure). The settings screen
+    says so on the row rather than showing a switch that quietly does
+    nothing.
+
+    Fields:
+        bind_host: Remembered bind address, or "" for "app default".
+        tls_preferred: Whether the user wants TLS once it exists.
+    """
+
+    bind_host: str = ""
+    tls_preferred: bool = False
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     # feat/launch-wrappers - schema/migration marker. Absent from every
@@ -366,6 +423,16 @@ class AuthConfig(BaseModel):
     terminal_commands: List[TerminalCommand] = Field(
         default_factory=lambda: [TerminalCommand(**c) for c in default_terminal_commands()]
     )
+    # feat/settings-gui - global workspace preferences and the remembered
+    # server bind/TLS choice. Both ADDITIVE top-level keys with
+    # all-default sub-models, so a config.json predating them loads
+    # unchanged, and (because Settings declares extra="ignore") a config
+    # carrying them still loads on an older build. See
+    # src/core/workspace_settings.py's docstring for the full
+    # downgrade-safety argument and why no config_version bump goes with
+    # this.
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
+    server_prefs: ServerPrefsConfig = Field(default_factory=ServerPrefsConfig)
 
 
 # Agent-type values resolved as a bare FAMILY name and never looked up as
@@ -1065,6 +1132,40 @@ class Settings(BaseSettings):
                     TerminalCommand(**c) for c in default_terminal_commands()
                 ]
 
+            # feat/settings-gui - the two additive blocks. Same
+            # malformed-block tolerance as every sibling above: a
+            # hand-mangled workspace block must not stop the server from
+            # loading its config, it must fall back to "unconfigured" and
+            # say so in the log. Note that AuthConfig is assembled field by
+            # field here, NOT from ``**data`` - a block absent from this
+            # list is silently unreachable no matter what the model
+            # declares, which is how the first cut of this feature wrote a
+            # value to disk that never reached a terminal.
+            workspace_data = data.get(WORKSPACE_KEY, {}) or {}
+            try:
+                workspace_config = WorkspaceConfig(**workspace_data)
+            except Exception:
+                import structlog
+                # Names only - a workspace env VALUE can be a secret.
+                structlog.get_logger().warning(
+                    "invalid_workspace_config_block",
+                    keys=sorted(workspace_data.keys())
+                    if isinstance(workspace_data, dict)
+                    else None,
+                )
+                workspace_config = WorkspaceConfig()
+
+            server_prefs_data = data.get(SERVER_PREFS_KEY, {}) or {}
+            try:
+                server_prefs_config = ServerPrefsConfig(**server_prefs_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_server_prefs_config_block",
+                    raw=server_prefs_data,
+                )
+                server_prefs_config = ServerPrefsConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             config_version = data.get("config_version", 0)
@@ -1099,6 +1200,8 @@ class Settings(BaseSettings):
                 uploads=uploads_config,
                 providers=providers_config,
                 terminal_commands=terminal_commands_config,
+                workspace=workspace_config,
+                server_prefs=server_prefs_config,
             )
 
             # Validate secrets are set
@@ -1597,12 +1700,33 @@ class Settings(BaseSettings):
             # feat/settings-tabs-and-commands - the terminal tab's list,
             # included here so opening settings is one round trip.
             "terminal_commands": [c.model_dump() for c in cfg.terminal_commands],
+            # feat/settings-gui - the four global settings. Values are NOT
+            # masked: a development root, a shell and an editor are paths,
+            # and the env map is the user's own - masking it would make the
+            # screen unable to show what it is about to inject. Values are
+            # never LOGGED, which is the property that actually matters for
+            # the secrets some of them will hold.
+            "workspace": cfg.workspace.model_dump(),
+            "server_prefs": {
+                **cfg.server_prefs.model_dump(),
+                # The address in force right now, so the screen can show
+                # the preference and the reality separately instead of
+                # showing an aspiration as a fact.
+                "effective_bind_host": self.host,
+                # THREE outcomes for TLS, and this is the third: not on,
+                # not off, but "this build cannot terminate TLS at all",
+                # so the stored preference is recorded and not in force.
+                "tls_available": False,
+                "restart_required": True,
+            },
         }
 
     def update_settings_config(
         self,
         agents_update: Optional[dict] = None,
         notifications_update: Optional[dict] = None,
+        workspace_update: Optional[dict] = None,
+        server_prefs_update: Optional[dict] = None,
     ) -> dict:
         """
         Merge partial ``agents`` / ``notifications`` updates into config.json.
@@ -1623,6 +1747,12 @@ class Settings(BaseSettings):
             ``model_fields_set``); values are the new strings.
           notifications_update (dict|None) - same shape, for the
             ``notifications`` block.
+          workspace_update (dict|None) - same shape, for the ``workspace``
+            block, EXCEPT that its ``env`` key is a whole-map replace
+            rather than a key-wise merge (see the merge code below - a
+            merge cannot express deleting a row).
+          server_prefs_update (dict|None) - same shape, for the
+            ``server_prefs`` block.
         Output: dict - ``get_settings_summary()`` computed AFTER the
           write, so the caller/UI can repaint from the authoritative
           post-write state in one round trip.
@@ -1667,6 +1797,24 @@ class Settings(BaseSettings):
             notifications_data.update(notifications_update)
             NotificationsConfig(**notifications_data)
             data["notifications"] = notifications_data
+
+        # feat/settings-gui. Same partial-merge semantics as the two
+        # blocks above: an absent key is left untouched. ``env`` is the
+        # one exception and it is deliberate - it is a WHOLE MAP, so a
+        # merge would make a row impossible to delete (there is no way to
+        # express "remove FOO" in a key-wise merge of a dict). The client
+        # therefore sends the complete map or omits the key entirely.
+        if workspace_update:
+            workspace_data = dict(data.get(WORKSPACE_KEY) or {})
+            workspace_data.update(workspace_update)
+            WorkspaceConfig(**workspace_data)
+            data[WORKSPACE_KEY] = workspace_data
+
+        if server_prefs_update:
+            prefs_data = dict(data.get(SERVER_PREFS_KEY) or {})
+            prefs_data.update(server_prefs_update)
+            ServerPrefsConfig(**prefs_data)
+            data[SERVER_PREFS_KEY] = prefs_data
 
         # Backup the pre-write bytes. Best-effort: a backup failure must
         # not block the write itself (matches the fail-soft posture the

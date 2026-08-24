@@ -131,10 +131,89 @@ class ServerManager {
   }
 
   /**
+   * Path to the config.json the Python server reads.
+   *
+   * feat/settings-gui put the bind preference there, so both surfaces
+   * that can change it - the web app's settings screen and this tray
+   * menu - are writing one value in one place. Two files each claiming
+   * to hold the preference is how a menu ends up disagreeing with the
+   * screen that set it.
+   *
+   * @returns {string} absolute path to config.json.
+   */
+  getConfigPath() {
+    return path.join(this.baseDir, 'config.json');
+  }
+
+  /**
+   * Read the bind preference out of config.json.
+   *
+   * Three outcomes, and the third is not a value: a missing file, a
+   * missing block, or unreadable JSON all return null, meaning "config
+   * expresses no preference", which is different from "config says
+   * loopback". The caller falls back rather than treating an unreadable
+   * file as an answer.
+   *
+   * @returns {?string} the stored address, or null when none is stored.
+   */
+  readConfigBindHost() {
+    try {
+      const raw = fs.readFileSync(this.getConfigPath(), 'utf8');
+      const parsed = JSON.parse(raw);
+      const prefs = parsed && parsed.server_prefs;
+      const host = prefs && prefs.bind_host;
+      return (typeof host === 'string' && host.trim()) ? host.trim() : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Persist the bind preference into config.json.
+   *
+   * Read-modify-write with a tmp file and a rename, matching the atomic
+   * convention src/config.py already uses on this same file, so no crash
+   * mid-write can leave a torn config. It re-reads immediately before
+   * writing so it MERGES into whatever is on disk rather than replacing
+   * it - a settings-screen save that landed a moment ago survives.
+   *
+   * The honest limitation: read-modify-write leaves a lost-update window
+   * of microseconds against a simultaneous write from the Python side.
+   * Closing it properly needs a lock this codebase does not have, and the
+   * two writers here are both a human physically choosing a menu item, so
+   * the window is stated rather than papered over.
+   *
+   * @param {string} ip - the address to store.
+   * @returns {boolean} whether the write happened.
+   */
+  writeConfigBindHost(ip) {
+    const configPath = this.getConfigPath();
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      parsed.server_prefs = Object.assign({}, parsed.server_prefs, { bind_host: ip });
+      const tmp = configPath + '.menubar.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(parsed, null, 2), 'utf8');
+      fs.renameSync(tmp, configPath);
+      return true;
+    } catch (err) {
+      console.warn('[bind-host] could not write config.json:', err.message);
+      return false;
+    }
+  }
+
+  /**
    * Current bind host ('0.0.0.0' | '127.0.0.1' | specific LAN IP).
+   *
+   * config.json wins, because that is where the settings screen writes
+   * and where the user was told the preference lives. menubar-settings
+   * .json remains the fallback for an install that predates the settings
+   * screen, so nobody's existing choice is silently reset to the default
+   * by this change.
    */
   getBindHost() {
-    return this._settings.bind_host || DEFAULT_BIND_HOST;
+    return this.readConfigBindHost()
+      || this._settings.bind_host
+      || DEFAULT_BIND_HOST;
   }
 
   /**
@@ -196,13 +275,21 @@ class ServerManager {
     if (!ip || typeof ip !== 'string') {
       throw new Error(`invalid bind host: ${ip}`);
     }
-    if (this._settings.bind_host === ip) {
+    // Compared against the EFFECTIVE value, not the menubar mirror. With
+    // config.json as the source of truth, the mirror can legitimately be
+    // stale, and comparing against it would refuse a change that has not
+    // actually been made.
+    if (this.getBindHost() === ip) {
       console.log(`[bind-host] already set to ${ip}, no-op`);
       return;
     }
     console.log(`[bind-host] change: ${this._settings.bind_host} -> ${ip}`);
     this._settings.bind_host = ip;
     this._saveSettings();
+    // config.json is the source of truth the settings screen reads, so a
+    // tray pick has to land there too or the two surfaces disagree about
+    // what the user last chose.
+    this.writeConfigBindHost(ip);
 
     // Full restart is required — uvicorn binds at startup and has no
     // in-place rebind. tmux sessions survive because the tmux server is

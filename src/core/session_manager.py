@@ -40,6 +40,7 @@ from src.models import (
     LogEntry,
     Toast,
 )
+from src.core.workspace_settings import build_spawn_env
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
@@ -525,6 +526,21 @@ class SessionManager:
         session is fully registered (we don't - see ``create_session``) can
         still ask. Empty dict when the configured port can't be read.
 
+        Layering (feat/settings-gui): the user's global workspace
+        environment goes in FIRST, then ``development_root`` as
+        ``CLOUDE_DEV_ROOT`` and ``default_shell`` as ``SHELL``, then the
+        three app variables below LAST so they win unconditionally. See
+        ``src/core/workspace_settings.build_spawn_env`` - precedence is
+        expressed as write order rather than trusted to the name policy,
+        so the control channel stays intact even if that policy is later
+        loosened.
+
+        This reaches only NEWLY spawned terminals. tmux copies the
+        environment at ``new-session`` time; a session already running
+        keeps the environment it was born with, and the settings screen
+        says so rather than letting the user believe a save applied
+        everywhere.
+
         Variables:
             CLOUDECODE_SESSION_ID - used as the ``X-Cloudecode-Session``
                 header so the hook endpoint can route the POST to the right
@@ -541,13 +557,30 @@ class SessionManager:
             port = settings.port
         except Exception:  # pragma: no cover - defensive
             return {}
-        return {
+        app_env = {
             "CLOUDECODE_SESSION_ID": session_id,
             "CLOUDECODE_HOOK_TOKEN": token,
             "CLOUDECODE_HOOK_URL": (
                 f"http://127.0.0.1:{port}/api/v1/hooks/claude-event"
             ),
         }
+
+        # feat/settings-gui - the user's global workspace environment.
+        # THIS function is the single funnel every spawn goes through
+        # (create_session and the adopt path both call it), which is why
+        # the global env is merged here and nowhere else: one place to
+        # add it means one place it can be missing from.
+        #
+        # A failure to read the config must never stop a session from
+        # starting, so this degrades to the app trio alone rather than
+        # raising. It is logged, so a silently-unapplied environment is
+        # visible instead of looking like the user typed nothing.
+        try:
+            workspace = settings.load_auth_config().workspace.model_dump()
+        except Exception as exc:  # noqa: BLE001 - see comment above
+            logger.warning("workspace_env_unavailable", error=str(exc))
+            return app_env
+        return build_spawn_env(workspace, app_env)
 
     # ---- backend type introspection --------------------------------------
 
