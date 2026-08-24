@@ -3867,7 +3867,7 @@ body.home-header-active {
 }
 
 .settings-wrapper-script-input {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     white-space: pre;
     resize: vertical;
     line-height: 1.4;
@@ -4088,7 +4088,7 @@ body.home-header-active {
 .settings-command-line code {
     color: var(--color-fg-muted);
     font-size: 0.78rem;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     white-space: nowrap;
 }
 
@@ -4625,4 +4625,83 @@ body.home-header-active {
 .project-node__toggle {
     min-width: 24px;
     justify-content: center;
+}
+
+/* ---------------------------------------------------------------------
+ * feat/settings-gui - the workspace tab's environment list.
+ *
+ * Every colour and corner is a token. Three themes (terminal, gameboy,
+ * legacy_apple) deliberately zero every radius, so a hardcoded corner
+ * here would be visibly wrong on them; a hardcoded colour would be
+ * illegible on roughly twenty.
+ *
+ * The row is a grid rather than flex so the NAME column stays the same
+ * width down the whole list - with flex, a long value on one row shrinks
+ * that row's name field and the column stops reading as a column.
+ * ------------------------------------------------------------------ */
+
+.settings-env-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.settings-env-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.settings-env-row .modal-input {
+    min-width: 0;
+}
+
+.settings-env-name {
+    font-family: var(--font-mono);
+}
+
+.settings-env-remove {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 6px 10px;
+}
+
+.settings-env-remove:hover {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.settings-env-add {
+    margin-top: 8px;
+}
+
+.settings-env-warnings {
+    margin-top: 4px;
+}
+
+.settings-env-warnings[hidden] {
+    display: none;
+}
+
+/* One column on a phone. The three-across grid put the remove button off
+ * the right edge of a 390px viewport, which is not a layout preference -
+ * the control was unreachable. */
+@media (max-width: 600px) {
+    .settings-env-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "name remove"
+            "value value";
+    }
+
+    .settings-env-name { grid-area: name; }
+    .settings-env-value { grid-area: value; }
+    .settings-env-remove { grid-area: remove; }
 }

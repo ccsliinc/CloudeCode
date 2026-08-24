@@ -118,6 +118,10 @@
         // NOTIFICATION_FIELDS. Four tabs now; measured at 390px the strip
         // is 393px against a 355px window, so it still scrolls, by 38px
         // instead of 89px. Shorter drag, not no drag.
+        // feat/settings-gui - the four global settings. FIRST because
+        // it is the tab that answers "what will my next terminal be",
+        // which is the question a settings screen is opened to answer.
+        { id: 'workspace', label: 'workspace', sectionIds: [], slots: ['workspace'] },
         { id: 'wrappers', label: 'wrappers', sectionIds: [], slots: ['wrappers'] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
         { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
@@ -157,6 +161,8 @@
                 parts.push(Sections.renderAppearanceSection());
             } else if (slot === 'audio') {
                 parts.push(window.SettingsAudio ? window.SettingsAudio.render() : '');
+            } else if (slot === 'workspace') {
+                parts.push(window.SettingsWorkspace ? window.SettingsWorkspace.render(lastSummary) : '');
             } else if (slot === 'server') {
                 parts.push(Sections.renderServerSection(lastSummary));
             } else {
@@ -237,6 +243,19 @@
                 body[section.group] = fragment;
             }
         });
+        // feat/settings-gui - the workspace tab owns its own collection
+        // because its environment list has a variable number of rows,
+        // which the field-driven path above cannot describe. It still
+        // joins THIS panel's single batched Save rather than writing on
+        // its own, so one Save means one write and one repaint.
+        if (window.SettingsWorkspace && overlayEl) {
+            var wsFragments = window.SettingsWorkspace.collect(
+                overlayEl.querySelector('#settings-panel-body'), lastSummary
+            );
+            Object.keys(wsFragments).forEach(function (key) {
+                body[key] = wsFragments[key];
+            });
+        }
         return body;
     }
 
@@ -261,6 +280,7 @@
         try {
             lastSummary = await window.API.updateSettings(patch);
             if (statusEl) statusEl.textContent = 'saved';
+            var savedWarnings = lastSummary && lastSummary.workspace_warnings;
             var bodyEl = overlayEl.querySelector('#settings-panel-body');
             if (bodyEl) {
                 // Repaint from the authoritative post-write summary, then
@@ -272,6 +292,12 @@
                 window.SettingsTabs.wire(bodyEl);
                 if (priorTab) window.SettingsTabs.activate(bodyEl, priorTab);
                 mountSlots();
+                // Warnings are the successful-save channel: a warned env
+                // name was SAVED, and the user has to be told which one.
+                // Rendered after the repaint so it survives it.
+                if (window.SettingsWorkspace) {
+                    window.SettingsWorkspace.showWarnings(bodyEl, savedWarnings);
+                }
             }
         } catch (err) {
             console.error('SettingsPanel: save failed', err);
@@ -303,6 +329,9 @@
      */
     function mountSlots() {
         mountThemeSlot();
+        if (window.SettingsWorkspace) {
+            window.SettingsWorkspace.wire(overlayEl.querySelector('#settings-panel-body'));
+        }
         if (window.SettingsAudio) window.SettingsAudio.wire(overlayEl);
         if (window.AgentWrappersPanel) {
             var wrapperSlot = overlayEl.querySelector('#settings-wrappers-slot');
@@ -353,7 +382,7 @@
             lastSummary = await window.API.getSettings();
         } catch (err) {
             console.error('SettingsPanel: failed to load settings', err);
-            lastSummary = { agents: {}, notifications: {}, server: {}, terminal_commands: null };
+            lastSummary = { agents: {}, notifications: {}, server: {}, terminal_commands: null, workspace: {}, server_prefs: {} };
         }
 
         overlayEl = document.createElement('div');

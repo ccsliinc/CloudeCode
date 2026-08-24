@@ -825,6 +825,11 @@
          window.ThemeAudio for the current gain and the floor, so it loads
          AFTER themeAudio.js and BEFORE settings-panel.js renders it. -->
     <script src="/static/js/settings-audio.js"></script>
+    <!-- The workspace tab (the four global settings). Reads
+         window.SettingsSections at IIFE time for escapeHtml, so it loads
+         AFTER settings-sections.js and BEFORE settings-panel.js, which
+         calls its render()/wire()/collect(). -->
+    <script src="/static/js/settings-workspace.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -
