@@ -29,9 +29,15 @@
 //   fill measured by sampling one painted pixel over a black page and
 //   again over a white one: 81.2% (codex), 81.6% (legacy_windows),
 //   81.6% (dracula) - so ~18.5% of the animation still shows through
-//   help control 20x20 at right=418 in a 430-wide header; the panel is
-//   still the first child of .launchpad-container and measures 0 height
-//   closed, 1377.77 open
+//   help control 20x20 at right=418 in a 430-wide header; the panel
+//   measures 0 height closed, 1377.77 open
+//
+// CORRECTION 2026-08-24: the line above used to read "the panel is still
+// the FIRST child of .launchpad-container". That stopped being true at
+// 28d698b, which put the attribution-prompt slot ahead of it. The claim
+// that matters was never "first child", it was "nothing above it adds
+// height", and the empty slot measures 0x0 with display:none - verified
+// in pixels by scripts/verify_attribution_prompt.py::measure_none.
 //
 // Run with: node tests/test_home_screen_mechanics.node.mjs
 
@@ -208,14 +214,48 @@ await test('ITEM 61b: the help control sits beside the title, not in the control
         'the help button must NOT be back in the right-hand controls cluster');
 });
 
-await test('ITEM 48: the help panel is still the FIRST child of the launchpad container', async () => {
+await test('ITEM 48: nothing above the help panel may add HEIGHT to the launchpad container', async () => {
+    // WHAT THIS ASSERTS AND WHY IT CHANGED. It used to demand that the
+    // <details class="adopt-disclosure"> be the literally first tag inside
+    // .launchpad-container. That was a MARKUP PROXY for the thing that
+    // actually matters, which is that nothing above the help panel pushes
+    // the home screen down. The proxy broke on a legitimate change:
+    // 28d698b added <div id="attribution-prompt"> as the first child, a
+    // slot that is EMPTY in the healthy case and carries
+    // `.attribution-prompt-slot:empty { display: none }`, so it costs
+    // exactly zero height. The old assertion failed on an app that was
+    // correct, which is the same defect class as a false green pointed
+    // the other way.
+    // So: only elements on this allow-list may precede the disclosure,
+    // and each one must be able to PROVE it collapses when empty. The
+    // rendered-pixel half of this claim is measured, not inferred, by
+    // scripts/verify_attribution_prompt.py::measure_none, which reads
+    // the empty slot's getBoundingClientRect() and requires a 0x0 box.
+    const ZERO_COST_SLOTS = [
+        { cls: 'attribution-prompt-slot', css: 'client/css/attribution-prompt.css' },
+    ];
     const containerTag = '<div class="launchpad-container">';
     const containerIdx = LAUNCHPAD_SRC.indexOf(containerTag);
     const detailsIdx = LAUNCHPAD_SRC.indexOf('<details class="adopt-disclosure">', containerIdx);
     assert.ok(detailsIdx !== -1, 'the disclosure must still be rendered by launchpad.js');
-    const between = LAUNCHPAD_SRC.slice(containerIdx + containerTag.length, detailsIdx);
-    const tags = between.replace(/<!--[\s\S]*?-->/g, '').match(/<[a-zA-Z]/g) || [];
-    assert.equal(tags.length, 0, 'nothing may render between the container and the help panel');
+    const between = LAUNCHPAD_SRC
+        .slice(containerIdx + containerTag.length, detailsIdx)
+        .replace(/<!--[\s\S]*?-->/g, '');
+    const tags = [...between.matchAll(/<([a-zA-Z][\w-]*)([^>]*)>/g)];
+    for (const [, tag, attrs] of tags) {
+        const slot = ZERO_COST_SLOTS.find((s) => attrs.includes(s.cls));
+        assert.ok(slot,
+            `<${tag}> renders between .launchpad-container and the help panel and is `
+            + 'not a declared zero-cost slot. Anything here pushes the whole home '
+            + 'screen down. Add it to ZERO_COST_SLOTS with a :empty collapse rule, '
+            + 'or move it below the disclosure.');
+        const css = fs.readFileSync(path.join(ROOT, slot.css), 'utf8');
+        const rule = new RegExp(
+            `\\.${slot.cls}:empty\\s*\\{[^}]*display:\\s*none`, 'm');
+        assert.match(css, rule,
+            `.${slot.cls} sits above the help panel, so it must collapse when empty - `
+            + `expected a ".${slot.cls}:empty { display: none }" rule in ${slot.css}`);
+    }
 });
 
 await test('ITEM 48: exactly ONE help control - the in-pane summary is taken out of the layout', async () => {

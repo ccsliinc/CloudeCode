@@ -134,20 +134,43 @@ test('the dead .launchpad-header / .launchpad-prompt CSS rules are removed', () 
     assert.equal(ruleBody(styleRules, '.launchpad-prompt'), null);
 });
 
-test('the launchpad-container\'s first real child is the adopt-disclosure help, not a title block', () => {
-    const containerIdx = launchpadJs.indexOf('class="launchpad-container"');
+test('no title block sneaks back in above the adopt-disclosure help', () => {
+    // WHAT CHANGED AND WHY. This used to require the adopt-disclosure
+    // <details> to be the literally FIRST tag inside .launchpad-container.
+    // The point of the rule was that no title block may come back and
+    // restore the vertical cost this change removed - "first tag" was a
+    // markup PROXY for that. 28d698b broke the proxy legitimately by
+    // adding <div id="attribution-prompt"> as the first child, an empty
+    // slot carrying `.attribution-prompt-slot:empty { display: none }`,
+    // which costs zero height in the healthy case. Asserting tag identity
+    // failed on an app that was correct.
+    // The real rule, asserted below: only declared zero-cost slots may
+    // precede the disclosure, and each must prove it collapses when empty.
+    // Its rendered height is measured, not inferred, by
+    // scripts/verify_attribution_prompt.py::measure_none (0x0, display:none).
+    const ZERO_COST_SLOTS = [
+        { cls: 'attribution-prompt-slot', css: 'client/css/attribution-prompt.css' },
+    ];
+    const containerTag = '<div class="launchpad-container">';
+    const containerIdx = launchpadJs.indexOf(containerTag);
     assert.ok(containerIdx > -1, '.launchpad-container markup not found');
-    const after = launchpadJs.slice(containerIdx, containerIdx + 4000);
-    // Strip the JS template-literal comment block between the container
-    // opening and the first real element, then the next tag must be the
-    // adopt-disclosure <details> - nothing else may sit between the
-    // container and it and add height back.
-    const withoutComment = after.replace(/<!--[\s\S]*?-->/, '');
-    const firstTagMatch = withoutComment.match(/<(\w+)[^>]*class="([^"]*)"/);
-    assert.ok(firstTagMatch, 'no element found after .launchpad-container opening');
-    assert.equal(firstTagMatch[1], 'details');
-    assert.ok(firstTagMatch[2].includes('adopt-disclosure'),
-        `expected the adopt-disclosure to be first, found class="${firstTagMatch[2]}"`);
+    const detailsIdx = launchpadJs.indexOf('<details class="adopt-disclosure">', containerIdx);
+    assert.ok(detailsIdx > -1, 'the adopt-disclosure must still be rendered');
+    const between = launchpadJs
+        .slice(containerIdx + containerTag.length, detailsIdx)
+        .replace(/<!--[\s\S]*?-->/g, '');
+    for (const [, tag, attrs] of between.matchAll(/<([a-zA-Z][\w-]*)([^>]*)>/g)) {
+        const slot = ZERO_COST_SLOTS.find((s) => attrs.includes(s.cls));
+        assert.ok(slot,
+            `<${tag}> sits between .launchpad-container and the adopt-disclosure and `
+            + 'is not a declared zero-cost slot. That is exactly the vertical cost '
+            + 'this change removed. Add it to ZERO_COST_SLOTS with a :empty collapse '
+            + 'rule, or render it below the disclosure.');
+        const css = fs.readFileSync(path.join(ROOT, slot.css), 'utf8');
+        assert.match(css, new RegExp(`\\.${slot.cls}:empty\\s*\\{[^}]*display:\\s*none`, 'm'),
+            `.${slot.cls} precedes the disclosure, so it must collapse when empty - `
+            + `expected ".${slot.cls}:empty { display: none }" in ${slot.css}`);
+    }
 });
 
 // ---------------------------------------------------------------------
