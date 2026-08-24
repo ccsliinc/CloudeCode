@@ -1,5 +1,116 @@
 # Release notes
 
+## v1.0.0
+
+Measured against `v0.8.1`. This is the first 1.0 and it is a version-string
+decision, not a claim that everything below is finished - the known issues
+are real and listed.
+
+Test suite at the release sha: **2527 passed, 1 skipped** (2528 collected),
+run with `--ignore=tests/test_nuke_sandbox.py`, which executes the real
+`nuke.sh`. Node suite: 91 files, all green, run per file. JS syntax check:
+95 files parsed cleanly.
+
+### What shipped in this release
+
+**Workspace settings, in the app.** A settings screen with a development
+root, a default shell, a default editor and an environment map, plus bind
+and TLS preferences. Two additive blocks in `config.json` - `workspace` and
+`server_prefs`. No config version bump, so an older build reads the file and
+ignores what it does not know. The environment map actually reaches a newly
+spawned terminal; that is measured, not assumed. The menu bar opens the
+settings screen, and the Edit Config item no longer claims to do something
+it did not.
+
+**Downgrade got safer, in one specific way.** The state-file location is now
+resolved once per filename and pinned, and `rollback.sh` restores each file
+to where it found it rather than to wherever the current version would put
+it. That closes the file-LOCATION half of the metadata-loss defect. It does
+not close the other half - see the known issues.
+
+**The in-app "reset server" control was withdrawn.** It called
+`POST /api/v1/server/reset`, which ran a `reset.sh` that has never been in
+the app bundle, so it returned a 500 on every packaged install. Shipping the
+script would have been worse than the 500: in a packaged install its
+fallback branch would have killed the python child the Electron app owns and
+left a detached uvicorn holding the port after the app quit - a quiet wrong
+state in place of a loud correct error. The endpoint and its UI control are
+both gone. Restart the app from the tray menu, or `launchctl kickstart -k`
+under launchd. Nothing that worked was removed: the mini never had the
+script.
+
+### Resolved earlier in this line, and you may still be exposed
+
+These were fixed, but a machine that ran the broken version still carries
+the damage. Read them even though they say RESOLVED.
+
+**The uninstaller left your data on disk while reporting a full reset.**
+"Nuke it from Orbit" reported a complete wipe and left `cloude.db`, the
+migration trail and your stored refresh tokens in place. If you ever ran the
+old uninstaller, **those files are still there** - this release removes them
+when you run the current one, but it cannot retroactively undo the old
+run's false report. Check the state directory yourself if that matters to
+you.
+
+**Rollback on Linux restored no state files while printing a success
+count.** The count came from what it intended to restore, not from what it
+wrote. A Linux rollback that told you it restored N files may have restored
+none of them. If you rolled back on Linux and your app came back not
+recognising its own sessions, this is why.
+
+### Known issues
+
+Each of these is real and shipping anyway. Read the consequence, not the
+title.
+
+**A config with object-form slash commands will not load on v0.8.1.** If any
+slash command in your `config.json` carries a description, the older server
+exits at startup rather than starting with a degraded config. New writes
+normalize to bare strings when there is no description, which shrinks the
+exposure without eliminating it. Check your slash commands before you
+downgrade.
+
+**A second downgrade defect is UNMEASURED.** Separate from the file-location
+fix above, `v0.8.1` was observed to prune a live session from the owned set
+and delete its metadata as stale. Consequence: after a downgrade the tmux
+sessions keep running and the app presents them as strangers you must
+re-adopt. The location fix does not address this and nobody has measured how
+far it reaches. Recorded in `docs/upgrade-downgrade-roundtrip.md`.
+
+**The login screen applies no theme variables.** The theme manifest is
+fetched after authentication, so the login screen renders in default colours
+no matter which theme you picked. Cosmetic, long-standing, unchanged here.
+
+**Logging out with an active session may stack two confirmation dialogs.**
+Found by reading the code path, not measured against the running app. If you
+see two dialogs, that is this.
+
+**The TLS preference is recorded but not enforced.** The settings screen
+lets you express a TLS preference and stores it. There is no TLS terminator
+in this build, so nothing acts on it. Setting it does not make anything
+encrypted.
+
+**`verify_home_mechanics` fails on ITEM 48.** The help panel does not move -
+it stays the first child of its container. Pre-existing, confirmed identical
+at the base commit, and this release took that harness from 6 failures to 3.
+Not introduced here and not fixed here.
+
+**Three verification harnesses could not be evaluated for this release.**
+`verify_selection_apps`, `verify_selection_regressions` and
+`verify_selection_scrolled` each need a live authenticated server and a TOTP
+secret file that was not present. They are CANNOT DETERMINE, not passes.
+`verify_lifecycle_reconcile` is a parameterised tool requiring `--db` and
+`--listing` and was likewise not exercised.
+
+**The type-NUKE confirmation window has been verified as rendered markup,
+not as a live Electron window.** Its HTML was rendered at the window's real
+dimensions: the confirm button is disabled on an empty field, still disabled
+on the wrong word in the wrong case, and enables only on exactly `NUKE`.
+Focus lands on the text field, not on the destructive control. The Electron
+window that hosts it, and the wiring from its verdict to `nuke.sh`, are
+covered by source-level tests only. Nobody has watched the real window open.
+
+
 ## v0.8.2
 
 Measured against `v0.8.1`. 390 commits. Test suite at the release candidate:
