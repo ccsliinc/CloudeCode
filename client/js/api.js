@@ -51,13 +51,26 @@ class API {
      * handleUnauthorized() path so the UI can reauth via TOTP.
      *
      * @param {string} endpoint - API endpoint (e.g., '/sessions')
-     * @param {object} options - fetch options
+     * @param {object} options - fetch options, plus one option of ours:
+     *   ``expectedStatuses`` (Array<number>, default []) - HTTP statuses
+     *   this particular call site treats as a legitimate NEGATIVE ANSWER
+     *   rather than a fault. The Error is still built and still thrown,
+     *   so the value contract is unchanged; only the console line is
+     *   downgraded from error to debug. Declaring a status here is a
+     *   claim about THIS call site, never about the status globally -
+     *   the same 404 from an endpoint that did not declare it still
+     *   logs as an error.
      * @param {object} [_meta] - internal; callers pass {_retrying: true}
      *                           to break the refresh-then-retry loop.
      * @returns {Promise<any>} - Response data
      */
     async call(endpoint, options = {}, _meta = {}) {
         const token = this.getToken();
+
+        // Pull our own option out before anything is handed to fetch, so
+        // the wire request is byte-identical to what it was before this
+        // option existed.
+        const { expectedStatuses = [], ...fetchOnlyOptions } = options;
 
         // Prepare headers
         const headers = { ...(options.headers || {}) };
@@ -71,7 +84,7 @@ class API {
         // Make request
         const url = `${this.baseURL}${endpoint}`;
         const fetchOptions = {
-            ...options,
+            ...fetchOnlyOptions,
             headers
         };
 
@@ -157,7 +170,17 @@ class API {
             // Return JSON response
             return await response.json();
         } catch (error) {
-            console.error(`API Error [${endpoint}]:`, error);
+            // A status this call site DECLARED expected is a negative
+            // answer, not a fault. It still throws (callers branch on
+            // it); it just does not claim to be an error in the console.
+            // An error line that is not an error is how a console stops
+            // being read, which is what hides the next real one.
+            const status = error && error.status;
+            if (status && expectedStatuses.includes(status)) {
+                console.debug(`API [${endpoint}]: expected ${status} - ${error.message}`);
+            } else {
+                console.error(`API Error [${endpoint}]:`, error);
+            }
             throw error;
         }
     }
@@ -693,7 +716,19 @@ class API {
             params.push(`rows=${encodeURIComponent(String(rows))}`);
         }
         const q = params.length ? `?${params.join('&')}` : '';
-        return await this.call(`/sessions${q}`);
+        // WHY 404 IS EXPECTED HERE, AND IS NOT A MISSING ROUTE.
+        // `GET /api/v1/sessions` exists (src/api/routes.py, mounted at
+        // the /api/v1 prefix in src/main.py) and answers 404 with
+        // {"detail": "No active session"} when the requested - or the
+        // current - session does not exist. That is the route's
+        // documented negative answer for "there is no session", which is
+        // the normal state of a launchpad with nothing running. It is
+        // distinguishable from a genuinely absent route, which answers
+        // {"detail": "Not Found"}; the deployed server was measured
+        // answering 200 on this same path whenever a session_id
+        // resolves. Declaring it here keeps the console honest without
+        // suppressing any other status.
+        return await this.call(`/sessions${q}`, { expectedStatuses: [404] });
     }
 
     /**
