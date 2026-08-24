@@ -195,20 +195,39 @@ def check_pinned_is_plain(m: dict, failures: list) -> None:
 def check_identity_survives(m: dict, failures: list) -> None:
     """A session-themed row must still be tellable from an unthemed one.
 
-    The 1px ring is what is left after the rail goes, and it is the row's
-    session identity. If it went with the rail, the cleanup deleted
-    information rather than a duplicate of it.
+    THE CARRIER MOVED, THE CHECK DID NOT. This used to sample the pixel 1
+    in from the row's left edge, because session identity was an inset
+    accent ring there. That ring is gone: the row's border and background
+    are what `[data-active="1"]` uses for SELECTION, and a session pinned
+    to the host theme painted an accent edge on a row that was not
+    selected and read as the selected one.
+
+    So identity is now a swatch INSIDE the row, and this samples that
+    instead. The point of the check is unchanged - if the cue went with
+    the ring, the cleanup deleted information rather than moving it - and
+    it is deliberately not weakened to a markup assertion: a swatch that
+    renders zero pixels must fail here.
 
     Inputs: m (dict); failures (list).
     Output: None.
     """
     plain, themed = m["rows"]["row-plain"], m["rows"]["row-themed"]
-    d = chan_delta(themed["left"][1], plain["left"][1])
+    if plain.get("swatch_px") is not None:
+        failures.append(
+            "%s: the UNTHEMED row is carrying a theme swatch - the cue must mean "
+            "'this session has its own theme' and nothing else" % m["theme"])
+    px = themed.get("swatch_px")
+    if px is None:
+        failures.append(
+            "%s: the session-themed row has no swatch, and nothing on its edges "
+            "either - session identity is not on screen at all" % m["theme"])
+        return
+    d = chan_delta(px, themed["left"][1])
     if d < DIFF_TOL:
         failures.append(
-            "%s: the session-themed row's ring pixel %s is indistinguishable from "
-            "the plain row's %s (delta %d) - session identity was removed along "
-            "with the rail" % (m["theme"], themed["left"][1], plain["left"][1], d))
+            "%s: the session-themed row's swatch pixel %s is indistinguishable "
+            "from the row behind it %s (delta %d) - the swatch is rendering, but "
+            "invisibly" % (m["theme"], px, themed["left"][1], d))
 
 
 def check_cross_theme(a: dict, b: dict, rows: tuple, failures: list) -> None:

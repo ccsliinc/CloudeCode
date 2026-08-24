@@ -35,12 +35,14 @@
 <div id="header-mount"></div>
 <div id="launchpad-screen" class="screen active"></div>
 <!-- A themed running-session row, mounted inside a .launchpad-container
-     exactly as the real one is, so the left-edge rules under test are the
-     ones the browser actually resolves for the home screen. -->
+     exactly as the real one is, so the edge rules under test are the ones
+     the browser actually resolves for the home screen. It must now paint
+     NO inset layer at all: the row's box carries selection, and session
+     identity carries on a swatch inside the row instead. -->
 <div class="launchpad-container" id="tint-probe-host">
   <div class="running-session-row owned" id="tint-probe"
        data-session-theme="dracula"
-       style="--session-theme-accent: #bd93f9; --session-theme-ring: rgba(189, 147, 249, 0.45);">
+       style="--session-theme-accent: #bd93f9;">
     <span class="running-session-name">probe</span>
   </div>
 </div>

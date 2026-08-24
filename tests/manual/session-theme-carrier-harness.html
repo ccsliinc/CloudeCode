@@ -214,6 +214,17 @@ window.__hex = function (hex) {
 };
 
 /**
+ * Switch the sidebar panel's density, which is a real user control and
+ * the mode in which the swatch has least room.
+ *
+ * @param {string} d - 'compact' | 'cozy' | 'detailed'.
+ * @returns {void}
+ */
+window.__setDensity = function (d) {
+    document.getElementById('panel').setAttribute('data-density', d);
+};
+
+/**
  * Resolve a custom property off :root.
  * @param {string} name - e.g. "--color-accent".
  * @returns {string} the trimmed computed value.
@@ -276,6 +287,7 @@ window.__carrier = function () {
         visibilityState: document.visibilityState,
         innerWidth: window.innerWidth,
         theme: document.documentElement.getAttribute('data-theme'),
+        density: document.getElementById('panel').getAttribute('data-density'),
         sessionAccent: window.__sessionAccent,
         tokens: {
             accent: window.__token('--color-accent'),

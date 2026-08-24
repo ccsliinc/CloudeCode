@@ -194,11 +194,24 @@ def check_identity_carrier(m: dict, failures: list) -> None:
                 "%s/%s: a themed row has NO swatch element - session identity is "
                 "not on screen at all" % (theme, rid))
             continue
-        if sw["rect"]["w"] < 6 or sw["rect"]["h"] < 6:
+        if sw["rect"]["w"] < 8 or sw["rect"]["h"] < 8:
             failures.append(
-                "%s/%s: the swatch lays out %dx%d, which is not a visible mark"
-                % (theme, rid, sw["rect"]["w"], sw["rect"]["h"]))
+                "%s/%s: the swatch lays out %dx%d at density %s, which is not a "
+                "visible mark" % (theme, rid, sw["rect"]["w"], sw["rect"]["h"],
+                                  m.get("density")))
             continue
+        # COMPACT is a 24px row. A swatch that overflows it is a cue that
+        # only works in the default density, which is not a cue.
+        box, rowbox = sw["rect"], row["rect"]
+        if (box["y"] < rowbox["y"]
+                or box["y"] + box["h"] > rowbox["y"] + rowbox["h"]
+                or box["x"] + box["w"] > rowbox["x"] + rowbox["w"]):
+            failures.append(
+                "%s/%s: the swatch box (%d,%d %dx%d) is not contained by its row "
+                "(%d,%d %dx%d) at density %s"
+                % (theme, rid, box["x"], box["y"], box["w"], box["h"],
+                   rowbox["x"], rowbox["y"], rowbox["w"], rowbox["h"],
+                   m.get("density")))
         got = tuple(row["swatch_fill"])
         d = chan_delta(got, want)
         if d > SAME_TOL:

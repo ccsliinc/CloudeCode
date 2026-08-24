@@ -466,29 +466,36 @@ await test('ITEM 37: hover re-declares the rail, because box-shadow is one prope
         'a hover glow that forgets the rail would make the accent edge blink on hover');
 });
 
-await test('ITEM 37: a themed session row keeps ONE inset edge layer, on BOTH surfaces', async () => {
-    // This used to assert a `.launchpad-container` override in styles.css.
-    // That rule existed for exactly one reason: session-theme-tint.css
-    // declared a 3px rail plus a 1px ring for both surfaces, and the home
-    // card was not to carry a left-side colour bar, so the override
-    // re-declared the ring alone and won on specificity.
+await test('ITEM 37: a themed session row paints NO edge layer, on either surface', async () => {
+    // This assertion has moved twice, and both moves were the same
+    // correction: an edge is not where session identity belongs.
     //
-    // The sidebar does not keep the rail either now ("get rid of the thick
-    // left bar like on the homepage and clean it like the homepage looks
-    // now"), so the SHARED rule is ring-only and the override would be a
-    // byte-for-byte duplicate of what it overrides. The assertion moves to
-    // where the fact now lives rather than being deleted: one rule, both
-    // surfaces, no rail.
+    // It first asserted a `.launchpad-container` override in styles.css
+    // that cancelled a 3px rail for the home card alone. The rail then
+    // went from both surfaces and the override with it, so it became "one
+    // ring, both surfaces, no rail". The ring is now gone too, because the
+    // row's border is what `[data-active="1"]` uses to say "this is the
+    // session you are in" - and when a session is pinned to the host
+    // theme, the ring and the selection border are the same colour, so a
+    // themed row read as the selected one.
+    //
+    // What it asserts now is the whole point: session-theme-tint.css
+    // declares nothing on either row's BOX. The cue is a swatch element.
     const tint = fs.readFileSync(
         path.join(ROOT, 'client', 'css', 'session-theme-tint.css'), 'utf8');
-    const body = ruleBody(
-        tint,
-        '.session-sidebar-row[data-session-theme],\n.running-session-row[data-session-theme]');
-    assert.match(body, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/,
-        'session identity is the 1px ring, in the session own colour, on all four edges');
-    assert.ok(!/inset\s+[1-9]\d*px\s+0\s+0/.test(body),
-        'an inset shadow offset along X and not Y is an inline-start rail, and a '
-        + 'left-side colour bar is the shape that was asked to go - on either surface');
+    const liveTint = tint.split('\n')
+        .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+        .join('\n');
+    assert.ok(!/\.session-sidebar-row\[data-session-theme\]/.test(liveTint),
+        'nothing may select the sidebar ROW by its theme any more - the row box '
+        + 'is selection, and the theme has its own element');
+    assert.ok(!/\.running-session-row\[data-session-theme\]/.test(liveTint),
+        'and the same for the home card, or the collision has only been moved');
+    assert.ok(!/box-shadow/.test(liveTint),
+        'no box-shadow at all: a ring is an edge, and an edge is what this '
+        + 'change is removing');
+    assert.match(liveTint, /\.session-theme-swatch\s*\{/,
+        'the cue has to be somewhere, or the tint was deleted rather than moved');
     const liveStyles = STYLES.split('\n')
         .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
         .join('\n');

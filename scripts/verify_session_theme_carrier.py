@@ -173,7 +173,8 @@ def sample_row(page, row: dict) -> dict:
     return row
 
 
-def measure_theme(page, theme: str, session_accent, undetermined: list) -> dict:
+def measure_theme(page, theme: str, session_accent, undetermined: list,
+                  density: str = "cozy") -> dict:
     """Apply one theme and sample every row. Returns {} when unmeasurable.
 
     Inputs: page - a Playwright page on the harness; theme (str) - a
@@ -184,6 +185,7 @@ def measure_theme(page, theme: str, session_accent, undetermined: list) -> dict:
     Output: dict - {'theme', 'tokens', 'sessionAccent', 'rows': {id: ...}}.
     """
     try:
+        page.evaluate("(d) => window.__setDensity(d)", density)
         page.evaluate(
             "([id, accent]) => window.__applyTheme(id, accent)",
             [theme, session_accent],
@@ -215,7 +217,13 @@ def measure_theme(page, theme: str, session_accent, undetermined: list) -> dict:
             % (theme, bundle.get("innerWidth"), VIEWPORT["width"]))
         return {}
 
-    out = {"theme": theme, "tokens": bundle["tokens"],
+    if bundle.get("density") != density:
+        undetermined.append(
+            "%s: the panel reports density=%r, not the %r asked for - never trust "
+            "a setter's own success, ask the page"
+            % (theme, bundle.get("density"), density))
+        return {}
+    out = {"theme": theme, "density": density, "tokens": bundle["tokens"],
            "sessionAccent": bundle["sessionAccent"], "rows": {}}
     for row in bundle["rows"]:
         if row is None:
@@ -261,9 +269,11 @@ def report(runs: list) -> None:
     Output: None.
     """
     for m in runs:
-        print("[%s] accent=%s accent-border=%s border=%s session-accent=%s"
-              % (m["theme"], m["tokens"]["accent"], m["tokens"]["accentBorder"],
-                 m["tokens"]["border"], m["sessionAccent"]))
+        print("[%s density=%s] accent=%s accent-border=%s border=%s "
+              "session-accent=%s"
+              % (m["theme"], m["density"], m["tokens"]["accent"],
+                 m["tokens"]["accentBorder"], m["tokens"]["border"],
+                 m["sessionAccent"]))
         for rid in ("row-plain", "row-themed", "row-active", "row-active-themed",
                     "home-plain", "home-themed"):
             row = m["rows"][rid]
@@ -307,6 +317,12 @@ def main() -> int:
                 m = measure_theme(page, "claude", "#00CD00", undetermined)
                 if m:
                     runs.append(m)
+                # And one at COMPACT, the density with least room. A cue
+                # that is only legible in the default mode is not legible.
+                m = measure_theme(page, "claude", None, undetermined,
+                                  density="compact")
+                if m:
+                    runs.append(m)
             browser.close()
     except Exception as exc:  # noqa: BLE001 - a launch failure is unknown, not a pass
         undetermined.append("browser could not be driven: %s" % exc)
@@ -323,10 +339,10 @@ def main() -> int:
         check_launchpad_matches_sidebar(m, EDGE_OFFSETS, failures)
     check_cross_theme(runs, failures)
 
-    if len(runs) < len(THEMES) + 1 and not undetermined:
+    if len(runs) < len(THEMES) + 2 and not undetermined:
         undetermined.append(
             "only %d of %d runs produced measurements, so the follow-the-theme "
-            "check could not run" % (len(runs), len(THEMES) + 1))
+            "check could not run" % (len(runs), len(THEMES) + 2))
 
     report(runs)
 

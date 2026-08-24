@@ -9,6 +9,7 @@ they are not the same bar:
   session-sidebar-density.css  `[data-pinned="1"]` drew inset 2px accent
   session-theme-tint.css       `[data-session-theme]` drew inset 3px in
                                the SESSION's accent, plus a 1px ring
+                               (BOTH are now gone - see below)
   (nothing)                    `[data-active="1"]` never drew one - it is
                                an accent background, an accent 1px border
                                on all four sides, and a bold accent name
@@ -16,10 +17,17 @@ The 3px session-theme rail is the one that was on screen: the green
 outline reported on `cloude_console-msw4z3m5` is that rule with a green
 `--session-theme-accent`, and the orange 3px + 1px pair measured on the
 current row is the SAME rule with an orange one. Neither was the active
-state. All the rails are now gone; the 1px session-theme ring stays,
-because it is the row's identity on all four edges rather than a bar, and
-every row now carries the home screen's own `1px solid var(--color-border)`
-so the dense list still separates.
+state. All the rails are now gone, AND SO IS THE 1px SESSION-THEME RING. The
+ring was kept here on the reasoning that it is identity on all four edges
+rather than a bar. That reasoning was wrong in a way this file could not
+see, because it only ever asked whether the left edge matched the right:
+the row's border is what `[data-active="1"]` uses for SELECTION, so a
+session pinned to the host theme drew a symmetric accent ring on a row
+that was not selected and read as the selected one. Session identity is
+now a swatch INSIDE the row, which is what check_identity_survives
+samples. Every row still carries the home screen's own
+`1px solid var(--color-border)` on all four sides, so the dense list
+separates, and that border now means selection and nothing else.
 
 WHY THIS IS A PIXEL TEST AND NOT A RULE-TEXT TEST. A grep can prove a
 declaration was deleted. It cannot prove nothing else paints that edge,
@@ -264,6 +272,13 @@ def measure_theme(page, theme: str, undetermined: list):
             return None
         rows[rid] = sample_row(page, meta)
         rows[rid]["label"] = label
+        # Session identity moved off the row's edge onto a swatch inside
+        # it, so it is sampled here rather than being read off a band
+        # this file otherwise proves is symmetric.
+        sw = meta.get("swatch")
+        rows[rid]["swatch_px"] = (
+            sample_pixel(page, sw["x"] + sw["w"] // 2, sw["y"] + sw["h"] // 2)[:3]
+            if sw else None)
     return {"theme": theme, "tokens": env["tokens"], "rows": rows}
 
 
@@ -355,8 +370,8 @@ def main() -> int:
     print("\nPASS: no sidebar row paints anything on its left edge it does not also "
           "paint on its right, every row carries --color-border on all sides, the "
           "current session is still distinguishable at both its border and its fill, "
-          "a pinned row is pixel-identical to a plain one, session identity survives "
-          "in the 1px ring, and the rail control was seen.")
+          "a pinned row is pixel-identical to a plain one, session identity "
+          "survives in the row's swatch, and the rail control was seen.")
     return 0
 
 

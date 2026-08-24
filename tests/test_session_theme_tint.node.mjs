@@ -4,45 +4,47 @@
 // sessions apart at a glance. Until now that only worked once you were
 // INSIDE a session - the sidebar list and the home screen rendered every
 // row identically, which is exactly where you are choosing which session
-// to enter. Themed rows carry a 1px ring in the theme's own
-// --color-accent, and sidebar rows additionally get a low-alpha wash of
-// it.
+// to enter.
 //
-// THERE USED TO BE A 3px INLINE-START RAIL TOO, on both surfaces, and it
-// is gone: "get rid of the thick left bar like on the homepage and clean
-// it like the homepage looks now". It was the bar actually on screen -
-// the green outline reported on one sidebar row was this rule with a
-// green --session-theme-accent, not any row state. Identity is not lost
-// with it: the ring is still that session's own colour on all four
-// edges. The rail's other job, separating rows in a dense list, moved to
-// the 1px --color-border every .session-sidebar-row now carries, which
-// is the answer the home screen already used.
+// WHERE THE CUE USED TO LIVE, AND WHY IT MOVED. It was an inset 1px ring
+// in the session's accent on the row's own box, plus a low-alpha wash of
+// the same accent on the sidebar row's background. Both of those are
+// channels SELECTION already owns: `[data-active="1"]` is an accent
+// background, an accent 1px border and a bold accent name. When a
+// session is pinned to the host theme - the ordinary case - the two
+// accents are the same colour, so a themed row that was NOT selected
+// drew an accent edge and read as the selected one. Measured live:
+// selection border rgba(215, 119, 87, 0.3) against a themed row's ring
+// rgba(215, 119, 87, 0.45). The same declaration is what produced the
+// green outline reported as "the wrong color".
+//
+// The cue is now a SWATCH: a 9px element rendered inside the row, on
+// both surfaces, emitted only when the session actually has a theme. The
+// row's box is left to mean one thing.
 //
 // THE THING THAT COULD GO WRONG, AND THE MEASUREMENT THAT GOVERNS IT.
-// The wash is the only cue that puts colour BEHIND text, so it is the
-// only one that can cost contrast. There are 23 themes, so 529 (host
-// theme, session theme) pairs, and a spot check on the two or three
-// themes anyone actually uses would prove nothing about the rest.
-//
-// Sweeping all 529, alpha-compositing the wash over each surface's real
-// background:
-//   - SIDEBAR row, name colour --color-fg: at alpha 0.10 no pair falls
-//     below the 4.5:1 body-text floor. At 0.14 three pairs do.
-//   - HOME row, name colour --color-accent over --color-accent-bg-soft:
-//     several themes already sit barely above the floor with no wash at
-//     all (jagermeister: 5.66:1). Alpha 0.10 costs 44 of the 529 pairs
-//     their 4.5:1, and even 0.03 costs 6. There is no safe alpha.
-// So the home row gets the ring - which is an edge, and sits behind
-// nothing - and no wash. That asymmetry is the finding, and the
-// sweep below is re-run on every test run rather than trusted from this
-// comment.
+// The swatch is an arbitrary theme's accent painted on an arbitrary
+// OTHER theme's row, so there is no pairing in which the fill alone is
+// guaranteed to be visible. There are 23 themes, so 529 pairs, and a
+// spot check on the two or three anyone actually uses would prove
+// nothing about the rest. Sweeping all 529 against the 3:1 non-text
+// floor: the fill alone fails 139 of them. The 1px hairline in
+// --color-fg-subtle is what covers those, and it is a FOREGROUND token,
+// so every one of the 23 themes sets it to something that clears 3:1
+// against its own page. Both halves of that are re-measured on every run
+// below rather than trusted from this comment.
 //
 // THE OTHER HALF: A SESSION WITH NO THEME MUST RENDER EXACTLY AS BEFORE.
 // Three outcomes, not two - no theme set, an id the registry does not
 // know, and a registry that has not finished loading are all "leave the
-// row alone", never a default colour. `attrs()` returns '' for all
-// three, the row carries no `data-session-theme`, and not one rule in
-// session-theme-tint.css can match it.
+// row alone", never a default colour. `attrs()` and `swatchHtml()` both
+// return '' for all three.
+//
+// WHAT THIS FILE CANNOT SEE. Every assertion here reads source text. A
+// swatch that is emitted and renders zero pixels would pass all of them,
+// which is the exact shape of three defects this repo has shipped
+// through green suites. scripts/verify_session_theme_carrier.py is the
+// pixel half, and it drives THIS module rather than a copy of it.
 //
 // Run with: node tests/test_session_theme_tint.node.mjs
 
@@ -97,16 +99,6 @@ function parseColor(text) {
     assert.ok(m, `unparseable colour: ${text}`);
     const p = m[1].split(',').map((x) => parseFloat(x));
     return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
-}
-
-/**
- * Composite one colour over an opaque background.
- * @param {number[]} c  Source colour with alpha.
- * @param {number[]} bg  Opaque backdrop.
- * @returns {number[]} The resulting opaque colour.
- */
-function over(c, bg) {
-    return [0, 1, 2].map((i) => c[i] * c[3] + bg[i] * (1 - c[3]));
 }
 
 /**
@@ -186,61 +178,29 @@ const tint = load(THEMES).SessionThemeTint;
 const tintCss = fs.readFileSync(path.join(ROOT, 'client', 'css', 'session-theme-tint.css'), 'utf8');
 
 // ---------------------------------------------------------------------
-// 1. THE CONTRAST SWEEP. 529 pairs, run for real.
+// 1. THE VISIBILITY SWEEP. 529 pairs, run for real.
 // ---------------------------------------------------------------------
 
+/** The 3:1 WCAG floor for a non-text graphical object. */
+const GRAPHIC_FLOOR = 3.0;
+
 /**
- * The three row surfaces a wash could sit on, for one host theme: the
- * plain sidebar row (transparent over the panel), the active sidebar row
- * (accent-bg over it), and the home row (accent-bg-soft over it), each
- * paired with the text colour that row's name actually uses.
+ * The theme's page colour, which is what a session row composites over
+ * on both surfaces.
  * @param {object} vars  One theme's cssVars.
- * @returns {Array<{tag: string, base: number[], text: number[]}>}
+ * @returns {number[]} An opaque colour.
  */
-function surfaces(vars) {
-    const bg = parseColor(vars['--color-bg']);
-    const fg = parseColor(vars['--color-fg']);
-    const accent = parseColor(vars['--color-accent']);
-    const activeBg = over(
-        parseColor(vars['--color-accent-bg'] || rootVar('--color-accent-bg')), bg);
-    const homeBg = over(
-        parseColor(vars['--color-accent-bg-soft'] || rootVar('--color-accent-bg-soft')), bg);
-    return [
-        { tag: 'sidebar', base: bg, text: fg },
-        { tag: 'sidebar-active', base: activeBg, text: fg },
-        { tag: 'home', base: homeBg, text: accent },
-    ];
+function pageBg(vars) {
+    return parseColor(vars['--color-bg']);
 }
 
 /**
- * Sweep every (host theme, session theme) pair at one alpha.
- * @param {number} alpha  Wash alpha.
- * @param {string[]} tags  Which surfaces the wash is applied to.
- * @returns {{broken: string[], worstKept: number}} Pairs that were above
- *   4.5:1 unwashed and fall below washed, and the lowest surviving ratio.
+ * The hairline colour a theme gives the swatch.
+ * @param {object} vars  One theme's cssVars.
+ * @returns {number[]} An opaque colour.
  */
-function sweep(alpha, tags) {
-    const broken = [];
-    let worstKept = Infinity;
-    for (const host of THEMES) {
-        for (const surface of surfaces(host.cssVars)) {
-            if (tags.indexOf(surface.tag) === -1) continue;
-            const before = contrast(surface.text, surface.base);
-            if (before < 4.5) continue;  // pre-existing, not ours to judge
-            for (const session of THEMES) {
-                const accent = parseColor(session.cssVars['--color-accent']);
-                const washed = over([accent[0], accent[1], accent[2], alpha], surface.base);
-                const after = contrast(surface.text, washed);
-                if (after < 4.5) {
-                    broken.push(`${host.id}/${session.id}/${surface.tag} `
-                        + `${before.toFixed(2)}->${after.toFixed(2)}`);
-                } else if (after < worstKept) {
-                    worstKept = after;
-                }
-            }
-        }
-    }
-    return { broken, worstKept };
+function hairline(vars) {
+    return parseColor(vars['--color-fg-subtle'] || rootVar('--color-fg-subtle'));
 }
 
 test('the sweep covers every theme pair, so it is not a spot check', () => {
@@ -249,66 +209,121 @@ test('the sweep covers every theme pair, so it is not a spot check', () => {
         for (const v of ['--color-bg', '--color-fg', '--color-accent']) {
             assert.ok(t.cssVars && t.cssVars[v], `${t.id} is missing ${v}`);
         }
+        assert.ok(pageBg(t.cssVars).every((v) => Number.isFinite(v)),
+            `${t.id} --color-bg did not resolve to a colour`);
+        assert.ok(hairline(t.cssVars).every((v) => Number.isFinite(v)),
+            `${t.id} has no usable --color-fg-subtle`);
     }
-    // The two overlay tints are optional in a manifest; every surface in
-    // the sweep must still resolve to a real colour.
-    for (const t of THEMES) {
-        for (const s of surfaces(t.cssVars)) {
-            assert.ok(s.base.every((v) => Number.isFinite(v)),
-                `${t.id} ${s.tag} did not resolve to a colour`);
+});
+
+test('the swatch FILL alone is not always visible, which is why it has a hairline', () => {
+    // If every pair cleared the floor on fill alone the hairline would be
+    // decoration and this whole rule would be unmotivated. It does not.
+    const dim = [];
+    for (const host of THEMES) {
+        const bg = pageBg(host.cssVars);
+        for (const session of THEMES) {
+            const fill = parseColor(session.cssVars['--color-accent']);
+            if (contrast(fill, bg) < GRAPHIC_FLOOR) {
+                dim.push(`${host.id}/${session.id}`);
+            }
         }
     }
+    assert.ok(dim.length > 0,
+        'no (host, session) pair renders a low-contrast swatch fill; if that is '
+        + 'now true the hairline needs re-justifying rather than silently keeping');
 });
 
-test('the sidebar wash costs no theme pair its 4.5:1', () => {
-    const { broken, worstKept } = sweep(tint.WASH_ALPHA, ['sidebar', 'sidebar-active']);
-    assert.deepEqual(broken, [],
-        'these pairs are legible unwashed and illegible washed');
-    assert.ok(worstKept >= 4.5, `worst surviving ratio ${worstKept.toFixed(2)}`);
-});
-
-test('the chosen alpha is the constraint, not a preference', () => {
-    // If a bigger alpha were also safe, the value would be arbitrary and
-    // this whole sweep would be decoration. 0.14 breaks three pairs.
-    const bigger = sweep(0.14, ['sidebar', 'sidebar-active']);
-    assert.ok(bigger.broken.length > 0,
-        'a larger wash must be demonstrably unsafe, or 0.10 is unmotivated');
-});
-
-test('no alpha is safe for the home row, which is why it has no wash', () => {
-    for (const alpha of [0.03, 0.10]) {
-        const { broken } = sweep(alpha, ['home']);
-        assert.ok(broken.length > 0,
-            `alpha ${alpha} looks safe on the home row; if that is now true the `
-            + 'no-wash decision needs revisiting rather than silently keeping');
+test('the hairline clears 3:1 in every theme, so the swatch is always locatable', () => {
+    const broken = [];
+    for (const host of THEMES) {
+        const ratio = contrast(hairline(host.cssVars), pageBg(host.cssVars));
+        if (ratio < GRAPHIC_FLOOR) {
+            broken.push(`${host.id} ${ratio.toFixed(2)}`);
+        }
     }
-    assert.doesNotMatch(
-        tintCss,
-        /\.running-session-row\[data-session-theme\][^{]*\{[^}]*background-image/,
-        'the home row must not carry the wash');
+    assert.deepEqual(broken, [],
+        'these themes draw the swatch hairline below the 3:1 non-text floor '
+        + 'against their own page, so a low-contrast accent there is an '
+        + 'invisible swatch and the cue silently disappears');
+});
+
+test('no (host, session) pair leaves BOTH the fill and the hairline under 3:1', () => {
+    const blind = [];
+    for (const host of THEMES) {
+        const bg = pageBg(host.cssVars);
+        const edge = contrast(hairline(host.cssVars), bg);
+        for (const session of THEMES) {
+            const fill = contrast(parseColor(session.cssVars['--color-accent']), bg);
+            if (fill < GRAPHIC_FLOOR && edge < GRAPHIC_FLOOR) {
+                blind.push(`${host.id}/${session.id}`);
+            }
+        }
+    }
+    assert.deepEqual(blind, [],
+        'these pairs render a swatch no one can see, in either layer');
 });
 
 // ---------------------------------------------------------------------
 // 2. What a themed row gets, and what an unthemed one does not.
 // ---------------------------------------------------------------------
 
-test('a themed row carries the theme id and its three colours', () => {
+test('a themed row carries the theme id and ONE colour, and nothing else', () => {
     const out = tint.attrs('dracula');
     assert.match(out, /data-session-theme="dracula"/);
     // dracula --color-accent is #bd93f9.
     assert.match(out, /--session-theme-accent: rgb\(189, 147, 249\)/);
-    assert.match(out, /--session-theme-wash: rgba\(189, 147, 249, 0\.1\)/);
-    assert.match(out, /--session-theme-ring: rgba\(189, 147, 249, 0\.45\)/);
+    // The wash and the ring are gone with the cue that used them. A
+    // leftover property here is a property some future rule can quietly
+    // start painting the row's box with again.
+    assert.doesNotMatch(out, /--session-theme-wash/);
+    assert.doesNotMatch(out, /--session-theme-ring/);
+});
+
+test('a themed row gets a swatch, and it says what it is in words', () => {
+    const html = tint.swatchHtml('dracula');
+    assert.match(html, /class="session-theme-swatch"/);
+    assert.match(html, /role="img"/);
+    // The whole point of the new carrier over the old ring: a name. The
+    // ring was colour-only and could not have carried one.
+    assert.match(html, /aria-label="session theme: Dracula"/);
+    assert.match(html, /title="session theme: Dracula"/);
+});
+
+test('the swatch takes its name from the manifest, and falls back to the id', () => {
+    const sandbox = load([{ id: 'nameless', cssVars: { '--color-accent': '#112233' } }]);
+    const html = sandbox.SessionThemeTint.swatchHtml('nameless');
+    assert.match(html, /aria-label="session theme: nameless"/,
+        'a manifest with no display name must still produce a named cue, not an '
+        + 'empty one');
+});
+
+test('a display name cannot break out of the attribute it is written into', () => {
+    const sandbox = load([{
+        id: 'evil',
+        name: 'a" onload="alert(1)',
+        cssVars: { '--color-accent': '#112233' },
+    }]);
+    const html = sandbox.SessionThemeTint.swatchHtml('evil');
+    // The literal text `onload=` survives - it is INSIDE a quoted
+    // attribute value and inert there. What must not survive is the
+    // quote that would close the attribute and start a new one.
+    assert.doesNotMatch(html, /onload="/,
+        'an unescaped quote would close aria-label and open a real handler');
+    assert.match(html, /&quot;/, 'the quote must be escaped, not dropped');
 });
 
 test('all three not-themed cases render exactly as today', () => {
-    assert.equal(tint.attrs(null), '', 'no theme set');
-    assert.equal(tint.attrs(undefined), '', 'field absent');
-    assert.equal(tint.attrs('no-such-theme'), '', 'id the registry does not know');
-    const noRegistry = load(null).SessionThemeTint;
-    assert.equal(noRegistry.attrs('dracula'), '',
-        'the registry loads asynchronously; an early paint must degrade to '
-        + 'the plain row, never to a default colour');
+    for (const fn of ['attrs', 'swatchHtml']) {
+        assert.equal(tint[fn](null), '', `${fn}: no theme set`);
+        assert.equal(tint[fn](undefined), '', `${fn}: field absent`);
+        assert.equal(tint[fn]('no-such-theme'), '',
+            `${fn}: id the registry does not know`);
+        const noRegistry = load(null).SessionThemeTint;
+        assert.equal(noRegistry[fn]('dracula'), '',
+            `${fn}: the registry loads asynchronously; an early paint must `
+            + 'degrade to the plain row, never to a default colour');
+    }
 });
 
 test('an unknown id is not cached, because the registry fills in later', () => {
@@ -320,92 +335,102 @@ test('an unknown id is not cached, because the registry fills in later', () => {
 });
 
 test('a theme id cannot break out of the attribute it is written into', () => {
-    const out = tint.attrs('dracula" onload="alert(1)');
-    assert.equal(out, '',
-        'the id is scrubbed to [A-Za-z0-9_-], and a scrubbed id that does not '
-        + 'match a manifest yields nothing at all');
+    for (const fn of ['attrs', 'swatchHtml']) {
+        assert.equal(tint[fn]('dracula" onload="alert(1)'), '',
+            `${fn}: the id is scrubbed to [A-Za-z0-9_-], and a scrubbed id that `
+            + 'does not match a manifest yields nothing at all');
+    }
 });
 
 // ---------------------------------------------------------------------
-// 3. The CSS. Two declarations here are load-bearing and both look like
-//    style choices.
+// 3. The CSS. What this file must NOT declare is now most of the point.
 // ---------------------------------------------------------------------
 
-test('the wash is a background-image, so hover and active survive it', () => {
-    assert.match(tintCss, /background-image:\s*linear-gradient\(/,
-        'a `background` shorthand would discard the row background-color '
-        + 'that carries hover and the active-row highlight');
-    assert.doesNotMatch(tintCss, /\n\s*background:\s/,
-        'no background shorthand anywhere in this file');
-});
-
-test('the ring is an inset shadow, not a border', () => {
-    assert.match(tintCss, /box-shadow:\s*inset 0 0 0 1px var\(--session-theme-ring\)/,
-        'a border here would replace the row own 1px --color-border rather '
-        + 'than compose with it, so the row would lose either its theme ring '
-        + 'or its neutral ring depending which stylesheet won');
-});
-
-test('no inline-start rail survives anywhere in this file', () => {
-    // THE RAIL IS GONE FROM BOTH SURFACES ("get rid of the thick left bar
-    // like on the homepage and clean it like the homepage looks now"). It
-    // was `inset 3px 0 0 var(--session-theme-accent)`, and it was the bar
-    // actually on screen - the green outline reported on one row was this
-    // rule with a green --session-theme-accent.
-    //
-    // Matching the SHAPE rather than that one declaration on purpose: an
-    // inset shadow with a non-zero X offset and a zero Y offset is a
-    // left-side bar whatever token it is written in, so this also catches
-    // a rail reintroduced in a different colour.
-    const rail = /inset\s+[1-9]\d*px\s+0\s+0/;
-    const live = tintCss.split('\n')
+/** The stylesheet with comment lines stripped, so prose about a
+ *  declaration is never mistaken for the declaration.
+ *  @returns {string} the live rules only. */
+function liveTintCss() {
+    return tintCss.split('\n')
         .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
         .join('\n');
-    assert.doesNotMatch(live, rail,
-        'an inset shadow offset along X and not Y is an inline-start rail');
+}
+
+test('nothing in this file selects a session ROW any more', () => {
+    const live = liveTintCss();
+    assert.doesNotMatch(live, /\.session-sidebar-row\[data-session-theme\]/,
+        'the sidebar row box carries selection; a rule that paints it by theme '
+        + 'is the collision this change removes');
+    assert.doesNotMatch(live, /\.running-session-row\[data-session-theme\]/,
+        'and the same for the home card, or the collision has only moved');
 });
 
-test('styles.css no longer cancels a rail that is not declared', () => {
-    // The home screen used to re-declare box-shadow as the ring alone,
-    // purely to remove the rail this file gave both surfaces. With the
-    // rail gone from the shared rule that override would be a byte-for-
-    // byte duplicate, and a rule that restates what it overrides is a
-    // second place to forget to change.
-    const styles = fs.readFileSync(
-        path.join(ROOT, 'client', 'css', 'styles.css'), 'utf8');
-    const live = styles.split('\n')
-        .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
-        .join('\n');
-    assert.doesNotMatch(
-        live,
-        /\.launchpad-container\s+\.running-session-row\[data-session-theme\]\s*\{/,
-        'the home-screen override exists only to cancel the rail; the rail '
-        + 'is gone, so there is one rule for both surfaces again');
+test('no edge treatment of any kind survives here', () => {
+    const live = liveTintCss();
+    assert.doesNotMatch(live, /box-shadow/,
+        'a ring and a rail are both edges, and an edge is the channel this '
+        + 'change is giving back to selection');
+    assert.doesNotMatch(live, /background-image/,
+        'the wash was a row BACKGROUND, which is selection is other channel');
 });
 
-test('the stylesheet loads last, which is what makes it win', () => {
+test('the swatch is the carrier, and it is locatable and theme-shaped', () => {
+    const live = liveTintCss();
+    assert.match(live, /\.session-theme-swatch\s*\{/,
+        'the cue has to be somewhere, or this was a deletion');
+    assert.match(live, /background-color:\s*var\(--session-theme-accent\)/,
+        'the fill is the SESSION theme colour, which is the whole fact');
+    assert.match(live, /border:\s*1px solid var\(--color-fg-subtle\)/,
+        'the hairline is what makes a low-contrast accent visible at all - see '
+        + 'the 529-pair sweep above, where the fill alone fails 139 pairs');
+    assert.match(live, /border-radius:\s*var\(--radius-sm\)/,
+        'the theme own radius token, so terminal / gameboy / legacy_apple get a '
+        + 'square chip rather than a rounded one fighting their palette');
+    assert.match(live, /flex-shrink:\s*0/,
+        'the row is a flex line with an ellipsizing name; a shrinkable swatch '
+        + 'would be squeezed to nothing by a long session name');
+});
+
+test('the stylesheet and the module are both still loaded, in a usable order', () => {
     const html = fs.readFileSync(path.join(ROOT, 'client', 'index.html'), 'utf8');
-    const tintAt = html.indexOf('session-theme-tint.css');
-    const sidebarAt = html.indexOf('session-sidebar.css');
-    const stylesAt = html.indexOf('css/styles.css');
-    assert.ok(tintAt > -1, 'session-theme-tint.css is not linked at all');
-    assert.ok(tintAt > sidebarAt && tintAt > stylesAt,
-        'it competes at equal specificity with row backgrounds in both, so '
-        + 'source order is the whole mechanism');
+    assert.ok(html.indexOf('session-theme-tint.css') > -1,
+        'session-theme-tint.css is not linked at all');
     assert.ok(html.indexOf('js/session-theme-tint.js') < html.indexOf('js/launchpad.js'),
         'launchpad.js calls window.SessionThemeTint');
+    assert.ok(html.indexOf('js/session-theme-tint.js')
+        < html.indexOf('js/session-sidebar-rows.js'),
+        'session-sidebar-rows.js calls window.SessionThemeTint');
+});
+
+test('the focus ring is no longer overridden away on a themed row', () => {
+    // A PRE-EXISTING BUG THAT THIS CHANGE ENDS AS A SIDE EFFECT, recorded
+    // so it cannot silently come back. `.session-sidebar-row:focus-visible`
+    // declares its ring as a box-shadow (session-sidebar-density.css).
+    // session-theme-tint.css declared box-shadow on the row at EQUAL
+    // specificity and loaded later, so a session-themed row had no
+    // keyboard focus ring at all. Nothing here declares box-shadow now.
+    const density = fs.readFileSync(
+        path.join(ROOT, 'client', 'css', 'session-sidebar-density.css'), 'utf8');
+    assert.match(density, /:focus-visible\s*\{[^}]*box-shadow/,
+        'the focus ring is still a box-shadow, so this file must keep away from '
+        + 'that property on the row');
+    assert.doesNotMatch(liveTintCss(), /box-shadow/);
 });
 
 // ---------------------------------------------------------------------
 // 4. Both row templates use it, and the sidebar repaints on a re-theme.
 // ---------------------------------------------------------------------
 
-test('both surfaces splice the attributes into their row', () => {
+test('both surfaces splice BOTH halves into their row', () => {
     for (const file of ['session-sidebar-rows.js', 'launchpad.js']) {
         const src = fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8');
         assert.match(src, /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.attrs\(/,
             `${file} must ask for the attributes and tolerate the module being absent`);
-        assert.match(src, /\$\{themeAttrs\}/, `${file} must splice them into the row`);
+        assert.match(src,
+            /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.swatchHtml\(/,
+            `${file} must ask for the swatch too - the attributes alone now paint `
+            + 'nothing, so a row with only those is a row with no cue at all');
+        assert.match(src, /\$\{themeAttrs\}/, `${file} must splice the attributes in`);
+        assert.match(src, /themeSwatch/, `${file} must splice the swatch in`);
     }
 });
 

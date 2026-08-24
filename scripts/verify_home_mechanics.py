@@ -182,10 +182,18 @@ def measure(page, rep: Report) -> None:
     rep.check("inset" in pi["boxShadow"],
               "ITEM 37: the accent rail survives, as an inset shadow",
               pi["boxShadow"])
+    # This asked for ONE inset layer rather than two, back when a themed
+    # home row carried a 3px rail plus a 1px ring. It asks for NONE now.
+    # The row's border and background are what says "this is the session
+    # you are in"; a session pinned to the host theme painted the same
+    # accent on a row that was not selected and read as the selected one.
+    # Session identity moved to a swatch inside the row - see
+    # scripts/verify_session_theme_carrier.py, which measures both
+    # directions of that in pixels.
     tint = g["tintProbePaint"]
     inset_layers = [seg for seg in tint["boxShadow"].split("), ") if "inset" in seg]
-    rep.check(len(inset_layers) == 1,
-              "ITEM 37: a themed home session row has ONE inset edge layer, not two",
+    rep.check(len(inset_layers) == 0,
+              "ITEM 37: a themed home session row paints NO inset edge layer",
               f"{len(inset_layers)} inset layer(s): {tint['boxShadow']}")
 
     # ---- ITEM 41: an 80 percent fill, measured, on this theme.

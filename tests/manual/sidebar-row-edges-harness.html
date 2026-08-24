@@ -52,6 +52,10 @@
 <link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
 <link rel="stylesheet" href="../../client/css/session-sidebar-groups.css" />
 <link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+<!-- The SHIPPED emitter. Session identity is no longer an edge fact - it
+     is a swatch inside the row - so this page has to render the real one
+     for check_identity_survives to have anything to measure. -->
+<script src="../../client/js/session-theme-tint.js"></script>
 <style>
   /* The harness page carries no colour opinion of its own: the backdrop
      is painted from the active theme's --color-bg by __applyTheme, so a
@@ -181,12 +185,19 @@ window.__row = function (id) {
     if (!el) return null;
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
+    var sw = el.querySelector('.session-theme-swatch');
     return {
         id: id,
         rect: {
             x: Math.round(r.left), y: Math.round(r.top),
             w: Math.round(r.width), h: Math.round(r.height),
         },
+        swatch: sw ? {
+            x: Math.round(sw.getBoundingClientRect().left),
+            y: Math.round(sw.getBoundingClientRect().top),
+            w: Math.round(sw.getBoundingClientRect().width),
+            h: Math.round(sw.getBoundingClientRect().height),
+        } : null,
         boxShadow: cs.boxShadow,
         borderLeftColor: cs.borderLeftColor,
         borderLeftWidth: cs.borderLeftWidth,
@@ -210,8 +221,41 @@ window.__edges = function () {
     };
 };
 
+/**
+ * Give every `data-session-theme` row the swatch the real row builders
+ * emit, using the shipped module rather than a hardcoded copy of what it
+ * is believed to produce.
+ *
+ * The inline `--session-theme-*` properties above stay hardcoded on
+ * purpose - they are the geometry under test - but the swatch is the
+ * thing check_identity_survives now samples, so a builder that stopped
+ * emitting one must be able to fail this page.
+ *
+ * @returns {void}
+ */
+window.__paintSwatches = function () {
+    window.Themes = {
+        listAll: function () {
+            return [{
+                id: 'green_crt',
+                name: 'Green CRT',
+                cssVars: { '--color-accent': '#33ff66' },
+            }];
+        },
+    };
+    var rows = document.querySelectorAll('[data-session-theme]');
+    for (var i = 0; i < rows.length; i++) {
+        var old = rows[i].querySelector('.session-theme-swatch');
+        if (old) old.parentNode.removeChild(old);
+        rows[i].querySelector('.session-sidebar-row-main')
+            .insertAdjacentHTML('beforeend',
+                window.SessionThemeTint.swatchHtml('green_crt'));
+    }
+};
+
 (async () => {
     await window.__applyTheme('terminal');
+    window.__paintSwatches();
     window.__edgesReady = true;
 })();
 </script>
