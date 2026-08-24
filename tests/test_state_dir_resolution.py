@@ -21,8 +21,10 @@ real ~/Library/Application Support/CloudeCode.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -104,11 +106,63 @@ def test_get_state_dir_default_when_unset(tmp_path, monkeypatch):
     expected = tmp_path / "Library" / "Application Support" / "CloudeCode"
     assert resolved == expected
     assert resolved.is_dir()
-    # Never /tmp, never tempfile.gettempdir() - this is the "never a
-    # silent temp-dir fallback" guarantee stated in get_state_dir()'s
-    # docstring, checked directly rather than just trusting the code.
-    assert str(resolved) != tempfile.gettempdir()
-    assert not str(resolved).startswith(tempfile.gettempdir())
+    # What is appended to home must be exactly the macOS-native suffix,
+    # measured RELATIVE to the patched home.
+    #
+    # This used to read ``assert not str(resolved).startswith(
+    # tempfile.gettempdir())``, which measured nothing about the code and
+    # passed on macOS only by accident. ``tmp_path`` IS under the system
+    # temp root on every platform - this test deliberately puts the fake
+    # home there - so an absolute prefix test can only ever be asking
+    # whether the FIXTURE is in a temp dir. On Linux both sides are
+    # "/tmp" and it failed; on macOS pytest hands back a realpath'd
+    # "/private/var/folders/..." while tempfile.gettempdir() returns
+    # "/var/folders/..." (no /private), so the prefix never matched and
+    # it passed. Measured 2026-08-24. The real guarantee is exercised by
+    # test_get_state_dir_default_is_never_under_the_system_temp_dir
+    # below, which patches home to a path that is genuinely NOT in temp.
+    assert resolved.relative_to(tmp_path) == Path(
+        "Library"
+    ) / "Application Support" / "CloudeCode"
+
+
+def test_get_state_dir_default_is_never_under_the_system_temp_dir(monkeypatch):
+    """The "never a silent temp-dir fallback" guarantee from
+    get_state_dir()'s docstring, measured for real.
+
+    Description: patches Path.home() to a directory that is genuinely
+      OUTSIDE the system temp root (created under the checkout, which
+      build/ already gitignores), so "the resolved path is not under
+      tempfile.gettempdir()" is a statement about the resolver rather
+      than about where pytest happens to put tmp_path.
+    Inputs: monkeypatch (pytest fixture).
+    Output: None.
+    """
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    base = ROOT.resolve()
+    if base == temp_root or temp_root in base.parents:
+        pytest.skip(
+            f"CANNOT DETERMINE: this checkout ({base}) is itself under the "
+            f"system temp root ({temp_root}), so no home rooted in it can "
+            "distinguish 'resolved outside temp' from 'resolved inside temp'"
+        )
+
+    fake_home = base / "build" / f"state-dir-test-home-{uuid.uuid4().hex}"
+    fake_home.mkdir(parents=True)
+    try:
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        assert settings.state_dir_override is None
+
+        resolved = settings.get_state_dir().resolve()
+
+        assert resolved == (
+            fake_home / "Library" / "Application Support" / "CloudeCode"
+        ).resolve()
+        assert resolved.is_dir()
+        assert resolved != temp_root
+        assert temp_root not in resolved.parents
+    finally:
+        shutil.rmtree(fake_home, ignore_errors=True)
 
 
 def test_get_state_dir_raises_named_error_when_uncreatable(tmp_path, monkeypatch):

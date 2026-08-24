@@ -17,12 +17,106 @@ repository except the release workflow, and that writes a draft.
 
 ## tests
 
-Two independent jobs.
+Three jobs: **python** as a two-platform matrix, **skip audit** over its
+results, and **javascript**.
 
-**python** (ubuntu, python 3.13)
+### Why the python job runs on macOS AND Linux
 
-1. Installs `tmux` via apt. `tests/test_session_backend.py` drives a real tmux
-   server, so those tests fail rather than skip without the binary.
+Updated 2026-08-24. It used to be ubuntu-only, and that was reporting a
+verdict it had never measured.
+
+CloudeCode ships as a macOS menu bar app AND as a Linux container
+(`Dockerfile`, `docker-compose.yml`). Both are real deployment targets:
+
+- **Linux-only CI can never execute** `~/Library/Application Support`,
+  `launchctl`, `security(1)`, LaunchAgents or `.icns` handling. Every macOS
+  behaviour would have to skip, and a test skipped on the only platform CI
+  runs is furniture: it cannot go red, so it is not a measurement.
+- **macOS-only CI hides Linux portability defects.** Measured, not
+  hypothetical: `restore_backup()` in
+  `scripts/upgrade_lib/upgrade_rollback_common.sh` selected its manifest rows
+  with a backslash-t inside a POSIX basic regular expression. BSD grep (macOS)
+  reads that as a tab; GNU grep 3.11 reads it as a literal `t`. On Linux the
+  branch never fired, so a restore restored the install files, restored NONE
+  of `session_metadata.json` / `pinned_themes.json` / `unread_state.json` /
+  `refresh_tokens.db`, and still printed a success count. Only a Linux leg
+  finds that class.
+
+The repository is public, so Actions minutes are free on every runner type;
+the usual cost objection to `macos-latest` does not apply here. What the
+split still gives up: neither leg exercises a REAL signed .app bundle, a real
+LaunchAgent load, or a real Keychain, because a GitHub macOS runner has no
+signing identity and no logged-in GUI session. Those remain untested by CI
+and are only covered by hand on the mini.
+
+### The tag the continuity tests need
+
+`actions/checkout` clones at depth 1 with no tags.
+`tests/test_session_meta_continuity.py` compiles `v0.8.1`'s OWN
+`Settings.get_session_metadata_path` out of the tag with
+`git show v0.8.1:src/config.py`, so a tagless clone leaves that whole
+comparison unmeasurable.
+
+`fetch-depth: 0` would fix it by downloading the entire history. Fetching the
+single tag at depth 1 is enough and much cheaper: measured 2026-08-24 against
+a `--depth=1` clone of this repo, `git fetch --depth=1 origin tag v0.8.1` took
+0.97s and left `.git` at 35M. A shallow tag fetch still carries that commit's
+complete tree, which is all `git show <tag>:<path>` reads.
+
+The workflow config is only half the fix. The test itself now has three
+outcomes rather than two: it SKIPS with a named reason plus the exact fetch
+command when the tag is absent from the clone (a shallow clone is a real
+environment, not a repository fault), and FAILS when the tag is present but
+its `get_session_metadata_path` cannot be read or parsed. The workflow step
+then `git rev-parse`s the tag and fails if it is missing, so that skip can
+never quietly become CI's normal state. Neither half is sufficient alone:
+config-only breaks again in any shallow clone, test-only lets CI go green
+without ever running the comparison.
+
+### skip audit
+
+A suite that passes while quietly skipping the tests that would have failed
+is the false-green pattern this project keeps paying for. So:
+
+1. Every python job runs pytest with `--junitxml` and `-rs`, then prints its
+   own skip count and every skipped test id with its reason.
+2. Each job uploads its skip list as an artifact.
+3. The `skip audit` job intersects them and FAILS the build if any test was
+   skipped on BOTH platforms, i.e. was never measured anywhere.
+
+`scripts/ci/skip-audit.py` is that tool. It refuses to treat a missing or
+unparseable junit report as "no skips" - that is a broken measurement, not an
+empty one - and it refuses to intersect fewer lists than there are platforms,
+because an intersection over one list passes trivially.
+
+The rule earned its keep on its first run (32737804938): it caught
+`tests/test_setup_wizard_renders.py`, the only suite that measures PIXELS
+rather than DOM text, skipping on both platforms because playwright had never
+been installed in CI, and
+`tests/test_dmg_artwork.py::test_the_generator_runs_end_to_end`, skipping on
+both because `rsvg-convert` was absent. Both now run.
+
+### Measured baseline
+
+Run 32738204216, 2026-08-24, commit `e16cb17`:
+
+| Leg | Result |
+|---|---|
+| python tests (ubuntu-latest) | 2415 passed, 1 skipped |
+| python tests (macos-latest) | 2416 passed, 0 skipped |
+
+The one Linux skip is `test_dmg_artwork.py::test_the_generator_runs_end_to_end`,
+which is macOS-only by construction: it calls `tiffutil` to prove the dmg
+background carries both a 1x and a 2x representation, and `tiffutil` does not
+exist on Linux. `librsvg` is therefore installed on the macOS runner only.
+Installing `rsvg-convert` on Linux too would move the failure, not fix it.
+
+**python** (ubuntu-latest and macos-latest, python 3.13)
+
+1. Installs `tmux` (apt on Linux, brew on macOS; macOS already ships zsh, and
+   the macOS leg also installs `librsvg` - see above).
+   `tests/test_session_backend.py` drives a real tmux server, so those tests
+   fail rather than skip without the binary.
 2. Runs `scripts/ci/assert-tmux-defaults.sh`. `src/core/tmux_backend.py`
    addresses panes as the literal `<session>:0.0`, which requires tmux's
    default `base-index 0` and `pane-base-index 0`. A developer whose dotfiles
@@ -47,7 +141,13 @@ Two independent jobs.
    `FileNotFoundError` without it, and `config.json` is gitignored. This single
    step is what turns the six `test_deep_link_routing.py` errors and the four
    `test_session_rejoin_scrollback.py` failures green.
-5. Runs `python3 -m pytest -q`.
+5. Installs `playwright` and its chromium. `tests/test_setup_wizard_renders.py`
+   is the only suite that asserts on painted pixels rather than DOM text, and
+   it `importorskip`s playwright. Playwright is deliberately NOT in
+   `requirements.txt`: it is a test-time browser driver, not a runtime
+   dependency of the server.
+6. Runs `python3 -m pytest -q -rs --junitxml=...`, then reports and uploads
+   this platform's skip list.
 
 Python 3.13 rather than 3.14: the suite gives identical results on both, and
 every pinned wheel in `requirements.txt` has a prebuilt 3.13 artifact.
@@ -199,11 +299,18 @@ on it.
 ```
 cp config.example.json config.json
 python3 -m pip install --requirement requirements.txt
-python3 -m pytest -q
+python3 -m pip install playwright && python3 -m playwright install chromium
+python3 -m pytest -q -rs
 
 scripts/ci/check-js-syntax.sh
-node tests/test_deeplink_resolver.node.mjs
+for suite in tests/*.node.mjs; do node "$suite" || echo "FAIL $suite"; done
 
 scripts/ci/assert-tmux-defaults.sh
 gitleaks dir . --config .gitleaks.toml --redact --no-banner
 ```
+
+`-rs` prints the reason for every skip. Without playwright installed,
+`tests/test_setup_wizard_renders.py` skips locally and you are not measuring
+what CI measures. Note also that a local run is NOT a substitute for CI here:
+the whole class of bug this matrix exists to catch is one where local and CI
+disagree.

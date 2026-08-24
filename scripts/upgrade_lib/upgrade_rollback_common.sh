@@ -621,7 +621,18 @@ restore_backup() {
         restored=$((restored + 1))
     done < "${backup_dir}/.manifest"
 
-    if grep -q '^BACKED_UP\tstate\t' "${backup_dir}/.manifest"; then
+    # NOT `grep -q '^BACKED_UP\tstate\t'`. In a POSIX basic regular
+    # expression `\t` is undefined: BSD grep (macOS) happens to treat it as a
+    # tab, GNU grep (every Linux install, and CI) reads it as a literal `t`
+    # and never matches. Measured 2026-08-24: BSD grep 2.6.0-FreeBSD MATCH,
+    # GNU grep 3.11 NOMATCH. The consequence was silent and total - on Linux
+    # this branch was skipped, so restore_backup() restored the install files,
+    # restored NONE of the state files (session_metadata.json,
+    # pinned_themes.json, unread_state.json, refresh_tokens.db), and still
+    # printed a success count. awk with a real tab field separator is
+    # unambiguous on both.
+    if awk -F'\t' '$1 == "BACKED_UP" && $2 == "state" { found = 1 }
+                   END { exit found ? 0 : 1 }' "${backup_dir}/.manifest"; then
         local log_dir
         log_dir="$(resolve_state_dir "${install_dir}")"
         if [ -z "${log_dir}" ]; then
