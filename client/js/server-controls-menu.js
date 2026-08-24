@@ -6,14 +6,17 @@
  * lives on the home bar rather than beside the two terminal FABs: the
  * session editor configures the session you are looking at, the tools menu
  * moves content across the terminal's boundary, and neither of those means
- * anything on the home screen. Restarting the web server means the same
- * thing everywhere, and the home screen is where you are when you want it.
+ * anything on the home screen.
  *
- * TWO ROWS. "restart server" used to be a full-width button in a "server
- * management" section of the launchpad body, which is a lot of vertical
- * real estate for a control pressed roughly never. "server status" was
- * added second, and it cost exactly what this file's design promised: one
- * entry in ENTRY_IDS, one icon, one row in buildItems(), and nothing
+ * ONE ROW, and it used to be two. "restart server" was withdrawn together
+ * with the endpoint behind it: POST /api/v1/server/reset spawned a reset.sh
+ * that the packaged app has never shipped, so the row returned a 500 on every
+ * packaged install. It was removed rather than shipped because restarting a
+ * process belongs to whatever SUPERVISES it, and this server never supervises
+ * itself - the full argument, and where each install shape's real restart
+ * lives, is at the removal site in src/api/routes.py. Withdrawing it cost
+ * exactly what this file's design promised, in reverse: one entry in
+ * ENTRY_IDS, one icon, one row in buildItems(), and nothing
  * else. Keep it that way - the rendering, the fetching and the one
  * destructive control all live in server-status-panel.js, not here.
  *
@@ -40,8 +43,7 @@ console.log('[ServerControlsMenu Module] Loading...');
 
     /** Stable ids for the menu rows, in declaration order. Read by tests. */
     var ENTRY_IDS = [
-        'serverStatusRow',
-        'serverRestartRow'
+        'serverStatusRow'
     ];
 
     /**
@@ -51,20 +53,13 @@ console.log('[ServerControlsMenu Module] Loading...');
      * attribute beats a stylesheet rule that targets the `svg`, so the
      * value has to be right in the markup).
      *
-     * `restart` is the arrow that used to sit on the "reset server"
-     * button, carried over unchanged so the control is still
-     * recognisable after moving surfaces.
-     *
      * @type {Object<string, string>}
      */
     var ICONS = {
         gauge:
             '<path d="M2.5 12A5.5 5.5 0 0 1 8 3a5.5 5.5 0 0 1 5.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
             '<path d="M8 8.5L10.75 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M8 12.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-        restart:
-            '<path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+            '<path d="M8 12.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
     };
 
     /**
@@ -86,16 +81,6 @@ console.log('[ServerControlsMenu Module] Loading...');
     });
 
     /**
-     * Restart the web server. Delegates to the launchpad, which owns the
-     * confirmation modal, the API call and the reload - the behaviour is
-     * untouched by this menu, only the surface moved.
-     *
-     * @param {Function} notify - FabMenu.notify, the visible feedback
-     *   channel. Used for the one case the launchpad cannot report,
-     *   namely the launchpad not being loaded at all.
-     * @returns {void}
-     */
-    /**
      * Open the server-status panel. The panel owns the fetch, the render
      * and its one destructive control; this row only opens it.
      *
@@ -111,17 +96,6 @@ console.log('[ServerControlsMenu Module] Loading...');
         }
         if (typeof notify === 'function') {
             notify('server status unavailable right now', 'error');
-        }
-    }
-
-    function restartServer(notify) {
-        var lp = window.Launchpad;
-        if (lp && typeof lp.restartServer === 'function') {
-            lp.restartServer();
-            return;
-        }
-        if (typeof notify === 'function') {
-            notify('server controls unavailable right now', 'error');
         }
     }
 
@@ -142,17 +116,15 @@ console.log('[ServerControlsMenu Module] Loading...');
             'server status, sessions and host health');
         statusRow.setAttribute('title',
             'server status, sessions and host health');
-        var restartRow = c.item(ENTRY_IDS[1], buildIcon('restart'),
-            'restart server', restartServer);
-        // Disruptive-adjacent: the web connection drops for a few
-        // seconds. Not danger-styled, because nothing is destroyed - the
-        // tmux sessions keep running and re-attach. The confirmation
-        // modal says exactly that; see Launchpad.restartServer().
-        restartRow.setAttribute('aria-label',
-            'restart server, sessions keep running');
-        restartRow.setAttribute('title',
-            'restart server, sessions keep running');
-        return [statusRow, restartRow];
+        // THERE IS NO "restart server" ROW ANY MORE. It called
+        // POST /api/v1/server/reset, which spawned reset.sh from the
+        // server's root - a file that has never shipped in the packaged
+        // app, so the row 500'd on every packaged install. Restarting the
+        // process belongs to whatever supervises it, never to the process
+        // itself; the argument and each install shape's real restart are
+        // recorded at the removal site in src/api/routes.py. Do not
+        // re-add a row here without a supervisor-owned action behind it.
+        return [statusRow];
     }
 
     /**

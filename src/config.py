@@ -474,6 +474,14 @@ class Settings(BaseSettings):
 
     _auth_config_cache: Optional[AuthConfig] = None
 
+    # One decision per name-keyed state file, made ONCE and remembered.
+    # See _resolve_state_file() for the full contract and for why a
+    # per-call re-derivation was a bug rather than a style choice.
+    # Keyed by (filename, state_dir_override, log_directory) so that
+    # repointing either configured directory legitimately asks a new
+    # question, while anything HAPPENING TO THE FILES does not.
+    _state_file_pins: Optional[dict] = None
+
     @property
     def allowed_origins(self) -> List[str]:
         """Compute the CORS allowed-origins list.
@@ -602,51 +610,112 @@ class Settings(BaseSettings):
         """
         return self.get_state_dir()
 
+    def _state_file_pin(self, filename: str) -> tuple:
+        """Decide ONCE where one name-keyed state file lives, then keep it.
+
+        Description: the single authority decision behind
+          ``_resolve_state_file()`` and ``get_state_file_location()``.
+          Everything either of those returns comes from here, so no call
+          site ever re-derives it - see ``_resolve_state_file``'s
+          docstring for why re-deriving was the bug.
+        Inputs: filename (str) - bare filename, e.g. "pinned_themes.json".
+        Output: tuple[Path, str] - the resolved path and the location it
+          belongs to, one of ``"state_dir"`` or ``"log_directory"``.
+        """
+        state_key = self.state_dir_override or ""
+        log_key = self.log_directory or ""
+        key = (filename, state_key, log_key)
+
+        if self._state_file_pins is None:
+            self._state_file_pins = {}
+        pinned = self._state_file_pins.get(key)
+        if pinned is not None:
+            return pinned
+
+        new_path = self.get_state_dir() / filename
+        decision = (new_path, "state_dir")
+        if log_key:
+            old_path = Path(log_key).expanduser() / filename
+            new_exists = new_path.exists()
+            old_exists = old_path.exists()
+            if new_exists and old_exists:
+                import structlog
+                structlog.get_logger().warning(
+                    "state_file_present_in_both_locations",
+                    filename=filename,
+                    using=str(new_path),
+                    old_path_retained=str(old_path),
+                )
+            elif old_exists:
+                decision = (old_path, "log_directory")
+
+        self._state_file_pins[key] = decision
+        return decision
+
+    def get_state_file_location(self, filename: str) -> str:
+        """Which of the two locations is AUTHORITATIVE for ``filename``.
+
+        Description: lets a caller ask which directory this install is
+          reading and writing a state file in, without re-running the
+          precedence rules itself. A resolution recomputed independently
+          at several call sites is how this file's own relocation bug
+          happened; there is one decision and this publishes it.
+        Inputs: filename (str) - bare filename, e.g. "session_metadata.json".
+        Output: str - ``"state_dir"`` (``get_state_dir()``) or
+          ``"log_directory"`` (the pre-feat/state-directory location).
+        Example: settings.get_state_file_location("session_metadata.json")
+        """
+        return self._state_file_pin(filename)[1]
+
     def _resolve_state_file(self, filename: str) -> Path:
         """Resolve one name-keyed JSON state file, old-location fallback.
 
-        Description: implements the migration contract for the three
-          JSON files that predate ``get_state_dir()`` -
-          session_metadata.json, pinned_themes.json, unread_state.json.
-          Three-outcome precedence:
+        Description: implements the migration contract for the JSON files
+          that predate ``get_state_dir()`` - session_metadata.json,
+          pinned_themes.json, unread_state.json - plus refresh_tokens.db.
+
+          The decision is made ONCE per process, on the FIRST resolution
+          of a given filename, and then STICKS. Precedence on that first
+          resolution:
 
             1. The file exists in BOTH the new state dir and the old
                ``log_directory`` location - ambiguous. Logged as a
-               warning naming both paths; the NEW path is preferred and
-               returned; the OLD file is left on disk, NEVER deleted by
-               this method.
+               warning naming both paths; the NEW path wins and the OLD
+               file is left on disk, NEVER deleted by this method. The
+               new path wins because it is the one this version writes
+               to: preferring the old copy would leave the app reading a
+               file it is not updating, which is a guaranteed divergence
+               rather than a possible one.
             2. The file exists only in the new location - use it.
-            3. The file exists only in the old location (``log_directory``
-               is set and the file is there) - use it, so an existing
-               pre-feat/state-directory install keeps working without a
-               manual migration step.
-            4. The file exists in neither - return the new-location path
-               (where a caller creating the file for the first time will
-               write it).
+            3. The file exists only in the old location - use it, so an
+               install that predates feat/state-directory keeps working
+               with no manual migration step.
+            4. The file exists in neither - use the new-location path,
+               which is where a caller creating it will write.
+
+          WHY THE PIN. This used to re-derive from disk on EVERY call,
+          which made the answer a function of whatever had just happened
+          to the files. ``SessionManager.detach_session`` unlinks the
+          resolved path and then saves again; the save re-resolved, the
+          old location no longer existed, and the file silently MOVED to
+          the state directory. Nothing copied it back, and a user who
+          then downgraded found no session metadata at all - the last
+          session's id, working directory, agent type, pinned theme and
+          the whole ``owned_tmux_sessions`` set, gone.
+          ``_clear_stale_metadata`` had the same shape. Pinning fixes
+          every such call site at once instead of patching the two that
+          were noticed: an install that started at ``log_directory``
+          keeps writing there, one that started in the state dir stays
+          there, and no ordinary operation relocates anything.
+
+          The pin is keyed on the CONFIGURED directories, so repointing
+          ``CLOUDE_STATE_DIR`` or ``LOG_DIRECTORY`` re-asks the question
+          (a different configuration is a different question) while a
+          file appearing or disappearing does not.
         Inputs: filename (str) - bare filename, e.g. "pinned_themes.json".
         Output: Path - the file path callers should read from / write to.
         """
-        new_path = self.get_state_dir() / filename
-        old_dir = self.log_directory
-        if not old_dir:
-            return new_path
-        old_path = Path(old_dir).expanduser() / filename
-        new_exists = new_path.exists()
-        old_exists = old_path.exists()
-        if new_exists and old_exists:
-            import structlog
-            structlog.get_logger().warning(
-                "state_file_present_in_both_locations",
-                filename=filename,
-                using=str(new_path),
-                old_path_retained=str(old_path),
-            )
-            return new_path
-        if new_exists:
-            return new_path
-        if old_exists:
-            return old_path
-        return new_path
+        return self._state_file_pin(filename)[0]
 
     def get_refresh_tokens_path(self) -> Path:
         """Get the path for the refresh-token revocation database.

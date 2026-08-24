@@ -345,11 +345,38 @@ confirm_or_die() {
 
 # Description: append one manifest line. Internal helper, not called
 #   directly from upgrade.sh/rollback.sh.
+#
+#   The fourth field is the ORIGIN DIRECTORY - the directory the file was
+#   actually copied FROM. It exists because restore_backup() used to
+#   ignore where take_backup() found a file and place every state file at
+#   resolve_state_dir(), so rolling back an install whose
+#   session_metadata.json still lives at the old LOG_DIRECTORY MOVED that
+#   file into the state directory. The older code being restored
+#   alongside it reads only LOG_DIRECTORY, so the one tool a user runs to
+#   go back was itself the step that made going back fail. A restore has
+#   to put a file where it came from, and that is a fact take_backup
+#   measured, not one restore_backup can re-derive: by restore time the
+#   original file has usually been deleted, which is exactly the state
+#   that makes any re-derivation answer the wrong location.
+#
+#   Field is APPENDED, so a manifest written by an older take_backup
+#   parses unchanged and simply carries an empty origin - restore_backup
+#   treats that as COULD NOT DETERMINE and says so, rather than silently
+#   guessing.
 # Inputs: $1 - backup_dir. $2 - outcome (BACKED_UP|NOT_PRESENT|MISSING).
-#   $3 - category (install|state). $4 - filename.
+#   $3 - category (install|state). $4 - filename. $5 - origin directory
+#   (optional; meaningful only for BACKED_UP).
 # Output: none (appends to backup_dir/.manifest).
 _manifest_record() {
-    printf '%s\t%s\t%s\n' "$2" "$3" "$4" >> "$1/.manifest"
+    if [ -n "${5:-}" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" >> "$1/.manifest"
+    else
+        # Three fields, not four-with-an-empty-one. A NOT_PRESENT/MISSING
+        # row has no origin by definition, and a trailing tab would make
+        # every existing anchored matcher of this format silently stop
+        # matching.
+        printf '%s\t%s\t%s\n' "$2" "$3" "$4" >> "$1/.manifest"
+    fi
 }
 
 # --- SQLite-safe copying ------------------------------------------------------
@@ -516,7 +543,7 @@ take_backup() {
         local f
         for f in "${INSTALL_REQUIRED_PAIR[@]}"; do
             _copy_backup_file "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
-            _manifest_record "${backup_dir}" BACKED_UP install "${f}"
+            _manifest_record "${backup_dir}" BACKED_UP install "${f}" "${install_dir}"
         done
     else
         log_unknown "${install_dir} has neither .env nor config.json - nothing has been configured yet (fresh checkout); backing up nothing, which is correct, not a failure"
@@ -526,7 +553,7 @@ take_backup() {
     for f in "${INSTALL_OPTIONAL_FILES[@]}"; do
         if [ -f "${install_dir}/${f}" ]; then
             _copy_backup_file "${install_dir}/${f}" "${backup_dir}/install/${f}" || die "failed to back up ${f}"
-            _manifest_record "${backup_dir}" BACKED_UP install "${f}"
+            _manifest_record "${backup_dir}" BACKED_UP install "${f}" "${install_dir}"
         else
             _manifest_record "${backup_dir}" NOT_PRESENT install "${f}"
         fi
@@ -553,7 +580,7 @@ take_backup() {
             src="$(resolve_state_file "${install_dir}" "${f}")"
             if [ -f "${src}" ]; then
                 _copy_backup_file "${src}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${src}"
-                _manifest_record "${backup_dir}" BACKED_UP state "${f}"
+                _manifest_record "${backup_dir}" BACKED_UP state "${f}" "$(dirname "${src}")"
                 [ "${src}" = "${log_dir}/${f}" ] || log_step "${f} found at the pre-feat/state-directory location ${src} - backing up from there"
             else
                 die "expected ${f} but it is in NEITHER the current state directory (${log_dir}) NOR the old LOG_DIRECTORY location. ${f} is created by every server startup, so either the server never started successfully on this install or state has already been lost. Refusing to take a partial backup and proceed with a destructive upgrade. If this install genuinely never ran, there is nothing to upgrade yet."
@@ -563,7 +590,7 @@ take_backup() {
             src="$(resolve_state_file "${install_dir}" "${f}")"
             if [ -f "${src}" ]; then
                 _copy_backup_file "${src}" "${backup_dir}/state/${f}" || die "failed to back up ${f} from ${src}"
-                _manifest_record "${backup_dir}" BACKED_UP state "${f}"
+                _manifest_record "${backup_dir}" BACKED_UP state "${f}" "$(dirname "${src}")"
             else
                 _manifest_record "${backup_dir}" NOT_PRESENT state "${f}"
             fi
@@ -581,8 +608,10 @@ take_backup() {
 
 # Description: restore every BACKED_UP entry from a backup's manifest back
 #   to where the app actually reads it from - install_dir for the
-#   "install" category, the CURRENTLY-configured state directory for the
-#   "state" category. Restores install files FIRST so CLOUDE_STATE_DIR can
+#   "install" category, and for the "state" category the directory
+#   take_backup RECORDED IT AS COMING FROM (manifest field 4), falling
+#   back to the currently-configured state directory with an explicit
+#   COULD-NOT-DETERMINE line when an older manifest carries no origin. Restores install files FIRST so CLOUDE_STATE_DIR can
 #   be read from the just-restored .env before any state file is placed.
 #   Does NOT run config migration afterward - the whole point of a
 #   rollback is that the restored config matches the OLDER code being
@@ -613,8 +642,8 @@ restore_backup() {
     fi
 
     local restored=0
-    local outcome category name
-    while IFS=$'\t' read -r outcome category name; do
+    local outcome category name origin
+    while IFS=$'\t' read -r outcome category name origin; do
         [ "${outcome}" = "BACKED_UP" ] || continue
         [ "${category}" = "install" ] || continue
         cp -p "${backup_dir}/install/${name}" "${install_dir}/${name}" || die "PARTIAL RESTORE: failed copying ${name} from ${backup_dir}/install - install_dir is now in a mixed state, ${restored} file(s) restored so far. Fix manually: diff ${backup_dir}/install ${install_dir}"
@@ -641,10 +670,38 @@ restore_backup() {
             die "PARTIAL RESTORE: install files restored (${restored}), but the state directory cannot be resolved from the just-restored .env, so session_metadata.json/pinned_themes.json/unread_state.json/refresh_tokens.db could NOT be restored. Fix .env's CLOUDE_STATE_DIR and re-run this script (idempotent) to finish."
         fi
         mkdir -p "${log_dir}" || die "could not create state directory ${log_dir} to restore state files into"
-        while IFS=$'\t' read -r outcome category name; do
+        local dest_dir
+        while IFS=$'\t' read -r outcome category name origin; do
             [ "${outcome}" = "BACKED_UP" ] || continue
             [ "${category}" = "state" ] || continue
-            cp -p "${backup_dir}/state/${name}" "${log_dir}/${name}" || die "PARTIAL RESTORE: failed copying ${name} from ${backup_dir}/state to ${log_dir} - ${restored} file(s) restored so far. Fix manually: diff ${backup_dir}/state ${log_dir}"
+
+            # Put the file back WHERE IT CAME FROM. take_backup located
+            # each state file individually (resolve_state_file) and
+            # recorded the directory it actually read it out of, because
+            # an install that predates feat/state-directory still keeps
+            # session_metadata.json / pinned_themes.json /
+            # unread_state.json / refresh_tokens.db under the old
+            # LOG_DIRECTORY, and the OLDER CODE a rollback is checking
+            # out reads only that location. Restoring everything to
+            # resolve_state_dir() relocated those files, so scripts/
+            # rollback.sh - the one tool a user runs specifically to go
+            # back - was itself the step that lost the state it had just
+            # backed up.
+            #
+            # An EMPTY origin means the manifest was written by an older
+            # take_backup that did not record one. That is COULD NOT
+            # DETERMINE, not "it was in the state dir": say so out loud
+            # and use the current state directory, which is the behavior
+            # that manifest was written under and therefore the only
+            # answer consistent with it.
+            if [ -n "${origin}" ]; then
+                dest_dir="${origin}"
+            else
+                dest_dir="${log_dir}"
+                log_unknown "${name}: this backup's manifest records no origin directory (written by an older take_backup), so where it was read FROM cannot be determined - restoring to the current state directory ${log_dir}. If this install predates feat/state-directory, check whether ${name} also needs to be at its LOG_DIRECTORY."
+            fi
+            mkdir -p "${dest_dir}" || die "PARTIAL RESTORE: could not create ${dest_dir} to restore ${name} into - ${restored} file(s) restored so far"
+            cp -p "${backup_dir}/state/${name}" "${dest_dir}/${name}" || die "PARTIAL RESTORE: failed copying ${name} from ${backup_dir}/state to ${dest_dir} - ${restored} file(s) restored so far. Fix manually: diff ${backup_dir}/state ${dest_dir}"
             restored=$((restored + 1))
         done < "${backup_dir}/.manifest"
     fi

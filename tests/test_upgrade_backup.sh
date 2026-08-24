@@ -83,9 +83,9 @@ RC=$?
 assert "${RC}" "case 1: take_backup exits 0 on a fully-configured install"
 assert "$([ "${OUT}" = "${BACKUP1}" ] && echo 0 || echo 1)" "case 1: take_backup prints the backup dir"
 
-assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
+assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db	' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
     "case 1: refresh_tokens.db backed up from CLOUDE_STATE_DIR (not the install dir)"
-assert "$(grep -q '^BACKED_UP	state	session_metadata.json$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
+assert "$(grep -q '^BACKED_UP	state	session_metadata.json	' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
     "case 1: session_metadata.json backed up from CLOUDE_STATE_DIR"
 assert "$(grep -q '^NOT_PRESENT	state	pinned_themes.json$' "${BACKUP1}/.manifest" && echo 0 || echo 1)" \
     "case 1: pinned_themes.json recorded NOT_PRESENT (never pinned), not a failure"
@@ -388,7 +388,7 @@ assert "$([ "${RC}" -ne 0 ] && echo 0 || echo 1)" \
 assert "$(grep -q 'integrity_check' "${C8_DIR}/out.stderr" && echo 0 || echo 1)" \
     "case 8: the failure message names integrity_check as the cause"
 if [ -f "${C8_BACKUP}/.manifest" ]; then
-    assert "$(grep -q '^BACKED_UP.*refresh_tokens.db$' "${C8_BACKUP}/.manifest" && echo 1 || echo 0)" \
+    assert "$(grep -q '^BACKED_UP.*refresh_tokens.db	' "${C8_BACKUP}/.manifest" && echo 1 || echo 0)" \
         "case 8: manifest never records BACKED_UP for the file that failed integrity_check"
 else
     assert 0 "case 8: no manifest was even written before the fatal integrity failure (nothing to falsely mark BACKED_UP)"
@@ -426,14 +426,22 @@ CASE10_RC=$?
 
 assert "${CASE10_RC}" \
     "case 10: take_backup SUCCEEDS when state files are at the old LOG_DIRECTORY location"
-assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db$' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
+assert "$(grep -q '^BACKED_UP	state	refresh_tokens.db	' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
     "case 10: refresh_tokens.db backed up from the old location, not reported missing"
 assert "$(cmp -s "${OLDDIR10}/refresh_tokens.db" "${BACKUP10}/state/refresh_tokens.db" && echo 0 || echo 1)" \
     "case 10: the bytes backed up are the OLD file's, not an empty new one"
-assert "$(grep -q '^BACKED_UP	state	pinned_themes.json$' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
+assert "$(grep -q '^BACKED_UP	state	pinned_themes.json	' "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
     "case 10: an optional JSON file at the old location is backed up too"
 assert "$([ ! -f "${NEWDIR10}/refresh_tokens.db" ] && echo 0 || echo 1)" \
     "case 10: resolving the old location never creates anything at the new one"
+# The manifest's 4th field is the ORIGIN DIRECTORY, and it is what makes
+# restore_backup able to put a file back where it came from instead of
+# relocating every state file to resolve_state_dir(). Without it,
+# scripts/rollback.sh moved session_metadata.json out of the old
+# LOG_DIRECTORY that the older code being restored is the only thing that
+# reads - the rollback tool breaking the rollback.
+assert "$(grep -q "^BACKED_UP	state	refresh_tokens.db	${OLDDIR10}$" "${BACKUP10}/.manifest" && echo 0 || echo 1)" \
+    "case 10: the manifest records the OLD location as the origin, not the new state dir"
 
 # And the NEW location still wins when the file is in both.
 echo 'new-refresh-token-db-bytes' > "${NEWDIR10}/refresh_tokens.db"

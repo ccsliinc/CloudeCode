@@ -76,16 +76,19 @@ _NON_EXEC_USES: set[str] = set()
 # The third outcome. Each entry: name -> reason. An entry is only legal if
 # the script is ALSO absent from extraResources (asserted below).
 ACCEPTED_UNDELIVERED: dict[str, str] = {
-    "reset.sh": (
-        "Invoked by src/api/routes.py POST /api/v1/server/reset against the "
-        "server's own root. It is not in extraResources, so a packaged install "
-        "has never had it and the endpoint returns a 500 that NAMES the missing "
-        "file - a loud, correct third outcome, not a silent wrong one. Shipping "
-        "it would also require start.sh and stop.sh, whose fallback path spawns "
-        "a uvicorn the Electron ServerManager does not own. Delivering that "
-        "safely is its own change with its own tests, not a rider on a "
-        "release-blocker fix. Tracked in RELEASE-NOTES.md known issues."
-    ),
+    # EMPTY, and that is the finished state, not a gap.
+    #
+    # reset.sh was the only entry. It was invoked by
+    # POST /api/v1/server/reset, never shipped in extraResources, and so
+    # 500'd on every packaged install. That endpoint and its UI control were
+    # REMOVED (see the note where the route used to be in src/api/routes.py),
+    # which takes reset.sh out of the invoked set entirely - so the register
+    # entry became permanently true and this file's own `unused` assertion
+    # required deleting it rather than rewording it.
+    #
+    # An entry here is legal only when the script is invoked, is genuinely
+    # undeliverable, is ALSO absent from extraResources, and its caller fails
+    # loudly. It is not a place to park a control that does not work.
 }
 
 

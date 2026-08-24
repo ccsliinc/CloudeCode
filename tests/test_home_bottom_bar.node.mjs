@@ -166,6 +166,7 @@ const stylesCss = read('client', 'css', 'styles.css');
 const indexHtml = read('client', 'index.html');
 const launchpadJs = read('client', 'js', 'launchpad.js');
 const menuJs = read('client', 'js', 'server-controls-menu.js');
+const apiJs = read('client', 'js', 'api.js');
 
 const homeBarRules = rules(homeBarCss);
 const iosRules = rules(iosCss);
@@ -480,40 +481,45 @@ test('the menu rides the shared FabMenu plumbing rather than its own', () => {
     assert.match(menuJs, /window\.FabMenu\.buildIcon/);
 });
 
-test('the restart row delegates to the launchpad and reports failure visibly', () => {
-    assert.match(menuJs, /'restart server'/,
-        'the row label must say restart, not reset: the action restarts the '
-        + 'python process and clears no state whatsoever');
-    assert.match(menuJs, /lp\.restartServer\(\)/);
-    assert.match(menuJs, /notify\(/,
-        'a row that can fail must report through FabMenu.notify()');
+// ---------------------------------------------------------------------
+// the server-restart control, WITHDRAWN
+//
+// It called POST /api/v1/server/reset, which spawned reset.sh from the
+// server's own root. reset.sh has never been in macOS/package.json's
+// build.extraResources, so on every packaged install the control returned
+// a 500 naming the missing file. It was removed rather than shipped
+// because restarting a process belongs to whatever SUPERVISES it and this
+// server never supervises itself; the argument, and where each install
+// shape's real restart lives, is at the removal site in src/api/routes.py.
+//
+// These tests used to assert the row EXISTED. They assert its absence now,
+// for the same reason they existed before: so the control cannot come back
+// by accident. If it comes back deliberately, it comes back with a
+// supervisor-owned action behind it, and these assertions are the place to
+// say so.
+// ---------------------------------------------------------------------
+
+test('the menu offers no server-restart row', () => {
+    assert.ok(!/'restart server'/.test(menuJs),
+        'a restart row here calls an endpoint that no longer exists');
+    assert.ok(!/serverRestartRow/.test(menuJs),
+        'the ENTRY_ID must go with the row, not linger as a dead id');
+    assert.match(menuJs, /return \[statusRow\];/,
+        'server status is the only row left; keep buildItems saying so '
+        + 'explicitly rather than assembling a list that could silently '
+        + 'grow a broken control back');
 });
 
-test('the launchpad owns the restart, under its true name, in one place', () => {
-    assert.match(launchpadJs, /async restartServer\(\)/,
-        'the method is named for what it does');
+test('the launchpad and the API client offer no server-restart at all', () => {
+    assert.ok(!/async restartServer\(\)/.test(launchpadJs),
+        'the launchpad method was removed with the endpoint');
     assert.ok(!/async resetServer\(\)/.test(launchpadJs),
-        'the old name must be gone, not aliased: two names for one action '
-        + 'is how a control ends up in two places again');
+        'the older name must not survive either');
     assert.ok(!/id="reset-server-btn"/.test(launchpadJs),
-        'the standalone "reset server" button must not survive alongside '
-        + 'the menu row');
-});
-
-test('the confirmation copy states only what was verified end to end', () => {
-    const call = launchpadJs.match(/showConfirmModal\(\s*'restart server',([\s\S]*?)\);/);
-    assert.ok(call, 'restart confirmation modal call not found');
-    const copy = call[1];
-    // reset.sh either launchctl-kickstarts the launchd job or runs
-    // stop.sh + start.sh. stop.sh kills whatever holds port 8000; start.sh
-    // brings the FastAPI process back. Nothing in that path touches tmux.
-    assert.match(copy, /tmux sessions keep running/,
-        'the sessions genuinely survive; say so rather than inventing a scare');
-    assert.ok(!/nothing on disk/i.test(copy),
-        'do not claim anything about disk that was not traced');
-    assert.ok(!/data (loss|will be lost)/i.test(copy),
-        'nothing is deleted by a restart; a false warning is as bad as a '
-        + 'false reassurance');
+        'the standalone "reset server" button must not come back');
+    assert.ok(!/\/server\/reset/.test(apiJs),
+        'the API client must not call a route the server no longer serves - '
+        + 'that is a 404 button in place of a 500 one');
 });
 
 // ---------------------------------------------------------------------
