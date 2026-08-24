@@ -1355,6 +1355,45 @@ class NotificationSecretsUpdate(BaseModel):
     pushover_user_key: Optional[str] = None
 
 
+class WorkspaceUpdate(BaseModel):
+    """PATCH body sub-block for ``AuthConfig.workspace``.
+
+    "Leave unchanged" is omission, as everywhere else on this endpoint;
+    an explicit empty string clears a field back to "not configured",
+    which is a meaningful state here (an unset development root means the
+    app behaves exactly as it did before the setting existed).
+
+    ``env`` is the exception to the omit/merge rule: it is sent WHOLE or
+    not at all, because a key-wise merge has no way to express deleting a
+    row. Values are validated in ``src/core/workspace_settings.py`` at
+    the route boundary and are never logged.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    development_root: Optional[str] = None
+    default_shell: Optional[str] = None
+    default_editor: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
+
+
+class ServerPrefsUpdate(BaseModel):
+    """PATCH body sub-block for ``AuthConfig.server_prefs``.
+
+    Writing ``bind_host`` records a PREFERENCE. It cannot widen an
+    instance's exposure: the address actually bound is resolved once by
+    ``src/core/setup_state.resolve_exposure``, downstream of this value,
+    and that function pins loopback until setup is complete. Nor does it
+    move a live socket - uvicorn binds once, so the change applies on the
+    next restart and the UI must say so.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    bind_host: Optional[str] = None
+    tls_preferred: Optional[bool] = None
+
+
 class ConfigSettingsUpdateRequest(BaseModel):
     """Request body for ``PATCH /api/v1/config/settings``.
 
@@ -1371,6 +1410,14 @@ class ConfigSettingsUpdateRequest(BaseModel):
 
     agents: Optional[AgentCommandsUpdate] = None
     notifications: Optional[NotificationSecretsUpdate] = None
+    # feat/settings-gui. Note that the docstring above says server bind is
+    # "deliberately absent" - that remains true of the .env HOST value it
+    # was written about. ``server_prefs.bind_host`` is a different thing:
+    # a remembered PREFERENCE in config.json, written through the same
+    # atomic tmp+fsync+replace path as every other block here, and clamped
+    # by resolve_exposure before it can ever become a listening socket.
+    workspace: Optional[WorkspaceUpdate] = None
+    server_prefs: Optional[ServerPrefsUpdate] = None
 
 
 # --- feat/sessions-table (S4) ----------------------------------------------

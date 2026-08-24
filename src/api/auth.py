@@ -34,6 +34,14 @@ from src.models import (
     ConfigSettingsUpdateRequest,
     ToggleFavoriteCommandRequest,
 )
+from src.core.workspace_settings import (
+    WorkspaceValidationError,
+    validate_bind_host,
+    validate_development_root,
+    validate_editor,
+    validate_env_map,
+    validate_shell,
+)
 from src.core.slash_command_discovery import build_command_groups, command_groups_to_dict
 from src.core import slash_command_labels, slash_favorites
 
@@ -1433,19 +1441,81 @@ async def update_settings(body: ConfigSettingsUpdateRequest):
             include=body.notifications.model_fields_set
         )
 
+    # feat/settings-gui. Validate BEFORE anything reaches disk, and let
+    # each failure carry the message that names the specific problem -
+    # "development root does not exist: /x", not "invalid settings". A
+    # settings screen that accepts a bad value and breaks terminal
+    # spawning an hour later is worse than one that refuses now.
+    workspace_update: dict = {}
+    env_warnings: list = []
+    if body.workspace is not None:
+        raw_workspace = body.workspace.model_dump(
+            include=body.workspace.model_fields_set
+        )
+        try:
+            if "development_root" in raw_workspace:
+                workspace_update["development_root"] = validate_development_root(
+                    raw_workspace["development_root"]
+                )
+            if "default_shell" in raw_workspace:
+                workspace_update["default_shell"] = validate_shell(
+                    raw_workspace["default_shell"]
+                )
+            if "default_editor" in raw_workspace:
+                workspace_update["default_editor"] = validate_editor(
+                    raw_workspace["default_editor"]
+                )
+            if "env" in raw_workspace:
+                env_map, env_warnings = validate_env_map(raw_workspace["env"])
+                workspace_update["env"] = env_map
+        except WorkspaceValidationError as e:
+            # Never log the request body: an env VALUE can be a secret.
+            logger.info("workspace_settings_rejected", reason=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+
+    server_prefs_update: dict = {}
+    if body.server_prefs is not None:
+        raw_prefs = body.server_prefs.model_dump(
+            include=body.server_prefs.model_fields_set
+        )
+        try:
+            if "bind_host" in raw_prefs:
+                server_prefs_update["bind_host"] = validate_bind_host(
+                    raw_prefs["bind_host"]
+                )
+            if "tls_preferred" in raw_prefs:
+                server_prefs_update["tls_preferred"] = bool(
+                    raw_prefs["tls_preferred"]
+                )
+        except WorkspaceValidationError as e:
+            logger.info("server_prefs_rejected", reason=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+
     logger.info(
         "settings_update_requested",
         agents_fields=sorted(agents_update.keys()),
         # Never log notification VALUES (several are secrets) - only
         # which field names changed.
         notifications_fields=sorted(notifications_update.keys()),
+        # NAMES only, for the same reason - an env value can be a secret,
+        # and a structlog line is the last place one should land.
+        workspace_fields=sorted(workspace_update.keys()),
+        workspace_env_names=sorted((workspace_update.get("env") or {}).keys()),
+        server_prefs_fields=sorted(server_prefs_update.keys()),
     )
 
     try:
-        return settings.update_settings_config(
+        summary = settings.update_settings_config(
             agents_update=agents_update or None,
             notifications_update=notifications_update or None,
+            workspace_update=workspace_update or None,
+            server_prefs_update=server_prefs_update or None,
         )
+        # Warnings ride back on the successful response rather than
+        # becoming a fourth outcome. The write HAPPENED; the user needs to
+        # see which names the policy flagged, not be told it failed.
+        summary["workspace_warnings"] = env_warnings
+        return summary
     except FileNotFoundError as e:
         logger.error("settings_update_config_missing", error=str(e))
         raise HTTPException(

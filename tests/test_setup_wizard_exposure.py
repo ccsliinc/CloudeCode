@@ -247,3 +247,71 @@ class TestMarkSetupComplete:
         mark_setup_complete(config_path)
         mark_setup_complete(config_path)
         assert (tmp_path / ".totp_paired").exists()
+
+
+class TestSavedBindPreferenceCannotDefeatTheLockdown:
+    """feat/settings-gui adds a place to SAVE a bind address. Prove it cannot
+    widen exposure.
+
+    The settings screen writes ``server_prefs.bind_host`` into config.json.
+    That value reaches the Python process as ``HOST`` and lands as
+    ``settings.host``, which is the ``configured_bind_host`` argument to
+    ``resolve_exposure`` - upstream of the single decision point, never
+    beside it. These cases cross every value the new validator will ACCEPT
+    with every setup state, which is a superset of what the class above
+    checks: it uses a fixed list of addresses, this one uses the ones a user
+    can actually get stored.
+
+    The complementary half of the argument lives in
+    tests/test_workspace_settings.py (the validator refuses an address this
+    machine does not hold). Neither test alone is the proof; together they
+    say a stored preference is both plausible and powerless.
+    """
+
+    #: Everything ``validate_bind_host`` returns non-empty for, on a machine
+    #: holding 192.168.1.40. Deliberately includes the widest one.
+    ACCEPTABLE_PREFERENCES = ["127.0.0.1", "0.0.0.0", "192.168.1.40"]
+
+    @pytest.mark.parametrize("preference", ACCEPTABLE_PREFERENCES)
+    @pytest.mark.parametrize("combo", TestTheInvariant.ALL_COMBINATIONS)
+    def test_a_stored_preference_never_lifts_the_lockdown(
+        self, tmp_path, preference, combo
+    ):
+        config, totp, jwt, paired = combo
+        state = _state(tmp_path, config=config, totp=totp, jwt=jwt, paired=paired)
+        exposure = resolve_exposure(preference, state)
+        if not state.is_complete:
+            assert exposure.bind_host == LOOPBACK_HOST, (
+                f"stored preference {preference} escaped the lockdown in "
+                f"state {combo}"
+            )
+        if not exposure.wizard_requires_auth:
+            assert exposure.bind_host == LOOPBACK_HOST
+
+    def test_a_stored_preference_is_reported_as_pending_not_as_in_force(
+        self, tmp_path
+    ):
+        """The UI must be able to say the socket has not moved.
+
+        uvicorn binds once. A settings screen that showed the saved value as
+        the current one would be showing an aspiration as a fact - the exact
+        defect the bind lockdown makes easy.
+        """
+        exposure = resolve_exposure("0.0.0.0", _state(tmp_path, paired=False))
+        assert exposure.restart_required_to_apply is True
+        assert exposure.configured_bind_host == "0.0.0.0"
+        assert exposure.bind_host == LOOPBACK_HOST
+
+    def test_validator_and_resolver_agree_on_the_universal_addresses(self):
+        """The two ends of the pipe must not disagree about what is storable.
+
+        A value the validator accepts and the resolver cannot take would be a
+        setting that saves and then strands the server.
+        """
+        from src.core.workspace_settings import (
+            UNIVERSAL_BIND_HOSTS,
+            validate_bind_host,
+        )
+
+        for host in UNIVERSAL_BIND_HOSTS:
+            assert validate_bind_host(host) == host
