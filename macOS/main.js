@@ -797,6 +797,123 @@ function openSetupWizard() {
 }
 
 /**
+ * Open the web app's settings screen.
+ *
+ * The URL comes from getPublishedUrl(), which prefers the address the
+ * server MEASURED itself onto - during the setup lockdown that is
+ * 127.0.0.1 while configuration may say something else, and opening the
+ * configured address would load nothing at all. Same reasoning as
+ * openSetupWizard().
+ *
+ * `#settings` is honoured by client/js/app.js once the launchpad is up,
+ * so this works whether or not the browser already holds a session.
+ *
+ * @returns {void}
+ */
+function openWebSettings() {
+  const base = serverManager.getPublishedUrl();
+  if (!base) {
+    dialog.showErrorBox(
+      'Cloude Code: unknown server port',
+      'Could not determine the configured port from .env (PORT= is set but ' +
+      'not a valid port number), so the settings page cannot be opened. Fix ' +
+      '.env and restart Cloude Code.'
+    );
+    return;
+  }
+  if (serverManager.getState() !== 'running') {
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Server not running',
+      message: 'The settings screen is served by the Cloude Code server.',
+      detail: 'Start the server from this menu, then open Settings again.',
+      buttons: ['OK'],
+    });
+    return;
+  }
+  shell.openExternal(`${base}/#settings`);
+}
+
+/**
+ * Open a file in the user's configured editor.
+ *
+ * WHAT THIS REPLACES, AND WHY IT MATTERED. This menu item used to run
+ * `open -R`, which REVEALS the file in Finder rather than opening it.
+ * That is not merely a slower route to the same place: the running
+ * server caches its parsed config in memory and only invalidates that
+ * cache when the app itself writes the file, so an edit made through
+ * Finder was invisible to the process it was meant to change. The user
+ * saw his change on disk and no change in behaviour, with nothing
+ * anywhere reporting a problem.
+ *
+ * Opening it in an editor does not fix the cache - a hand edit still
+ * needs a restart - so the dialog says so rather than implying the
+ * change took.
+ *
+ * Three outcomes: no editor configured falls back to the system default
+ * (`shell.openPath`, which at least OPENS the file), a configured editor
+ * that fails to launch reports the failure, and success says what to do
+ * next.
+ *
+ * @param {string} filePath - absolute path to open.
+ * @returns {void}
+ */
+function openInConfiguredEditor(filePath) {
+  const fs = require('fs');
+  const { exec } = require('child_process');
+
+  let editor = null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(serverManager.getConfigPath(), 'utf8'));
+    const configured = parsed && parsed.workspace && parsed.workspace.default_editor;
+    if (typeof configured === 'string' && configured.trim()) editor = configured.trim();
+  } catch (err) {
+    // An unreadable config is exactly the case someone opens this item to
+    // FIX, so it must not become a dead menu item. Fall through to the
+    // system default.
+    console.warn('[edit-config] could not read default_editor:', err.message);
+  }
+
+  const note = {
+    type: 'info',
+    title: 'Edit config',
+    message: 'Restart the server after you save.',
+    detail: 'The running server parsed this file at startup and caches it, ' +
+            'so a hand edit does not take effect until it restarts. Changes ' +
+            'made from the web app\'s settings screen apply without one.',
+    buttons: ['OK'],
+  };
+
+  if (!editor) {
+    shell.openPath(filePath).then((err) => {
+      if (err) {
+        dialog.showErrorBox('Cloude Code: could not open config',
+          `macOS could not open ${filePath}: ${err}`);
+        return;
+      }
+      dialog.showMessageBox(note);
+    });
+    return;
+  }
+
+  exec(`${editor} ${JSON.stringify(filePath)}`, (err) => {
+    if (err) {
+      dialog.showErrorBox(
+        'Cloude Code: editor would not launch',
+        `The configured editor could not open the file.\n\n` +
+        `Command: ${editor}\n` +
+        `File: ${filePath}\n\n` +
+        `${err.message}\n\n` +
+        'Change "default editor" on the settings screen, or clear it to use ' +
+        'the system default.'
+      );
+      return;
+    }
+    dialog.showMessageBox(note);
+  });
+}
+
+/**
  * Build and update the tray menu
  */
 function updateMenu() {
@@ -937,6 +1054,17 @@ function updateMenu() {
         }
       },
       enabled: isStartingOrRunning
+    },
+    {
+      // feat/settings-gui - the global settings screen lives in the web
+      // app (the user chose that over a native window), so this opens it
+      // there rather than duplicating the controls in a tray submenu that
+      // would then be a second place to look and a second place to be
+      // wrong. Same shell.openExternal + published-URL reasoning as
+      // 'Open in Browser' below.
+      label: 'Settings...',
+      click: () => openWebSettings(),
+      enabled: isRunning
     },
     {
       label: 'Open in Browser',
@@ -1149,12 +1277,9 @@ function updateMenu() {
         },
         {
           label: 'Edit Config',
-          click: () => {
-            const { exec } = require('child_process');
-            const configPath = path.join(serverManager.getProjectRoot(), 'config.json');
-            // Open Finder and select the config.json file
-            exec(`open -R "${configPath}"`);
-          }
+          click: () => openInConfiguredEditor(
+            path.join(serverManager.getProjectRoot(), 'config.json')
+          )
         },
         {
           // Replaces the old 'Check Config for New Defaults...' dialog, which

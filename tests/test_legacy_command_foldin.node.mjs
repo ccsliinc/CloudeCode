@@ -106,10 +106,20 @@ test('settings-panel has no AGENT_FIELDS array', () => {
         'AGENT_FIELDS still exists; a future tab could re-render it');
 });
 
-test('the tab strip is exactly the four surviving tabs, in order', () => {
+test('the "agents" tab is gone and the four survivors keep their order', () => {
+    // Originally pinned to an exact four-element list. That asserted two
+    // things at once - that "agents" is absent, which is this file's
+    // subject, and that no tab is ever ADDED, which is not. The second
+    // half failed the moment feat/settings-gui added "workspace", a tab
+    // that has nothing to do with the legacy command keys. Split so the
+    // real invariant survives and an unrelated addition does not read as
+    // a regression of it.
     const ids = [...panelSrc.matchAll(/\{\s*id:\s*'([a-z-]+)',\s*label:/g)]
         .map((m) => m[1]);
-    assert.deepEqual(ids, ['wrappers', 'terminal', 'notifications', 'general']);
+    assert.ok(!ids.includes('agents'), 'the agents tab is back');
+    const survivors = ids.filter((id) => ['wrappers', 'terminal',
+                                          'notifications', 'general'].includes(id));
+    assert.deepEqual(survivors, ['wrappers', 'terminal', 'notifications', 'general']);
 });
 
 // ---------------------------------------------------------------------

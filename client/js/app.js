@@ -475,6 +475,21 @@ class AppController {
     }
 
     /**
+     * Open the settings panel when the URL asks for it.
+     *
+     * Description: honours `#settings` (the menu bar's deep link) exactly
+     *   once, then strips the hash so a refresh does not reopen the modal
+     *   over whatever the user moved on to.
+     * Inputs: none - reads window.location.
+     * Output: void.
+     */
+    _openSettingsIfDeepLinked() {
+        if (window.location.hash !== '#settings') return;
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        if (window.SettingsPanel) window.SettingsPanel.open(this.settingsBtn || null);
+    }
+
+    /**
      * Setup event listeners
      */
     setupEventListeners() {
@@ -724,6 +739,13 @@ class AppController {
         });
         // v0.7.1 - back on the launchpad, no active session; reset tab title.
         setPageTitle(null);
+        // feat/settings-gui - honour the menu bar's `#settings` deep link.
+        // Hooked HERE rather than on the `authenticated` event because
+        // only one of the two login paths fires that event: init()'s
+        // existing-token branch calls showLaunchpad() directly. Both
+        // paths reach this line, and reaching it means a session exists,
+        // which the panel needs - its first act is GET /config/settings.
+        this._openSettingsIfDeepLinked();
         // Outbound URL sync: leaving a session (detach/delete) or just
         // navigating here resets the address bar to `/` so a refresh
         // lands on the launcher, not a stale/gone session URL. No-ops if
