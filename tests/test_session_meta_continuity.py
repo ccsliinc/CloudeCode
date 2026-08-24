@@ -304,15 +304,19 @@ def test_plain_upgrade_writes_back_to_the_old_location(dirs):
     assert downgrade_verdict(log_dir, "sess-old") == INTACT
 
 
-def test_detach_sequence_relocates_metadata_and_the_old_version_loses_it(dirs):
-    """DOWNGRADE, the bad path - and it is reachable from one user action.
+def test_detach_sequence_keeps_metadata_where_the_install_started_from(dirs):
+    """DOWNGRADE, the path one ordinary user action used to break.
 
     ``SessionManager.detach_session`` unlinks the RESOLVED metadata path
     and then, if another session is still live, calls
-    ``_save_session_metadata`` - which re-resolves. After the unlink the
-    old location no longer exists, so the resolver returns the NEW path
-    and the file MOVES. Nothing copies it back. This test runs those two
-    real methods in that real order.
+    ``_save_session_metadata``. That second call used to RE-RESOLVE from
+    disk, and by then the old location was gone, so the file silently
+    moved to the state directory and a downgrade could no longer find it.
+
+    The resolver now decides ONCE per (filename, configured locations)
+    and keeps returning that decision, so an install that started at
+    ``LOG_DIRECTORY`` keeps writing there. This runs the same two real
+    methods in the same real order and measures the DISK.
     """
     log_dir, state_dir = dirs
     _write_old_metadata(log_dir, "sess-detached", "work-a", ["work-a", "work-b"])
@@ -328,11 +332,76 @@ def test_detach_sequence_relocates_metadata_and_the_old_version_loses_it(dirs):
     mgr.owned_tmux_sessions = {"work-b"}
     mgr._save_session_metadata()
 
-    assert (state_dir / "session_metadata.json").exists()
-    assert not (log_dir / "session_metadata.json").exists(), (
-        "the file was expected to have MOVED to the state dir"
+    assert (log_dir / "session_metadata.json").exists(), (
+        "the file was expected to STAY at the location this install started from"
     )
-    assert downgrade_verdict(log_dir, "sess-survivor") == ABSENT
+    assert not (state_dir / "session_metadata.json").exists(), (
+        "the detach sequence relocated the file into the state dir again"
+    )
+    assert downgrade_verdict(log_dir, "sess-survivor") == INTACT
+
+
+def test_the_pin_survives_the_file_being_unlinked(dirs):
+    """The mechanism under the test above, isolated from SessionManager.
+
+    Resolve once with the file only at the old location, delete it, and
+    resolve again. A resolver that recomputes from disk answers the state
+    dir the second time; a resolver that decided once answers the same
+    path both times.
+    """
+    log_dir, _state_dir = dirs
+    old = log_dir / "session_metadata.json"
+    old.write_text("{}")
+
+    first = settings.get_session_metadata_path()
+    assert first == old
+    old.unlink()
+    assert settings.get_session_metadata_path() == first, (
+        "the resolution flipped as a side effect of the file being removed"
+    )
+
+
+def test_a_fresh_install_with_no_file_anywhere_pins_the_state_dir(dirs):
+    """Nothing on disk in either place: the new location wins and sticks."""
+    log_dir, state_dir = dirs
+    resolved = settings.get_session_metadata_path()
+    assert resolved == state_dir / "session_metadata.json"
+    assert settings.get_state_file_location("session_metadata.json") == "state_dir"
+
+    # A file appearing at the OLD location afterwards must not move the
+    # decision - this process already committed to the state dir.
+    (log_dir / "session_metadata.json").write_text("{}")
+    assert settings.get_session_metadata_path() == resolved
+
+
+def test_callers_read_the_authoritative_location_instead_of_re_deriving(dirs):
+    """The decision is published, so no call site has to recompute it."""
+    log_dir, _state_dir = dirs
+    (log_dir / "session_metadata.json").write_text("{}")
+    assert settings.get_state_file_location("session_metadata.json") == "log_directory"
+    assert settings.get_session_metadata_path().parent == log_dir
+
+
+def test_changing_the_configured_locations_invalidates_the_pin(tmp_path, monkeypatch):
+    """The pin is about DISK CHANGE, never about configuration change.
+
+    An operator who repoints CLOUDE_STATE_DIR or LOG_DIRECTORY has asked
+    a different question, and must get a fresh answer rather than a
+    remembered one keyed to directories that are no longer configured.
+    """
+    a_log, a_state = tmp_path / "a-logs", tmp_path / "a-state"
+    b_log, b_state = tmp_path / "b-logs", tmp_path / "b-state"
+    for d in (a_log, a_state, b_log, b_state):
+        d.mkdir()
+    (a_log / "session_metadata.json").write_text("{}")
+
+    monkeypatch.setattr(settings, "log_directory", str(a_log))
+    monkeypatch.setattr(settings, "state_dir_override", str(a_state))
+    assert settings.get_session_metadata_path() == a_log / "session_metadata.json"
+
+    monkeypatch.setattr(settings, "log_directory", str(b_log))
+    monkeypatch.setattr(settings, "state_dir_override", str(b_state))
+    assert settings.get_session_metadata_path() == b_state / "session_metadata.json"
 
 
 def test_metadata_present_in_both_locations_leaves_the_old_copy_stale(dirs):
@@ -385,20 +454,18 @@ def test_detector_reports_stale_when_the_old_copy_diverges(dirs):
 COMMON_SH = ROOT / "scripts" / "upgrade_lib" / "upgrade_rollback_common.sh"
 
 
-def test_rollback_relocates_state_files_out_of_the_old_location(tmp_path: Path):
-    """The project's OWN rollback tool moves the file the old version reads.
+def _run_rollback_cycle(tmp_path: Path, seed_dir_name: str):
+    """take_backup then restore_backup, for real, against a throwaway install.
 
-    ``restore_backup()`` places every state file at
-    ``resolve_state_dir()`` regardless of where ``take_backup()`` found
-    it. Backing up an install whose metadata is still at
-    ``LOG_DIRECTORY`` therefore RESTORES it to the state directory and
-    leaves the old location empty - so a downgrade performed with
-    scripts/rollback.sh cannot find it, which is the opposite of what a
-    rollback is for. Measured by running the real bash functions.
+    Inputs: tmp_path (Path) - pytest tmp dir. seed_dir_name (str) -
+      "logs" to seed session_metadata.json at the OLD LOG_DIRECTORY,
+      "state" to seed it at the CURRENT state dir.
+    Output: (install, logs, state, proc, backed_up_meta) - the three
+      directories, the CompletedProcess, and whether the manifest
+      actually recorded the metadata as BACKED_UP (if not, the rollback
+      path was never exercised and the caller must report CANNOT
+      DETERMINE rather than a verdict).
     """
-    if not COMMON_SH.exists():
-        pytest.skip(f"CANNOT DETERMINE: {COMMON_SH} not present in this tree")
-
     install = tmp_path / "install"
     logs = tmp_path / "logs"
     state = tmp_path / "state"
@@ -408,21 +475,22 @@ def test_rollback_relocates_state_files_out_of_the_old_location(tmp_path: Path):
         f"LOG_DIRECTORY={logs}\nCLOUDE_STATE_DIR={state}\n"
     )
     (install / "config.json").write_text("{}")
+    seed = logs if seed_dir_name == "logs" else state
     # refresh_tokens.db is a REQUIRED backup file and take_backup copies
-    # it with sqlite3's own .backup, which REFUSES a file that merely
+    # it with sqlite3's own VACUUM INTO, which REFUSES a file that merely
     # starts with the SQLite magic bytes. It has to be a real database.
     import sqlite3 as _sqlite3
-    with contextlib.closing(_sqlite3.connect(str(logs / "refresh_tokens.db"))) as c:
+    with contextlib.closing(_sqlite3.connect(str(seed / "refresh_tokens.db"))) as c:
         c.execute("CREATE TABLE t (a)")
         c.commit()
-    (logs / "session_metadata.json").write_text(
+    (seed / "session_metadata.json").write_text(
         json.dumps({"id": "sess-from-old", "owned_tmux_sessions": ["cloude_a"]})
     )
 
     script = (
         f"source '{COMMON_SH}'; "
         f"take_backup '{install}' '{tmp_path}/bk' >/dev/null 2>&1; "
-        f"rm -f '{logs}/session_metadata.json' '{logs}/refresh_tokens.db'; "
+        f"rm -f '{seed}/session_metadata.json' '{seed}/refresh_tokens.db'; "
         f"restore_backup '{install}' '{tmp_path}/bk' >/dev/null 2>&1"
     )
     # resolve_state_dir() prefers the INHERITED ``CLOUDE_STATE_DIR`` env
@@ -439,6 +507,52 @@ def test_rollback_relocates_state_files_out_of_the_old_location(tmp_path: Path):
         manifest.exists()
         and "BACKED_UP\tstate\tsession_metadata.json" in manifest.read_text()
     )
+    return install, logs, state, proc, backed_up_meta
+
+
+def test_rollback_restores_a_state_file_to_where_take_backup_found_it(tmp_path: Path):
+    """The rollback tool must not be the step that breaks the rollback.
+
+    ``take_backup()`` already locates each state file individually via
+    ``resolve_state_file`` and says so when it finds one at the old
+    ``LOG_DIRECTORY``. ``restore_backup()`` used to throw that away and
+    place EVERY state file at ``resolve_state_dir()``, so running
+    scripts/rollback.sh on a pre-state-directory install moved the very
+    file the older code reads. Measured by running the two real bash
+    functions and reading the DISK, not their exit codes.
+    """
+    if not COMMON_SH.exists():
+        pytest.skip(f"CANNOT DETERMINE: {COMMON_SH} not present in this tree")
+
+    _install, logs, state, proc, backed_up_meta = _run_rollback_cycle(tmp_path, "logs")
+    if not backed_up_meta:
+        pytest.skip(
+            "CANNOT DETERMINE: take_backup did not back up "
+            f"session_metadata.json (rc={proc.returncode}, stderr="
+            f"{proc.stderr[-300:]!r}) - the rollback path was not exercised"
+        )
+
+    assert (logs / "session_metadata.json").exists(), (
+        "restore did not put the file back where take_backup found it"
+    )
+    assert not (state / "session_metadata.json").exists(), (
+        "restore RELOCATED the file into the state dir - the defect this "
+        "test exists to catch"
+    )
+    assert downgrade_verdict(logs, "sess-from-old") == INTACT
+
+
+def test_rollback_restores_a_state_dir_file_to_the_state_dir(tmp_path: Path):
+    """The other origin, so the fix cannot be 'always use LOG_DIRECTORY'.
+
+    A file that take_backup found in the CURRENT state directory must go
+    back there. Without this, a one-line inversion of the bug would pass
+    the test above and break every modern install.
+    """
+    if not COMMON_SH.exists():
+        pytest.skip(f"CANNOT DETERMINE: {COMMON_SH} not present in this tree")
+
+    _install, logs, state, proc, backed_up_meta = _run_rollback_cycle(tmp_path, "state")
     if not backed_up_meta:
         pytest.skip(
             "CANNOT DETERMINE: take_backup did not back up "
@@ -447,9 +561,8 @@ def test_rollback_relocates_state_files_out_of_the_old_location(tmp_path: Path):
         )
 
     assert (state / "session_metadata.json").exists(), (
-        "restore did not place the file at the new state dir"
+        "restore did not put the file back in the state dir it came from"
     )
     assert not (logs / "session_metadata.json").exists(), (
-        "the file was expected to have been RELOCATED out of LOG_DIRECTORY"
+        "restore misfiled a state-dir file into the old LOG_DIRECTORY"
     )
-    assert downgrade_verdict(logs, "sess-from-old") == ABSENT
