@@ -450,19 +450,36 @@ cat "${WORK_DIR}/artifacts/meta-03-new-after-detach.json"
 # --- 4. DOWNGRADE - the step that answers the question -----------------------
 
 checkout_ref "${OLD_REF}" || setup_fail "could not check back out ${OLD_REF}"
-capture_step "downgraded-old"
 
-# --- 4b. THE VERDICT: what the OLD version finds after all of that ----------
+# --- 4b. THE VERDICT: what the OLD version finds after the round trip ----------
 #
 # Three outcomes, and STALE is named separately from ABSENT on purpose. An
 # absent file makes the old version start clean, which the user can see. A
 # stale one silently rehydrates a session that is no longer the live one.
-say "--- what the OLD version resolves after the round trip"
+#
+# THIS PROBE RUNS BEFORE THE OLD SERVER STARTS, and the order is
+# load-bearing. The question this step asks is "after the round trip, does
+# the old version FIND its session metadata" - a question about the file's
+# LOCATION. The old server's own startup reconciler then answers a second,
+# unrelated question about whether the sessions named in it are still live,
+# and it deletes the file when it decides they are not. Measured 2026-08-24:
+# with the location bug fixed, v0.8.1 loaded the file correctly
+# (session_metadata_loaded, session_id roundtrip-b) and then pruned
+# cloude_roundtrip-b from the owned set and deleted the metadata as stale -
+# on a socket where that tmux session was demonstrably alive. That is a
+# name-form difference in the owned set between the two versions, worth its
+# own step, and it is NOT evidence about where the file lives. Probing after
+# it ran meant this step reported ABSENT no matter what the resolver did,
+# which is a verdict the measurement could not distinguish from the bug it
+# exists to catch.
+say "--- what the OLD version resolves after the round trip (before it starts)"
 (
     cd "${INSTALL}" || exit 1
     "${PY_BIN}" "${LIB_DIR}/session_meta_probe.py" --label old-after-downgrade
 ) > "${WORK_DIR}/artifacts/meta-04-old-after-downgrade.json" 2>&1
 cat "${WORK_DIR}/artifacts/meta-04-old-after-downgrade.json"
+
+capture_step "downgraded-old"
 
 "${PY_BIN}" - "${WORK_DIR}" <<'PYVERDICT' > "${WORK_DIR}/artifacts/meta-verdict.json"
 import json, os, sys
@@ -530,11 +547,16 @@ print(json.dumps({
 }, indent=2, sort_keys=True))
 PYVERDICT
 cat "${WORK_DIR}/artifacts/meta-verdict.json"
-# DECLARED, like step 08's expected FAIL. ABSENT is what this currently
-# measures; declaring it makes the step a guard that notices a CHANGE
-# rather than a check that quietly agrees with whatever it finds. If a
-# fix makes this INTACT, this step goes UNEXPECTED and someone reads it.
-printf 'ABSENT\n' > "${WORK_DIR}/artifacts/meta.expect"
+# DECLARED, like step 08's expected FAIL - but declaring the GOOD state
+# now, because the defect is fixed. Was ABSENT: the resolver re-derived
+# from disk on every call, so detach_session's unlink-then-save relocated
+# the file into the state dir and a downgrade found nothing. The resolver
+# now decides once per (filename, configured directories) and keeps
+# writing where the install started, so an install seeded at
+# LOG_DIRECTORY still has its metadata there after the round trip.
+# Declaring INTACT means a REGRESSION goes UNEXPECTED and someone reads
+# it, which is the same guard pointed the other way.
+printf 'INTACT\n' > "${WORK_DIR}/artifacts/meta.expect"
 
 # --- 5. OLD writes again, post-upgrade ---------------------------------------
 #
