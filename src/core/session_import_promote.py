@@ -160,6 +160,47 @@ def record_decline(
     return PROMOTE_NOT_ELIGIBLE
 
 
+def attribution_settled_instances(
+    conn: sqlite3.Connection, *, socket: str = DEFAULT_TMUX_SOCKET
+) -> Optional[Set[Tuple[str, int]]]:
+    """Every instance whose attribution question has PROVABLY been answered.
+
+    Description: the read half of the one-way gate, and the reason the
+      Stage C prompt does not have to be pruned by hand on every path
+      that answers it. ``meta.session_import_unattributed`` is a snapshot
+      written once at import time; it is the CANDIDATE SET, never the
+      answer. Anything in this result has moved out of
+      ``origin='observed' AND user_declined_at IS NULL`` and therefore
+      has nothing left to ask.
+
+      IT IS THE EXACT COMPLEMENT OF ``reexaminable_instances`` OVER ROWS
+      THAT EXIST, and the phrase "over rows that exist" is the whole
+      subtlety. A candidate with NO ROW is in neither set, because a
+      missing row proves nothing either way - the adopt path records its
+      own sighting before claiming it, so such a candidate is still a
+      live question. A caller must therefore prune on MEMBERSHIP HERE,
+      never on absence from ``reexaminable_instances``.
+    Inputs: conn (sqlite3.Connection). socket (str) - the tmux socket the
+      caller's SessionManager reports.
+    Output: set[tuple[str, int]] of (tmux_name, epoch), or None on a
+      pre-v2 database where the question CANNOT BE DETERMINED. None is
+      not an empty set: empty means "nothing is settled", None means "we
+      could not look", and a caller that collapses the two turns an
+      unreadable database into a prompt that answers itself.
+    Example: attribution_settled_instances(conn, socket='cloude')
+    """
+    if not sessions_table_ready(conn):
+        return None
+    rows = conn.execute(
+        "SELECT tmux_name, tmux_created_epoch FROM sessions "
+        "WHERE tmux_socket = ? "
+        "AND tmux_name IS NOT NULL AND tmux_created_epoch IS NOT NULL "
+        "AND NOT (origin = ? AND user_declined_at IS NULL)",
+        (socket, SESSION_ORIGIN_OBSERVED),
+    ).fetchall()
+    return {(str(r[0]), int(r[1])) for r in rows}
+
+
 def reexaminable_instances(
     conn: sqlite3.Connection, *, socket: str = DEFAULT_TMUX_SOCKET
 ) -> Set[Tuple[str, int]]:

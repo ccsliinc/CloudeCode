@@ -2356,9 +2356,26 @@ async def session_attribution_prompt(request: Request):
       leaves none because it has not looked yet - so collapsing them
       would make one of the two answers unreadable.
 
-      A row the user has already declined never appears here: the import
-      writes ``user_declined_at`` and drops it from the list, so the
-      prompt does not return on every boot.
+      THE STORED RECORD IS THE CANDIDATE SET, NOT THE ANSWER. It is a
+      snapshot written once, at import time, and every answer the user
+      gives happens afterwards on ``sessions``. Reading it back verbatim
+      is what made "adopt all" leave the card on screen: the five rows
+      were genuinely ``adopted``, stamped at the second he clicked, and
+      the prompt re-rendered the snapshot that could not know it. So the
+      list is re-derived on every request against
+      ``attribution_settled_instances``, and no future path that answers
+      an attribution question has to remember to prune anything.
+
+      WHAT IS NOT PRUNED, deliberately. A candidate we cannot cross
+      reference - no epoch in the record, no rows table to ask, or no row
+      at all - stays in the list. None of those is evidence the question
+      was answered, and dropping one would trade a card that will not
+      clear for a question that vanished unanswered, which is the same
+      defect pointed the other way.
+
+      A row the user has already declined never appears here: the decline
+      route writes ``user_declined_at``, which takes it out of the
+      derivation above, so the prompt does not return on every boot.
     Inputs: request (Request) - unused beyond auth.
     Output: SessionAttributionPrompt. ``unavailable`` when the datastore
       could not be read, which is NEVER rendered as an empty prompt: an
@@ -2372,18 +2389,29 @@ async def session_attribution_prompt(request: Request):
 
     from src.core.db import DatastoreUnreadableError, connect, db_path_for, get_meta
     from src.core.db_models import META_SESSION_IMPORT_UNATTRIBUTED
+    from src.core.session_import_promote import attribution_settled_instances
 
     db_path = db_path_for(settings.get_state_dir())
     if not db_path.exists():
         return SessionAttributionPrompt(state="none")
 
+    socket = request.app.state.session_manager.tmux_socket_name()
+
     def _read():
-        """Read the unattributed record on one pooled thread."""
+        """Read the snapshot AND the live answers on one pooled thread.
+
+        Output: tuple[str | None, set | None] - the stored record, and
+          the instances whose question is settled (None when that could
+          not be determined at all).
+        """
         with closing(connect(db_path, create=False)) as conn:
-            return get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
+            return (
+                get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED),
+                attribution_settled_instances(conn, socket=socket),
+            )
 
     try:
-        raw = await run_in_threadpool(_read)
+        raw, settled = await run_in_threadpool(_read)
     except DatastoreUnreadableError as exc:
         return SessionAttributionPrompt(
             state="unavailable",
@@ -2410,6 +2438,30 @@ async def session_attribution_prompt(request: Request):
             ),
         )
     if not isinstance(records, list) or not records:
+        return SessionAttributionPrompt(state="none")
+
+    def _still_open(record) -> bool:
+        """Whether this candidate is still an unanswered question.
+
+        Inputs: record (Any) - one stored candidate.
+        Output: bool - True unless the row it names has PROVABLY moved
+          out of 'observed and not declined'. Anything we could not
+          cross-reference returns True, because not knowing is not an
+          answer.
+        """
+        if not isinstance(record, dict) or settled is None:
+            return True
+        epoch = record.get("epoch")
+        if epoch is None:
+            return True
+        try:
+            key = (str(record.get("tmux_name", "")), int(epoch))
+        except (TypeError, ValueError):
+            return True
+        return key not in settled
+
+    records = [r for r in records if _still_open(r)]
+    if not records:
         return SessionAttributionPrompt(state="none")
 
     sessions = [
