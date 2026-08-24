@@ -48,30 +48,45 @@
     "/effort",
     "/plan",
     "/tasks",
-    { "command": "/diff", "description": "review changes" },
+    {
+      "command": "/diff",
+      "description": "review changes"
+    },
     "/login"
   ],
   "projects": [
     {
-      "name": "🔥 AGI-SaaS Disruptor",
+      "name": "\ud83d\udd25 AGI-SaaS Disruptor",
       "path": "~/projects/agi-saas",
       "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
     },
     {
-      "name": "⚡ NeuralMesh3000",
+      "name": "\u26a1 NeuralMesh3000",
       "path": "~/projects/neural-mesh",
       "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression",
       "agent_type": "hermes"
     },
     {
-      "name": "⚛️ ReactHook Nirvana",
+      "name": "\u269b\ufe0f ReactHook Nirvana",
       "path": "~/projects/react-nirvana",
       "description": "Component library that transcends the virtual DOM and enters the astral plane"
     },
     {
-      "name": "☁️ Cloude Code",
+      "name": "\u2601\ufe0f Cloude Code",
       "path": "~/projects/cloude-code",
       "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
     }
-  ]
+  ],
+  "_comment_workspace": "Global settings for what a NEW terminal is born with. Edited from the web app's settings screen (gear icon -> workspace), not by hand: the running server caches this file and only re-reads it when it writes it itself, so a hand edit needs a restart. Every value defaults to empty, which means 'not configured' - development_root reaches terminals as CLOUDE_DEV_ROOT, default_shell as SHELL, and env is injected verbatim. Names beginning CLOUDECODE_ are reserved by the app and refused.",
+  "workspace": {
+    "development_root": "",
+    "default_shell": "",
+    "default_editor": "",
+    "env": {}
+  },
+  "_comment_server_prefs": "Bind address and TLS preference, remembered across restarts so they do not have to be re-picked from the menu bar. bind_host is a PREFERENCE: the address actually bound is resolved by src/core/setup_state.py, which pins loopback until an authenticator has been paired, and uvicorn binds once so a change applies on the next restart. tls_preferred is recorded and NOT in force - this build serves plain HTTP and has no TLS terminator.",
+  "server_prefs": {
+    "bind_host": "",
+    "tls_preferred": false
+  }
 }
