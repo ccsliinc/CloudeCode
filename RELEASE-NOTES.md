@@ -1,6 +1,102 @@
 # Release notes
 
-## Unreleased
+## v1.0.4
+
+Measured against `v1.0.3`. Nine branches: two schema changes, one behaviour
+removal, three lifecycle/isolation fixes and three UI fixes.
+
+Test suite at the release sha: **2706 passed, 1 skipped, 0 failed** (2707
+collected), plus 102 standalone `tests/*.node.mjs` suites, all passing.
+Baseline at `v1.0.3` was 2561 collected.
+
+**READ THIS BEFORE UPGRADING.** This release changes the database schema
+(v6 to v8) and it changes `src/`, so it is not a restart-free drop-in. Quit
+from the tray first, install, then start it again. On the first start the
+app backs up `cloude.db` and then migrates it. `requirements.txt` is
+unchanged from v1.0.3, so the launchd wrapper will not rebuild the venv.
+Your `config.json` and `.env` are not touched by the installer.
+
+### Schema v6 to v8
+
+Two additive steps run on first start, inside one transaction, after the
+app has taken its own backup of `cloude.db`.
+
+- **v6 to v7** creates `ix_sessions_claude_uuid`. No column is added -
+  `claude_session_uuid`, `parent_session_id` and `fork_kind` have been in
+  the sessions DDL since v2 and were never written. The index is what makes
+  the new lineage lookup cheap on every Claude SessionStart.
+- **v7 to v8** creates `session_groups` and `session_group_members`. Nothing
+  is backfilled and that is the correct empty state: before this version no
+  group existed, so every session is ungrouped, and ungrouped is the ABSENCE
+  of a membership row rather than a row pointing at a default group.
+
+Both steps carry their own `IF NOT EXISTS`, so a retry after an interrupted
+run is safe. A v6 or v7 reader still opens the same file: an index changes
+no query result and the new tables are simply never queried.
+
+### Session lineage
+
+Sessions now record which Claude session they are (`claude_session_uuid`),
+what they were forked from (`parent_session_id`) and how (`fork_kind`),
+driven by SessionStart and SessionEnd hooks. The hooks fail open: a hook
+that cannot write does not take a session down with it.
+
+### Sidebar groups
+
+You can create named groups in the session sidebar and drag sessions into
+them. Drag already existed for reordering; it is extended, not replaced.
+
+### Restart a dead session in place
+
+A dead session row now offers a Restart control next to Delete instead of
+only offering you the chance to throw the row away. The respawn writes
+nothing to the database - it reuses the row it already has. This overrides
+a prohibition previously documented in `client/js/session-sidebar-rows.js`,
+which is marked superseded rather than deleted.
+
+### Server lifecycle
+
+- Adoption of an already-running server is gated on its version, read from
+  `/api/v1/health`, which now reports the running version. A server whose
+  version cannot be established is not adopted.
+- Quit is deterministic instead of best-effort.
+- Restart on an adopted server refuses and offers, rather than silently
+  doing something to a process the app did not start.
+- The supervisor's restart backoff is bounded.
+
+### Test runs can no longer write to your real home directory
+
+`ensure_hook_settings()` no longer has an implicit default path - the
+argument is required, which is the enforcement. A new
+`src/core/test_write_guard.py` plus a conftest canary make a test that
+reaches outside its temp root fail rather than quietly editing
+`~/.claude/settings.json`.
+
+### Upload sweeper no longer follows symlinks out of its bucket
+
+A real production bug: the sweeper's delete could follow a symlink out of
+`.cloude_uploads` and remove what it pointed at. The delete is now gated by
+a pure `sweep_verdict()` query, and the second delete site in
+`destroy_session` is gated the same way.
+
+The sweeper's project list is now read from `cloude.db` rather than
+`config.json`, keeping its three-outcome contract: a list (possibly empty)
+when the datastore was read, and "undetermined" when it could not be.
+Undetermined means the sweeper deletes NOTHING, rather than falling back to
+sweeping paths it could not verify.
+
+### Toasts stack instead of pile up
+
+Client-side coalescing, a cap, and priority ordering, with an overflow row
+when the cap is hit. `client/js/toast.js` and `client/css/toast.css` only.
+
+### Tray glyph paints at full strength
+
+The menu bar glyph was drawn at 71 of 255 ink and read as washed out
+against a dark menu bar. It is now 255. The icon generator and all
+generated assets are regenerated, and `dot_signature` is derived from
+colour rather than from alpha.
+
 
 ### Projects live in cloude.db and nowhere else
 
