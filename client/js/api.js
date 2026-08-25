@@ -1320,6 +1320,80 @@ class API {
             body,
         });
     }
+
+    // ---- Session sidebar groups ------------------------------------------
+    //
+    // THE READ NEVER THROWS ON AN UNREADABLE GROUP TABLE. The route
+    // answers 200 with `status: 'unavailable'` rather than a 503, because
+    // an unreadable group table must leave the conversation list working.
+    // Every WRITE below does throw when it could not land - a
+    // silently-dropped assignment is a group the user watched themselves
+    // make that is gone after a reload.
+
+    /**
+     * List every session group with its membership.
+     * @returns {Promise<object>} {status: 'ok'|'unavailable', groups, detail}
+     */
+    async listSessionGroups() {
+        return await this.call('/session-groups');
+    }
+
+    /**
+     * Create a group. Returns the WHOLE list, so the caller re-renders
+     * from one authoritative payload rather than splicing.
+     * @param {string} name  Label; trimmed and bounded server-side.
+     * @returns {Promise<object>} The full groups response.
+     */
+    async createSessionGroup(name) {
+        return await this.call('/session-groups', { method: 'POST', body: { name } });
+    }
+
+    /**
+     * Rename a group. Membership and position are untouched.
+     * @param {string} groupUuid  Which group.
+     * @param {string} name  New label.
+     * @returns {Promise<object>} The full groups response.
+     */
+    async renameSessionGroup(groupUuid, name) {
+        return await this.call(`/session-groups/${encodeURIComponent(groupUuid)}`, {
+            method: 'PATCH', body: { name },
+        });
+    }
+
+    /**
+     * Delete a group. ITS CONVERSATIONS ARE NOT DELETED - they become
+     * ungrouped and render in OTHER.
+     * @param {string} groupUuid  Which group.
+     * @returns {Promise<object>} The full groups response, plus `freed`.
+     */
+    async deleteSessionGroup(groupUuid) {
+        return await this.call(`/session-groups/${encodeURIComponent(groupUuid)}`, {
+            method: 'DELETE',
+        });
+    }
+
+    /**
+     * File one session into a group, or return it to ungrouped.
+     * @param {string} tmuxName  The sidebar's own row key.
+     * @param {string|null} groupUuid  Target group, or null for ungrouped.
+     * @returns {Promise<object>} The full groups response.
+     */
+    async assignSessionGroup(tmuxName, groupUuid) {
+        return await this.call('/session-groups/assign', {
+            method: 'POST', body: { tmux_name: tmuxName, group_uuid: groupUuid },
+        });
+    }
+
+    /**
+     * Rewrite the group order from a full list of uuids.
+     * @param {Array<string>} groupUuids  Desired order, first is topmost.
+     * @returns {Promise<object>} The full groups response.
+     */
+    async reorderSessionGroups(groupUuids) {
+        return await this.call('/session-groups/order', {
+            method: 'POST', body: { group_uuids: groupUuids },
+        });
+    }
 }
 
 // Export singleton instance

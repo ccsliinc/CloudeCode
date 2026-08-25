@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 7
+CURRENT_SCHEMA_VERSION: int = 8
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -682,6 +682,134 @@ SESSION_FORK_KINDS: Tuple[str, ...] = (
 META_STAGE_A_BOUNDARY_EPOCH = "stage_a_origin_marker_boundary_epoch"
 
 
+
+# ---- schema v6 -> v7: the lineage lookup index ----------------------------
+#
+# THIS STEP IS NOT THIS FEATURE'S. It belongs to the session-lineage
+# change, which took v7 first. It is reproduced here because this branch
+# was cut from v1.0.3 (v6) and needs an unbroken 6 -> 7 -> 8 chain to be
+# independently correct: a STEPS table with a hole at 6 cannot migrate any
+# database at all, so omitting it would break every install rather than
+# just this feature.
+#
+# THE MERGE RESOLUTION IS "KEEP EXACTLY ONE COPY", and it is safe either
+# way because the statement is idempotent BY THE STATEMENT (CREATE INDEX
+# IF NOT EXISTS), not by a PRAGMA inspection. Two copies running in
+# sequence produce the same index and the same row count. If the two
+# definitions ever disagree, lineage's is the authority - it owns the
+# column being indexed.
+DDL_SESSIONS_CLAUDE_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_sessions_claude_uuid "
+    "ON sessions (claude_session_uuid) "
+    "WHERE claude_session_uuid IS NOT NULL"
+)
+
+#: Ordered DDL for a v6 -> v7 database. Additive, one partial index, no
+#: new column: CREATE INDEX IF NOT EXISTS is idempotent by the statement
+#: itself, unlike every ALTER TABLE step before it.
+DDL_V7: Tuple[str, ...] = (DDL_SESSIONS_CLAUDE_UUID_INDEX,)
+
+#: A REVERSE of v6 -> v7 destroys no data at all - an index is derived,
+#: not stored fact - so unlike v3..v6 this one has a real inverse.
+REVERSAL_SQL_V7: Tuple[str, ...] = ("DROP INDEX IF EXISTS ix_sessions_claude_uuid",)
+
+
+# ---- schema v7 -> v8: user-defined sidebar groups -------------------------
+#
+# WHY THIS IS IN THE DATABASE AND NOT IN config.json. Projects were moved
+# to DB-only precisely because a second source of truth in config.json
+# produced a UI that contradicted itself, and a group model carries the
+# same hazard in the same place: the sidebar would have to decide which
+# of two disagreeing lists of groups to draw. There is one list, it is
+# here, and config.json never learns the word "group".
+#
+# MEMBERSHIP IS KEYED BY tmux_name, NOT BY sessions.id, and that is the
+# decision worth reading. The obvious shape is a nullable
+# ``sessions.group_id`` column, and it is wrong here: the sidebar's rows
+# come from ``GET /sessions/attachable``, which is a live tmux probe, and
+# a tmux session that this install has never adopted HAS NO ROW IN
+# ``sessions`` at all. A foreign key to a table that cannot represent the
+# thing being grouped is a model that silently cannot hold half the
+# user's data - the same shape as this project's own CubeBackup and
+# nut-b findings, where the thing that mattered was outside the structure
+# doing the enumerating. tmux_name is also exactly the key the sidebar's
+# existing pin set and manual order already use, so all three pieces of
+# per-row state agree on what identifies a row.
+#
+# ONE GROUP PER SESSION, ENFORCED BY THE SCHEMA. ``tmux_name`` is the
+# PRIMARY KEY of the membership table, so a second membership for the
+# same session is impossible at the database level rather than by
+# convention. See the module docblock in src/core/session_group_store.py
+# for why one-per-session rather than many.
+#
+# DELETING A GROUP MUST NEVER DELETE A CONVERSATION. ``ON DELETE
+# CASCADE`` here deletes the MEMBERSHIP row, which is the only thing this
+# table owns; the session itself is not referenced by it and cannot be
+# reached from it. So the strongest destructive act available - a raw
+# ``DELETE FROM session_groups`` with no application code involved -
+# returns those sessions to ungrouped and can do nothing worse. The API
+# path does the same thing explicitly; this is the guarantee underneath
+# it, not a substitute for it.
+DDL_SESSION_GROUPS = """
+CREATE TABLE IF NOT EXISTS session_groups (
+  id         INTEGER PRIMARY KEY,
+  group_uuid TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+)
+"""
+
+DDL_SESSION_GROUP_MEMBERS = """
+CREATE TABLE IF NOT EXISTS session_group_members (
+  tmux_name  TEXT PRIMARY KEY,
+  group_id   INTEGER NOT NULL REFERENCES session_groups(id) ON DELETE CASCADE,
+  added_at   TEXT NOT NULL
+)
+"""
+
+DDL_SESSION_GROUPS_POSITION_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_session_groups_position "
+    "ON session_groups (position)"
+)
+
+DDL_SESSION_GROUP_MEMBERS_GROUP_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_session_group_members_group "
+    "ON session_group_members (group_id)"
+)
+
+#: Ordered DDL for a v7 -> v8 database. Two new tables and two indexes,
+#: nothing altered and no column added to an existing table - so, like
+#: v7 and unlike v3..v6, every statement is idempotent BY THE STATEMENT
+#: and the step needs no PRAGMA inspection to be safe on a retry.
+DDL_V8: Tuple[str, ...] = (
+    DDL_SESSION_GROUPS,
+    DDL_SESSION_GROUP_MEMBERS,
+    DDL_SESSION_GROUPS_POSITION_INDEX,
+    DDL_SESSION_GROUP_MEMBERS_GROUP_INDEX,
+)
+
+#: A REVERSE of v7 -> v8 drops both tables, which is the exact inverse of
+#: creating them. It destroys the user's groups and their membership -
+#: real loss, named in REVERSAL_DESTROYS - and destroys no conversation,
+#: because neither table holds one.
+REVERSAL_SQL_V8: Tuple[str, ...] = (
+    "DROP TABLE IF EXISTS session_group_members",
+    "DROP TABLE IF EXISTS session_groups",
+)
+
+#: The longest a group name may be. Not a UI nicety: an unbounded name is
+#: an unbounded row and an unbounded header, and the sidebar has one
+#: column of width to render it in.
+SESSION_GROUP_NAME_MAX = 40
+
+#: The most groups one install may hold. A sidebar with more section
+#: headers than rows has stopped being a sidebar, and a bound here is
+#: what stops a stuck client from growing the table without limit.
+SESSION_GROUP_MAX = 50
+
+
 # Columns a REVERSE of each step permanently destroys, keyed by the
 # to_version it undoes. Used to generate the typed-confirmation text in
 # section 9.5 ("permanently deletes the values stored in: ..."), which
@@ -701,4 +829,8 @@ REVERSAL_DESTROYS: dict = {
     # destroys no stored value, so the tuple is deliberately empty rather
     # than absent: absent would read as "nobody considered this step".
     7: (),
+    8: (
+        "session_groups (whole table)",
+        "session_group_members (whole table)",
+    ),
 }

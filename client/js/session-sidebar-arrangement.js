@@ -76,16 +76,53 @@ console.log('[SessionSidebarArrangement Module] Loading...');
             if (!known.has(row.name)) ordered.push(row);
         }
 
-        const pinnedBand = [];
-        const restBand = [];
+        // PARTITION BY BAND, not by the pin flag alone. `bands()` is
+        // PINNED, then each user group in its stored order, then OTHER -
+        // and with the group model unknown or unreadable it is exactly
+        // the pinned/rest pair this function has always produced, so an
+        // install with no groups (or one that could not read them) gets
+        // byte-identical output to the pre-groups build.
+        //
+        // Relative order INSIDE a band is preserved from `ordered`, which
+        // is the user's own manual order. That is what lets the group
+        // dimension be added without touching the ordering algebra: a
+        // group changes which band a row is in, never where it sits
+        // within one.
+        const G = groupStore();
+        const keys = G ? G.bandOrder() : ['pinned', 'other'];
+        const buckets = new Map(keys.map((k) => [k, []]));
         for (const row of ordered) {
             row.is_pinned = S.isPinned(row.name);
-            (row.is_pinned ? pinnedBand : restBand).push(row);
+            row.band_key = G
+                ? G.bandOf(row.name, row.is_pinned)
+                : (row.is_pinned ? 'pinned' : 'other');
+            // A row whose band is not in the current order can only mean
+            // the group model changed between the membership read and
+            // this paint. It goes to OTHER rather than being DROPPED -
+            // a row that renders nowhere is a conversation the user
+            // cannot reach, which is far worse than one in the wrong
+            // section for a single frame.
+            if (!buckets.has(row.band_key)) row.band_key = 'other';
+            buckets.get(row.band_key).push(row);
         }
+        let out = [];
+        for (const key of keys) out = out.concat(buckets.get(key));
 
         const remembered = S.dedupe(S.current().order.concat(S.current().pinned));
         const missing = remembered.filter((n) => !byName.has(n));
-        return { rows: pinnedBand.concat(restBand), missing };
+        return { rows: out, missing };
+    }
+
+    /**
+     * Description: the group store, or null when it has not loaded. Read
+     *   through a function rather than aliased at module load because
+     *   this file may be parsed before it - and a null here is a
+     *   MEANINGFUL state (draw the pre-groups list), not an error.
+     * Inputs: none. Output: object|null.
+     */
+    function groupStore() {
+        const G = window.SessionSidebarGroupStore;
+        return (G && G.isUsable()) ? G : null;
     }
 
     /**
@@ -261,7 +298,7 @@ console.log('[SessionSidebarArrangement Module] Loading...');
         VERSION: S.VERSION,
         MAX_REMEMBERED: S.MAX_REMEMBERED,
         GROUP_KEYS: S.GROUP_KEYS,
-        arrange, mergeOrder, togglePin, move, placeAt, sameOrder,
+        arrange, mergeOrder, togglePin, move, placeAt, sameOrder, groupStore,
     };
     console.log('[SessionSidebarArrangement Module] Exported as window.SessionSidebarArrangement');
 })();

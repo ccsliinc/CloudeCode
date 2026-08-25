@@ -355,6 +355,49 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   density (string) - 'compact' | 'cozy' | 'detailed'.
      * Output: string - HTML.
      */
+    /**
+     * Description: the group affordance on a row - a CHIP naming the
+     *   group this conversation is filed in, doubling as the button that
+     *   opens the group picker.
+     *
+     *   IT IS ONE CONTROL, NOT TWO, and that is the point. The chip has
+     *   to exist anyway for a PINNED row, because a pinned row is drawn
+     *   in the pinned band rather than under its group's header, so
+     *   without it the filing is invisible for exactly the rows the user
+     *   cares most about. Making that same chip the picker means the
+     *   non-drag route is always visible rather than hidden behind a
+     *   hover, which matters on a phone where there is no hover.
+     *
+     *   An UNGROUPED row still gets the control, rendered as a muted
+     *   "+ group" rather than as nothing: a control that only appears
+     *   once you have used it cannot be discovered.
+     *
+     *   Emits NOTHING when the group model is unknown or unreadable.
+     *   Offering to file a conversation into a table we could not read
+     *   is offering an action that cannot work.
+     * Inputs: name (string) - tmux name.
+     * Output: string - HTML, possibly empty.
+     */
+    function groupChipHtml(name) {
+        const G = window.SessionSidebarGroupStore;
+        if (!G || !G.isUsable()) return '';
+        const uuid = G.groupOf(name);
+        const group = uuid ? G.groupByUuid(uuid) : null;
+        const label = group ? group.name : '+ group';
+        const title = group
+            ? `In the ${group.name} group - click to move it`
+            : 'Not in a group - click to file it';
+        return (
+            '<button type="button" class="session-sidebar-row-group'
+            + `${group ? '' : ' session-sidebar-row-group--none'}" `
+            + `data-group-pick="${esc(name)}" `
+            + `title="${esc(title)}" aria-label="${esc(title)}" `
+            + 'aria-haspopup="menu">'
+            + `<span class="session-sidebar-row-group__label">${esc(label)}</span>`
+            + '</button>'
+        );
+    }
+
     function rowHtml(r, density) {
         const mode = density || 'cozy';
         const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
@@ -414,6 +457,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             // the other coloured mark on the row.
             themeSwatch +
             inlineBadge +
+            groupChipHtml(r.name) +
             pinButtonHtml(r.name, !!r.is_pinned) +
             markUnread +
             rowAction +
