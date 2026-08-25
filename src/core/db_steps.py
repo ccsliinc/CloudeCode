@@ -298,6 +298,201 @@ def _step_v7_to_v8(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+#: Columns the v9 merge may carry from the discarded corpse onto the
+#: survivor, and ONLY when the survivor has nothing there. Declared as a
+#: list rather than "every column" so a future column is opted in
+#: deliberately: silently copying a column whose meaning nobody checked
+#: is how a repair becomes a corruption.
+_V9_CARRY_FORWARD = (
+    "project_id",
+    "working_dir",
+    "legacy_session_id",
+    "agent_type",
+    "agent_family",
+    "model",
+    "claude_session_uuid",
+    "parent_session_id",
+    "fork_kind",
+    "pinned_theme",
+    "audio_enabled",
+    "title",
+    "adopted_at",
+    "last_seen_running_at",
+)
+
+
+def _v9_merge_rename_splits(conn: sqlite3.Connection) -> int:
+    """Heal every pair of rows the rename bug made out of one session.
+
+    Description: the repair half of v9. A rename used to move the one
+      field identity was keyed on, so the stored row was reaped as
+      ``tmux_missing`` and the same live session returned through the
+      adopt path as a stranger and got a second row.
+
+      THE SHAPE IS RECOGNISABLE FROM THE DATA ALONE, which is what makes
+      this safe to run unattended. A split pair is: same socket, same
+      ``tmux_created_epoch``, same NON-NULL tmux ``#{session_id}``,
+      EXACTLY two rows, EXACTLY one of them ``stopped`` and one not. Two
+      genuinely different sessions cannot share both an epoch and an id
+      on one socket - the id is unique per tmux server lifetime and the
+      epoch pins the lifetime - so nothing legitimate has this shape.
+      Every clause is a refusal: three rows, two live rows, or a NULL id
+      all leave the group untouched, because none of those can be told
+      apart from real data.
+
+      THE SURVIVOR IS THE LIVE ROW. It carries the name tmux actually
+      reports right now, which is the only name any probe will match.
+
+      ORIGIN COMES FROM THE CORPSE WHEN THE CORPSE SAYS ``created``, and
+      this is the one place that rule is broken on purpose. ``origin`` is
+      normally written once and never recomputed - but the survivor's
+      ``adopted`` is an ARTEFACT OF THE DEFECT, not a user action: the
+      session was adopted only because the rename made the app treat its
+      own session as a stranger. Restoring ``created`` puts back what was
+      true before the bug rewrote it. The reasoning is recorded here
+      rather than left implicit precisely because it contradicts the
+      general rule.
+
+      CARRY-FORWARD FILLS GAPS AND NEVER OVERRIDES. A value already on
+      the survivor is a live answer and wins; the corpse only supplies
+      what the survivor has nothing for. Unread flags are ORed, since
+      "unread" is a claim that something happened and losing it is worse
+      than keeping it.
+
+      IDEMPOTENT. After a run no group has two rows, so a retry after an
+      INTERRUPTED trail entry finds nothing to do.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: int - how many corpse rows were removed.
+    Example: _v9_merge_rename_splits(conn)  # 1
+    """
+    groups = conn.execute(
+        "SELECT tmux_socket, tmux_created_epoch, tmux_session_id "
+        "FROM sessions "
+        "WHERE tmux_session_id IS NOT NULL AND tmux_session_id != '' "
+        "AND tmux_created_epoch IS NOT NULL "
+        "GROUP BY tmux_socket, tmux_created_epoch, tmux_session_id "
+        "HAVING COUNT(*) = 2"
+    ).fetchall()
+
+    merged = 0
+    for group in groups:
+        socket, epoch, sid = (
+            group["tmux_socket"],
+            group["tmux_created_epoch"],
+            group["tmux_session_id"],
+        )
+        pair = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM sessions WHERE tmux_socket = ? "
+                "AND tmux_created_epoch = ? AND tmux_session_id = ? "
+                "ORDER BY id",
+                (socket, epoch, sid),
+            ).fetchall()
+        ]
+        living = [r for r in pair if r["lifecycle"] != "stopped"]
+        corpses = [r for r in pair if r["lifecycle"] == "stopped"]
+        if len(living) != 1 or len(corpses) != 1:
+            # Two live rows, or two corpses. Neither is the split this
+            # step recognises, and guessing which to keep would be a
+            # verdict nobody measured.
+            continue
+        survivor, corpse = living[0], corpses[0]
+
+        sets, values = [], []
+        for column in _V9_CARRY_FORWARD:
+            if survivor.get(column) is None and corpse.get(column) is not None:
+                sets.append(f"{column} = ?")
+                values.append(corpse[column])
+        if corpse.get("origin") == "created" and survivor.get("origin") != "created":
+            sets.append("origin = ?")
+            values.append("created")
+        for flag in ("unread_auto", "unread_manual"):
+            if int(corpse.get(flag) or 0) and not int(survivor.get(flag) or 0):
+                sets.append(f"{flag} = 1")
+        earlier = min(
+            str(survivor.get("created_at") or ""),
+            str(corpse.get("created_at") or ""),
+        )
+        if earlier and earlier != survivor.get("created_at"):
+            sets.append("created_at = ?")
+            values.append(earlier)
+
+        if sets:
+            values.append(int(survivor["id"]))
+            conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", values
+            )
+        # Group membership is keyed on tmux_name, not on the row, so the
+        # corpse's memberships describe the OLD name and are meaningless
+        # once the name is gone. Nothing to move.
+        conn.execute("DELETE FROM sessions WHERE id = ?", (int(corpse["id"]),))
+        merged += 1
+    return merged
+
+
+def _v9_backfill_labels(conn: sqlite3.Connection) -> int:
+    """Give every row a human label derived from its tmux name.
+
+    Description: ``sessions.title`` becomes the user-facing LABEL, and a
+      row with none would render blank. The derivation reverses two
+      things the APP did rather than anything a user chose: the
+      ``cloude_`` prefix the launcher adds, and the underscores the
+      name filter substitutes for spaces.
+
+      AN EXISTING TITLE IS NEVER TOUCHED. The lineage feature already
+      writes this column for forks, and overwriting a title someone or
+      something chose in order to install a derived one would be a
+      downgrade.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: int - how many rows were given a label.
+    Example: _v9_backfill_labels(conn)  # 3
+    """
+    from src.core.session_label import label_from_tmux_name
+
+    rows = conn.execute(
+        "SELECT id, tmux_name FROM sessions "
+        "WHERE (title IS NULL OR title = '') AND tmux_name IS NOT NULL"
+    ).fetchall()
+    filled = 0
+    for row in rows:
+        label = label_from_tmux_name(row["tmux_name"])
+        if not label:
+            continue
+        conn.execute(
+            "UPDATE sessions SET title = ? WHERE id = ?",
+            (label, int(row["id"])),
+        )
+        filled += 1
+    return filled
+
+
+def _step_v8_to_v9(conn: sqlite3.Connection) -> None:
+    """Make ``title`` the session LABEL, and heal the rename splits.
+
+    Description: NO COLUMN IS ADDED. ``sessions.title`` has been in the
+      DDL since v2; what changes at v9 is its MEANING - it becomes the
+      user-facing label, decoupled from the tmux session name so that
+      renaming a session no longer moves the field identity is keyed on.
+      This step is therefore entirely data: backfill the column so no row
+      renders blank, and repair the rows the old behaviour split.
+
+      ORDER MATTERS. The merge runs FIRST, so a corpse about to be
+      deleted is not given a label on the way out and the survivor is
+      labelled from the name it will actually keep.
+
+      A v8 READER STILL WORKS against the same file. It does not display
+      ``title`` and will show the tmux name as it always did; the labels
+      are not lost, only unread. The merged rows it will simply not see,
+      which is the point.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v8_to_v9(conn)  # after _step_v7_to_v8
+    """
+    _v9_merge_rename_splits(conn)
+    _v9_backfill_labels(conn)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -311,6 +506,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     5: _step_v5_to_v6,
     6: _step_v6_to_v7,
     7: _step_v7_to_v8,
+    8: _step_v8_to_v9,
 }
 
 

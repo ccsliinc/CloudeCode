@@ -1,0 +1,281 @@
+"""The user-facing LABEL, and the lossy filter that derives a tmux name.
+
+TWO THINGS THAT WERE ONE THING. A session's displayed name and its tmux
+session name were the same string, so renaming a session meant
+``tmux rename-session``, which moves the one field the identity key
+``(socket, name, epoch)`` was built on. The stored row stopped matching
+the live listing, the reaper called it dead, and the same live session
+came back through the adopt path as a stranger and got a second row. One
+session, two rows, one of them a corpse.
+
+Separating them does not patch that path - it makes it UNREACHABLE from
+the rename surface. A label lives in ``sessions.title``. Changing it
+writes one column. The tmux name and the creation epoch never move, so
+the identity triple is never touched by a rename at all.
+
+It also removes a restriction the user asked to have removed: the old
+rename endpoint enforced ``^[A-Za-z0-9_-]{1,64}$``, so "Media
+Compression" was not a legal session name. A label is a label; it takes
+what a human types.
+
+WHAT WAS MEASURED ABOUT TMUX, RATHER THAN ASSUMED. On a throwaway socket,
+``new-session -s`` ACCEPTED every one of: a space, ``:``, ``.``, ``/``,
+``"``, ``$``. So tmux is far more permissive than the old validator
+implied. Two real constraints remain:
+
+  NON-ASCII IS NOT PRESERVED. A session created as ``emoji 🚀 ok`` reads
+  back from ``list-sessions`` as ``emoji __ ok``. tmux mangles it, so a
+  derived name containing one would not round-trip and every lookup by
+  name would miss.
+
+  ``:`` AND ``.`` ARE TARGET SYNTAX. tmux's ``-t`` grammar splits on
+  them, so a name carrying either is legal to CREATE and awkward to
+  ADDRESS - which is what every other call site in this codebase does.
+
+Neither constrains the LABEL, because the label is never handed to tmux.
+
+THE FILTER IS LOSSY AND THEREFORE NOT AN IDENTITY. ``client: acme`` and
+``client. acme`` both sanitise to ``client_acme``. That is deliberate and
+safe here precisely because the tmux name no longer identifies anything
+on its own - the row is identified by ``(socket, name, epoch)`` and, for
+a rename, by ``(epoch, #{session_id})``. The collision is resolved by
+appending a suffix, never by rejecting the user's label, and never by
+letting two live sessions share a tmux name.
+
+WHY THIS DOES NOT DISTURB SIDEBAR GROUPS. Group membership is keyed on
+``tmux_name`` on purpose: an unadopted tmux session has no ``sessions``
+row to key on, so a row-keyed membership could not represent it at all.
+That reasoning is untouched here. The tmux name is now MORE stable than
+before, not less - nothing renames it after creation - so the group key
+is strictly safer than it was.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import sqlite3
+import unicodedata
+from typing import Iterable, Optional, Set
+
+import structlog
+
+from src.core.trail_entry import utc_now
+
+logger = structlog.get_logger()
+
+#: Longest label we will store. Generous, because it is a human label and
+#: not a key, but bounded so no surface has to defend against an
+#: unbounded string and no row can be made pathological on purpose.
+LABEL_MAX_CHARS: int = 200
+
+#: Longest derived tmux name. tmux itself imposes no such limit; this
+#: keeps the value comfortable inside a FIFO filename and a status line.
+TMUX_NAME_MAX_CHARS: int = 64
+
+#: The prefix this app puts on the tmux names it creates. Stripped when
+#: deriving a label from an existing name, because it is an artefact of
+#: the launcher rather than anything a user typed.
+APP_TMUX_PREFIX = "cloude_"
+
+#: Used when a label sanitises down to nothing at all. tmux will not take
+#: an empty name and the caller has no better fallback than we do.
+FALLBACK_TMUX_NAME = "session"
+
+#: Characters replaced by ``_`` in a derived tmux name: tmux target
+#: separators plus anything whitespace-like. Applied AFTER non-ASCII has
+#: been dropped, so this only ever sees a byte it can reason about.
+_UNSAFE_FOR_TMUX = re.compile(r"[\s:./\\'\"`$;|&<>(){}\[\]*?!#%^~,=+@]+")
+
+#: Control characters, which no label may contain. Includes newline and
+#: tab: a label is rendered on one line everywhere it appears, and a
+#: newline would either truncate it or break the surface showing it.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class InvalidLabel(ValueError):
+    """A label that cannot be stored or rendered as given.
+
+    Description: raised rather than silently corrected, because quietly
+      mangling what a user typed and then showing them the mangled
+      version is how a UI teaches people not to trust it. The one
+      correction applied without complaint is stripping surrounding
+      whitespace, which is essentially always a paste artefact.
+    """
+
+
+def validate_label(label: Optional[str]) -> str:
+    """Accept a human label, or say exactly why it cannot be one.
+
+    Description: permissive on PURPOSE. Spaces, punctuation, mixed case
+      and non-ASCII are all fine - this string is never handed to tmux,
+      so tmux's constraints do not apply to it. Only two classes are
+      refused: empty (there is nothing to show) and control characters
+      (they break the single-line surfaces that render it).
+    Inputs: label (str | None) - the raw value from the user.
+    Output: str - the label to store, surrounding whitespace stripped.
+    Raises: InvalidLabel - empty, too long, or carrying a control char.
+    Example: validate_label('  Media Compression ')  # 'Media Compression'
+    """
+    if label is None:
+        raise InvalidLabel("a session label cannot be empty")
+    cleaned = label.strip()
+    if not cleaned:
+        raise InvalidLabel("a session label cannot be empty")
+    if len(cleaned) > LABEL_MAX_CHARS:
+        raise InvalidLabel(
+            f"a session label may be at most {LABEL_MAX_CHARS} characters"
+        )
+    if _CONTROL_CHARS.search(cleaned):
+        raise InvalidLabel(
+            "a session label cannot contain control characters such as a "
+            "newline or a tab"
+        )
+    return cleaned
+
+
+def sanitize_tmux_name(label: str) -> str:
+    """Derive a tmux-safe session name from a free-form label.
+
+    Description: THE FILTER, and it is lossy by design - see the module
+      docstring. Three passes, in this order:
+
+        1. Drop everything non-ASCII. Measured: tmux does not preserve
+           it, so a name carrying it would not round-trip through
+           ``list-sessions`` and every lookup by name would miss.
+        2. Replace runs of tmux-hostile characters with a single ``_``.
+           That set leads with ``:`` and ``.`` because they are tmux's
+           own ``-t`` target separators, and continues through the shell
+           metacharacters, since this value ends up in command lines and
+           in a FIFO filename.
+        3. Trim leading and trailing ``_`` and truncate.
+
+      Never returns an empty string: a label of ``!!!`` reduces to
+      nothing and gets ``FALLBACK_TMUX_NAME`` instead, because tmux would
+      refuse the empty name and this function's caller has no better
+      answer available than this one does.
+    Inputs: label (str) - any label; need not have been validated.
+    Output: str - a non-empty ASCII name safe in a tmux target.
+    Example: sanitize_tmux_name('client: acme')  # 'client_acme'
+    """
+    folded = unicodedata.normalize("NFKD", label or "")
+    ascii_only = folded.encode("ascii", "ignore").decode("ascii")
+    replaced = _UNSAFE_FOR_TMUX.sub("_", ascii_only)
+    replaced = re.sub(r"_+", "_", replaced).strip("_")
+    trimmed = replaced[:TMUX_NAME_MAX_CHARS].strip("_")
+    return trimmed or FALLBACK_TMUX_NAME
+
+
+def unique_tmux_name(label: str, *, taken: Iterable[str]) -> str:
+    """Derive a tmux name that no live session already holds.
+
+    Description: the collision half of a lossy filter. Two labels CAN
+      sanitise to one name, and the answer is a suffix rather than a
+      rejection: the user's label is theirs and is stored intact, while
+      the tmux name is an internal handle that nobody reads and nothing
+      identifies a session by on its own.
+
+      The walk is BOUNDED. ``_2`` through ``_49``, and if every one of
+      those is taken it falls back to an 8-hex-character digest of the
+      label plus the taken-set size, which cannot loop. An unbounded
+      "keep incrementing" would be a hang under a pathological set, and
+      a hang in the create path is worse than an ugly name.
+    Inputs: label (str) - the user's label. taken (Iterable[str]) - the
+      names already in use on this socket.
+    Output: str - a name not present in ``taken``.
+    Example: unique_tmux_name('acme', taken={'acme'})  # 'acme_2'
+    """
+    used: Set[str] = set(taken)
+    base = sanitize_tmux_name(label)
+    if base not in used:
+        return base
+    room = max(1, TMUX_NAME_MAX_CHARS - 4)
+    stem = base[:room].strip("_") or FALLBACK_TMUX_NAME
+    for suffix in range(2, 50):
+        candidate = f"{stem}_{suffix}"
+        if candidate not in used:
+            return candidate
+    digest = hashlib.sha256(
+        f"{label}|{len(used)}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"{stem[: TMUX_NAME_MAX_CHARS - 9]}_{digest}"
+
+
+def label_from_tmux_name(tmux_name: Optional[str]) -> Optional[str]:
+    """Derive a readable label from an existing tmux session name.
+
+    Description: used to give rows that predate the label a sensible one
+      instead of a blank. Two transforms, both reversing something the
+      app did rather than something the user chose: the ``cloude_``
+      prefix the launcher adds, and the underscores the filter
+      substituted for spaces.
+
+      THE PREFIX IS ONLY REMOVED WHEN SOMETHING SURVIVES IT. A name of
+      exactly ``cloude_`` keeps its stem rather than becoming empty; a
+      blank label is worse than an ugly one, and the whole point of this
+      column is that a row always has something to show.
+    Inputs: tmux_name (str | None).
+    Output: str | None - the derived label, or None for no input.
+    Example: label_from_tmux_name('cloude_Media')  # 'Media'
+    """
+    if not tmux_name:
+        return None
+    stem = tmux_name
+    if stem.startswith(APP_TMUX_PREFIX) and len(stem) > len(APP_TMUX_PREFIX):
+        stem = stem[len(APP_TMUX_PREFIX) :]
+    return stem.replace("_", " ").strip() or tmux_name
+
+
+def set_label(
+    conn: sqlite3.Connection,
+    *,
+    session_uuid: str,
+    label: str,
+    now: Optional[str] = None,
+) -> bool:
+    """Store a user-chosen label on one session row.
+
+    Description: THE USER SET, and deliberately not the same operation as
+      ``session_lineage._maybe_set_title``. That one SEEDS a title and
+      refuses to overwrite, because a fork's inherited title must not
+      flap every time a hook fires. This one is a person deciding what
+      their session is called, so it overwrites - the two are different
+      operations on one column and keeping them apart is why neither has
+      to compromise.
+
+      IDENTITY IS NOT IN THE UPDATE. ``tmux_name``, ``tmux_created_epoch``
+      and ``tmux_session_id`` are not in the SET clause and never will
+      be. That is the property that makes a rename structurally incapable
+      of splitting a session into two rows, so it is asserted by a test
+      rather than left to review.
+
+      The caller owns the transaction, matching every other write path in
+      this package.
+    Inputs: conn (sqlite3.Connection). session_uuid (str) - the row's
+      external identity, which survives a tmux rename and is therefore
+      the right handle for this. label (str) - validated here, before any
+      write. now (str | None) - ISO stamp, defaults to ``utc_now()``.
+    Output: bool - True when a row was updated. False means NO SUCH ROW,
+      which is a definite negative the caller can render, not an error.
+    Raises: InvalidLabel - the label cannot be stored; nothing is written.
+    Example: set_label(conn, session_uuid='u1', label='Media Compression')
+    """
+    cleaned = validate_label(label)
+    stamp = now or utc_now()
+    cursor = conn.execute(
+        "UPDATE sessions SET title = ?, updated_at = ? WHERE session_uuid = ?",
+        (cleaned, stamp, session_uuid),
+    )
+    if cursor.rowcount > 0:
+        logger.info(
+            "session_label_set",
+            session_uuid=session_uuid,
+            note="title only; no identity column is in this statement",
+        )
+        return True
+    logger.warning(
+        "session_label_no_such_row",
+        session_uuid=session_uuid,
+        note="no row carries that session_uuid, so nothing was labelled",
+    )
+    return False
