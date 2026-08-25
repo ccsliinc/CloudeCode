@@ -485,8 +485,22 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
                     ],
                 }
             ],
-            # SessionStart is NOT a cloudecode-managed event at all — must
-            # pass through completely untouched.
+            # feat/session-lineage - this slot used to hold SessionStart,
+            # which WAS unmanaged when this test was written and is now a
+            # lifecycle event we install. Swapped to PreCompact, which
+            # this app still does not manage, so the case the test exists
+            # to cover - a user hook under an event we never touch - is
+            # still actually being covered rather than quietly retired.
+            # The SessionStart pass-through case is asserted separately
+            # below, where it now belongs: preserved AND appended to.
+            "PreCompact": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": "echo user-pre-compact"}
+                    ],
+                }
+            ],
             "SessionStart": [
                 {
                     "matcher": "*",
@@ -517,7 +531,16 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
     assert CLOUDECODE_HOOKS_MARKER in stop_entries[1]["hooks"][0]["command"]
 
     # An event we don't manage at all is untouched.
-    assert data["hooks"]["SessionStart"] == user_block["hooks"]["SessionStart"]
+    assert data["hooks"]["PreCompact"] == user_block["hooks"]["PreCompact"]
+
+    # feat/session-lineage - SessionStart is managed NOW, so the user's
+    # entry must survive and ours must be appended after it. Asserted in
+    # that order deliberately: claude_hooks appends managed matchers last
+    # so a user hook's exit code can short-circuit ours, never the reverse.
+    starts = data["hooks"]["SessionStart"]
+    assert len(starts) == 2
+    assert starts[0]["hooks"][0]["command"] == "echo user-session-start"
+    assert CLOUDECODE_HOOKS_MARKER in starts[1]["hooks"][0]["command"]
 
     # Non-hooks user keys preserved.
     assert data["someOtherUserKey"] == "value"
@@ -573,7 +596,7 @@ def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
 
 
 def test_build_hook_block_has_all_managed_events():
-    """feat/hook-driven-status — 3 toast events + 5 activity-only events."""
+    """3 toast events + 5 activity-only + 2 lifecycle (feat/session-lineage)."""
     block = _build_hook_block()
     assert set(block.keys()) == {
         "Stop",
@@ -584,6 +607,12 @@ def test_build_hook_block_has_all_managed_events():
         "PostToolUse",
         "SubagentStart",
         "SubagentStop",
+        # feat/session-lineage - the only two events that carry the Claude
+        # conversation uuid and how it started. Listed literally rather
+        # than derived from _MANAGED_EVENTS: a test that recomputes the
+        # value under test can never disagree with it.
+        "SessionStart",
+        "SessionEnd",
     }
 
 
