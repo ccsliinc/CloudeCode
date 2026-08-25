@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,24 @@ from src.core.test_write_guard import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _outside_temp_probe(tag: str) -> Path:
+    """Return a unique, non-existent path that sits outside every temp root.
+
+    Unique per call on purpose. A NEUTERED guard genuinely does create
+    these files, so a leftover from an earlier run would fail the next
+    run's precondition and read as a guard regression rather than as
+    litter. A fresh name each time keeps the two states distinguishable.
+
+    Inputs:
+        tag: Short label distinguishing one probe from another.
+    Outputs:
+        Path - under the repo's build/ dir, guaranteed absent.
+    """
+    probe = REPO_ROOT / "build" / f"guard-probe-{tag}-{uuid.uuid4().hex}.json"
+    assert not probe.exists()
+    return probe
 
 
 def _sha256(path: Path) -> str | None:
@@ -159,8 +178,7 @@ def test_direct_import_cannot_write_outside_temp() -> None:
     :func:`test_guard_refuses_the_real_claude_settings_path_by_name`,
     which asks for a verdict and performs no write at all.
     """
-    outside_temp = REPO_ROOT / "build" / "guard-probe-never-written.json"
-    assert not outside_temp.exists()
+    outside_temp = _outside_temp_probe("direct")
 
     with pytest.raises(OutsideTempWriteError) as excinfo:
         claude_hooks.ensure_hook_settings(outside_temp)
@@ -211,8 +229,7 @@ def test_guard_survives_a_subprocess_fork() -> None:
     Aimed at an outside-temp path with no blast radius, for the reason
     spelled out in :func:`test_direct_import_cannot_write_outside_temp`.
     """
-    outside_temp = REPO_ROOT / "build" / "guard-probe-subprocess.json"
-    assert not outside_temp.exists()
+    outside_temp = _outside_temp_probe("subprocess")
 
     program = (
         "import sys, pathlib\n"
