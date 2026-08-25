@@ -30,7 +30,8 @@ EVERY state is generated here, including the healthy one. Leaving "ok" on
 AppKit's template path while the rest went through the ordinary image path was
 tried first and measured wrong: the two paths render at different weights, so
 "stopped" came out BRIGHTER than "ok" and a stopped server looked identical to
-a healthy one. See NORMAL_GLYPH_ALPHA below.
+a healthy one. Owning the fill also means owning the WEIGHT, and the mark is
+drawn at full opacity in every state. See NORMAL_GLYPH_ALPHA below.
 
 STATE VOCABULARY - TWO AXES, AND BRIGHTNESS IS NOT ONE OF THEM
 --------------------------------------------------------------
@@ -110,27 +111,36 @@ GLYPH_COLORS: dict[str, tuple[int, int, int]] = {
 
 #: Glyph opacity for the NORMAL (undimmed) states, per appearance.
 #:
-#: This is calibrated, not chosen. A template image and an ordinary image do
-#: not render at the same weight in the menu bar: AppKit draws a template
-#: glyph muted, and the bar is translucent so everything composites over the
-#: wallpaper. Measured on a dark menu bar with the tray harness, native system
-#: icons and the template-rendered mark both land at p90 luminance 70 against
-#: a background of 32, while a FULL opacity white glyph lands at 166. Left
-#: uncalibrated, every non-healthy state renders more than twice as heavy as
-#: the healthy one and as every neighbouring system icon.
+#: FULL STRENGTH IN BOTH APPEARANCES. The mark is drawn opaque: solid black on
+#: a light menu bar, solid white on a dark one.
 #:
-#: The dark value is fitted from that measurement (rendered = 32 + 135.4 * a,
-#: so a = 0.28 reproduces the native 70) and then verified by re-measuring.
+#: This deliberately REVERSES an earlier calibration, and the reversal is the
+#: whole point, so it is written down rather than quietly overwritten. That
+#: calibration measured native system icons in a real menu bar and fitted the
+#: glyph to match them: rendered = 32 + 135.4 * a on a dark bar, so a = 0.28
+#: reproduced the native p90 luminance of 70. The light value was set to 0.85,
+#: which is not a neutral guess either - it is exactly NSColor.labelColor in
+#: the light appearance, black at 85 percent. So BOTH values had been pinned to
+#: what AppKit does, and the two together are why the mark reads as washed out.
 #:
-#: THE LIGHT VALUE IS NOT VERIFIED. Confirming it means flipping the system
-#: appearance, which is not something to do to a machine somebody is working
-#: on. It is set to the symmetric construction and errs toward the lighter,
-#: less harsh side. To calibrate it properly, switch the menu bar to light and
-#: re-run the harness comparison described in
-#: tests/test_tray_status.node.mjs.
+#: Native is not the target. System menu-bar glyphs are deliberately restrained
+#: because they are chrome; this is an application's own mark and the owner has
+#: reported it as muted twice, on two separate builds. Matching the system's
+#: restraint reproduced the complaint rather than fixing it. Full opacity is
+#: the end stop in both directions, which also makes the two appearances mean
+#: the same thing: composited over its own menu bar, the mark reaches Weber
+#: contrast 1.000 on light and 1.000 on dark, against 0.851 and 0.278 before.
+#:
+#: DIMMING IS STILL FORBIDDEN and is unaffected by this. The per-state
+#: multiplier below stays 1.0 everywhere; the dot carries every distinction.
+#:
+#: Measured on the generated PNGs, not asserted here - see
+#: test_the_glyph_renders_at_full_strength, which reads ink coverage off the
+#: rendered file so that editing this constant without regenerating the assets
+#: fails loudly instead of silently changing nothing.
 NORMAL_GLYPH_ALPHA: dict[str, float] = {
-    "light": 0.85,
-    "dark": 0.28,
+    "light": 1.0,
+    "dark": 1.0,
 }
 
 #: Status dot colours, taken from the macOS system palette so they sit
