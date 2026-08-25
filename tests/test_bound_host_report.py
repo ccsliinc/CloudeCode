@@ -143,3 +143,4 @@ def test_the_reason_names_what_could_not_be_measured() -> None:
     record_bound_host(LOOPBACK_HOST)
     pending = bind_report(configured_host="0.0.0.0")["reason"]
     assert "restart" in pending.lower(), pending
+

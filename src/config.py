@@ -1658,6 +1658,10 @@ class Settings(BaseSettings):
         Raises:
           FileNotFoundError: if config.json is missing.
         """
+        # Imported here rather than at module scope: setup_state imports
+        # settings from this module, so a top-level import is circular.
+        from src.core.setup_state import recorded_bound_host  # noqa: PLC0415
+
         cfg = self.load_auth_config()
         agents = cfg.agents
         notif = cfg.notifications
@@ -1709,10 +1713,15 @@ class Settings(BaseSettings):
             "workspace": cfg.workspace.model_dump(),
             "server_prefs": {
                 **cfg.server_prefs.model_dump(),
-                # The address in force right now, so the screen can show
-                # the preference and the reality separately instead of
-                # showing an aspiration as a fact.
-                "effective_bind_host": self.host,
+                # The address in force right now, read from the STARTUP
+                # RECORD. This used to be self.host - the CONFIGURED value -
+                # under this same comment, which made the screen render "in
+                # force: the server is on 0.0.0.0" for an install whose only
+                # socket was on loopback. Null when nothing recorded a bind,
+                # and the client renders that as a third state rather than
+                # substituting the preference. See
+                # src/core/setup_state.py::recorded_bound_host.
+                "effective_bind_host": recorded_bound_host(),
                 # THREE outcomes for TLS, and this is the third: not on,
                 # not off, but "this build cannot terminate TLS at all",
                 # so the stored preference is recorded and not in force.

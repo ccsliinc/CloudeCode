@@ -89,6 +89,40 @@ def test_get_separates_the_bind_preference_from_the_address_in_force(
     assert prefs["restart_required"] is True
 
 
+def test_the_address_in_force_is_the_startup_record_not_the_configured_host(
+    client, config_path, monkeypatch
+):
+    """The Settings screen had its own copy of the menu bar's defect.
+
+    src/config.py built this payload with ``"effective_bind_host": self.host``
+    under a comment calling it "the address in force right now". It is the
+    CONFIGURED address. On the owner's install that renders "in force: the
+    server is on 0.0.0.0" in the browser while the only socket is on
+    loopback - the same false statement the menu bar was making, in a second
+    place, behind a third piece of code.
+    """
+    from src.config import settings
+
+    monkeypatch.setenv("CLOUDE_BOUND_HOST", "127.0.0.1")
+    monkeypatch.setattr(settings, "host", "0.0.0.0", raising=False)
+
+    prefs = client.get("/api/v1/config/settings").json()["server_prefs"]
+    assert prefs["effective_bind_host"] == "127.0.0.1"
+
+
+def test_an_unmeasured_bind_is_null_rather_than_the_configured_host(
+    client, config_path, monkeypatch
+):
+    """Three outcomes. Null is the third and it must survive the wire."""
+    from src.config import settings
+
+    monkeypatch.delenv("CLOUDE_BOUND_HOST", raising=False)
+    monkeypatch.setattr(settings, "host", "0.0.0.0", raising=False)
+
+    prefs = client.get("/api/v1/config/settings").json()["server_prefs"]
+    assert prefs["effective_bind_host"] is None
+
+
 def test_get_says_tls_is_unavailable_rather_than_off(client, config_path):
     """Three outcomes. This build cannot terminate TLS at all."""
     prefs = client.get("/api/v1/config/settings").json()["server_prefs"]

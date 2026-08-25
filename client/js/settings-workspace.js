@@ -87,7 +87,23 @@
         // THREE states, not two. "saved is empty" is not the same as
         // "saved matches what is running", and neither is "they differ".
         var bindStateHtml;
-        if (!saved) {
+        if (!effective) {
+            // The address in force was never measured. Substituting the
+            // saved preference here would print a plausible wrong address,
+            // which is the defect this whole three-state block exists for -
+            // and it is what the server used to send, because the payload
+            // reported the configured value under the name "effective".
+            bindStateHtml =
+                '<div class="settings-field-hint" data-bind-state="unmeasured">' +
+                'the address the server is listening on could not be ' +
+                'determined. ' +
+                (saved
+                    ? 'your saved preference is <code>' + escapeHtml(saved) +
+                      '</code>, which is what was requested and not proof of ' +
+                      'what is reachable.'
+                    : 'no preference is saved either.') +
+                '</div>';
+        } else if (!saved) {
             bindStateHtml =
                 '<div class="settings-field-hint" data-bind-state="unset">' +
                 'no preference saved. the server is on <code>' + escapeHtml(effective) + '</code> ' +
