@@ -6,6 +6,7 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
+const { resolvePublishedUrl } = require('./published-url');
 
 // Default bind host = 0.0.0.0 (listen on all interfaces). Matches the
 // pydantic Settings default in src/config.py; changing here without
@@ -341,15 +342,19 @@ class ServerManager {
       console.error(`[port] getPublishedUrl: ${err.message}`);
       return null;
     }
-    // The MEASURED bind wins over the configured one whenever the server has
-    // told us. During the setup lockdown they differ, and handing the browser
-    // the configured address would open a URL nothing is listening on.
-    const host = this.getEffectiveBindHost() || this.getBindHost();
-    if (host === '0.0.0.0') {
-      const lan = this.getPrimaryLanIp();
-      return `http://${lan || '127.0.0.1'}:${port}`;
-    }
-    return `http://${host}:${port}`;
+    // The rule itself lives in macOS/published-url.js - a pure module with
+    // no imports, so the node suites (which run with no dependencies
+    // installed) can test it without dragging in axios and electron. Read
+    // its header for why an UNMEASURED bind must not resolve to a LAN
+    // address: during the setup lockdown, which is the state every fresh
+    // install is in, the server listens only on loopback and a LAN URL is
+    // connection-refused.
+    return resolvePublishedUrl({
+      port,
+      configuredHost: this.getBindHost(),
+      measuredHost: this.getEffectiveBindHost(),
+      lanIp: this.getPrimaryLanIp(),
+    });
   }
 
   /**
