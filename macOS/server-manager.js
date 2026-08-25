@@ -1023,20 +1023,6 @@ class ServerManager {
   }
 
   /**
-   * Kill process by PID
-   */
-  killByPid(pid, signal = 'SIGTERM') {
-    return new Promise((resolve) => {
-      exec(`kill -${signal === 'SIGTERM' ? '15' : '9'} ${pid}`, (error) => {
-        if (error) {
-          console.log(`Failed to kill PID ${pid}:`, error.message);
-        }
-        resolve();
-      });
-    });
-  }
-
-  /**
    * This bundle's own version.
    *
    * Wrapped rather than called inline because `app.getVersion()` can throw in
