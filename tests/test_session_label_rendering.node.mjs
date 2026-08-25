@@ -155,6 +155,15 @@ async function renderRowWith(rowFields) {
         alert() {},
     };
     vm.createContext(context);
+    // Load the shared resolver FIRST, exactly as client/index.html does.
+    // Without it launchpad.js takes its script-missing fallback branch,
+    // so every assertion below would pass while proving nothing about the
+    // path a real browser runs.
+    vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'session-label.js'), 'utf8'),
+        context,
+        { filename: 'session-label.js' }
+    );
     vm.runInContext(
         fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8'),
         context,

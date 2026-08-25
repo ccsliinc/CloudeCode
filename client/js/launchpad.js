@@ -1540,6 +1540,23 @@ class Launchpad {
      *            label: 'Media Compression'})  -> 'Media Compression'
      */
     _sessionDisplayLabel(row) {
+        // DELEGATED, NOT DUPLICATED. This method used to hold its own
+        // copy of the fallback chain, which was fine while the launchpad
+        // was the only surface rendering a session name. It is not: the
+        // tab title, the in-page header, a toast card and the attribution
+        // prompt all ask the same question, and four separate answers to
+        // it would drift silently. The rule lives in
+        // client/js/session-label.js now and this is a thin caller.
+        //
+        // A row with neither a label nor a name cannot be named at all,
+        // which is a thing to SAY rather than a blank cell to render.
+        if (window.SessionLabel) {
+            return window.SessionLabel.resolve(row) || window.SessionLabel.UNKNOWN;
+        }
+        // session-label.js is loaded before this file by client/index.html.
+        // If it somehow is not, fall back to the old inline chain rather
+        // than rendering nothing - a missing script must not blank every
+        // session name on the home screen.
         const label = row && typeof row.label === 'string'
             ? row.label.trim()
             : '';

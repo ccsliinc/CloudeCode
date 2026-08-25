@@ -606,6 +606,12 @@
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->
+    <!-- THE ONE PLACE THAT DECIDES WHAT A SESSION IS CALLED ON SCREEN.
+         Must load BEFORE toast.js, launchpad.js, terminal.js and app.js -
+         all four render a session name and all four call
+         window.SessionLabel.resolve() to decide what that name is. It has
+         no dependencies of its own, so it goes first. -->
+    <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
