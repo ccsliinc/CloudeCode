@@ -1124,6 +1124,37 @@ class ServerManager {
   }
 
   /**
+   * A URL built ONLY from the address the server measured itself onto.
+   *
+   * The difference from getPublishedUrl() is deliberate and is the whole
+   * point. getPublishedUrl() is for NAVIGATION - open the browser at the
+   * best URL available - and a best-effort answer is right there. This one
+   * is for DISPLAY and for the clipboard, where a best-effort answer is a
+   * dead address the user pastes somewhere and believes. It never falls back
+   * to configuration; when the bind was not measured the answer is null and
+   * the caller must say so rather than substitute a plausible one.
+   *
+   * @returns {string|null} The URL, or null when either the effective bind
+   *   or the port could not be determined.
+   */
+  getMeasuredUrl() {
+    const host = this.getEffectiveBindHost();
+    if (!host) return null;
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getMeasuredUrl: ${err.message}`);
+      return null;
+    }
+    if (host === '0.0.0.0') {
+      const lan = this.getPrimaryLanIp();
+      return `http://${lan || '127.0.0.1'}:${port}`;
+    }
+    return `http://${host}:${port}`;
+  }
+
+  /**
    * The address the server is ACTUALLY listening on, when it has said.
    *
    * @returns {string|null} The effective host, or null when unknown. Never

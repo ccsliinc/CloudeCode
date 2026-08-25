@@ -495,10 +495,13 @@ function currentTrayInput() {
     sessions: traySignals.sessions,
     sessionsReachable: traySignals.sessionsReachable,
     updateStatus: traySignals.updateStatus,
-    // The server's own setup verdict, straight from GET /health. Null until
-    // it has been asked; tray-status treats null as unknown, never as
-    // complete, so an unpolled instance cannot render as set up.
-    setupStatus: serverManager ? serverManager.getSetupStatus() : null,
+    // The setup verdict, which prefers the SERVER's answer from GET /health
+    // and falls back to reading the same facts locally only when there is no
+    // server to ask. The icon and the menu row must not be able to disagree,
+    // so both go through getSetupVerdict() and neither reads
+    // getSetupStatus() directly. tray-status treats null as unknown, never
+    // as complete, so an unpolled instance cannot render as set up.
+    setupStatus: serverManager ? serverManager.getSetupVerdict().status : null,
   };
 }
 
@@ -653,6 +656,15 @@ function buildBindAndUrlItems() {
   const bindHost = serverManager.getBindHost();
   const localIps = serverManager.getLocalInterfaceIps();
   const publishedUrl = serverManager.getPublishedUrl();
+  // The ROW describes what is in effect; it is not built from configuration.
+  // getBindHost() above is used only to tick the right radio item, which is
+  // a question about what was CHOSEN and is the one place configuration is
+  // the correct source.
+  const bindRow = trayStatus.describeBind({
+    effectiveHost: serverManager.getEffectiveBindHost(),
+    configuredHost: bindHost,
+  });
+  const measuredUrl = serverManager.getMeasuredUrl();
 
   // No certificate is passed because the server terminates plaintext HTTP
   // today. evaluateBinding sees an http scheme and returns insecure without
@@ -690,7 +702,8 @@ function buildBindAndUrlItems() {
 
   return [
     {
-      label: `Bind IP: ${bindHost}`,
+      label: bindRow.label,
+      toolTip: bindRow.detail,
       submenu: bindSubmenu,
     },
     {
@@ -702,13 +715,22 @@ function buildBindAndUrlItems() {
       enabled: false,
       toolTip: security.detail,
     },
-    {
-      label: `Copy URL: ${publishedUrl}`,
-      click: () => {
-        clipboard.writeText(publishedUrl);
-        console.log(`[clipboard] wrote: ${publishedUrl}`);
-      },
-    },
+    measuredUrl
+      ? {
+          label: `Copy URL: ${measuredUrl}`,
+          click: () => {
+            clipboard.writeText(measuredUrl);
+            console.log(`[clipboard] wrote: ${measuredUrl}`);
+          },
+        }
+      : {
+          // Never hand him a URL assembled from configuration. He would
+          // paste it somewhere and it would not answer, with nothing to say
+          // why - the address looks exactly as legitimate as a real one.
+          label: 'Copy URL: unavailable (bind not measured)',
+          enabled: false,
+          toolTip: bindRow.detail,
+        },
   ];
 }
 
@@ -749,13 +771,17 @@ async function handleBindChange(ip) {
  */
 function setupMenuLabel() {
   const derived = trayStatus.deriveTrayState(currentTrayInput());
-  const status = serverManager ? serverManager.getSetupStatus() : null;
+  // The VERDICT, which prefers the server's answer over any local reading.
+  // Reading getSetupStatus() directly here would have been a fourth opinion.
+  const status = serverManager ? serverManager.getSetupVerdict().status : null;
   // Only the setup-driven attention state earns the marker here. A session
   // waiting on a human is real, but it is not a reason to point him at the
   // configuration page.
   const needsSetup = status === 'incomplete' || status === 'undetermined';
   const marker = needsSetup && derived.state === 'attention' ? '(!)  ' : '';
-  return `${marker}Setup and Config...`;
+  // The TEXT says what to do. "Setup and Config..." is a destination, and he
+  // told us the previous warning was not self-explanatory.
+  return `${marker}${trayStatus.describeSetupRow(status)}`;
 }
 
 /**
