@@ -219,3 +219,66 @@ def resolve_respawn_plan(
         command=None,
         detail="restarting the command tmux recorded for this pane",
     )
+
+
+#: tmux format the respawn probe asks for. ``pane_start_command`` is LAST
+#: on purpose: tmux permits ``|`` inside a command string, so the field
+#: must be the one a bounded ``split("|", 2)`` leaves whole. Putting it
+#: anywhere else makes a command containing a pipe silently shift every
+#: later field - the same delimiter hazard the tmux LISTING parser exists
+#: to handle.
+RESPAWN_PANE_FORMAT: str = "#{pane_dead}|#{pane_dead_status}|#{pane_start_command}"
+
+
+def parse_respawn_probe(raw: str) -> tuple[str, str, str]:
+    """Split one ``RESPAWN_PANE_FORMAT`` line into its three fields.
+
+    Description: bounded split so a start command containing ``|`` stays
+        intact. Missing trailing fields come back as empty strings rather
+        than raising, because a short line is a degraded read the caller
+        classifies, not a crash.
+
+    Inputs:
+        raw: one line of tmux output (already decoded, may be blank).
+
+    Output:
+        tuple[str, str, str]: ``(pane_dead, pane_dead_status,
+            pane_start_command)``, each stripped of surrounding whitespace
+            except the start command, which is stripped only of the
+            trailing newline so an all-whitespace command still reads as
+            empty via ``.strip()`` downstream.
+
+    Example:
+        >>> parse_respawn_probe('1|0|"a | b"')
+        ('1', '0', '"a | b"')
+    """
+    parts = raw.rstrip("\r\n").split("|", 2)
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0].strip(), parts[1].strip(), parts[2]
+
+
+@dataclass(frozen=True)
+class RespawnResult:
+    """Outcome of an attempted respawn, as reported to the API and the UI.
+
+    ``kind`` is the ladder's verdict and is ALWAYS meaningful; ``ok`` says
+    whether a process is actually running in the pane now. The pair is
+    deliberately not collapsed into one field, because "we knew what to run
+    and it died again" (kind=agent, ok=False) is a different report from
+    "we could not tell what to run" (kind=cannot_determine, ok=False), and
+    the user needs to be told which.
+
+    Attributes:
+        kind: One of the ``RESPAWN_*`` constants.
+        ok: True only when the pane was verified alive after the respawn.
+        detail: One sentence fit to show the user verbatim.
+        command: The command actually handed to ``respawn-pane``, or None
+            when tmux reused its own record. Reported so a failure names
+            what was tried.
+    """
+
+    kind: str
+    ok: bool
+    detail: str = ""
+    command: Optional[str] = None
