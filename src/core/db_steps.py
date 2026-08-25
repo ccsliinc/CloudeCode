@@ -31,6 +31,8 @@ from src.core.db_models import (
     DDL_V4,
     DDL_V5,
     DDL_V6,
+    DDL_V7,
+    DDL_V8,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -238,6 +240,61 @@ def _step_v5_to_v6(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+
+def _step_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """Add ``ix_sessions_claude_uuid``, the lineage lookup index.
+
+    Description: NOT THIS FEATURE'S STEP. It belongs to the
+      session-lineage change, which took v7 first, and is reproduced here
+      only because this branch was cut from v6 and a STEPS table with a
+      hole at 6 cannot migrate any database at all. See the matching
+      comment in src/core/db_models.py: the merge resolution is to keep
+      exactly one copy, and it is safe either way because the statement
+      is idempotent BY THE STATEMENT (``CREATE INDEX IF NOT EXISTS``)
+      rather than by a PRAGMA inspection.
+
+      NO COLUMN IS ADDED. An index changes no row and no query result,
+      only how fast the answer arrives, so a v6 reader that has not been
+      upgraded keeps working against the same file.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v6_to_v7(conn)  # after _step_v5_to_v6
+    """
+    for statement in DDL_V7:
+        conn.execute(statement)
+
+
+def _step_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """Add ``session_groups`` and ``session_group_members``.
+
+    Description: build step for user-defined sidebar groups. Two new
+      tables and two new indexes; no existing table is altered and no
+      column is added to one, so - like v7 and unlike v3..v6 - every
+      statement carries its own ``IF NOT EXISTS`` and the step is
+      idempotent without inspecting ``PRAGMA table_info``. A retry after
+      an INTERRUPTED trail entry is therefore safe with no inspection.
+
+      NOTHING IS BACKFILLED, AND THAT IS THE CORRECT EMPTY STATE. Before
+      this version no group existed, so every session is ungrouped, and
+      "ungrouped" is represented by the ABSENCE of a membership row
+      rather than by a row pointing at a default group. There is no
+      migration to write because there is no prior state to translate -
+      which is different from a migration that had nothing to do, and the
+      distinction is why this docstring says so out loud.
+
+      A v7 READER STILL WORKS. It does not know these tables exist and
+      never queries them; its sidebar renders the pinned/rest split it
+      always did. The groups are not lost, only unread - the same trade
+      the projects table already made, and recorded here for the same
+      reason.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v7_to_v8(conn)  # after _step_v6_to_v7
+    """
+    for statement in DDL_V8:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -249,6 +306,8 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _step_v3_to_v4,
     4: _step_v4_to_v5,
     5: _step_v5_to_v6,
+    6: _step_v6_to_v7,
+    7: _step_v7_to_v8,
 }
 
 
