@@ -364,6 +364,119 @@ def resolve_exposure(configured_bind_host: str, state: SetupState) -> Exposure:
     return exposure
 
 
+#: Environment variable carrying the address uvicorn was ACTUALLY started on.
+#:
+#: Written by src/main.py immediately before ``uvicorn.run``, read by the
+#: endpoints that report the bind. The environment is the channel rather than
+#: a module global because ``python -m src.main`` runs the chooser as
+#: ``__main__`` while uvicorn imports the app as ``src.main`` - two distinct
+#: module objects in one process, so a global set by the first is invisible to
+#: the second. os.environ is shared by both.
+BOUND_HOST_ENV = "CLOUDE_BOUND_HOST"
+
+
+def record_bound_host(host: str) -> None:
+    """Record the address being handed to uvicorn, at the moment it is handed.
+
+    Args:
+        host: The address about to be bound.
+
+    Returns:
+        None.
+    """
+    os.environ[BOUND_HOST_ENV] = host
+
+
+def recorded_bound_host() -> Optional[str]:
+    """The address this process bound, if it recorded one.
+
+    Returns:
+        The recorded host, or None when there is no record. None means
+        UNKNOWN and nothing else. It is never resolved to the configured
+        address: uvicorn binds its socket once at startup and never rebinds,
+        so configuration is what somebody ASKED for, which is a different
+        claim from what is listening.
+    """
+    value = os.environ.get(BOUND_HOST_ENV, "").strip()
+    return value or None
+
+
+def bind_report(configured_host: str) -> dict:
+    """What to tell a client about this server's exposure. Three outcomes.
+
+    The defect this exists to prevent, measured on a real first install:
+    ``current_exposure()`` re-derives the exposure from the filesystem on
+    every call, so once a slow bootstrap finished writing its files the
+    server began reporting ``effective_host: "0.0.0.0"`` while its only
+    socket was on loopback. The menu bar displayed the address it was told.
+    A re-derivation is an aspiration wearing a measurement's name.
+
+    So the effective host here comes only from the startup record. When there
+    is no record, every field derived from it is None rather than a guess -
+    ``restart_required: false`` would be a verdict nobody measured, and it
+    would tell the UI there is nothing to do.
+
+    Args:
+        configured_host: The address configuration currently asks for.
+
+    Returns:
+        A dict with ``effective_host`` (str or None), ``effective_host_known``
+        (bool), ``configured_host`` (str), ``locked_down`` (bool or None),
+        ``restart_required`` (bool or None) and ``reason`` (str).
+
+    Example:
+        >>> import os
+        >>> os.environ["CLOUDE_BOUND_HOST"] = "127.0.0.1"
+        >>> bind_report("0.0.0.0")["restart_required"]
+        True
+    """
+    effective = recorded_bound_host()
+
+    if effective is None:
+        return {
+            "effective_host": None,
+            "effective_host_known": False,
+            "configured_host": configured_host,
+            "locked_down": None,
+            "restart_required": None,
+            "reason": (
+                "The address in force was not measured, so it is unknown. "
+                f"Configuration asks for {configured_host}, which is what "
+                "was requested and not evidence of what is listening."
+            ),
+        }
+
+    differs = effective != configured_host
+    if differs:
+        reason = (
+            f"Listening on {effective}. Configuration asks for "
+            f"{configured_host}, which needs a server restart to apply - "
+            "uvicorn binds its socket once at startup and cannot rebind."
+        )
+    else:
+        reason = f"Listening on {effective}, which is what configuration asks for."
+
+    return {
+        "effective_host": effective,
+        "effective_host_known": True,
+        "configured_host": configured_host,
+        "locked_down": differs,
+        "restart_required": differs,
+        "reason": reason,
+    }
+
+
+def current_bind_report() -> dict:
+    """``bind_report`` for the running server's own configured host.
+
+    Returns:
+        The bind report, as described by ``bind_report``.
+    """
+    from src.config import settings  # noqa: PLC0415 - see current_setup_state
+
+    return bind_report(settings.host)
+
+
 def current_setup_state() -> SetupState:
     """Evaluate setup state from the running server's own settings.
 

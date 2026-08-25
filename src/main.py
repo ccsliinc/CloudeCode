@@ -32,7 +32,12 @@ from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
-from src.core.setup_state import current_exposure, current_setup_state
+from src.core.setup_state import (
+    current_bind_report,
+    current_exposure,
+    current_setup_state,
+    record_bound_host,
+)
 from src.api.setup_routes import router as setup_router, page_router as setup_page_router
 from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
@@ -857,20 +862,20 @@ async def health_check():
         addresses, whether the lockdown is in force, and whether a restart is
         needed before the configured address applies.
     """
-    exposure = current_exposure()
     setup_state = current_setup_state()
     return {
         "status": "healthy",
         "session_active": session_manager.has_active_session() if session_manager else False,
         "monitoring": log_monitor.is_monitoring if log_monitor else False,
         "setup_status": setup_state.status,
-        "bind": {
-            "effective_host": exposure.bind_host,
-            "configured_host": exposure.configured_bind_host,
-            "locked_down": exposure.locked_down,
-            "restart_required": exposure.restart_required_to_apply,
-            "reason": exposure.reason,
-        },
+        # The bind comes from the STARTUP RECORD, never from re-resolving the
+        # exposure. current_exposure() re-derives from the filesystem on every
+        # call, so a bootstrap that finished writing its files AFTER the server
+        # started makes it report the configured address while the socket is
+        # still on loopback where the lockdown put it. That shipped, and the
+        # menu bar displayed 0.0.0.0 for a server nothing off-host could
+        # reach. See src/core/setup_state.py::bind_report.
+        "bind": current_bind_report(),
     }
 
 
@@ -909,6 +914,10 @@ if __name__ == "__main__":
     # Setup completeness is read from the filesystem residue of setup having
     # happened, so editing configuration cannot lift the lockdown.
     exposure = current_exposure()
+    # Record the address BEFORE handing it to uvicorn, in the same block that
+    # hands it over, so the record cannot drift from the socket. Everything
+    # that later reports an effective bind reads this and only this.
+    record_bound_host(exposure.bind_host)
     if exposure.locked_down:
         logger.warning(
             "bind_locked_down_pending_setup",

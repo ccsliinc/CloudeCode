@@ -137,14 +137,40 @@ class TestOpenWhileSetupIsIncomplete:
         assert resp.json()["mode"] == "first_run"
 
     def test_it_reports_the_lockdown_rather_than_the_configured_address(
-        self, instance
+        self, instance, monkeypatch
     ):
-        """The page must never show an aspiration as a fact."""
+        """The page must never show an aspiration as a fact.
+
+        The bound address is taken from the STARTUP RECORD, so this test has
+        to write one: a TestClient never ran uvicorn, and without a record the
+        honest answer is "unknown", which is what the case below asserts.
+
+        This assertion used to read the re-derived exposure instead, which
+        agreed with the record only by coincidence and disagreed with it
+        exactly when it mattered - a bootstrap finishing after startup made
+        the re-derivation report the configured address for a socket still
+        pinned to loopback.
+        """
+        monkeypatch.setenv("CLOUDE_BOUND_HOST", "127.0.0.1")
         body = instance.client.get("/api/v1/setup/state").json()
         assert body["exposure"]["effective_host"] == "127.0.0.1"
         assert body["exposure"]["configured_host"] == "0.0.0.0"
         assert body["exposure"]["locked_down"] is True
         assert body["exposure"]["restart_required"] is True
+
+    def test_an_unmeasured_bind_is_reported_as_unknown(self, instance, monkeypatch):
+        """No startup record means the wizard is told nothing was measured.
+
+        The wrong answer here is the configured address, because it is
+        plausible and the reader has no way to tell it apart from a measured
+        one.
+        """
+        monkeypatch.delenv("CLOUDE_BOUND_HOST", raising=False)
+        body = instance.client.get("/api/v1/setup/state").json()
+        assert body["exposure"]["effective_host"] is None
+        assert body["exposure"]["effective_host_known"] is False
+        assert body["exposure"]["restart_required"] is None
+        assert body["exposure"]["configured_host"] == "0.0.0.0"
 
     def test_checks_preserve_the_third_outcome_over_the_wire(self, instance):
         """A JSON false here would turn 'could not evaluate' into 'failed'."""
