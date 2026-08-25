@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from src.core.test_write_guard import assert_test_write_allowed
 from src.core.config_files_constants import (
     READONLY_COLLAPSED_DIRS,
     SENSITIVE_NAMES,
@@ -85,6 +86,16 @@ def atomic_write(path: Path, content: str) -> None:
     Output: None.
     Raises: OSError - propagated from the filesystem; callers translate.
     """
+    # Same blast-radius control as src/core/claude_hooks.py. This is the
+    # single chokepoint for every config-file write in the editor, and
+    # the "user" root it serves is literally ``Path.home()/".claude"``
+    # (config_files.py -> slash_command_discovery.CLAUDE_HOME) with NO
+    # env override of any kind. That is the identical shape as the
+    # ensure_hook_settings defect: a test that reaches this function
+    # without a redirect writes into the developer's real ~/.claude.
+    # Inert in production.
+    assert_test_write_allowed(path)
+
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(content)
