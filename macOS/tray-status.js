@@ -15,9 +15,16 @@
 // "could not determine" is a first-class state here with its OWN appearance
 // (a hollow ring, never a filled dot, never the plain healthy glyph). A
 // filled dot means "I measured this and it is true". A hollow ring means "I
-// could not measure this". Absence of a dot means "I measured this and there
-// is nothing to report". Those are three different claims and they get three
-// different pictures.
+// have no settled measurement" - either I could not ask, or the thing has
+// not finished happening yet. Absence of a dot means "I measured this and
+// there is nothing to report". Those are three different claims and they get
+// three different pictures.
+//
+// THE GLYPH IS NEVER DIMMED. It used to be, for starting/crashed/stopped,
+// and that dimming was carrying real meaning. It has all been moved into the
+// dot's fill and hue - see the state table in scripts/generate-tray-icons.py
+// for the two axes and why there are only two. Undimming without moving it
+// would have made "stopped" pixel-identical to "ok".
 //
 // A NOTE ON WHICH SIGNAL DRIVES THE ICON
 //

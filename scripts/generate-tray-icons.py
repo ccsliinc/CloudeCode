@@ -32,26 +32,47 @@ tried first and measured wrong: the two paths render at different weights, so
 "stopped" came out BRIGHTER than "ok" and a stopped server looked identical to
 a healthy one. See NORMAL_GLYPH_ALPHA below.
 
-STATE VOCABULARY
-----------------
-Seven states, and they are visually distinguishable from each other, not just
-nominally different. "unknown" in particular is a HOLLOW RING rather than a
-filled dot: a filled dot reads as a definite signal, and an empty ring reads
-as an absent one. A state meaning "could not determine" must never look like
-a state meaning "healthy", and must not look like a definite alarm either.
+STATE VOCABULARY - TWO AXES, AND BRIGHTNESS IS NOT ONE OF THEM
+--------------------------------------------------------------
+The glyph is drawn at ONE weight in every state. It used to be dimmed for
+starting, crashed and stopped, and the owner's instruction was flat: the tray
+glyph must never be dimmed at all. That instruction is only safe to follow
+because the dimming was carrying real meaning, and that meaning has been moved
+into the status dot rather than dropped. Undimming without moving it would
+have made "stopped" pixel-identical to "ok" - a stopped server looking exactly
+like a healthy one, which is a worse defect than the dimness it fixed.
 
-    state       glyph        dot
-    ok          normal       none
-    update      normal       blue filled
-    attention   normal       red filled
-    unknown     normal       grey hollow ring
-    starting    dimmed       amber filled
-    crashed     dimmed       red filled
-    stopped     dimmed more  none
+So the dot now carries everything, on two axes and only two. A third axis
+would be a visual idiom nobody has been taught to read.
 
-"crashed" and "attention" share a red dot but differ in glyph brightness: the
-server being down dims the mark, whereas sessions needing attention leaves a
-healthy server's mark at full strength.
+    FILL - is this a settled measurement?
+        filled dot   yes, I measured this and this is the answer
+        hollow ring  no settled answer: either I could not ask, or the thing
+                     being measured has not finished happening yet
+        no dot       I measured this and there is nothing to report
+
+    HUE - what kind of thing is it?
+        red     a fault
+        amber   your attention, or a transition in progress
+        blue    informational
+        grey    neutral, and specifically NOT a health claim
+
+    state       dot          why
+    ok          none         measured, nothing to report
+    update      blue filled  a settled fact, and only informational
+    attention   amber filled a settled fact: a human is being waited on
+    crashed     red filled   a settled fact, and it is a fault
+    stopped     grey filled  a settled fact, and deliberately not an alarm -
+                             a stopped server is a state he chose
+    starting    amber ring   coming up; health is not yet answerable
+    unknown     grey ring    could not be measured at all
+
+Two pairs are worth naming because they are the ones undimming broke, and
+both are proved pair-by-pair in tests/test_tray_icon_assets.py rather than
+spot-checked. ok/stopped used to differ only by brightness and now differ by
+the presence of a dot. attention/crashed used to differ only by brightness
+and now differ by hue: red is reserved for a genuine fault, and a session
+asking a question is a prompt, not a fault.
 
 Inputs:
     Reads macOS/assets/iconTemplate.png and iconTemplate@2x.png.
@@ -121,8 +142,12 @@ GREY = (142, 142, 147)
 
 #: state -> (glyph dim multiplier, dot colour or None, filled?)
 #:
-#: The multiplier is applied ON TOP of NORMAL_GLYPH_ALPHA, so 1.0 means "the
-#: same weight as a native system icon" rather than "fully opaque".
+#: The multiplier is applied ON TOP of NORMAL_GLYPH_ALPHA. It is 1.0 for every
+#: state and must stay that way: the glyph is never dimmed, and the dot
+#: carries the whole distinction. The parameter is kept rather than deleted so
+#: that a future state cannot reintroduce dimming silently by adding a column
+#: nobody notices - test_no_state_is_dimmed measures the rendered result and
+#: fails on any value other than 1.0.
 #:
 #: "ok" is generated here too, even though it carries no dot. That is the
 #: point: when the healthy state went through AppKit's template path while
@@ -134,11 +159,11 @@ GREY = (142, 142, 147)
 STATES: dict[str, tuple[float, tuple[int, int, int] | None, bool]] = {
     "ok": (1.0, None, True),
     "update": (1.0, BLUE, True),
-    "attention": (1.0, RED, True),
+    "attention": (1.0, AMBER, True),
+    "crashed": (1.0, RED, True),
+    "stopped": (1.0, GREY, True),
+    "starting": (1.0, AMBER, False),
     "unknown": (1.0, GREY, False),
-    "starting": (0.62, AMBER, True),
-    "crashed": (0.62, RED, True),
-    "stopped": (0.38, None, True),
 }
 
 #: Dot geometry as a fraction of the icon's edge length, so @1x and @2x stay
@@ -189,8 +214,9 @@ def draw_status_dot(
     Args:
         canvas: RGBA image to draw into. Modified in place.
         color: RGB of the dot.
-        filled: True for a solid dot (a definite signal), False for a hollow
-            ring (used only by the "cannot determine" state).
+        filled: True for a solid dot (a settled measurement), False for a
+            hollow ring (no settled measurement: either it could not be
+            asked, or it has not finished happening yet).
 
     Returns:
         None.
