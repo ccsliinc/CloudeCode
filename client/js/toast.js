@@ -409,7 +409,12 @@ class ToastManager {
    */
   _renderCard(group, container) {
     const { newest, count, severity, key } = group;
-    let el = container.querySelector(`.toast[data-group-key="${CSS_ESC(key)}"]`);
+    // NOT `.toast--dismissing`: a card mid-fade still carries its group
+    // key for the 220ms the exit animation runs, so a new toast arriving
+    // in that window would reuse the corpse and resurrect a card the user
+    // just dismissed, half-faded.
+    let el = container.querySelector(
+      `.toast[data-group-key="${CSS_ESC(key)}"]:not(.toast--dismissing)`);
     const isNew = !el;
     if (isNew) {
       el = document.createElement('div');

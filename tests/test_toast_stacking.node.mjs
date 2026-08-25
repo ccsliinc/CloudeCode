@@ -117,8 +117,16 @@ class El {
     }
     _all(out) { for (const c of this.childNodes) { out.push(c); c._all(out); } return out; }
     _matches(sel) {
-        // Supports `.class` and `.class[attr="value"]`, the only two
-        // shapes the module builds selectors in.
+        // Supports `.class`, `.class[attr="value"]` and a trailing
+        // `:not(.class)` - the three shapes the module builds selectors
+        // in. Anything else THROWS rather than silently not matching: a
+        // stub that quietly returns false for a selector it does not
+        // understand manufactures a passing test out of its own gap.
+        const not = /:not\(\.([A-Za-z0-9_-]+)\)$/.exec(sel);
+        if (not) {
+            if (this._classes().has(not[1])) return false;
+            sel = sel.slice(0, not.index);
+        }
         const m = /^\.([A-Za-z0-9_-]+)(?:\[([a-z-]+)="((?:[^"\\]|\\.)*)"\])?$/.exec(sel);
         if (!m) throw new Error(`stub selector unsupported: ${sel}`);
         if (!this._classes().has(m[1])) return false;
@@ -329,6 +337,25 @@ test('the id dedupe survives - backfill plus the WS race is still one card', () 
     assert.equal(cards(container).length, 1);
     assert.equal(cards(container)[0].querySelector('.toast__count'), null,
         'the same id twice is one event, not two - no count badge');
+});
+
+test('a toast arriving mid-fade does not resurrect the card being dismissed', () => {
+    const { container, mgr } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', 'first'));
+    // Click x. The card keeps its group key for the 220ms exit animation.
+    cards(container)[0].querySelector('.toast__dismiss').click();
+    const fading = container.childNodes.filter(
+        (e) => e._classes().has('toast') && e._classes().has('toast--dismissing'));
+    assert.equal(fading.length, 1, 'the dismissed card should be animating out');
+    // A new Stop lands inside that window - same coalesce key.
+    mgr.add(toast('Stop', 'Your turn', 'second'));
+    const live = container.childNodes.filter(
+        (e) => e._classes().has('toast') && !e._classes().has('toast--dismissing'));
+    assert.equal(live.length, 1, 'the arrival gets its OWN card');
+    assert.notEqual(live[0], fading[0], 'and never the corpse of the dismissed one');
+    assert.equal(live[0].querySelector('.toast__body').textContent, 'second');
+    assert.equal(live[0].querySelector('.toast__count'), null,
+        'one live toast is not a count of two');
 });
 
 test('the container is a polite live region', () => {
