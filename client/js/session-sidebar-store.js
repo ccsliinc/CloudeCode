@@ -33,6 +33,17 @@
  * collapsed", because a fold is a preference and not data: there is
  * nothing of the user's to lose and nothing to announce.
  *
+ * USER GROUP FOLDS RIDE THE SAME KEY, ALSO WITHOUT BUMPING VERSION.
+ * A folded user group is stored as `g:<uuid>` beside `pinned` and
+ * `other`. `isFoldKey` therefore validates the SHAPE of a key rather
+ * than its membership in a fixed list - it cannot ask whether the group
+ * still exists, because the groups are read asynchronously from the
+ * database and this parse runs first. An OLDER build reading an envelope
+ * containing `g:<uuid>` drops it and warns, which unfolds that section
+ * and loses nothing: a fold is graded as a preference here precisely so
+ * that this is survivable. A NEWER build reading an older envelope is
+ * unchanged.
+ *
  * It also rides the SAME envelope without bumping VERSION. Bumping to 2
  * would have declared every arrangement already on disk 'unreadable',
  * so every existing user would have opened the bar to a CANNOT LOAD
@@ -80,6 +91,47 @@ console.log('[SessionSidebarStore Module] Loading...');
      * @type {Array<string>}
      */
     const GROUP_KEYS = ['pinned', 'other'];
+
+    /**
+     * Prefix of a USER GROUP's fold key, mirroring
+     * `client/js/session-sidebar-group-store.js`'s `BAND_GROUP_PREFIX`.
+     * Duplicated as a literal on purpose: this file must parse and grade
+     * a stored envelope whether or not the group store ever loads, so it
+     * cannot take a load-order dependency on it.
+     * @type {string}
+     */
+    const GROUP_FOLD_PREFIX = 'g:';
+
+    /**
+     * Most folded sections remembered. A fold key for a group that was
+     * deleted is harmless - it names a section that no longer renders -
+     * but without a bound a long-lived install would accumulate one per
+     * group it ever had.
+     * @type {number}
+     */
+    const MAX_FOLDS = 100;
+
+    /**
+     * Description: true when a stored fold key names a section this build
+     *   can reopen: one of the two reserved bands, or a user group.
+     *
+     *   WHY THIS IS A SHAPE TEST AND NOT A MEMBERSHIP TEST. It cannot ask
+     *   whether the group still exists, because the groups are read
+     *   asynchronously from the database and this parse runs before that
+     *   read completes. Rejecting an unrecognised group key here would
+     *   silently unfold every section on every reload, which is worse
+     *   than keeping a key that names nothing - a fold for a group that
+     *   no longer exists simply never matches a rendered section.
+     * Inputs: key (any).
+     * Output: boolean.
+     * Example: isFoldKey('g:3f2a') // true
+     */
+    function isFoldKey(key) {
+        if (typeof key !== 'string' || !key) return false;
+        if (GROUP_KEYS.indexOf(key) !== -1) return true;
+        return key.indexOf(GROUP_FOLD_PREFIX) === 0
+            && key.length > GROUP_FOLD_PREFIX.length;
+    }
 
     /** Live state, replaced wholesale by load(). @type {object} */
     let state = {
@@ -129,7 +181,7 @@ console.log('[SessionSidebarStore Module] Loading...');
                 + ' section names, treating every section as open');
             return [];
         }
-        const kept = dedupe(value).filter((k) => GROUP_KEYS.indexOf(k) !== -1);
+        const kept = dedupe(value).filter(isFoldKey).slice(0, MAX_FOLDS);
         if (kept.length !== dedupe(value).length) {
             console.warn('SessionSidebarArrangement: dropped unknown collapsed section key(s)');
         }
@@ -281,7 +333,7 @@ console.log('[SessionSidebarStore Module] Loading...');
      * Output: boolean - the section's new collapsed state.
      */
     function toggleCollapsed(key) {
-        if (GROUP_KEYS.indexOf(key) === -1) return false;
+        if (!isFoldKey(key)) return false;
         const next = !isCollapsed(key);
         const collapsed = next
             ? state.collapsed.concat([key])
@@ -299,8 +351,9 @@ console.log('[SessionSidebarStore Module] Loading...');
 
     window.SessionSidebarStore = {
         load, current, save, isPinned, isCollapsed, toggleCollapsed,
-        readCollapsed, dedupe, isNameArray,
+        readCollapsed, dedupe, isNameArray, isFoldKey,
         STORAGE_KEY, VERSION, MAX_REMEMBERED, GROUP_KEYS,
+        GROUP_FOLD_PREFIX, MAX_FOLDS,
     };
     console.log('[SessionSidebarStore Module] Exported as window.SessionSidebarStore');
 })();

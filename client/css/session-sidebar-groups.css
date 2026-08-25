@@ -95,6 +95,60 @@
     display: block;
 }
 
+/* ---- The header ROW: the fold button plus a user group's menu --------
+ *
+ * A user group's header is TWO controls, not one, so they cannot be a
+ * single button: the fold toggle owns the whole label and count (a big,
+ * forgiving target), and the menu sits at the end. `pinned` and `other`
+ * emit no menu at all - see session-sidebar-groups.js - so this row is
+ * one child wide for them and the flex layout collapses to exactly the
+ * old geometry. That is deliberate: the pinned header must not shift
+ * when user groups appear beside it.
+ */
+.session-sidebar-group__headerrow {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+/* THE MENU IS SYMMETRIC AND INSET, never an edge bar. scripts/
+ * verify_sidebar_row_edges.py asserts that a sidebar row's left three
+ * pixels match its right three, and a control that painted a rail on
+ * either edge would break that property for every row beneath it. This
+ * one lives inside the header's own padding box. */
+.session-sidebar-group__menu {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    min-height: 22px;
+    margin: 0 6px 0 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.9em;
+    line-height: 1;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.session-sidebar-group__menu:hover,
+.session-sidebar-group__menu:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-group__menu:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: -1px;
+}
+
 .session-sidebar-group__header {
     display: flex;
     align-items: center;
