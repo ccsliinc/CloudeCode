@@ -48,6 +48,19 @@ FULL_WEIGHT_STATES = STATES
 #: The lower-right region holding the status dot and its gutter.
 DOT_CORNER_FRACTION = 0.45
 
+#: Glyph fill per appearance, mirroring GLYPH_COLORS in the generator. The
+#: dot measurement needs it so it can tell mark from dot by colour rather
+#: than by opacity, now that both are opaque.
+GLYPH_RGB: dict[str, tuple[int, int, int]] = {
+    "light": (0, 0, 0),
+    "dark": (255, 255, 255),
+}
+
+#: Manhattan RGB distance within which a pixel counts as the glyph fill
+#: rather than a dot. Small enough that no system dot colour falls inside
+#: it (the nearest is grey at 334), large enough to absorb PNG rounding.
+GLYPH_COLOUR_TOLERANCE = 24
+
 
 def icon_path(state: str, appearance: str, scale: str = "") -> Path:
     """Path of one generated tray icon.
@@ -193,7 +206,9 @@ def test_no_state_is_dimmed(appearance: str) -> None:
     )
 
 
-def dot_signature(image: Image.Image) -> tuple[int, tuple[int, int, int]]:
+def dot_signature(
+    image: Image.Image, glyph_rgb: tuple[int, int, int]
+) -> tuple[int, tuple[int, int, int]]:
     """Measure the status dot: how much ink it lays down, and what colour.
 
     Everything that distinguishes one tray state from another now lives in
@@ -202,17 +217,33 @@ def dot_signature(image: Image.Image) -> tuple[int, tuple[int, int, int]]:
     identical across states by construction, so a metric that looked at the
     glyph could not separate any pair.
 
-    Only FULLY OPAQUE pixels inside the dot's gutter are counted. That is the
-    step that makes the measurement mean what it says: the mark itself
-    extends into the lower-right corner, so counting the whole corner counts
-    glyph, and the healthy state (which punches no gutter at all) then reports
-    a dot it does not have. The generator composites the dot at alpha 255
-    while the glyph never exceeds NORMAL_GLYPH_ALPHA, so the alpha threshold
-    separates them cleanly. If the glyph is ever taken to full opacity this
-    threshold stops discriminating and must be replaced, not raised.
+    Only pixels inside the dot's gutter that are FULLY OPAQUE and are NOT the
+    glyph colour are counted. Both conditions are load-bearing: the mark
+    itself extends into the lower-right corner, so counting the whole corner
+    counts glyph, and the healthy state (which punches no gutter at all) then
+    reports a dot it does not have.
+
+    The colour test REPLACES an earlier alpha-only threshold, and the reason
+    is worth keeping. That version relied on the dot being composited at alpha
+    255 while the glyph never exceeded NORMAL_GLYPH_ALPHA, and it carried a
+    note saying that if the glyph were ever taken to full opacity the
+    threshold would stop discriminating and must be replaced rather than
+    raised. The glyph has now been taken to full opacity, so that is exactly
+    what happened: measured on the new assets, an alpha-only rule counted 143
+    glyph pixels in the healthy state's corner and reported "ok" as carrying a
+    white dot it does not have. Raising the threshold could not fix it, because
+    dot and glyph had become equally opaque.
+
+    Colour is the axis that survives, and it is the axis that was always the
+    real one. The dot exists to be a different colour from the mark: the
+    closest dot to its own glyph is grey (142, 142, 147) against white, a
+    distance of 334, while every glyph pixel is the fill colour exactly. The
+    separation is not marginal and does not depend on how heavy the glyph is.
 
     Args:
         image: A generated tray icon; converted to RGBA internally.
+        glyph_rgb: The fill colour of the mark in this icon's appearance.
+            Pixels matching it are glyph, never dot.
 
     Returns:
         A tuple of (count of dot pixels, mean RGB of those pixels). The count
@@ -238,6 +269,8 @@ def dot_signature(image: Image.Image) -> tuple[int, tuple[int, int, int]]:
                 continue
             r, g, b, a = pixels[x, y]
             if a < 250:
+                continue
+            if sum(abs(c - g_c) for c, g_c in zip((r, g, b), glyph_rgb)) <= GLYPH_COLOUR_TOLERANCE:
                 continue
             reds.append(r)
             greens.append(g)
@@ -305,7 +338,9 @@ def test_every_pair_of_states_is_distinguishable(appearance: str) -> None:
     and were separated only by weight).
     """
     signatures = {
-        state: dot_signature(Image.open(icon_path(state, appearance, "@2x")))
+        state: dot_signature(
+            Image.open(icon_path(state, appearance, "@2x")), GLYPH_RGB[appearance]
+        )
         for state in STATES
     }
     failures: list[str] = []
@@ -329,7 +364,9 @@ def test_ok_is_the_only_state_with_no_dot() -> None:
     empty = [
         state
         for state in STATES
-        if dot_signature(Image.open(icon_path(state, "dark", "@2x")))[0] == 0
+        if dot_signature(
+            Image.open(icon_path(state, "dark", "@2x")), GLYPH_RGB["dark"]
+        )[0] == 0
     ]
     assert empty == ["ok"], (
         f"states rendering with no status dot: {empty}; only 'ok' may, "
@@ -374,3 +411,94 @@ def test_no_two_states_are_pixel_identical() -> None:
             f"{state} renders identically to {seen[data]}"
         )
         seen[data] = state
+
+
+#: Menu-bar backgrounds the glyph is measured against, per appearance.
+#:
+#: These are sampled values, not invented ones: a dark menu bar composites to
+#: roughly luminance 32 and a light one to roughly 246 once the bar's own
+#: translucency has blended it over a wallpaper. They exist so the two
+#: appearances can be held to the SAME contrast requirement relative to their
+#: own background, rather than to a raw pixel value that necessarily differs
+#: between a white glyph and a black one.
+MENU_BAR_BACKGROUND: dict[str, int] = {"dark": 32, "light": 246}
+
+#: What the glyph measured at BEFORE it was taken to full strength, so the
+#: direction of the change is asserted and not merely its endpoint.
+#:
+#: These are the real measured numbers from the calibrated-to-native build
+#: (NORMAL_GLYPH_ALPHA of 0.28 dark, 0.85 light). The owner reported that
+#: build as looking muted twice. A test that only checked "coverage is high"
+#: would pass on a value that had never moved.
+PREVIOUS_MEASURED_COVERAGE: dict[str, float] = {"dark": 71.0, "light": 217.0}
+
+#: The floor the rendered mark must clear to count as full strength. 255 is
+#: fully opaque; the small tolerance absorbs nothing more than PNG round-trip
+#: noise, and is far tighter than the gap to either previous value.
+FULL_STRENGTH_FLOOR = 254.0
+
+
+@pytest.mark.parametrize("appearance", APPEARANCES)
+@pytest.mark.parametrize("state", STATES)
+@pytest.mark.parametrize("scale", SCALES)
+def test_the_glyph_renders_at_full_strength(
+    appearance: str, state: str, scale: str
+) -> None:
+    """The mark must be drawn at full opacity, measured on the rendered PNG.
+
+    This asserts INK COVERAGE of the generated file, deliberately not the
+    value of NORMAL_GLYPH_ALPHA. A test that reads the constant proves the
+    constant, and the constant is not what the owner is looking at - a
+    generator change that never reached the assets on disk would pass such a
+    test while the menu bar stayed exactly as muted as before.
+
+    The mark previously rendered at 71 on dark and 217 on light because it
+    had been calibrated to match native system icons, which are deliberately
+    restrained. The owner reported the result as washed out twice. Full
+    strength here means opaque: solid black on a light menu bar, solid white
+    on a dark one.
+    """
+    coverage = mean_glyph_alpha(Image.open(icon_path(state, appearance, scale)))
+
+    assert coverage >= FULL_STRENGTH_FLOOR, (
+        f"{state}/{appearance}{scale}: the mark renders at ink coverage "
+        f"{coverage:.1f}, below the full-strength floor of "
+        f"{FULL_STRENGTH_FLOOR}; the glyph is not opaque"
+    )
+    previous = PREVIOUS_MEASURED_COVERAGE[appearance]
+    assert coverage > previous + 10.0, (
+        f"{state}/{appearance}{scale}: ink coverage {coverage:.1f} has not "
+        f"moved materially above the previous measured {previous}; the "
+        "assets on disk were not regenerated"
+    )
+
+
+@pytest.mark.parametrize("appearance", APPEARANCES)
+def test_the_glyph_reaches_the_same_contrast_in_both_appearances(
+    appearance: str,
+) -> None:
+    """Full strength must mean the SAME thing on a light and a dark bar.
+
+    Raw ink coverage is an alpha number, so holding both appearances to one
+    pixel value says nothing about how either one reads. This composites the
+    mark over its own menu-bar background and measures Weber contrast, which
+    is comparable across the two: an opaque black glyph on a light bar and an
+    opaque white glyph on a dark bar both reach 1.0.
+
+    The light value was the one on record as never having been calibrated, so
+    it is held to exactly the same bar as the dark one rather than to a
+    symmetric guess.
+    """
+    background = MENU_BAR_BACKGROUND[appearance]
+    glyph_luminance = 255.0 if appearance == "dark" else 0.0
+
+    coverage = mean_glyph_alpha(Image.open(icon_path("ok", appearance, "@2x")))
+    alpha = coverage / 255.0
+    rendered = background + (glyph_luminance - background) * alpha
+    contrast = abs(rendered - background) / max(background, 255 - background)
+
+    assert contrast >= 0.99, (
+        f"{appearance}: the mark composites to luminance {rendered:.1f} "
+        f"against a menu bar of {background}, a contrast of {contrast:.3f}; "
+        "full strength requires the glyph to reach its own end stop"
+    )
