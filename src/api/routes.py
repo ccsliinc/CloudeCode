@@ -917,17 +917,29 @@ async def set_pinned_theme(
 async def rename_session_endpoint(
     request: Request, session_id: str, body: RenameSessionRequest
 ):
-    """Rename a live session's tmux backend in-place.
+    """Set a live session's user-facing LABEL. The tmux name never moves.
 
-    Validates ``new_name`` against ``^[A-Za-z0-9_-]{1,64}$`` (strict ASCII
-    so the value is safe inside a tmux target, a FIFO filename, and a
-    JSON-shaped WS payload). Returns:
+    STALE DOC CORRECTED. This docstring described the endpoint's behaviour
+    before the label split and outlived it: it named a
+    ``^[A-Za-z0-9_-]{1,64}$`` validator, a 409 and a 500 that the body
+    below had already stopped being able to produce. The comment block
+    above this function explained the new design correctly the whole time,
+    which is exactly how a stale docstring survives - the accurate prose
+    sat next to it and nobody re-read the paragraph underneath.
 
-      * 400 - invalid name (empty, too long, or contains a disallowed char)
-      * 404 - unknown session id
-      * 409 - name already in use by another live OR owned-but-detached session
-      * 500 - tmux ``rename-session`` itself failed
+    Validates ``new_name`` with ``session_label.validate_label``: at most
+    ``LABEL_MAX_CHARS`` (200) characters, non-empty after stripping, no
+    control characters. Spaces, punctuation and non-ASCII are all ACCEPTED
+    - the label is never handed to tmux, so tmux's constraints do not
+    apply to it. Returns:
+
+      * 400 - empty, too long, or carrying a control character
+      * 404 - no tmux session this app has a record of
       * 200 - success; body is the updated ``SessionInfo``
+
+    There is no 409: two sessions may carry the same label, because a
+    label identifies nothing. There is no 500 for a failed tmux rename,
+    because no tmux rename happens.
 
     On success the server broadcasts ``session.renamed`` to every WS bound
     to ``session_id`` so all attached tabs update their displayed name +
