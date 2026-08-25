@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 6
+CURRENT_SCHEMA_VERSION: int = 7
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -608,6 +608,72 @@ REVERSAL_SQL_V6: Tuple[str, ...] = ()
 #: absent key are different: absent means the ladder has never run.
 META_SESSION_IMPORT_UNATTRIBUTED = "session_import_unattributed"
 
+# ---- schema v7: an index on sessions.claude_session_uuid ------------------
+#
+# THE COLUMNS FOR LINEAGE SHIPPED IN v2 AND NOTHING EVER WROTE THEM.
+# ``claude_session_uuid``, ``parent_session_id`` and ``fork_kind`` have
+# been in DDL_SESSIONS since the table was created; the first two reads of
+# them are added in this same change (src/core/session_lineage.py). What
+# was missing is an index: the lineage write path's FIRST question on
+# every Claude ``SessionStart`` is "does any row already carry this
+# uuid", which is both the idempotence guard against a duplicate hook
+# POST and the fork detector. Without an index that is a full table scan,
+# and this table is the one that grows fastest once every fork is a row.
+#
+# NOT UNIQUE, DELIBERATELY. A UNIQUE index here would turn a duplicate
+# hook delivery into an IntegrityError raised out of a telemetry write -
+# an exception on a path whose entire contract is that it cannot disturb
+# a live session. Uniqueness is enforced by the lookup that precedes the
+# insert, where a collision is a NO-OP with a name (``continued``) rather
+# than an error. Partial on NOT NULL because every pre-lineage row - and
+# every session that is not a Claude session at all - carries NULL, and
+# indexing those would be indexing the majority of the table to answer a
+# question never asked of them.
+DDL_SESSIONS_CLAUDE_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_sessions_claude_uuid "
+    "ON sessions (claude_session_uuid) "
+    "WHERE claude_session_uuid IS NOT NULL"
+)
+
+#: Ordered DDL for a v6 -> v7 database. Additive, one partial index, no
+#: new column: CREATE INDEX IF NOT EXISTS is idempotent by the statement
+#: itself, unlike every ALTER TABLE step before it.
+DDL_V7: Tuple[str, ...] = (DDL_SESSIONS_CLAUDE_UUID_INDEX,)
+
+#: A REVERSE of v6 -> v7 destroys no data at all - an index is derived,
+#: not stored fact - so unlike v3..v6 this one has a real inverse.
+REVERSAL_SQL_V7: Tuple[str, ...] = ("DROP INDEX IF EXISTS ix_sessions_claude_uuid",)
+
+# sessions.fork_kind - HOW a new Claude session came out of the one
+# before it in the same tmux session. Written only by
+# src/core/session_lineage.py, and only on a row that also carries
+# ``parent_session_id``.
+#
+# The vocabulary is Claude Code's own ``SessionStart.source``, verified
+# against the shipped binary rather than taken from prose: the enum in
+# 2.1.236 is ["startup", "resume", "clear", "compact", "fork"]. Only the
+# values that can accompany a CHANGED session uuid are listed here.
+# 'startup' and 'resume' never can - startup has no predecessor and
+# resume continues the same uuid - so they are not fork kinds.
+SESSION_FORK_KIND_FORK = "fork"
+SESSION_FORK_KIND_CLEAR = "clear"
+SESSION_FORK_KIND_COMPACT = "compact"
+
+#: COULD NOT EVALUATE, as a stored value. A uuid provably changed, so a
+#: new session exists and must get a row, but the ``source`` that came
+#: with it is absent or is a string this build has never heard of - a
+#: newer Claude Code adding a sixth kind is the expected way to get here.
+#: Recorded rather than guessed at: writing 'fork' for an unrecognised
+#: source would be inventing the one fact the column exists to hold.
+SESSION_FORK_KIND_UNKNOWN = "unknown"
+
+SESSION_FORK_KINDS: Tuple[str, ...] = (
+    SESSION_FORK_KIND_FORK,
+    SESSION_FORK_KIND_CLEAR,
+    SESSION_FORK_KIND_COMPACT,
+    SESSION_FORK_KIND_UNKNOWN,
+)
+
 #: The unix epoch at or after which a tmux ``CLOUDECODE_ORIGIN`` marker is
 #: admissible on THIS install - the moment a build carrying the Stage-A
 #: create-path write site first ran here. Stamped once and never moved.
@@ -631,4 +697,8 @@ REVERSAL_DESTROYS: dict = {
     3: ("sessions.tmux_session_id",),
     5: ("project_tombstones (whole table)",),
     6: ("sessions.user_declined_at",),
+    # v7 adds an INDEX, not a column. A reverse drops derived data and
+    # destroys no stored value, so the tuple is deliberately empty rather
+    # than absent: absent would read as "nobody considered this step".
+    7: (),
 }
