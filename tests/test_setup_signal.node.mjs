@@ -206,11 +206,32 @@ test('the tray input carries the setup status through to the icon', () => {
 });
 
 test('the published URL prefers the MEASURED bind over the configured one', () => {
-  const fn = managerSrc.slice(
-    managerSrc.indexOf('getPublishedUrl()'),
-    managerSrc.indexOf('getPublishedUrl()') + 1200
+  // THE RULE MOVED, AND THIS ASSERTION GOT STRONGER FOR IT. It used to
+  // regex the SOURCE TEXT of getPublishedUrl for
+  // `this.getEffectiveBindHost() || this.getBindHost()`. That is a markup
+  // assertion about a behaviour - it passes on any source that contains
+  // the string and fails on any refactor that preserves the behaviour,
+  // which is exactly what happened.
+  //
+  // The rule now lives in macOS/published-url.js, a pure module with no
+  // imports (server-manager.js requires axios and electron, so the rule
+  // was untestable where it was). So assert the BEHAVIOUR instead: the
+  // measured host wins over the configured one whenever it exists.
+  const { resolvePublishedUrl } = require(path.join(macDir, 'published-url.js'));
+  assert.equal(
+    resolvePublishedUrl({
+      port: 8000,
+      configuredHost: '0.0.0.0',
+      measuredHost: '127.0.0.1',
+      lanIp: '10.0.1.86',
+    }),
+    'http://127.0.0.1:8000',
+    'the configured host beat the measured one, so the menu would print an ' +
+    'aspiration rather than where the server actually is'
   );
-  assert.match(fn, /this\.getEffectiveBindHost\(\)\s*\|\|\s*this\.getBindHost\(\)/);
+  // And server-manager must still be delegating to that module rather than
+  // keeping a second copy of the rule that could drift from it.
+  assert.match(managerSrc, /resolvePublishedUrl\(\{/);
 });
 
 test('the effective bind never falls back to the configured value', () => {
