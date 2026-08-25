@@ -56,7 +56,7 @@ from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
     SweepOutcome,
     UploadSweeper,
-    configured_project_paths,
+    datastore_project_paths,
     sweep_verdict,
 )
 from src.utils.pty_session import PTYSessionError
@@ -931,6 +931,8 @@ class SessionManager:
         destroy_session() never ran. Identical prune logic to the periodic
         UploadSweeper so they share intent.
         """
+        from src.core.project_authority import resolve_projects
+
         auth_cfg = settings.load_auth_config()
         cfg = auth_cfg.uploads
         if not cfg.enabled:
@@ -938,7 +940,15 @@ class SessionManager:
         sweeper = UploadSweeper(
             ttl_seconds=cfg.ttl_seconds,
             interval_seconds=0,
-            project_paths=configured_project_paths(auth_cfg),
+            # PROJECT PATHS COME FROM THE DATASTORE, which is the only
+            # place projects live as of v1.0.4. The helper keeps the
+            # three-outcome contract: a list (possibly empty) when the
+            # datastore was read, None when it could not be, and None
+            # means the sweeper deletes nothing at all rather than
+            # sweeping paths it could not verify.
+            project_paths=datastore_project_paths(
+                resolve_projects(settings.get_state_dir())
+            ),
             default_dir=settings.get_working_dir(),
         )
         try:

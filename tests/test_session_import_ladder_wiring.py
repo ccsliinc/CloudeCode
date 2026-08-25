@@ -91,7 +91,6 @@ def test_a_created_pipe_imports_the_session_as_OURS(conn, tmp_path):
     """Tier 3 on the wire: the pipe file the app wrote about ITSELF."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_1a2b3c4d", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path, "tmux_ses_1a2b3c4d.pipe"),
@@ -109,7 +108,6 @@ def test_an_ext_pipe_ALONE_leaves_the_session_unattributed(conn, tmp_path):
     strength of a verdict the bug produced."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_scrolltest", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path, "tmux_ext_cloude_scrolltest.pipe"),
@@ -125,7 +123,6 @@ def test_an_ext_pipe_ALONE_leaves_the_session_unattributed(conn, tmp_path):
 def test_both_pipes_is_OURS_by_the_created_pipe(conn, tmp_path):
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_ec5bf2a3", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(
@@ -142,7 +139,6 @@ def test_an_unreadable_log_directory_is_could_not_evaluate_not_no_evidence(
 ):
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_a", 1000)]),
         owned_tmux_names=set(),
         log_dir=tmp_path / "does-not-exist",
@@ -156,7 +152,6 @@ def test_the_unattributed_record_shape_is_exactly_what_the_prompt_renders(
 ):
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_deadbeef", 4242)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -171,7 +166,6 @@ def test_an_empty_list_and_an_absent_key_are_different_facts(conn, tmp_path):
     assert get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED) is None
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -207,7 +201,6 @@ def test_a_marker_on_a_session_older_than_the_boundary_is_ignored(conn, tmp_path
     record_boundary(conn, now_epoch=2000)
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_old", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -221,7 +214,6 @@ def test_a_marker_after_the_boundary_imports_as_OURS(conn, tmp_path):
     record_boundary(conn, now_epoch=2000)
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_new", 3000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -237,7 +229,6 @@ def test_a_marker_with_NO_boundary_is_inadmissible_not_assumed_valid(
 ):
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_x", 3000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -253,7 +244,6 @@ def _first_pass(conn, tmp_path, names, log_files=()):
     """Run the import once and then pretend an OLDER ladder produced it."""
     result = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live(n, e) for n, e in names]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path, *log_files),
@@ -301,7 +291,6 @@ def test_a_second_run_at_the_SAME_version_is_already_done(conn, tmp_path):
     _s(conn, META_IMPORTED_FROM_JSON_RESULT, json.dumps(blob))
     out = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_a", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -317,7 +306,6 @@ def test_a_version_bump_PROMOTES_an_observed_row_the_new_ladder_can_prove(
 
     out = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_1a2b3c4d", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path, "tmux_ses_1a2b3c4d.pipe"),
@@ -343,7 +331,6 @@ def test_a_DECLINED_row_survives_a_latch_version_bump(conn, tmp_path):
 
     out = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_1a2b3c4d", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path, "tmux_ses_1a2b3c4d.pipe"),
@@ -370,7 +357,6 @@ def test_an_OURS_row_is_NEVER_demoted_by_a_re_run(conn, tmp_path):
     # The evidence is GONE on the re-run: no pipe file at all.
     out = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_ses_1a2b3c4d", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path / "empty"),
@@ -400,7 +386,6 @@ def test_an_ADOPTED_row_is_never_touched_by_a_re_run(conn, tmp_path):
     )
     out = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_adopted", 1000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -416,7 +401,6 @@ def test_a_re_run_INSERTS_nothing(conn, tmp_path):
     before = {r["tmux_name"] for r in list_sessions(conn)}
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_brand_new", 2000)]),
         owned_tmux_names=set(),
         log_dir=_logdir(tmp_path),
@@ -473,7 +457,6 @@ def test_NO_log_directory_at_all_is_could_not_evaluate(conn):
     a measurement we could not take rather than one that found nothing."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_a", 1000)]),
         owned_tmux_names=set(),
         log_dir=None,

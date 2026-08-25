@@ -1,15 +1,14 @@
 """feat/db-is-authoritative - the four /projects routes, end to end.
 
-Exercises the HTTP layer against a real cloude.db and a real config.json
-on disk: what GET /projects serves and where it came from, whether a
-round trip through POST / PATCH / DELETE lands in BOTH stores, what
-happens to a write when the datastore is unreachable, and how a
-DB-versus-config disagreement is surfaced.
+Exercises the HTTP layer against a real cloude.db: what GET /projects
+serves, and whether a round trip through POST / PATCH / DELETE lands in
+the table.
 
-The round-trip test is the one that proves the inversion actually took.
-It asserts on both sides after every mutation - the database changed, AND
-config.json was updated to match - because either half alone is a
-half-migration that looks finished.
+THE ROUND TRIP USED TO ASSERT ON BOTH STORES, because a mutation had to
+reach the database AND config.json's mirrored copy. Projects are DB-only
+now, so there is exactly one place for a write to land and the config
+half of every assertion is gone - not relaxed, REMOVED, because a config
+side that is never written is a config side that must never be checked.
 """
 
 from __future__ import annotations
@@ -70,13 +69,6 @@ def app_env(tmp_path, monkeypatch):
 
     config_projects = [cfg(p["name"], p["path"]) for p in REAL_CONFIG_PROJECTS]
     _write_config(config_file, config_projects)
-
-    monkeypatch.setattr(
-        type(settings),
-        "load_auth_config",
-        lambda self: _FakeAuthConfig(_read_config_projects(config_file)),
-        raising=True,
-    )
 
     assert ensure_db_migrated(state_dir, 4, "0.0.0").status == "ok"
     with closing(connect(db_path_for(state_dir))) as conn:
@@ -158,10 +150,15 @@ def _config_names(config_file: Path) -> List[str]:
 
 
 class TestGetProjects:
-    def test_thirteen_config_entries_render_as_nine_projects(self, app_env):
-        """The visible symptom, fixed at the API boundary."""
-        client, _, config_file = app_env
-        assert len(json.loads(config_file.read_text())["projects"]) == 13
+    def test_thirteen_config_entries_became_nine_rows(self, app_env):
+        """The visible symptom, fixed at the API boundary.
+
+        Description: the 13 entries are imported into the table by the
+          fixture, exactly as the one-time migration does on a real
+          upgrade. The route then serves the table, and the triplicated
+          root has collapsed to one row.
+        """
+        client, _, _ = app_env
 
         body = client.get("/api/v1/projects").json()
 
@@ -197,10 +194,10 @@ class TestGetProjects:
 
 
 class TestRoundTrip:
-    """Each mutation must land in the database AND in the rollback file."""
+    """Each mutation lands in the table, which is the only store."""
 
-    def test_create_lands_in_both_stores(self, app_env):
-        client, state_dir, config_file = app_env
+    def test_create_lands_in_the_table(self, app_env):
+        client, state_dir, _ = app_env
 
         response = client.post(
             "/api/v1/projects",
@@ -210,10 +207,9 @@ class TestRoundTrip:
         assert response.status_code == 201
         assert response.json()["id"] is not None
         assert "roundtrip" in [r["display_name"] for r in _db_rows(state_dir)]
-        assert "roundtrip" in _config_names(config_file)
 
-    def test_rename_lands_in_both_stores(self, app_env):
-        client, state_dir, config_file = app_env
+    def test_rename_lands_in_the_table(self, app_env):
+        client, state_dir, _ = app_env
 
         response = client.patch(
             "/api/v1/projects/CloudeCode", json={"new_name": "Renamed"}
@@ -222,17 +218,14 @@ class TestRoundTrip:
         assert response.status_code == 200
         assert response.json()["name"] == "Renamed"
         assert "Renamed" in [r["display_name"] for r in _db_rows(state_dir)]
-        assert "Renamed" in _config_names(config_file)
-        assert "CloudeCode" not in _config_names(config_file)
 
-    def test_delete_lands_in_both_stores(self, app_env):
-        client, state_dir, config_file = app_env
+    def test_delete_lands_in_the_table(self, app_env):
+        client, state_dir, _ = app_env
 
         response = client.delete("/api/v1/projects/ai-setup")
 
         assert response.status_code == 200
         assert "ai-setup" not in [r["display_name"] for r in _db_rows(state_dir)]
-        assert "ai-setup" not in _config_names(config_file)
 
     def test_a_rename_does_not_move_the_folder_or_the_root(self, app_env):
         client, state_dir, _ = app_env

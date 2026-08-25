@@ -94,7 +94,6 @@ def test_a_persisted_OWNED_session_imports_as_created_not_observed(conn):
     """
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([]),
         owned_tmux_names={"cloude_mine"},
         persisted_sessions=[
@@ -112,7 +111,6 @@ def test_a_persisted_UNOWNED_session_still_imports_as_observed(conn):
     """D5, the other half: the fix must not badge everything as ours."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([]),
         owned_tmux_names={"something_else"},
         persisted_sessions=[
@@ -126,7 +124,6 @@ def test_the_import_NEVER_invents_an_adoption_on_either_step(conn):
     """D5: past adoptions were persisted nowhere, so importing one is invention."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_live", 1000)]),
         owned_tmux_names={"cloude_live", "cloude_dead"},
         persisted_sessions=[{"tmux_session": "cloude_dead", "id": "s"}],
@@ -252,7 +249,7 @@ def test_the_two_latch_keys_are_written_TOGETHER_or_not_at_all(conn):
     """
     with transaction(conn):
         pending = run_first_run_import(
-            conn, projects=[], listing=TmuxListing.unavailable("timeout")
+            conn, listing=TmuxListing.unavailable("timeout")
         )
     assert pending.pending is True
     assert sessions_stage_done(conn) is False
@@ -260,7 +257,7 @@ def test_the_two_latch_keys_are_written_TOGETHER_or_not_at_all(conn):
 
     with transaction(conn):
         done = run_first_run_import(
-            conn, projects=[], listing=TmuxListing.answered([])
+            conn, listing=TmuxListing.answered([])
         )
     assert done.outcome == IMPORT_COMPLETED
     assert sessions_stage_done(conn) is True
@@ -307,7 +304,6 @@ def test_the_import_records_the_socket_it_was_GIVEN(conn):
     """D7: rows must key on the probed socket, not the module default."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("a", 1000)]),
         socket="mysock",
     )
@@ -373,7 +369,7 @@ def test_an_unreadable_latch_record_RAISES_instead_of_re_running(conn, corrupt):
     """
     with transaction(conn):
         run_first_run_import(
-            conn, projects=[], listing=TmuxListing.answered([])
+            conn, listing=TmuxListing.answered([])
         )
     assert sessions_stage_done(conn) is True
 
@@ -386,7 +382,7 @@ def test_an_unreadable_latch_record_RAISES_instead_of_re_running(conn, corrupt):
     with pytest.raises(ImportLatchUnreadable):
         with transaction(conn):
             run_first_run_import(
-                conn, projects=[], listing=TmuxListing.answered([])
+                conn, listing=TmuxListing.answered([])
             )
 
     # nothing was written, and the corrupt value was NOT clobbered
@@ -415,7 +411,7 @@ def test_another_stages_keys_SURVIVE_a_sessions_import(conn):
         )
     with transaction(conn):
         run_first_run_import(
-            conn, projects=[], listing=TmuxListing.answered([])
+            conn, listing=TmuxListing.answered([])
         )
     blob = json.loads(get_meta(conn, META_IMPORTED_FROM_JSON_RESULT))
     assert blob["projects_imported_at"] == "2026-01-01T00:00:00Z"
@@ -474,7 +470,6 @@ def test_the_listing_carries_the_session_id_into_the_import(conn):
     """End to end: a parsed row's id reaches the stored row."""
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("a", 1000, session_id="$5")]),
     )
     assert list_sessions(conn)[0]["tmux_session_id"] == "$5"

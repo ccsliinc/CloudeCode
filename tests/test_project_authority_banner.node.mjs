@@ -262,11 +262,39 @@ function projectNodeCount(html) {
     return countOf(html, '<div class="project-node" data-project-node="project"');
 }
 
-// --- the provenance banner's four states ---------------------------------
+// --- the provenance banner: ONE voice, three states -----------------------
+//
+// THE DEFECT THESE REPLACE. This block used to cover four banner states
+// and a separate "disagreement" banner, and the renderer could emit TWO
+// of them at once: a degraded banner saying "Showing config.json's
+// projects" immediately above a disagreement banner saying "cloude.db is
+// authoritative and is what you are seeing". Both rendered, and they
+// contradicted each other about the one thing a provenance banner exists
+// to state.
+//
+// Projects are DB-only now, so there is one source and one opinion. The
+// load-bearing assertion is `exactly one banner element, in every state`
+// - a count, not a presence check, because the old bug was two banners
+// that were each individually correct-looking.
+
+/**
+ * Count rendered banner elements in a chunk of markup.
+ *
+ * Counts the OPENING TAG of the banner div rather than the class name,
+ * so a state that carried two classes could never read as two banners
+ * and vice versa.
+ *
+ * @param {string} html - rendered markup.
+ * @returns {number} - how many banner elements were drawn.
+ */
+function bannerCount(html) {
+    return countOf(html, '<div class="project-authority-banner');
+}
 
 test('healthy db mode draws no banner at all', () => {
     const html = renderWith({ projects: authoritativeProjects() });
     assert.ok(!html.includes('project-authority-banner'));
+    assert.equal(bannerCount(html), 0);
 });
 
 test('a failed authority fetch renders CANNOT DETERMINE, never healthy', () => {
@@ -274,97 +302,134 @@ test('a failed authority fetch renders CANNOT DETERMINE, never healthy', () => {
     assert.ok(html.includes('project-authority-banner-unknown'));
     assert.ok(html.includes('data-authority-state="unknown"'));
     assert.ok(html.includes('CANNOT DETERMINE'));
+    assert.equal(bannerCount(html), 1);
 });
 
-test('config fallback renders a distinct banner and marks itself unwritable', () => {
+test('an unreadable datastore draws ONE banner and marks itself unwritable', () => {
     const html = renderWith({
-        projects: authoritativeProjects(),
+        projects: [],
         authority: {
-            mode: 'config_fallback',
+            mode: 'db_unreadable',
             writable: false,
             degraded: true,
-            message: 'cloude.db is UNREACHABLE. Projects are being served from config.json in read-only rollback mode.',
+            message: 'cloude.db is UNREACHABLE, so your projects CANNOT BE READ right now. This is NOT a claim that you have no projects.',
             detail: 'no such file',
-            project_count: 9,
-            diff: null,
-            diff_state: 'cannot_determine',
+            project_count: 0,
         },
     });
-    assert.ok(html.includes('project-authority-banner-fallback'));
-    assert.ok(html.includes('data-authority-state="config_fallback"'));
+    assert.equal(bannerCount(html), 1);
+    assert.ok(html.includes('project-authority-banner-unreadable'));
+    assert.ok(html.includes('data-authority-state="db_unreadable"'));
     assert.ok(html.includes('data-writable="false"'));
     assert.ok(html.includes('UNREACHABLE'));
-    // Still draws the projects - a degraded launcher is not a blank one.
-    assert.equal(projectNodeCount(html), 9);
 });
 
-test('the three degraded banners are visually distinct classes', () => {
-    const fallback = renderWith({
-        projects: authoritativeProjects(),
-        authority: {
-            mode: 'config_fallback', writable: false, degraded: true,
-            message: 'm', detail: null, project_count: 9,
-            diff: null, diff_state: 'cannot_determine',
-        },
-    });
-    const empty = renderWith({
-        projects: authoritativeProjects(),
-        authority: {
-            mode: 'db_empty_config_has', writable: true, degraded: true,
-            message: 'm', detail: null, project_count: 9,
-            diff: { agree: true, authoritative: 'db', difference_count: 0,
-                    only_in_db: [], only_in_config: [], field_mismatches: [],
-                    duplicate_config_roots: [] },
-            diff_state: 'known',
-        },
-    });
-    const unknown = renderWith({ projects: authoritativeProjects(), authority: null });
-
-    assert.ok(fallback.includes('project-authority-banner-fallback'));
-    assert.ok(empty.includes('project-authority-banner-empty'));
-    assert.ok(unknown.includes('project-authority-banner-unknown'));
-    assert.ok(!empty.includes('project-authority-banner-fallback'));
-    assert.ok(!unknown.includes('project-authority-banner-fallback'));
-});
-
-test('an empty database with a populated config does not say "no projects"', () => {
+test('the unreadable banner denies that an empty list means zero projects', () => {
+    // THE ASSERTION THIS WHOLE MODE EXISTS FOR. Losing cloude.db and
+    // having deleted every project render identically unless the banner
+    // says which one happened. This reads the RENDERED TEXT, not the
+    // authority object, because the object being right is not the claim
+    // - what the user sees is.
     const html = renderWith({
-        projects: authoritativeProjects(),
+        projects: [],
         authority: {
-            mode: 'db_empty_config_has', writable: true, degraded: true,
-            message: 'cloude.db opened cleanly but holds no projects. This is NOT a claim that you have no projects.',
-            detail: 'db_projects=0 config_projects=13', project_count: 9,
-            diff: { agree: false, authoritative: 'db', difference_count: 9,
-                    only_in_db: [], only_in_config: [], field_mismatches: [],
-                    duplicate_config_roots: [] },
-            diff_state: 'known',
+            mode: 'db_unreadable', writable: false, degraded: true,
+            message: 'cloude.db is UNREACHABLE, so your projects CANNOT BE READ right now. This is NOT a claim that you have no projects - the list is empty because nothing could be read, not because nothing is there.',
+            detail: 'no such file', project_count: 0,
         },
     });
-    assert.ok(html.includes('NOT a claim'));
-    assert.ok(!html.includes('no projects yet'));
+    assert.ok(html.includes('NOT a claim that you have no projects'));
+    assert.ok(html.includes('nothing could be read'));
 });
 
-test('a disagreement names both sides and states who is authoritative', () => {
-    const html = renderWith({
-        projects: authoritativeProjects(),
-        authority: {
-            mode: 'db', writable: true, degraded: false,
-            message: 'ok', detail: null, project_count: 9,
+test('NO authority state can ever draw two banners at once', () => {
+    // The regression guard for the reported defect, stated as a property
+    // over every state the renderer can be put in rather than as one
+    // example. Two banners was never a rendering accident - it was two
+    // independent branches each deciding to draw. One banner per state,
+    // always, is what makes a contradiction structurally impossible.
+    //
+    // THE FOURTH STATE IS THE POSITIVE CONTROL, and it is the only one
+    // that matters. The first three pass against the OLD renderer too -
+    // verified by running this file against v1.0.3's launchpad.js, where
+    // it reported 8 passed / 1 failed with THIS test among the passes.
+    // A guard that cannot fail on the defect it names is worse than no
+    // guard, so the state below is shaped to trip the old code's two
+    // independent branches at once: `degraded: true` fires the mode
+    // banner, and a non-agreeing `diff` fires the disagreement banner.
+    // The old renderer draws BOTH and fails here. The current one has no
+    // diff branch to fire, ignores the extra keys, and draws one.
+    const states = [
+        null,
+        { mode: 'db', writable: true, degraded: false, message: 'ok', detail: null, project_count: 9 },
+        { mode: 'db_unreadable', writable: false, degraded: true, message: 'UNREACHABLE', detail: 'x', project_count: 0 },
+        // A server that grows a new degraded mode this client has never
+        // heard of must still draw exactly one banner, not zero and not
+        // two.
+        { mode: 'some_future_mode', writable: false, degraded: true, message: 'm', detail: null, project_count: 0 },
+        // The positive control - the exact shape the user screenshotted.
+        {
+            mode: 'db_empty_config_has', writable: true, degraded: true,
+            message: "cloude.db opened cleanly but holds no projects, while config.json holds 4. Showing config.json's projects.",
+            detail: 'db_projects=0 config_projects=4', project_count: 4,
             diff: {
-                agree: false, authoritative: 'db', difference_count: 2,
-                only_in_db: [{ root: '/tmp/x', display_name: 'db-only', raw_path: '/tmp/x' }],
-                only_in_config: [{ root: '/tmp/y', name: 'config-only', path: '/tmp/y' }],
+                agree: false, authoritative: 'db', difference_count: 4,
+                only_in_db: [],
+                only_in_config: [
+                    { root: '/tmp/a', name: 'a', path: '/tmp/a' },
+                    { root: '/tmp/b', name: 'b', path: '/tmp/b' },
+                    { root: '/tmp/c', name: 'c', path: '/tmp/c' },
+                    { root: '/tmp/d', name: 'd', path: '/tmp/d' },
+                ],
                 field_mismatches: [], duplicate_config_roots: [],
             },
             diff_state: 'known',
         },
-    });
-    assert.ok(html.includes('project-authority-banner-disagree'));
-    assert.ok(html.includes('DISAGREE'));
-    assert.ok(html.includes('db-only'), 'the DB-only project must be named');
-    assert.ok(html.includes('config-only'), 'the config-only project must be named');
-    assert.ok(html.includes('cloude.db is authoritative'));
-    assert.ok(html.includes('data-difference-count="2"'));
+    ];
+    for (const authority of states) {
+        const html = renderWith({ projects: authoritativeProjects(), authority });
+        const n = bannerCount(html);
+        const label = authority === null ? 'null' : authority.mode;
+        assert.ok(n <= 1, `state ${label} drew ${n} banners; at most one is allowed`);
+        if (authority !== null && authority.degraded) {
+            assert.equal(n, 1, `degraded state ${label} drew no banner`);
+        }
+    }
+});
+
+test('no banner in any state contradicts itself about the source', () => {
+    // The two old banners each contained one of these phrases. If both
+    // ever appear in one render again, the contradiction is back.
+    // Same positive control as above: the last state is the one the user
+    // actually saw, carrying BOTH the config-fallback message and a
+    // non-agreeing diff. Against v1.0.3's renderer it produces both
+    // sentences in one render and fails this test.
+    for (const authority of [
+        null,
+        { mode: 'db', writable: true, degraded: false, message: 'ok', detail: null, project_count: 9 },
+        { mode: 'db_unreadable', writable: false, degraded: true, message: 'cloude.db is UNREACHABLE, so your projects CANNOT BE READ right now.', detail: 'x', project_count: 0 },
+        {
+            mode: 'db_empty_config_has', writable: true, degraded: true,
+            message: "cloude.db opened cleanly but holds no projects, while config.json holds 4. Showing config.json's projects.",
+            detail: null, project_count: 4,
+            diff: {
+                agree: false, authoritative: 'db', difference_count: 4,
+                only_in_db: [],
+                only_in_config: [{ root: '/tmp/a', name: 'a', path: '/tmp/a' }],
+                field_mismatches: [], duplicate_config_roots: [],
+            },
+            diff_state: 'known',
+        },
+    ]) {
+        const html = renderWith({ projects: authoritativeProjects(), authority });
+        const claimsConfig = html.includes("Showing config.json's projects");
+        const claimsDb = html.includes('cloude.db is authoritative and is what you are seeing');
+        assert.ok(
+            !(claimsConfig && claimsDb),
+            'the two contradictory provenance claims rendered together again',
+        );
+        assert.ok(!html.includes('DISAGREE'), 'the retired disagreement banner rendered');
+    }
 });
 
 test('the empty-list state also carries the banner', () => {
@@ -375,9 +440,10 @@ test('the empty-list state also carries the banner', () => {
     assert.ok(html.includes('no projects yet'));
 });
 
-test('the empty state no longer tells the user to edit config.json', () => {
-    // config.json is a rollback artifact now, not the place to add a
-    // project. Advice that was true before the inversion is a lie after it.
+test('the empty state does not tell the user to edit config.json', () => {
+    // Projects are not in config.json at all now, so advice to edit it
+    // is not merely stale - it sends the user to a file where their edit
+    // would be silently ignored.
     const html = renderWith({ projects: [] });
     assert.ok(!html.includes('edit config.json'));
 });
@@ -385,9 +451,10 @@ test('the empty state no longer tells the user to edit config.json', () => {
 // --- the id plumbing -----------------------------------------------------
 
 test('a project with a null id draws no children even if sessions claim id 0', () => {
-    // The degraded fallback carries id: null. Rendering that as row 0
-    // would let a session attributed to project 0 attach to every
-    // config-sourced project at once.
+    // A null id must never render as row 0, which would let a session
+    // attributed to project 0 attach to every such project at once.
+    // The config fallback that used to produce null ids is gone; the
+    // guard stays, because the cost of it being wrong has not changed.
     const projects = authoritativeProjects().map((p) => ({ ...p, id: null }));
     const html = renderWith({
         projects,

@@ -52,7 +52,6 @@ def patched_auth_config(monkeypatch):
         refresh_token_ttl_seconds=604800,
         refresh_grace_seconds=10,
         totp_secret="X" * 32,
-        projects=[],
     )
 
     class _FakeSettings:

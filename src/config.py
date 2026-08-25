@@ -398,7 +398,13 @@ class AuthConfig(BaseModel):
     # at once) without tripping reuse-detection.
     refresh_grace_seconds: int = auth_defaults.REFRESH_GRACE_SECONDS
     template_path: Optional[str] = None
-    projects: List[ProjectConfig] = []
+    # PROJECTS ARE NOT HERE. They live in cloude.db's ``projects``
+    # table and nowhere else. A legacy ``projects`` key in config.json
+    # is IGNORED on read - see src/core/projects_config_migration.py,
+    # which moves any entry the table has never seen into the table
+    # once and then removes the key. Reintroducing this field would
+    # recreate the second source of truth whose divergence reporter
+    # shipped two contradictory banners.
     # Entries are EITHER a bare command string ("/clear", the historical
     # form, still fully supported) OR an object carrying a user-authored
     # short description ({"command": "/clear", "description": "wipe it"}).
@@ -1000,10 +1006,12 @@ class Settings(BaseSettings):
         Load authentication configuration from JSON file + .env secrets.
 
         Secrets (totp_secret, jwt_secret) come from .env via Settings.
-        Non-secrets (projects, template_path, etc) come from JSON file.
+        Non-secrets (template_path, agents, etc) come from JSON file.
+        A legacy ``projects`` key is deliberately NOT read: projects
+        live in cloude.db only.
 
         Returns:
-            AuthConfig object with TOTP secret, JWT config, and projects
+            AuthConfig object with TOTP secret and JWT config
 
         Raises:
             FileNotFoundError: If config file doesn't exist
@@ -1023,10 +1031,6 @@ class Settings(BaseSettings):
         try:
             with open(config_path) as f:
                 data = json.load(f)
-
-            # Convert projects from dict to ProjectConfig objects
-            projects_data = data.get("projects", [])
-            projects = [ProjectConfig(**p) for p in projects_data]
 
             # Build SessionConfig from optional "session" block; missing keys
             # fall back to SessionConfig defaults.
@@ -1191,7 +1195,6 @@ class Settings(BaseSettings):
                     data.get("refresh_grace_seconds", 10)
                 ),
                 template_path=data.get("template_path"),
-                projects=projects,
                 common_slash_commands=data.get("common_slash_commands", []),
                 session=session_config,
                 auth_rate_limits=rate_limits_config,
@@ -1222,272 +1225,10 @@ class Settings(BaseSettings):
                 f"Check {config_path}"
             )
 
-    def get_project(self, name: str) -> Optional[ProjectConfig]:
-        """Look up a project by display name. Returns None if not found."""
-        auth_config = self.load_auth_config()
-        for p in auth_config.projects:
-            if p.name == name:
-                return p
-        return None
 
-    def save_project(self, project: ProjectConfig) -> None:
-        """
-        Add a new project to the configuration file.
 
-        Args:
-            project: ProjectConfig object to add
 
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If config file is invalid or project already exists
-        """
-        config_path = Path(self.auth_config_file).expanduser()
 
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Auth config file not found: {config_path}\n"
-                f"Run ./setup_auth.py to create it."
-            )
-
-        try:
-            # Read current config
-            with open(config_path) as f:
-                data = json.load(f)
-
-            # Check if project with same name already exists
-            projects_data = data.get("projects", [])
-            if any(p.get("name") == project.name for p in projects_data):
-                raise ValueError(f"Project with name '{project.name}' already exists")
-
-            # Add new project at the top (index 0)
-            projects_data.insert(0, {
-                "name": project.name,
-                "path": project.path,
-                "description": project.description
-            })
-
-            # Update data
-            data["projects"] = projects_data
-
-            # Write back to file
-            with open(config_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            # Clear cache to force reload
-            self._auth_config_cache = None
-
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Invalid JSON in auth config file: {e}\n"
-                f"Check {config_path}"
-            )
-
-    def delete_project(self, project_name: str) -> None:
-        """
-        Delete a project from the configuration file.
-
-        Args:
-            project_name: Name of the project to delete
-
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If config file is invalid or project doesn't exist
-        """
-        config_path = Path(self.auth_config_file).expanduser()
-
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Auth config file not found: {config_path}\n"
-                f"Run ./setup_auth.py to create it."
-            )
-
-        try:
-            # Read current config
-            with open(config_path) as f:
-                data = json.load(f)
-
-            # Find and remove project
-            projects_data = data.get("projects", [])
-            original_length = len(projects_data)
-            projects_data = [p for p in projects_data if p.get("name") != project_name]
-
-            if len(projects_data) == original_length:
-                raise ValueError(f"Project '{project_name}' not found")
-
-            # Update data
-            data["projects"] = projects_data
-
-            # Write back to file
-            with open(config_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            # Clear cache to force reload
-            self._auth_config_cache = None
-
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Invalid JSON in auth config file: {e}\n"
-                f"Check {config_path}"
-            )
-
-    def update_project(
-        self,
-        old_name: str,
-        new_name: Optional[str],
-        description: Optional[str],
-    ) -> ProjectConfig:
-        """
-        Update a project's display name and/or description.
-
-        Display name only - the folder on disk is never touched.
-
-        Args:
-            old_name: Current display name (used as the lookup key)
-            new_name: New display name. ``None`` = leave unchanged. If equal to
-                ``old_name`` it's treated as a no-op for the name field.
-            description: New description. ``None`` = leave unchanged. An empty
-                string is honored as an intentional clear.
-
-        Returns:
-            The updated ``ProjectConfig`` (reflecting the new name/description).
-
-        Raises:
-            FileNotFoundError: If config file doesn't exist.
-            KeyError: If no project named ``old_name`` exists.
-            ValueError: ``"name conflict"`` if renaming to a name another
-                project already has, or for invalid JSON in the config file.
-        """
-        config_path = Path(self.auth_config_file).expanduser()
-
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Auth config file not found: {config_path}\n"
-                f"Run ./setup_auth.py to create it."
-            )
-
-        try:
-            # Read current config
-            with open(config_path) as f:
-                data = json.load(f)
-
-            projects_data = data.get("projects", [])
-
-            # Locate the target project (case-sensitive exact match)
-            target_index = None
-            for i, p in enumerate(projects_data):
-                if p.get("name") == old_name:
-                    target_index = i
-                    break
-
-            if target_index is None:
-                raise KeyError(old_name)
-
-            # Apply name change (with collision check)
-            if new_name is not None and new_name != old_name:
-                # Collision: any OTHER project (different index) with new_name
-                for i, p in enumerate(projects_data):
-                    if i != target_index and p.get("name") == new_name:
-                        raise ValueError("name conflict")
-                projects_data[target_index]["name"] = new_name
-
-            # Apply description change (None = no-op; "" = intentional clear)
-            if description is not None:
-                projects_data[target_index]["description"] = description
-
-            # Update data and persist atomically:
-            # write to .tmp → fsync → os.replace() (atomic on same filesystem).
-            data["projects"] = projects_data
-
-            tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(data, f, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, config_path)
-
-            # Clear cache to force reload
-            self._auth_config_cache = None
-
-            updated = projects_data[target_index]
-            return ProjectConfig(
-                name=updated["name"],
-                path=updated.get("path", ""),
-                description=updated.get("description"),
-            )
-
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Invalid JSON in auth config file: {e}\n"
-                f"Check {config_path}"
-            )
-
-    def move_project_to_top(self, working_dir: str) -> None:
-        """
-        Move a project to the top of the projects list (most recently used).
-
-        Args:
-            working_dir: Path of the working directory to match against projects
-
-        Note:
-            Fails silently if no matching project found (user might use custom paths)
-        """
-        try:
-            config_path = Path(self.auth_config_file).expanduser()
-
-            if not config_path.exists():
-                return  # Fail silently
-
-            # Read current config
-            with open(config_path) as f:
-                data = json.load(f)
-
-            projects_data = data.get("projects", [])
-            if not projects_data:
-                return  # No projects to reorder
-
-            # Normalize the working_dir path for comparison
-            working_path = Path(working_dir).expanduser().resolve()
-
-            # Find matching project
-            matching_project = None
-            matching_index = None
-
-            for i, project in enumerate(projects_data):
-                project_path = Path(project.get("path", "")).expanduser().resolve()
-                if project_path == working_path:
-                    matching_project = project
-                    matching_index = i
-                    break
-
-            # If no match found, fail silently (user using custom path)
-            if matching_project is None or matching_index is None:
-                return
-
-            # If already at top, no need to reorder
-            if matching_index == 0:
-                return
-
-            # Move to top
-            projects_data.pop(matching_index)
-            projects_data.insert(0, matching_project)
-
-            # Update data
-            data["projects"] = projects_data
-
-            # Write back to file
-            with open(config_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            # Clear cache to force reload
-            self._auth_config_cache = None
-
-        except Exception as e:
-            # Fail silently - don't want to break session creation if reordering fails
-            import structlog
-            logger = structlog.get_logger()
-            logger.warning("failed_to_reorder_projects", error=str(e), working_dir=working_dir)
-
-    # ---- provider-selector modal (v3.1) ----------------------------------
 
     def get_provider_models(self) -> List[str]:
         """Return the persisted list of add/remove-able OpenRouter model ids.

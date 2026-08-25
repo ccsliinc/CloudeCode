@@ -117,28 +117,40 @@ class SweepVerdict:
     reason: str
 
 
-def configured_project_paths(auth_cfg) -> list[str] | None:
-    """Read the configured project base paths, or report that we cannot.
+def datastore_project_paths(view) -> list[str] | None:
+    """Read the project base paths out of a ProjectsView, or refuse.
 
-    The provenance half of the sweeper's safety. Every failure to
-    enumerate returns ``None``, which the sweeper treats as "delete
-    nothing at all", rather than an empty list, which it would treat as
-    "there are legitimately no projects, carry on with the default dir".
-    Those two are very different statements and only one of them is
-    evidence.
+    The provenance half of the sweeper's safety, now sourced from the
+    datastore because as of v1.0.4 cloude.db's ``projects`` table is the
+    only place projects live. Every failure to enumerate returns
+    ``None``, which the sweeper treats as "delete nothing at all",
+    rather than an empty list, which it would treat as "there are
+    legitimately no projects, carry on with the default dir". Those two
+    are very different statements and only one of them is evidence.
+
+    A view whose ``read_only`` flag is set could not read the datastore
+    at all, so its empty ``projects`` list is an absence of evidence and
+    is reported as ``None``.
 
     Inputs:
-        auth_cfg: A loaded ``AuthConfig``.
+        view: A ``ProjectsView`` (or anything exposing ``read_only`` and
+            ``projects``) from ``project_authority.resolve_projects``.
     Outputs:
-        list[str] - one base path per configured project, possibly
-        empty when the config genuinely declares none.
+        list[str] - one base path per project, possibly empty when the
+        datastore genuinely holds none.
         None - the list could not be determined.
     Example:
-        >>> configured_project_paths(settings.load_auth_config())
+        >>> datastore_project_paths(resolve_projects(state_dir))
         ['/Users/me/Development/thing']
     """
     try:
-        projects = auth_cfg.projects
+        if view.read_only:
+            logger.warning(
+                "project_list_unreadable",
+                error="datastore view is read-only, projects could not be read",
+            )
+            return None
+        projects = view.projects
     except AttributeError as exc:
         logger.warning("project_list_unreadable", error=str(exc))
         return None
@@ -149,7 +161,7 @@ def configured_project_paths(auth_cfg) -> list[str] | None:
     paths: list[str] = []
     try:
         for project in projects:
-            path = project.path
+            path = project["path"]
             if not isinstance(path, str) or not path.strip():
                 # One unusable entry means the list as a whole is not
                 # trustworthy. Silently dropping it would sweep a subset
@@ -160,7 +172,7 @@ def configured_project_paths(auth_cfg) -> list[str] | None:
                 )
                 return None
             paths.append(path)
-    except (AttributeError, TypeError) as exc:
+    except (AttributeError, TypeError, KeyError) as exc:
         logger.warning("project_list_unreadable", error=str(exc))
         return None
     return paths

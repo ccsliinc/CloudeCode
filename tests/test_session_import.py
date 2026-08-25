@@ -112,12 +112,23 @@ def _live(name, epoch, working_dir=None):
 def _run(conn, listing, **kwargs):
     """Run the first-run import inside its own transaction.
 
+    Description: ``projects`` is no longer a parameter of the import -
+      projects are DB-only and main.py settles the table (via
+      ``projects_config_migration``) BEFORE this runs. So the helper
+      seeds the rows itself, which keeps every attribution test saying
+      what it always said: "given these projects exist, attribute this
+      session".
     Inputs: conn (sqlite3.Connection). listing (TmuxListing).
-      **kwargs - forwarded to run_first_run_import.
+      **kwargs - forwarded to run_first_run_import, except ``projects``,
+      which is seeded into the table instead.
     Output: FirstRunImportResult.
     """
-    kwargs.setdefault("projects", [])
+    from src.core.project_store import import_from_config
+
+    seed = kwargs.pop("projects", None) or []
     with transaction(conn):
+        if seed:
+            import_from_config(conn, seed)
         return run_first_run_import(conn, listing=listing, **kwargs)
 
 
@@ -454,15 +465,6 @@ def test_importing_twice_with_ok_true_does_not_duplicate_rows(conn):
     assert second.outcome == IMPORT_ALREADY_DONE
     assert second.sessions_imported == 0
     assert count_sessions(conn) == 2
-
-
-def test_the_projects_stage_does_not_double_on_a_retry(conn):
-    """A failed probe re-runs the projects stage; it must stay idempotent."""
-    projects = [FakeProject(name="p1", path="/tmp/p1")]
-    _run(conn, TmuxListing.unavailable(REASON_TIMEOUT), projects=projects)
-    _run(conn, TmuxListing.answered([]), projects=projects)
-    rows = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
-    assert rows == 1
 
 
 # ===========================================================================

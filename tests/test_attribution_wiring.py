@@ -470,7 +470,7 @@ def test_the_import_attributes_nothing_without_a_probe_and_resolves_with_one(
     listing = listing_of([listing_row("cloude_cc", 4242)])
 
     result = run_first_run_import(
-        conn, projects=[], listing=listing, socket=TEST_SOCKET,
+        conn, listing=listing, socket=TEST_SOCKET,
         working_dir_probe=None,
     )
     assert result.sessions_imported == 1

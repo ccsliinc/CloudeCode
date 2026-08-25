@@ -33,7 +33,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: owns, rather than a setting describing how the app behaves. The bootstrap
 #: copies this file verbatim, so anything listed here must ship empty or a
 #: fresh install starts with fabricated user data.
-USER_DATA_KEYS = ("projects",)
+# NOTHING LEFT. ``projects`` used to be the one user-data key config.json
+# carried, and the parametrized guard below made sure it shipped present
+# and empty. Projects are DB-only now, so the correct assertion inverted:
+# the key must be ABSENT, which is what
+# test_example_config_carries_no_projects_key checks. If a future user-data
+# key lands in config.json, add it here and the present-and-empty guard
+# comes back to life for it.
+USER_DATA_KEYS = ()
 
 
 @pytest.fixture(scope="module")
@@ -71,24 +78,33 @@ def test_example_config_seeds_no_user_data(example: dict, key: str) -> None:
     )
 
 
-def test_example_config_documents_project_shape_in_prose(example: dict) -> None:
-    """Emptying ``projects`` must not delete the documentation of its shape.
+def test_example_config_carries_no_projects_key(example: dict) -> None:
+    """Projects are not a config concern, so the example must not imply they are.
 
-    A bare ``"projects": []`` tells a reader the key exists and nothing about
-    what goes in it. The shape has to survive somewhere the bootstrap will not
-    copy into the user's data - a ``_comment_`` key, which the loader ignores.
+    Description: this assertion is the exact INVERSE of the one it
+      replaces, and the inversion is the point. The old test required a
+      ``projects: []`` key plus a ``_comment_projects`` documenting the
+      entry shape. Both are now misleading: a reader who followed that
+      documentation would hand-write entries into config.json and watch
+      the app ignore every one of them. Documentation for a key that no
+      longer does anything is worse than no documentation, because a
+      reader will act on it.
     """
-    comment = example.get("_comment_projects")
-    assert isinstance(comment, str) and comment.strip(), (
-        "config.example.json has no _comment_projects. Emptying the projects "
-        "list removed the only illustration of a project's fields, so the "
-        "example no longer documents the shape it exists to document."
+    assert "projects" not in example, (
+        "config.example.json still carries a projects key. Projects live "
+        "in cloude.db only, so a key here documents a shape the app does "
+        "not read and invites hand edits that silently do nothing."
     )
-    for field in ("name", "path", "description", "agent_type"):
-        assert field in comment, (
-            f"_comment_projects does not mention the {field!r} field, so a "
-            f"reader cannot learn a project's shape from this file."
-        )
+    assert "_comment_projects" not in example, (
+        "config.example.json still documents the retired projects array's "
+        "entry shape. That is now a stale doc."
+    )
+    retired = example.get("_comment_projects_retired")
+    assert isinstance(retired, str) and "cloude.db" in retired, (
+        "config.example.json should say where projects DID go. Removing "
+        "the key without a forwarding note leaves a reader who remembers "
+        "it with no way to find out what replaced it."
+    )
 
 
 def test_fresh_config_json_yields_zero_projects(tmp_path: Path) -> None:
@@ -106,7 +122,7 @@ def test_fresh_config_json_yields_zero_projects(tmp_path: Path) -> None:
     fresh = tmp_path / "config.json"
     fresh.write_bytes((REPO_ROOT / "config.example.json").read_bytes())
     loaded = json.loads(fresh.read_text())
-    assert loaded.get("projects") == [], (
+    assert not loaded.get("projects"), (
         "A freshly bootstrapped config.json contains projects. The first "
         "screen of a brand-new install would show rows the user never made."
     )

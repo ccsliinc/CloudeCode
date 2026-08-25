@@ -24,7 +24,7 @@ from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
 from src.core.refresh_store import RefreshStore
-from src.core.upload_sweeper import UploadSweeper, configured_project_paths
+from src.core.upload_sweeper import UploadSweeper, datastore_project_paths
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
@@ -264,6 +264,42 @@ async def lifespan(app: FastAPI):
     # reconcile block.
     app.state.project_reconcile_notice = None
     if datastore_state.healthy:
+        # PROJECTS OUT OF config.json, ONCE, BEFORE ANYTHING READS THEM.
+        # Runs ahead of the session import because step 7's project
+        # attribution matches sessions against the projects table, so any
+        # entry still stranded in config.json has to be a row before that
+        # match happens. Never raises; a pass that cannot prove the table
+        # covers the file leaves config.json exactly as it found it and
+        # is retried on the next start.
+        from src.core.projects_config_migration import (
+            migrate_projects_out_of_config,
+        )
+
+        _projects_migration = migrate_projects_out_of_config(
+            settings.get_state_dir(),
+            Path(settings.auth_config_file).expanduser(),
+        )
+        app.state.project_reconcile_notice = _projects_migration.notice()
+        if not _projects_migration.ok:
+            logger.warning(
+                "projects_config_migration_incomplete",
+                reason=_projects_migration.reason,
+                detail=_projects_migration.detail,
+            )
+        else:
+            logger.info(
+                "projects_config_migration",
+                reason=_projects_migration.reason,
+                imported=len(_projects_migration.imported),
+                imported_undetermined=len(
+                    _projects_migration.imported_undetermined
+                ),
+            )
+        # The migration may have rewritten config.json, so anything the
+        # Settings cache is holding for it is now stale by construction.
+        settings._auth_config_cache = None
+        auth_cfg = settings.load_auth_config()
+
         from src.core.db import connect, db_path_for, transaction
         from src.core.session_attribution import backfill_attribution
         from src.core.session_import import run_first_run_import
@@ -290,7 +326,6 @@ async def lifespan(app: FastAPI):
                     record_boundary(_import_conn)
                     _import_result = run_first_run_import(
                         _import_conn,
-                        projects=auth_cfg.projects,
                         listing=_listing,
                         owned_tmux_names=set(
                             session_manager.owned_tmux_sessions
@@ -332,10 +367,6 @@ async def lifespan(app: FastAPI):
                 app.state.session_import_notice = (
                     _import_result.home_screen_notice()
                 )
-                if _import_result.projects is not None:
-                    app.state.project_reconcile_notice = (
-                        _import_result.projects.notice()
-                    )
                 logger.info(
                     "first_run_import",
                     outcome=_import_result.outcome,
@@ -457,11 +488,21 @@ async def lifespan(app: FastAPI):
     # weeks. No-op when uploads.enabled is False.
     upload_sweeper_task = None
     if auth_cfg.uploads.enabled:
+        from src.core.project_authority import resolve_projects
+
         cfg = auth_cfg.uploads
         upload_sweeper = UploadSweeper(
             ttl_seconds=cfg.ttl_seconds,
             interval_seconds=cfg.sweep_interval_seconds,
-            project_paths=configured_project_paths(auth_cfg),
+            # PROJECT PATHS COME FROM THE DATASTORE, which is the only
+            # place projects live as of v1.0.4. The helper keeps the
+            # three-outcome contract: a list (possibly empty) when the
+            # datastore was read, None when it could not be, and None
+            # means the sweeper deletes nothing at all rather than
+            # sweeping paths it could not verify.
+            project_paths=datastore_project_paths(
+                resolve_projects(settings.get_state_dir())
+            ),
             default_dir=settings.get_working_dir(),
         )
         app.state.upload_sweeper = upload_sweeper

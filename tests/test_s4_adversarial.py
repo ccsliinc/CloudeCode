@@ -169,7 +169,7 @@ def test_defect_latch_stamped_after_unreadable_socket(conn):
     listing = classify_listing_failure(
         1, "error connecting to /tmp/x/sock (Permission denied)"
     )
-    result = run_first_run_import(conn, projects=[], listing=listing)
+    result = run_first_run_import(conn, listing=listing)
     assert result.outcome == IMPORT_PENDING_LISTING_UNAVAILABLE
     assert result.pending is True
     assert result.sessions_imported == 0
@@ -181,7 +181,6 @@ def test_defect_latch_stamped_after_unreadable_socket(conn):
     # And it is NOT permanent: the next start recovers his sessions.
     second = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_work", 1755000000)]),
         owned_tmux_names={"cloude_work"},
     )
@@ -481,7 +480,6 @@ def test_defect_persisted_owned_session_imports_as_observed(conn):
     """
     result = run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([]),
         owned_tmux_names={"cloude_mine"},
         persisted_sessions=[
@@ -522,7 +520,6 @@ def test_defect_import_hardcodes_the_default_socket(conn):
     """
     run_first_run_import(
         conn,
-        projects=[],
         listing=TmuxListing.answered([_live("cloude_a", 1755000000)]),
         owned_tmux_names={"cloude_a"},
         socket="mysock",
@@ -575,7 +572,7 @@ def test_defect_corrupt_result_blob_reruns_the_import(conn):
 
     with transaction(conn):
         run_first_run_import(
-            conn, projects=[], listing=TmuxListing.answered([]),
+            conn, listing=TmuxListing.answered([]),
         )
     assert sessions_stage_done(conn) is True
 
@@ -588,7 +585,7 @@ def test_defect_corrupt_result_blob_reruns_the_import(conn):
     with pytest.raises(ImportLatchUnreadable):
         with transaction(conn):
             run_first_run_import(
-                conn, projects=[], listing=TmuxListing.answered([]),
+                conn, listing=TmuxListing.answered([]),
             )
 
     # the unreadable value is preserved, not overwritten
@@ -703,7 +700,6 @@ def test_defect_ast_proof_misses_the_guard_that_actually_latches(tmp_path):
         with transaction(c):
             blocked = run_first_run_import(
                 c,
-                projects=[],
                 listing=TmuxListing.answered([_live("cloude_work", 1755000000)]),
                 owned_tmux_names={"cloude_work"},
             )

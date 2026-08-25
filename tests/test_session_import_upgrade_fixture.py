@@ -111,7 +111,6 @@ def _run(conn, logs):
     return run_first_run_import(
         conn,
         socket=FIXTURE_SOCKET,
-        projects=[],
         listing=TmuxListing.answered(
             [
                 {"name": n, "created_at_epoch": 1755000000 + i, "window_count": 1}

@@ -56,7 +56,7 @@ from src.core.upload_sweeper import (  # noqa: E402
     UPLOAD_DIR_NAME,
     SweepOutcome,
     UploadSweeper,
-    configured_project_paths,
+    datastore_project_paths,
     sweep_verdict,
 )
 
@@ -317,47 +317,59 @@ def test_guard_is_inert_when_not_under_test(tmp_path, monkeypatch):
     assert verdict.bucket == (project / UPLOAD_DIR_NAME).resolve()
 
 
-# ---- provenance at the source: reading the configured project list -----
+# ---- provenance at the source: reading the datastore project list -----
 
 
-class _FakeProject:
-    def __init__(self, path):
-        self.path = path
+class _FakeView:
+    """Stands in for project_authority.ProjectsView.
 
+    read_only mirrors the real property: True whenever the datastore
+    could not be read, which makes an empty projects list an absence of
+    evidence rather than a statement that there are no projects.
+    """
 
-class _FakeAuthConfig:
-    def __init__(self, projects):
+    def __init__(self, projects, read_only=False):
         self.projects = projects
+        self.read_only = read_only
 
 
-def test_configured_project_paths_reads_a_good_list():
+def test_datastore_project_paths_reads_a_good_list():
     """The ordinary case still produces a plain list of strings."""
-    cfg = _FakeAuthConfig([_FakeProject("/a"), _FakeProject("/b")])
-    assert configured_project_paths(cfg) == ["/a", "/b"]
+    view = _FakeView([{"path": "/a"}, {"path": "/b"}])
+    assert datastore_project_paths(view) == ["/a", "/b"]
 
 
-def test_configured_project_paths_distinguishes_empty_from_unknown():
+def test_datastore_project_paths_distinguishes_empty_from_unknown():
     """No projects is a fact. It must not be confused with not knowing."""
-    assert configured_project_paths(_FakeAuthConfig([])) == []
-    assert configured_project_paths(_FakeAuthConfig(None)) is None
+    assert datastore_project_paths(_FakeView([])) == []
+    assert datastore_project_paths(_FakeView(None)) is None
+
+
+def test_datastore_project_paths_refuses_an_unreadable_datastore():
+    """A read-only view read nothing, so its empty list is not evidence."""
+    assert datastore_project_paths(_FakeView([], read_only=True)) is None
+    assert (
+        datastore_project_paths(_FakeView([{"path": "/a"}], read_only=True)) is None
+    )
 
 
 @pytest.mark.parametrize(
     "projects",
     [
-        [_FakeProject("/a"), _FakeProject("")],
-        [_FakeProject("/a"), _FakeProject(None)],
-        [_FakeProject("/a"), object()],
+        [{"path": "/a"}, {"path": ""}],
+        [{"path": "/a"}, {"path": None}],
+        [{"path": "/a"}, {}],
+        [{"path": "/a"}, object()],
     ],
 )
-def test_configured_project_paths_refuses_a_partial_list(projects):
+def test_datastore_project_paths_refuses_a_partial_list(projects):
     """One unusable entry poisons the whole list.
 
     Dropping the bad entry and returning the rest would sweep a subset
     while reporting a complete run - a partial answer wearing a
     complete answer's clothes.
     """
-    assert configured_project_paths(_FakeAuthConfig(projects)) is None
+    assert datastore_project_paths(_FakeView(projects)) is None
 
 
 # ---- the OTHER delete site: destroy_session's recursive rmtree ---------
