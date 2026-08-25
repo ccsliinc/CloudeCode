@@ -15,9 +15,16 @@
 // "could not determine" is a first-class state here with its OWN appearance
 // (a hollow ring, never a filled dot, never the plain healthy glyph). A
 // filled dot means "I measured this and it is true". A hollow ring means "I
-// could not measure this". Absence of a dot means "I measured this and there
-// is nothing to report". Those are three different claims and they get three
-// different pictures.
+// have no settled measurement" - either I could not ask, or the thing has
+// not finished happening yet. Absence of a dot means "I measured this and
+// there is nothing to report". Those are three different claims and they get
+// three different pictures.
+//
+// THE GLYPH IS NEVER DIMMED. It used to be, for starting/crashed/stopped,
+// and that dimming was carrying real meaning. It has all been moved into the
+// dot's fill and hue - see the state table in scripts/generate-tray-icons.py
+// for the two axes and why there are only two. Undimming without moving it
+// would have made "stopped" pixel-identical to "ok".
 //
 // A NOTE ON WHICH SIGNAL DRIVES THE ICON
 //
@@ -267,6 +274,108 @@ function buildTooltip(input) {
 }
 
 /**
+ * Describe the bind row: what address is IN EFFECT, and what to do about it.
+ *
+ * THE DEFECT THIS EXISTS TO PREVENT, measured on a fresh install. The menu
+ * built this row from getBindHost() - CONFIGURATION - and printed it as
+ * though it were a measurement. A slow bootstrap meant the server had
+ * evaluated setup as incomplete at startup, the lockdown pinned uvicorn to
+ * loopback, and uvicorn bound once and never rebound. So the menu said
+ * "hosting on 0.0.0.0" about a server nothing off-host could reach. Nothing
+ * errored, and the address it printed was entirely plausible.
+ *
+ * Three outcomes. The one that matters is the third: when the effective bind
+ * is unknown, the LABEL carries no address at all. Not the configured one,
+ * not a guess, nothing - because a plausible wrong address is worse than an
+ * admitted blank, and the reader has no way to tell the two apart. What
+ * configuration asks for still goes in the DETAIL, named as a request rather
+ * than as the address in force.
+ *
+ * @param {{effectiveHost: (string|null), configuredHost: (string|null)}}
+ *   input - The address the server reported binding (null or empty when it
+ *   has not said) and the address configuration asks for.
+ * @returns {{known: boolean, applied: boolean, label: string,
+ *   detail: string}} `known` is whether the effective bind was measured;
+ *   `applied` is whether configuration is actually in force, and is false
+ *   whenever it is not known to be.
+ *
+ * @example
+ * describeBind({effectiveHost: '127.0.0.1', configuredHost: '0.0.0.0'}).label
+ * // 'Bind: 127.0.0.1 in effect - restart to apply 0.0.0.0'
+ */
+function describeBind(input) {
+  const effective = (input && input.effectiveHost) || null;
+  const configured = (input && input.configuredHost) || null;
+
+  if (!effective) {
+    return {
+      known: false,
+      applied: false,
+      label: 'Bind: unknown (not measured)',
+      detail:
+        'The address this server is listening on has not been measured. ' +
+        (configured
+          ? 'Configuration asks for ' +
+            configured +
+            ', which is what was requested and not proof of what is ' +
+            'reachable.'
+          : 'No bind address is configured either.'),
+    };
+  }
+
+  if (configured && effective !== configured) {
+    return {
+      known: true,
+      applied: false,
+      // The address IN FORCE leads. Reading order is the whole point: he
+      // read the configured value first and concluded he was on the LAN.
+      label:
+        'Bind: ' + effective + ' in effect - restart to apply ' + configured,
+      detail:
+        'Listening on ' +
+        effective +
+        '. Configuration asks for ' +
+        configured +
+        ', which needs a server restart to apply - the server binds its ' +
+        'socket once at startup and cannot move it.',
+    };
+  }
+
+  return {
+    known: true,
+    applied: true,
+    label: 'Bind: ' + effective + ' (in effect)',
+    detail: 'Listening on ' + effective + ', which is what you configured.',
+  };
+}
+
+/**
+ * Label for the setup/config menu row.
+ *
+ * A STATUS IS NOT AN INSTRUCTION. The owner's words about the previous
+ * version were that it "did mention setup, with warning but its not self
+ * explanitory". "Setup incomplete" tells a person the state they are in and
+ * leaves them to work out the next move; the bar here is that somebody who
+ * has never seen this app knows what to do without asking.
+ *
+ * The exclamation marker is NOT added here - the caller derives it from the
+ * tray state so the icon and the row cannot disagree about urgency.
+ *
+ * @param {string|null} setupStatus - The server's verdict: 'complete',
+ *   'incomplete', 'undetermined', or null when it has not been asked.
+ * @returns {string} The row text.
+ */
+function describeSetupRow(setupStatus) {
+  if (setupStatus === 'incomplete') {
+    return 'Setup not finished - open to finish it, then restart the server';
+  }
+  if (setupStatus === 'undetermined' || !setupStatus) {
+    return 'Setup state unknown - open Setup and Config to check';
+  }
+  return 'Setup and Config...';
+}
+
+/**
  * Resolve which image file backs a tray state.
  *
  * EVERY state, including the healthy one, resolves to a generated
@@ -304,6 +413,8 @@ function resolveIconAsset(state, isDarkMenuBar, assetsDir) {
 
 module.exports = {
   ATTENTION_STATUSES,
+  describeBind,
+  describeSetupRow,
   TRAY_STATES,
   countSessionSignals,
   deriveTrayState,

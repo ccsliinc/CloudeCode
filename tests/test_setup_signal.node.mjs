@@ -200,9 +200,32 @@ test('the menu label derives its marker from deriveTrayState, not its own check'
 test('the tray input carries the setup status through to the icon', () => {
   const fn = mainSrc.slice(
     mainSrc.indexOf('function currentTrayInput()'),
-    mainSrc.indexOf('function currentTrayInput()') + 900
+    mainSrc.indexOf('function currentTrayInput()') + 1200
   );
-  assert.match(fn, /setupStatus:\s*serverManager\s*\?\s*serverManager\.getSetupStatus\(\)/);
+  // Via getSetupVerdict(), which prefers the SERVER's answer and falls back
+  // to a local reading of the same facts only when there is no server to
+  // ask. This used to call getSetupStatus() directly, which was correct
+  // until a second, private notion of "configured" turned out to be driving
+  // the row the user actually saw - see macOS/setup-verdict.js.
+  assert.match(fn, /setupStatus:\s*serverManager\s*\?\s*serverManager\.getSetupVerdict\(\)\.status/);
+});
+
+test('the icon and the setup ROW read the same verdict, never two', () => {
+  // The whole defect was two answers to one question, with the wrong one on
+  // screen. Neither path may reach getSetupStatus() directly any more.
+  const label = mainSrc.slice(
+    mainSrc.indexOf('function setupMenuLabel()'),
+    mainSrc.indexOf('function openSetupWizard()')
+  );
+  assert.match(label, /getSetupVerdict\(\)\.status/);
+  const menu = mainSrc.slice(
+    mainSrc.indexOf('function currentTrayInput()'),
+    mainSrc.indexOf('function openSetupWizard()')
+  );
+  assert.ok(
+    !/serverManager\.getSetupStatus\(\)/.test(menu),
+    'a menu path still reads the raw server status instead of the verdict'
+  );
 });
 
 test('the published URL prefers the MEASURED bind over the configured one', () => {

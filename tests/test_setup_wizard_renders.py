@@ -123,6 +123,13 @@ def live_wizard(tmp_path, monkeypatch):
     )
 
     port = _free_port()
+    # Record the bind in the same place it is chosen, exactly as src/main.py
+    # does. The server reports the RECORD, never a re-derivation, so without
+    # this the wizard would honestly answer "the bind was not measured" - and
+    # it would be right, because nothing had recorded one. Note the shape
+    # here IS the owner's first-run bug: settings.host is 0.0.0.0 above while
+    # the socket goes on loopback.
+    monkeypatch.setenv("CLOUDE_BOUND_HOST", "127.0.0.1")
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)

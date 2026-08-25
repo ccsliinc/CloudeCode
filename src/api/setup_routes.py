@@ -62,6 +62,7 @@ from src.core.config_merge import (
     merge_config,
 )
 from src.core.setup_state import (
+    current_bind_report,
     current_exposure,
     current_setup_state,
     mark_setup_complete,
@@ -293,7 +294,6 @@ async def setup_state(_: bool = Depends(guard_wizard_access)) -> dict[str, Any]:
         The mode, the setup checks, the exposure in force, and the merge plan.
     """
     state = current_setup_state()
-    exposure = current_exposure()
     return {
         "mode": "first_run" if not state.is_complete else "upgrade_review",
         "setup": {
@@ -310,13 +310,10 @@ async def setup_state(_: bool = Depends(guard_wizard_access)) -> dict[str, Any]:
                 for c in state.checks
             ],
         },
-        "exposure": {
-            "effective_host": exposure.bind_host,
-            "configured_host": exposure.configured_bind_host,
-            "locked_down": exposure.locked_down,
-            "restart_required": exposure.restart_required_to_apply,
-            "reason": exposure.reason,
-        },
+        # Same rule as GET /health: the effective bind is the startup record
+        # or it is unknown. Re-resolving the exposure here would tell the
+        # wizard the user is reachable on an address nothing is listening on.
+        "exposure": current_bind_report(),
         "plan": _compute_plan(),
     }
 

@@ -163,6 +163,18 @@ function renderItem(item, index) {
  * @returns {string} Markup.
  */
 function renderExposure(exposure) {
+  // Three outcomes, and the third gets its own banner rather than rendering
+  // "Listening on null". An unmeasured bind is reported as unknown by the
+  // server, and the configured address must not be substituted for it here -
+  // that substitution is the defect this whole path exists to prevent.
+  if (!exposure.effective_host) {
+    return '<div class="banner" id="exposure-banner">' +
+      'The address this server is listening on could not be determined. ' +
+      'Your configured address is <code>' + esc(exposure.configured_host) +
+      '</code>, which is what was requested and not proof of what is ' +
+      'reachable. Restart the server from the menu bar to settle this.' +
+      '</div>';
+  }
   const cls = exposure.locked_down ? 'banner' : 'banner ok';
   let text = 'Listening on <code>' + esc(exposure.effective_host) + '</code>. ';
   if (exposure.locked_down) {

@@ -40,11 +40,13 @@ STATES = ("ok", "update", "attention", "unknown", "starting", "crashed", "stoppe
 APPEARANCES = ("light", "dark")
 SCALES = ("", "@2x")
 
-#: States whose glyph is drawn at full (native-matching) weight.
-FULL_WEIGHT_STATES = ("ok", "update", "attention", "unknown")
+#: Every state is drawn at ONE weight. Dimming was removed deliberately - see
+#: test_no_state_is_dimmed for why, and the generator's STATES table for what
+#: carries the distinction instead.
+FULL_WEIGHT_STATES = STATES
 
-#: States whose glyph is deliberately dimmed because the server is not up.
-DIMMED_STATES = ("starting", "crashed")
+#: The lower-right region holding the status dot and its gutter.
+DOT_CORNER_FRACTION = 0.45
 
 
 def icon_path(state: str, appearance: str, scale: str = "") -> Path:
@@ -167,54 +169,172 @@ def test_the_mark_is_composited_never_redrawn(state: str) -> None:
 
 
 @pytest.mark.parametrize("appearance", APPEARANCES)
-def test_stopped_is_clearly_fainter_than_healthy(appearance: str) -> None:
-    """A stopped server must not look like a healthy one.
+def test_no_state_is_dimmed(appearance: str) -> None:
+    """EVERY state renders the glyph at one single weight.
 
-    This is the regression that shipped and was caught only by measuring a
-    real menu bar: "stopped" rendered BRIGHTER than "ok". The margin below is
-    deliberately large, because a couple of luminance steps apart is not a
-    signal anybody notices in a menu bar.
-    """
-    ok_alpha = mean_glyph_alpha(Image.open(icon_path("ok", appearance, "@2x")))
-    stopped_alpha = mean_glyph_alpha(Image.open(icon_path("stopped", appearance, "@2x")))
+    The owner's instruction was flat: the tray glyph must never be dimmed at
+    all. Three states used to be - starting and crashed at 0.62, stopped at
+    0.38 - and the dimming was carrying real meaning, so removing it is only
+    safe because the status DOT now carries that meaning instead. This test
+    is the half that proves the dimming is gone; the pair matrix below is the
+    half that proves nothing was lost with it.
 
-    assert stopped_alpha < ok_alpha, (
-        f"{appearance}: stopped ({stopped_alpha:.1f}) is not fainter than ok "
-        f"({ok_alpha:.1f}); a stopped server would look healthy"
-    )
-    assert ok_alpha - stopped_alpha > 30, (
-        f"{appearance}: stopped ({stopped_alpha:.1f}) and ok ({ok_alpha:.1f}) "
-        "are too close to tell apart at menu-bar size"
-    )
-
-
-@pytest.mark.parametrize("appearance", APPEARANCES)
-def test_full_weight_states_share_one_glyph_weight(appearance: str) -> None:
-    """States that are not dimmed must all render at the same glyph weight.
-
-    If they drift apart, the icon starts implying a severity difference that
-    the code never intended.
+    A drift here also re-implies a severity difference the code never
+    intended, which was the original reason this weight was pinned.
     """
     weights = {
         state: mean_glyph_alpha(Image.open(icon_path(state, appearance, "@2x")))
         for state in FULL_WEIGHT_STATES
     }
     spread = max(weights.values()) - min(weights.values())
-    assert spread < 12, f"{appearance}: glyph weights drifted apart: {weights}"
+    assert spread < 2.0, (
+        f"{appearance}: the glyph is not drawn at a single weight, so some "
+        f"state is dimmed relative to the others: {weights}"
+    )
+
+
+def dot_signature(image: Image.Image) -> tuple[int, tuple[int, int, int]]:
+    """Measure the status dot: how much ink it lays down, and what colour.
+
+    Everything that distinguishes one tray state from another now lives in
+    this dot, so this is the measurement the distinguishability matrix is
+    built on. Brightness is deliberately NOT part of it - the glyph weight is
+    identical across states by construction, so a metric that looked at the
+    glyph could not separate any pair.
+
+    Only FULLY OPAQUE pixels inside the dot's gutter are counted. That is the
+    step that makes the measurement mean what it says: the mark itself
+    extends into the lower-right corner, so counting the whole corner counts
+    glyph, and the healthy state (which punches no gutter at all) then reports
+    a dot it does not have. The generator composites the dot at alpha 255
+    while the glyph never exceeds NORMAL_GLYPH_ALPHA, so the alpha threshold
+    separates them cleanly. If the glyph is ever taken to full opacity this
+    threshold stops discriminating and must be replaced, not raised.
+
+    Args:
+        image: A generated tray icon; converted to RGBA internally.
+
+    Returns:
+        A tuple of (count of dot pixels, mean RGB of those pixels). The count
+        is 0 and the colour (0, 0, 0) when there is no dot, which is the
+        healthy state's signature.
+    """
+    rgba = image.convert("RGBA")
+    pixels = rgba.load()
+    edge = rgba.size[0]
+
+    # Gutter geometry, matching the generator.
+    dot_d = edge * 0.40
+    gutter_r = edge * 0.52 / 2.0
+    cx = edge - dot_d / 2.0 - edge * 0.04
+    cy = edge - dot_d / 2.0 - edge * 0.04
+
+    reds: list[int] = []
+    greens: list[int] = []
+    blues: list[int] = []
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            if (x - cx) ** 2 + (y - cy) ** 2 > gutter_r**2:
+                continue
+            r, g, b, a = pixels[x, y]
+            if a < 250:
+                continue
+            reds.append(r)
+            greens.append(g)
+            blues.append(b)
+    if not reds:
+        return 0, (0, 0, 0)
+    n = len(reds)
+    return n, (sum(reds) // n, sum(greens) // n, sum(blues) // n)
+
+
+def distinguishing_reason(
+    left: tuple[int, tuple[int, int, int]],
+    right: tuple[int, tuple[int, int, int]],
+) -> str | None:
+    """Whether two dot signatures differ enough for a human to tell them apart.
+
+    Two axes are allowed to carry the difference, and only two, because a
+    third would be a new visual idiom nobody has been taught:
+
+      * INK - a filled dot lays down far more ink than a hollow ring, and a
+        state with no dot lays down none. This separates filled from hollow
+        from absent.
+      * HUE - the system palette colours are far apart in RGB. This separates
+        two states that are both filled, or both hollow.
+
+    The thresholds are deliberately coarse. A few RGB steps apart is not a
+    distinction anybody notices at menu-bar size, which is exactly the
+    mistake the original brightness-based design made.
+
+    Args:
+        left: dot_signature of the first icon.
+        right: dot_signature of the second icon.
+
+    Returns:
+        A short phrase naming the axis that separates them, or None when
+        nothing does - which is a failure.
+    """
+    left_ink, left_rgb = left
+    right_ink, right_rgb = right
+
+    bigger = max(left_ink, right_ink)
+    if bigger > 0 and abs(left_ink - right_ink) / bigger >= 0.25:
+        return f"ink coverage {left_ink} vs {right_ink}"
+
+    hue_distance = sum(abs(a - b) for a, b in zip(left_rgb, right_rgb))
+    if hue_distance >= 90:
+        return f"hue {left_rgb} vs {right_rgb} (distance {hue_distance})"
+
+    return None
 
 
 @pytest.mark.parametrize("appearance", APPEARANCES)
-def test_dimmed_states_sit_between_healthy_and_stopped(appearance: str) -> None:
-    """The not-running states are dimmer than healthy but brighter than stopped."""
-    ok_alpha = mean_glyph_alpha(Image.open(icon_path("ok", appearance, "@2x")))
-    stopped_alpha = mean_glyph_alpha(Image.open(icon_path("stopped", appearance, "@2x")))
+def test_every_pair_of_states_is_distinguishable(appearance: str) -> None:
+    """The full matrix, not a spot check.
 
-    for state in DIMMED_STATES:
-        value = mean_glyph_alpha(Image.open(icon_path(state, appearance, "@2x")))
-        assert stopped_alpha < value < ok_alpha, (
-            f"{appearance}: {state} ({value:.1f}) must sit between stopped "
-            f"({stopped_alpha:.1f}) and ok ({ok_alpha:.1f})"
-        )
+    Undimming the glyph removed the axis that used to separate several
+    pairs - ok from stopped, and attention from crashed - so every pair has
+    to be re-proved, not assumed. A matrix is the only shape that cannot
+    quietly stop covering a pair when somebody adds an eighth state.
+
+    Two pairs are worth naming because they are the ones that broke:
+    ok/stopped (both carried no dot once the dimming went, so a stopped
+    server would have looked healthy - the exact false green this icon
+    exists to prevent) and attention/crashed (both carried a red filled dot
+    and were separated only by weight).
+    """
+    signatures = {
+        state: dot_signature(Image.open(icon_path(state, appearance, "@2x")))
+        for state in STATES
+    }
+    failures: list[str] = []
+    for i, left in enumerate(STATES):
+        for right in STATES[i + 1 :]:
+            reason = distinguishing_reason(signatures[left], signatures[right])
+            if reason is None:
+                failures.append(
+                    f"{left} vs {right}: indistinguishable "
+                    f"({signatures[left]} / {signatures[right]})"
+                )
+    assert not failures, f"{appearance}: " + "; ".join(failures)
+
+
+def test_ok_is_the_only_state_with_no_dot() -> None:
+    """"Nothing to report" must be the only thing that renders as nothing.
+
+    Once the glyph stopped being dimmed, "no dot" became the sole appearance
+    of the healthy state. Any other state sharing it is invisible.
+    """
+    empty = [
+        state
+        for state in STATES
+        if dot_signature(Image.open(icon_path(state, "dark", "@2x")))[0] == 0
+    ]
+    assert empty == ["ok"], (
+        f"states rendering with no status dot: {empty}; only 'ok' may, "
+        "because 'no dot' is what healthy looks like"
+    )
 
 
 def test_unknown_is_a_hollow_ring_not_a_filled_dot() -> None:
