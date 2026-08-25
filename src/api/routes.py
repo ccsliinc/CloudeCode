@@ -887,16 +887,26 @@ async def set_pinned_theme(
 # ``rename_session`` for the re-keying semantics (owned set, pinned-themes
 # map, session metadata).
 #
-# Name validation is intentionally STRICTER than ``_sanitize_tmux_name``
-# in the SessionManager - that helper accepts spaces, unicode, emoji, and
-# only escapes ``.``/``:`` because tmux's own grammar requires it. The
-# rename surface, by contrast, is user-facing and edits via an inline
-# input - we hold it to ``^[A-Za-z0-9_-]{1,64}$`` to avoid shell-quoting
-# weirdness, filesystem-path collisions (the FIFO log filename is derived
-# from the slug), and visually confusing whitespace runs in the launchpad
-# row. Existing sessions whose names contain spaces / unicode keep working
-# fine - they just can't be re-named to a value containing those chars.
-_RENAME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# A SESSION NAME IS A LABEL, AND A LABEL IS NOT THE TMUX NAME.
+# This endpoint used to call ``tmux rename-session``, which moves
+# ``tmux_name`` - the field ``(socket, name, epoch)`` identity is keyed
+# on. The stored row then matched no live listing row, was reaped as
+# ``tmux_missing``, and the same live session came back through the
+# adopt path as a stranger and got a SECOND row. One session, two rows,
+# one of them a corpse.
+#
+# It now writes ``sessions.title`` and stops. The tmux name a session is
+# created with is the tmux name it keeps, so no user-facing path can
+# move identity. The old ``^[A-Za-z0-9_-]{1,64}$`` charset is gone with
+# it: that regex existed to keep the value safe inside a tmux target and
+# a FIFO filename, and a label is never handed to either. Labels take
+# spaces, punctuation and mixed case; ``session_label.validate_label``
+# refuses only what cannot be rendered (empty, or a control character).
+#
+# ``SessionManager.rename_session`` is deliberately NOT deleted. An
+# external ``tmux rename-session`` is still possible, and the lifecycle
+# reconciler still heals it - see src/core/session_lifecycle.py's rename
+# pass. What changed is that no user action reaches that path.
 
 
 @router.patch(
@@ -927,20 +937,17 @@ async def rename_session_endpoint(
     """
     session_manager = request.app.state.session_manager
 
-    new_name = (body.new_name or "").strip()
-    if not _RENAME_NAME_RE.match(new_name):
+    from src.core.session_label import InvalidLabel, validate_label
+
+    try:
+        new_name = validate_label(body.new_name)
+    except InvalidLabel as exc:
         logger.info(
-            "api_rename_session_rejected_invalid_name",
+            "api_rename_session_rejected_invalid_label",
             session_id=session_id,
-            new_name=new_name[:80],
+            reason=str(exc),
         )
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Invalid session name. Must be 1-64 chars from "
-                "[A-Za-z0-9_-]."
-            ),
-        )
+        raise HTTPException(status_code=400, detail=str(exc))
 
     logger.info(
         "api_rename_session_request",
@@ -948,19 +955,19 @@ async def rename_session_endpoint(
         new_name=new_name,
     )
 
-    try:
-        info = await session_manager.rename_session(session_id, new_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    except RuntimeError as exc:
-        logger.error(
-            "api_rename_session_tmux_failed",
-            session_id=session_id,
-            error=str(exc),
+    if not session_manager.set_session_label(session_id, new_name):
+        # A DEFINITE NEGATIVE, and the only one this surface has left.
+        # There is no 409 any more: two sessions may carry the same
+        # label, because a label identifies nothing. There is no 500 for
+        # a failed tmux rename, because no tmux rename happens.
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "That session could not be labelled - it is not a tmux "
+                "session this app has a record of."
+            ),
         )
-        raise HTTPException(status_code=500, detail=str(exc))
+    info = await session_manager.get_session_info(session_id)
 
     # Broadcast to every WS bound to this session so attached tabs update
     # their header text + document.title without a round-trip. Failures on

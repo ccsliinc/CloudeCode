@@ -31,6 +31,7 @@ import pytest
 from src.core import session_group_store as G
 from src.core.db import connect, db_path_for, get_meta
 from src.core.db_migration import ensure_db_migrated
+from src.core.db_models import CURRENT_SCHEMA_VERSION
 from src.core.db_models import SESSION_GROUP_MAX, SESSION_GROUP_NAME_MAX
 
 
@@ -51,13 +52,22 @@ def conn(tmp_path: Path):
 
 
 def test_migration_chain_reaches_v8(tmp_path: Path):
-    """A fresh datastore migrates all the way to v8 in one chain."""
+    """A fresh datastore's chain INCLUDES the v8 step and runs past it.
+
+    Asserts the 7->8 step ran, not that v8 is the end of the chain. The
+    two were the same thing when this was written and stopped being so
+    at v9; pinning the END here made a groups test fail for a reason
+    that had nothing to do with groups. ``CURRENT_SCHEMA_VERSION`` is
+    the single place that number lives, and tests/test_db_migration.py
+    is where the chain's endpoint belongs.
+    """
     state = ensure_db_migrated(tmp_path)
-    assert state.schema_version == 8
+    assert state.schema_version == CURRENT_SCHEMA_VERSION
+    assert state.schema_version >= 8
     assert "7->8" in state.migrations_applied
     c = connect(db_path_for(tmp_path))
     try:
-        assert get_meta(c, "schema_version") == "8"
+        assert get_meta(c, "schema_version") == str(CURRENT_SCHEMA_VERSION)
     finally:
         c.close()
 

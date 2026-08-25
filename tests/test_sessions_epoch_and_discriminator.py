@@ -353,9 +353,27 @@ def test_no_source_file_deletes_a_sessions_row() -> None:
     point - whoever builds it must come here, read the intended design
     recorded in session_store's module docstring (reap only against a
     listing with ok=True), and update both together.
+
+    ONE EXEMPTION, AND IT IS DELIBERATELY NARROW. Schema v9 merges the
+    row pairs the tmux-rename defect produced, and a merge ends by
+    removing the discarded corpse. That is a ONE-SHOT, VERSIONED,
+    inside-a-transaction repair with no runtime path to it - a
+    completely different risk from a live reaper deciding a session is
+    gone. The exemption is a single FILE, checked further by
+    ``test_the_only_delete_lives_in_the_v9_merge`` below, which pins it
+    to a single FUNCTION. Widening it to a second file or a second
+    function fails one of the two tests, which is the property that
+    stops "one migration needed it" becoming a general licence.
     """
+    #: The only source file permitted to carry a sessions DELETE. See
+    #: this function's docstring for why, and the test below for the
+    #: second half of the guard.
+    migration_steps = "core/db_steps.py"
+
     offenders: List[str] = []
     for path in sorted((ROOT / "src").rglob("*.py")):
+        if str(path.relative_to(ROOT / "src")) == migration_steps:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
 
         docstring_nodes = set()
@@ -403,4 +421,38 @@ def test_session_store_documents_the_missing_repair_path() -> None:
     )
     assert "ok=True" in doc, (
         "the load-bearing constraint on any future reaper must be stated"
+    )
+
+
+def test_the_only_delete_lives_in_the_v9_merge() -> None:
+    """The second half of the exemption above: pin it to ONE function.
+
+    ``test_no_source_file_deletes_a_sessions_row`` exempts one FILE.
+    Left there, anything later added to that file could delete sessions
+    rows unnoticed. This walks the same AST and asserts every sessions
+    DELETE in it sits inside ``_v9_merge_rename_splits``, so the
+    exemption cannot spread by accident.
+    """
+    path = ROOT / "src" / "core" / "db_steps.py"
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+
+    allowed = "_v9_merge_rename_splits"
+    stray: List[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name == allowed:
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Constant)
+                and isinstance(inner.value, str)
+                and "delete from sessions" in inner.value.lower()
+            ):
+                stray.append(f"{node.name}:{inner.lineno}")
+
+    assert stray == [], (
+        "a sessions DELETE appeared outside the v9 merge. The file-level "
+        "exemption in test_no_source_file_deletes_a_sessions_row covers "
+        f"exactly one function, not the whole file. Found in: {stray}"
     )

@@ -2515,6 +2515,97 @@ class SessionManager:
             logger.error("session_destruction_failed", error=str(e))
             raise
 
+    def set_session_label(self, session_id: str, label: str) -> bool:
+        """Store the user-facing LABEL for one session. No tmux involved.
+
+        Description: what the rename surface calls now. A label is a
+          display string on the row; it is not the tmux session name and
+          writing it touches no identity column, so a rename can no
+          longer move ``tmux_name`` out from under the identity key and
+          split one session into two rows.
+
+          The tmux name and the creation epoch are read to KEY the write
+          and are never modified. The epoch comes from a fresh listing
+          because that is the only place it exists - the row is keyed on
+          it, so a label write needs it just as much as a create does.
+
+          NEVER RAISES for a data problem. A missing session, an
+          unavailable datastore or a listing that could not answer all
+          return False, which the route renders as a definite failure.
+          An invalid label is the one exception, and it is raised before
+          anything is read.
+        Inputs: session_id (str) - the app's session id, not a tmux name.
+          label (str) - the user's label; validated before any read.
+        Output: bool - True only when a row now carries that label.
+        Raises: InvalidLabel - the label cannot be stored.
+        Example: mgr.set_session_label('abc123', 'Media Compression')
+        """
+        from src.core.session_label import set_label_for_instance, validate_label
+
+        validate_label(label)
+
+        sess = self.sessions.get(session_id)
+        tmux_name = getattr(sess, "tmux_session", None) if sess else None
+        if not tmux_name:
+            logger.warning(
+                "session_label_not_tmux_backed",
+                session_id=session_id,
+                note=(
+                    "no tmux name for this session, so there is no "
+                    "instance triple to key a label on"
+                ),
+            )
+            return False
+
+        probe_socket, listing = self.list_attachable_sessions_with_socket()
+        socket = probe_socket or self._tmux_socket_name()
+        if not listing.ok:
+            logger.warning(
+                "session_label_listing_unavailable",
+                session_id=session_id,
+                listing_reason=listing.reason,
+                note=(
+                    "the creation epoch could not be read, so the row "
+                    "cannot be keyed. Nothing written - a label aimed at "
+                    "a guessed instance is worse than no label"
+                ),
+            )
+            return False
+
+        from src.core.session_adopt_persist import find_live_instance
+
+        live = find_live_instance(listing, tmux_name)
+        if live is None:
+            return False
+        epoch = live.get("created_at_epoch")
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            return False
+        try:
+            from src.core.db import transaction
+
+            with transaction(conn):
+                return set_label_for_instance(
+                    conn,
+                    socket=socket,
+                    name=tmux_name,
+                    epoch=epoch,
+                    label=label,
+                )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "session_label_write_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
+            return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     async def rename_session(
         self, session_id: str, new_name: str
     ) -> "SessionInfo":
@@ -2901,6 +2992,11 @@ class SessionManager:
             stats=stats,
             session_backend=backend_name,
             tmux_session=tmux_session_name,
+            # The user-facing label, read off the row. None when the row
+            # carries none, which the client renders by falling back to
+            # the tmux name - so a session with no label looks exactly
+            # like it did before labels existed.
+            label=self._label_for_tmux_name(tmux_session_name),
             agent_type=sess.agent_type,
             agent_family=display_family.name if display_family else None,
             agent_family_source=display_family_source,
@@ -3659,6 +3755,49 @@ class SessionManager:
             except Exception:
                 pass
 
+    def _label_for_tmux_name(self, tmux_name):
+        """Read the stored LABEL for a tmux session name, or None.
+
+        Description: a never-raising decoration read. Keyed on the name
+          alone rather than the full instance triple, which is a
+          deliberate weakening and worth saying out loud: the caller has
+          a live session in hand and no epoch, and the worst case is
+          showing a label that belonged to an earlier session of the
+          same name. That is a cosmetic wrong string, not a wrong write -
+          nothing here writes anything. The most recent row wins, which
+          is the live one whenever there is a live one.
+
+          Every failure answers None, which the client renders as "no
+          label" and falls back to the tmux name for. A bookkeeping read
+          must never be able to fail a session payload.
+        Inputs: tmux_name (str | None).
+        Output: str | None - the label, or None when there is none.
+        Example: self._label_for_tmux_name('cloude_a')
+        """
+        if not tmux_name:
+            return None
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            row = conn.execute(
+                "SELECT title FROM sessions WHERE tmux_socket = ? "
+                "AND tmux_name = ? AND title IS NOT NULL AND title != '' "
+                "ORDER BY id DESC LIMIT 1",
+                (self._tmux_socket_name(), tmux_name),
+            ).fetchone()
+            return dict(row)["title"] if row is not None else None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("session_label_read_threw", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def reconcile_lifecycle(self, listing: TmuxListing) -> "ReconcileOutcome":
         """Fold one tmux listing into the stored ``lifecycle`` column.
 
@@ -3879,6 +4018,10 @@ class SessionManager:
             name = row.get("name")
             if name:
                 row["pinned_theme"] = self.pinned_themes.get(name)
+                # The user-facing label for this instance, so the home
+                # screen shows what the user called it rather than the
+                # derived tmux handle. None falls back to the name.
+                row["label"] = self._label_for_tmux_name(name)
                 status_row = status_map.get(name)
                 raw_tmux_status = status_row["status"] if status_row else STATUS_UNKNOWN
                 # feat/hook-driven-status - attachable rows have no live

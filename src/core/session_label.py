@@ -279,3 +279,78 @@ def set_label(
         note="no row carries that session_uuid, so nothing was labelled",
     )
     return False
+
+
+def set_label_for_instance(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: Optional[int],
+    label: str,
+    now: Optional[str] = None,
+) -> bool:
+    """Store a label on the row for one tmux INSTANCE.
+
+    Description: the same write as :func:`set_label`, keyed on the
+      instance triple instead of the row uuid, because that is what the
+      HTTP rename surface has in hand - it knows which tmux session the
+      user is looking at, not which row id.
+
+      KEYED ON THE FULL TRIPLE, NEVER THE NAME ALONE. Names are reusable
+      and this table can legitimately hold several rows under one name
+      with different epochs (history of a name that was used twice). A
+      write keyed on the name alone would relabel all of them, which is
+      the same class of defect as adopting by name - and it is asserted
+      by a test rather than left to review. A None epoch has no identity
+      to key on and refuses immediately.
+
+      IDENTITY IS NOT IN THE UPDATE. ``tmux_name``, ``tmux_created_epoch``
+      and ``tmux_session_id`` appear only in the WHERE clause. That is
+      what makes a rename structurally incapable of moving a session's
+      identity, which is the entire point of separating the two.
+    Inputs: conn (sqlite3.Connection). socket (str), name (str), epoch
+      (int | None) - the instance triple. label (str) - validated before
+      any write. now (str | None) - ISO stamp.
+    Output: bool - True when a row was updated; False means NO SUCH
+      INSTANCE, a definite negative rather than an error.
+    Raises: InvalidLabel - nothing is written.
+    Example:
+        set_label_for_instance(conn, socket='cloude', name='cloude_a',
+                               epoch=7, label='Media Compression')
+    """
+    cleaned = validate_label(label)
+    if epoch is None:
+        logger.warning(
+            "session_label_no_epoch",
+            tmux_socket=socket,
+            tmux_name=name,
+            note=(
+                "no creation epoch, so there is no instance to key on; "
+                "nothing written rather than relabelling by name"
+            ),
+        )
+        return False
+    stamp = now or utc_now()
+    cursor = conn.execute(
+        "UPDATE sessions SET title = ?, updated_at = ? "
+        "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch = ?",
+        (cleaned, stamp, socket, name, int(epoch)),
+    )
+    if cursor.rowcount > 0:
+        logger.info(
+            "session_label_set_for_instance",
+            tmux_socket=socket,
+            tmux_name=name,
+            tmux_created_epoch=int(epoch),
+            note="title only; no identity column is in the SET clause",
+        )
+        return True
+    logger.warning(
+        "session_label_no_such_instance",
+        tmux_socket=socket,
+        tmux_name=name,
+        tmux_created_epoch=int(epoch),
+        note="no row carries that instance triple, so nothing was labelled",
+    )
+    return False

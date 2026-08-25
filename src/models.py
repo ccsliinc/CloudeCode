@@ -248,6 +248,22 @@ class SessionInfo(BaseModel):
         default=None,
         description="tmux session name (tmux backend only; None otherwise)",
     )
+    # THE USER-FACING NAME, which is NOT ``tmux_session``. A label is a
+    # free-form display string stored in ``sessions.title``; the tmux
+    # name is an internal handle derived from it once, at creation, and
+    # never moved again. Renaming used to move the tmux name, which is
+    # the field identity is keyed on, and that split one session into
+    # two rows. None means the row carries no label yet and the client
+    # should fall back to ``tmux_session`` - which is what every v1.0.4
+    # client does anyway, so an older client is unaffected.
+    label: Optional[str] = Field(
+        default=None,
+        description=(
+            "User-facing session label (sessions.title). Free-form; may "
+            "contain spaces and punctuation. Falls back to tmux_session "
+            "when None."
+        ),
+    )
     # Phase 6 - surface the active session's agent_type to the client so the
     # launchpad / banner can show the right label and theme. Mirrors the
     # ``Session.agent_type`` value; redundant on the wire but keeps the UI
@@ -705,6 +721,15 @@ class AttachableSession(BaseModel):
     inheriting a dead session's badge.
     """
     name: str = Field(..., description="Literal tmux session name")
+    # The user-facing LABEL for this instance. Distinct from ``name``,
+    # which is the tmux handle: the label is what the user called the
+    # session and may contain spaces and punctuation the tmux name
+    # cannot. None means the row carries no label, and the client falls
+    # back to ``name`` exactly as it always did.
+    label: Optional[str] = Field(
+        default=None,
+        description="User-facing session label; falls back to name when None",
+    )
     created_by_cloude: bool = Field(
         ..., description="True if Cloude Code created this session"
     )
@@ -1159,13 +1184,25 @@ class SessionRenamedMessage(BaseModel):
 class RenameSessionRequest(BaseModel):
     """Request body for ``PATCH /api/v1/sessions/{session_id}/name``.
 
-    ``new_name`` is validated at the route layer against a strict charset
-    (``^[A-Za-z0-9_-]{1,64}$``) before being passed to
-    ``tmux rename-session``. The strict regex sidesteps tmux's own target-
-    separator pitfalls (``.`` / ``:``), filesystem path quirks, and shell
-    metacharacters all in one shot.
+    ``new_name`` is a LABEL, not a tmux session name. It is validated by
+    ``session_label.validate_label``, which accepts anything printable -
+    spaces, punctuation, mixed case, non-ASCII - and refuses only what
+    cannot be rendered: empty, over 200 characters, or carrying a control
+    character such as a newline.
+
+    The strict ``[A-Za-z0-9_-]`` charset this used to carry existed
+    because the value was handed straight to ``tmux rename-session``. It
+    no longer is: the endpoint writes ``sessions.title`` and the tmux
+    name never moves, which is what stops a rename from splitting one
+    session into two rows.
     """
-    new_name: str = Field(..., description="New session name (1-64 chars, [A-Za-z0-9_-])")
+    new_name: str = Field(
+        ...,
+        description=(
+            "New session label (1-200 chars, any printable text "
+            "including spaces)"
+        ),
+    )
 
 
 class CreateToastRequest(BaseModel):
