@@ -1293,6 +1293,19 @@ body.home-header-active {
 /* Heading row variant: text hugs left, inline action button hugs right.
  * Used by the "running sessions" section so the + speed-dial sits beside
  * the heading instead of floating in the chrome. */
+/* The launchpad's global actions row. Holds the create control (#new-fab).
+ *
+ * ALWAYS DISPLAYED, deliberately, and it has no empty state because it has
+ * no contents to be empty of. Never give this rule a display:none branch,
+ * and never nest the create control inside a section that has one - that is
+ * the exact bug this row was carved out to fix. */
+.launchpad-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
+
 .launchpad-section-title--row {
     display: flex;
     align-items: center;
@@ -3083,8 +3096,15 @@ body.home-header-active {
  * ===================================================================== */
 /* ---- Inline FAB wrapper (lives inside the section heading row) ----- */
 /* The wrapper is the absolute-positioning context for the fan-out menu.
- * It sits as a flex child of .launchpad-section-title--row, so .hidden
- * isn't needed (it shows/hides naturally with the launchpad screen). */
+ * It sits as a flex child of .launchpad-actions - a row that is ALWAYS
+ * present - so .hidden isn't needed (it shows/hides with the launchpad
+ * screen and nothing else).
+ *
+ * It used to be a child of the "running sessions" section title instead,
+ * and that section is display:none while the user has no sessions. The
+ * comment here previously read "shows/hides naturally with the launchpad
+ * screen", which was the assumption that hid it: it also hid with the
+ * SECTION, so a fresh install had no create control at all. */
 .new-fab {
     position: relative;
     display: inline-flex;

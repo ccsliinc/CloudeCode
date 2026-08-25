@@ -170,8 +170,25 @@ def classify_tmux_argv(cmd: Any) -> Tuple[str, Optional[str], str]:
             )
         return ("not_tmux", None, "not a tmux invocation")
 
-    # argv[0] is tmux. Find the socket selector among the server options,
-    # which tmux requires to appear before the command word.
+    # argv[0] is tmux. Two flags answer entirely from the binary and never
+    # open, create or connect to a socket - `-V` prints the version and
+    # exits, `-h` prints usage and exits. They are the ONLY tmux
+    # invocations that are safe without a socket selector, and they are
+    # exactly what a discovery probe needs to run (see
+    # src/core/tmux_discovery.probe_tmux, which executes `tmux -V` to prove
+    # the binary runs rather than trusting shutil.which). Blocking them
+    # would force the probe to guess, which is the defect it exists to
+    # remove. Anything else with no -L/-S still targets the shared default
+    # socket and stays unsafe.
+    if len(argv) == 2 and argv[1] in ("-V", "-h"):
+        return (
+            "safe",
+            None,
+            f"tmux {argv[1]} answers from the binary and opens no socket",
+        )
+
+    # Find the socket selector among the server options, which tmux
+    # requires to appear before the command word.
     for i, tok in enumerate(argv[1:], start=1):
         if tok == "-L":
             if i + 1 >= len(argv):

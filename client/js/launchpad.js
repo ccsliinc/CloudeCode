@@ -2123,14 +2123,31 @@ class Launchpad {
                     </div>
                 </details>
 
-                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
-                    <div class="launchpad-section-title launchpad-section-title--row">
-                        <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
-                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
-                            <span class="launchpad-section-title__text">running sessions</span>
-                            <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
-                        </button>
-                        <div class="new-fab" id="new-fab">
+                <!-- CREATE CONTROL. It lives HERE, in its own always-present
+                     row, and NOT inside a section title, because it is a
+                     GLOBAL action whose lifetime must not depend on any one
+                     list's contents.
+
+                     It used to be a child of #running-sessions-section's
+                     title row. That section is display:none while the user
+                     has zero sessions, so on a fresh install the only
+                     control that creates a project or a session measured
+                     0x0 and a brand-new user could not create anything at
+                     all - the button that makes your first session only
+                     existed once you already had one. The button was in the
+                     DOM the whole time with visibility:visible, so every
+                     markup assertion passed against the broken build; only
+                     getBoundingClientRect() and a walk up the ancestor
+                     chain could see it. See scripts/verify_fresh_install.py,
+                     which measures exactly that and ships with a --legacy
+                     positive control that re-parents it back here to prove
+                     the check can fail.
+
+                     Do NOT move this back inside a section. If it needs to
+                     sit visually beside a heading, style this row - do not
+                     re-parent the control. -->
+                <div class="launchpad-actions" id="launchpad-actions">
+                    <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" title="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
                                     <line x1="12" y1="5" x2="12" y2="19"/>
@@ -2207,7 +2224,16 @@ class Launchpad {
                                     <span class="new-fab__label">new console</span>
                                 </button>
                             </div>
-                        </div>
+                    </div>
+                </div>
+
+                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
+                    <div class="launchpad-section-title launchpad-section-title--row">
+                        <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            <span class="launchpad-section-title__text">running sessions</span>
+                            <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
+                        </button>
                     </div>
                     <div id="running-sessions-list"></div>
                 </div>
@@ -2882,7 +2908,19 @@ class Launchpad {
                 // design section 4.1. The row still exists so it stays
                 // visible and can never be silently opened into a stale
                 // or unreachable directory.
+                //
+                // REFUSING IS NOT THE SAME AS DOING NOTHING. This used to be
+                // a bare `return`: the click was swallowed with no message,
+                // no log line and no request, so the row presented to the
+                // user as a button that does nothing. Refusal has to SAY it
+                // refused and name the path, or the user cannot tell a
+                // deliberate refusal from a broken app - and on a fresh
+                // install every seeded row was in this state, so the whole
+                // first screen was dead clicks.
                 if (item.classList.contains('project-presence-disabled')) {
+                    const idx = parseInt(item.dataset.index);
+                    const p = this.projects[idx];
+                    this._explainRefusedProject(p, item);
                     return;
                 }
                 const index = parseInt(item.dataset.index);
@@ -4562,6 +4600,60 @@ class Launchpad {
     /**
      * Show error message
      */
+    /**
+     * Say out loud why a project row refused to open, and name the path.
+     *
+     * THREE OUTCOMES, kept distinct on purpose. 'missing' is a measured
+     * fact - the folder is not there. 'unreachable' is the third state:
+     * the presence probe could not reach the path, which is NOT evidence
+     * the project is gone, and telling the user it is missing would invent
+     * a verdict nobody measured. Anything else reaching here means the row
+     * was disabled for a reason this function does not know about, and it
+     * says exactly that rather than guessing.
+     *
+     * @param {object|undefined} project - The project the row stands for.
+     * @param {HTMLElement} item - The row element, used only as a fallback
+     *   source for the path when the project object is unavailable.
+     * @returns {void}
+     */
+    _explainRefusedProject(project, item) {
+        const path = (project && (project.root || project.path))
+            || (item && item.dataset ? item.dataset.path : '')
+            || 'an unrecorded path';
+        const row = (project && project.root && this.projectPresence.get(project.root))
+            || null;
+        const state = row ? row.presence : 'unchecked';
+
+        if (state === 'missing') {
+            this.showError(
+                `"${project && project.name ? project.name : 'this project'}" ` +
+                `was not opened: its folder does not exist at ${path}.\n\n` +
+                `Nothing was started and nothing was changed. Either restore ` +
+                `the folder at that path, edit the project to point at where ` +
+                `it lives now, or delete the project.`
+            );
+            return;
+        }
+        if (state === 'unreachable') {
+            const detail = (row && row.presence_detail) || 'reason unknown';
+            this.showError(
+                `"${project && project.name ? project.name : 'this project'}" ` +
+                `was not opened: CANNOT DETERMINE whether ${path} exists ` +
+                `(${detail}).\n\n` +
+                `This is NOT a report that the folder is gone - the check ` +
+                `could not run. Nothing was started and nothing was changed.`
+            );
+            return;
+        }
+        this.showError(
+            `"${project && project.name ? project.name : 'this project'}" ` +
+            `was not opened, and the reason was not recorded (presence ` +
+            `state "${state}" for ${path}).\n\n` +
+            `Nothing was started and nothing was changed. This is a bug in ` +
+            `the app, not something you did.`
+        );
+    }
+
     showError(message) {
         // For now, just log and use browser alert
         // Could be improved with a proper error UI element

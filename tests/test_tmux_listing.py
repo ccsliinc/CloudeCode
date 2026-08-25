@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
+from src.core import tmux_discovery
 from src.core.tmux_backend import TmuxBackend
 from src.core.tmux_listing import (
     REASON_NO_SERVER,
@@ -174,7 +175,19 @@ def test_nonzero_exit_with_silent_stderr_is_not_an_answer(name, call):
 def test_tmux_missing_is_unavailable_not_empty(name, call):
     """shutil.which -> None means we cannot ask, not that the answer is zero."""
     backend = _backend()
-    with mock.patch("src.core.tmux_backend.shutil.which", return_value=None):
+    # PATCH POINT MOVED. tmux discovery is no longer a bare
+    # ``shutil.which`` in this module: it is
+    # ``src.core.tmux_discovery``, which searches PATH *and* the
+    # well-known absolute install locations (a GUI-launched app has no
+    # shell PATH) and then EXECUTES ``tmux -V`` to prove the binary
+    # runs. Patching shutil.which here would no longer simulate a
+    # missing tmux - it would simulate nothing at all and the test
+    # would pass or fail for unrelated reasons. Patch the resolver, and
+    # clear the memoized probe so the fake is not read from cache.
+    tmux_discovery.reset_probe_cache()
+    with mock.patch(
+        "src.core.tmux_backend.resolve_tmux_path", return_value=None
+    ):
         listing = call(backend)
     assert listing.ok is False, f"{name}: no tmux binary is not zero sessions"
     assert listing.sessions == []
