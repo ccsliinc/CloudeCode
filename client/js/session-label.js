@@ -57,6 +57,38 @@
     var APP_TMUX_PREFIX = 'cloude_';
 
     /**
+     * Longest label the SERVER will store. Mirrors LABEL_MAX_CHARS in
+     * src/core/session_label.py.
+     *
+     * WHY A MIRROR AND NOT A FETCH. Nothing serves this constant, and an
+     * editor has to know its own limit before it can draw a `maxlength`,
+     * which is before any request it could learn the answer from. So it
+     * is copied - but copied ONCE, here, rather than into each of the
+     * three rename controls, and the copy is enforced:
+     * tests/test_label_constants_parity.py parses both files and fails if
+     * the two numbers drift. A mirror nobody checks is just a second
+     * declaration waiting to disagree.
+     *
+     * The direction of a drift decides how it hurts, which is why the
+     * parity test asserts EQUALITY rather than `client <= server`. A
+     * client that permits MORE than the server accepts sends a label that
+     * comes back rejected after the user typed it; a client that permits
+     * LESS silently truncates at the `maxlength` and stores something the
+     * user did not write, with no error anywhere. The second is worse and
+     * is exactly what the hardcoded 64 was doing.
+     * @type {number}
+     */
+    var LABEL_MAX_CHARS = 200;
+
+    /**
+     * Control characters, which no label may contain. Mirrors
+     * _CONTROL_CHARS in src/core/session_label.py, newline and tab
+     * included: a label is rendered on one line on every surface.
+     * @type {RegExp}
+     */
+    var CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+
+    /**
      * What a surface shows for outcome 3. A sentence, because a blank
      * cell and an unknowable one look identical to a reader and mean
      * opposite things.
@@ -147,11 +179,56 @@
         return resolve({ label: toast.session_label, name: toast.session_name });
     }
 
+    /**
+     * The server's label rule, mirrored so an obviously bad label is
+     * refused without a round trip. THE SERVER REMAINS AUTHORITATIVE -
+     * this is an early out, never the decision.
+     *
+     * WHAT IT DELIBERATELY DOES NOT REFUSE. The rename controls used to
+     * enforce ``^[A-Za-z0-9_-]{1,64}$``, the old TMUX NAME rule, against
+     * a field that is no longer a tmux name. That regex refused "Media
+     * Compression" - the feature's own worked example - before it could
+     * reach a server that would have accepted it happily. Spaces, ``:``,
+     * ``.``, quotes, ``$`` and non-ASCII are all legal in a label,
+     * because a label is never handed to tmux. Only the server's own two
+     * refusals are mirrored: empty, and control characters.
+     *
+     * Inputs: raw (string|null) - the value from an edit control.
+     * Output: object - ``{ok: true, value: string}`` with surrounding
+     *   whitespace stripped, or ``{ok: false, reason: string}`` carrying
+     *   a sentence fit to show the user.
+     * Example: SessionLabel.validate(' Media Compression ')
+     *   // {ok: true, value: 'Media Compression'}
+     */
+    function validate(raw) {
+        var cleaned = cleanString(raw);
+        if (cleaned === null) {
+            return { ok: false, reason: 'a session label cannot be empty' };
+        }
+        if (cleaned.length > LABEL_MAX_CHARS) {
+            return {
+                ok: false,
+                reason: 'a session label may be at most '
+                    + LABEL_MAX_CHARS + ' characters',
+            };
+        }
+        if (CONTROL_CHARS.test(cleaned)) {
+            return {
+                ok: false,
+                reason: 'a session label cannot contain control characters'
+                    + ' such as a newline or a tab',
+            };
+        }
+        return { ok: true, value: cleaned };
+    }
+
     window.SessionLabel = {
         APP_TMUX_PREFIX: APP_TMUX_PREFIX,
+        LABEL_MAX_CHARS: LABEL_MAX_CHARS,
         UNKNOWN: UNKNOWN,
         stripAppPrefix: stripAppPrefix,
         resolve: resolve,
         resolveToast: resolveToast,
+        validate: validate,
     };
 })();
