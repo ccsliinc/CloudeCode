@@ -45,6 +45,7 @@ from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
 from src.api.config_files_routes import router as config_files_router
+from src.api.session_groups_routes import router as session_groups_router
 from src.api.status_routes import router as status_router
 
 # feat/state-directory - resolve (and, if needed, create) the app's state
@@ -614,6 +615,7 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes
