@@ -60,12 +60,21 @@ console.log('[SessionSidebarRename Module] Loading...');
     const DBLCLICK_MS = 250;
 
     /**
-     * The server's own name rule, mirrored so an obviously bad name is
-     * refused without a round trip. The SERVER remains authoritative -
-     * this is an early out, never the decision.
-     * @type {RegExp}
+     * Description: the label rule, from the one module that holds it.
+     *   Kept as a function rather than a constant so this module has no
+     *   copy of the rule at all - see client/js/session-label.js.
+     * Inputs: raw (string|null). Output: object - {ok, value} | {ok, reason}.
      */
-    const NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+    function validateLabel(raw) {
+        if (window.SessionLabel && window.SessionLabel.validate) {
+            return window.SessionLabel.validate(raw);
+        }
+        // The resolver is a hard dependency of this module (it also
+        // supplies the editor's seed). If it is missing, say so rather
+        // than falling back to a second copy of the rule - a fallback
+        // rule is how the two drift.
+        return { ok: false, reason: 'the label rule is unavailable' };
+    }
 
     /** The in-flight deferred activation timer, or null. */
     let pending = null;
@@ -206,6 +215,26 @@ console.log('[SessionSidebarRename Module] Loading...');
         if (!nameEl) return false;
         editing = name;
         rowEl.setAttribute('data-editing', '1');
+
+        // THE SEED IS THE RENDERED TEXT, and taking it from the DOM
+        // rather than re-deriving it is the point. This control edits the
+        // LABEL; it used to seed itself with `rowEl.dataset.name`, the
+        // tmux handle, so a user who had named a session "Media
+        // Compression" opened the editor on "cloude_Media" and, on
+        // Enter, overwrote their own label with a handle-derived string.
+        // That is data loss, and it is silent.
+        //
+        // Reading `nameEl.textContent` means the seed IS what the user
+        // was looking at, by construction rather than by two functions
+        // agreeing. If the row's display half ever regresses to the
+        // handle again, the seed regresses with it and the same test
+        // catches both, instead of the display looking right while the
+        // editor quietly hands back something else.
+        //
+        // Read BEFORE the span is hidden - `hidden` is a display:none,
+        // and textContent is unaffected by it, but the ordering is worth
+        // not depending on.
+        const seed = (nameEl.textContent || '').trim();
         nameEl.hidden = true;
 
         const wrap = document.createElement('span');
@@ -213,9 +242,16 @@ console.log('[SessionSidebarRename Module] Loading...');
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'session-sidebar-rename-input';
-        input.value = name;
-        input.setAttribute('aria-label', `Rename ${name}`);
-        input.setAttribute('maxlength', '64');
+        input.value = seed;
+        input.setAttribute('aria-label', `Rename ${seed}`);
+        // The LABEL's limit, from the one module that mirrors the server.
+        // It used to be a hardcoded 64 - the old tmux-name limit - which
+        // silently truncated any label past that point at the maxlength,
+        // with no error, because a maxlength does not report anything.
+        input.setAttribute(
+            'maxlength',
+            String((window.SessionLabel && window.SessionLabel.LABEL_MAX_CHARS) || 200)
+        );
         const err = document.createElement('span');
         err.className = 'session-sidebar-rename-error';
         err.hidden = true;
@@ -224,7 +260,9 @@ console.log('[SessionSidebarRename Module] Loading...');
         wrap.appendChild(err);
         nameEl.insertAdjacentElement('afterend', wrap);
 
-        const ctx = { rowEl, nameEl, wrap, input, err, name, sessionId, settled: false };
+        const ctx = {
+            rowEl, nameEl, wrap, input, err, name, seed, sessionId, settled: false,
+        };
         input.addEventListener('keydown', (e) => onEditKeydown(e, ctx));
         // BLUR COMMITS, which is what the user asked for, but a blur
         // caused by the editor tearing itself down must not re-enter
@@ -234,7 +272,7 @@ console.log('[SessionSidebarRename Module] Loading...');
         input.addEventListener('blur', () => { commit(ctx); });
         input.focus();
         input.select();
-        announce(`editing the name of ${name}. Enter to save, Escape to cancel.`);
+        announce(`editing the name of ${seed}. Enter to save, Escape to cancel.`);
         return true;
     }
 
@@ -281,7 +319,10 @@ console.log('[SessionSidebarRename Module] Loading...');
     function cancel(ctx) {
         if (ctx.settled) return;
         teardown(ctx);
-        announce(`rename cancelled, ${ctx.name} unchanged`);
+        // The user is told about the thing they were LOOKING AT. A screen
+        // reader hearing the tmux handle here would be told a name that
+        // appears nowhere on the row.
+        announce(`rename cancelled, ${ctx.seed} unchanged`);
     }
 
     /**
@@ -299,25 +340,46 @@ console.log('[SessionSidebarRename Module] Loading...');
     async function commit(ctx) {
         if (ctx.settled) return;
         const raw = (ctx.input.value || '').trim();
-        if (!raw || raw === ctx.name) { cancel(ctx); return; }
-        if (!NAME_RE.test(raw)) {
-            showError(ctx, 'use 1-64 characters: A-Z a-z 0-9 _ -');
+        // UNCHANGED IS A NO-OP, AND THE BASIS IS THE SEED. It used to be
+        // `ctx.name`, the tmux handle, which made the comparison ask a
+        // question nobody was answering: the user was editing a label, so
+        // their text almost never equalled the handle, so the guard let
+        // an unchanged edit through as a write.
+        //
+        // Comparing against the SEED is what makes this control safe for
+        // a session with NO label yet. That session is seeded with the
+        // `cloude_`-stripped handle, because an empty box for a row that
+        // visibly has a name is worse to use and no safer. Seeding it
+        // that way on its own WOULD be a trap - press Enter unchanged and
+        // a handle-derived string is promoted into a real stored label,
+        // freezing a value the user never typed and never asked for. The
+        // guard is what closes it: unchanged writes nothing, so the only
+        // way a handle becomes a label is a user deliberately editing it
+        // into one, which is indistinguishable from typing it.
+        //
+        // And for a session that DOES have a label, the seed is that
+        // label, so this is also what makes "open the editor and change
+        // your mind" leave the label exactly where it was.
+        if (!raw || raw === ctx.seed) { cancel(ctx); return; }
+        const verdict = validateLabel(raw);
+        if (!verdict.ok) {
+            showError(ctx, verdict.reason);
             return;
         }
         ctx.settled = true;
         try {
-            await window.API.renameSession(ctx.sessionId, raw);
+            await window.API.renameSession(ctx.sessionId, verdict.value);
         } catch (err) {
             // Re-open rather than close: the text the user typed is still
             // the best starting point for their next attempt.
             ctx.settled = false;
             const detail = (err && (err.message || err.detail)) || 'the server refused it';
             showError(ctx, `rename failed: ${detail}`);
-            announce(`rename failed, ${ctx.name} is unchanged: ${detail}`);
+            announce(`rename failed, ${ctx.seed} is unchanged: ${detail}`);
             return;
         }
         teardown(ctx);
-        announce(`renamed ${ctx.name} to ${raw}`);
+        announce(`renamed ${ctx.seed} to ${verdict.value}`);
         const sidebar = window.SessionSidebar;
         if (sidebar) {
             sidebar._lastSig = null;
@@ -366,7 +428,7 @@ console.log('[SessionSidebarRename Module] Loading...');
     window.SessionSidebarRename = {
         init, afterRender, deferActivation, onListClick, onDblClick,
         onRowKeydown, beginEdit, isEditing, clearPending,
-        DBLCLICK_MS, NAME_RE,
+        DBLCLICK_MS, validateLabel,
     };
     console.log('[SessionSidebarRename Module] Exported as window.SessionSidebarRename');
 })();

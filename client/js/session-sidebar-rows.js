@@ -229,6 +229,14 @@ console.log('[SessionSidebarRows Module] Loading...');
             // the row order before serialising it.
             rows: (rows || []).map((r) => ({
                 name: r.name,
+                // THE ROW'S TEXT IS THE LABEL, so it must be here or a
+                // rename repaints nothing. `name` cannot stand in: a
+                // rename moves ONLY the label and leaves the handle put,
+                // so the field the diff watched is the one a rename no
+                // longer touches. The editor forces a repaint by clearing
+                // `_lastSig` - but the 5s poller and another tab's
+                // `session.renamed` come through this diff.
+                label: r.label || null,
                 status: r.status || 'unknown',
                 active: !!r.is_active,
                 thisTab: !!r.is_this_tab,
@@ -401,7 +409,19 @@ console.log('[SessionSidebarRows Module] Loading...');
     function rowHtml(r, density) {
         const mode = density || 'cozy';
         const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // TWO STRINGS, NOT INTERCHANGEABLE. `name` is the tmux handle,
+        // for the ATTRIBUTES - grip, pin, group chip, delete and reorder
+        // all key on it, so it must never be a label. `display` is what
+        // a HUMAN reads, from the one resolver in session-label.js. This
+        // row rendered the handle over a `label` its payload has carried
+        // since the feature landed, so "Media Compression" showed as
+        // "cloude_Media". Outcome 3 (null) falls back to the handle: a
+        // blank where a name goes is worse than either.
         const name = esc(r.name);
+        const resolved = window.SessionLabel
+            ? window.SessionLabel.resolve(r)
+            : null;
+        const display = resolved === null ? name : esc(resolved);
         const badge = r.created_by_cloude ? 'tmux' : 'external';
         const sidAttr = r.session_id ? ` data-session-id="${esc(r.session_id)}"` : '';
         const themeAttrs = window.SessionThemeTint
@@ -448,8 +468,12 @@ console.log('[SessionSidebarRows Module] Loading...');
             '<div class="session-sidebar-row-main">' +
             gripHtml(r.name) +
             dot +
+            // `data-row-name` stays the HANDLE: nothing reads its value
+            // (it is the rename module's `closest()` target), and an
+            // identity-shaped attribute should not carry a label. The
+            // TEXT is the display value; they differ on purpose.
             `<span class="session-sidebar-row-name" data-row-name="${name}" ` +
-            `title="${esc(rename.reason)}">${name}</span>` +
+            `title="${esc(rename.reason)}">${display}</span>` +
             // After the name, not before it: the name column starts at
             // the same x on every row whether or not it is themed, so a
             // themed row does not make the list ragged. It is also the

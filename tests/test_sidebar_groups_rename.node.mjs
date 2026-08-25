@@ -285,16 +285,58 @@ await test('ITEM 64: the FOLD is in the signature, or collapsing paints nothing'
         'and the drag flag is what makes the empty pinned group appear');
 });
 
-await test('ITEM 66: the name rule refuses an obviously bad name without a round trip', () => {
+await test('ITEM 66: the editor enforces the LABEL rule, not the old tmux-name rule', () => {
+    // THIS TEST USED TO ASSERT THE BUG. It read
+    // `assert.ok(!R.NAME_RE.test('has space'))` - a space must be
+    // REFUSED - which is the old `^[A-Za-z0-9_-]{1,64}$` tmux-name rule
+    // applied to a field that is no longer a tmux name. A label is never
+    // handed to tmux, so tmux's constraints do not apply to it, and the
+    // feature's own worked example ("Media Compression") was refused in
+    // the browser before it could reach a server that accepts it.
+    //
+    // The editor now holds no copy of the rule at all: it delegates to
+    // SessionLabel.validate, so this asserts through the same door the
+    // editor uses rather than against a second regex.
     const storage = fakeStorage();
-    const { window } = loadModules(['session-sidebar-rename.js'], {
-        storage, document: new Doc(),
-    });
+    const { window } = loadModules(
+        ['session-label.js', 'session-sidebar-rename.js'],
+        { storage, document: new Doc() },
+    );
     const R = window.SessionSidebarRename;
-    assert.ok(R.NAME_RE.test('good_name-1'));
-    assert.ok(!R.NAME_RE.test('has space'));
-    assert.ok(!R.NAME_RE.test(''));
-    assert.ok(!R.NAME_RE.test('x'.repeat(65)));
+
+    // THE WHOLE POINT OF THE FEATURE: punctuation a tmux name cannot
+    // carry is legal in a label.
+    for (const good of ['Media Compression', 'client: acme', 'v1.2 "final"', 'cost $5', 'ok']) {
+        assert.equal(R.validateLabel(good).ok, true, `${good} must be a legal label`);
+    }
+    // Non-ASCII too. tmux does not preserve it, which is why a LABEL may
+    // legitimately differ from its handle by more than the filter.
+    assert.equal(R.validateLabel('emoji \u{1F680} ok').ok, true);
+
+    // Surrounding whitespace is the one silent correction, as on the server.
+    // Field-by-field rather than deepEqual: the verdict object is
+    // constructed inside the module's own VM realm, so a structural
+    // comparison fails on prototype identity alone and says nothing
+    // about the value.
+    const trimmed = R.validateLabel('  Media Compression  ');
+    assert.equal(trimmed.ok, true);
+    assert.equal(trimmed.value, 'Media Compression');
+
+    // AND THE TWO REFUSALS THE SERVER ACTUALLY MAKES.
+    assert.equal(R.validateLabel('').ok, false, 'empty is refused');
+    assert.equal(R.validateLabel('   ').ok, false, 'whitespace-only is refused');
+    assert.equal(R.validateLabel(null).ok, false, 'null is refused');
+    assert.equal(R.validateLabel('a\nb').ok, false, 'a newline is a control char');
+    assert.equal(R.validateLabel('a\tb').ok, false, 'a tab is a control char');
+
+    // THE LIMIT IS THE LABEL'S, NOT THE TMUX NAME'S. 65 characters used
+    // to be refused here; the boundary is now 200, and both sides of it
+    // are asserted so a limit that drifted in either direction fails.
+    const max = window.SessionLabel.LABEL_MAX_CHARS;
+    assert.equal(max, 200, 'the mirrored server limit');
+    assert.equal(R.validateLabel('x'.repeat(65)).ok, true, '65 is fine for a label');
+    assert.equal(R.validateLabel('x'.repeat(max)).ok, true, 'exactly the limit is fine');
+    assert.equal(R.validateLabel('x'.repeat(max + 1)).ok, false, 'one over is refused');
 });
 
 // =====================================================================

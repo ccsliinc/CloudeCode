@@ -113,6 +113,19 @@ export class El {
     set id(v) { this.setAttribute('id', v); }
 
     /**
+     * `className` is the SAME STORE as the `class` attribute, because in a
+     * browser it is. Without this it was a plain JS property: a module
+     * that built an element with `el.className = 'x'` - which the inline
+     * rename editor does for both the input and its wrapper - produced a
+     * node that `querySelector('.x')` could never find, and the resulting
+     * null read as "the editor refused to open" rather than "the harness
+     * cannot see it". Both of the app's ways of setting a class now land
+     * in one place, so a selector written against either one works.
+     */
+    get className() { return this.getAttribute('class') || ''; }
+    set className(v) { this.setAttribute('class', v == null ? '' : String(v)); }
+
+    /**
      * textContent must ESCAPE into innerHTML, because that round trip IS
      * the app's HTML escaper (`esc()` in session-sidebar-rows.js sets
      * textContent on a scratch div and reads innerHTML back). A stub that
@@ -139,6 +152,33 @@ export class El {
         const i = this.childNodes.indexOf(node);
         if (i !== -1) this.childNodes.splice(i, 1);
         node.parentNode = null;
+        return node;
+    }
+
+    /**
+     * Description: insert a sibling next to this node, the way the inline
+     *   rename editor mounts its input beside the row's name span.
+     *
+     *   ONLY THE POSITIONS THE APP ACTUALLY USES ARE IMPLEMENTED, and an
+     *   unimplemented one THROWS rather than returning quietly. A stub
+     *   that silently no-opped on a position it did not understand would
+     *   let a caller believe it had mounted an element that is not in the
+     *   tree, and every later `querySelector` for it would come back null
+     *   - which reads exactly like "the editor refused to open" rather
+     *   than "the harness dropped it on the floor".
+     * Inputs: where (string) - 'afterend' or 'beforebegin'; node (El).
+     * Output: El - the inserted node.
+     * Raises: Error - any other position.
+     */
+    insertAdjacentElement(where, node) {
+        const parent = this.parentNode;
+        if (!parent) throw new Error('insertAdjacentElement on a detached node');
+        if (node.parentNode) node.parentNode.removeChild(node);
+        const at = parent.childNodes.indexOf(this);
+        if (where === 'afterend') parent.childNodes.splice(at + 1, 0, node);
+        else if (where === 'beforebegin') parent.childNodes.splice(at, 0, node);
+        else throw new Error(`insertAdjacentElement: unsupported position ${where}`);
+        node.parentNode = parent;
         return node;
     }
 
@@ -183,6 +223,16 @@ export class El {
     }
 
     focus() { this.ownerDocument.activeElement = this; }
+
+    /**
+     * Description: select all of an input's text. RECORDED rather than
+     *   ignored, because "the editor opens with the text selected" is a
+     *   real behaviour a caller may want to assert - an empty method
+     *   would make that assertion impossible to write and equally
+     *   impossible to notice was missing.
+     * Inputs: none. Output: void.
+     */
+    select() { this.selectedAll = true; }
 
     getBoundingClientRect() {
         return { top: this._box.top, height: this._box.height, bottom: this._box.top + this._box.height };
