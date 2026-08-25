@@ -140,12 +140,17 @@ ENV_COMPLETE=false
 if [ -f ".env" ]; then
     ENV_EXISTS=true
 
-    # Check if all required values are present
-    if grep -q "CLOUDFLARE_API_TOKEN=.\+" .env && \
-       grep -q "CLOUDFLARE_ZONE_ID=.\+" .env && \
-       grep -q "CLOUDFLARE_DOMAIN=.\+" .env && \
-       grep -q "TOTP_SECRET=.\+" .env && \
-       grep -q "JWT_SECRET=.\+" .env; then
+    # Check if all required values are present.
+    #
+    # The three CLOUDFLARE_* checks that used to be here were removed: the
+    # Cloudflare tunnel system went away in Plan v3.2 and .env.example has
+    # not carried those keys since, so no install could satisfy them and
+    # ENV_COMPLETE was permanently false. That dragged an already-configured
+    # user back through setup_auth.py further down this script - the same
+    # dead check, and the same consequence, as the one in
+    # macOS/server-manager.js checkConfiguration().
+    if grep -q "^TOTP_SECRET=.\+" .env && \
+       grep -q "^JWT_SECRET=.\+" .env; then
         ENV_COMPLETE=true
     fi
 fi
