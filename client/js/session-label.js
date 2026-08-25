@@ -101,18 +101,33 @@
      * The string a HUMAN should see for one session, or null.
      *
      * Description: the whole fallback rule, and the only copy of it.
+     *
+     *   THE ONE PRESENTATION SWITCH, AND WHY IT IS NOT A SECOND RULE.
+     *   ``stripPrefix: false`` keeps the ``cloude_`` prefix on the
+     *   fallback. The FALLBACK CHAIN is identical either way - label,
+     *   else the tmux name, else null - and only how the tmux name is
+     *   spelled changes. The attribution prompt is the one surface that
+     *   passes it, because there the prefix is EVIDENCE: that card is
+     *   asking "did you start this session?", one of its own hints is
+     *   that the name matches the auto-generated form, and the user may
+     *   need to match the exact string against their own ``tmux ls``.
+     *   Every other surface strips it, because there it is an artefact
+     *   of the launcher and not part of the name.
      * Inputs: row (object|null) - reads ``label`` and ``name``. Either
-     *   may be absent, empty or the wrong type.
+     *   may be absent, empty or the wrong type. options (object|null) -
+     *   ``{stripPrefix: false}`` to keep the ``cloude_`` prefix on the
+     *   fallback; stripping is the default.
      * Output: string|null - see outcomes 1-3 in the module header. Never
      *   an empty string.
      * Example: SessionLabel.resolve({name: 'cloude_Media',
      *            label: 'Media Compression'})  -> 'Media Compression'
      */
-    function resolve(row) {
+    function resolve(row, options) {
         if (!row || typeof row !== 'object') return null;
         var label = cleanString(row.label);
         if (label !== null) return label;
-        return stripAppPrefix(row.name);
+        var strip = !(options && options.stripPrefix === false);
+        return strip ? stripAppPrefix(row.name) : cleanString(row.name);
     }
 
     /**

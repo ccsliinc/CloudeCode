@@ -48,6 +48,11 @@
 <body>
 <div id="launchpad-screen" class="screen active"></div>
 <pre id="out">rendering...</pre>
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
 <script src="../../client/js/api.js"></script>
 <script src="../../client/js/session-status-ui.js"></script>
 <script src="../../client/js/session-row-actions.js"></script>

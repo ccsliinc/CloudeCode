@@ -153,6 +153,32 @@ test('the toast field names resolve through the same one rule', () => {
     assert.equal(SL.resolveToast(null), null);
 });
 
+test('stripPrefix:false changes the SPELLING of the fallback, not the rule', () => {
+    // The attribution prompt is the one surface that asks for this: its
+    // whole question is "did you start this session?", one of its own
+    // hints is that the name matches the auto-generated cloude_ form, and
+    // the user may need to match the exact string against their own
+    // `tmux ls`. Stripping the prefix there removes evidence from an
+    // evidence card.
+    assert.equal(
+        SL.resolve({ name: 'cloude_Media' }, { stripPrefix: false }),
+        'cloude_Media'
+    );
+    // The CHAIN is untouched: a label still wins, and neither still
+    // answers null. Only how the tmux name is spelled changes.
+    assert.equal(
+        SL.resolve({ name: 'cloude_Media', label: 'Media Compression' },
+                   { stripPrefix: false }),
+        'Media Compression'
+    );
+    assert.equal(SL.resolve({}, { stripPrefix: false }), null);
+    assert.equal(SL.resolve({ name: '  ' }, { stripPrefix: false }), null);
+    // Anything other than an explicit false strips, so a caller that
+    // passes an empty options object gets the default and not a surprise.
+    assert.equal(SL.resolve({ name: 'cloude_Media' }, {}), 'Media');
+    assert.equal(SL.resolve({ name: 'cloude_Media' }, null), 'Media');
+});
+
 test('UNKNOWN is a sentence a user can read, not an empty string', () => {
     assert.equal(typeof SL.UNKNOWN, 'string');
     assert.ok(SL.UNKNOWN.trim().length > 0);

@@ -439,6 +439,69 @@ def measure_none(page, rep: Report) -> int:
     return data["slotHtmlLength"]
 
 
+# The labels the pending-labelled fixture feeds in, keyed by tmux name.
+# Two carry characters the OLD rename validator refused, because the value
+# used to be handed straight to tmux; it is not any more, and these
+# surviving verbatim is the point of the feature. One is null: most
+# unattributed sessions have no label and that row must look exactly as it
+# always did.
+LABELLED_EXPECT = {
+    "cloude_ses_deadbeef": 'client: acme v2.1 "prod" $rate',
+    "cloude_test pause": "<b>not html</b>",
+    "cloude_scrolltest": "cloude_scrolltest",  # no label -> the tmux name
+}
+
+
+def measure_labelled(page, rep) -> None:
+    """The prompt names a session the way the rest of the app names it.
+
+    Description: reads the RENDERED name off the element that paints it,
+      so a label that never reached the DOM, or one mangled by an escape
+      bug, fails here rather than passing a state assertion.
+
+      The ``data-tmux-name`` attribute is asserted UNCHANGED in the same
+      pass. It is the key every adopt and decline action is posted under;
+      a label is free-form and identifies nothing, so swapping the two
+      would send an adopt for a session name that does not exist. The
+      display and the key are different jobs and this proves they stayed
+      different.
+    Inputs: page - Playwright page. rep (Report).
+    Output: None.
+    """
+    report = _stable_report(page)
+    rows = report["rows"]
+    rep.check(
+        len(rows) == len(LABELLED_EXPECT),
+        f"labelled: all {len(LABELLED_EXPECT)} rows rendered",
+        f"got {len(rows)}",
+    )
+    for row in rows:
+        name = row["name"]
+        expected = LABELLED_EXPECT.get(name)
+        if expected is None:
+            rep.check(False, f"labelled: unexpected row {name!r}", "")
+            continue
+        # THE KEY IS UNTOUCHED. data-tmux-name still carries the handle.
+        rep.check(
+            name in LABELLED_EXPECT,
+            f"labelled: row keeps its tmux name as its action key",
+            f"data-tmux-name={name!r}",
+        )
+        # THE DISPLAY IS THE LABEL. Read off the painting element, so the
+        # "~~claude" class of defect - a glyph injected by a ::before rule
+        # that .textContent reads the same either way - fails here.
+        rep.check(
+            row["renderedName"] == expected,
+            f"labelled: row {name} paints {expected!r}",
+            f"rendered={row['renderedName']!r}",
+        )
+        rep.check(
+            row["nameBox"]["nonZeroBox"],
+            f"labelled: row {name} paints a non-zero name box",
+            f"{row['nameBox']['width']:.1f}x{row['nameBox']['height']:.1f}",
+        )
+
+
 def main() -> int:
     """Serve the repo, drive the harness in a real browser, print results.
 
@@ -487,6 +550,11 @@ def main() -> int:
                 measure_pending(page, rep)
                 measure_choose(page, rep)
                 measure_decline(page, rep)
+                page.close()
+
+                rep.lines.append("--- fixture pending-labelled ---")
+                page = _open(browser, port, "pending-labelled")
+                measure_labelled(page, rep)
                 page.close()
 
                 rep.lines.append("--- fixture unavailable ---")

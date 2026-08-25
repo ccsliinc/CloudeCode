@@ -456,6 +456,29 @@ class Launchpad {
 
         const rows = p.sessions.map((s) => {
             const name = this._escapeHtml(s.tmux_name || '');
+            // WHAT THE USER READS vs WHAT THE ACTION IS KEYED ON.
+            //
+            // ``name`` above stays the raw tmux handle, because it is the
+            // key every adopt and decline POST is sent under and a label
+            // is free-form text that identifies nothing. ``shown`` is the
+            // string a human is asked to recognise, and if this session
+            // carries a label then the name the user typed is a far
+            // better prompt than an internal handle.
+            //
+            // stripPrefix:false is deliberate and this is the ONE surface
+            // that asks for it. The card's whole question is "did you
+            // start this?", one of its own hints is that the name matches
+            // the auto-generated form, and the user may need to match the
+            // exact string against their own `tmux ls`. Stripping the
+            // prefix here would remove evidence from an evidence card.
+            const shown = this._escapeHtml(
+                (window.SessionLabel
+                    ? window.SessionLabel.resolve(
+                        { label: s.label, name: s.tmux_name },
+                        { stripPrefix: false })
+                    : null)
+                || s.tmux_name || ''
+            );
             const started = s.epoch ? this._formatRelativeTime(s.epoch) : 'start time unknown';
             // THE HINTS ARE SENTENCES, NOT A SCORE. Each one is rendered
             // as its own line of prose so the user can weigh what was
@@ -471,7 +494,7 @@ class Launchpad {
                 <li class="attribution-prompt__row" data-tmux-name="${name}">
                     <label class="attribution-prompt__pick">
                         <input type="checkbox" class="attribution-prompt__check" data-tmux-name="${name}" checked>
-                        <span class="attribution-prompt__name">${name}</span>
+                        <span class="attribution-prompt__name" title="tmux session: ${name}">${shown}</span>
                     </label>
                     <span class="attribution-prompt__meta">started ${this._escapeHtml(started)}</span>
                     <span class="attribution-prompt__why" data-reason="${this._escapeHtml(s.reason || '')}">${why}</span>

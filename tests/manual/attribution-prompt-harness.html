@@ -49,6 +49,11 @@
 <body>
 <div id="launchpad-screen" class="screen active"></div>
 <pre id="out">rendering...</pre>
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
 <script src="../../client/js/api.js"></script>
 <script src="../../client/js/session-status-ui.js"></script>
 <script src="../../client/js/session-row-actions.js"></script>
@@ -80,8 +85,29 @@ const PENDING = {
     ],
 };
 
+// The same question set, but two of the three sessions carry a LABEL -
+// what a user called them - alongside their tmux name. The prompt asks
+// the user to RECOGNISE a session, so showing an internal handle instead
+// of the name they typed makes recognition harder. The third row keeps a
+// null label, because most unattributed sessions genuinely have none and
+// that row must render exactly as it always did.
+//
+// The labels carry every character the old rename validator refused, and
+// one of them carries markup: a label is free-form user text and must
+// never reach the DOM raw.
+const PENDING_LABELLED = {
+    state: 'pending',
+    notice: PENDING.notice,
+    sessions: [
+        { ...PENDING.sessions[0], label: 'client: acme v2.1 "prod" $rate' },
+        { ...PENDING.sessions[1], label: '<b>not html</b>' },
+        { ...PENDING.sessions[2], label: null },
+    ],
+};
+
 const FIXTURES = {
     pending: PENDING,
+    'pending-labelled': PENDING_LABELLED,
     unavailable: {
         state: 'unavailable',
         sessions: [],
