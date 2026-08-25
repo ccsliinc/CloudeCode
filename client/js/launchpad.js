@@ -2050,7 +2050,23 @@ class Launchpad {
             console.error('[launchpad] SessionRowActions missing, refusing to act');
             return;
         }
-        const display = this._deriveRunningSessionDisplayName(tmuxName);
+        // NAME IT THE WAY THE USER KNOWS IT. This derived the display
+        // straight off the tmux handle, so a session labelled "Media
+        // Compression" produced a DESTRUCTIVE confirmation reading
+        // "cloude_Media_Compression" - asking someone to confirm
+        // destroying something under a name they never chose and may not
+        // recognise, which is the worst dialog in the app to get wrong.
+        //
+        // The row is looked up by handle, which is the identity and the
+        // only thing this handler is given, and then resolved through the
+        // same `_sessionDisplayLabel` the row itself rendered with, so the
+        // dialog and the row cannot disagree. A handle with no row falls
+        // back to the old derivation rather than refusing: a confirm that
+        // cannot name its target is still better than no confirm.
+        const actionRow = (this.runningSessions || []).find((s) => s && s.name === tmuxName);
+        const display = actionRow
+            ? this._sessionDisplayLabel(actionRow)
+            : this._deriveRunningSessionDisplayName(tmuxName);
         const resolved = action || window.SessionRowActions.ACTION_CLOSE;
 
         // RESTART branches out before the confirm, because it is the one
