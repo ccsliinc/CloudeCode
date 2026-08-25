@@ -39,6 +39,7 @@ from src.core.tmux_backend import (
     _slugify,
 )
 from src.utils.pty_session import PTYBackend
+from src.core import tmux_discovery
 from tests.socket_guard import TEST_SOCKET_NAME
 
 
@@ -133,7 +134,19 @@ def test_pty_backend_required_methods_are_present():
 
 
 def test_build_backend_falls_back_to_pty_when_tmux_missing():
-    with mock.patch("src.core.session_backend.shutil.which", return_value=None):
+    # PATCH POINT MOVED. tmux discovery is no longer a bare
+    # ``shutil.which`` in this module: it is
+    # ``src.core.tmux_discovery``, which searches PATH *and* the
+    # well-known absolute install locations (a GUI-launched app has no
+    # shell PATH) and then EXECUTES ``tmux -V`` to prove the binary
+    # runs. Patching shutil.which here would no longer simulate a
+    # missing tmux - it would simulate nothing at all and the test
+    # would pass or fail for unrelated reasons. Patch the resolver, and
+    # clear the memoized probe so the fake is not read from cache.
+    tmux_discovery.reset_probe_cache()
+    with mock.patch(
+        "src.core.tmux_discovery.resolve_tmux_path", return_value=None
+    ):
         backend = build_backend(
             settings_obj=None,
             session_id="fallback-test",

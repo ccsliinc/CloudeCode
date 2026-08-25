@@ -26,6 +26,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core.tmux_discovery import (
+    TMUX_AVAILABLE,
+    TMUX_UNDETERMINED,
+    probe_tmux,
+)
 from src.core.tmux_listing import TmuxListing
 
 logger = structlog.get_logger()
@@ -305,27 +310,56 @@ def build_backend(
                 fallback="auto",
             )
 
-    tmux_available = bool(shutil.which("tmux"))
-
     if requested == "pty":
         logger.info("session_backend_selected", backend="pty", reason="forced")
         return PTYBackend(session_id, working_dir, on_output)
 
-    if requested == "tmux" and not tmux_available:
+    # THREE OUTCOMES, not two. This used to be `bool(shutil.which("tmux"))`,
+    # which reports only that a name resolves to a file with the executable
+    # bit set - a quarantined binary, a wrong-architecture build, a broken
+    # dylib link and a dangling symlink all resolve and all fail to run. The
+    # factory then logged `backend=tmux`, a claim about executability that
+    # nothing had measured. probe_tmux() actually runs `tmux -V` and keeps
+    # "could not evaluate" as its own state. See src/core/tmux_discovery.py.
+    probe = probe_tmux()
+
+    if probe.state == TMUX_UNDETERMINED:
+        # Never claim tmux here. The binary is present and we could not
+        # prove it runs, so the honest move is to say exactly that and use
+        # the backend we CAN run, rather than start a session against a
+        # tmux that may not exec.
+        logger.error(
+            "session_backend_tmux_undetermined",
+            backend="pty",
+            reason=requested,
+            tmux_path=probe.path,
+            detail=probe.detail,
+            hint=(
+                "tmux was found but could not be run, so the tmux backend was "
+                "NOT selected. Sessions will not survive a server restart "
+                "until this is resolved."
+            ),
+        )
+        return PTYBackend(session_id, working_dir, on_output)
+
+    if requested == "tmux" and probe.state != TMUX_AVAILABLE:
         logger.warning(
             "session_backend_tmux_requested_but_missing",
             fallback="pty",
+            detail=probe.detail,
             hint="install with: brew install tmux",
         )
         return PTYBackend(session_id, working_dir, on_output)
 
-    # auto, or explicit tmux with binary present
-    if tmux_available:
+    # auto, or explicit tmux, with the binary proven runnable
+    if probe.usable:
         logger.info(
             "session_backend_selected",
             backend="tmux",
             reason=requested,
             socket_name=socket_name,
+            tmux_path=probe.path,
+            tmux_version=probe.version,
         )
         return TmuxBackend(
             session_id,
@@ -337,7 +371,8 @@ def build_backend(
 
     logger.warning(
         "session_backend_auto_fallback_to_pty",
-        reason="tmux_not_on_path",
+        reason="tmux_not_installed",
+        detail=probe.detail,
         hint="install with: brew install tmux",
     )
     return PTYBackend(session_id, working_dir, on_output)

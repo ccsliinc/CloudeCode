@@ -126,3 +126,26 @@ def tmux_test_socket(tmux_socket_isolation: str) -> str:
         The socket name string. This is the ONLY socket the guard permits.
     """
     return tmux_socket_isolation
+
+
+@pytest.fixture(autouse=True)
+def _reset_tmux_probe_cache():
+    """Forget the memoized tmux probe around every test.
+
+    ``src.core.tmux_discovery.probe_tmux`` executes ``tmux -V`` once and
+    caches the answer for the process lifetime, which is right in
+    production (session creation is a hot path) and poison in a test
+    session: a test that fakes a missing tmux leaves ABSENT in the cache,
+    and every later test in the same process reads that fake instead of
+    measuring. That does not fail cleanly - it silently hands back the PTY
+    backend to tests that were written against tmux, which is how it
+    presented: the suite HUNG rather than failed.
+
+    Resetting on both sides means neither the test that set it nor the one
+    that follows can inherit another test's environment.
+    """
+    from src.core import tmux_discovery
+
+    tmux_discovery.reset_probe_cache()
+    yield
+    tmux_discovery.reset_probe_cache()

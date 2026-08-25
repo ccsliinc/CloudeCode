@@ -50,6 +50,7 @@ from typing import Any, Callable, Dict, List, Optional
 import structlog
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
     LISTING_FORMAT,
     parse_listing_row,
@@ -268,8 +269,16 @@ class TmuxBackend(SessionBackend):
     # ---- internal helpers ------------------------------------------------
 
     def _tmux_base(self) -> List[str]:
-        """Common tmux argv prefix - always uses our dedicated socket."""
-        return ["tmux", "-L", self.socket_name]
+        """Common tmux argv prefix - always uses our dedicated socket.
+
+        Uses the ABSOLUTE path resolved by src.core.tmux_discovery, not the
+        bare name "tmux". A subprocess inherits this process's PATH, and a
+        GUI-launched app has no shell PATH, so a bare name resolves only
+        when whoever launched us happened to patch PATH first. Falls back to
+        the bare name when nothing resolved, so start()'s own missing-tmux
+        error is what the user sees.
+        """
+        return tmux_argv_prefix(self.socket_name)
 
     async def _apply_history_limit(self) -> None:
         """Set this socket's scrollback depth to :data:`HISTORY_LIMIT`.
@@ -432,8 +441,11 @@ class TmuxBackend(SessionBackend):
         if self._running:
             raise RuntimeError("TmuxBackend already running")
 
-        if not shutil.which("tmux"):
-            raise RuntimeError("tmux not found on PATH")
+        if resolve_tmux_path() is None:
+            raise RuntimeError(
+                "tmux was not found on PATH or at any well-known install "
+                "location (see src/core/tmux_discovery.WELL_KNOWN_PATHS)"
+            )
 
         self.working_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1031,11 +1043,13 @@ class TmuxBackend(SessionBackend):
         """
         import subprocess
 
-        if not shutil.which("tmux"):
+        if resolve_tmux_path() is None:
             # Not "zero sessions" - we have no way to ask the question.
             return (
                 TmuxListing.unavailable(
-                    REASON_TMUX_MISSING, detail="tmux not found on PATH"
+                    REASON_TMUX_MISSING,
+                    detail="tmux not found on PATH or at any well-known "
+                           "install location",
                 ),
                 "",
             )
