@@ -1106,6 +1106,7 @@ class Launchpad {
             listing: [listing.ok, listing.reason || '', listing.detail || ''],
             rows: this.runningSessions.map(s => ({
                 name: s.name,
+                label: s.label || null,
                 owned: !!s.created_by_cloude,
                 active: !!s.is_active,
                 sid: s.session_id || null,
@@ -1124,7 +1125,7 @@ class Launchpad {
         if (section) section.style.display = '';
         container.innerHTML = attentionHtml + this.runningSessions.map(s => {
             const owned = !!s.created_by_cloude;
-            const displayName = this._deriveRunningSessionDisplayName(s.name);
+            const displayName = this._sessionDisplayLabel(s);
             const ageStr = s.created_at_epoch ? this._formatRelativeTime(s.created_at_epoch) : '';
             const escapedName = this._escapeHtml(s.name);
             const escapedDisplay = this._escapeHtml(displayName);
@@ -1507,6 +1508,37 @@ class Launchpad {
             return tmuxName.slice('cloude_'.length);
         }
         return tmuxName;
+    }
+
+    /**
+     * The string a HUMAN should see for one session row.
+     *
+     * A session's NAME IS A LABEL. It is free-form - spaces,
+     * punctuation, mixed case - and it lives on the row as
+     * ``sessions.title``, arriving here as ``label``. The tmux session
+     * name is an internal handle derived from that label once, at
+     * creation, and never moved again. Keeping them separate is what
+     * stops a rename from moving the field session identity is keyed
+     * on, which used to split one session into two rows.
+     *
+     * FALLBACK IS THE OLD BEHAVIOUR, EXACTLY. A row with no label - any
+     * session created before labels existed, and any external session
+     * this app never made - renders the ``cloude_``-stripped tmux name
+     * just as it always did. An empty-string label counts as no label:
+     * rendering blank would be worse than rendering the handle.
+     *
+     * Inputs: row (object) - a running-session row; reads ``label`` and
+     *   ``name``.
+     * Output: string - the display name, never empty when a name exists.
+     * Example: this._sessionDisplayLabel({name: 'cloude_Media',
+     *            label: 'Media Compression'})  -> 'Media Compression'
+     */
+    _sessionDisplayLabel(row) {
+        const label = row && typeof row.label === 'string'
+            ? row.label.trim()
+            : '';
+        if (label) return label;
+        return this._deriveRunningSessionDisplayName(row && row.name);
     }
 
     /**
@@ -2599,7 +2631,7 @@ class Launchpad {
      */
     _renderTreeSessionRowHtml(s) {
         const owned = !!s.created_by_cloude;
-        const displayName = this._deriveRunningSessionDisplayName(s.name);
+        const displayName = this._sessionDisplayLabel(s);
         const escapedName = this._escapeHtml(s.name);
         const escapedDisplay = this._escapeHtml(displayName);
         const statusDot = window.SessionStatusUI
