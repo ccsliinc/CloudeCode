@@ -6,6 +6,10 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
+const { terminateProcess, isAlive } = require('./process-teardown');
+const { decideAdoption } = require('./adoption-decision');
+const { decideLifecycleAction } = require('./ownership-policy');
+const { createSupervisor, SUPERVISOR_RESTART } = require('./supervisor-policy');
 const setupVerdict = require('./setup-verdict');
 const { resolvePublishedUrl } = require('./published-url');
 
@@ -33,6 +37,29 @@ class ServerManager {
     this.process = null;
     this.processPid = null;
     this.ownedProcess = false; // true if we spawned the server, false if adopted
+    // The version an ADOPTED server reported, when one was adopted. Null for
+    // a server we spawned (its version is ours by construction) and null when
+    // nothing is running. Display only - the decision it came from has
+    // already been made in start().
+    this.adoptedVersion = null;
+
+    // Set when start() REFUSED to adopt whatever holds the port. It exists
+    // because refusing is not enough on its own: main.js re-probes health
+    // right after start() and used to promote any healthy response back to
+    // state 'running'. That probe cannot tell our server from the stranger we
+    // just declined to adopt, so without this flag the refusal was undone one
+    // line later and the stale server was effectively adopted anyway - the
+    // defect surviving its own fix. Cleared by a successful start or stop.
+    this.startBlockedReason = null;
+
+    // Bounded auto-recovery. Before this, ANY server death was permanent:
+    // spawn/adopt only happen inside start(), and nothing called start() again
+    // after an unexpected exit, so the app sat there with a menu bar that did
+    // not say it was dead. Measured on 2026-08-25 at 22 seconds and counting.
+    // The budget and the reasoning are in macOS/supervisor-policy.js.
+    this.supervisor = createSupervisor();
+    this.supervisorTimer = null;
+    this.quitting = false;
     this.logStream = null;
 
     // Crash tracking. `state` stays a three-value machine
@@ -758,24 +785,66 @@ class ServerManager {
       console.log(`Port ${port} already in use, checking if it's our server...`);
       const health = await this.getHealth();
       if (health) {
-        console.log('Server already running on port, adopting it');
+        // A HEALTHY CLOUDE CODE SERVER IS NOT NECESSARILY *THIS* CLOUDE CODE
+        // SERVER.
+        //
+        // This branch used to adopt unconditionally. That is right when
+        // Electron crashed and left its own healthy server behind, and wrong
+        // across an upgrade - and on 2026-08-25 it was wrong: a v1.0.2 server
+        // orphaned onto launchd (ppid 1) was adopted by a v1.0.3 bundle,
+        // which then ran the older server's code for four hours.
+        //
+        // The gate is version equality, decided in adoption-decision.js.
+        // `health.version` comes from the UNAUTHENTICATED GET /api/v1/health
+        // (the auth-gated /api/v1/version is unusable here - nobody has logged
+        // in yet) and is frozen at the server's own startup rather than
+        // re-resolved, because bootstrap.js rewrites the on-disk VERSION file
+        // on every packaged launch.
+        //
+        // FOUR outcomes, and only one of them adopts. A server that does not
+        // report a version at all - which is every server built before this
+        // change, including the orphan - is CANNOT DETERMINE and is refused.
+        const bundleVersion = this.getBundleVersion();
+        const verdict = decideAdoption({
+          runningVersion: health && health.version,
+          bundleVersion,
+        });
+        const holderPid = await this.findPortHolderPid(port);
+
+        if (!verdict.adopt) {
+          console.log(
+            `Refusing to adopt server on port ${port}: ${verdict.outcome}`
+          );
+          this.state = 'stopped';
+          this.startBlockedReason = verdict.outcome;
+          const err = new Error(
+            `${verdict.reason}\n\n` +
+              `Cloude Code did not start this server` +
+              (holderPid ? ` (PID ${holderPid})` : '') +
+              `, so it will not stop it without being told to.`
+          );
+          // Structured so main.js can offer a real choice instead of a dead
+          // end. A refusal the user cannot act on is just a different silence.
+          err.code = 'ADOPTION_REFUSED';
+          err.outcome = verdict.outcome;
+          err.runningVersion = verdict.runningVersion;
+          err.bundleVersion = verdict.bundleVersion;
+          err.pid = holderPid;
+          err.port = port;
+          throw err;
+        }
+
+        console.log(
+          `Adopting server on port ${port}: ${verdict.reason}`
+        );
         this.state = 'running';
         this.startTime = Date.now(); // Approximate
-        this.ownedProcess = false; // We didn't spawn this — don't kill it on quit
-
-        // Try to capture the PID of the existing process (for display only)
-        try {
-          exec(`lsof -ti:${port}`, (err, stdout) => {
-            if (!err && stdout) {
-              const pid = parseInt(stdout.trim());
-              if (!isNaN(pid)) {
-                console.log(`Adopted existing server process PID: ${pid}`);
-                this.processPid = pid;
-              }
-            }
-          });
-        } catch (e) {
-          console.warn('Could not determine PID of running server:', e.message);
+        this.ownedProcess = false; // We didn't spawn this, so we don't kill it
+        this.adoptedVersion = verdict.runningVersion;
+        this.startBlockedReason = null;
+        if (holderPid) {
+          console.log(`Adopted existing server process PID: ${holderPid}`);
+          this.processPid = holderPid;
         }
 
         return;
@@ -817,6 +886,7 @@ class ServerManager {
     // never clears is furniture, not a signal.
     this.lastExitUnexpected = false;
     this.stopRequested = false;
+    this.startBlockedReason = null;
     this.state = 'starting';
 
     // Create log file stream
@@ -911,6 +981,7 @@ class ServerManager {
       // distinguishable from a clean stop once state collapses to 'stopped'.
       this.lastExit = { code, signal, at: Date.now() };
       this.lastExitUnexpected = !this.stopRequested;
+      const wasExpected = this.stopRequested;
       this.stopRequested = false;
 
       this.process = null;
@@ -918,6 +989,11 @@ class ServerManager {
       this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
+
+      // A death nobody asked for gets a bounded restart. A deliberate stop
+      // does not, or there would be no way to turn the server off, and neither
+      // does a death during quit, which would recreate the orphan.
+      this.superviseDown({ expected: wasExpected });
     });
 
     // Handle process errors
@@ -947,17 +1023,241 @@ class ServerManager {
   }
 
   /**
-   * Kill process by PID
+   * This bundle's own version.
+   *
+   * Wrapped rather than called inline because `app.getVersion()` can throw in
+   * a half-initialised Electron, and the adoption gate must be able to tell
+   * "1.0.3" apart from "I could not find out". Returning a plausible-looking
+   * fallback here would be the whole defect in miniature: the gate would
+   * compare against a number nobody measured.
+   *
+   * @returns {string} The version, or "" when it could not be determined.
    */
-  killByPid(pid, signal = 'SIGTERM') {
+  getBundleVersion() {
+    try {
+      return app.getVersion() || '';
+    } catch (err) {
+      console.warn('Could not resolve this bundle version:', err.message);
+      return '';
+    }
+  }
+
+  /**
+   * The pid currently listening on a port, if it can be determined.
+   *
+   * Promisified deliberately. The shipped adoption path fired an `exec` and
+   * returned WITHOUT awaiting it, assigning this.processPid from inside the
+   * callback some time later - so for an indeterminate window after adoption
+   * the manager had adopted a server whose pid it did not yet know, and
+   * anything reading processPid in that window read null. The pid is part of
+   * the decision now (it is named in the refusal the user is shown), so it is
+   * awaited.
+   *
+   * @param {number} port - Port to look up.
+   * @returns {Promise<number|null>} The pid, or null when lsof says nothing
+   *   usable. Null is CANNOT DETERMINE, not "nothing is listening".
+   */
+  findPortHolderPid(port) {
     return new Promise((resolve) => {
-      exec(`kill -${signal === 'SIGTERM' ? '15' : '9'} ${pid}`, (error) => {
-        if (error) {
-          console.log(`Failed to kill PID ${pid}:`, error.message);
+      exec(`lsof -ti:${port}`, (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
         }
-        resolve();
+        const first = String(stdout || '').trim().split('\n')[0];
+        const pid = parseInt(first, 10);
+        resolve(Number.isNaN(pid) ? null : pid);
       });
     });
+  }
+
+  /**
+   * Tell the supervisor the server went down, and act on its answer.
+   *
+   * @param {object} [event] - Context.
+   * @param {boolean} [event.expected] - True when the stop was deliberate.
+   * @returns {object} The supervisor's decision, for logging and tests.
+   */
+  superviseDown(event = {}) {
+    const decision = this.supervisor.recordDown({
+      expected: event.expected === true,
+      quitting: this.quitting === true,
+    });
+    console.log(`[supervisor] ${decision.message}`);
+
+    if (decision.action !== SUPERVISOR_RESTART) return decision;
+
+    if (this.supervisorTimer) clearTimeout(this.supervisorTimer);
+    this.supervisorTimer = setTimeout(async () => {
+      this.supervisorTimer = null;
+      if (this.quitting) return;
+      try {
+        await this.start();
+        this.supervisor.recordUp();
+      } catch (err) {
+        // A failed automatic restart is itself a death, and it must spend
+        // budget. Without this the timer path could retry indefinitely while
+        // the budget the exit path maintains never moves.
+        console.error(`[supervisor] restart failed: ${err.message}`);
+        this.superviseDown({ expected: false });
+      }
+    }, decision.delayMs);
+
+    return decision;
+  }
+
+  /**
+   * Call from whatever already polls health.
+   *
+   * Two jobs. It clears the restart budget once the server has been
+   * continuously up for the healthy window - coming up is not staying up, and
+   * conflating them turns a bounded retry into an unbounded one. And it is the
+   * ONLY thing that can notice an ADOPTED server dying: an adopted process
+   * emits no 'exit' event here, because we never spawned it, so without a poll
+   * its death is invisible. That is exactly the case that stayed down for 22
+   * seconds on 2026-08-25.
+   *
+   * @param {boolean} healthy - Whether the server just answered a health probe.
+   * @returns {void}
+   */
+  superviseTick(healthy) {
+    if (this.quitting) return;
+    if (healthy) {
+      this.supervisor.noteStillUp();
+      return;
+    }
+    // Not healthy. Only act if we BELIEVED it was running - otherwise this is
+    // a server the user stopped, or one that never started, and restarting it
+    // would override a decision somebody already made.
+    if (this.state !== 'running') return;
+    if (this.startBlockedReason) return;
+    this.state = 'stopped';
+    this.superviseDown({ expected: false });
+  }
+
+  /**
+   * Clear the restart budget, including a give-up.
+   *
+   * For an explicit user-initiated start only. Having given up must never lock
+   * the user out of trying again.
+   *
+   * @returns {void}
+   */
+  resetSupervisor() {
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
+    this.supervisor.reset();
+  }
+
+  /**
+   * What the supervisor is doing, for the menu to render.
+   *
+   * A supervisor nobody can see is the masking failure mode this design is
+   * meant to avoid: an automatic restart the user is not told about is
+   * indistinguishable from nothing happening.
+   *
+   * @returns {{attempts: number, maxAttempts: number, gaveUp: boolean,
+   *   message: string, pending: boolean}} Status, always renderable.
+   */
+  getSupervisorStatus() {
+    return {
+      ...this.supervisor.status(),
+      pending: this.supervisorTimer !== null,
+    };
+  }
+
+  /**
+   * Note that the app is shutting down.
+   *
+   * Set before any teardown so a stop cannot be undone by the supervisor
+   * racing it, which would leave a brand new orphan behind at the exact moment
+   * the app is going away.
+   *
+   * @returns {void}
+   */
+  beginQuit() {
+    this.quitting = true;
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
+  }
+
+  /**
+   * Wait until nothing is listening on a port.
+   *
+   * A pid being gone and a port being free are two different facts. A dying
+   * process releases its socket asynchronously, and on macOS a listener in
+   * TIME_WAIT can keep a bind failing for a moment after its owner is reaped.
+   * Spawning into that window fails with a bind error that reads like a
+   * completely different problem.
+   *
+   * @param {number} port - Port to watch.
+   * @param {number} [budgetMs=5000] - How long to wait.
+   * @param {number} [pollMs=150] - Interval between checks.
+   * @returns {Promise<boolean>} True when free, false on timeout. False is a
+   *   real answer the caller must handle, not a reason to proceed anyway.
+   */
+  async waitForPortFree(port, budgetMs = 5000, pollMs = 150) {
+    const deadline = Date.now() + budgetMs;
+    for (;;) {
+      if (!(await this.isPortInUse(port))) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
+  /**
+   * Terminate whatever holds the port and start our own server in its place.
+   *
+   * THIS IS ONLY EVER CALLED AFTER THE USER SAYS SO. start() refuses to adopt
+   * a server it cannot prove is running this bundle's code, and refusing is
+   * where its authority ends: killing a process this app did not start is not
+   * a decision it gets to make on its own. The refusal names the pid and the
+   * two versions, main.js turns that into a choice, and this runs only if the
+   * user picks "replace".
+   *
+   * Every step is confirmed rather than assumed - the pid is confirmed gone
+   * via the kernel (see process-teardown.js), and the PORT is then confirmed
+   * free, which is a separate fact from the pid being gone.
+   *
+   * @returns {Promise<void>} Resolves once the replacement server is starting.
+   * @throws {Error} If the holder cannot be identified, cannot be killed, or
+   *   the port does not come free. Each is reported as itself; none of them
+   *   silently falls through to a spawn that will fail confusingly later.
+   */
+  async takeOverPort() {
+    const port = this.getPort();
+    const pid = await this.findPortHolderPid(port);
+    if (!pid) {
+      throw new Error(
+        `Could not determine which process is holding port ${port}, so ` +
+          `Cloude Code will not try to stop it. Quit it yourself and choose ` +
+          `Start Server.`
+      );
+    }
+
+    console.log(`Taking over port ${port} from PID ${pid} (user approved)...`);
+    const result = await terminateProcess(pid, { graceMs: 5000 });
+    if (!result.terminated) {
+      throw new Error(
+        `Could not stop the process on port ${port} (PID ${pid}): ` +
+          `${result.outcome}. Nothing was started.`
+      );
+    }
+
+    if (!(await this.waitForPortFree(port))) {
+      throw new Error(
+        `PID ${pid} exited but port ${port} is still held. Nothing was ` +
+          `started - something else may have taken the port.`
+      );
+    }
+
+    this.startBlockedReason = null;
+    this.adoptedVersion = null;
+    await this.start();
   }
 
   /**
@@ -1010,8 +1310,46 @@ class ServerManager {
    * (SIGTERM → 3s grace → SIGKILL). No HTTP shutdown call — the /api/v1/shutdown
    * endpoint now requires auth, and signaling a PID we own is strictly simpler.
    */
-  async stop() {
+  async stop(options = {}) {
     console.log('Stopping server...');
+
+    // ADOPTED SERVER: WE DID NOT START IT, SO WE DO NOT STOP IT - AND WE DO
+    // NOT LIE ABOUT IT EITHER.
+    //
+    // This branch used to log to a console nobody reads, set
+    // `this.state = 'stopped'`, and return. Two defects in four lines. The
+    // refusal was invisible, so from the menu it was indistinguishable from a
+    // dead click and got reported as a broken menu item. And the state it set
+    // was false: the server was still serving every request while the tray,
+    // which renders this exact field, reported it stopped.
+    //
+    // The guard itself is right and stays. What changes is that the refusal
+    // is now returned to the caller so the menu can show it, the state is
+    // taken from a MEASUREMENT rather than asserted, and an explicit
+    // `takeOwnership: true` from the user can override it. See
+    // macOS/ownership-policy.js for the argument.
+    const verdict = decideLifecycleAction({
+      action: 'stop',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      // Measured, not assumed. null when we could not tell, which leaves the
+      // state alone rather than inventing one.
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to stop: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        stopped: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
+    }
 
     // Everything from here on is a deliberate stop, so the exit handler must
     // not report it as a crash. Set BEFORE any kill is issued, because the
@@ -1019,34 +1357,35 @@ class ServerManager {
     this.stopRequested = true;
     this.lastExitUnexpected = false;
 
-    // Adopted server: we didn't start it, we don't stop it.
-    if (!this.ownedProcess) {
-      console.log('Server was adopted, not owned — leaving it running.');
-      // Clear our local references so menu reflects "stopped" from app's POV.
-      this.processPid = null;
-      this.state = 'stopped';
-      this.startTime = null;
-      return;
-    }
-
-    // Owned server: SIGTERM via process ref or PID, then SIGKILL after grace period.
-    if (this.process && !this.process.killed) {
-      console.log('Sending SIGTERM to owned server process...');
-      this.process.kill('SIGTERM');
-
-      // Give uvicorn ~3s to flush connections, then force kill.
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      if (this.process && !this.process.killed) {
-        console.log('Server did not exit on SIGTERM, sending SIGKILL');
-        this.process.kill('SIGKILL');
+    // Owned server: terminate by PID and CONFIRM from the kernel.
+    //
+    // This used to branch on `this.process.killed` to decide whether to
+    // escalate to SIGKILL. That property means "a signal was successfully
+    // SENT", not "the process is dead", so the SIGTERM one line above set it
+    // and the SIGKILL branch was unreachable. A uvicorn that declined to exit
+    // on SIGTERM was never escalated against, outlived the app, got
+    // reparented to launchd, and was then ADOPTED by the next version - which
+    // is the whole 2026-08-25 incident. See macOS/process-teardown.js.
+    //
+    // Both old branches (process ref, bare pid) collapse into one: a pid is a
+    // pid, and the kernel is the only thing that knows whether it is gone.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    let outcome = 'no-pid';
+    if (pid) {
+      console.log(`Terminating owned server PID ${pid}...`);
+      const result = await terminateProcess(pid, { graceMs: 3000 });
+      outcome = result.outcome;
+      if (result.escalated) {
+        console.log(`PID ${pid} ignored SIGTERM; escalated to SIGKILL`);
       }
-    } else if (this.processPid) {
-      // Process object lost but we have PID (edge case: app restart mid-lifecycle).
-      console.log(`Sending SIGTERM to owned PID ${this.processPid}...`);
-      await this.killByPid(this.processPid, 'SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await this.killByPid(this.processPid, 'SIGKILL');
+      if (!result.terminated) {
+        // Say so out loud. The caller's next move - deciding whether the port
+        // is free, whether to respawn - is wrong if this is assumed.
+        console.error(
+          `Could not confirm PID ${pid} exited (${result.outcome}). ` +
+          `The port may still be held.`
+        );
+      }
     }
 
     // Close log stream
@@ -1055,22 +1394,67 @@ class ServerManager {
       this.logStream = null;
     }
 
-    // Wait briefly for exit event to fire, then clean up state if it didn't.
+    // Wait briefly for the exit event to fire, then clean up state if it did
+    // not. Only claim 'stopped' when the process is actually gone: the state
+    // this sets is what the tray renders, and a tray that says stopped about
+    // a live server is the same class of false claim as the escalation bug.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (!this.process) {
-      this.processPid = null;
-      this.ownedProcess = false;
-      this.state = 'stopped';
-      this.startTime = null;
+    if (pid && isAlive(pid)) {
+      console.error(`PID ${pid} is still alive after stop(); not reporting stopped.`);
+      return { stopped: false, outcome, pid };
     }
+
+    this.process = null;
+    this.processPid = null;
+    this.ownedProcess = false;
+    this.state = 'stopped';
+    this.startTime = null;
+    return { stopped: true, outcome, pid };
   }
 
   /**
    * Restart the server
    */
-  async restart() {
+  async restart(options = {}) {
     console.log('Restarting server...');
+
+    // Ask BEFORE doing anything, rather than discovering the refusal halfway
+    // through stop() and returning from there. restart() used to delegate
+    // wholesale to stop(), so when stop() refused, restart() carried on to
+    // start() - which found the still-healthy adopted server on the port and
+    // went straight back down the adoption path. The user got no restart, no
+    // error, and no way to tell the difference.
+    const verdict = decideLifecycleAction({
+      action: 'restart',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to restart: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        restarted: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
+    }
+
+    if (!this.ownedProcess && options.takeOwnership === true) {
+      // Consented takeover of an adopted server: terminate the holder,
+      // confirm the port is free, then spawn ours. takeOverPort() does all
+      // three and refuses to spawn if any of them could not be confirmed.
+      await this.takeOverPort();
+      console.log('Server restarted under new ownership');
+      return { restarted: true, refused: false, tookOwnership: true };
+    }
+
     await this.stop();
 
     // Wait a bit before restarting
@@ -1078,6 +1462,7 @@ class ServerManager {
 
     await this.start();
     console.log('Server restarted');
+    return { restarted: true, refused: false, tookOwnership: false };
   }
 
   /**
@@ -1212,29 +1597,22 @@ class ServerManager {
    * @returns {boolean}
    */
   isProcessRunning() {
-    // If we spawned the process ourselves, check the process object
-    if (this.process && !this.process.killed) {
-      return true;
-    }
-
-    // If we have a PID (either spawned or adopted), verify it's still alive
-    if (this.processPid) {
-      try {
-        // Sending signal 0 doesn't actually send a signal, just checks if process exists
-        process.kill(this.processPid, 0);
-        return true;
-      } catch (err) {
-        if (err.code === 'ESRCH') {
-          // No such process - it died
-          this.processPid = null;
-          return false;
-        }
-        // Other error (e.g., permission denied) - assume it's not running
-        console.warn('Error checking process PID:', err.message);
-        return false;
-      }
-    }
-
+    // Ask the KERNEL, always. This used to short-circuit on
+    // `this.process && !this.process.killed` and only fall through to a real
+    // liveness check when that was false. `killed` means "a signal was sent",
+    // so the shortcut answered "running" for a process nobody had measured -
+    // the same false claim that made stop()'s SIGKILL branch unreachable,
+    // pointing the other way. There is no cheaper source of truth worth
+    // having here: process.kill(pid, 0) is a syscall, not an expense.
+    //
+    // isAlive() also keeps EPERM apart from ESRCH. Only a live process can
+    // produce EPERM; the old code treated it as "not running", which would
+    // report a healthy server as stopped the moment it was out of reach.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    if (!pid) return false;
+    if (isAlive(pid)) return true;
+    // Confirmed gone. Drop the stale pid so nothing else reports on it.
+    this.processPid = null;
     return false;
   }
 

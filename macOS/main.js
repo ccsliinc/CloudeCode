@@ -8,6 +8,7 @@ const trayStatus = require('./tray-status');
 const { TrayApiClient } = require('./tray-api');
 const { isTailscaleIp } = require('./network-interfaces');
 const tlsStatus = require('./tls-status');
+const { createQuitHandler } = require('./quit-sequence');
 
 // ---------------------------------------------------------------------------
 // Menu-bar-only presence (no Dock icon)
@@ -439,11 +440,21 @@ app.whenReady().then(async () => {
   try {
     await serverManager.start();
   } catch (err) {
-    dialog.showErrorBox('Cloude Code could not start the server', err.message);
+    await reportStartFailure(err);
   }
 
-  // Force immediate health check to sync state before first menu update
-  const health = await serverManager.getHealth();
+  // Force immediate health check to sync state before first menu update.
+  //
+  // GUARDED, and the guard is the point. This probe cannot tell OUR server
+  // from a stranger on the same port: it asks "is something healthy on 8000",
+  // gets yes, and promotes the state to 'running'. When start() has just
+  // REFUSED to adopt that exact listener because it is a different version,
+  // this line would quietly undo the refusal one statement later and the app
+  // would carry on talking to the stale server anyway - the 2026-08-25 defect
+  // surviving its own fix. If start() blocked, leave it blocked.
+  const health = serverManager.startBlockedReason
+    ? null
+    : await serverManager.getHealth();
   if (health && serverManager.getState() !== 'running') {
     console.log('Initial health check succeeded, marking as running');
     serverManager.state = 'running';
@@ -1127,10 +1138,32 @@ function updateMenu() {
     {
       label: 'Server',
       submenu: [
+        // WHAT THE SUPERVISOR IS DOING, SAID OUT LOUD.
+        //
+        // An automatic restart nobody is told about is indistinguishable from
+        // nothing happening, which is the masking failure mode that makes
+        // restart loops a bad idea in the first place. A server that has been
+        // given up on must say so plainly here, because the alternative - the
+        // shipped behaviour - is a dead server the user has to guess about.
+        ...buildSupervisorItems(),
         {
           label: 'Restart Server',
           click: async () => {
-            await serverManager.restart();
+            // A REFUSAL MUST BE VISIBLE.
+            //
+            // This used to be a bare `await serverManager.restart()`. When the
+            // server had been adopted rather than spawned, restart() refused
+            // deep inside stop() and returned without a word, so clicking the
+            // item did nothing observable and it was reported as broken. It
+            // was not broken; it was mute.
+            try {
+              const result = await serverManager.restart();
+              if (result && result.refused) {
+                await offerTakeOwnership('restart', result);
+              }
+            } catch (err) {
+              dialog.showErrorBox('Cloude Code could not restart the server', err.message);
+            }
             updateMenu();
             setTimeout(updateMenu, 2500);
           },
@@ -1141,14 +1174,21 @@ function updateMenu() {
           click: async () => {
             try {
               if (canStart) {
+                // An explicit Start is a fresh decision by the user. If the
+                // supervisor had given up, having given up must not lock him
+                // out of trying again.
+                serverManager.resetSupervisor();
                 await serverManager.start();
               } else {
-                await serverManager.stop();
+                const result = await serverManager.stop();
+                if (result && result.refused) {
+                  await offerTakeOwnership('stop', result);
+                }
               }
             } catch (err) {
               // The user explicitly asked for this, so they get an explicit
               // answer rather than a menu item that appears to do nothing.
-              dialog.showErrorBox('Cloude Code could not start the server', err.message);
+              await reportStartFailure(err);
             }
             updateMenu();
             setTimeout(updateMenu, 500);
@@ -1461,18 +1501,18 @@ function updateMenu() {
     { type: 'separator' },
     {
       label: 'Quit Cloude Code',
-      click: async () => {
-        console.log('Quitting app...');
-
-        // Stop stats polling
-        if (statsUpdateInterval) {
-          clearTimeout(statsUpdateInterval);
-        }
-
-        // Stop server
-        await serverManager.stop();
-
-        // Quit app
+      click: () => {
+        // Just quit. The teardown belongs to the before-quit handler and
+        // ONLY there.
+        //
+        // This used to clear the timers and await serverManager.stop() itself
+        // before calling app.quit(), which meant the app had TWO quit paths
+        // with different shutdown semantics: this one awaited the stop,
+        // Cmd-Q's before-quit listener did not. Same build, same machine,
+        // different outcome depending on how the user quit - which is most of
+        // why "does quitting kill the server" measured both ways on
+        // 2026-08-25. One path, one behaviour.
+        console.log('Quit requested from the menu.');
         app.quit();
       }
     }
@@ -1543,6 +1583,15 @@ function startStatsPolling() {
     // Check if server should be running (either we started it or adopted it)
     if (state === 'running' || state === 'starting' || serverManager.isProcessRunning()) {
       const health = await serverManager.getHealth();
+      // THE ONLY PLACE AN ADOPTED SERVER'S DEATH CAN BE NOTICED.
+      //
+      // An adopted process emits no 'exit' event to this app - we never
+      // spawned it, so there is no ChildProcess to listen to. Without this
+      // call its death is invisible and the server stays down until the user
+      // works out that the app has gone quiet, which is exactly what happened
+      // on 2026-08-25. It also clears the restart budget once the server has
+      // been continuously up for the healthy window.
+      serverManager.superviseTick(Boolean(health));
       if (health) {
         currentStats = health;
         // If we got health response, mark as running
@@ -1596,17 +1645,212 @@ function startStatsPolling() {
 /**
  * Handle app quit
  */
-app.on('before-quit', async () => {
-  console.log('App quitting...');
+/**
+ * Menu rows describing the auto-restart supervisor, when it has anything to
+ * say.
+ *
+ * Returns an EMPTY array in the ordinary case - a healthy server that has
+ * never needed a restart does not need a row about it, and a row that is
+ * always present and always says "fine" is furniture nobody reads. It appears
+ * exactly when something happened.
+ *
+ * @returns {Array<object>} Menu item templates, possibly empty.
+ */
+function buildSupervisorItems() {
+  if (!serverManager) return [];
+  const status = serverManager.getSupervisorStatus();
+  if (!status.gaveUp && !status.pending && status.attempts === 0) return [];
 
-  if (statsUpdateInterval) {
-    clearTimeout(statsUpdateInterval);
+  const label = status.gaveUp
+    ? `Automatic restart gave up after ${status.maxAttempts} attempts`
+    : status.pending
+      ? `Restarting automatically (attempt ${status.attempts} of ${status.maxAttempts})...`
+      : `Restarted automatically (attempt ${status.attempts} of ${status.maxAttempts})`;
+
+  return [
+    { label, enabled: false },
+    {
+      label: 'Why?',
+      click: () => {
+        dialog.showMessageBox({
+          type: status.gaveUp ? 'warning' : 'info',
+          title: 'Automatic server restart',
+          message: label,
+          detail: status.message,
+          buttons: ['OK'],
+        });
+      },
+    },
+    { type: 'separator' },
+  ];
+}
+
+/**
+ * Show why a stop or restart was refused, and offer to take ownership.
+ *
+ * The refusal itself is correct - Cloude Code does not stop a server it did
+ * not start. What was wrong was that it happened in silence. From the menu, a
+ * correct refusal and a broken menu item look exactly the same, and the user
+ * reasonably read it as the latter.
+ *
+ * The destructive option is never the default button. Taking ownership means
+ * killing a process this app did not start, which is a decision that belongs
+ * to a person and should not ride on a stray Return key.
+ *
+ * @param {'stop'|'restart'} action - What was refused.
+ * @param {{reason: string, offerTakeOwnership: boolean, pid: number|null}}
+ *   result - The structured refusal from serverManager.
+ * @returns {Promise<void>} Resolves once the user has answered and any
+ *   takeover they asked for has been attempted.
+ */
+async function offerTakeOwnership(action, result) {
+  const title =
+    action === 'restart'
+      ? 'Cloude Code did not start this server'
+      : 'Cloude Code did not start this server';
+
+  if (!result.offerTakeOwnership) {
+    dialog.showErrorBox(title, result.reason);
+    return;
   }
 
-  if (serverManager) {
-    await serverManager.stop();
+  const verb = action === 'restart' ? 'Restart' : 'Stop';
+  const answer = await dialog.showMessageBox({
+    type: 'warning',
+    title,
+    message: title,
+    detail:
+      `${result.reason}\n\n` +
+      (result.pid ? `The running server is PID ${result.pid}.\n\n` : '') +
+      `${verb} it anyway and let Cloude Code take ownership? Claude sessions ` +
+      'running in tmux keep running - tmux outlives the server - but anything ' +
+      'connected through the web client will be disconnected.',
+    buttons: ['Leave it alone', `${verb} it anyway`],
+    defaultId: 0,
+    cancelId: 0,
+  });
+
+  if (answer.response !== 1) {
+    console.log(`User declined to take ownership for ${action}.`);
+    return;
   }
-});
+
+  try {
+    if (action === 'restart') {
+      await serverManager.restart({ takeOwnership: true });
+    } else {
+      await serverManager.stop({ takeOwnership: true });
+    }
+  } catch (err) {
+    dialog.showErrorBox(`Cloude Code could not ${action} the server`, err.message);
+  }
+  updateMenu();
+}
+
+/**
+ * Show a start() failure, and offer a way out of the one that has a way out.
+ *
+ * ADOPTION_REFUSED is not a generic error. start() found a healthy Cloude Code
+ * server on the port that it could not prove is running THIS bundle's code -
+ * on 2026-08-25 that was a v1.0.2 server, orphaned onto launchd, which a
+ * v1.0.3 bundle adopted and then ran for four hours. Refusing to adopt is
+ * right. Refusing and then leaving the user at a dead end is not: the only
+ * remaining move would be Activity Monitor, and an app that tells you
+ * something is wrong and nothing about what to do reads as broken.
+ *
+ * So the refusal becomes a choice, and the app does not make it. Killing a
+ * process this app did not start is exactly the kind of decision that needs a
+ * person, which is why the default button is the harmless one.
+ *
+ * @param {Error} err - The error start() threw.
+ * @returns {Promise<void>} Resolves once the user has answered, and once any
+ *   replacement they asked for has been attempted.
+ */
+async function reportStartFailure(err) {
+  if (!err || err.code !== 'ADOPTION_REFUSED') {
+    dialog.showErrorBox('Cloude Code could not start the server', err.message);
+    return;
+  }
+
+  const title =
+    err.outcome === 'mismatch'
+      ? 'A different version of the Cloude Code server is already running'
+      : 'Cloude Code cannot identify the server already running';
+
+  const answer = await dialog.showMessageBox({
+    type: 'warning',
+    title,
+    message: title,
+    detail:
+      `${err.reason || err.message}\n\n` +
+      'Replacing it will stop that server. Any Claude sessions it is running ' +
+      'in tmux keep running - tmux outlives the server - but anything ' +
+      'connected to it through the web client will be disconnected until the ' +
+      'new server is up.',
+    buttons: ['Leave it running', 'Replace it'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+
+  if (answer.response !== 1) {
+    console.log('User declined to replace the server on the port.');
+    return;
+  }
+
+  try {
+    await serverManager.takeOverPort();
+  } catch (takeoverErr) {
+    dialog.showErrorBox(
+      'Cloude Code could not replace the running server',
+      takeoverErr.message
+    );
+  }
+  updateMenu();
+}
+
+//
+// THE QUIT MUST WAIT FOR THE SERVER TO ACTUALLY DIE.
+//
+// This was registered as a bare `async () => { ... await serverManager.stop() }`.
+// Electron does not await an async before-quit listener: it calls the
+// function, receives a pending promise, discards it, and carries on quitting.
+// So every line after the first `await` inside stop() raced the main
+// process's own teardown, and on 2026-08-25 that race was observed going BOTH
+// ways on one machine and one build. When the app won, the Python server was
+// reparented to launchd (ppid 1), kept serving port 8000, and was ADOPTED
+// four hours later by a newer version of the app.
+//
+// The sequencing now lives in macOS/quit-sequence.js, which defers the quit,
+// awaits the teardown, and re-issues the quit exactly once. It is there
+// rather than here because this file cannot be loaded outside a running
+// Electron, so anything left inline can only be checked by grepping its
+// text - see tests/test_quit_is_deterministic.node.mjs.
+app.on(
+  'before-quit',
+  createQuitHandler({
+    teardown: async () => {
+      // FIRST, before anything is stopped. Otherwise the supervisor sees the
+      // shutdown as an unexpected death and races the quit to spawn a
+      // replacement - a brand new orphan created at the exact moment the app
+      // is going away.
+      if (serverManager) {
+        serverManager.beginQuit();
+      }
+      if (statsUpdateInterval) {
+        clearTimeout(statsUpdateInterval);
+      }
+      if (trayPollInterval) {
+        clearTimeout(trayPollInterval);
+      }
+      if (serverManager) {
+        await serverManager.stop();
+      }
+    },
+    quit: () => app.quit(),
+    log: (msg) => console.log(msg),
+    onError: (msg, err) => console.error(msg, err && err.message),
+  })
+);
 
 /**
  * Handle app activation (macOS specific)
