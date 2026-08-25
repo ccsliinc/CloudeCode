@@ -67,6 +67,7 @@ from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
+from src.core.session_lineage import LINEAGE_UNRESOLVED
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
 
 logger = structlog.get_logger()
@@ -1213,7 +1214,17 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
 # claude_hooks.py (also consulted by ``ensure_hook_settings`` to decide
 # which hooks to install), so the whitelist here can never drift from what
 # actually gets installed.
-_VALID_HOOK_EVENTS = claude_hooks.TOAST_EVENTS + claude_hooks.ACTIVITY_ONLY_EVENTS
+_VALID_HOOK_EVENTS = (
+    claude_hooks.TOAST_EVENTS
+    + claude_hooks.ACTIVITY_ONLY_EVENTS
+    # feat/session-lineage - SessionStart / SessionEnd. Same derivation
+    # rule as the two tuples above: read off claude_hooks so the set the
+    # endpoint ACCEPTS can never drift from the set
+    # ``ensure_hook_settings`` INSTALLS. A hook installed but rejected
+    # here would 400 forever and look, from the session side, exactly
+    # like a hook that was never installed at all.
+    + claude_hooks.LIFECYCLE_EVENTS
+)
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 
 
@@ -1365,6 +1376,42 @@ async def claude_event_hook(request: Request):
             event_kind=event_kind,
             error=str(exc),
         )
+
+    # feat/session-lineage - SessionStart carries the Claude conversation
+    # uuid and the ``source`` that says how it began; SessionEnd carries
+    # the reason it stopped. This is the ONLY place the app learns which
+    # conversation is inside a tmux session.
+    #
+    # BEST-EFFORT, LOUDLY. ``record_claude_lifecycle_event`` is documented
+    # never to raise and returns a named outcome for every failure, but it
+    # is wrapped anyway: this endpoint runs on the critical path of a live
+    # working session, and lineage is telemetry. Nothing about a lineage
+    # write may change the status code the hook sees.
+    if event_kind in claude_hooks.LIFECYCLE_EVENTS:
+        try:
+            outcome = session_manager.record_claude_lifecycle_event(
+                session_id, event_kind, payload
+            )
+            if outcome.outcome == LINEAGE_UNRESOLVED:
+                # THE THIRD OUTCOME REACHES A LOG, never a silent pass.
+                # "We were told about a Claude session and could not work
+                # out which row it belongs to" is a real finding; folding
+                # it into the success path is how missing lineage becomes
+                # invisible missing lineage.
+                logger.info(
+                    "claude_lineage_unresolved",
+                    session_id=session_id,
+                    event_kind=event_kind,
+                    detail=outcome.detail,
+                )
+        except Exception as exc:  # pragma: no cover - defensive, see above
+            logger.warning(
+                "claude_lineage_hook_failed",
+                session_id=session_id,
+                event_kind=event_kind,
+                error=str(exc),
+            )
+        return {"ok": True}
 
     if event_kind not in claude_hooks.TOAST_EVENTS:
         # ACTIVITY_ONLY_EVENTS - state machine already updated above, no

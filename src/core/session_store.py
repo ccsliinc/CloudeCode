@@ -235,6 +235,7 @@ def list_sessions(
     *,
     lifecycle: Optional[str] = None,
     include_archived: bool = True,
+    include_lineage: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return session rows as plain dicts, newest first.
 
@@ -244,7 +245,16 @@ def list_sessions(
       so the running query does not reference ``archived_at`` at all.
     Inputs: conn (sqlite3.Connection). lifecycle (str | None) - filter to
       one of db_models.SESSION_LIFECYCLES; None returns every state,
-      including ``unknown``. include_archived (bool).
+      including ``unknown``. include_archived (bool). include_lineage
+      (bool) - whether to return CLAUDE-LINEAGE rows, i.e. rows carrying a
+      ``parent_session_id``. DEFAULTS TO FALSE, and that default is the
+      compatibility guarantee: a lineage row describes a past CONVERSATION
+      inside a tmux session, not a tmux session of its own, so every
+      caller that predates lineage keeps seeing exactly the rows it saw
+      before. Pass True only from a reader building the session tree,
+      which knows what a lineage row is. Rows written before lineage
+      existed carry NULL here and are returned either way, because a NULL
+      parent means "lineage root" and every one of them genuinely is one.
     Output: list[dict] - empty on a pre-v2 database.
     Example: list_sessions(conn, lifecycle='stopped', include_archived=False)
     """
@@ -257,6 +267,8 @@ def list_sessions(
         values.append(lifecycle)
     if not include_archived:
         clauses.append("archived_at IS NULL")
+    if not include_lineage:
+        clauses.append("parent_session_id IS NULL")
     query = "SELECT * FROM sessions"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
@@ -281,8 +293,16 @@ def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """
     if not sessions_table_ready(conn):
         return []
+    # LINEAGE ROWS ARE EXCLUDED, and that is not a suppression. This group
+    # exists so the user can ACT on a session whose state could not be
+    # evaluated; a lineage row describes a finished conversation with no
+    # process behind it, so there is nothing to act on and a permanent
+    # entry here would be furniture. It inherits its parent's attribution,
+    # so an unknown one is already surfaced by the parent's own row.
     rows = conn.execute(
-        "SELECT * FROM sessions WHERE lifecycle = ? OR project_attribution = ? "
+        "SELECT * FROM sessions "
+        "WHERE (lifecycle = ? OR project_attribution = ?) "
+        "AND parent_session_id IS NULL "
         "ORDER BY id DESC",
         (SESSION_LIFECYCLE_UNKNOWN, SESSION_ATTRIBUTION_UNKNOWN),
     ).fetchall()

@@ -31,6 +31,7 @@ from src.core.db_models import (
     DDL_V4,
     DDL_V5,
     DDL_V6,
+    DDL_V7,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -238,6 +239,33 @@ def _step_v5_to_v6(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """Add ``ix_sessions_claude_uuid``, the lineage lookup index.
+
+    Description: build step for Claude-session identity and fork lineage.
+      Purely additive and, unlike every step before it, idempotent BY THE
+      STATEMENT: ``CREATE INDEX IF NOT EXISTS`` needs no PRAGMA
+      inspection, so a retry after an INTERRUPTED trail entry is safe
+      without one. The inspection pattern used by v2..v6 exists because
+      SQLite's ALTER TABLE ADD COLUMN has no IF NOT EXISTS; an index does.
+
+      NO COLUMN IS ADDED. ``claude_session_uuid``, ``parent_session_id``
+      and ``fork_kind`` have been in the sessions DDL since v2 and were
+      never written by anything. This step indexes the first of them
+      because src/core/session_lineage.py, added in the same change, asks
+      "does any row already carry this uuid" on every Claude SessionStart
+      - once as the fork detector and once as the duplicate-delivery
+      guard. A v6 reader that has not been upgraded keeps working against
+      the same file: an index changes no row and no query result, only
+      how fast the answer arrives.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v6_to_v7(conn)  # after _step_v5_to_v6
+    """
+    for statement in DDL_V7:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -249,6 +277,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _step_v3_to_v4,
     4: _step_v4_to_v5,
     5: _step_v5_to_v6,
+    6: _step_v6_to_v7,
 }
 
 

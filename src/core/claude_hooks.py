@@ -70,10 +70,31 @@ ACTIVITY_ONLY_EVENTS = (
     "SubagentStop",
 )
 
+# feat/session-lineage - events that report WHICH CLAUDE CONVERSATION is
+# running in this tmux session, and when it ended. Neither is a toast and
+# neither feeds the activity state machine: they exist only to write
+# ``sessions.claude_session_uuid`` / ``parent_session_id`` / ``fork_kind``
+# (src/core/session_lineage.py).
+#
+# Kept as its own tuple for the same reason TOAST_EVENTS is: the endpoint
+# branches on this exact set to decide whether to run the lineage write,
+# so the routing cannot drift from what gets installed.
+#
+# PAYLOAD SHAPE, VERIFIED AGAINST THE SHIPPED BINARY (2.1.236) rather
+# than taken from prose. Common to both: ``session_id``,
+# ``transcript_path``, ``cwd``, ``hook_event_name``, ``permission_mode``.
+# SessionStart additionally carries ``source``, whose enum is literally
+# ["startup", "resume", "clear", "compact", "fork"], plus ``agent_type``,
+# ``model`` and ``session_title`` - the last three are undocumented and
+# are therefore read defensively, never required. SessionEnd additionally
+# carries ``reason``.
+LIFECYCLE_EVENTS = ("SessionStart", "SessionEnd")
+
 # Every event we install a managed hook for. Ordered for deterministic
 # JSON output diff-stability (toast-worthy first, matching the original
-# three's historical order, then the new activity-only events).
-_MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS
+# three's historical order, then the new activity-only events, then the
+# lifecycle pair).
+_MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS + LIFECYCLE_EVENTS
 
 
 def _build_managed_command(event_kind: str) -> str:
