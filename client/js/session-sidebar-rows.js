@@ -46,13 +46,35 @@
  * per density. The density contract is a number the stylesheet states,
  * not an accident of whichever controls currently ride the line.
  *
- * NO RESTART CONTROL IS EMITTED HERE, AT ANY DENSITY. Sidebar rows come
- * from the attachable probe, which carries an activity status and no
- * `lifecycle` at all, so this module cannot know that a session is
- * stopped rather than unknown - and restarting something whose state you
- * could not determine is how you end up with two of it. The destructive
- * control (close vs remove) still comes from SessionRowActions, which
- * already refuses to treat `unknown` as stopped.
+ * A RESTART CONTROL IS NOW EMITTED for a row whose status is `dead`.
+ * SUPERSEDES the rule that used to stand here, which read: "NO RESTART
+ * CONTROL IS EMITTED HERE, AT ANY DENSITY. Sidebar rows come from the
+ * attachable probe, which carries an activity status and no `lifecycle`
+ * at all, so this module cannot know that a session is stopped rather
+ * than unknown - and restarting something whose state you could not
+ * determine is how you end up with two of it."
+ *
+ * Both halves of that were checked before it was changed, and both have
+ * stopped being true:
+ *
+ *   1. THE STATUS IS NOT ALWAYS A GUESS. `session-sidebar-fetch.js`
+ *      `mergeLiveRow()` overwrites `status` with the server's
+ *      `activity_status` for every session this app holds a backend for,
+ *      and that value is `resolve_pane_status()`'s reading of tmux's own
+ *      `#{pane_dead}`. So `dead` on such a row is a measurement. A row
+ *      the probe alone produced still carries `unknown`, and
+ *      `SessionRowActions.actionsFor` refuses to treat `unknown` as
+ *      stopped - so the undetermined case is still withheld, which is
+ *      what the original rule was protecting.
+ *   2. "TWO OF IT" IS NOT A REACHABLE OUTCOME for this control. Restart
+ *      creates nothing: it runs `tmux respawn-pane` against the pane that
+ *      is already there (see src/core/session_respawn.py). It never
+ *      passes `-k`, and tmux REFUSES respawn-pane on a live pane without
+ *      it, so even clicking a stale `dead` row cannot disturb a session
+ *      that came back to life, let alone duplicate one.
+ *
+ * The destructive control (close vs remove) is unchanged and still comes
+ * from SessionRowActions.
  *
  * Must load AFTER session-status-ui.js, session-row-actions.js and
  * session-listing-state.js, and BEFORE session-sidebar.js runs.

@@ -209,6 +209,33 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const rowEl = btnEl.closest('.session-sidebar-row');
         const isThisTab = !!rowEl && rowEl.dataset.active === '1';
 
+        // RESTART is handled before the own-tab branch and before the
+        // confirm, and both of those are deliberate. It destroys nothing,
+        // so it needs no dialog (SessionRowActions.requiresConfirm), and
+        // it must NOT route through destroySession() even for the tab the
+        // user is looking at - reviving this pane is the opposite of
+        // tearing it down, and the sidebar should stay open around it.
+        if (action === actions.ACTION_RESTART) {
+            try {
+                const result = await window.API.respawnSession(name);
+                if (!result || result.ok !== true) {
+                    // The server's sentence, verbatim. It is the only
+                    // thing that knows whether the pane could not be read
+                    // or the agent started and exited again.
+                    alert(
+                        `could not restart "${name}": `
+                        + ((result && result.detail) || 'no reason given')
+                    );
+                }
+            } catch (err) {
+                console.error('SessionSidebar: restart failed:', err);
+                alert(`could not restart "${name}": ${err.message || err}`);
+            }
+            ctrl._lastSig = null; // force a repaint even if the poll sig matches
+            await ctrl._fetchAndRender();
+            return;
+        }
+
         if (isThisTab) {
             ctrl.close();
             await window.TerminalController.destroySession(action);

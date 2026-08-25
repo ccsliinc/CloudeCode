@@ -150,28 +150,56 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     assert.ok(!/<script/i.test(scripted.slice(0, scripted.indexOf('mark-unread-toggle'))));
 });
 
-test('every row carries exactly one destructive control, from the shared module', () => {
+test('every row carries exactly one DESTRUCTIVE control, from the shared module', () => {
+    // UPDATED by feat/session-respawn. The invariant is unchanged and is
+    // about the destructive pair: close and remove make opposite
+    // promises, so a row may carry exactly one of them, never both. What
+    // changed is that a `dead` row now ALSO carries a restart, which is
+    // the one non-destructive control in the family - so the count is
+    // taken per-action rather than over every action attribute.
     for (const status of ['working', 'dead', 'idle', 'question']) {
         const html = Rows.rowHtml(row({ status }));
         const buttons = (html.match(new RegExp(RowActions.BASE_CLASS, 'g')) || []).length;
         assert.ok(buttons >= 1, `status ${status} must paint the shared row control`);
-        // Exactly one DESTRUCTIVE control, never two. The row also carries
-        // a pin button now, so counting <button> alone stopped measuring
-        // this; count the destructive contract attribute instead, which is
-        // what "exactly one of close-or-remove" actually means.
+        const destructive =
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}="close"`, 'g')) || []).length
+            + (html.match(new RegExp(`${RowActions.ATTR_ACTION}="remove"`, 'g')) || []).length;
         assert.equal(
-            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 1,
+            destructive, 1,
             `status ${status} must paint exactly one destructive control`,
         );
         assert.equal(
             (html.match(/data-pin-session=/g) || []).length, 1,
             `status ${status} must paint exactly one pin toggle`,
         );
-        // AND NEVER A RESTART. Sidebar rows come from the attachable
-        // probe, which carries no `lifecycle`, so this module cannot tell
-        // a stopped session from one whose state could not be determined -
-        // and restarting the latter is how you end up with two of it.
-        assert.ok(!/restart/i.test(html), `status ${status} must offer no restart control`);
+        const restarts =
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length;
+        if (status === 'dead') {
+            assert.equal(restarts, 1, 'a dead row must offer a restart');
+        } else {
+            // SUPERSEDES the old blanket "never a restart" rule here. The
+            // reason it existed - that this module could not tell stopped
+            // from undetermined - still applies to `unknown`, which is
+            // covered below and is what actionsFor() actually refuses. A
+            // MEASURED `dead` is a different fact; see the module
+            // docstring in session-sidebar-rows.js for the evidence.
+            assert.equal(restarts, 0, `status ${status} must offer no restart control`);
+        }
+    }
+});
+
+test('an UNDETERMINED row is still offered no restart - the original rule, kept', () => {
+    // The half of the old prohibition that is still correct and still
+    // load-bearing: a row the attachable probe alone produced carries
+    // `unknown`, and offering to restart a session whose state we could
+    // not read is exactly the guess this app refuses to make.
+    for (const status of ['unknown', undefined, null, '']) {
+        const html = Rows.rowHtml(row({ status }));
+        assert.equal(
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length,
+            0,
+            `status ${String(status)} must offer no restart control`,
+        );
     }
 });
 

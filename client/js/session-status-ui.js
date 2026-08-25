@@ -322,6 +322,38 @@ console.log('[SessionStatusUI Module] Loading...');
     }
 
     /**
+     * Shared restart glyph - a circular arrow - for the "start the agent
+     * again in this session" control on a dead row
+     * (client/js/session-row-actions.js).
+     *
+     * A CIRCULAR ARROW, deliberately, not a play triangle. Play reads as
+     * "begin something new"; this control puts a process back into a pane
+     * that already exists and keeps its scrollback, its name and its
+     * place in the list. The shape has to say "again", not "new", because
+     * the row it sits on already offers a destructive neighbour and the
+     * two must not be confusable at a glance.
+     *
+     * Same family as trashIconSvg / closeIconSvg / pencilIconSvg: 16x16
+     * viewBox, stroke="currentColor", fill="none" for the arc and an
+     * explicit currentColor fill on the solid arrowhead, stroke-width
+     * 1.5, no color set on the element so the caller's CSS `color` drives
+     * it via currentColor.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   restartIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function restartIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<path d="M13 8A5 5 0 1 1 11.4 4.3" stroke="currentColor" ' +
+            'stroke-width="1.5" stroke-linecap="round"/>' +
+            '<path d="M12.9 1.9V5.1H9.7L12.9 1.9Z" fill="currentColor"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
      * Shared pencil (edit) glyph for every inline-rename/edit control in
      * the app (launcher project rows, running-session rename). Same
      * family as trashIconSvg: 16x16 viewBox, stroke="currentColor",
@@ -405,6 +437,7 @@ console.log('[SessionStatusUI Module] Loading...');
         markUnreadHtml,
         trashIconSvg,
         closeIconSvg,
+        restartIconSvg,
         pencilIconSvg,
         envelopeOutlineSvg,
         envelopeFilledSvg,

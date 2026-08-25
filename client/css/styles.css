@@ -2869,6 +2869,39 @@ body.home-header-active {
     height: 18px;
 }
 
+/* The RESTART control on a dead row - the one action in this family that
+ * destroys nothing, so it must not wear the destructive palette.
+ *
+ * It sits directly beside the trash on the same row, and that is the only
+ * place in the app where a harmless control and a permanent one are
+ * adjacent. Color is the fastest thing the eye resolves, so painting
+ * restart in the same danger red would make the safe button look exactly
+ * as consequential as the one that deletes an uploads bucket - and, worse,
+ * would make the trash beside it stop reading as a warning at all. Shape
+ * carries the meaning (a circular arrow, not a play triangle - see
+ * restartIconSvg); color carries only the stakes.
+ *
+ * ONE RULE FOR BOTH SURFACES, matched on the shared BASE_CLASS plus the
+ * modifier rather than on either host's own class. The launcher
+ * (.running-session-kill, here) and the sidebar
+ * (.session-sidebar-row-delete, session-sidebar.css) size the control
+ * differently but agree on this, and session-sidebar.css is at its
+ * 500-line budget. The doubled class is what makes the selector (0,3,0),
+ * which is what lets it beat the sidebar's own (0,2,0) danger hover from
+ * an EARLIER stylesheet - equal specificity would have lost on source
+ * order and silently painted the safe button red in the sidebar only. */
+.session-row-action.session-row-action-restart {
+    color: var(--color-fg-faint);
+}
+
+.session-row-action.session-row-action-restart:hover,
+.session-row-action.session-row-action-restart:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    outline: none;
+}
+
 .running-session-kill svg path {
     stroke-width: 1.67;
 }

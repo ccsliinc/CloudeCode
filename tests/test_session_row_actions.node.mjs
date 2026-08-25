@@ -128,7 +128,12 @@ const RUNNING_STATUSES = [
 ];
 const STOPPED_STATUSES = ['dead'];
 
-test('running statuses get the close action, stopped get remove', () => {
+test('running statuses get the close action; stopped get restart then remove', () => {
+    // UPDATED by feat/session-respawn. This test used to assert that a
+    // stopped row's action WAS remove, full stop, which is exactly the
+    // defect: the only thing offered for a dead session was to throw it
+    // away while its pane sat there revivable. A stopped row now offers
+    // restart first and remove second. The running half is unchanged.
     for (const status of RUNNING_STATUSES) {
         assert.equal(
             SessionRowActions.actionFor(status),
@@ -137,7 +142,13 @@ test('running statuses get the close action, stopped get remove', () => {
         );
     }
     for (const status of STOPPED_STATUSES) {
-        assert.equal(SessionRowActions.actionFor(status), SessionRowActions.ACTION_REMOVE);
+        assert.equal(SessionRowActions.actionFor(status), SessionRowActions.ACTION_RESTART);
+        assert.ok(
+            Array.from(SessionRowActions.actionsFor(status)).indexOf(
+                SessionRowActions.ACTION_REMOVE
+            ) !== -1,
+            'remove must still be offered on a stopped row'
+        );
     }
 });
 
@@ -147,19 +158,26 @@ test('unknown is never treated as stopped', () => {
     assert.equal(SessionRowActions.actionFor('unknown'), SessionRowActions.ACTION_CLOSE);
 });
 
-test('a row renders exactly one control, never both glyphs', () => {
+test('the X and the trash are still never both on one row', () => {
+    // UPDATED by feat/session-respawn. The invariant that survives is
+    // about the DESTRUCTIVE PAIR: close and remove make opposite promises
+    // and a row must never offer both. Restart is not part of that pair -
+    // it is the only non-destructive control here - so a stopped row now
+    // draws restart AND trash, and that is not the ambiguity this test
+    // was written to prevent.
     const running = SessionRowActions.html('working', 'cloude_api', 'running-session-kill');
     const stopped = SessionRowActions.html('dead', 'cloude_api', 'running-session-kill');
-    for (const markup of [running, stopped]) {
-        assert.equal((markup.match(/<button/g) || []).length, 1);
-    }
-    // The X is two crossing strokes; the trash can has a lid line and a
-    // tapering body. Neither markup may contain the other's paths.
+    assert.equal((running.match(/<button/g) || []).length, 1, 'running row grew a control');
+    assert.equal((stopped.match(/<button/g) || []).length, 2, 'stopped row must offer restart + remove');
+
     const closeGlyph = SessionStatusUI.closeIconSvg();
     const trashGlyph = SessionStatusUI.trashIconSvg();
+    const restartGlyph = SessionStatusUI.restartIconSvg();
     assert.ok(running.includes(closeGlyph), 'running row must draw the X');
     assert.ok(!running.includes(trashGlyph), 'running row must not draw the trash');
+    assert.ok(!running.includes(restartGlyph), 'a live agent must not be offered a restart');
     assert.ok(stopped.includes(trashGlyph), 'stopped row must draw the trash');
+    assert.ok(stopped.includes(restartGlyph), 'stopped row must draw the restart arrow');
     assert.ok(!stopped.includes(closeGlyph), 'stopped row must not draw the X');
 });
 
@@ -391,7 +409,11 @@ test('sidebar rows paint the same control with the same wording', () => {
     const html = container.innerHTML;
     assert.ok(html.includes('title="close session"'), 'same tooltip wording as the launcher');
     assert.ok(html.includes('title="remove from the list"'));
-    assert.equal((html.match(/data-session-action=/g) || []).length, 2, 'one control per row, never two');
+    // 3, not 2: the live row draws close, the dead row draws restart
+    // AND remove. Updated by feat/session-respawn - see the launcher
+    // assertion above for why the dead row now carries two.
+    assert.ok(html.includes('title="restart the agent"'), 'dead row lost its restart');
+    assert.equal((html.match(/data-session-action=/g) || []).length, 3);
 });
 
 await runQueue();
