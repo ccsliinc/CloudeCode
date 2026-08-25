@@ -8,6 +8,7 @@ const trayStatus = require('./tray-status');
 const { TrayApiClient } = require('./tray-api');
 const { isTailscaleIp } = require('./network-interfaces');
 const tlsStatus = require('./tls-status');
+const { createQuitHandler } = require('./quit-sequence');
 
 // ---------------------------------------------------------------------------
 // Menu-bar-only presence (no Dock icon)
@@ -1461,18 +1462,18 @@ function updateMenu() {
     { type: 'separator' },
     {
       label: 'Quit Cloude Code',
-      click: async () => {
-        console.log('Quitting app...');
-
-        // Stop stats polling
-        if (statsUpdateInterval) {
-          clearTimeout(statsUpdateInterval);
-        }
-
-        // Stop server
-        await serverManager.stop();
-
-        // Quit app
+      click: () => {
+        // Just quit. The teardown belongs to the before-quit handler and
+        // ONLY there.
+        //
+        // This used to clear the timers and await serverManager.stop() itself
+        // before calling app.quit(), which meant the app had TWO quit paths
+        // with different shutdown semantics: this one awaited the stop,
+        // Cmd-Q's before-quit listener did not. Same build, same machine,
+        // different outcome depending on how the user quit - which is most of
+        // why "does quitting kill the server" measured both ways on
+        // 2026-08-25. One path, one behaviour.
+        console.log('Quit requested from the menu.');
         app.quit();
       }
     }
@@ -1596,17 +1597,42 @@ function startStatsPolling() {
 /**
  * Handle app quit
  */
-app.on('before-quit', async () => {
-  console.log('App quitting...');
-
-  if (statsUpdateInterval) {
-    clearTimeout(statsUpdateInterval);
-  }
-
-  if (serverManager) {
-    await serverManager.stop();
-  }
-});
+//
+// THE QUIT MUST WAIT FOR THE SERVER TO ACTUALLY DIE.
+//
+// This was registered as a bare `async () => { ... await serverManager.stop() }`.
+// Electron does not await an async before-quit listener: it calls the
+// function, receives a pending promise, discards it, and carries on quitting.
+// So every line after the first `await` inside stop() raced the main
+// process's own teardown, and on 2026-08-25 that race was observed going BOTH
+// ways on one machine and one build. When the app won, the Python server was
+// reparented to launchd (ppid 1), kept serving port 8000, and was ADOPTED
+// four hours later by a newer version of the app.
+//
+// The sequencing now lives in macOS/quit-sequence.js, which defers the quit,
+// awaits the teardown, and re-issues the quit exactly once. It is there
+// rather than here because this file cannot be loaded outside a running
+// Electron, so anything left inline can only be checked by grepping its
+// text - see tests/test_quit_is_deterministic.node.mjs.
+app.on(
+  'before-quit',
+  createQuitHandler({
+    teardown: async () => {
+      if (statsUpdateInterval) {
+        clearTimeout(statsUpdateInterval);
+      }
+      if (trayPollInterval) {
+        clearTimeout(trayPollInterval);
+      }
+      if (serverManager) {
+        await serverManager.stop();
+      }
+    },
+    quit: () => app.quit(),
+    log: (msg) => console.log(msg),
+    onError: (msg, err) => console.error(msg, err && err.message),
+  })
+);
 
 /**
  * Handle app activation (macOS specific)

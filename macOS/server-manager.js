@@ -6,6 +6,7 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
+const { terminateProcess, isAlive } = require('./process-teardown');
 const setupVerdict = require('./setup-verdict');
 const { resolvePublishedUrl } = require('./published-url');
 
@@ -1029,24 +1030,35 @@ class ServerManager {
       return;
     }
 
-    // Owned server: SIGTERM via process ref or PID, then SIGKILL after grace period.
-    if (this.process && !this.process.killed) {
-      console.log('Sending SIGTERM to owned server process...');
-      this.process.kill('SIGTERM');
-
-      // Give uvicorn ~3s to flush connections, then force kill.
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      if (this.process && !this.process.killed) {
-        console.log('Server did not exit on SIGTERM, sending SIGKILL');
-        this.process.kill('SIGKILL');
+    // Owned server: terminate by PID and CONFIRM from the kernel.
+    //
+    // This used to branch on `this.process.killed` to decide whether to
+    // escalate to SIGKILL. That property means "a signal was successfully
+    // SENT", not "the process is dead", so the SIGTERM one line above set it
+    // and the SIGKILL branch was unreachable. A uvicorn that declined to exit
+    // on SIGTERM was never escalated against, outlived the app, got
+    // reparented to launchd, and was then ADOPTED by the next version - which
+    // is the whole 2026-08-25 incident. See macOS/process-teardown.js.
+    //
+    // Both old branches (process ref, bare pid) collapse into one: a pid is a
+    // pid, and the kernel is the only thing that knows whether it is gone.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    let outcome = 'no-pid';
+    if (pid) {
+      console.log(`Terminating owned server PID ${pid}...`);
+      const result = await terminateProcess(pid, { graceMs: 3000 });
+      outcome = result.outcome;
+      if (result.escalated) {
+        console.log(`PID ${pid} ignored SIGTERM; escalated to SIGKILL`);
       }
-    } else if (this.processPid) {
-      // Process object lost but we have PID (edge case: app restart mid-lifecycle).
-      console.log(`Sending SIGTERM to owned PID ${this.processPid}...`);
-      await this.killByPid(this.processPid, 'SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await this.killByPid(this.processPid, 'SIGKILL');
+      if (!result.terminated) {
+        // Say so out loud. The caller's next move - deciding whether the port
+        // is free, whether to respawn - is wrong if this is assumed.
+        console.error(
+          `Could not confirm PID ${pid} exited (${result.outcome}). ` +
+          `The port may still be held.`
+        );
+      }
     }
 
     // Close log stream
@@ -1055,15 +1067,23 @@ class ServerManager {
       this.logStream = null;
     }
 
-    // Wait briefly for exit event to fire, then clean up state if it didn't.
+    // Wait briefly for the exit event to fire, then clean up state if it did
+    // not. Only claim 'stopped' when the process is actually gone: the state
+    // this sets is what the tray renders, and a tray that says stopped about
+    // a live server is the same class of false claim as the escalation bug.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (!this.process) {
-      this.processPid = null;
-      this.ownedProcess = false;
-      this.state = 'stopped';
-      this.startTime = null;
+    if (pid && isAlive(pid)) {
+      console.error(`PID ${pid} is still alive after stop(); not reporting stopped.`);
+      return { stopped: false, outcome, pid };
     }
+
+    this.process = null;
+    this.processPid = null;
+    this.ownedProcess = false;
+    this.state = 'stopped';
+    this.startTime = null;
+    return { stopped: true, outcome, pid };
   }
 
   /**
@@ -1212,29 +1232,22 @@ class ServerManager {
    * @returns {boolean}
    */
   isProcessRunning() {
-    // If we spawned the process ourselves, check the process object
-    if (this.process && !this.process.killed) {
-      return true;
-    }
-
-    // If we have a PID (either spawned or adopted), verify it's still alive
-    if (this.processPid) {
-      try {
-        // Sending signal 0 doesn't actually send a signal, just checks if process exists
-        process.kill(this.processPid, 0);
-        return true;
-      } catch (err) {
-        if (err.code === 'ESRCH') {
-          // No such process - it died
-          this.processPid = null;
-          return false;
-        }
-        // Other error (e.g., permission denied) - assume it's not running
-        console.warn('Error checking process PID:', err.message);
-        return false;
-      }
-    }
-
+    // Ask the KERNEL, always. This used to short-circuit on
+    // `this.process && !this.process.killed` and only fall through to a real
+    // liveness check when that was false. `killed` means "a signal was sent",
+    // so the shortcut answered "running" for a process nobody had measured -
+    // the same false claim that made stop()'s SIGKILL branch unreachable,
+    // pointing the other way. There is no cheaper source of truth worth
+    // having here: process.kill(pid, 0) is a syscall, not an expense.
+    //
+    // isAlive() also keeps EPERM apart from ESRCH. Only a live process can
+    // produce EPERM; the old code treated it as "not running", which would
+    // report a healthy server as stopped the moment it was out of reach.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    if (!pid) return false;
+    if (isAlive(pid)) return true;
+    // Confirmed gone. Drop the stale pid so nothing else reports on it.
+    this.processPid = null;
     return false;
   }
 
