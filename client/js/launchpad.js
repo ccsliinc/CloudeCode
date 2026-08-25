@@ -1236,9 +1236,15 @@ class Launchpad {
      */
     _renderRecentSessionRowHtml(row) {
         const uuid = this._escapeHtml(row.session_uuid || '');
+        // ``title`` IS THE LABEL NOW, so it leads. It used to sit third
+        // in this chain as a last-ditch fallback, which was correct while
+        // it was a lineage-seeded string and is exactly backwards once it
+        // carries what the user called the session.
         const displayName = this._escapeHtml(
-            (row.tmux_name && this._deriveRunningSessionDisplayName(row.tmux_name))
-                || row.title || row.working_dir || 'session'
+            (row.title && String(row.title).trim())
+                || (row.tmux_name && this._deriveRunningSessionDisplayName(row.tmux_name))
+                || row.working_dir
+                || 'session'
         );
         const lifecycle = row.lifecycle || 'unknown';
         const canRestart = lifecycle === 'stopped';
@@ -2696,7 +2702,7 @@ class Launchpad {
         if (!items || items.length === 0) return '';
         const rows = items.map(({ session, reason }) => {
             const displayName = this._escapeHtml(
-                this._deriveRunningSessionDisplayName(session.name)
+                this._sessionDisplayLabel(session)
             );
             return `
                 <div class="project-session-row project-session-row--attention" data-name="${this._escapeHtml(session.name)}">
