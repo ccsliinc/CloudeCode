@@ -54,29 +54,8 @@
     },
     "/login"
   ],
-  "projects": [
-    {
-      "name": "\ud83d\udd25 AGI-SaaS Disruptor",
-      "path": "~/projects/agi-saas",
-      "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
-    },
-    {
-      "name": "\u26a1 NeuralMesh3000",
-      "path": "~/projects/neural-mesh",
-      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression",
-      "agent_type": "hermes"
-    },
-    {
-      "name": "\u269b\ufe0f ReactHook Nirvana",
-      "path": "~/projects/react-nirvana",
-      "description": "Component library that transcends the virtual DOM and enters the astral plane"
-    },
-    {
-      "name": "\u2601\ufe0f Cloude Code",
-      "path": "~/projects/cloude-code",
-      "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
-    }
-  ],
+  "_comment_projects": "SHIPS EMPTY ON PURPOSE, and must stay empty. macOS/bootstrap.js step 3e copies this file VERBATIM to config.json on a fresh install, so anything listed here is not an example a new user reads - it is a row on their very first screen. Four invented demo projects used to live here, all pointing at ~/projects/* paths that existed on nobody's machine, so a brand new install opened onto four dead rows. Add your own from the app (the + control on the launchpad) or by hand. Each entry is an object with: name (string, shown on the card, emoji allowed), path (string, absolute or ~-relative, and it must actually exist or the row refuses to open), description (string, optional, one line under the name), and agent_type (optional, one of claude / codex / hermes / openclaw, default claude). Example of one entry, kept here as prose so no copy of it can ever reach config.json: {\"name\": \"My App\", \"path\": \"~/code/my-app\", \"description\": \"the thing I am building\", \"agent_type\": \"claude\"}",
+  "projects": [],
   "_comment_workspace": "Global settings for what a NEW terminal is born with. Edited from the web app's settings screen (gear icon -> workspace), not by hand: the running server caches this file and only re-reads it when it writes it itself, so a hand edit needs a restart. Every value defaults to empty, which means 'not configured' - development_root reaches terminals as CLOUDE_DEV_ROOT, default_shell as SHELL, and env is injected verbatim. Names beginning CLOUDECODE_ are reserved by the app and refused.",
   "workspace": {
     "development_root": "",

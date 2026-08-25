@@ -372,7 +372,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-cp config.example.json config.json   # projects, agents, notifications
+cp config.example.json config.json   # agents, notifications; projects starts EMPTY
 cp .env.example .env                 # then set DEFAULT_WORKING_DIR and LOG_DIRECTORY
 
 python3 setup_auth.py     # generates TOTP + JWT secrets, prints a QR, optional push setup
