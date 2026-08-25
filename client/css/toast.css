@@ -1,5 +1,16 @@
 /*
- * Toast notifications (v0.7.0 Part 2)
+ * Toast notifications
+ * ------------------------------------------------------------------
+ * STACKING POLICY lives in client/js/toast.js; this file paints what it
+ * decides. Three things here exist only because of that policy:
+ *   .toast__count      the "x3" badge on a coalesced card
+ *   .toast-overflow    the single row standing in for everything the
+ *                      visible cap is holding back. It is a BUTTON, and
+ *                      it must never read as decoration - it is the only
+ *                      on-screen evidence that suppressed toasts exist.
+ *   [data-severity]    tier styling. 3 (PermissionRequest) is blocking
+ *                      and is painted as such; it is also cap-exempt in
+ *                      the JS, so it can never be behind the overflow row.
  * ------------------------------------------------------------------
  * Per-toast accent border colored from the session's project theme.
  * The server bakes a hex color onto each Toast.color field; the client
@@ -120,6 +131,102 @@
   color: var(--color-info, #4fc1ff);
 }
 
+/* ------------------------------------------------------------------
+   Coalesced-repeat count badge.
+   A separate ELEMENT, not text appended to the title, for two reasons:
+   it needs its own colour and shape, and a title that literally
+   contained "x3" would be indistinguishable from this at the
+   .textContent level - which is precisely how a `~~claude` badge
+   shipped through a green suite in this codebase.
+   ------------------------------------------------------------------ */
+.toast__title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.toast__title-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast__count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 1;
+  padding: 2px 6px;
+  /* radius-pill, not radius-full: several themes zero every radius token
+     on purpose, and this is a rounded rectangle, not a circle, so it
+     degrades to a hard-edged chip there rather than to a broken dot. */
+  border-radius: var(--radius-pill, 50px);
+  background: var(--toast-accent);
+  /* The badge sits ON the accent, so it needs the page background as its
+     ink rather than the foreground colour. */
+  color: var(--color-bg-card, #252526);
+}
+
+/* ------------------------------------------------------------------
+   Severity tiers.
+   3 = PermissionRequest: blocking, user must answer. 2 = Notification.
+   1 = Stop, the chatty one. Only the top tier gets extra weight; a
+   fleet of equally-shouty cards is the problem, not the fix.
+   ------------------------------------------------------------------ */
+.toast[data-severity="3"] {
+  border-color: var(--color-warning-border, rgba(251, 191, 36, 0.35));
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5)),
+              0 0 0 1px var(--color-warning-border, rgba(251, 191, 36, 0.35));
+}
+
+/* ------------------------------------------------------------------
+   Overflow row. The cap's receipt.
+   ------------------------------------------------------------------ */
+.toast-overflow {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* styles.css pins every button to a var(--control-size) square; this
+     is a full-width row, so it sizes from its own padding - the same
+     escape .toast__dismiss needs, for the same reason. */
+  width: 100%;
+  height: auto;
+  padding: 7px 12px;
+  background: var(--color-bg-card, #252526);
+  color: var(--color-fg-muted, #858585);
+  border: 1px dashed var(--color-border, #3e3e42);
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5));
+  font-family: var(--font-mono, 'SF Mono', monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: center;
+}
+
+.toast-overflow:hover {
+  background: var(--color-bg-hover, #323235);
+  color: var(--color-fg, #d4d4d4);
+}
+
+.toast-overflow__count {
+  font-weight: bold;
+  color: var(--color-fg, #d4d4d4);
+}
+
+/* What is in there, in words. A count alone tells the user something is
+   hidden but not whether it matters. */
+.toast-overflow__worst {
+  color: var(--color-warning, #fbbf24);
+}
+
+/* The row itself takes the colour of the worst thing it holds, so a
+   glance at the edge of the screen carries the same fact as the text. */
+.toast-overflow[data-severity="2"] {
+  border-color: var(--color-warning-border, rgba(251, 191, 36, 0.35));
+}
+
 /* Mobile responsive: full-width, anchored just under the header. */
 @media (max-width: 640px) {
   .toast-container {
@@ -128,5 +235,13 @@
     left: 8px;
     width: auto;
     max-width: none;
+  }
+
+  /* A phone is mostly toast at three cards, so the JS caps at two here.
+     That makes the overflow row load-bearing rather than an edge case:
+     give it a real 44px touch target. */
+  .toast-overflow {
+    padding: 12px;
+    min-height: 44px;
   }
 }
