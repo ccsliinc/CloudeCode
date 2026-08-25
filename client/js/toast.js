@@ -465,6 +465,14 @@ class ToastManager {
 
     if (isNew) {
       container.appendChild(el);
+      // Force a style flush BEFORE dropping the entering class. Without
+      // it, a burst that appends and un-classes several cards inside one
+      // task can leave the browser never having computed the entering
+      // state, so the transition sometimes runs and sometimes does not -
+      // measured flapping between both on identical input. A reflow read
+      // pins it: the entering style is computed, so the transition always
+      // runs and the end state is always reached.
+      void el.offsetWidth;
       requestAnimationFrame(() => el.classList.remove('toast--entering'));
     }
     return el;
@@ -521,9 +529,13 @@ class ToastManager {
       if (worstLabel) {
         const w = document.createElement('span');
         w.className = 'toast-overflow__worst';
-        w.textContent = worstLabel(
+        // Parenthesised because the two spans are read back as one
+        // string by a screen reader: "+9 more9 waiting on you" is what
+        // bare concatenation produces, and the flex gap only fixes the
+        // sighted case.
+        w.textContent = '(' + worstLabel(
           hidden.filter((g) => g.severity === worst).reduce((n2, g) => n2 + g.count, 0),
-        );
+        ) + ')';
         row.appendChild(w);
       }
     }
