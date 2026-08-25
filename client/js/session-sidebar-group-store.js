@@ -219,6 +219,36 @@ console.log('[SessionSidebarGroupStore Module] Loading...');
     }
 
     /**
+     * Description: move a session between groups LOCALLY, before the
+     *   server has confirmed it.
+     *
+     *   WHY OPTIMISTIC AT ALL. A drag has to reorder under the user's
+     *   finger; waiting for a round trip on every pointer sample would
+     *   make the row lag the pointer, and firing a request per sample
+     *   would hammer the API. So the drag moves the row here and the
+     *   commit happens once, on pointer up.
+     *
+     *   WHAT THIS IS NOT. It does NOT mark the state 'ok' and it does not
+     *   touch `groups[].members`. Only the membership index moves, so a
+     *   subsequent authoritative read overwrites it wholesale with no
+     *   merge step to get wrong. If the commit fails, the caller re-reads
+     *   from the server rather than trying to invert this - an invented
+     *   undo is a second write path that can itself be wrong, and the
+     *   server already holds the answer.
+     * Inputs: name (string) - tmux name. groupUuid (string|null) - target
+     *   group, or null for ungrouped.
+     * Output: string|null - the membership this REPLACED, so a caller
+     *   that wants to describe the change can.
+     * Example: setOptimistic('cloude_a', 'u1')
+     */
+    function setOptimistic(name, groupUuid) {
+        const previous = groupOf(name);
+        if (groupUuid) membership.set(name, groupUuid);
+        else membership.delete(name);
+        return previous;
+    }
+
+    /**
      * Description: the band a row belongs in RIGHT NOW - pinned wins over
      *   its group, because the pinned band is above every group and a row
      *   can only be drawn once.
@@ -287,7 +317,7 @@ console.log('[SessionSidebarGroupStore Module] Loading...');
     }
 
     window.SessionSidebarGroupStore = {
-        apply, markUnavailable, current, isUsable, noticeText,
+        apply, markUnavailable, current, isUsable, noticeText, setOptimistic,
         groupOf, groupByUuid, bandOf, bandOrder, labelFor, bandIntent,
         bandKeyFor, groupUuidOf,
         STATUS_UNKNOWN, STATUS_OK, STATUS_UNAVAILABLE,

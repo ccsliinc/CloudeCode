@@ -47,7 +47,8 @@
  * behaviour depend on state that is not on screen.
  *
  * WHICH BAND A DROP LANDS IN IS READ OFF THE GROUP UNDER THE POINTER, not
- * off the nearest row. Those differ in the one case that matters: an
+ * off the nearest row. That resolution lives in
+ * client/js/session-sidebar-drop-target.js. Those differ in the one case that matters: an
  * EMPTY pinned group has no rows to be near, and inferring the band from
  * the nearest row would make it permanently undroppable - which is the
  * case the whole feature exists for. That is also why
@@ -300,40 +301,19 @@ console.log('[SessionSidebarReorder Module] Loading...');
             // so "did not cross" and "crossed into unpinned" stay
             // distinguishable - false would collapse them.
             crossed: undefined,
+            // The group this drag has optimistically moved the row into,
+            // and whether it moved at all. `group` stays undefined until
+            // a placement actually names one, so "was never over a group
+            // band" and "was dropped into ungrouped" stay distinguishable
+            // - the same reason `crossed` starts undefined rather than
+            // false.
+            group: undefined,
+            groupChanged: false,
             pointerId: e.pointerId,
         };
         if (grip.setPointerCapture) {
             try { grip.setPointerCapture(e.pointerId); } catch (_) { /* not captured */ }
         }
-    }
-
-    /**
-     * Description: which band the pointer is currently over, decided by
-     *   the GROUP CONTAINER it falls inside rather than by the nearest
-     *   row. Returns null when the list is ungrouped (nothing pinned and
-     *   no drag has forced the pinned group into existence yet), which
-     *   the caller reads as "leave the band alone".
-     *
-     *   The header counts as part of its own group, so dropping onto the
-     *   word "pinned" pins - which is what the gesture looks like it
-     *   should do. A pointer below every group lands in the last one.
-     * Inputs: clientY (number) - the pointer's viewport Y.
-     * Output: boolean|null - true pinned, false unpinned, null unknown.
-     */
-    function bandAt(clientY) {
-        const list = listEl();
-        if (!list) return null;
-        const groups = Array.prototype.slice.call(
-            list.querySelectorAll('.session-sidebar-group[data-group]'),
-        );
-        if (!groups.length) return null;
-        let last = null;
-        for (const g of groups) {
-            const box = g.getBoundingClientRect();
-            last = g;
-            if (clientY < box.bottom) return g.getAttribute('data-group') === 'pinned';
-        }
-        return last ? last.getAttribute('data-group') === 'pinned' : null;
     }
 
     /**
@@ -369,12 +349,42 @@ console.log('[SessionSidebarReorder Module] Loading...');
         // The band comes from the GROUP under the pointer; only when the
         // list is ungrouped does it fall back to the row's current band,
         // which in that case is the only band there is.
-        const overBand = bandAt(e.clientY);
-        const targetPinned = overBand === null ? arrangement.isPinned(drag.name) : overBand;
+        const G = window.SessionSidebarGroupStore;
+        const overKey = window.SessionSidebarDropTarget.bandKeyAt(e.clientY);
+        const intent = (overKey !== null && G)
+            ? G.bandIntent(overKey)
+            : { pinned: arrangement.isPinned(drag.name), group: undefined };
+
+        // A DROP IS TWO FACTS, AND ONLY ONE OF THEM IS LOCAL. The pin and
+        // the order live in localStorage and commit here, per pointer
+        // sample, because the list has to reorder under the finger. The
+        // GROUP lives in the database and is only moved OPTIMISTICALLY
+        // here - the write happens once, on pointer up. Firing a request
+        // per sample would hammer the API and could land out of order.
+        //
+        // `intent.group === undefined` means LEAVE THE FILING ALONE and
+        // is what the pinned band returns; `null` means REMOVE it. The
+        // `in` test rather than a truthiness test is what keeps those
+        // apart, and collapsing them would make dragging a row into the
+        // pinned band quietly empty the group it was filed in.
+        if (G && intent.group !== undefined) {
+            const before = G.setOptimistic(drag.name, intent.group);
+            if (before !== intent.group) drag.groupChanged = true;
+            drag.group = intent.group;
+        }
+
         const result = arrangement.placeAt(
-            drag.name, targetPinned, beforeName, visibleNames(),
+            drag.name, intent.pinned, beforeName, visibleNames(),
         );
-        if (!result) return;
+        // A pure GROUP change moves no row within its band and flips no
+        // pin, so placeAt correctly reports "nothing to do" - but the row
+        // still has to be repainted into its new section. Returning early
+        // on a null here is what would make a drag between two groups
+        // look like it did nothing.
+        if (!result) {
+            if (drag.groupChanged) repaintKeepingFocus(drag.name);
+            return;
+        }
         if (result.crossed) drag.crossed = result.pinned;
         repaintKeepingFocus(drag.name);
     }
@@ -389,6 +399,8 @@ console.log('[SessionSidebarReorder Module] Loading...');
         const wasActive = drag.active;
         const name = drag.name;
         const crossed = drag.crossed;
+        const group = drag.group;
+        const groupChanged = drag.groupChanged;
         drag = null;
         const list = listEl();
         if (list) list.classList.remove('session-sidebar-list--dragging');
@@ -401,6 +413,15 @@ console.log('[SessionSidebarReorder Module] Loading...');
         if (!wasActive) return;
         const rows = visibleNames();
         const where = `position ${rows.indexOf(name) + 1} of ${rows.length}`;
+        const actions = window.SessionSidebarGroupActions;
+        if (groupChanged && actions) {
+            // COMMIT ONCE, HERE. The optimistic move already happened, so
+            // this only makes it durable - and if it fails, the actions
+            // module re-reads from the server and says so out loud rather
+            // than leaving the user looking at a move that did not land.
+            actions.commitAssignment(name, group === undefined ? null : group);
+            return;
+        }
         announce(crossed === undefined
             ? `${name} moved to ${where}`
             : `${name} ${crossed ? 'pinned' : 'unpinned'}, now at ${where}`);
@@ -426,7 +447,7 @@ console.log('[SessionSidebarReorder Module] Loading...');
 
     window.SessionSidebarReorder = {
         init, afterRender, moveRow, togglePinRow, onPinClick, isDragging,
-        setFocusRow, visibleNames, bandAt, DRAG_SLOP_PX,
+        setFocusRow, visibleNames, announce, DRAG_SLOP_PX,
     };
     console.log('[SessionSidebarReorder Module] Exported as window.SessionSidebarReorder');
 })();

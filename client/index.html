@@ -441,6 +441,18 @@
                     </button>
                 </div>
             </div>
+            <!-- NEW GROUP. Sits beside the density control rather than
+                 inside the list, because it belongs to the panel and not
+                 to any one section. It is the discoverable way to make a
+                 group; the row picker's "new group..." entry is the
+                 other, and both land in the same code path. Groups are
+                 user-defined and stored in the database - see
+                 client/js/session-sidebar-group-actions.js. -->
+            <button type="button" id="session-sidebar-group-add"
+                    class="session-sidebar-group-add" data-group-add="1"
+                    title="New group" aria-label="New group">
+                <span aria-hidden="true">+</span>
+            </button>
                 </div>
             </div>
             <!-- PANEL CHROME, a separate cluster from the list controls
@@ -774,6 +786,10 @@
          algebra and reads/writes through the store. Pure functions plus
          localStorage; no DOM. The store must load FIRST, and both must
          load BEFORE session-sidebar.js runs. -->
+    <!-- The group model, read from the database. Must load BEFORE
+         session-sidebar-arrangement.js, whose arrange() partitions rows
+         into the bands this module declares. -->
+    <script src="/static/js/session-sidebar-group-store.js"></script>
     <script src="/static/js/session-sidebar-store.js"></script>
     <script src="/static/js/session-sidebar-arrangement.js"></script>
     <!-- Two endpoints to one row list, plus whether the probe answered. -->
@@ -794,7 +810,14 @@
     <!-- Row detail (density) and the reorder interactions. Both call back
          into window.SessionSidebar, so both load AFTER it. -->
     <script src="/static/js/session-sidebar-density.js"></script>
+    <!-- Which band the pointer is over. Split out of the reorder module
+         when that crossed the 500-line budget; must load BEFORE it. -->
+    <script src="/static/js/session-sidebar-drop-target.js"></script>
     <script src="/static/js/session-sidebar-reorder.js"></script>
+    <!-- Create/rename/delete/reorder groups, and every NON-DRAG way to
+         move a session between them. Loads AFTER reorder because it
+         borrows that module's live-region announcer. -->
+    <script src="/static/js/session-sidebar-group-actions.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the

@@ -126,6 +126,14 @@ class SessionSidebarController {
         if (window.SessionSidebarDensity) window.SessionSidebarDensity.init();
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.init();
         if (window.SessionSidebarRename) window.SessionSidebarRename.init();
+        if (window.SessionSidebarGroupActions) {
+            window.SessionSidebarGroupActions.init();
+            // FIRST GROUP READ. Until it lands the store reports
+            // 'unknown' and the list renders exactly as it did before
+            // groups existed - which is the correct thing to draw while
+            // the answer is genuinely not known yet.
+            window.SessionSidebarGroupActions.refresh();
+        }
         console.log('SessionSidebar: wired');
     }
 
@@ -310,15 +318,35 @@ class SessionSidebarController {
             collapsed: (state && Array.isArray(state.collapsed)) ? state.collapsed : [],
             dragging: !!this._dragging,
         };
+        // THE GROUP MODEL IS PART OF THE SIGNATURE, and it has to be.
+        // This method short-circuits when the signature is unchanged, so
+        // a group that was created, renamed, reordered or moved into
+        // would repaint NOTHING - the rows are the same rows, in the same
+        // order, with the same pins. The band each one lands in is the
+        // thing that changed, and without this the user would drag a row
+        // into a group and watch it not move.
+        const G = window.SessionSidebarGroupStore;
+        const groupSig = G
+            ? `${G.current().status}|${G.bandOrder().join(',')}|`
+                + rows.map((r) => `${r.name}:${r.band_key}`).join(',')
+            : 'nogroups';
         const sig = window.SessionSidebarRows.signature(
             rows, density, this._listing, missing, groups,
-        ) + (state ? `|${state.status}` : '');
+        ) + (state ? `|${state.status}` : '') + `|${groupSig}`;
         if (sig === this._lastSig) return;
         this._lastSig = sig;
         this.listEl.setAttribute('data-listing-ok', this._listing.ok ? '1' : '0');
         this.listEl.setAttribute('data-order-missing', String(missing.length));
         this.listEl.setAttribute('data-arrangement-state', state ? state.status : 'default');
         this.listEl.setAttribute('data-density', density);
+        // CANNOT DETERMINE, on the element, so a harness can measure it
+        // and a user can be told. 'unknown' and 'unavailable' both render
+        // an ungrouped list, so without this the two are indistinguishable
+        // from the outside - which is the exact false green this project
+        // keeps removing.
+        this.listEl.setAttribute(
+            'data-groups-state', G ? G.current().status : 'nogroups',
+        );
         this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
             rows, density, this._listing, missing, state, groups,
         );

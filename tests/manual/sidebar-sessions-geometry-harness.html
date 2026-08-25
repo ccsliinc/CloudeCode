@@ -108,7 +108,118 @@ const renamed = {};
  */
 window.__setListingFails = function (on) { failNextListing = on; };
 
+// AN IN-MEMORY GROUP SERVER, not a set of canned replies.
+//
+// The group routes are stateful - a create changes what a later list
+// returns, an assign changes what a later delete frees - so a stub that
+// returned fixed payloads could not represent a drag AT ALL: the row
+// would move and the next read would put it back. This keeps real state
+// and enforces the same invariants the real store does, including the
+// one that matters most: DELETING A GROUP FREES ITS MEMBERS RATHER THAN
+// DELETING THEM.
+const groupState = { groups: [], members: new Map(), seq: 0, failNext: null };
+
+/**
+ * Description: force the next group WRITE to fail with a given message,
+ *   so the verifier can measure what the UI does when a move does not
+ *   land - which must be "snap back and say why", never "look like it
+ *   worked".
+ * Inputs: message (string|null). Output: void.
+ */
+window.__failNextGroupWrite = function (message) { groupState.failNext = message; };
+
+/** Description: seed groups directly. Inputs: defs (Array). Output: void. */
+window.__seedGroups = function (defs) {
+    groupState.groups = [];
+    groupState.members = new Map();
+    groupState.seq = 0;
+    for (const def of (defs || [])) {
+        groupState.seq += 1;
+        groupState.groups.push({
+            group_uuid: def.uuid || `u${groupState.seq}`,
+            name: def.name,
+            position: groupState.groups.length,
+        });
+        for (const m of (def.members || [])) {
+            groupState.members.set(m, def.uuid || `u${groupState.seq}`);
+        }
+    }
+};
+
+/** Description: the wire shape of the current group state. Output: object. */
+function groupsBody() {
+    return {
+        status: 'ok',
+        detail: null,
+        groups: groupState.groups
+            .slice()
+            .sort((a, b) => (a.position - b.position)
+                || (a.group_uuid < b.group_uuid ? -1 : 1))
+            .map((g) => ({
+                group_uuid: g.group_uuid,
+                name: g.name,
+                position: g.position,
+                members: Array.from(groupState.members.entries())
+                    .filter(([, uuid]) => uuid === g.group_uuid)
+                    .map(([name]) => name)
+                    .sort(),
+            })),
+    };
+}
+
+/** Description: throw when a failure was armed. Output: void. */
+function maybeFail() {
+    if (groupState.failNext === null) return;
+    const message = groupState.failNext;
+    groupState.failNext = null;
+    const err = new Error(message);
+    err.status = 503;
+    throw err;
+}
+
 window.API = {
+    async listSessionGroups() { return groupsBody(); },
+    async createSessionGroup(name) {
+        maybeFail();
+        const clean = String(name).split(/\s+/).filter(Boolean).join(' ');
+        if (!clean) { const e = new Error('group name is empty'); e.status = 400; throw e; }
+        groupState.seq += 1;
+        groupState.groups.push({
+            group_uuid: `u${groupState.seq}`, name: clean,
+            position: groupState.groups.length,
+        });
+        return groupsBody();
+    },
+    async renameSessionGroup(uuid, name) {
+        maybeFail();
+        const g = groupState.groups.find((x) => x.group_uuid === uuid);
+        if (g) g.name = String(name).split(/\s+/).filter(Boolean).join(' ');
+        return groupsBody();
+    },
+    async deleteSessionGroup(uuid) {
+        maybeFail();
+        let freed = 0;
+        for (const [name, u] of Array.from(groupState.members.entries())) {
+            // THE INVARIANT: the MEMBERSHIP goes, the session does not.
+            if (u === uuid) { groupState.members.delete(name); freed += 1; }
+        }
+        groupState.groups = groupState.groups.filter((g) => g.group_uuid !== uuid);
+        return Object.assign(groupsBody(), { freed });
+    },
+    async assignSessionGroup(tmuxName, uuid) {
+        maybeFail();
+        if (uuid === null || uuid === undefined) groupState.members.delete(tmuxName);
+        else groupState.members.set(tmuxName, uuid);
+        return groupsBody();
+    },
+    async reorderSessionGroups(uuids) {
+        maybeFail();
+        uuids.forEach((u, i) => {
+            const g = groupState.groups.find((x) => x.group_uuid === u);
+            if (g) g.position = i;
+        });
+        return groupsBody();
+    },
     async listAttachableSessions() {
         if (failNextListing) {
             const err = new Error('the server could not read the tmux session list');
@@ -181,6 +292,7 @@ window.App = {
 window.TerminalController = { async destroySession() {} };
 </script>
 <script src="../../client/js/session-listing-state.js"></script>
+<script src="../../client/js/session-sidebar-group-store.js"></script>
 <script src="../../client/js/session-sidebar-store.js"></script>
 <script src="../../client/js/session-sidebar-arrangement.js"></script>
 <script src="../../client/js/session-sidebar-fetch.js"></script>
@@ -191,7 +303,9 @@ window.TerminalController = { async destroySession() {} };
 <script src="../../client/js/session-sidebar.js"></script>
 <script src="../../client/js/session-sidebar-pin.js"></script>
 <script src="../../client/js/session-sidebar-density.js"></script>
+<script src="../../client/js/session-sidebar-drop-target.js"></script>
 <script src="../../client/js/session-sidebar-reorder.js"></script>
+<script src="../../client/js/session-sidebar-group-actions.js"></script>
 <script>
 /**
  * Description: pull the real sidebar markup out of the shipped
@@ -227,6 +341,40 @@ window.__sidebarMeasure = function () {
     const rows = Array.prototype.slice.call(list.querySelectorAll('.session-sidebar-row'));
     return {
         innerWidth: window.innerWidth,
+        // GROUP GEOMETRY, MEASURED. Every band's real painted box, and
+        // for every row the band it is actually drawn inside - read by
+        // walking up from the row's own element, never from a state
+        // object that merely claims where it should be.
+        groupsState: list.getAttribute('data-groups-state'),
+        bands: Array.prototype.slice.call(
+            list.querySelectorAll('.session-sidebar-group[data-group]'),
+        ).map((g) => {
+            const box = g.getBoundingClientRect();
+            const label = g.querySelector('.session-sidebar-group__label');
+            return {
+                key: g.getAttribute('data-group'),
+                label: label ? label.textContent : '',
+                count: g.getAttribute('data-count'),
+                collapsed: g.getAttribute('data-collapsed'),
+                top: box.top, bottom: box.bottom, height: box.height,
+                left: box.left, right: box.right,
+                hasMenu: !!g.querySelector('[data-group-menu]'),
+                bodyRows: g.querySelectorAll('.session-sidebar-row').length,
+            };
+        }),
+        rowBands: rows.map((r) => {
+            const owner = r.closest('.session-sidebar-group[data-group]');
+            const chip = r.querySelector('[data-group-pick]');
+            const chipBox = chip ? chip.getBoundingClientRect() : null;
+            return {
+                name: r.dataset.name,
+                band: owner ? owner.getAttribute('data-group') : null,
+                pinned: r.getAttribute('data-pinned'),
+                chipText: chip ? chip.textContent.trim() : null,
+                chipWidth: chipBox ? chipBox.width : 0,
+                chipHeight: chipBox ? chipBox.height : 0,
+            };
+        }),
         density: panel.getAttribute('data-density'),
         listingOk: list.getAttribute('data-listing-ok'),
         arrangementState: list.getAttribute('data-arrangement-state'),
