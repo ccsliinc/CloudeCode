@@ -1,6 +1,6 @@
 {
   "name": "cloude-code-menubar",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "macOS menu bar app for Cloude Code remote control",
   "main": "main.js",
   "scripts": {
@@ -39,14 +39,20 @@
         "from": "../src",
         "to": "src",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.DS_Store"
         ]
       },
       {
         "from": "../client",
         "to": "client",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.DS_Store"
         ]
       },
       {

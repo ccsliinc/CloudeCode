@@ -179,7 +179,12 @@ async def lifespan(app: FastAPI):
     global session_manager, log_monitor, local_servers
     global refresh_store, _refresh_purge_task, notification_router
 
-    logger.info("application_starting", version="1.0.0")
+    # THE SINGLE RESOLVER (src/core/version.py) owns the version string.
+    # A hardcoded literal here contradicted that rule and, on the current
+    # release, claimed "1.0.0" - the SUPERSEDED tag - in every log line.
+    # "unknown" rather than a guess when nothing resolves: a blank or wrong
+    # version in a log is worse than a named could-not-determine.
+    logger.info("application_starting", version=resolve_version() or "unknown")
 
     # feat/launch-wrappers - one-shot, idempotent config.json migration
     # (hardcoded cld/cldor -> user-editable wrappers). MUST run before the
@@ -525,7 +530,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="☁️ Cloud Code",
     description="Remote control and monitoring for Claude Code sessions",
-    version="1.0.0",
+    # Same rule as the startup log line above: derived, never a literal.
+    # This string is what /docs and /openapi.json publish as info.version.
+    version=resolve_version() or "unknown",
     lifespan=lifespan
 )
 

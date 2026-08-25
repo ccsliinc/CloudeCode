@@ -270,3 +270,71 @@ def test_accepted_undelivered_entries_carry_a_real_reason():
         "An exemption without a stated reason is a suppression: "
         + ", ".join(thin)
     )
+
+
+# ---------------------------------------------------------------------------
+# Build hygiene: what the BUILD MACHINE leaks into the bundle.
+#
+# The src/ and client/ extraResources entries used a bare ``**/*`` filter, so
+# whatever happened to be sitting in the working tree at build time shipped.
+# Running pytest before building put 110 ``.pyc`` files, compiled by the build
+# machine's own interpreter, inside the 1.0.2 candidate DMG. Not a correctness
+# fault - CPython invalidates a .pyc whose recorded source mtime and size do
+# not match - but it is several MB of one machine's state distributed to
+# users, and the same unbounded filter is what would ship a stray .DS_Store or
+# anything else a future tool drops in those trees.
+#
+# These directories are gitignored, so nothing in git can catch this. The
+# filter is the only place it can be caught, which is why it is asserted here.
+# ---------------------------------------------------------------------------
+
+# Directories copied wholesale into the bundle, whose contents are therefore
+# whatever the build machine's working tree holds at build time.
+_WHOLESALE_COPIED = ("src", "client")
+
+# Patterns each wholesale-copied entry must exclude. Build-machine byproducts
+# that are never part of a release.
+_REQUIRED_EXCLUSIONS = ("!**/__pycache__/**", "!**/*.pyc", "!**/.DS_Store")
+
+
+def parse_extra_resource_filters() -> dict[str, list[str]]:
+    """The ``filter`` array of every build.extraResources entry, keyed by ``to``.
+
+    Inputs: none.
+    Outputs: dict[str, list[str]] - destination name -> its filter patterns.
+      An entry with no ``filter`` key maps to an empty list, which is itself
+      the unbounded case this module's hygiene test rejects.
+    """
+    data = json.loads(_read(PACKAGE_JSON))
+    entries = data.get("build", {}).get("extraResources", [])
+    return {
+        e["to"]: list(e.get("filter", []))
+        for e in entries
+        if isinstance(e, dict) and "to" in e
+    }
+
+
+def test_wholesale_copied_trees_exclude_build_machine_byproducts():
+    """src/ and client/ must not ship the build machine's caches.
+
+    A bare ``**/*`` filter is not "everything we wrote", it is "everything
+    that is there right now", and those are different sets on any machine
+    that has run the test suite.
+    """
+    filters = parse_extra_resource_filters()
+    missing: list[str] = []
+    for name in _WHOLESALE_COPIED:
+        assert name in filters, (
+            f"build.extraResources no longer ships {name!r}. If that is "
+            "deliberate, delete it from _WHOLESALE_COPIED in the same edit; "
+            "a hygiene check pointed at a tree nobody ships is furniture."
+        )
+        for pattern in _REQUIRED_EXCLUSIONS:
+            if pattern not in filters[name]:
+                missing.append(f"{name}: {pattern}")
+
+    assert not missing, (
+        "These extraResources entries copy a whole tree without excluding "
+        "build-machine byproducts, so the DMG carries whatever the working "
+        "tree held at build time: " + ", ".join(missing)
+    )
