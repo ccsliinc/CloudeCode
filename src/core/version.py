@@ -250,3 +250,75 @@ def resolve_version(root: Path | None = None) -> str:
         or read_package_json_version(root)
         or describe_git_tag(root)
     )
+
+
+# --- the version this PROCESS started with --------------------------------
+#
+# resolve_version() answers "what does this installation resolve to RIGHT
+# NOW". That is the wrong question for a running server being asked whose
+# code it is executing, and the difference is not academic.
+#
+# On 2026-08-25 a v1.0.2 server was orphaned on quit, reparented to launchd,
+# and left serving port 8000. A v1.0.3 bundle started later, found a healthy
+# listener, and adopted it - so the app ran four hours of old server code
+# under a new bundle. The fix is for the app to compare the RUNNING server's
+# version against its own before adopting. That comparison is only worth
+# anything if the running server reports the version it STARTED with.
+#
+# resolve_version() would not do that. Source 1 is CLOUDE_APP_VERSION, which
+# is stable for a process's life - but when it is absent, source 2 is the
+# VERSION file on disk, and macOS/bootstrap.js REWRITES that file on every
+# packaged launch. The upgraded bundle stamps 1.0.3 over it while the old
+# 1.0.2 process is still running, so a request-time resolve would have the
+# OLD process report the NEW number, the adoption check would see a match,
+# and the bug would reproduce itself through a read that looked correct.
+#
+# So it is frozen once, at process start, and never re-derived.
+
+_startup_version: str | None = None
+
+
+def freeze_startup_version(root: Path | None = None) -> str:
+    """Resolve and pin the version for the life of this process.
+
+    Idempotent: the first call wins and every later call returns that same
+    answer, whatever has since changed on disk or in the environment. Call it
+    as early as possible in server startup.
+
+    Args:
+        root: repository root, defaults to :func:`repo_root`.
+
+    Returns:
+        The pinned version string, "" when nothing resolved.
+
+    Example:
+        >>> freeze_startup_version()  # doctest: +SKIP
+        '1.0.3'
+    """
+    global _startup_version
+    if _startup_version is None:
+        _startup_version = resolve_version(root)
+    return _startup_version
+
+
+def startup_version() -> str:
+    """Return the version this process started with.
+
+    Freezes on first use if startup never got to it, which is a safety net
+    rather than the intended path: the later the freeze, the more chance an
+    upgraded bundle has already rewritten the VERSION file underneath us.
+
+    Returns:
+        The pinned version string, "" when nothing resolved.
+    """
+    return freeze_startup_version()
+
+
+def reset_startup_version() -> None:
+    """Clear the pin. For tests only.
+
+    Production code must never call this: the whole value of the pin is that
+    it cannot be moved once the process is up.
+    """
+    global _startup_version
+    _startup_version = None

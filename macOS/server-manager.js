@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
 const { terminateProcess, isAlive } = require('./process-teardown');
+const { decideAdoption } = require('./adoption-decision');
 const setupVerdict = require('./setup-verdict');
 const { resolvePublishedUrl } = require('./published-url');
 
@@ -34,6 +35,20 @@ class ServerManager {
     this.process = null;
     this.processPid = null;
     this.ownedProcess = false; // true if we spawned the server, false if adopted
+    // The version an ADOPTED server reported, when one was adopted. Null for
+    // a server we spawned (its version is ours by construction) and null when
+    // nothing is running. Display only - the decision it came from has
+    // already been made in start().
+    this.adoptedVersion = null;
+
+    // Set when start() REFUSED to adopt whatever holds the port. It exists
+    // because refusing is not enough on its own: main.js re-probes health
+    // right after start() and used to promote any healthy response back to
+    // state 'running'. That probe cannot tell our server from the stranger we
+    // just declined to adopt, so without this flag the refusal was undone one
+    // line later and the stale server was effectively adopted anyway - the
+    // defect surviving its own fix. Cleared by a successful start or stop.
+    this.startBlockedReason = null;
     this.logStream = null;
 
     // Crash tracking. `state` stays a three-value machine
@@ -759,24 +774,66 @@ class ServerManager {
       console.log(`Port ${port} already in use, checking if it's our server...`);
       const health = await this.getHealth();
       if (health) {
-        console.log('Server already running on port, adopting it');
+        // A HEALTHY CLOUDE CODE SERVER IS NOT NECESSARILY *THIS* CLOUDE CODE
+        // SERVER.
+        //
+        // This branch used to adopt unconditionally. That is right when
+        // Electron crashed and left its own healthy server behind, and wrong
+        // across an upgrade - and on 2026-08-25 it was wrong: a v1.0.2 server
+        // orphaned onto launchd (ppid 1) was adopted by a v1.0.3 bundle,
+        // which then ran the older server's code for four hours.
+        //
+        // The gate is version equality, decided in adoption-decision.js.
+        // `health.version` comes from the UNAUTHENTICATED GET /api/v1/health
+        // (the auth-gated /api/v1/version is unusable here - nobody has logged
+        // in yet) and is frozen at the server's own startup rather than
+        // re-resolved, because bootstrap.js rewrites the on-disk VERSION file
+        // on every packaged launch.
+        //
+        // FOUR outcomes, and only one of them adopts. A server that does not
+        // report a version at all - which is every server built before this
+        // change, including the orphan - is CANNOT DETERMINE and is refused.
+        const bundleVersion = this.getBundleVersion();
+        const verdict = decideAdoption({
+          runningVersion: health && health.version,
+          bundleVersion,
+        });
+        const holderPid = await this.findPortHolderPid(port);
+
+        if (!verdict.adopt) {
+          console.log(
+            `Refusing to adopt server on port ${port}: ${verdict.outcome}`
+          );
+          this.state = 'stopped';
+          this.startBlockedReason = verdict.outcome;
+          const err = new Error(
+            `${verdict.reason}\n\n` +
+              `Cloude Code did not start this server` +
+              (holderPid ? ` (PID ${holderPid})` : '') +
+              `, so it will not stop it without being told to.`
+          );
+          // Structured so main.js can offer a real choice instead of a dead
+          // end. A refusal the user cannot act on is just a different silence.
+          err.code = 'ADOPTION_REFUSED';
+          err.outcome = verdict.outcome;
+          err.runningVersion = verdict.runningVersion;
+          err.bundleVersion = verdict.bundleVersion;
+          err.pid = holderPid;
+          err.port = port;
+          throw err;
+        }
+
+        console.log(
+          `Adopting server on port ${port}: ${verdict.reason}`
+        );
         this.state = 'running';
         this.startTime = Date.now(); // Approximate
-        this.ownedProcess = false; // We didn't spawn this — don't kill it on quit
-
-        // Try to capture the PID of the existing process (for display only)
-        try {
-          exec(`lsof -ti:${port}`, (err, stdout) => {
-            if (!err && stdout) {
-              const pid = parseInt(stdout.trim());
-              if (!isNaN(pid)) {
-                console.log(`Adopted existing server process PID: ${pid}`);
-                this.processPid = pid;
-              }
-            }
-          });
-        } catch (e) {
-          console.warn('Could not determine PID of running server:', e.message);
+        this.ownedProcess = false; // We didn't spawn this, so we don't kill it
+        this.adoptedVersion = verdict.runningVersion;
+        this.startBlockedReason = null;
+        if (holderPid) {
+          console.log(`Adopted existing server process PID: ${holderPid}`);
+          this.processPid = holderPid;
         }
 
         return;
@@ -818,6 +875,7 @@ class ServerManager {
     // never clears is furniture, not a signal.
     this.lastExitUnexpected = false;
     this.stopRequested = false;
+    this.startBlockedReason = null;
     this.state = 'starting';
 
     // Create log file stream
@@ -959,6 +1017,130 @@ class ServerManager {
         resolve();
       });
     });
+  }
+
+  /**
+   * This bundle's own version.
+   *
+   * Wrapped rather than called inline because `app.getVersion()` can throw in
+   * a half-initialised Electron, and the adoption gate must be able to tell
+   * "1.0.3" apart from "I could not find out". Returning a plausible-looking
+   * fallback here would be the whole defect in miniature: the gate would
+   * compare against a number nobody measured.
+   *
+   * @returns {string} The version, or "" when it could not be determined.
+   */
+  getBundleVersion() {
+    try {
+      return app.getVersion() || '';
+    } catch (err) {
+      console.warn('Could not resolve this bundle version:', err.message);
+      return '';
+    }
+  }
+
+  /**
+   * The pid currently listening on a port, if it can be determined.
+   *
+   * Promisified deliberately. The shipped adoption path fired an `exec` and
+   * returned WITHOUT awaiting it, assigning this.processPid from inside the
+   * callback some time later - so for an indeterminate window after adoption
+   * the manager had adopted a server whose pid it did not yet know, and
+   * anything reading processPid in that window read null. The pid is part of
+   * the decision now (it is named in the refusal the user is shown), so it is
+   * awaited.
+   *
+   * @param {number} port - Port to look up.
+   * @returns {Promise<number|null>} The pid, or null when lsof says nothing
+   *   usable. Null is CANNOT DETERMINE, not "nothing is listening".
+   */
+  findPortHolderPid(port) {
+    return new Promise((resolve) => {
+      exec(`lsof -ti:${port}`, (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
+        }
+        const first = String(stdout || '').trim().split('\n')[0];
+        const pid = parseInt(first, 10);
+        resolve(Number.isNaN(pid) ? null : pid);
+      });
+    });
+  }
+
+  /**
+   * Wait until nothing is listening on a port.
+   *
+   * A pid being gone and a port being free are two different facts. A dying
+   * process releases its socket asynchronously, and on macOS a listener in
+   * TIME_WAIT can keep a bind failing for a moment after its owner is reaped.
+   * Spawning into that window fails with a bind error that reads like a
+   * completely different problem.
+   *
+   * @param {number} port - Port to watch.
+   * @param {number} [budgetMs=5000] - How long to wait.
+   * @param {number} [pollMs=150] - Interval between checks.
+   * @returns {Promise<boolean>} True when free, false on timeout. False is a
+   *   real answer the caller must handle, not a reason to proceed anyway.
+   */
+  async waitForPortFree(port, budgetMs = 5000, pollMs = 150) {
+    const deadline = Date.now() + budgetMs;
+    for (;;) {
+      if (!(await this.isPortInUse(port))) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
+  /**
+   * Terminate whatever holds the port and start our own server in its place.
+   *
+   * THIS IS ONLY EVER CALLED AFTER THE USER SAYS SO. start() refuses to adopt
+   * a server it cannot prove is running this bundle's code, and refusing is
+   * where its authority ends: killing a process this app did not start is not
+   * a decision it gets to make on its own. The refusal names the pid and the
+   * two versions, main.js turns that into a choice, and this runs only if the
+   * user picks "replace".
+   *
+   * Every step is confirmed rather than assumed - the pid is confirmed gone
+   * via the kernel (see process-teardown.js), and the PORT is then confirmed
+   * free, which is a separate fact from the pid being gone.
+   *
+   * @returns {Promise<void>} Resolves once the replacement server is starting.
+   * @throws {Error} If the holder cannot be identified, cannot be killed, or
+   *   the port does not come free. Each is reported as itself; none of them
+   *   silently falls through to a spawn that will fail confusingly later.
+   */
+  async takeOverPort() {
+    const port = this.getPort();
+    const pid = await this.findPortHolderPid(port);
+    if (!pid) {
+      throw new Error(
+        `Could not determine which process is holding port ${port}, so ` +
+          `Cloude Code will not try to stop it. Quit it yourself and choose ` +
+          `Start Server.`
+      );
+    }
+
+    console.log(`Taking over port ${port} from PID ${pid} (user approved)...`);
+    const result = await terminateProcess(pid, { graceMs: 5000 });
+    if (!result.terminated) {
+      throw new Error(
+        `Could not stop the process on port ${port} (PID ${pid}): ` +
+          `${result.outcome}. Nothing was started.`
+      );
+    }
+
+    if (!(await this.waitForPortFree(port))) {
+      throw new Error(
+        `PID ${pid} exited but port ${port} is still held. Nothing was ` +
+          `started - something else may have taken the port.`
+      );
+    }
+
+    this.startBlockedReason = null;
+    this.adoptedVersion = null;
+    await this.start();
   }
 
   /**

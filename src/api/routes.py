@@ -59,6 +59,8 @@ from src.models import (
     RecentSessionsResponse,
 )
 from src.core.tmux_listing import coerce_listing
+# Imported for its side-effect-free pin: see freeze_startup_version() below.
+from src.core.version import freeze_startup_version, startup_version
 from src.core.agent_family_display import resolve_family_for_display
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
@@ -68,6 +70,21 @@ from src.core import claude_hooks
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
 
 logger = structlog.get_logger()
+
+# PIN THE VERSION NOW, AT IMPORT, WHICH IS SERVER STARTUP.
+#
+# This module is imported while the server is coming up, so this is the
+# earliest moment the running process can honestly answer "which code am I".
+# It must happen before anything can rewrite the VERSION file underneath us:
+# macOS/bootstrap.js stamps that file on every packaged launch, so an upgraded
+# bundle landing while an older server is still running would otherwise make
+# the OLD process report the NEW version. That false match is exactly what
+# lets an upgrade silently adopt a stale server. See
+# src/core/version.py::freeze_startup_version for the full account.
+#
+# Idempotent, and cheap: in production the answer comes from the
+# CLOUDE_APP_VERSION env var that Electron injects at spawn.
+freeze_startup_version()
 
 router = APIRouter()
 
@@ -1882,6 +1899,22 @@ async def health_endpoint(request: Request):
         uptime=uptime_seconds,
         session_name=session_name,
         local_server_count=local_server_count,
+        # WHOSE CODE IS ON THIS PORT.
+        #
+        # The menu-bar app adopts an already-healthy server rather than
+        # double-spawning, which is right after an Electron crash and wrong
+        # across an upgrade. On 2026-08-25 a v1.0.2 server was orphaned on
+        # quit, reparented to launchd, and adopted by a v1.0.3 bundle, which
+        # then ran the old code for four hours. The app needs to compare
+        # versions BEFORE adopting, and it has not authenticated at that
+        # point - which is why this rides on the unauthenticated health poll
+        # rather than on GET /api/v1/version, which requires auth.
+        #
+        # startup_version() is frozen at process start, NOT re-resolved here.
+        # bootstrap.js rewrites the on-disk VERSION file on every packaged
+        # launch, so a fresh resolve would have this old process report the
+        # NEW bundle's number and turn an upgrade into a false match.
+        version=startup_version(),
     )
 
 

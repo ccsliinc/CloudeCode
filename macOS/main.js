@@ -440,11 +440,21 @@ app.whenReady().then(async () => {
   try {
     await serverManager.start();
   } catch (err) {
-    dialog.showErrorBox('Cloude Code could not start the server', err.message);
+    await reportStartFailure(err);
   }
 
-  // Force immediate health check to sync state before first menu update
-  const health = await serverManager.getHealth();
+  // Force immediate health check to sync state before first menu update.
+  //
+  // GUARDED, and the guard is the point. This probe cannot tell OUR server
+  // from a stranger on the same port: it asks "is something healthy on 8000",
+  // gets yes, and promotes the state to 'running'. When start() has just
+  // REFUSED to adopt that exact listener because it is a different version,
+  // this line would quietly undo the refusal one statement later and the app
+  // would carry on talking to the stale server anyway - the 2026-08-25 defect
+  // surviving its own fix. If start() blocked, leave it blocked.
+  const health = serverManager.startBlockedReason
+    ? null
+    : await serverManager.getHealth();
   if (health && serverManager.getState() !== 'running') {
     console.log('Initial health check succeeded, marking as running');
     serverManager.state = 'running';
@@ -1149,7 +1159,7 @@ function updateMenu() {
             } catch (err) {
               // The user explicitly asked for this, so they get an explicit
               // answer rather than a menu item that appears to do nothing.
-              dialog.showErrorBox('Cloude Code could not start the server', err.message);
+              await reportStartFailure(err);
             }
             updateMenu();
             setTimeout(updateMenu, 500);
@@ -1597,6 +1607,67 @@ function startStatsPolling() {
 /**
  * Handle app quit
  */
+/**
+ * Show a start() failure, and offer a way out of the one that has a way out.
+ *
+ * ADOPTION_REFUSED is not a generic error. start() found a healthy Cloude Code
+ * server on the port that it could not prove is running THIS bundle's code -
+ * on 2026-08-25 that was a v1.0.2 server, orphaned onto launchd, which a
+ * v1.0.3 bundle adopted and then ran for four hours. Refusing to adopt is
+ * right. Refusing and then leaving the user at a dead end is not: the only
+ * remaining move would be Activity Monitor, and an app that tells you
+ * something is wrong and nothing about what to do reads as broken.
+ *
+ * So the refusal becomes a choice, and the app does not make it. Killing a
+ * process this app did not start is exactly the kind of decision that needs a
+ * person, which is why the default button is the harmless one.
+ *
+ * @param {Error} err - The error start() threw.
+ * @returns {Promise<void>} Resolves once the user has answered, and once any
+ *   replacement they asked for has been attempted.
+ */
+async function reportStartFailure(err) {
+  if (!err || err.code !== 'ADOPTION_REFUSED') {
+    dialog.showErrorBox('Cloude Code could not start the server', err.message);
+    return;
+  }
+
+  const title =
+    err.outcome === 'mismatch'
+      ? 'A different version of the Cloude Code server is already running'
+      : 'Cloude Code cannot identify the server already running';
+
+  const answer = await dialog.showMessageBox({
+    type: 'warning',
+    title,
+    message: title,
+    detail:
+      `${err.reason || err.message}\n\n` +
+      'Replacing it will stop that server. Any Claude sessions it is running ' +
+      'in tmux keep running - tmux outlives the server - but anything ' +
+      'connected to it through the web client will be disconnected until the ' +
+      'new server is up.',
+    buttons: ['Leave it running', 'Replace it'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+
+  if (answer.response !== 1) {
+    console.log('User declined to replace the server on the port.');
+    return;
+  }
+
+  try {
+    await serverManager.takeOverPort();
+  } catch (takeoverErr) {
+    dialog.showErrorBox(
+      'Cloude Code could not replace the running server',
+      takeoverErr.message
+    );
+  }
+  updateMenu();
+}
+
 //
 // THE QUIT MUST WAIT FOR THE SERVER TO ACTUALLY DIE.
 //
