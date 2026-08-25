@@ -8,6 +8,7 @@ const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
 const { terminateProcess, isAlive } = require('./process-teardown');
 const { decideAdoption } = require('./adoption-decision');
+const { decideLifecycleAction } = require('./ownership-policy');
 const setupVerdict = require('./setup-verdict');
 const { resolvePublishedUrl } = require('./published-url');
 
@@ -1193,24 +1194,52 @@ class ServerManager {
    * (SIGTERM → 3s grace → SIGKILL). No HTTP shutdown call — the /api/v1/shutdown
    * endpoint now requires auth, and signaling a PID we own is strictly simpler.
    */
-  async stop() {
+  async stop(options = {}) {
     console.log('Stopping server...');
+
+    // ADOPTED SERVER: WE DID NOT START IT, SO WE DO NOT STOP IT - AND WE DO
+    // NOT LIE ABOUT IT EITHER.
+    //
+    // This branch used to log to a console nobody reads, set
+    // `this.state = 'stopped'`, and return. Two defects in four lines. The
+    // refusal was invisible, so from the menu it was indistinguishable from a
+    // dead click and got reported as a broken menu item. And the state it set
+    // was false: the server was still serving every request while the tray,
+    // which renders this exact field, reported it stopped.
+    //
+    // The guard itself is right and stays. What changes is that the refusal
+    // is now returned to the caller so the menu can show it, the state is
+    // taken from a MEASUREMENT rather than asserted, and an explicit
+    // `takeOwnership: true` from the user can override it. See
+    // macOS/ownership-policy.js for the argument.
+    const verdict = decideLifecycleAction({
+      action: 'stop',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      // Measured, not assumed. null when we could not tell, which leaves the
+      // state alone rather than inventing one.
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to stop: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        stopped: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
+    }
 
     // Everything from here on is a deliberate stop, so the exit handler must
     // not report it as a crash. Set BEFORE any kill is issued, because the
     // exit event can land before this function returns.
     this.stopRequested = true;
     this.lastExitUnexpected = false;
-
-    // Adopted server: we didn't start it, we don't stop it.
-    if (!this.ownedProcess) {
-      console.log('Server was adopted, not owned — leaving it running.');
-      // Clear our local references so menu reflects "stopped" from app's POV.
-      this.processPid = null;
-      this.state = 'stopped';
-      this.startTime = null;
-      return;
-    }
 
     // Owned server: terminate by PID and CONFIRM from the kernel.
     //
@@ -1271,8 +1300,45 @@ class ServerManager {
   /**
    * Restart the server
    */
-  async restart() {
+  async restart(options = {}) {
     console.log('Restarting server...');
+
+    // Ask BEFORE doing anything, rather than discovering the refusal halfway
+    // through stop() and returning from there. restart() used to delegate
+    // wholesale to stop(), so when stop() refused, restart() carried on to
+    // start() - which found the still-healthy adopted server on the port and
+    // went straight back down the adoption path. The user got no restart, no
+    // error, and no way to tell the difference.
+    const verdict = decideLifecycleAction({
+      action: 'restart',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to restart: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        restarted: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
+    }
+
+    if (!this.ownedProcess && options.takeOwnership === true) {
+      // Consented takeover of an adopted server: terminate the holder,
+      // confirm the port is free, then spawn ours. takeOverPort() does all
+      // three and refuses to spawn if any of them could not be confirmed.
+      await this.takeOverPort();
+      console.log('Server restarted under new ownership');
+      return { restarted: true, refused: false, tookOwnership: true };
+    }
+
     await this.stop();
 
     // Wait a bit before restarting
@@ -1280,6 +1346,7 @@ class ServerManager {
 
     await this.start();
     console.log('Server restarted');
+    return { restarted: true, refused: false, tookOwnership: false };
   }
 
   /**

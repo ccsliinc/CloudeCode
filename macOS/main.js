@@ -1141,7 +1141,21 @@ function updateMenu() {
         {
           label: 'Restart Server',
           click: async () => {
-            await serverManager.restart();
+            // A REFUSAL MUST BE VISIBLE.
+            //
+            // This used to be a bare `await serverManager.restart()`. When the
+            // server had been adopted rather than spawned, restart() refused
+            // deep inside stop() and returned without a word, so clicking the
+            // item did nothing observable and it was reported as broken. It
+            // was not broken; it was mute.
+            try {
+              const result = await serverManager.restart();
+              if (result && result.refused) {
+                await offerTakeOwnership('restart', result);
+              }
+            } catch (err) {
+              dialog.showErrorBox('Cloude Code could not restart the server', err.message);
+            }
             updateMenu();
             setTimeout(updateMenu, 2500);
           },
@@ -1154,7 +1168,10 @@ function updateMenu() {
               if (canStart) {
                 await serverManager.start();
               } else {
-                await serverManager.stop();
+                const result = await serverManager.stop();
+                if (result && result.refused) {
+                  await offerTakeOwnership('stop', result);
+                }
               }
             } catch (err) {
               // The user explicitly asked for this, so they get an explicit
@@ -1607,6 +1624,68 @@ function startStatsPolling() {
 /**
  * Handle app quit
  */
+/**
+ * Show why a stop or restart was refused, and offer to take ownership.
+ *
+ * The refusal itself is correct - Cloude Code does not stop a server it did
+ * not start. What was wrong was that it happened in silence. From the menu, a
+ * correct refusal and a broken menu item look exactly the same, and the user
+ * reasonably read it as the latter.
+ *
+ * The destructive option is never the default button. Taking ownership means
+ * killing a process this app did not start, which is a decision that belongs
+ * to a person and should not ride on a stray Return key.
+ *
+ * @param {'stop'|'restart'} action - What was refused.
+ * @param {{reason: string, offerTakeOwnership: boolean, pid: number|null}}
+ *   result - The structured refusal from serverManager.
+ * @returns {Promise<void>} Resolves once the user has answered and any
+ *   takeover they asked for has been attempted.
+ */
+async function offerTakeOwnership(action, result) {
+  const title =
+    action === 'restart'
+      ? 'Cloude Code did not start this server'
+      : 'Cloude Code did not start this server';
+
+  if (!result.offerTakeOwnership) {
+    dialog.showErrorBox(title, result.reason);
+    return;
+  }
+
+  const verb = action === 'restart' ? 'Restart' : 'Stop';
+  const answer = await dialog.showMessageBox({
+    type: 'warning',
+    title,
+    message: title,
+    detail:
+      `${result.reason}\n\n` +
+      (result.pid ? `The running server is PID ${result.pid}.\n\n` : '') +
+      `${verb} it anyway and let Cloude Code take ownership? Claude sessions ` +
+      'running in tmux keep running - tmux outlives the server - but anything ' +
+      'connected through the web client will be disconnected.',
+    buttons: ['Leave it alone', `${verb} it anyway`],
+    defaultId: 0,
+    cancelId: 0,
+  });
+
+  if (answer.response !== 1) {
+    console.log(`User declined to take ownership for ${action}.`);
+    return;
+  }
+
+  try {
+    if (action === 'restart') {
+      await serverManager.restart({ takeOwnership: true });
+    } else {
+      await serverManager.stop({ takeOwnership: true });
+    }
+  } catch (err) {
+    dialog.showErrorBox(`Cloude Code could not ${action} the server`, err.message);
+  }
+  updateMenu();
+}
+
 /**
  * Show a start() failure, and offer a way out of the one that has a way out.
  *
