@@ -117,6 +117,55 @@ class SweepVerdict:
     reason: str
 
 
+def configured_project_paths(auth_cfg) -> list[str] | None:
+    """Read the configured project base paths, or report that we cannot.
+
+    The provenance half of the sweeper's safety. Every failure to
+    enumerate returns ``None``, which the sweeper treats as "delete
+    nothing at all", rather than an empty list, which it would treat as
+    "there are legitimately no projects, carry on with the default dir".
+    Those two are very different statements and only one of them is
+    evidence.
+
+    Inputs:
+        auth_cfg: A loaded ``AuthConfig``.
+    Outputs:
+        list[str] - one base path per configured project, possibly
+        empty when the config genuinely declares none.
+        None - the list could not be determined.
+    Example:
+        >>> configured_project_paths(settings.load_auth_config())
+        ['/Users/me/Development/thing']
+    """
+    try:
+        projects = auth_cfg.projects
+    except AttributeError as exc:
+        logger.warning("project_list_unreadable", error=str(exc))
+        return None
+    if projects is None:
+        logger.warning("project_list_unreadable", error="projects is None")
+        return None
+
+    paths: list[str] = []
+    try:
+        for project in projects:
+            path = project.path
+            if not isinstance(path, str) or not path.strip():
+                # One unusable entry means the list as a whole is not
+                # trustworthy. Silently dropping it would sweep a subset
+                # while reporting a complete run.
+                logger.warning(
+                    "project_list_unreadable",
+                    error=f"project entry has an unusable path: {path!r}",
+                )
+                return None
+            paths.append(path)
+    except (AttributeError, TypeError) as exc:
+        logger.warning("project_list_unreadable", error=str(exc))
+        return None
+    return paths
+
+
 def sweep_verdict(base: str | os.PathLike | None) -> SweepVerdict:
     """Decide whether ``<base>/.cloude_uploads`` may be pruned. PURE QUERY.
 

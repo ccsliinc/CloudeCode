@@ -53,7 +53,12 @@ from src.core.session_activity import (
 )
 from src.core.unread_store import UnreadStore
 from src.core.notifications.idle_watcher import IdleWatcher
-from src.core.upload_sweeper import UPLOAD_DIR_NAME, UploadSweeper
+from src.core.upload_sweeper import (
+    SweepOutcome,
+    UploadSweeper,
+    configured_project_paths,
+    sweep_verdict,
+)
 from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
 
@@ -933,7 +938,7 @@ class SessionManager:
         sweeper = UploadSweeper(
             ttl_seconds=cfg.ttl_seconds,
             interval_seconds=0,
-            project_paths=[p.path for p in auth_cfg.projects],
+            project_paths=configured_project_paths(auth_cfg),
             default_dir=settings.get_working_dir(),
         )
         try:
@@ -2442,13 +2447,27 @@ class SessionManager:
 
             sess.status = SessionStatus.STOPPED
 
+            # Layer 1 of upload cleanup (see upload_sweeper's module
+            # docstring). This is a RECURSIVE delete of an operator-supplied
+            # path, so it goes through the same three-question verdict the
+            # background sweeper uses rather than trusting exists(): a
+            # session's working_dir is a real project directory, and under
+            # test it is whatever the fixture happened to leave behind.
+            # ignore_errors=True used to make any refusal invisible.
             working_dir = sess.working_dir
             if working_dir:
-                uploads_dir = Path(working_dir).expanduser() / UPLOAD_DIR_NAME
-                if uploads_dir.exists():
-                    shutil.rmtree(uploads_dir, ignore_errors=True)
+                verdict = sweep_verdict(working_dir)
+                if verdict.outcome is SweepOutcome.SWEEP:
+                    shutil.rmtree(verdict.bucket, ignore_errors=True)
                     logger.info(
-                        "upload_dir_cleaned_on_destroy", path=str(uploads_dir)
+                        "upload_dir_cleaned_on_destroy",
+                        path=str(verdict.bucket),
+                    )
+                elif verdict.outcome is SweepOutcome.REFUSED:
+                    logger.warning(
+                        "upload_dir_cleanup_refused",
+                        working_dir=str(working_dir),
+                        reason=verdict.reason,
                     )
 
             was_persisted = (self.current_session() is not None and

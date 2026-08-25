@@ -24,7 +24,7 @@ from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
 from src.core.refresh_store import RefreshStore
-from src.core.upload_sweeper import UploadSweeper
+from src.core.upload_sweeper import UploadSweeper, configured_project_paths
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
@@ -461,7 +461,7 @@ async def lifespan(app: FastAPI):
         upload_sweeper = UploadSweeper(
             ttl_seconds=cfg.ttl_seconds,
             interval_seconds=cfg.sweep_interval_seconds,
-            project_paths=[p.path for p in auth_cfg.projects],
+            project_paths=configured_project_paths(auth_cfg),
             default_dir=settings.get_working_dir(),
         )
         app.state.upload_sweeper = upload_sweeper

@@ -56,6 +56,7 @@ from src.core.upload_sweeper import (  # noqa: E402
     UPLOAD_DIR_NAME,
     SweepOutcome,
     UploadSweeper,
+    configured_project_paths,
     sweep_verdict,
 )
 
@@ -314,3 +315,132 @@ def test_guard_is_inert_when_not_under_test(tmp_path, monkeypatch):
     verdict = sweep_verdict(str(project))
     assert verdict.outcome is SweepOutcome.SWEEP
     assert verdict.bucket == (project / UPLOAD_DIR_NAME).resolve()
+
+
+# ---- provenance at the source: reading the configured project list -----
+
+
+class _FakeProject:
+    def __init__(self, path):
+        self.path = path
+
+
+class _FakeAuthConfig:
+    def __init__(self, projects):
+        self.projects = projects
+
+
+def test_configured_project_paths_reads_a_good_list():
+    """The ordinary case still produces a plain list of strings."""
+    cfg = _FakeAuthConfig([_FakeProject("/a"), _FakeProject("/b")])
+    assert configured_project_paths(cfg) == ["/a", "/b"]
+
+
+def test_configured_project_paths_distinguishes_empty_from_unknown():
+    """No projects is a fact. It must not be confused with not knowing."""
+    assert configured_project_paths(_FakeAuthConfig([])) == []
+    assert configured_project_paths(_FakeAuthConfig(None)) is None
+
+
+@pytest.mark.parametrize(
+    "projects",
+    [
+        [_FakeProject("/a"), _FakeProject("")],
+        [_FakeProject("/a"), _FakeProject(None)],
+        [_FakeProject("/a"), object()],
+    ],
+)
+def test_configured_project_paths_refuses_a_partial_list(projects):
+    """One unusable entry poisons the whole list.
+
+    Dropping the bad entry and returning the rest would sweep a subset
+    while reporting a complete run - a partial answer wearing a
+    complete answer's clothes.
+    """
+    assert configured_project_paths(_FakeAuthConfig(projects)) is None
+
+
+# ---- the OTHER delete site: destroy_session's recursive rmtree ---------
+
+
+async def _destroy_with_uploads_dir(tmp_path, working_dir: Path):
+    """Drive ``SessionManager.destroy_session`` for a session in working_dir.
+
+    Inputs:
+        tmp_path: pytest tmp dir, used for the metadata redirect.
+        working_dir: Disposable directory holding a ``.cloude_uploads``.
+    Outputs:
+        None. The session is destroyed; the caller inspects the tree.
+    """
+    from unittest.mock import MagicMock
+
+    import src.core.session_manager as sm_mod
+    from src.core.session_manager import SessionManager
+    from src.models import Session, SessionStatus
+
+    object.__setattr__(
+        sm_mod.settings,
+        "get_session_metadata_path",
+        lambda: tmp_path / "session_metadata.json",
+    )
+
+    manager = SessionManager()
+    backend = MagicMock()
+
+    async def _stop():
+        return None
+
+    backend.stop = _stop
+    backend.is_alive = MagicMock(return_value=True)
+    backend.tmux_session = "cloude_iso01"
+    manager._register_session(
+        Session(
+            id="ses_iso01",
+            working_dir=str(working_dir),
+            status=SessionStatus.RUNNING,
+        ),
+        backend,
+    )
+    await manager.destroy_session()
+
+
+@pytest.mark.asyncio
+async def test_destroy_session_rmtree_refuses_outside_every_temp_root(
+    tmp_path, monkeypatch
+):
+    """Layer 1 is an rmtree, and it gets the same verdict as the sweeper.
+
+    ``destroy_session`` recursively deletes ``<working_dir>/.cloude_uploads``
+    with ``ignore_errors=True``, which used to make any refusal invisible.
+    The tree here is disposable.
+    """
+    allowed_root = tmp_path / "the-only-temp-root"
+    allowed_root.mkdir()
+    monkeypatch.setattr(test_write_guard, "temp_roots", lambda: [allowed_root])
+
+    working_dir = tmp_path / "pretend-real-project"
+    working_dir.mkdir()
+    survivor = _seed_old_file(working_dir, "keep.png")
+
+    await _destroy_with_uploads_dir(tmp_path, working_dir)
+
+    assert survivor.exists(), (
+        "destroy_session rmtree'd an uploads dir outside every temp root."
+    )
+
+
+@pytest.mark.asyncio
+async def test_destroy_session_still_cleans_a_permitted_uploads_dir(
+    tmp_path, monkeypatch
+):
+    """Positive control for the rmtree site: the normal path still cleans."""
+    monkeypatch.setattr(test_write_guard, "temp_roots", lambda: [tmp_path])
+
+    working_dir = tmp_path / "legit"
+    working_dir.mkdir()
+    doomed = _seed_old_file(working_dir, "gone.png")
+
+    await _destroy_with_uploads_dir(tmp_path, working_dir)
+
+    assert not doomed.exists()
+    assert not (working_dir / UPLOAD_DIR_NAME).exists()
