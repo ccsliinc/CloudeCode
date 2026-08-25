@@ -381,6 +381,23 @@ console.log('[SessionSidebarReorder Module] Loading...');
         // still has to be repainted into its new section. Returning early
         // on a null here is what would make a drag between two groups
         // look like it did nothing.
+        //
+        // NOT COVERED BY A TEST, AND SAID SO RATHER THAN IMPLIED.
+        // scripts/verify_sidebar_group_drag.py measures the row's band
+        // mid-drag with the pointer still down, and that assertion passes
+        // WITH AND WITHOUT this branch - measured, not assumed. The
+        // reason is that the first pointer sample to reach the target
+        // band also changes the flat visible order (the empty pinned band
+        // appearing shifts every row), so placeAt returns non-null there
+        // and repaints anyway; placeAt was instrumented and returns null
+        // on 6 of 8 samples, so the branch DOES execute, but its removal
+        // is not observable in any scenario that could be constructed.
+        // It is kept because the case it guards is real - a drag whose
+        // flat order never changes at any sample would leave the row
+        // stuck under the finger until release - and deleting correct
+        // defensive code because a harness cannot reach it is how the
+        // narrow case ships broken. If you can build that scenario,
+        // assert it here and delete this comment.
         if (!result) {
             if (drag.groupChanged) repaintKeepingFocus(drag.name);
             return;
