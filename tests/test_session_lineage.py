@@ -1,0 +1,359 @@
+"""Claude-session identity and fork lineage.
+
+WHAT THESE TESTS ARE ACTUALLY DEFENDING. Two claims, and neither is about
+SQL.
+
+FIRST: that a fork produces a SECOND ROW pointing at the one it came from,
+rather than overwriting the first. The difference matters because the
+overwrite is invisible - the table still looks healthy, the session still
+works, and the only thing lost is the ability to ever reopen the
+conversation that was there before. So the assertions are on ROWS AND
+PARENT IDS read back out of the database, never on a function having been
+called.
+
+SECOND: that a lineage row cannot be mistaken for a live tmux session by
+any reader that predates it. That is asserted against the actual identity
+queries - ``get_instance``, ``owned_instances``, ``list_sessions`` - not
+against the intention.
+
+The hook-side guarantee (an unreachable server must not break a session
+start) lives in tests/test_claude_hooks_fail_open.py, because it is a
+property of the installed shell command rather than of this module.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from contextlib import closing
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+os.environ.setdefault("DEFAULT_WORKING_DIR", "/tmp")
+os.environ.setdefault("LOG_DIRECTORY", "/tmp")
+os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
+os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
+
+# ruff: noqa: E402
+from src.core.db import connect, db_path_for, transaction
+from src.core.db_migration import ensure_db_migrated
+from src.core.db_models import (
+    SESSION_FORK_KIND_CLEAR,
+    SESSION_FORK_KIND_FORK,
+    SESSION_FORK_KIND_UNKNOWN,
+    SESSION_LIFECYCLE_STOPPED,
+    SESSION_ORIGIN_CREATED,
+)
+from src.core.session_identity import record_instance
+from src.core.session_lineage import (
+    LINEAGE_BOUND,
+    LINEAGE_CONTINUED,
+    LINEAGE_FORKED,
+    LINEAGE_UNRESOLVED,
+    classify_fork_kind,
+    lineage_chain,
+    record_claude_session,
+)
+from src.core.session_store import (
+    get_instance,
+    list_sessions,
+    needs_attention,
+    owned_instances,
+)
+
+SOCKET = "cloude"
+NAME = "cloude_proj"
+EPOCH = 1_700_000_000
+
+
+@pytest.fixture()
+def conn(tmp_path):
+    """A migrated cloude.db connection at the current schema version.
+
+    Inputs: tmp_path (Path) - pytest's per-test directory.
+    Output: sqlite3.Connection, closed on teardown.
+    """
+    ensure_db_migrated(tmp_path, 4, "0.8.2")
+    with closing(connect(db_path_for(tmp_path))) as connection:
+        yield connection
+
+
+@pytest.fixture()
+def anchor(conn):
+    """One created tmux instance with a row, and no Claude session yet.
+
+    Inputs: conn (sqlite3.Connection).
+    Output: int - the anchor row's sessions.id.
+    """
+    with transaction(conn):
+        result = record_instance(
+            conn,
+            socket=SOCKET,
+            name=NAME,
+            epoch=EPOCH,
+            origin=SESSION_ORIGIN_CREATED,
+            working_dir="/tmp/proj",
+        )
+    return result.session_id
+
+
+def _record(conn, claude_uuid, source, **kwargs):
+    """Run one lineage write inside its own transaction.
+
+    Inputs: conn (sqlite3.Connection). claude_uuid (str). source (str |
+      None). **kwargs - forwarded to record_claude_session.
+    Output: LineageResult.
+    """
+    with transaction(conn):
+        return record_claude_session(
+            conn,
+            socket=kwargs.pop("socket", SOCKET),
+            name=kwargs.pop("name", NAME),
+            epoch=kwargs.pop("epoch", EPOCH),
+            claude_uuid=claude_uuid,
+            source=source,
+            **kwargs,
+        )
+
+
+# --- the column that was declared and never written -------------------------
+
+
+def test_v1_0_3_never_wrote_the_lineage_columns(conn, anchor):
+    """A fresh row carries NULL in all three lineage columns.
+
+    This is the pre-condition the whole feature is built on, asserted
+    rather than assumed: the schema declared them in v2 and nothing wrote
+    them, so a row created by the ordinary create path has them empty.
+    """
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["claude_session_uuid"] is None
+    assert row["parent_session_id"] is None
+    assert row["fork_kind"] is None
+
+
+def test_startup_binds_the_uuid_to_the_anchor_row(conn, anchor):
+    """The first SessionStart writes the uuid onto the existing row."""
+    result = _record(conn, "uuid-A", "startup")
+    assert result.outcome == LINEAGE_BOUND
+    assert result.row_id == anchor
+
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["claude_session_uuid"] == "uuid-A"
+    assert row["parent_session_id"] is None
+    # Binding is NOT a fork. No second row.
+    assert len(list_sessions(conn, include_lineage=True)) == 1
+
+
+# --- THE DECISIVE TEST: a fork is a new row with the right parent -----------
+
+
+def test_fork_creates_a_second_row_pointing_at_the_first(conn, anchor):
+    """``source='fork'`` inserts a NEW row parented to the previous one.
+
+    The assertions are on rows read back out of the table, and on the
+    parent id specifically, because "we called the fork function" is not
+    evidence that a reopenable record exists.
+    """
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-B", "fork")
+
+    assert result.outcome == LINEAGE_FORKED
+    assert result.parent_row_id == anchor
+    assert result.fork_kind == SESSION_FORK_KIND_FORK
+
+    rows = list_sessions(conn, include_lineage=True)
+    assert len(rows) == 2
+
+    child = [r for r in rows if r["id"] == result.row_id][0]
+    parent = [r for r in rows if r["id"] == anchor][0]
+
+    assert child["parent_session_id"] == anchor
+    assert child["claude_session_uuid"] == "uuid-B"
+    assert child["fork_kind"] == SESSION_FORK_KIND_FORK
+    # THE PARENT IS NOT REWRITTEN. Its uuid still identifies the
+    # conversation that was there, which is the whole point of a new row.
+    assert parent["claude_session_uuid"] == "uuid-A"
+    assert parent["parent_session_id"] is None
+
+
+def test_the_forked_row_carries_what_reopening_needs(conn, anchor):
+    """A fork row stores the uuid and the directory ``--resume`` needs."""
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-B", "fork")
+
+    child = [
+        r for r in list_sessions(conn, include_lineage=True) if r["id"] == result.row_id
+    ][0]
+    assert child["claude_session_uuid"] == "uuid-B"
+    assert child["working_dir"] == "/tmp/proj"
+    assert child["origin"] == SESSION_ORIGIN_CREATED
+    assert child["lifecycle"] == SESSION_LIFECYCLE_STOPPED
+
+
+def test_a_second_fork_parents_onto_the_head_not_the_root(conn, anchor):
+    """Forking twice builds a CHAIN, not two children of the anchor."""
+    _record(conn, "uuid-A", "startup")
+    first = _record(conn, "uuid-B", "fork")
+    second = _record(conn, "uuid-C", "fork")
+
+    assert second.parent_row_id == first.row_id
+    assert second.parent_row_id != anchor
+
+    chain = lineage_chain(conn, second.row_id)
+    assert [r["claude_session_uuid"] for r in chain] == [
+        "uuid-A",
+        "uuid-B",
+        "uuid-C",
+    ]
+
+
+# --- the classification, argued in db_models and asserted here --------------
+
+
+def test_clear_is_a_new_row_and_says_it_was_a_clear(conn, anchor):
+    """``/clear`` forks, because the cleared conversation stays resumable."""
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-B", "clear")
+    assert result.outcome == LINEAGE_FORKED
+    assert result.fork_kind == SESSION_FORK_KIND_CLEAR
+    assert result.parent_row_id == anchor
+
+
+def test_compact_is_the_same_session_continuing(conn, anchor):
+    """A compaction presents the SAME uuid, so no row is added."""
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-A", "compact")
+    assert result.outcome == LINEAGE_CONTINUED
+    assert len(list_sessions(conn, include_lineage=True)) == 1
+
+
+def test_resume_of_the_same_conversation_is_not_a_fork(conn, anchor):
+    """``--resume`` keeps the uuid, so it is a continuation."""
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-A", "resume")
+    assert result.outcome == LINEAGE_CONTINUED
+    assert len(list_sessions(conn, include_lineage=True)) == 1
+
+
+def test_a_duplicate_hook_delivery_writes_nothing(conn, anchor):
+    """The same POST arriving twice must leave the table untouched."""
+    _record(conn, "uuid-A", "startup")
+    _record(conn, "uuid-B", "fork")
+    before = list_sessions(conn, include_lineage=True)
+
+    again = _record(conn, "uuid-B", "fork")
+
+    assert again.outcome == LINEAGE_CONTINUED
+    assert not again.wrote
+    assert list_sessions(conn, include_lineage=True) == before
+
+
+def test_an_unknown_source_forks_honestly_rather_than_guessing(conn, anchor):
+    """A source string this build has never heard of stores 'unknown'."""
+    _record(conn, "uuid-A", "startup")
+    result = _record(conn, "uuid-B", "teleport_from_the_future")
+    assert result.outcome == LINEAGE_FORKED
+    assert result.fork_kind == SESSION_FORK_KIND_UNKNOWN
+
+
+def test_classify_fork_kind_never_invents_a_kind():
+    """Every unrecognised input maps to 'unknown', including None."""
+    assert classify_fork_kind("fork") == SESSION_FORK_KIND_FORK
+    assert classify_fork_kind("clear") == SESSION_FORK_KIND_CLEAR
+    assert classify_fork_kind(None) == SESSION_FORK_KIND_UNKNOWN
+    assert classify_fork_kind("") == SESSION_FORK_KIND_UNKNOWN
+    assert classify_fork_kind("startup") == SESSION_FORK_KIND_UNKNOWN
+
+
+# --- the third outcome ------------------------------------------------------
+
+
+def test_an_unknown_tmux_instance_is_unresolved_not_a_new_session(conn):
+    """No row for the triple means CANNOT DETERMINE, and writes nothing."""
+    result = _record(conn, "uuid-A", "startup", name="never-recorded")
+    assert result.outcome == LINEAGE_UNRESOLVED
+    assert result.detail
+    assert list_sessions(conn, include_lineage=True) == []
+
+
+def test_an_unreadable_epoch_is_unresolved(conn, anchor):
+    """A None epoch identifies no instance, so nothing is written."""
+    result = _record(conn, "uuid-A", "startup", epoch=None)
+    assert result.outcome == LINEAGE_UNRESOLVED
+    assert len(list_sessions(conn, include_lineage=True)) == 1
+
+
+def test_an_empty_payload_session_id_is_unresolved(conn, anchor):
+    """A payload with no session_id cannot be recorded and says so."""
+    result = _record(conn, "", "startup")
+    assert result.outcome == LINEAGE_UNRESOLVED
+
+
+# --- a lineage row must be invisible to every tmux-identity reader ----------
+
+
+def test_a_lineage_row_cannot_be_mistaken_for_a_tmux_instance(conn, anchor):
+    """The fork row is excluded from every identity query, by the queries.
+
+    Asserted against the real readers rather than against the NULL epoch,
+    because the guarantee that matters is what those readers RETURN.
+    """
+    _record(conn, "uuid-A", "startup")
+    forked = _record(conn, "uuid-B", "fork")
+
+    # The instance triple still resolves to the ANCHOR, not the fork.
+    assert get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)["id"] == anchor
+    # Ownership is keyed on the instance; the fork contributes no pair.
+    assert owned_instances(conn, socket=SOCKET) == {(NAME, EPOCH)}
+    # And the default session listing does not show it at all.
+    ids = [r["id"] for r in list_sessions(conn)]
+    assert anchor in ids
+    assert forked.row_id not in ids
+
+
+def test_lineage_rows_do_not_enter_needs_attention(conn, anchor):
+    """A finished conversation is not something the user can act on."""
+    _record(conn, "uuid-A", "startup")
+    _record(conn, "uuid-B", "fork")
+    assert all(r["parent_session_id"] is None for r in needs_attention(conn))
+
+
+def test_rows_that_predate_lineage_are_untouched_and_still_listed(conn, anchor):
+    """A pre-lineage row is a lineage ROOT and stays fully visible.
+
+    His existing rows have NULL in all three columns and always will.
+    Lineage-aware code must neither backfill nor hide them.
+    """
+    before = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert before["claude_session_uuid"] is None
+
+    # A DIFFERENT tmux session forks. The untouched row must not move.
+    with transaction(conn):
+        record_instance(
+            conn,
+            socket=SOCKET,
+            name="other",
+            epoch=EPOCH + 1,
+            origin=SESSION_ORIGIN_CREATED,
+        )
+    _record(conn, "uuid-A", "startup", name="other", epoch=EPOCH + 1)
+    _record(conn, "uuid-B", "fork", name="other", epoch=EPOCH + 1)
+
+    after = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert after == before
+    assert anchor in [r["id"] for r in list_sessions(conn)]
+
+
+def test_title_is_written_once_and_never_overwritten(conn, anchor):
+    """A session title is recorded on first sight and then left alone."""
+    _record(conn, "uuid-A", "startup", title="first title")
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["title"] == "first title"
+
+    _record(conn, "uuid-A", "compact", title="a later, different title")
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["title"] == "first title"
