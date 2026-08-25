@@ -74,9 +74,16 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
     if g2["rename"]:
         rep.check(g2["rename"]["focused"] is True,
                   "ITEM 66: the editor takes real DOM focus", "")
-        rep.check(g2["rename"]["value"] == "cloude_fstest",
-                  "ITEM 66: and starts with the current name in it",
+        # THE SEED IS WHAT THE ROW SHOWS. With no label set, that is the
+        # cloude_-stripped handle - which is also exactly what this panel
+        # rendered before labels existed, so an unlabelled session looks
+        # and edits precisely as it always did.
+        rep.check(g2["rename"]["value"] == "fstest",
+                  "ITEM 66: and starts with what the row DISPLAYS in it",
                   f"value={g2['rename']['value']!r}")
+        rep.check(g2["rename"]["maxlength"] == "200",
+                  "ITEM 66: the editor accepts a LABEL's length, not a tmux name's",
+                  f"maxlength={g2['rename']['maxlength']!r}")
         # A ROW THAT GROWS WHEN YOU DOUBLE-CLICK IT shoves every row below
         # it down while the pointer is still moving.
         rep.check(abs(g2["rename"]["rowHeight"] - before_h) < 1.0,
@@ -111,10 +118,10 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
     page.wait_for_timeout(200)
     g3 = page.evaluate("window.__sidebarMeasure()")
     rep.check(g3["rename"] is None, "ITEM 66: Escape closes the editor", "")
-    rep.check(any(r["name"] == "cloude_fstest" for r in g3["rows"]),
+    rep.check(any(r["displayName"] == "fstest" for r in g3["rows"]),
               "ITEM 66: and the original name is restored",
-              f"names={[r['name'] for r in g3['rows']][:3]}")
-    rep.check(not any(r["name"] == "escape_should_discard" for r in g3["rows"]),
+              f"shown={[r['displayName'] for r in g3['rows']][:3]}")
+    rep.check(not any(r["displayName"] == "escape_should_discard" for r in g3["rows"]),
               "ITEM 66: Escape DISCARDS the typed name rather than committing it", "")
     page.close()
 
@@ -128,9 +135,22 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
     page.wait_for_timeout(250)
     g4 = page.evaluate("window.__sidebarMeasure()")
     rep.check(g4["rename"] is None, "ITEM 66: Enter closes the editor", "")
-    rep.check(any(r["name"] == "renamed_ok" for r in g4["rows"]),
+    # READ OFF THE RENDERED ELEMENT, not off `data-name`. This assertion
+    # used to read `data-name`, which under the correct model does not
+    # move at all - a rename writes a LABEL and leaves the tmux handle
+    # exactly where it is. So the old form could only have passed against
+    # a harness that renamed the handle, and it did: the fake server used
+    # to mutate `r.name`. Both were wrong together and looked right.
+    rep.check(any(r["displayName"] == "renamed_ok" for r in g4["rows"]),
               "ITEM 66: Enter COMMITS the new name into the row",
+              f"shown={[r['displayName'] for r in g4['rows']][:3]}")
+    rep.check(all(r["name"] != "renamed_ok" for r in g4["rows"]),
+              "ITEM 66: and the TMUX HANDLE did not move - a rename writes a label",
               f"names={[r['name'] for r in g4['rows']][:3]}")
+    shown = [r for r in g4["rows"] if r["displayName"] == "renamed_ok"]
+    rep.check(bool(shown) and shown[0]["displayWidth"] > 4,
+              "ITEM 66: and the committed name occupies real painted width",
+              f"width={shown[0]['displayWidth'] if shown else 'no row'}")
     page.close()
 
     # ---- A REJECTED RENAME SAYS SO AND RESTORES THE PREVIOUS NAME.
@@ -143,10 +163,10 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
     page.keyboard.press("Enter")
     page.wait_for_timeout(300)
     g5 = page.evaluate("window.__sidebarMeasure()")
-    rep.check(any(r["name"] == "cloude_fstest" for r in g5["rows"]),
+    rep.check(any(r["displayName"] == "fstest" for r in g5["rows"]),
               "ITEM 66: a FAILED rename restores the previous name",
-              f"names={[r['name'] for r in g5['rows']][:3]}")
-    rep.check(not any(r["name"] == "taken_name" for r in g5["rows"]),
+              f"shown={[r['displayName'] for r in g5['rows']][:3]}")
+    rep.check(not any(r["displayName"] == "taken_name" for r in g5["rows"]),
               "ITEM 66: and the rejected name is nowhere on screen", "")
     # THE EDITOR STAYS OPEN, WITH THE TEXT STILL IN IT. Closing it and
     # only announcing the failure would make the user retype rather than
@@ -162,6 +182,87 @@ def measure_inline_rename(browser, port: int, rep: Report) -> None:
         rep.check("rename failed" in g5["rename"]["error"],
                   "ITEM 66: and the reason shown NEXT TO the input, not only announced",
                   f"error={g5['rename']['error']!r}")
+    page.close()
+
+    # ---- THE DATA-LOSS CASE. A SESSION THAT ALREADY HAS A LABEL.
+    #
+    # Everything above drives a session with NO label, where the handle
+    # and the display value happen to agree once the prefix is stripped -
+    # so none of it can tell a control that edits the LABEL from one that
+    # edits the HANDLE. This is the case that separates them, and it is
+    # the one that was losing data: the row showed the handle, the editor
+    # seeded from the handle, and committing stored a handle-derived
+    # string over whatever the user had called the session.
+    #
+    # The label deliberately carries a space, a colon, a dot, a quote and
+    # a dollar - all legal in a label, none of them legal in the old
+    # client-side validator, and `:` and `.` specifically are tmux target
+    # syntax. A label that survives this round trip cannot have been
+    # through the tmux-name filter.
+    label = 'Media Compression: v1.2 "final" $5'
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    page.evaluate("(v) => window.__seedLabel('cloude_fstest', v)", label)
+    page.evaluate("window.SessionSidebar._lastSig = null")
+    page.evaluate("window.SessionSidebar._fetchAndRender()")
+    page.wait_for_timeout(250)
+
+    gl = page.evaluate("window.__sidebarMeasure()")
+    rep.check(any(r["displayName"] == label for r in gl["rows"]),
+              "ITEM 66: a labelled session RENDERS its label, not its tmux handle",
+              f"shown={[r['displayName'] for r in gl['rows']][:3]}")
+    rep.check(any(r["name"] == "cloude_fstest" for r in gl["rows"]),
+              "ITEM 66: while data-name still carries the handle everything keys on",
+              f"names={[r['name'] for r in gl['rows']][:3]}")
+
+    page.dblclick(name_sel)
+    page.wait_for_timeout(150)
+    gl2 = page.evaluate("window.__sidebarMeasure()")
+    rep.check(gl2["rename"] is not None and gl2["rename"]["value"] == label,
+              "ITEM 66: and the editor OPENS ON THE LABEL, not on the handle",
+              f"value={(gl2['rename'] or {}).get('value')!r}")
+
+    # DISMISSED UNCHANGED, THE LABEL SURVIVES. Asserted on the STORED
+    # value and on the call count, not on the row - a row can render the
+    # right thing while a write nobody wanted has already gone out.
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(250)
+    stored = page.evaluate("window.__lastRenameValue || null")
+    calls = page.evaluate("window.__renameCallCount || 0")
+    rep.check(calls == 0 and stored is None,
+              "ITEM 66: dismissing the editor UNCHANGED writes nothing at all",
+              f"calls={calls} stored={stored!r}")
+    g_after = page.evaluate("window.__sidebarMeasure()")
+    rep.check(any(r["displayName"] == label for r in g_after["rows"]),
+              "ITEM 66: so the label the user typed is still on screen afterwards",
+              f"shown={[r['displayName'] for r in g_after['rows']][:3]}")
+    page.close()
+
+    # ---- AND A REAL EDIT STORES THE USER'S NEW LABEL, VERBATIM.
+    page = open_page(browser, port, {DENSITY_KEY: "cozy"})
+    page.evaluate("(v) => window.__seedLabel('cloude_fstest', v)", label)
+    page.evaluate("window.SessionSidebar._lastSig = null")
+    page.evaluate("window.SessionSidebar._fetchAndRender()")
+    page.wait_for_timeout(250)
+    page.dblclick(name_sel)
+    page.wait_for_timeout(150)
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.type("Archive Sweep: nightly")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    stored = page.evaluate("window.__lastRenameValue || null")
+    rep.check(stored == "Archive Sweep: nightly",
+              "ITEM 66: a label with a space and a colon reaches the server VERBATIM",
+              f"stored={stored!r}")
+    rep.check(not (stored or "").startswith("cloude_"),
+              "ITEM 66: and no tmux handle was ever promoted into a stored label",
+              f"stored={stored!r}")
+    g_edit = page.evaluate("window.__sidebarMeasure()")
+    rep.check(any(r["displayName"] == "Archive Sweep: nightly" for r in g_edit["rows"]),
+              "ITEM 66: and the row RENDERS the new label",
+              f"shown={[r['displayName'] for r in g_edit['rows']][:3]}")
+    rep.check(any(r["name"] == "cloude_fstest" for r in g_edit["rows"]),
+              "ITEM 66: with the tmux handle STILL unmoved after a successful rename",
+              f"names={[r['name'] for r in g_edit['rows']][:3]}")
     page.close()
 
     # ---- A ROW THAT CANNOT BE RENAMED OPENS NO EDITOR. Last, because it

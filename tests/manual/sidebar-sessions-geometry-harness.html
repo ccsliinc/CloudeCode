@@ -41,6 +41,14 @@
 <div id="panel-mount"></div>
 
 <script src="../../client/js/api.js"></script>
+<!-- THE FALLBACK RESOLVER AND THE LABEL RULE. The app has served this
+     since the label feature landed; this harness did not, so the row
+     builder's display fallback and the rename editor's validator both
+     ran without it. Neither guessed: the row fell back to the handle
+     and the editor refused with "the label rule is unavailable",
+     which is what made the omission visible instead of silent. Must
+     load BEFORE the rows and rename modules. -->
+<script src="../../client/js/session-label.js"></script>
 <script src="../../client/js/session-status-ui.js"></script>
 <script src="../../client/js/session-row-actions.js"></script>
 <script src="../../client/js/session-theme-tint.js"></script>
@@ -84,8 +92,16 @@ function fixtureRows() {
     // - and that is the state most likely to be quietly folded into
     // "external" by a `!r.x` somewhere.
     rows[4].created_by_cloude = null;
+    // A RENAME SETS A LABEL. It does NOT move `name`.
+    //
+    // This used to read `if (renamed[r.name]) r.name = renamed[r.name]`,
+    // which modelled a rename as a tmux rename-session - the very thing
+    // the label feature exists to make unreachable. A harness that moves
+    // the handle cannot tell a correct client from one that overwrites a
+    // label with a handle, because in that model there is nothing to
+    // overwrite. It made both look identical and both look fine.
     for (const r of rows) {
-        if (renamed[r.name]) r.name = renamed[r.name];
+        if (labels[r.name] !== undefined) r.label = labels[r.name];
     }
     return rows;
 }
@@ -93,13 +109,23 @@ function fixtureRows() {
 let failNextListing = false;
 
 /**
- * Renames the fake server has accepted, old name -> new name. The stub
- * has to APPLY a rename it accepted, or the list re-renders the old name
- * and a working commit measures as a failure - the harness would be
- * reporting on itself rather than on the app.
+ * Labels the fake server holds, keyed by the tmux name that never moves.
+ * The stub has to APPLY a rename it accepted, or the list re-renders the
+ * old value and a working commit measures as a failure - the harness
+ * would be reporting on itself rather than on the app.
  * @type {Object<string, string>}
  */
-const renamed = {};
+const labels = {};
+
+/**
+ * Description: seed a label BEFORE the app boots, so a page can start
+ *   from "this session already has a label the user typed" - the state
+ *   the destructive rename path needs in order to have anything to
+ *   destroy. Without it every row starts label-less and the whole class
+ *   of defect is unreachable from this harness.
+ * Inputs: tmuxName (string); label (string). Output: void.
+ */
+window.__seedLabel = function (tmuxName, label) { labels[tmuxName] = label; };
 
 /**
  * Description: flip the attachable probe into a structured 503, the shape
@@ -247,7 +273,9 @@ window.API = {
         // into a different one without saying so.
         if (failNextListing) return [];
         return [{
-            tmux_session: renamed.cloude_fstest || 'cloude_fstest',
+            // THE HANDLE NEVER MOVES. A rename writes a label.
+            tmux_session: 'cloude_fstest',
+            label: labels.cloude_fstest,
             session: { id: 'sess-fstest-0001' },
             activity_status: 'idle',
             unread: false,
@@ -263,8 +291,13 @@ window.API = {
             err.status = 409;
             throw err;
         }
-        renamed.cloude_fstest = name;
-        return { session: { id, tmux_session: name } };
+        // Records what it was ASKED TO STORE, which is what the rename
+        // assertions read back. The tmux name is deliberately unchanged
+        // in the response, exactly as the real endpoint leaves it.
+        labels.cloude_fstest = name;
+        window.__lastRenameValue = name;
+        window.__renameCallCount = (window.__renameCallCount || 0) + 1;
+        return { session: { id, tmux_session: 'cloude_fstest' }, label: name };
     },
     // MUST RETURN SOMETHING TRUTHY. activateRow only calls
     // returnToExistingTerminal when getSession resolves to a session, so
@@ -396,8 +429,21 @@ window.__sidebarMeasure = function () {
         })),
         rows: rows.map((r) => {
             const box = r.getBoundingClientRect();
+            const nameEl = r.querySelector('.session-sidebar-row-name');
             return {
+                // THE IDENTITY the app keys on.
                 name: r.dataset.name,
+                // WHAT A HUMAN ACTUALLY READS, off the rendered element
+                // rather than out of any model. `name` above cannot
+                // stand in for it: since the label feature the two are
+                // different strings by design, and every assertion that
+                // read `name` and called it "what the row shows" was
+                // describing an attribute nobody can see.
+                displayName: nameEl ? nameEl.textContent : null,
+                // The pixel box of the name, so a row that renders its
+                // text into zero width fails rather than passing on a
+                // string that is technically present.
+                displayWidth: nameEl ? nameEl.getBoundingClientRect().width : 0,
                 pinned: r.dataset.pinned,
                 tabindex: r.getAttribute('tabindex'),
                 height: box.height,
@@ -447,6 +493,10 @@ window.__sidebarMeasure = function () {
             const rowEl = input.closest('.session-sidebar-row');
             return {
                 value: input.value,
+                // The limit the editor actually draws. A maxlength below
+                // the server's truncates silently - it raises nothing -
+                // so it has to be measured rather than assumed.
+                maxlength: input.getAttribute('maxlength'),
                 width: box.width,
                 height: box.height,
                 rowHeight: rowEl ? rowEl.getBoundingClientRect().height : null,

@@ -126,6 +126,14 @@ console.log('[SessionSidebarFetch Module] Loading...');
             existing.status = status;
             existing.unread = unread;
             existing.created_by_cloude = !!info.created_by_cloude;
+            // THE LIVE ROW IS THE FRESHER ANSWER ABOUT THE LABEL. It is
+            // the payload a rename's own response and the session.renamed
+            // repaint come back through, while the attachable probe may
+            // still be serving the pre-rename value from this poll tick.
+            // `!== undefined` rather than a truthiness test on purpose: a
+            // label CLEARED back to null is a real state, and `||` would
+            // silently keep showing the old one.
+            if (info.label !== undefined) existing.label = info.label;
             if (info.agent_family !== undefined) existing.agent_family = info.agent_family;
             if (info.agent_family_source !== undefined) {
                 existing.agent_family_source = info.agent_family_source;
@@ -135,6 +143,10 @@ console.log('[SessionSidebarFetch Module] Loading...');
         }
         rows.unshift({
             name: tmuxName,
+            // A row the probe never listed still has a name a human gave
+            // it. Dropping the label here would make this one row render
+            // its tmux handle while every other row rendered its label.
+            label: info.label !== undefined ? info.label : null,
             created_by_cloude: !!info.created_by_cloude,
             created_at_epoch: 0,
             is_active: true,
