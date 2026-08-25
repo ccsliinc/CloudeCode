@@ -11,8 +11,10 @@ must not depend on the next person remembering.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
+from pathlib import Path
 from typing import Iterator
 
 import pytest
@@ -30,6 +32,29 @@ import pytest
 # suite must never cause. conftest.py is imported before any test module
 # in its directory, so this line always wins the race.
 os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_test_state_"))
+
+# fix/test-home-isolation - two lines, two different jobs.
+#
+# CLOUDE_TEST_MODE is the STICKY marker src/core/test_write_guard.py reads.
+# PYTEST_CURRENT_TEST is cleared between tests and during collection, and a
+# subprocess may not carry it, so on its own it leaves gaps exactly where
+# the original defect lived (a write at app-startup time). This is set in
+# os.environ, so a child process inherits it and the guard survives a fork.
+#
+# CLOUDE_CLAUDE_SETTINGS_PATH points claude_hooks.default_settings_path()
+# at a throwaway file. Without it, src/main.py's lifespan merged
+# CloudeCode's managed hook block into the developer's REAL
+# ~/.claude/settings.json on every pytest run - silently, successfully,
+# returning True. The guard in test_write_guard.py would now REFUSE that
+# write, so this line is not the safety mechanism; it is what keeps the
+# ordinary startup path working instead of merely failing safe.
+os.environ.setdefault("CLOUDE_TEST_MODE", "1")
+os.environ.setdefault(
+    "CLOUDE_CLAUDE_SETTINGS_PATH",
+    os.path.join(
+        tempfile.mkdtemp(prefix="cc_test_claude_home_"), ".claude", "settings.json"
+    ),
+)
 
 from tests.socket_guard import (
     FORBIDDEN_SOCKET_NAME,
@@ -149,3 +174,63 @@ def _reset_tmux_probe_cache():
     tmux_discovery.reset_probe_cache()
     yield
     tmux_discovery.reset_probe_cache()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_claude_settings_unchanged() -> Iterator[None]:
+    """Fail the run if the developer's real settings file changed. READ ONLY.
+
+    The last line of defence, and deliberately the weakest-privileged
+    one: it never writes, never restores, never creates. It hashes
+    ``~/.claude/settings.json`` before and after the session and reports
+    a difference.
+
+    The guard in ``src/core/test_write_guard.py`` is what PREVENTS the
+    write. This exists because a preventive check can only cover the code
+    paths it sits on, and the suite shells out to subprocesses and drives
+    an application with many writers. If something reaches that file by a
+    route nobody anticipated, this turns a silent machine-state change
+    into a loud failure at the end of the run.
+
+    THE THREE-OUTCOME RULE: absent-before-and-after is a pass (nothing to
+    protect), changed is a failure, and "could not read it" is reported
+    as a failure too, never shrugged off - an unreadable canary proves
+    nothing and must not look like good news.
+
+    Inputs:
+        None.
+    Outputs:
+        Yields None. Raises AssertionError at teardown on any change.
+    """
+    target = Path.home() / ".claude" / "settings.json"
+
+    def _fingerprint() -> tuple[str, str]:
+        """Return (state, detail) without modifying anything."""
+        try:
+            if not target.exists():
+                return ("absent", "")
+            return ("present", hashlib.sha256(target.read_bytes()).hexdigest())
+        except OSError as exc:
+            return ("unreadable", str(exc))
+
+    before = _fingerprint()
+    try:
+        yield
+    finally:
+        after = _fingerprint()
+        assert before[0] != "unreadable", (
+            f"Could not read {target} before the test session ({before[1]}). "
+            "The canary cannot vouch for the file, which is a failure, not "
+            "a pass."
+        )
+        assert after[0] != "unreadable", (
+            f"Could not read {target} after the test session ({after[1]}). "
+            "The canary cannot vouch for the file, which is a failure, not "
+            "a pass."
+        )
+        assert before == after, (
+            f"THE TEST SUITE MODIFIED {target}. Before={before} After={after}. "
+            "Nothing in this suite may write to a path outside a temp "
+            "directory. Find the writer and give it an explicit temp "
+            "destination; see src/core/test_write_guard.py."
+        )

@@ -442,7 +442,7 @@ def test_ensure_hook_settings_creates_file_when_missing(monkeypatch, tmp_path):
     target = tmp_path / "claude" / "settings.json"
     assert not target.exists()
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True
     assert target.exists()
 
@@ -500,7 +500,7 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
     }
     target.write_text(json.dumps(user_block))
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True
 
     data = json.loads(target.read_text())
@@ -530,8 +530,8 @@ def test_ensure_hook_settings_replaces_old_cloudecode_hooks_idempotently(
     _isolate_settings_disabled_flag(monkeypatch, False)
     target = tmp_path / "settings.json"
 
-    ensure_hook_settings(settings_path=target)
-    ensure_hook_settings(settings_path=target)
+    ensure_hook_settings(target)
+    ensure_hook_settings(target)
 
     data = json.loads(target.read_text())
     for event in ("Stop", "Notification", "PermissionRequest"):
@@ -554,7 +554,7 @@ def test_ensure_hook_settings_does_not_clobber_unparseable(monkeypatch, tmp_path
     corrupt = "{ this is not json"
     target.write_text(corrupt)
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is False
     assert target.read_text() == corrupt  # untouched
 
@@ -562,7 +562,7 @@ def test_ensure_hook_settings_does_not_clobber_unparseable(monkeypatch, tmp_path
 def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
     _isolate_settings_disabled_flag(monkeypatch, True)
     target = tmp_path / "claude" / "settings.json"
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True  # disabled = success-no-op
     assert not target.exists()  # file never created
 

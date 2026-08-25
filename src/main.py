@@ -402,7 +402,12 @@ async def lifespan(app: FastAPI):
     # (env vars travel through tmux at spawn time), but the merge itself
     # is idempotent and re-running is cheap.
     try:
-        claude_hooks.ensure_hook_settings()
+        # The destination is passed EXPLICITLY. It used to be an implicit
+        # fallback inside ensure_hook_settings(), which meant this line
+        # silently merged into the developer's real ~/.claude/settings.json
+        # during a plain pytest run. Naming the resolver here makes the
+        # destination a decision this call site owns.
+        claude_hooks.ensure_hook_settings(claude_hooks.default_settings_path())
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("claude_hooks_ensure_failed", error=str(exc))
 
