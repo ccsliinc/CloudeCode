@@ -825,6 +825,59 @@ class AttachableListingStatus(BaseModel):
     )
 
 
+class RespawnSessionRequest(BaseModel):
+    """Request body for ``POST /sessions/respawn``.
+
+    Only the tmux name. There is deliberately no command, agent_type or
+    wrapper field: a restart re-runs what the session was already running,
+    and letting a client name the command would turn this into a create
+    with none of a create's checks. Choosing a DIFFERENT agent is the New
+    Session flow, not this one.
+    """
+
+    session_name: str = Field(
+        ..., description="Literal tmux session name to restart in place"
+    )
+
+
+class RespawnSessionResponse(BaseModel):
+    """Result of a restart attempt. Three outcomes, never two.
+
+    ``kind`` and ``ok`` are separate on purpose. ``ok=false`` with
+    ``kind='cannot_determine'`` means the pane could not be read; with
+    ``kind='agent'`` it means we knew exactly what to run, ran it, and it
+    exited again. Those need different words in front of the user, so the
+    API does not collapse them into one boolean.
+    """
+
+    name: str = Field(..., description="tmux session name that was targeted")
+    kind: str = Field(
+        ...,
+        description=(
+            "Ladder verdict: 'agent' | 'replay' | 'shell' | 'not_dead' | "
+            "'cannot_determine' (src/core/session_respawn.py)"
+        ),
+    )
+    ok: bool = Field(
+        ...,
+        description=(
+            "True only when a process was VERIFIED running in the pane "
+            "afterwards. Never inferred from the respawn command's exit code"
+        ),
+    )
+    detail: str = Field(
+        "",
+        description="One sentence fit to show the user verbatim, always present",
+    )
+    command: Optional[str] = Field(
+        None,
+        description=(
+            "Command handed to respawn-pane, or null when tmux reused its "
+            "own recorded start command"
+        ),
+    )
+
+
 class AdoptSessionRequest(BaseModel):
     """Request body for ``POST /sessions/adopt``."""
     session_name: str = Field(

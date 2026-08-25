@@ -887,6 +887,46 @@ class API {
     }
 
     /**
+     * Sessions: restart the agent inside a session whose process exited.
+     *
+     * POST /api/v1/sessions/respawn. The counterpart to
+     * ``destroyExternalSession``: that one throws the dead session away,
+     * this one revives it in place. The tmux session, its pane, its
+     * scrollback, its name, its pinned theme and its database row all
+     * survive - the server puts a process back into the pane that is
+     * already there.
+     *
+     * ONLY A NAME CROSSES THIS BOUNDARY. There is no command parameter
+     * and there must never be one: what gets run is decided server-side
+     * from what the session was already running. Launching a different
+     * agent is the New Session flow.
+     *
+     * READ ``ok``, NOT THE HTTP STATUS. A 200 with ``ok:false`` is the
+     * normal shape for "the server worked and the pane could not be
+     * read", or for "we restarted it and it exited again". ``detail`` is
+     * always a sentence written for the user, so show it verbatim rather
+     * than composing your own.
+     *
+     * @param {string} sessionName - tmux session name (as seen in the list).
+     * @returns {Promise<{name: string, kind: string, ok: boolean,
+     *   detail: string, command: (string|null)}>}
+     * @throws on 400 (name tmux would misread as a target), 500.
+     */
+    async respawnSession(sessionName) {
+        // A PLAIN OBJECT, not JSON.stringify. `call()` sets
+        // `Content-Type: application/json` only when `body` is an object,
+        // and stringifies it itself. Handing it a pre-stringified string
+        // sends the right bytes with NO content type, so FastAPI cannot
+        // parse the body and the request comes back 400 - which reads as
+        // "the server rejected this session name" and is nothing of the
+        // kind. Every other POST here passes an object; match them.
+        return await this.call('/sessions/respawn', {
+            method: 'POST',
+            body: { session_name: sessionName },
+        });
+    }
+
+    /**
      * Sessions: Rename a live session's tmux backend in place.
      *
      * PATCH /api/v1/sessions/{id}/name. Server validates the name against

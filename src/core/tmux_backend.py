@@ -67,6 +67,12 @@ from src.core.tmux_listing import (
 )
 from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
+from src.core.session_respawn import (
+    RESPAWN_PANE_FORMAT,
+    RespawnResult,
+    parse_respawn_probe,
+    resolve_respawn_plan,
+)
 
 logger = structlog.get_logger()
 
@@ -1234,6 +1240,217 @@ class TmuxBackend(SessionBackend):
                 )
 
         return TmuxListing.answered(results, refused_rows=refused_rows)
+
+    async def respawn(
+        self, agent_command: Optional[str] = None
+    ) -> RespawnResult:
+        """Put a process back into this session's dead pane, in place.
+
+        Description: the whole restart path. Probes the pane, runs the
+            ladder in ``src.core.session_respawn`` to decide what to run,
+            then ``tmux respawn-pane`` and a dead-on-arrival re-probe.
+
+            NOTHING IS CREATED AND NOTHING IS DESTROYED. The tmux session,
+            its ``#{session_created}`` epoch, its ``#{pane_id}``, its
+            scrollback and its ``pipe-pane`` all survive (measured on tmux
+            3.7c - see tests/test_tmux_respawn_real.py). That is what keeps
+            the app's ``sessions`` row, project attribution, pinned theme,
+            unread state and name attached to the same session: the
+            instance triple this row is keyed on does not change, so no new
+            row can be minted and no lineage/fork column is ever touched.
+
+            ``-k`` IS DELIBERATELY NEVER PASSED. tmux refuses
+            ``respawn-pane`` on a live pane without it, so a click on a row
+            painted 'dead' that has since come back to life cannot kill a
+            running agent. The ``not_dead`` branch below is the friendly
+            message; tmux is the actual guarantee.
+
+            IT ALSO NEVER KILLS THE SESSION ON FAILURE, which is where it
+            departs from ``start()``. On create, tearing down a
+            dead-on-arrival corpse frees the name for a retry. On restart
+            the session IS the thing the user is trying to keep, so a
+            failed respawn leaves the corpse, the scrollback and the row
+            exactly as it found them and reports why.
+
+            NO RETRY LOOP. An agent that crashes on startup comes back as
+            ``ok=False`` naming its exit status and the first meaningful
+            line it printed. The user clicks again or does not; this method
+            never decides to.
+
+        Inputs:
+            agent_command: What the app would launch for this session's
+                recorded ``agent_type``, or None when it has no record.
+                Only CONSULTED when tmux confirms the pane had a start
+                command at all - see the ladder's docstring for why
+                ``agent_type`` alone is not admissible evidence.
+
+        Output:
+            RespawnResult: ``kind`` is the ladder verdict, ``ok`` says
+                whether a process is running in the pane now, ``detail`` is
+                one sentence fit to show the user.
+
+        Example:
+            >>> res = await backend.respawn(agent_command="cld")
+            >>> res.kind, res.ok
+            ('agent', True)
+        """
+        target = _safe_target(self.tmux_session)
+
+        rc, out, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            RESPAWN_PANE_FORMAT,
+            check=False,
+        )
+        decoded = out.decode("utf-8", errors="replace") if out else ""
+        first_line = decoded.splitlines()[0] if decoded.strip() else ""
+        probe_ok = rc == 0 and bool(first_line)
+
+        pane_dead: Optional[str] = None
+        start_command: Optional[str] = None
+        if probe_ok:
+            pane_dead, _dead_status, start_command = parse_respawn_probe(first_line)
+
+        plan = resolve_respawn_plan(
+            probe_ok=probe_ok,
+            pane_dead=pane_dead,
+            pane_start_command=start_command,
+            agent_command=agent_command,
+        )
+
+        if not plan.actionable:
+            logger.info(
+                "tmux_respawn_refused",
+                session=self.tmux_session,
+                kind=plan.kind,
+                detail=plan.detail,
+            )
+            return RespawnResult(kind=plan.kind, ok=False, detail=plan.detail)
+
+        args: List[str] = ["respawn-pane", "-t", target]
+        if plan.command:
+            args.append(plan.command)
+
+        rc_spawn, _, err_spawn = await self._run_tmux(*args, check=False)
+        if rc_spawn != 0:
+            stderr = err_spawn.decode("utf-8", errors="replace").strip()
+            logger.error(
+                "tmux_respawn_command_failed",
+                session=self.tmux_session,
+                kind=plan.kind,
+                returncode=rc_spawn,
+                stderr=stderr[:300],
+            )
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=(
+                    f"tmux refused to restart this pane: "
+                    f"{stderr or 'no error text'}"
+                ),
+                command=plan.command,
+            )
+
+        # Same 250ms dead-on-arrival window ``start()`` uses. A binary that
+        # is missing, unauthenticated, or misconfigured exits inside it, and
+        # reporting THAT is what stops a one-click restart from looking like
+        # a success that did nothing.
+        await asyncio.sleep(0.25)
+
+        rc_after, out_after, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            RESPAWN_PANE_FORMAT,
+            check=False,
+        )
+        decoded_after = (
+            out_after.decode("utf-8", errors="replace") if out_after else ""
+        )
+        if rc_after != 0 or not decoded_after.strip():
+            # THIRD OUTCOME, on the verification rather than the plan. The
+            # respawn command succeeded; we simply cannot see the result.
+            # Reported as not-ok so nothing downstream renders an unmeasured
+            # success, and SAID so rather than blamed on the agent.
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=(
+                    "the restart command succeeded but tmux did not answer "
+                    "when asked whether the pane came back, so whether it is "
+                    "running cannot be determined"
+                ),
+                command=plan.command,
+            )
+
+        dead_after, status_after, _ = parse_respawn_probe(
+            decoded_after.splitlines()[0]
+        )
+        if dead_after == "1":
+            banner = await self._first_meaningful_pane_line(target)
+            logger.error(
+                "tmux_respawn_died_on_arrival",
+                session=self.tmux_session,
+                kind=plan.kind,
+                pane_dead_status=status_after,
+                capture=banner[:300],
+            )
+            reason = banner or f"exit status {status_after or 'unknown'}"
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=f"it started and exited again: {reason}",
+                command=plan.command,
+            )
+
+        logger.info(
+            "tmux_respawn_ok",
+            session=self.tmux_session,
+            kind=plan.kind,
+        )
+        return RespawnResult(
+            kind=plan.kind, ok=True, detail=plan.detail, command=plan.command
+        )
+
+    async def _first_meaningful_pane_line(self, target: str) -> str:
+        """Newest non-blank line of pane output, with escapes stripped.
+
+        Description: a launch banner opens with cursor/colour escapes, so
+            the raw capture is unreadable in an error surface. Coarse
+            CSI/OSC strip - good enough for one line of diagnostics, and
+            deliberately not a full terminal emulator.
+
+        Inputs:
+            target: an already ``_safe_target``-validated tmux target.
+
+        Output:
+            str: the first meaningful line found, or '' when the capture
+                failed or held nothing but blanks. An empty string means
+                "nothing to quote", and callers must fall back to the exit
+                status rather than presenting it as a message.
+
+        Example:
+            >>> await backend._first_meaningful_pane_line("cloude_x")
+            'command not found: claude'
+        """
+        rc, out, _ = await self._run_tmux(
+            "capture-pane", "-t", target, "-p", "-S", "-200", check=False
+        )
+        if rc != 0:
+            return ""
+        for raw_line in reversed(out.decode("utf-8", errors="replace").splitlines()):
+            cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line)
+            cleaned = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", cleaned)
+            cleaned = cleaned.strip()
+            # tmux writes its own "Pane is dead (...)" footer into the
+            # capture. Quoting that back at the user says nothing about
+            # WHY, so it is skipped in favour of the agent's own output.
+            if cleaned and not cleaned.startswith("Pane is dead"):
+                return cleaned
+        return ""
 
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""

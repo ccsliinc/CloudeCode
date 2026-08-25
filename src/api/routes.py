@@ -31,6 +31,8 @@ from src.models import (
     AttachableListingStatus,
     AdoptSessionRequest,
     AdoptSessionResponse,
+    RespawnSessionRequest,
+    RespawnSessionResponse,
     ThemeManifest,
     UpdatePinnedThemeRequest,
     UpdateThemeRequest,
@@ -513,6 +515,65 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
         )
 
     return AdoptSessionResponse(**result)
+
+
+@router.post(
+    "/sessions/respawn",
+    response_model=RespawnSessionResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def respawn_session(request: Request, body: RespawnSessionRequest):
+    """Restart the agent inside a session whose process has exited.
+
+    The counterpart to ``DELETE /sessions/external/{name}``: that one
+    throws the corpse away, this one revives it. ``remain-on-exit`` keeps
+    the pane, its id, its scrollback and this app's ``pipe-pane`` alive
+    when the agent exits, so nothing here creates a session - it puts a
+    process back into the one that is already there. The session's row,
+    project attribution, pinned theme, unread state and name all survive
+    because the instance triple they are keyed on does not change, and
+    this path issues no database write at all.
+
+    NOT A FORK. A fork mints a new ``sessions`` row and sets
+    ``parent_session_id`` / ``fork_kind``. A respawn cannot mint one -
+    ``#{session_created}`` is unchanged, so there is no new instance for a
+    row to key on - and it never writes either column.
+
+    NO COMMAND CROSSES THIS BOUNDARY. The body carries only a session
+    name. What gets run is decided server-side by the ladder in
+    ``src.core.session_respawn``, gated on tmux's own
+    ``#{pane_start_command}``. Accepting a command from the client would
+    make this a create wearing a restart's clothes.
+
+    WHY A REFUSAL IS STILL A 200. ``ok=false`` with
+    ``kind='cannot_determine'`` means the SERVER worked perfectly and the
+    PANE could not be read. A 500 there would blame the server for a state
+    it correctly detected, and would push the client into an error path
+    instead of showing the user the sentence that says what is unknown.
+    The only 4xx here is a name tmux would misread as a target.
+
+    Raises:
+        HTTPException(400): the name contains ``:`` or ``.``.
+        HTTPException(500): a genuine, unexpected server fault.
+    """
+    session_manager = request.app.state.session_manager
+
+    logger.info("api_respawn_session_request", name=body.session_name)
+
+    try:
+        result = await session_manager.respawn_session(body.session_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(
+            "respawn_session_failed", name=body.session_name, error=str(exc)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to restart session {body.session_name!r}: {exc}",
+        )
+
+    return RespawnSessionResponse(**result)
 
 
 @router.delete(

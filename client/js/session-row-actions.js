@@ -50,6 +50,14 @@ console.log('[SessionRowActions Module] Loading...');
      */
     const ACTION_CLOSE = 'close';
     const ACTION_REMOVE = 'remove';
+    /**
+     * Restart the agent inside a session whose process has exited. The
+     * ONLY non-destructive action in this module: it starts a process in
+     * a pane that is already sitting empty, and destroys nothing. See
+     * ``requiresConfirm``.
+     * @type {string}
+     */
+    const ACTION_RESTART = 'restart';
 
     /**
      * Activity statuses that mean "this session is not running any more".
@@ -74,6 +82,7 @@ console.log('[SessionRowActions Module] Loading...');
     const ACTION_LABELS = {
         [ACTION_CLOSE]: 'close session',
         [ACTION_REMOVE]: 'remove from the list',
+        [ACTION_RESTART]: 'restart the agent',
     };
 
     /**
@@ -187,11 +196,64 @@ console.log('[SessionRowActions Module] Loading...');
      *   actionFor('dead')    -> 'remove'
      *   actionFor(undefined) -> 'close'   // unknown is never assumed dead
      */
-    function actionFor(status) {
+    function actionsFor(status) {
         const key = window.SessionStatusUI
             ? window.SessionStatusUI.normalizeStatus(status)
             : 'unknown';
-        return STOPPED_STATUSES.indexOf(key) !== -1 ? ACTION_REMOVE : ACTION_CLOSE;
+        if (STOPPED_STATUSES.indexOf(key) !== -1) {
+            // Restart first: it is what the user came for, and putting the
+            // destructive control under the cursor's first stop would be a
+            // poor trade on a row whose whole problem is that it looks
+            // finished.
+            return [ACTION_RESTART, ACTION_REMOVE];
+        }
+        return [ACTION_CLOSE];
+    }
+
+    /**
+     * Back-compat single-action accessor.
+     *
+     * Description: kept so no existing call site has to change in the
+     *   same edit that adds restart. Returns the row's PRIMARY action,
+     *   which for a dead row is now restart rather than remove - a dead
+     *   row's primary intent is to get the agent back, not to discard it.
+     *   New code should call ``actionsFor`` and render all of them.
+     * Inputs:
+     *   status (string|null|undefined) - raw activity_status value.
+     * Output:
+     *   string - one action id.
+     * Example:
+     *   actionFor('working') -> 'close'
+     *   actionFor('dead')    -> 'restart'
+     */
+    function actionFor(status) {
+        return actionsFor(status)[0];
+    }
+
+    /**
+     * Whether an action must be confirmed before it runs.
+     *
+     * Description: the policy, stated once, in the module that owns the
+     *   controls. Close and remove both destroy something the user cannot
+     *   get back (a running process, an uploads bucket), so both confirm.
+     *
+     *   RESTART DOES NOT, and that is a decision rather than an omission.
+     *   It kills nothing, deletes nothing, and writes no database row; it
+     *   puts a process into a pane that is already empty, and the close
+     *   button sitting beside it undoes the result. A dialog here would
+     *   put a second click back into precisely the flow the user reported
+     *   as broken - and a confirmation that guards a harmless action is
+     *   how users learn to click through the ones that matter.
+     * Inputs:
+     *   action (string) - an ACTION_* id.
+     * Output:
+     *   boolean - true when a confirm modal must be shown first.
+     * Example:
+     *   requiresConfirm('restart') -> false
+     *   requiresConfirm('remove')  -> true
+     */
+    function requiresConfirm(action) {
+        return action !== ACTION_RESTART;
     }
 
     /**
@@ -222,9 +284,11 @@ console.log('[SessionRowActions Module] Loading...');
      */
     function iconFor(action) {
         if (!window.SessionStatusUI) return '';
-        return action === ACTION_REMOVE
-            ? window.SessionStatusUI.trashIconSvg()
-            : window.SessionStatusUI.closeIconSvg();
+        if (action === ACTION_REMOVE) return window.SessionStatusUI.trashIconSvg();
+        if (action === ACTION_RESTART) {
+            return window.SessionStatusUI.restartIconSvg();
+        }
+        return window.SessionStatusUI.closeIconSvg();
     }
 
     /**
@@ -250,16 +314,21 @@ console.log('[SessionRowActions Module] Loading...');
      *     -> '<button type="button" class="session-row-action ..." ...>'
      */
     function html(status, tmuxName, surfaceClass) {
-        const action = actionFor(status);
-        const label = labelFor(action);
         const safeName = escapeAttr(tmuxName);
         const cls = surfaceClass ? `${BASE_CLASS} ${surfaceClass}` : BASE_CLASS;
-        return (
-            `<button type="button" class="${cls}" ` +
-            `${ATTR_ACTION}="${action}" ${ATTR_NAME}="${safeName}" ` +
-            `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">` +
-            `${iconFor(action)}</button>`
-        );
+        return actionsFor(status)
+            .map(function (action) {
+                const label = labelFor(action);
+                const extra =
+                    action === ACTION_RESTART ? ` ${BASE_CLASS}-restart` : '';
+                return (
+                    `<button type="button" class="${cls}${extra}" ` +
+                    `${ATTR_ACTION}="${action}" ${ATTR_NAME}="${safeName}" ` +
+                    `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">` +
+                    `${iconFor(action)}</button>`
+                );
+            })
+            .join('');
     }
 
     /**
@@ -367,10 +436,13 @@ console.log('[SessionRowActions Module] Loading...');
     window.SessionRowActions = {
         ACTION_CLOSE,
         ACTION_REMOVE,
+        ACTION_RESTART,
         ATTR_ACTION,
         ATTR_NAME,
         BASE_CLASS,
         actionFor,
+        actionsFor,
+        requiresConfirm,
         labelFor,
         iconFor,
         html,
