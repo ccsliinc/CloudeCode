@@ -927,11 +927,17 @@ function updateMenu() {
   const sessionName = health?.session_name || 'None';
   const tunnelCount = health?.tunnel_count || 0;
 
-  // Check configuration status
-  const configStatus = serverManager.checkConfiguration();
-  const configText = configStatus.isConfigured
-    ? '✓ Configuration: OK'
-    : '⚠ Configuration: Setup Required';
+  // Setup status, from the SERVER whenever it has answered. The tray used to
+  // compute its own and got a different answer that the user could not act
+  // on - see macOS/setup-verdict.js. Three outcomes: a server that could not
+  // be asked is not an unconfigured instance and must not read as one.
+  const setupVerdictNow = serverManager.getSetupVerdict();
+  const configText =
+    setupVerdictNow.status === 'complete'
+      ? '✓ Setup: complete'
+      : setupVerdictNow.status === 'incomplete'
+        ? '⚠ Setup: not finished'
+        : '⚠ Setup: unknown (could not be checked)';
 
   let statusText, statusIcon;
   switch (state) {
@@ -958,8 +964,12 @@ function updateMenu() {
   // Build menu items array
   const menuItems = [];
 
-  // Only show setup script option if config is not complete
-  if (!configStatus.isConfigured) {
+  // Offer the setup script ONLY on a DEFINITE incomplete. Not on
+  // 'undetermined': sending somebody to re-run a setup that was never the
+  // problem is the same defect as hiding one that was, pointed the other
+  // way. This used to be gated on a private check that could never be
+  // satisfied, so the row was permanent furniture on a finished install.
+  if (setupVerdictNow.status === 'incomplete') {
     menuItems.push({
       label: '⚠️  Run Setup Script',
       click: () => {

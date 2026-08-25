@@ -6,6 +6,7 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
+const setupVerdict = require('./setup-verdict');
 
 // Default bind host = 0.0.0.0 (listen on all interfaces). Matches the
 // pydantic Settings default in src/config.py; changing here without
@@ -1284,77 +1285,70 @@ class ServerManager {
   }
 
   /**
-   * Check if configuration is complete
-   * @returns {Object} Status object with isConfigured flag and details
+   * Whether this instance is set up, and who says so.
+   *
+   * The SERVER is the authority. This asks it first and uses its answer
+   * whenever it has one. The local evaluation below runs only when there is
+   * no server to ask - a genuine case on a first run - and it reads the same
+   * facts src/core/setup_state.py reads, guarded by an antijoin in
+   * tests/test_setup_verdict_authority.node.mjs.
+   *
+   * This method used to be checkConfiguration(), which had its own private
+   * definition of "configured" requiring CLOUDFLARE_API_TOKEN,
+   * CLOUDFLARE_ZONE_ID and CLOUDFLARE_DOMAIN. Those belong to a tunnel
+   * feature removed in plan v3.2, nothing writes them any more, and the
+   * owner's freshly set-up install was therefore judged unconfigured
+   * permanently - the menu offered "Run Setup Script" after a setup that had
+   * succeeded, and no amount of re-running it could have helped.
+   *
+   * @returns {{status: string, source: string, reason: string,
+   *   checks: Array<object>}} status is 'complete', 'incomplete' or
+   *   'undetermined'. Undetermined means the question could not be answered
+   *   and MUST NOT be rendered as incomplete: a stopped server is not an
+   *   unconfigured one.
    */
-  checkConfiguration() {
-    const envPath = path.join(this.baseDir, '.env');
-    const configPath = path.join(this.baseDir, 'config.json');
-    const setupScriptPath = path.join(this.baseDir, 'setup_auth.py');
+  getSetupVerdict() {
+    const local = setupVerdict.evaluateLocalSetup(this.readSetupFacts());
+    const resolved = setupVerdict.resolveSetupVerdict({
+      serverStatus: this.getSetupStatus(),
+      local,
+    });
+    return { ...resolved, checks: local.checks };
+  }
 
-    const status = {
-      isConfigured: true,
-      missingFiles: [],
-      missingEnvVars: [],
-      details: []
+  /**
+   * Read the raw files the setup evaluation needs.
+   *
+   * Kept separate from the evaluation so the decision logic stays pure and
+   * node-testable without a filesystem. A read that FAILS is reported as
+   * null rather than as an absent file where the difference matters: an
+   * unreadable pairing sentinel is "could not tell", while a missing one is
+   * "not paired yet".
+   *
+   * @returns {{envText: (string|null), configText: (string|null),
+   *   pairedExists: (boolean|null)}} Raw facts for evaluateLocalSetup.
+   */
+  readSetupFacts() {
+    const read = (file) => {
+      try {
+        return fs.readFileSync(path.join(this.baseDir, file), 'utf8');
+      } catch (err) {
+        return null;
+      }
     };
 
-    // Check if .env exists
-    if (!fs.existsSync(envPath)) {
-      status.isConfigured = false;
-      status.missingFiles.push('.env');
-      status.details.push('.env file not found');
-    } else {
-      // Check required env vars
-      const envContent = fs.readFileSync(envPath, 'utf8');
-      const requiredVars = [
-        'TOTP_SECRET',
-        'JWT_SECRET',
-        'CLOUDFLARE_API_TOKEN',
-        'CLOUDFLARE_ZONE_ID',
-        'CLOUDFLARE_DOMAIN'
-      ];
-
-      requiredVars.forEach(varName => {
-        // Check if var exists and has a non-empty value
-        const regex = new RegExp(`${varName}=(.+)`, 'm');
-        const match = envContent.match(regex);
-
-        if (!match || !match[1] || match[1].trim() === '' || match[1].trim() === '""') {
-          status.isConfigured = false;
-          status.missingEnvVars.push(varName);
-        }
-
-        // Check for placeholder values in CLOUDFLARE_DOMAIN
-        if (varName === 'CLOUDFLARE_DOMAIN' && match && match[1]) {
-          const domain = match[1].trim();
-          if (domain.includes('example.com') ||
-            domain.includes('yourdomain.com') ||
-            domain.includes('your-subdomain') ||
-            domain.includes('mydomain.nyc')) {
-            status.isConfigured = false;
-            status.details.push('CLOUDFLARE_DOMAIN contains placeholder value. Run setup to configure.');
-          }
-        }
-      });
-
-      if (status.missingEnvVars.length > 0) {
-        status.details.push(`Missing env vars: ${status.missingEnvVars.join(', ')}`);
-      }
+    let pairedExists;
+    try {
+      pairedExists = fs.existsSync(path.join(this.baseDir, '.totp_paired'));
+    } catch (err) {
+      pairedExists = null;
     }
 
-    // Check if config.json exists
-    if (!fs.existsSync(configPath)) {
-      status.missingFiles.push('config.json');
-      status.details.push('config.json not found (optional)');
-    }
-
-    // Check if setup script exists
-    if (!fs.existsSync(setupScriptPath)) {
-      status.details.push('setup_auth.py not found');
-    }
-
-    return status;
+    return {
+      envText: read('.env'),
+      configText: read('config.json'),
+      pairedExists,
+    };
   }
 
   /**
