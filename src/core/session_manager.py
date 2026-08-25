@@ -3037,6 +3037,156 @@ class SessionManager:
             logger.warning("adopt_datastore_unavailable", error=str(exc))
             return None
 
+    def record_claude_lifecycle_event(
+        self, session_id: str, event_kind: str, payload: dict
+    ):
+        """Write Claude-session identity / fork lineage for one hook event.
+
+        Description: the correlation step between the TWO identities this
+          app holds. A Claude Code hook knows its own conversation uuid
+          and nothing about tmux; cloudecode knows the tmux instance and
+          nothing about the conversation. The bridge is
+          ``CLOUDECODE_SESSION_ID`` - injected into the spawned agent's
+          environment at ``new-session`` time by
+          :meth:`get_env_for_spawn`, echoed back by the hook as the
+          ``X-Cloudecode-Session`` header, and resolved HERE to a tmux
+          name and then, via a live listing, to the instance triple that
+          keys the row. No new channel and no new credential: the
+          existing hook trio already proves both identity and locality.
+
+          THIS IS THE ONLY PLACE THE TWO CAN BE JOINED. The hook cannot
+          learn the tmux creation epoch (it is not in the pane's
+          environment), and the server cannot learn the conversation uuid
+          any other way, so the join has to happen server-side against a
+          fresh listing - the same shape ``persist_adoption`` uses, for
+          the same reason.
+
+          IT NEVER RAISES. Every failure is a named outcome. The caller is
+          the hook endpoint, which runs inside a live working session's
+          critical path; an exception escaping here would become a 500,
+          and while the hook one-liner discards that, a telemetry write
+          has no business producing one.
+
+          ``SessionEnd`` is accepted and deliberately writes nothing to
+          lineage. It is a real event worth logging, but the row already
+          says which conversation was there, and marking it ended would
+          duplicate a lifecycle the tmux probe owns and measures directly.
+        Inputs: session_id (str) - the cloudecode session id from the
+          header. event_kind (str) - 'SessionStart' or 'SessionEnd'.
+          payload (dict) - the hook's JSON body, read defensively; no
+          field is required to be present.
+        Output: LineageResult - ``outcome`` is one of bound / continued /
+          forked / unresolved. Never None, never an exception.
+        Example: mgr.record_claude_lifecycle_event(sid, 'SessionStart', p)
+        """
+        from src.core.session_lineage import (
+            LINEAGE_CONTINUED,
+            LINEAGE_UNRESOLVED,
+            LineageResult,
+            record_claude_session,
+        )
+
+        if event_kind != "SessionStart":
+            # SessionEnd (and anything else routed here later) is a no-op
+            # by design, reported under the name that says so rather than
+            # as a success nobody measured.
+            return LineageResult(
+                outcome=LINEAGE_CONTINUED,
+                detail=f"{event_kind} carries no lineage transition",
+            )
+
+        claude_uuid = payload.get("session_id") if isinstance(payload, dict) else None
+        if not isinstance(claude_uuid, str) or not claude_uuid:
+            return LineageResult(
+                outcome=LINEAGE_UNRESOLVED,
+                detail="the SessionStart payload carried no session_id",
+            )
+
+        session = self.get_session(session_id)
+        tmux_name = getattr(session, "tmux_session", None) if session else None
+        if not tmux_name:
+            return LineageResult(
+                outcome=LINEAGE_UNRESOLVED,
+                detail=(
+                    "no live session carries this cloudecode session id, or "
+                    "it is not tmux-backed"
+                ),
+            )
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            return LineageResult(
+                outcome=LINEAGE_UNRESOLVED,
+                detail="the datastore could not be opened to record lineage",
+            )
+        try:
+            from src.core.db import transaction
+
+            # THE SOCKET THE LISTING ACTUALLY RAN AGAINST, not the one
+            # settings says it should have - same reasoning as
+            # persist_adoption, and the same reason a verification harness
+            # pinning its own socket cannot leak a probe onto another one.
+            from src.core.session_adopt_persist import find_live_instance
+
+            probe_socket, listing = self.list_attachable_sessions_with_socket()
+            socket = probe_socket or self._tmux_socket_name()
+
+            # THREE OUTCOMES AT THE PROBE, NOT TWO. A listing that could
+            # not RUN and a listing that ran and does not contain the name
+            # are different facts, and only the first is "we could not
+            # tell". Collapsing them would let a broken tmux probe silently
+            # discard lineage as though the session were simply gone.
+            if not getattr(listing, "ok", False):
+                return LineageResult(
+                    outcome=LINEAGE_UNRESOLVED,
+                    detail=(
+                        "the tmux listing could not run, so the instance "
+                        f"could not be identified: {getattr(listing, 'reason', None)}"
+                    ),
+                )
+            live = find_live_instance(listing, tmux_name)
+            if live is None:
+                return LineageResult(
+                    outcome=LINEAGE_UNRESOLVED,
+                    detail=(
+                        f"tmux session {tmux_name!r} is not in a listing that ran"
+                    ),
+                )
+            try:
+                epoch = int(live.get("created_at_epoch"))
+            except (TypeError, ValueError):
+                # No readable epoch means no identity triple. Reported as
+                # unresolved rather than guessed at - record_claude_session
+                # would refuse it anyway, but saying so here names WHY.
+                epoch = None
+
+            with transaction(conn):
+                return record_claude_session(
+                    conn,
+                    socket=socket,
+                    name=tmux_name,
+                    epoch=epoch,
+                    claude_uuid=claude_uuid,
+                    source=payload.get("source"),
+                    title=payload.get("session_title"),
+                )
+        except Exception as exc:  # noqa: BLE001 - lineage must never raise
+            logger.warning(
+                "claude_lineage_record_failed",
+                session=session_id,
+                event_kind=event_kind,
+                error=str(exc),
+            )
+            return LineageResult(
+                outcome=LINEAGE_UNRESOLVED,
+                detail=f"could not record lineage: {exc}",
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
     def persist_adoption(self, name: str):
         """Write ``origin='adopted'`` for one tmux session, durably.
 
