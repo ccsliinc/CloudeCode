@@ -2908,7 +2908,19 @@ class Launchpad {
                 // design section 4.1. The row still exists so it stays
                 // visible and can never be silently opened into a stale
                 // or unreachable directory.
+                //
+                // REFUSING IS NOT THE SAME AS DOING NOTHING. This used to be
+                // a bare `return`: the click was swallowed with no message,
+                // no log line and no request, so the row presented to the
+                // user as a button that does nothing. Refusal has to SAY it
+                // refused and name the path, or the user cannot tell a
+                // deliberate refusal from a broken app - and on a fresh
+                // install every seeded row was in this state, so the whole
+                // first screen was dead clicks.
                 if (item.classList.contains('project-presence-disabled')) {
+                    const idx = parseInt(item.dataset.index);
+                    const p = this.projects[idx];
+                    this._explainRefusedProject(p, item);
                     return;
                 }
                 const index = parseInt(item.dataset.index);
@@ -4588,6 +4600,60 @@ class Launchpad {
     /**
      * Show error message
      */
+    /**
+     * Say out loud why a project row refused to open, and name the path.
+     *
+     * THREE OUTCOMES, kept distinct on purpose. 'missing' is a measured
+     * fact - the folder is not there. 'unreachable' is the third state:
+     * the presence probe could not reach the path, which is NOT evidence
+     * the project is gone, and telling the user it is missing would invent
+     * a verdict nobody measured. Anything else reaching here means the row
+     * was disabled for a reason this function does not know about, and it
+     * says exactly that rather than guessing.
+     *
+     * @param {object|undefined} project - The project the row stands for.
+     * @param {HTMLElement} item - The row element, used only as a fallback
+     *   source for the path when the project object is unavailable.
+     * @returns {void}
+     */
+    _explainRefusedProject(project, item) {
+        const path = (project && (project.root || project.path))
+            || (item && item.dataset ? item.dataset.path : '')
+            || 'an unrecorded path';
+        const row = (project && project.root && this.projectPresence.get(project.root))
+            || null;
+        const state = row ? row.presence : 'unchecked';
+
+        if (state === 'missing') {
+            this.showError(
+                `"${project && project.name ? project.name : 'this project'}" ` +
+                `was not opened: its folder does not exist at ${path}.\n\n` +
+                `Nothing was started and nothing was changed. Either restore ` +
+                `the folder at that path, edit the project to point at where ` +
+                `it lives now, or delete the project.`
+            );
+            return;
+        }
+        if (state === 'unreachable') {
+            const detail = (row && row.presence_detail) || 'reason unknown';
+            this.showError(
+                `"${project && project.name ? project.name : 'this project'}" ` +
+                `was not opened: CANNOT DETERMINE whether ${path} exists ` +
+                `(${detail}).\n\n` +
+                `This is NOT a report that the folder is gone - the check ` +
+                `could not run. Nothing was started and nothing was changed.`
+            );
+            return;
+        }
+        this.showError(
+            `"${project && project.name ? project.name : 'this project'}" ` +
+            `was not opened, and the reason was not recorded (presence ` +
+            `state "${state}" for ${path}).\n\n` +
+            `Nothing was started and nothing was changed. This is a bug in ` +
+            `the app, not something you did.`
+        );
+    }
+
     showError(message) {
         // For now, just log and use browser alert
         // Could be improved with a proper error UI element
