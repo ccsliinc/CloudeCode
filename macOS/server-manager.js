@@ -9,6 +9,7 @@ const { currentTotp, secondsUntilRollover } = require('./totp');
 const { terminateProcess, isAlive } = require('./process-teardown');
 const { decideAdoption } = require('./adoption-decision');
 const { decideLifecycleAction } = require('./ownership-policy');
+const { createSupervisor, SUPERVISOR_RESTART } = require('./supervisor-policy');
 const setupVerdict = require('./setup-verdict');
 const { resolvePublishedUrl } = require('./published-url');
 
@@ -50,6 +51,15 @@ class ServerManager {
     // line later and the stale server was effectively adopted anyway - the
     // defect surviving its own fix. Cleared by a successful start or stop.
     this.startBlockedReason = null;
+
+    // Bounded auto-recovery. Before this, ANY server death was permanent:
+    // spawn/adopt only happen inside start(), and nothing called start() again
+    // after an unexpected exit, so the app sat there with a menu bar that did
+    // not say it was dead. Measured on 2026-08-25 at 22 seconds and counting.
+    // The budget and the reasoning are in macOS/supervisor-policy.js.
+    this.supervisor = createSupervisor();
+    this.supervisorTimer = null;
+    this.quitting = false;
     this.logStream = null;
 
     // Crash tracking. `state` stays a three-value machine
@@ -971,6 +981,7 @@ class ServerManager {
       // distinguishable from a clean stop once state collapses to 'stopped'.
       this.lastExit = { code, signal, at: Date.now() };
       this.lastExitUnexpected = !this.stopRequested;
+      const wasExpected = this.stopRequested;
       this.stopRequested = false;
 
       this.process = null;
@@ -978,6 +989,11 @@ class ServerManager {
       this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
+
+      // A death nobody asked for gets a bounded restart. A deliberate stop
+      // does not, or there would be no way to turn the server off, and neither
+      // does a death during quit, which would recreate the orphan.
+      this.superviseDown({ expected: wasExpected });
     });
 
     // Handle process errors
@@ -1067,6 +1083,120 @@ class ServerManager {
         resolve(Number.isNaN(pid) ? null : pid);
       });
     });
+  }
+
+  /**
+   * Tell the supervisor the server went down, and act on its answer.
+   *
+   * @param {object} [event] - Context.
+   * @param {boolean} [event.expected] - True when the stop was deliberate.
+   * @returns {object} The supervisor's decision, for logging and tests.
+   */
+  superviseDown(event = {}) {
+    const decision = this.supervisor.recordDown({
+      expected: event.expected === true,
+      quitting: this.quitting === true,
+    });
+    console.log(`[supervisor] ${decision.message}`);
+
+    if (decision.action !== SUPERVISOR_RESTART) return decision;
+
+    if (this.supervisorTimer) clearTimeout(this.supervisorTimer);
+    this.supervisorTimer = setTimeout(async () => {
+      this.supervisorTimer = null;
+      if (this.quitting) return;
+      try {
+        await this.start();
+        this.supervisor.recordUp();
+      } catch (err) {
+        // A failed automatic restart is itself a death, and it must spend
+        // budget. Without this the timer path could retry indefinitely while
+        // the budget the exit path maintains never moves.
+        console.error(`[supervisor] restart failed: ${err.message}`);
+        this.superviseDown({ expected: false });
+      }
+    }, decision.delayMs);
+
+    return decision;
+  }
+
+  /**
+   * Call from whatever already polls health.
+   *
+   * Two jobs. It clears the restart budget once the server has been
+   * continuously up for the healthy window - coming up is not staying up, and
+   * conflating them turns a bounded retry into an unbounded one. And it is the
+   * ONLY thing that can notice an ADOPTED server dying: an adopted process
+   * emits no 'exit' event here, because we never spawned it, so without a poll
+   * its death is invisible. That is exactly the case that stayed down for 22
+   * seconds on 2026-08-25.
+   *
+   * @param {boolean} healthy - Whether the server just answered a health probe.
+   * @returns {void}
+   */
+  superviseTick(healthy) {
+    if (this.quitting) return;
+    if (healthy) {
+      this.supervisor.noteStillUp();
+      return;
+    }
+    // Not healthy. Only act if we BELIEVED it was running - otherwise this is
+    // a server the user stopped, or one that never started, and restarting it
+    // would override a decision somebody already made.
+    if (this.state !== 'running') return;
+    if (this.startBlockedReason) return;
+    this.state = 'stopped';
+    this.superviseDown({ expected: false });
+  }
+
+  /**
+   * Clear the restart budget, including a give-up.
+   *
+   * For an explicit user-initiated start only. Having given up must never lock
+   * the user out of trying again.
+   *
+   * @returns {void}
+   */
+  resetSupervisor() {
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
+    this.supervisor.reset();
+  }
+
+  /**
+   * What the supervisor is doing, for the menu to render.
+   *
+   * A supervisor nobody can see is the masking failure mode this design is
+   * meant to avoid: an automatic restart the user is not told about is
+   * indistinguishable from nothing happening.
+   *
+   * @returns {{attempts: number, maxAttempts: number, gaveUp: boolean,
+   *   message: string, pending: boolean}} Status, always renderable.
+   */
+  getSupervisorStatus() {
+    return {
+      ...this.supervisor.status(),
+      pending: this.supervisorTimer !== null,
+    };
+  }
+
+  /**
+   * Note that the app is shutting down.
+   *
+   * Set before any teardown so a stop cannot be undone by the supervisor
+   * racing it, which would leave a brand new orphan behind at the exact moment
+   * the app is going away.
+   *
+   * @returns {void}
+   */
+  beginQuit() {
+    this.quitting = true;
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
   }
 
   /**

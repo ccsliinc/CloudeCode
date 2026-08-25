@@ -1138,6 +1138,14 @@ function updateMenu() {
     {
       label: 'Server',
       submenu: [
+        // WHAT THE SUPERVISOR IS DOING, SAID OUT LOUD.
+        //
+        // An automatic restart nobody is told about is indistinguishable from
+        // nothing happening, which is the masking failure mode that makes
+        // restart loops a bad idea in the first place. A server that has been
+        // given up on must say so plainly here, because the alternative - the
+        // shipped behaviour - is a dead server the user has to guess about.
+        ...buildSupervisorItems(),
         {
           label: 'Restart Server',
           click: async () => {
@@ -1166,6 +1174,10 @@ function updateMenu() {
           click: async () => {
             try {
               if (canStart) {
+                // An explicit Start is a fresh decision by the user. If the
+                // supervisor had given up, having given up must not lock him
+                // out of trying again.
+                serverManager.resetSupervisor();
                 await serverManager.start();
               } else {
                 const result = await serverManager.stop();
@@ -1571,6 +1583,15 @@ function startStatsPolling() {
     // Check if server should be running (either we started it or adopted it)
     if (state === 'running' || state === 'starting' || serverManager.isProcessRunning()) {
       const health = await serverManager.getHealth();
+      // THE ONLY PLACE AN ADOPTED SERVER'S DEATH CAN BE NOTICED.
+      //
+      // An adopted process emits no 'exit' event to this app - we never
+      // spawned it, so there is no ChildProcess to listen to. Without this
+      // call its death is invisible and the server stays down until the user
+      // works out that the app has gone quiet, which is exactly what happened
+      // on 2026-08-25. It also clears the restart budget once the server has
+      // been continuously up for the healthy window.
+      serverManager.superviseTick(Boolean(health));
       if (health) {
         currentStats = health;
         // If we got health response, mark as running
@@ -1624,6 +1645,46 @@ function startStatsPolling() {
 /**
  * Handle app quit
  */
+/**
+ * Menu rows describing the auto-restart supervisor, when it has anything to
+ * say.
+ *
+ * Returns an EMPTY array in the ordinary case - a healthy server that has
+ * never needed a restart does not need a row about it, and a row that is
+ * always present and always says "fine" is furniture nobody reads. It appears
+ * exactly when something happened.
+ *
+ * @returns {Array<object>} Menu item templates, possibly empty.
+ */
+function buildSupervisorItems() {
+  if (!serverManager) return [];
+  const status = serverManager.getSupervisorStatus();
+  if (!status.gaveUp && !status.pending && status.attempts === 0) return [];
+
+  const label = status.gaveUp
+    ? `Automatic restart gave up after ${status.maxAttempts} attempts`
+    : status.pending
+      ? `Restarting automatically (attempt ${status.attempts} of ${status.maxAttempts})...`
+      : `Restarted automatically (attempt ${status.attempts} of ${status.maxAttempts})`;
+
+  return [
+    { label, enabled: false },
+    {
+      label: 'Why?',
+      click: () => {
+        dialog.showMessageBox({
+          type: status.gaveUp ? 'warning' : 'info',
+          title: 'Automatic server restart',
+          message: label,
+          detail: status.message,
+          buttons: ['OK'],
+        });
+      },
+    },
+    { type: 'separator' },
+  ];
+}
+
 /**
  * Show why a stop or restart was refused, and offer to take ownership.
  *
@@ -1768,6 +1829,13 @@ app.on(
   'before-quit',
   createQuitHandler({
     teardown: async () => {
+      // FIRST, before anything is stopped. Otherwise the supervisor sees the
+      // shutdown as an unexpected death and races the quit to spawn a
+      // replacement - a brand new orphan created at the exact moment the app
+      // is going away.
+      if (serverManager) {
+        serverManager.beginQuit();
+      }
       if (statsUpdateInterval) {
         clearTimeout(statsUpdateInterval);
       }
