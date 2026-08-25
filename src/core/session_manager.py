@@ -4106,6 +4106,169 @@ class SessionManager:
             f"tmux kill-session for {name!r} failed (rc={rc}): {stderr_text}"
         )
 
+    def _agent_command_for_tmux_name(self, name: str) -> Optional[str]:
+        """Command this app would launch for the session with this tmux name.
+
+        Description: looks up the in-memory ``Session`` carrying this tmux
+            name and re-derives its launch command through
+            ``Settings.get_agent_command`` using the ``agent_type`` and
+            ``model`` recorded at create time.
+
+            RE-DERIVED, NOT REPLAYED, and that is the point. The user's
+            reported case is "I exited to update Claude, now start it
+            again", so a restart has to run the CURRENT command for that
+            agent type - a new wrapper path, a new CLI location - not the
+            string that was executed weeks ago.
+
+            Returning None is a real answer, not a failure: it means this
+            app has no record of what this session runs, which is the
+            normal state for a session the user started outside CloudeCode.
+            The caller's ladder then falls back to tmux's own record.
+
+        Inputs:
+            name: literal tmux session name.
+
+        Output:
+            Optional[str]: shell command string, or None when this app has
+                no record for that name or the config could not be read.
+
+        Example:
+            >>> mgr._agent_command_for_tmux_name("cloude_api")
+            "zsh -c 'source ~/.zshrc ...; cld'"
+        """
+        match = None
+        for session in self.sessions.values():
+            if getattr(session, "tmux_session", None) == name:
+                match = session
+                break
+        if match is None:
+            return None
+
+        agent_type = getattr(match, "agent_type", None)
+        if not agent_type:
+            return None
+
+        try:
+            return settings.get_agent_command(
+                agent_type, model=getattr(match, "model", None)
+            )
+        except Exception as exc:
+            # A config we cannot read is "no record", never a guess. The
+            # ladder degrades to tmux's own start command, which is a
+            # worse-but-honest answer rather than an invented one.
+            logger.warning(
+                "respawn_agent_command_unresolved",
+                tmux_name=name,
+                agent_type=agent_type,
+                error=str(exc),
+            )
+            return None
+
+    async def respawn_session(
+        self, name: str, *, socket_name: Optional[str] = None
+    ) -> dict:
+        """Restart the agent inside a dead session, keeping the session.
+
+        Description: the server half of the launcher's restart control.
+            ``remain-on-exit`` means a session whose agent exited still
+            exists - window, pane, pane id, scrollback and the app's
+            ``pipe-pane`` all intact - so this puts a process back into
+            that pane rather than building anything new.
+
+            IDENTITY IS PRESERVED BY CONSTRUCTION, NOT BY COPYING FIELDS.
+            The durable identity of a session row is the instance triple
+            ``(tmux_socket, tmux_name, tmux_created_epoch)``, and
+            ``#{session_created}`` belongs to the SESSION, not to the
+            pane's process - a respawn does not change it. So every
+            existing lookup keeps matching the SAME row and its
+            ``session_uuid``, ``origin``, ``project_id``, ``pinned_theme``,
+            unread state and title are untouched because nothing writes
+            them. This method issues NO database write at all.
+
+            THAT IS ALSO WHAT SEPARATES IT FROM A FORK. A fork deliberately
+            mints a new row and sets ``parent_session_id`` / ``fork_kind``.
+            A respawn cannot mint one, because there is no new instance for
+            a row to key on, and it never touches either column.
+
+            AN ALREADY-BOUND BACKEND IS REUSED, not rebuilt. When the user
+            has the session open in the app there is a live ``TmuxBackend``
+            with a running tail loop; respawning through it means the
+            existing ``pipe-pane`` (which survives the respawn - measured)
+            keeps streaming and the open terminal simply comes back to
+            life. Building a second backend for the same pane would leave
+            two readers on one file.
+
+        Inputs:
+            name: literal tmux session name as shown in the session list.
+            socket_name: tmux socket override. Internal/test use only -
+                the HTTP route never passes it, so a client cannot aim
+                this at another socket. Defaults to the configured one.
+
+        Output:
+            dict: ``{"name", "kind", "ok", "detail", "command"}``.
+                ``ok`` False with a ``kind`` of ``cannot_determine`` is a
+                normal, successful API call reporting that the pane could
+                not be read - it is not an error.
+
+        Raises:
+            ValueError: ``name`` contains a tmux target separator.
+
+        Example:
+            >>> await mgr.respawn_session("cloude_api")
+            {'name': 'cloude_api', 'kind': 'agent', 'ok': True, ...}
+        """
+        from src.core.tmux_backend import (
+            DEFAULT_SOCKET_NAME,
+            TmuxBackend,
+            _safe_target,
+        )
+
+        # Same validation as adoption and external destroy: a name holding
+        # ':' or '.' would be read by tmux as a window/pane target.
+        _safe_target(name)
+
+        if socket_name is None:
+            try:
+                socket_name = settings.load_auth_config().session.tmux_socket_name
+            except Exception:
+                socket_name = DEFAULT_SOCKET_NAME
+
+        agent_command = self._agent_command_for_tmux_name(name)
+
+        backend = None
+        for candidate in self.backends.values():
+            if getattr(candidate, "tmux_session", None) == name:
+                backend = candidate
+                break
+
+        if backend is None or not hasattr(backend, "respawn"):
+            # No live backend (or a non-tmux one): build a bare handle
+            # purely to issue the tmux calls. Nothing is adopted, no
+            # pipe-pane is started, and it is discarded on return.
+            backend = TmuxBackend.for_external(
+                session_name=name,
+                working_dir=Path(settings.default_working_dir).expanduser(),
+                on_output=None,
+                socket_name=socket_name,
+            )
+
+        logger.info(
+            "respawn_session_request",
+            name=name,
+            socket=socket_name,
+            has_agent_record=agent_command is not None,
+        )
+
+        result = await backend.respawn(agent_command=agent_command)
+
+        return {
+            "name": name,
+            "kind": result.kind,
+            "ok": result.ok,
+            "detail": result.detail,
+            "command": result.command,
+        }
+
     async def _resolve_external_cwd(self, name: str) -> Path:
         """Best-effort cwd probe for an adopted tmux pane.
 
