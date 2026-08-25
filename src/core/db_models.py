@@ -204,6 +204,22 @@ SESSION_ATTRIBUTIONS: Tuple[str, ...] = (
 SESSION_FAMILY_SOURCE_WRAPPER = "wrapper"
 SESSION_FAMILY_SOURCE_RESERVED_NAME = "reserved_name"
 SESSION_FAMILY_SOURCE_FINGERPRINT = "fingerprint"
+#: THE APP LAUNCHED IT AND KNOWS WHAT IT RAN. A fact, and the strongest
+#: one available: the launcher resolved an ``agent_type``, built the
+#: command from it and executed that command. Nothing was inferred.
+#: Written only by the create path, which is the only code that can
+#: honestly assert it.
+SESSION_FAMILY_SOURCE_LAUNCHED = "launched"
+
+#: THE APP MADE THE SESSION AND DELIBERATELY STARTED NO AGENT
+#: (``auto_start_claude=False`` - a bare shell). Also a fact, and NOT the
+#: same fact as ``unknown``: "there is no agent here" is a measurement,
+#: "we do not know what is running here" is the absence of one. Keeping
+#: them apart is what stops a shell rendering as a guessed agent.
+SESSION_FAMILY_SOURCE_NOT_LAUNCHED = "not_launched"
+
+#: COULD NOT DETERMINE. Reserved for a session the app never started, so
+#: it has no launch choice to read. Never write this from a create path.
 SESSION_FAMILY_SOURCE_UNKNOWN = "unknown"
 
 # The socket every session row defaults to. Stored per row rather than

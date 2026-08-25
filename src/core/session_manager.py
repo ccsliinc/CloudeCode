@@ -2179,8 +2179,20 @@ class SessionManager:
             # while a fabricated row is not repairable by anyone.
             create_persist_outcome = None
             if owned_name:
+                # THE PROVENANCE HANDOFF. ``resolved_agent_type`` was
+                # decided in phase 6 above and ``auto_start_claude``
+                # decided whether its command was actually executed.
+                # Both were already on the in-memory Session and in
+                # session_metadata.json; the AUTHORITY - the sessions
+                # table - was never told, which is why every
+                # launcher-created row carried agent_type NULL and the
+                # UI fell through to a scrollback guess for a session
+                # this app started itself.
                 persisted = self.persist_creation(
-                    owned_name, working_dir=str(work_path)
+                    owned_name,
+                    working_dir=str(work_path),
+                    agent_type=resolved_agent_type,
+                    agent_launched=bool(auto_start_claude),
                 )
                 create_persist_outcome = persisted.outcome
                 if not persisted.recorded:
@@ -3292,7 +3304,13 @@ class SessionManager:
             except Exception:  # noqa: BLE001 - close failure is not a verdict
                 pass
 
-    def persist_creation(self, name: str, working_dir: Optional[str] = None):
+    def persist_creation(
+        self,
+        name: str,
+        working_dir: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        agent_launched: Optional[bool] = None,
+    ):
         """Write ``origin='created'`` for one tmux session, durably.
 
         Description: the sibling of :meth:`persist_adoption`, and the
@@ -3321,6 +3339,13 @@ class SessionManager:
         Inputs: name (str) - the tmux session name just created.
           working_dir (str | None) - the directory it was created in,
           which this path already knows and need not probe for.
+          agent_type (str | None) - the agent this path RESOLVED and
+          built its launch command from. agent_launched (bool | None) -
+          whether that command was actually run, or a bare shell was
+          started instead. Both are forwarded verbatim; the module-level
+          ``persist_creation`` is the single place that turns them into
+          stored provenance. Passing them is what stops a session the
+          app itself started from rendering a GUESSED agent type.
         Output: CreatePersistResult - ``recorded`` is True only when a
           row now carries ``origin='created'``.
         Example: mgr.persist_creation('cloude_a').recorded
@@ -3363,6 +3388,8 @@ class SessionManager:
                     socket=socket,
                     name=name,
                     listing=listing,
+                    agent_type=agent_type,
+                    agent_launched=agent_launched,
                     working_dir=working_dir,
                     working_dir_probe=make_working_dir_probe(socket),
                 )
@@ -3590,6 +3617,47 @@ class SessionManager:
                 error=str(exc),
             )
             return None
+
+    def _stored_launch_for_listing(self, *, socket, name, epoch):
+        """Read this instance's RECORDED launch decision, or NOT KNOWN.
+
+        Description: a thin, never-raising bridge from the listing loop to
+          ``session_agent_provenance.stored_launch_for``. Every failure -
+          no datastore, an unreadable row, a locked file - answers NOT
+          KNOWN, which is honest: it means the caller falls through to a
+          fingerprint scan and the result renders as the inference it is.
+          It must never raise, because a bookkeeping read has no business
+          failing the home screen's session list.
+        Inputs: socket (str), name (str), epoch (int | None) - the
+          instance triple the listing row carries.
+        Output: StoredLaunch - read ``known`` before ``agent_type``.
+        Example: self._stored_launch_for_listing(
+                     socket='cloude', name='a', epoch=7).known
+        """
+        from src.core.session_agent_provenance import (
+            NOT_KNOWN,
+            stored_launch_for,
+        )
+
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+        except Exception:
+            conn = None
+        if conn is None:
+            return NOT_KNOWN
+        try:
+            return stored_launch_for(
+                conn, socket=socket, name=name, epoch=epoch
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("stored_launch_lookup_threw", error=str(exc))
+            return NOT_KNOWN
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def reconcile_lifecycle(self, listing: TmuxListing) -> "ReconcileOutcome":
         """Fold one tmux listing into the stored ``lifecycle`` column.
@@ -3833,16 +3901,38 @@ class SessionManager:
                 # launch choice, so the pill must always render as a
                 # GUESS (dashed) rather than a fact - even when the scan
                 # found nothing and the result is still "unknown".
-                fingerprinted_agent_type = self._fingerprint_agent_type_for_listing(
-                    socket=self._last_probe_socket or self._tmux_socket_name(),
+                # THE RECORDED ANSWER COMES FIRST. Fingerprinting every
+                # row unconditionally threw away a fact in order to
+                # render a guess: for a session THIS APP LAUNCHED the
+                # agent is on record, because the launcher chose the
+                # command and ran it. Only when nothing was recorded -
+                # an adopted or externally-created session - does the
+                # scrollback scan run, and only then is the result an
+                # inference. ``from_fingerprint`` is now derived from
+                # WHICH branch answered rather than hardcoded True, so
+                # the pill's dashed treatment tracks the actual
+                # provenance instead of the code path.
+                probe_socket = self._last_probe_socket or self._tmux_socket_name()
+                launch = self._stored_launch_for_listing(
+                    socket=probe_socket,
                     name=name,
                     epoch=row.get("created_at_epoch"),
                 )
-                row["agent_type"] = fingerprinted_agent_type
+                if launch.known:
+                    effective_agent_type = launch.agent_type
+                    from_fingerprint = False
+                else:
+                    effective_agent_type = self._fingerprint_agent_type_for_listing(
+                        socket=probe_socket,
+                        name=name,
+                        epoch=row.get("created_at_epoch"),
+                    )
+                    from_fingerprint = True
+                row["agent_type"] = effective_agent_type
                 display_family, display_family_source = resolve_family_for_display(
-                    fingerprinted_agent_type,
+                    effective_agent_type,
                     getattr(getattr(settings, "agents", None), "wrappers", None) or [],
-                    from_fingerprint=True,
+                    from_fingerprint=from_fingerprint,
                 )
                 row["agent_family"] = display_family.name if display_family else None
                 row["agent_family_source"] = display_family_source

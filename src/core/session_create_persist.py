@@ -61,6 +61,8 @@ from typing import Any, Callable, Optional
 import structlog
 
 from src.core.db_models import (
+    SESSION_FAMILY_SOURCE_LAUNCHED,
+    SESSION_FAMILY_SOURCE_NOT_LAUNCHED,
     SESSION_LIFECYCLE_RUNNING,
     SESSION_ORIGIN_CREATED,
 )
@@ -146,6 +148,8 @@ def persist_creation(
     listing: TmuxListing,
     working_dir: Optional[str] = None,
     working_dir_probe: Optional[Callable[[str], Optional[str]]] = None,
+    agent_type: Optional[str] = None,
+    agent_launched: Optional[bool] = None,
     now: Optional[str] = None,
 ) -> CreatePersistResult:
     """Record a just-created tmux instance as ``origin='created'``.
@@ -162,7 +166,23 @@ def persist_creation(
       spawn. working_dir (str | None) - the directory the session was
       created in, which the create path already knows and does not need
       to probe for. working_dir_probe (callable | None) - fallback
-      name -> directory. now (str | None) - ISO-8601 stamp.
+      name -> directory. agent_type (str | None) - the agent the
+      launcher RESOLVED and built its command from; recorded verbatim.
+      agent_launched (bool | None) - whether that command was actually
+      executed. THREE STATES, and the pair is read together:
+        True  - the app ran that agent. Source ``launched``: a fact.
+        False - the app made a bare shell and deliberately ran no agent.
+                Source ``not_launched``, and ``agent_type`` is NOT
+                recorded, because nothing is running to have a type.
+                Still a fact, and a different one from not knowing.
+        None  - the caller did not say. Source stays ``unknown``, which
+                is the honest could-not-evaluate and is what every
+                pre-existing caller gets.
+      A create path that leaves this None is the defect this parameter
+      exists to remove: the launcher KNOWS what it ran, and a row that
+      does not say so forces the UI to fall through to a scrollback
+      guess for a session the user opened through the interface.
+      now (str | None) - ISO-8601 stamp.
     Output: CreatePersistResult.
     Example: persist_creation(conn, socket='cloude', name='cloude_a',
                               listing=listing).recorded
@@ -231,6 +251,22 @@ def persist_creation(
         resolved_dir = working_dir_probe(name)
     project_id, attribution = attribute(resolved_dir, _project_roots(conn))
 
+    # PROVENANCE, DECIDED HERE AND NOWHERE ELSE. One place turns the
+    # caller's (agent_type, agent_launched) pair into the two stored
+    # columns, so a second call site cannot invent a fourth meaning.
+    if agent_launched is True:
+        recorded_agent_type = agent_type
+        family_source = SESSION_FAMILY_SOURCE_LAUNCHED
+    elif agent_launched is False:
+        # A bare shell. Deliberately drops any resolved agent_type: it
+        # was resolved but never run, and storing it would claim an
+        # agent that is not there.
+        recorded_agent_type = None
+        family_source = SESSION_FAMILY_SOURCE_NOT_LAUNCHED
+    else:
+        recorded_agent_type = None
+        family_source = None
+
     result = record_instance(
         conn,
         socket=socket,
@@ -244,6 +280,8 @@ def persist_creation(
         working_dir=resolved_dir,
         project_id=project_id,
         project_attribution=attribution,
+        agent_type=recorded_agent_type,
+        agent_family_source=family_source,
     )
     if result.refused:
         logger.warning(
