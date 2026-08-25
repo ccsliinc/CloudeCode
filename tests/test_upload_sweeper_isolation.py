@@ -32,6 +32,7 @@ Two rules, both learned the hard way:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -465,3 +466,26 @@ def test_base_that_is_itself_an_uploads_dir_is_refused(tmp_path, monkeypatch):
     (nested / UPLOAD_DIR_NAME).mkdir(parents=True)
     verdict = sweep_verdict(str(nested))
     assert verdict.outcome is SweepOutcome.REFUSED
+
+
+@pytest.mark.asyncio
+async def test_run_starts_when_the_project_list_is_undetermined(tmp_path):
+    """The startup log must survive project_paths=None.
+
+    The run loop opened by logging ``len(self.project_paths) + 1``, which
+    raises TypeError on the very CANNOT DETERMINE state the rest of the
+    class is built to handle. Startup then failed at shutdown teardown
+    rather than at the sweep, which pointed nowhere near the cause.
+    """
+    sweeper = UploadSweeper(
+        ttl_seconds=1,
+        interval_seconds=3600,
+        project_paths=None,
+        default_dir=str(tmp_path),
+    )
+    task = asyncio.create_task(sweeper.run())
+    await asyncio.sleep(0)
+    assert not task.done(), "run() died before its first sleep"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

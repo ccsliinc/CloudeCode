@@ -328,7 +328,15 @@ class UploadSweeper:
             "upload_sweeper_started",
             ttl_seconds=self.ttl_seconds,
             interval_seconds=self.interval_seconds,
-            base_paths=len(self.project_paths) + 1,
+            # None is the CANNOT DETERMINE state, not zero bases. Saying
+            # so here rather than counting it keeps the startup line
+            # readable as "this sweeper will delete nothing" instead of
+            # crashing on len(None), which is what it used to do.
+            base_paths=(
+                "undetermined"
+                if self.project_paths is None
+                else len(self.project_paths) + 1
+            ),
         )
 
         while True:
