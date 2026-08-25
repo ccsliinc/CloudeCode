@@ -354,3 +354,119 @@ def set_label_for_instance(
         note="no row carries that instance triple, so nothing was labelled",
     )
     return False
+
+
+def _clean_title(value) -> Optional[str]:
+    """Normalise a stored ``title`` into a label or None.
+
+    Description: the ONE place "is there a label here" is decided, so
+      every read agrees. A NULL title, a title that is not text, and a
+      title that is only whitespace are all the same answer: this row
+      carries no label. Rendering a blank string would be worse than
+      rendering the tmux handle, so the caller must be able to tell.
+    Inputs: value (Any) - whatever the ``title`` column held.
+    Output: str | None - the trimmed label, or None.
+    Example: _clean_title('  Media  ')  -> 'Media'
+    """
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def label_for_instance(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: Optional[int],
+) -> Optional[str]:
+    """Read the label for one tmux INSTANCE. Exact, or None.
+
+    Description: the read counterpart of :func:`set_label_for_instance`,
+      keyed on the same full triple. Use this wherever the caller holds
+      a creation epoch - a tmux listing row carries ``created_at_epoch``
+      and the attribution prompt carries ``epoch``, so for those callers
+      the exact key is free.
+
+      There is no guessing in here at all. The answer is either the
+      label stored against THIS instance or None; it can never be some
+      other session's label, which is what makes it safe for a surface a
+      human reads as identity. A None epoch has nothing to key on and
+      answers None immediately rather than falling back to the name.
+
+      NEVER RAISES. A decoration read must not be able to fail the
+      payload it is decorating.
+    Inputs: conn (sqlite3.Connection). socket (str), name (str), epoch
+      (int | None) - the instance triple.
+    Output: str | None - the label, or None for "this instance carries
+      none", which every client renders by falling back to the tmux name.
+    Example:
+        label_for_instance(conn, socket='cloude', name='cloude_a',
+                           epoch=7)  -> 'Media Compression'
+    """
+    if not name or epoch is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT title FROM sessions "
+            "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (socket, name, int(epoch)),
+        ).fetchone()
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        logger.debug("session_label_instance_read_threw", error=str(exc))
+        return None
+    if row is None:
+        return None
+    return _clean_title(dict(row).get("title"))
+
+
+def label_for_name(
+    conn: sqlite3.Connection, *, socket: str, name: str
+) -> Optional[str]:
+    """Read the label for a tmux NAME. Weaker key, bounded weakness.
+
+    Description: for the callers that genuinely have no epoch - a toast
+      is recorded from a hook event carrying only a session id, and
+      probing tmux for a creation time on every hook event is not a cost
+      a notification path can pay.
+
+      THE NEWEST ROW DECIDES, AND ITS ANSWER IS FINAL. Names are
+      reusable, so this table can hold several rows under one name. The
+      newest row for a name is the most recently created instance of it,
+      which is the live one whenever there is a live one. If that row
+      carries no title, the answer is None.
+
+      What that rule FORBIDS is the previous shape, which filtered to
+      rows that had a title and took the newest of those: a dead
+      predecessor could then lend its label to a live session that had
+      never been named, and the user would read a stranger's name as
+      this session's identity. Asserted in
+      tests/test_session_label_reads.py rather than left to review.
+
+      One case this key still cannot cover: a live session with NO row
+      at all (an external session this app never created) sharing a name
+      with a former app-created session. Prefer :func:`label_for_instance`
+      wherever an epoch exists.
+
+      NEVER RAISES.
+    Inputs: conn (sqlite3.Connection). socket (str), name (str).
+    Output: str | None - the label, or None.
+    Example: label_for_name(conn, socket='cloude', name='cloude_a')
+    """
+    if not name:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT title FROM sessions "
+            "WHERE tmux_socket = ? AND tmux_name = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (socket, name),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        logger.debug("session_label_name_read_threw", error=str(exc))
+        return None
+    if row is None:
+        return None
+    return _clean_title(dict(row).get("title"))

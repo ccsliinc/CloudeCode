@@ -2524,6 +2524,7 @@ async def session_attribution_prompt(request: Request):
     from src.core.db import DatastoreUnreadableError, connect, db_path_for, get_meta
     from src.core.db_models import META_SESSION_IMPORT_UNATTRIBUTED
     from src.core.session_import_promote import attribution_settled_instances
+    from src.core.session_label import label_for_instance
 
     db_path = db_path_for(settings.get_state_dir())
     if not db_path.exists():
@@ -2534,18 +2535,40 @@ async def session_attribution_prompt(request: Request):
     def _read():
         """Read the snapshot AND the live answers on one pooled thread.
 
-        Output: tuple[str | None, set | None] - the stored record, and
-          the instances whose question is settled (None when that could
-          not be determined at all).
+        Output: tuple[str | None, set | None, callable] - the stored
+          record, the instances whose question is settled (None when that
+          could not be determined at all), and a label lookup closed over
+          nothing (the labels are read here, on this same connection, so
+          the render pass below needs no second open).
         """
         with closing(connect(db_path, create=False)) as conn:
-            return (
-                get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED),
-                attribution_settled_instances(conn, socket=socket),
-            )
+            record = get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
+            settled_now = attribution_settled_instances(conn, socket=socket)
+            # Read every candidate's label on this connection. Parsing the
+            # record here would duplicate the validation below, so the
+            # lookup is deferred by handing back a reader bound to a live
+            # connection - which cannot outlive this block, hence the
+            # eager dict instead.
+            labels = {}
+            try:
+                parsed = json.loads(record) if record else None
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    nm = item.get("tmux_name")
+                    ep = item.get("epoch")
+                    if not nm:
+                        continue
+                    labels[(str(nm), ep)] = label_for_instance(
+                        conn, socket=socket, name=str(nm), epoch=ep
+                    )
+            return record, settled_now, labels
 
     try:
-        raw, settled = await run_in_threadpool(_read)
+        raw, settled, labels = await run_in_threadpool(_read)
     except DatastoreUnreadableError as exc:
         return SessionAttributionPrompt(
             state="unavailable",
@@ -2602,6 +2625,10 @@ async def session_attribution_prompt(request: Request):
         UnattributedSession(
             tmux_name=str(r.get("tmux_name", "")),
             epoch=r.get("epoch"),
+            # Keyed on the full instance triple in ``_read`` above, so a
+            # different instance that once shared this tmux name cannot
+            # lend its label to the row the user is being asked about.
+            label=labels.get((str(r.get("tmux_name", "")), r.get("epoch"))),
             hints=[str(h) for h in (r.get("hints") or [])],
             reason=str(r.get("reason", "no_admissible_evidence")),
         )

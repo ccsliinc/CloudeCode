@@ -163,7 +163,7 @@ def test_the_response_model_does_not_STRIP_the_hints(tmp_path, monkeypatch):
     )
     client = _client(tmp_path, monkeypatch)
     s = client.get("/api/v1/sessions/attribution-prompt").json()["sessions"][0]
-    assert set(s) == {"tmux_name", "epoch", "hints", "reason"}
+    assert set(s) == {"tmux_name", "epoch", "label", "hints", "reason"}
     assert s["hints"] == ["h1", "h2"]
 
 
@@ -242,3 +242,85 @@ def test_declining_with_no_datastore_is_a_503_not_a_silent_success(
     )
     assert resp.status_code == 503
     assert "WAS NOT" in resp.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# The prompt names sessions the way the rest of the app names them.
+#
+# These rows are the ones the ladder could not attribute, so most of them
+# will carry no label and render the tmux name exactly as before. The case
+# that matters is the one where a row DOES carry a title: the prompt is
+# asking the user to recognise a session, and showing an internal handle
+# instead of the name they gave it makes recognition harder, not easier.
+#
+# KEYED ON THE FULL TRIPLE. The record carries an epoch, so the exact
+# instance key is free here and there is no reason to accept the weaker
+# name-only read on a surface whose whole job is identifying a session.
+# --------------------------------------------------------------------------- #
+
+
+def _title_row(tmp_path, name, epoch, title):
+    """Put a title on one stored instance. Output: None."""
+    with closing(connect(db_path_for(tmp_path))) as conn:
+        with transaction(conn):
+            conn.execute(
+                "UPDATE sessions SET title = ? "
+                "WHERE tmux_socket = 'cloude' AND tmux_name = ? "
+                "AND tmux_created_epoch = ?",
+                (title, name, epoch),
+            )
+
+
+def test_an_unattributed_session_carries_its_label_when_it_has_one(
+    tmp_path, monkeypatch
+):
+    _seed(
+        tmp_path,
+        [{"tmux_name": "cloude_fs2", "epoch": 1755000000, "hints": [],
+          "reason": "no_admissible_evidence"}],
+        rows=[("cloude_fs2", 1755000000, SESSION_ORIGIN_OBSERVED)],
+    )
+    _title_row(tmp_path, "cloude_fs2", 1755000000, 'client: acme "prod"')
+    client = _client(tmp_path, monkeypatch)
+    s = client.get("/api/v1/sessions/attribution-prompt").json()["sessions"][0]
+    assert s["label"] == 'client: acme "prod"'
+    # The tmux name is still carried verbatim: it is the key every adopt
+    # and decline action is posted under, and a label identifies nothing.
+    assert s["tmux_name"] == "cloude_fs2"
+
+
+def test_an_unattributed_session_with_no_label_carries_none(tmp_path, monkeypatch):
+    _seed(
+        tmp_path,
+        [{"tmux_name": "cloude_fs2", "epoch": 1755000000, "hints": [],
+          "reason": "no_admissible_evidence"}],
+        rows=[("cloude_fs2", 1755000000, SESSION_ORIGIN_OBSERVED)],
+    )
+    client = _client(tmp_path, monkeypatch)
+    s = client.get("/api/v1/sessions/attribution-prompt").json()["sessions"][0]
+    assert s["label"] is None
+
+
+def test_a_label_on_a_DIFFERENT_instance_of_the_same_name_is_not_borrowed(
+    tmp_path, monkeypatch
+):
+    """The exact key, asserted rather than assumed.
+
+    Two instances have shared this tmux name. The older one was named by
+    a user; the one being asked about was not. Answering with the older
+    one's label would put a stranger's name on the row the user is being
+    asked to recognise.
+    """
+    _seed(
+        tmp_path,
+        [{"tmux_name": "cloude_fs2", "epoch": 1755000009, "hints": [],
+          "reason": "no_admissible_evidence"}],
+        rows=[
+            ("cloude_fs2", 1755000000, SESSION_ORIGIN_OBSERVED),
+            ("cloude_fs2", 1755000009, SESSION_ORIGIN_OBSERVED),
+        ],
+    )
+    _title_row(tmp_path, "cloude_fs2", 1755000000, "the old one")
+    client = _client(tmp_path, monkeypatch)
+    s = client.get("/api/v1/sessions/attribution-prompt").json()["sessions"][0]
+    assert s["label"] is None

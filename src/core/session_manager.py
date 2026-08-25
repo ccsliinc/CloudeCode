@@ -1630,6 +1630,29 @@ class SessionManager:
             raise ValueError(f"Unknown session_id: {session_id!r}")
 
         color = self._get_session_accent_color(session)
+        # WHICH SESSION, IN WORDS. Stamped here because this is the only
+        # moment the answer is certain: the session is live and in hand.
+        # By render time the browser may be holding a toast for a session
+        # it has no row for at all (a different view, a session since
+        # destroyed, or an attach backfill replaying history).
+        #
+        # The name-only label read is the right one HERE and only here.
+        # This path has no creation epoch - it is driven by hook events,
+        # and probing tmux for a creation time on every hook event is not
+        # a cost a notification path can pay. It is bounded: the newest
+        # row for the name decides, and the live session is always the
+        # newest instance of its own name, so a dead predecessor cannot
+        # lend its label. See label_for_name's docstring.
+        #
+        # NEVER FAILS THE TOAST. A notification must not be lost to a
+        # bookkeeping read, so a throwing lookup degrades to "no label",
+        # which renders as the tmux name.
+        session_name = getattr(session, "tmux_session", None)
+        try:
+            session_label = self._label_for_tmux_name(session_name)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("toast_label_read_threw", error=str(exc))
+            session_label = None
         toast = Toast(
             id=_uuid.uuid4().hex,
             session_id=session_id,
@@ -1637,6 +1660,8 @@ class SessionManager:
             title=title,
             body=body,
             color=color,
+            session_label=session_label,
+            session_name=session_name,
             created_at=datetime.utcnow(),
             acknowledged=False,
         )
@@ -3758,14 +3783,19 @@ class SessionManager:
     def _label_for_tmux_name(self, tmux_name):
         """Read the stored LABEL for a tmux session name, or None.
 
-        Description: a never-raising decoration read. Keyed on the name
-          alone rather than the full instance triple, which is a
-          deliberate weakening and worth saying out loud: the caller has
-          a live session in hand and no epoch, and the worst case is
-          showing a label that belonged to an earlier session of the
-          same name. That is a cosmetic wrong string, not a wrong write -
-          nothing here writes anything. The most recent row wins, which
-          is the live one whenever there is a live one.
+        Description: a never-raising decoration read for the callers
+          that have no creation epoch in hand. Delegates to
+          :func:`src.core.session_label.label_for_name`, which documents
+          exactly how weak the name-only key is and what it forbids: the
+          NEWEST row for the name decides, and if that row carries no
+          title the answer is None, so a dead predecessor can never lend
+          its label to a live session that was never named.
+
+          PREFER :meth:`_label_for_instance` WHENEVER AN EPOCH EXISTS.
+          A tmux listing row carries ``created_at_epoch`` and the
+          attribution prompt carries ``epoch``, so for those callers the
+          exact triple is free and this weaker read has no reason to be
+          used at all.
 
           Every failure answers None, which the client renders as "no
           label" and falls back to the tmux name for. A bookkeeping read
@@ -3774,6 +3804,8 @@ class SessionManager:
         Output: str | None - the label, or None when there is none.
         Example: self._label_for_tmux_name('cloude_a')
         """
+        from src.core.session_label import label_for_name
+
         if not tmux_name:
             return None
         conn = None
@@ -3781,15 +3813,53 @@ class SessionManager:
             conn = self._writable_datastore_connection()
             if conn is None:
                 return None
-            row = conn.execute(
-                "SELECT title FROM sessions WHERE tmux_socket = ? "
-                "AND tmux_name = ? AND title IS NOT NULL AND title != '' "
-                "ORDER BY id DESC LIMIT 1",
-                (self._tmux_socket_name(), tmux_name),
-            ).fetchone()
-            return dict(row)["title"] if row is not None else None
+            return label_for_name(
+                conn, socket=self._tmux_socket_name(), name=tmux_name
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("session_label_read_threw", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _label_for_instance(self, tmux_name, epoch):
+        """Read the stored LABEL for one tmux INSTANCE, or None.
+
+        Description: the exact-key decoration read. Keyed on the full
+          ``(socket, name, epoch)`` triple, so the answer is either this
+          instance's label or None - never another session's. Use this
+          for anything a human reads as identity.
+
+          Never raises, for the same reason as
+          :meth:`_label_for_tmux_name`: a decoration read must not be
+          able to fail the payload it decorates.
+        Inputs: tmux_name (str | None). epoch (int | None) - the tmux
+          creation epoch; None has no instance to key on and answers
+          None rather than falling back to the name.
+        Output: str | None - the label, or None.
+        Example: self._label_for_instance('cloude_a', 1700000000)
+        """
+        from src.core.session_label import label_for_instance
+
+        if not tmux_name or epoch is None:
+            return None
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            return label_for_instance(
+                conn,
+                socket=self._tmux_socket_name(),
+                name=tmux_name,
+                epoch=epoch,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("session_label_instance_read_threw", error=str(exc))
             return None
         finally:
             if conn is not None:
@@ -4021,7 +4091,13 @@ class SessionManager:
                 # The user-facing label for this instance, so the home
                 # screen shows what the user called it rather than the
                 # derived tmux handle. None falls back to the name.
-                row["label"] = self._label_for_tmux_name(name)
+                # KEYED ON THE FULL TRIPLE, because a listing row already
+                # carries its creation epoch - the exact key is free here,
+                # so there is no reason to accept the name-only read's
+                # weaker guarantee on a row a human reads as identity.
+                row["label"] = self._label_for_instance(
+                    name, row.get("created_at_epoch")
+                )
                 status_row = status_map.get(name)
                 raw_tmux_status = status_row["status"] if status_row else STATUS_UNKNOWN
                 # feat/hook-driven-status - attachable rows have no live

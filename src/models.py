@@ -1146,6 +1146,35 @@ class Toast(BaseModel):
         None,
         description="Hex accent color resolved from the session's project theme",
     )
+    # WHICH SESSION THIS IS ABOUT, IN WORDS, STAMPED AT RECORD TIME.
+    # A toast is a record of a moment, not a view of a session: it can
+    # arrive for a session that is not on screen, it outlives the session
+    # it names, and the attach backfill re-delivers it later. So the
+    # client cannot be relied on to still have that session's row when the
+    # card renders. The one moment the identity is certainly knowable is
+    # this one, while the session is live and in hand.
+    #
+    # TWO FACTS, NO DECISION. The fallback rule ("label, else the
+    # cloude_-stripped tmux name, else say so") lives in exactly one place
+    # for the whole app - client/js/session-label.js - so these fields
+    # carry what was true and never a pre-resolved display string. Both
+    # None means this toast's session cannot be named, which the client
+    # renders as "unknown session" rather than dropping the line.
+    session_label: Optional[str] = Field(
+        None,
+        description=(
+            "The session's user-facing label at record time; None when it "
+            "had none. NOT a display string - the client applies the "
+            "fallback."
+        ),
+    )
+    session_name: Optional[str] = Field(
+        None,
+        description=(
+            "The session's tmux name at record time; None for a non-tmux "
+            "session. The fallback the client renders when there is no label."
+        ),
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
     acknowledged: bool = Field(
         False, description="True once the toast has been dismissed"
@@ -1650,6 +1679,20 @@ class UnattributedSession(BaseModel):
         description=(
             "tmux #{session_created}. None when the instance could not "
             "be dated, which is why some sessions cannot be answered for"
+        ),
+    )
+    # The user-facing label for this instance, when the stored row
+    # carries one. Usually None here by the nature of the question - the
+    # ladder could not attribute these - but a row WITH a title is
+    # exactly the one the user has the best chance of recognising, and
+    # showing them an internal handle instead of the name they typed
+    # makes recognition harder. None falls back to ``tmux_name``, which
+    # is what this surface always rendered.
+    label: Optional[str] = Field(
+        default=None,
+        description=(
+            "User-facing label for this instance (sessions.title), or "
+            "None. Falls back to tmux_name when None."
         ),
     )
     hints: List[str] = Field(
