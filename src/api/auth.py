@@ -732,9 +732,9 @@ async def get_projects():
         deduplicated by root, and GET /projects/authority reports
         ``mode: config_fallback`` with writes refused;
       - the database is readable but empty while config.json is not:
-        config.json's entries are served and the mode says
-        ``db_empty_config_has``, never an empty list that would render as
-        "you have no projects".
+        the list is EMPTY and the mode says ``db_unreadable``, so an
+        empty list is never rendered as "you have no projects" when it
+        actually means "nothing could be read".
 
     A client that needs to know WHICH of those it is calls
     GET /projects/authority. This route always returns a list, because a
@@ -762,39 +762,27 @@ async def get_projects():
 @router.get("/projects/authority", dependencies=[Depends(require_auth)])
 async def get_projects_authority() -> dict:
     """
-    Report which source is authoritative right now, and any disagreement.
+    Report where the project list came from, and whether writes work.
 
-    feat/db-is-authoritative. Two questions, one answer, because they are
-    only useful together:
+    Projects live in cloude.db and nowhere else, so this route no longer
+    reports a disagreement between two sources - there is only one.
+    ``mode`` is one of:
 
-    1. WHERE IS THE LIST COMING FROM. ``mode`` is one of ``db`` (the
-       normal case, writes allowed), ``config_fallback`` (cloude.db is
-       unreachable, the list is config.json's, writes refused) or
-       ``db_empty_config_has`` (the database is fine but holds no
-       projects while config.json does - not a claim that you have none).
+      ``db``             the normal case. The list is the table's and
+                         writes are allowed. An empty list here is a
+                         real, measured empty list.
+      ``db_unreadable``  cloude.db could not be read. The list is EMPTY
+                         because nothing could be read, NOT because
+                         nothing is there, and ``message`` says so in
+                         words. Writes are refused until it clears.
 
-    2. DO THE TWO SOURCES AGREE. ``diff`` names every project present in
-       only one of them and every field that differs between them.
-       Disagreement is REPORTED, never resolved silently by picking a
-       winner: the database stays authoritative, and this route says so
-       in ``diff.authoritative`` while still naming what config.json
-       holds that the database does not.
-
-       ``diff`` is ``null`` - and ``diff_state`` is ``cannot_determine``
-       - whenever the database could not be read. An empty diff object
-       would render as "the two agree", which is a verdict nobody
-       measured.
-
-       ``duplicate_config_roots`` is reported separately from
-       ``only_in_config``, because a config entry sharing a root with
-       another is EXPECTED to have no row: the import kept the first and
-       recorded the rest in ``meta.imported_from_json_result``. Listing
-       an expected absence as a discrepancy trains the reader to ignore
-       the report.
+    ``reconcile`` reports what the last startup pass did to the table,
+    so a repair the user did not ask for is still something the user can
+    see.
 
     Returns:
         dict - ``{"mode", "writable", "degraded", "message", "detail",
-        "project_count", "diff", "diff_state", "config_path"}``.
+        "project_count", "reconcile"}``.
     """
     return projects_service.authority_payload(settings)
 
@@ -804,9 +792,8 @@ async def create_project(body: CreateProjectRequest):
     """
     Add a new project.
 
-    feat/db-is-authoritative. Writes the ``projects`` table, then
-    refreshes config.json as a rollback snapshot. In that order: the
-    snapshot describes a committed transaction, never a pending one.
+    Writes the ``projects`` table, which is the only place projects
+    live. There is no second store to keep in step.
 
     Args:
         body: Project creation parameters.
@@ -848,7 +835,6 @@ async def create_project(body: CreateProjectRequest):
         logger.warning("project_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
-    projects_service.finish_write(settings)
     logger.info("project_created", name=row["display_name"], path=row["raw_path"])
 
     return ProjectResponse(
@@ -891,7 +877,6 @@ async def delete_project(project_name: str):
         target = projects_service.resolve_target(conn, project_name)
         db_delete_project(conn, target["id"])
 
-    projects_service.finish_write(settings)
     logger.info("project_deleted", name=project_name, root=target["root"])
 
     return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
@@ -959,7 +944,6 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
             detail=f"A project named '{body.new_name}' already exists",
         )
 
-    projects_service.finish_write(settings)
     logger.info(
         "project_updated",
         old_name=project_name,
@@ -1149,7 +1133,6 @@ async def clone_project_from_github(body: CloneProjectRequest):
         )
         raise HTTPException(status_code=409, detail=str(e))
 
-    projects_service.finish_write(settings)
 
     logger.info(
         "project_cloned_from_github",

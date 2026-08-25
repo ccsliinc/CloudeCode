@@ -2,27 +2,21 @@
 
 Kept out of src/api/auth.py so the routes stay thin and this logic - which
 is where the authority inversion actually bites - is readable on its own.
-Every function here does the same three things in the same order:
+Every function here does the same two things in the same order:
 
   1. resolve the current authority mode (``resolve_projects``),
-  2. refuse the operation if that mode is not writable,
-  3. mutate the database, then refresh the config.json snapshot.
+  2. refuse the operation if that mode is not writable, otherwise
+     mutate the database.
 
-Step 3 is never reordered. The snapshot is written AFTER the database
-commit, because writing it first would leave config.json describing a
-transaction that a rollback means never happened.
-
-A FAILED SNAPSHOT DOES NOT FAIL THE REQUEST. The database is
-authoritative and it recorded what the user asked for; telling them the
-operation failed would be a lie that invites a destructive retry. The
-failure is logged and returned in the response's ``snapshot`` block, so a
-surface can warn that the rollback file is now stale without pretending
-the change did not happen.
+THERE IS NO THIRD STEP ANY MORE. There used to be: every mutation also
+rewrote config.json's ``projects`` key as a rollback snapshot. Projects
+are DB-only now, so the commit IS the whole write. Nothing mirrors it,
+nothing can fall out of step with it, and there is no second store whose
+staleness has to be reported alongside a successful change.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -32,7 +26,6 @@ from src.core import project_authority as authority
 from src.core.project_authority import (
     ProjectsReadOnlyError,
     ProjectsView,
-    refresh_snapshot,
     require_writable,
     resolve_projects,
 )
@@ -40,35 +33,6 @@ from src.core.project_authority import (
 logger = structlog.get_logger()
 
 
-def config_projects_for(settings: Any) -> List[Any]:
-    """Load config.json's project entries, tolerating an absent file.
-
-    Description: the authority layer needs the config list for two
-      purposes - the diff, and the degraded fallback - and neither is
-      worth failing a request over when config.json is missing. A missing
-      config is reported as an empty list, which the diff then renders as
-      every DB project being ``only_in_db``: visible, named, and true.
-      It is never allowed to raise past this point, because a config
-      problem must not be able to take down a database-backed read.
-    Inputs: settings (Any) - the Settings singleton.
-    Output: list - ProjectConfig objects, empty when config.json is
-      missing or unparseable.
-    Example: config_projects_for(settings) -> [ProjectConfig(...)]
-    """
-    try:
-        return list(settings.load_auth_config().projects)
-    except Exception as exc:  # noqa: BLE001 - a config fault is not a 500 here
-        logger.warning("projects_config_unreadable", error=str(exc))
-        return []
-
-
-def config_path_for(settings: Any) -> Path:
-    """Resolve the config.json path the snapshot writes to.
-
-    Inputs: settings (Any) - the Settings singleton.
-    Output: Path - ``settings.auth_config_file`` with ``~`` expanded.
-    """
-    return Path(settings.auth_config_file).expanduser()
 
 
 def current_view(settings: Any) -> ProjectsView:
@@ -78,23 +42,8 @@ def current_view(settings: Any) -> ProjectsView:
     Output: ProjectsView.
     Example: current_view(settings).mode -> "db"
     """
-    return resolve_projects(settings.get_state_dir(), config_projects_for(settings))
+    return resolve_projects(settings.get_state_dir())
 
-
-def _snapshot_block(settings: Any) -> Dict[str, Any]:
-    """Refresh config.json and render the result for a response body.
-
-    Inputs: settings (Any) - the Settings singleton.
-    Output: dict - ``{"ok", "reason", "detail"}``.
-    """
-    result = refresh_snapshot(settings.get_state_dir(), config_path_for(settings))
-    if not result.ok:
-        logger.warning(
-            "project_rollback_snapshot_stale",
-            reason=result.reason,
-            detail=result.detail,
-        )
-    return {"ok": result.ok, "reason": result.reason, "detail": result.detail}
 
 
 def readonly_http_error(exc: ProjectsReadOnlyError) -> HTTPException:
@@ -111,8 +60,8 @@ def readonly_http_error(exc: ProjectsReadOnlyError) -> HTTPException:
         status_code=503,
         detail=(
             "cloude.db is unreachable, so project changes are refused. "
-            "Projects are currently being served from config.json in "
-            f"read-only rollback mode. ({exc.detail})"
+            "Projects live only in cloude.db, so there is nothing else to "
+            f"apply this to. ({exc.detail})"
         ),
     )
 
@@ -154,30 +103,20 @@ def guard_writable(settings: Any) -> ProjectsView:
     return view
 
 
-def finish_write(settings: Any) -> Dict[str, Any]:
-    """Refresh the rollback snapshot after a committed mutation.
-
-    Inputs: settings (Any) - the Settings singleton.
-    Output: dict - the ``snapshot`` block for the response body.
-    """
-    return _snapshot_block(settings)
-
 
 def authority_payload(settings: Any) -> Dict[str, Any]:
     """Render the full authority + disagreement report.
 
-    Description: the body of GET /projects/authority. Carries the mode,
-      whether writes are allowed, and the DB-versus-config diff. When the
-      database is unreachable the diff is null rather than empty, so a
-      client cannot read "could not compare" as "they agree".
+    Description: the body of GET /projects/authority. Carries the mode
+      and whether writes are allowed. It no longer carries a
+      DB-versus-config diff or a config path, because projects live in
+      exactly one place and there is nothing to compare that place
+      against.
     Inputs: settings (Any) - the Settings singleton.
     Output: dict.
     Example: authority_payload(settings)["mode"] -> "db"
     """
-    view = current_view(settings)
-    payload = view.to_dict()
-    payload["config_path"] = str(config_path_for(settings))
-    return payload
+    return current_view(settings).to_dict()
 
 
 def views_to_responses(view: ProjectsView, response_cls: Any) -> List[Any]:
@@ -231,7 +170,7 @@ def resolve_target(conn: Any, name: str) -> Dict[str, Any]:
 
 
 def touch_project_best_effort(settings: Any, working_dir: str) -> Optional[Dict]:
-    """Mark a project most-recently-opened, and refresh the snapshot.
+    """Mark a project most-recently-opened in the datastore.
 
     Description: the replacement for ``Settings.move_project_to_top``,
       called when a session starts in a directory. Best-effort in the
@@ -265,9 +204,6 @@ def touch_project_best_effort(settings: Any, working_dir: str) -> Optional[Dict]
         )
         return None
 
-    if row is None:
-        return None
-    _snapshot_block(settings)
     return row
 
 
@@ -296,10 +232,7 @@ def agent_type_for(settings: Any, project_name: str) -> Optional[str]:
 __all__ = [
     "agent_type_for",
     "authority_payload",
-    "config_path_for",
-    "config_projects_for",
     "current_view",
-    "finish_write",
     "guard_writable",
     "open_db_or_503",
     "readonly_http_error",

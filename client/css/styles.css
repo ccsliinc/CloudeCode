@@ -4465,17 +4465,15 @@ body.home-header-active {
     border: 1px solid var(--color-border);
 }
 
-.project-authority-banner-fallback {
+/* THE ONE DEGRADED BANNER. There used to be three classes here, for
+ * three modes that could render two banners at once and contradict each
+ * other. Projects are DB-only now, so the only degraded state is "the
+ * datastore did not answer", and it is danger-coloured because writes
+ * are refused while it lasts. */
+.project-authority-banner-unreadable {
     color: var(--color-danger);
     background: var(--color-danger-bg-hover);
     border: 1px solid var(--color-danger-border);
-}
-
-.project-authority-banner-empty,
-.project-authority-banner-disagree {
-    color: var(--color-warning);
-    background: var(--color-warning-bg);
-    border: 1px solid var(--color-warning-border);
 }
 
 /* ---------------------------------------------------------------------

@@ -624,20 +624,28 @@ class Launchpad {
     }
 
     /**
-     * Build the banner that names the project list's provenance.
+     * Build the ONE banner that names where the project list came from.
      *
-     * Draws nothing in the healthy case - `mode: "db"` with the two
-     * sources agreeing is the steady state and does not need a badge.
-     * Draws in three other cases, each visually distinct:
+     * There is exactly one banner, and that is the fix. This method used
+     * to draw up to two at once from two independently-formed opinions -
+     * a "degraded mode" banner saying config.json's projects were being
+     * shown, and a "sources disagree" banner saying the database was
+     * authoritative and was what you were seeing. Both rendered together,
+     * and they contradicted each other about the one thing a provenance
+     * banner exists to state. Worse, the disagreement was computed by
+     * comparing a live database read against a CACHED config read, so it
+     * announced conflicts that did not exist on disk.
      *
-     *   - authority unknown (fetch failed): says so, claims nothing.
-     *   - degraded mode: names the mode, says writes are refused in
-     *     `config_fallback`, and carries the server's own message.
-     *   - sources disagree: lists what each side has that the other does
-     *     not, and states that the database is authoritative. Reporting
-     *     the disagreement and naming the winner are two separate
-     *     sentences on purpose - "the DB won" is not the same claim as
-     *     "there was nothing to win".
+     * Projects are DB-only now, so there is one source, one opinion and
+     * one banner. Three cases, and the healthy one draws nothing:
+     *
+     *   - `db`: the steady state. No badge; an empty list here is a real
+     *     measured empty list and the empty-state copy already says so.
+     *   - `db_unreadable`: the datastore did not answer. The server's own
+     *     message says the empty list means "could not read", not "you
+     *     have none", and that writes are refused.
+     *   - authority unknown (the fetch itself failed): says so, and
+     *     claims nothing in either direction.
      *
      * @returns {string} - HTML, empty string when there is nothing to say.
      */
@@ -647,30 +655,11 @@ class Launchpad {
             return `<div class="project-authority-banner project-authority-banner-unknown" data-authority-state="unknown">CANNOT DETERMINE which source these projects came from - the authority check did not answer. This is not a claim that anything is wrong, and not a claim that it is fine.</div>`;
         }
 
-        let html = '';
-        if (a.degraded) {
-            const cls = a.mode === 'config_fallback'
-                ? 'project-authority-banner-fallback'
-                : 'project-authority-banner-empty';
-            html += `<div class="project-authority-banner ${cls}" data-authority-state="${this._escapeHtml(a.mode)}" data-writable="${a.writable ? 'true' : 'false'}">${this._escapeHtml(a.message || a.mode)}</div>`;
+        if (!a.degraded) {
+            return '';
         }
 
-        const d = a.diff;
-        if (d && !d.agree) {
-            const parts = [];
-            if (d.only_in_db && d.only_in_db.length) {
-                parts.push(`${d.only_in_db.length} only in the database (${d.only_in_db.map(x => x.display_name).join(', ')})`);
-            }
-            if (d.only_in_config && d.only_in_config.length) {
-                parts.push(`${d.only_in_config.length} only in config.json (${d.only_in_config.map(x => x.name).join(', ')})`);
-            }
-            if (d.field_mismatches && d.field_mismatches.length) {
-                parts.push(`${d.field_mismatches.length} field(s) differ`);
-            }
-            html += `<div class="project-authority-banner project-authority-banner-disagree" data-authority-state="disagree" data-difference-count="${d.difference_count}">cloude.db and config.json DISAGREE: ${this._escapeHtml(parts.join('; '))}. cloude.db is authoritative and is what you are seeing; config.json is the rollback snapshot and is currently out of step.</div>`;
-        }
-
-        return html;
+        return `<div class="project-authority-banner project-authority-banner-unreadable" data-authority-state="${this._escapeHtml(a.mode)}" data-writable="${a.writable ? 'true' : 'false'}">${this._escapeHtml(a.message || a.mode)}</div>`;
     }
 
     async loadProjectPresence() {

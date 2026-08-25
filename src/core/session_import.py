@@ -86,7 +86,6 @@ from src.core.session_import_mapping import (
     _row_fields,
     _stopped_epoch,
 )
-from src.core.project_reconcile import ReconcileResult, reconcile_projects
 from src.core.session_identity import RECORD_INSERTED, record_instance
 from src.core.session_import_evidence import gather, live_sessions_from
 from src.core.session_import_ladder import (
@@ -145,11 +144,7 @@ class FirstRunImportResult:
 
     Inputs (constructor): outcome (str) - one of ``IMPORT_COMPLETED``,
       ``IMPORT_ALREADY_DONE``, ``IMPORT_PENDING_LISTING_UNAVAILABLE``.
-      sessions_imported (int). projects (ReconcileResult | None) - what
-      the config-projects reconcile did on THIS start. Never None on a
-      completed or already-done outcome: the projects stage runs on every
-      start, so a caller that sees None is looking at a pass that could
-      not reach it at all.
+      sessions_imported (int).
       listing_reason (str | None) - the tmux probe's own reason token,
       carried verbatim on the pending outcome so the UI can say WHAT
       could not be measured rather than showing a blank. refusals
@@ -161,7 +156,6 @@ class FirstRunImportResult:
 
     outcome: str
     sessions_imported: int = 0
-    projects: Optional[ReconcileResult] = None
     listing_reason: Optional[str] = None
     refusals: List[Dict[str, Any]] = field(default_factory=list)
     unmatched: List[Dict[str, Any]] = field(default_factory=list)
@@ -381,7 +375,6 @@ def _latch_sessions_stage(
 def run_first_run_import(
     conn: sqlite3.Connection,
     *,
-    projects: Iterable[Any],
     listing: TmuxListing,
     owned_tmux_names: Optional[Set[str]] = None,
     persisted_sessions: Optional[Sequence[Dict[str, Any]]] = None,
@@ -392,7 +385,7 @@ def run_first_run_import(
     log_dir: Optional[Path] = None,
     origin_probe: Optional[Callable[[str], Optional[str]]] = None,
 ) -> FirstRunImportResult:
-    """Import config projects and live tmux sessions, once per install, ever.
+    """Import live tmux sessions, once per install, ever.
 
     Description: design section 5.3, steps 2 through 8, with step 3 as the
       hard gate. Runs inside the caller's transaction, so a failure
@@ -402,9 +395,11 @@ def run_first_run_import(
 
       THE ORDER MATTERS AND IS NOT REARRANGEABLE:
 
-        step 2  config projects (idempotent - ``import_from_config``
-                dedupes against rows already present, so a retry after a
-                failed probe does not double them).
+        (there is no config-projects step any more. Projects are
+                DB-only and any legacy config copy is retired once by
+                ``projects_config_migration``, which main.py runs BEFORE
+                this import so the projects table is settled before
+                attribution in step 7 reads it.)
         step 3  THE GATE. ``listing.ok is False`` returns PENDING right
                 here: zero session rows, latch untouched, reason
                 recorded. Every statement below is unreachable on that
@@ -419,7 +414,6 @@ def run_first_run_import(
                 cwd could not be probed.
         step 8  stamp the latch. The ONLY stamp site in this module.
     Inputs: conn (sqlite3.Connection) - caller owns the transaction.
-      projects (Iterable) - ``AuthConfig.projects`` entries.
       listing (TmuxListing) - ONE ``tmux list-sessions`` result; read
       ``ok`` before anything else. owned_tmux_names (set[str] | None) -
       the legacy ``SessionManager.owned_tmux_sessions``. persisted_sessions
@@ -429,27 +423,11 @@ def run_first_run_import(
       cannot answer; absent probe means every row without an inline
       ``working_dir`` gets attribution ``unknown``, never a guess.
     Output: FirstRunImportResult.
-    Example: run_first_run_import(conn, projects=[], listing=listing).outcome
+    Example: run_first_run_import(conn, listing=listing).outcome
     """
     stamp = now or utc_now()
     owned = set(owned_tmux_names or ())
 
-    # --- step 2: config projects. RUNS ON EVERY START, ABOVE THE LATCH. ---
-    #
-    # It used to sit BELOW the sessions gate, so a project the OLD version
-    # created while the user was downgraded never reached the table on
-    # re-upgrade and the next snapshot_projects() then deleted it from
-    # config.json too. Silent, and unrecoverable one write later.
-    #
-    # The latch is correct for SESSIONS and wrong for PROJECTS, and the
-    # difference is the input, not the caller: sessions come from a live
-    # tmux process table that is gone by tomorrow, projects come from a
-    # durable file that says the same thing every time it is read. So the
-    # sessions latch below is untouched and this stage moved out from
-    # behind it. See src/core/project_reconcile.py for how the reconcile
-    # tells "never imported" from "the user deleted it" - and for the
-    # third answer, when it can tell neither.
-    project_result = reconcile_projects(conn, projects, now=stamp)
 
     # --- STAGE D: the latch is versioned, not one-way --------------------
     # None  never ran            -> full import
@@ -458,7 +436,7 @@ def run_first_run_import(
     prior_version = sessions_stage_version(conn)
     if prior_version is not None and prior_version >= EVIDENCE_LADDER_VERSION:
         return FirstRunImportResult(
-            outcome=IMPORT_ALREADY_DONE, projects=project_result
+            outcome=IMPORT_ALREADY_DONE
         )
 
     # --- step 3: THE GATE ------------------------------------------------
@@ -485,8 +463,7 @@ def run_first_run_import(
         return FirstRunImportResult(
             outcome=IMPORT_PENDING_LISTING_UNAVAILABLE,
             sessions_imported=0,
-            projects=project_result,
-            listing_reason=listing.reason,
+                listing_reason=listing.reason,
         )
 
     # --- THE EVIDENCE LADDER (design Stage B) ----------------------------
@@ -518,7 +495,6 @@ def run_first_run_import(
             socket=socket,
             stamp=stamp,
             prior_version=prior_version,
-            project_result=project_result,
             listing=listing,
         )
 
@@ -651,14 +627,12 @@ def run_first_run_import(
     logger.info(
         "session_import_completed",
         sessions_imported=imported,
-        projects_imported=len(project_result.imported),
         refusals=len(refusals),
         total_rows=count_sessions(conn),
     )
     return FirstRunImportResult(
         outcome=IMPORT_COMPLETED,
         sessions_imported=imported,
-        projects=project_result,
         listing_reason=listing.reason,
         refusals=refusals,
         unmatched=unmatched,
@@ -673,7 +647,6 @@ def _rerun_promote_only(
     socket: str,
     stamp: str,
     prior_version: int,
-    project_result: ReconcileResult,
     listing: TmuxListing,
 ) -> FirstRunImportResult:
     """STAGE D. Re-apply a NEWER ladder to rows the old one left observed.
@@ -700,7 +673,7 @@ def _rerun_promote_only(
       re-raises a closed question.
     Inputs: conn (sqlite3.Connection). ladder (LadderReport). socket
       (str). stamp (str) - ISO-8601. prior_version (int) - the ladder
-      version that ran before. project_result (ReconcileResult).
+      version that ran before.
       listing (TmuxListing).
     Output: FirstRunImportResult with outcome IMPORT_RERUN_COMPLETED.
     """
@@ -759,7 +732,6 @@ def _rerun_promote_only(
     return FirstRunImportResult(
         outcome=IMPORT_RERUN_COMPLETED,
         sessions_imported=0,
-        projects=project_result,
         listing_reason=listing.reason,
         unattributed=unattributed,
         promoted=promoted,
