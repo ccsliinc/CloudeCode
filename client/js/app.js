@@ -199,6 +199,40 @@ function _unwireHeaderTitleRename() {
 }
 
 /**
+ * The string a HUMAN should see for one session, or null.
+ *
+ * Description: a thin front for window.SessionLabel.resolve, which holds
+ *   the ONE fallback rule this app has for "what is this session called"
+ *   (label, else the cloude_-stripped tmux name, else null). It is here
+ *   so the two screen-transition paths below and the tab-title function
+ *   all ask the same question in the same words instead of each carrying
+ *   their own chain.
+ *
+ *   A SESSION'S NAME IS A LABEL, NOT ITS TMUX NAME. These two used to be
+ *   one string. They are not any more, and every surface that renders
+ *   identity has to read the label - a surface still painting the tmux
+ *   handle looks broken the moment a label differs from it, which is the
+ *   normal case rather than the exotic one.
+ * Inputs: sessionLike (object|null) - anything carrying ``label`` and
+ *   ``name``, or a SessionInfo carrying ``label`` and ``tmux_session``.
+ * Output: string|null - null means this session cannot be named at all.
+ * Example: sessionDisplayName({label: 'Media', tmux_session: 'cloude_m'})
+ */
+function sessionDisplayName(sessionLike) {
+    if (!sessionLike || typeof sessionLike !== 'object') return null;
+    var row = {
+        label: sessionLike.label,
+        name: sessionLike.name || sessionLike.tmux_session || null,
+    };
+    if (window.SessionLabel) return window.SessionLabel.resolve(row);
+    // session-label.js is loaded before this file by client/index.html.
+    // If it somehow is not, fall back rather than blanking the tab.
+    if (typeof row.label === 'string' && row.label.trim()) return row.label.trim();
+    return row.name || null;
+}
+window.sessionDisplayName = sessionDisplayName;
+
+/**
  * v0.7.1 - Browser tab title sync.
  *
  * The page title reflects whichever session is active for the user's
@@ -207,18 +241,30 @@ function _unwireHeaderTitleRename() {
  * window title in a multi-tab browser is identifiable at a glance
  * (matches the convention used by VS Code, IntelliJ, etc.).
  *
+ * THE NAME IS RESOLVED IN HERE, NOT BY THE CALLERS. It used to take a
+ * pre-resolved string, and three separate call sites each decided what
+ * that string was - which is three chances to forget that a session's
+ * displayed name is its LABEL and not its tmux handle. Resolving here
+ * makes forgetting structurally impossible for the tab title.
+ *
  * Called from:
  *   - showTerminal / returnToExistingTerminal - paint session name
  *   - showLaunchpad - clear back to brand
  *   - terminal.js WS handler on session.renamed - live-update for the
  *     attached session
  *
- * @param {?string} sessionName  Session name or null/empty to reset.
+ * @param {?(string|object)} session  A session-shaped object carrying
+ *   ``label`` and ``name``/``tmux_session``, or an already-resolved
+ *   display string, or null/empty to reset to the brand. A session that
+ *   cannot be named resolves to the bare brand - never to the literal
+ *   word "null", which is what String()-ing a JSON null would put in the
+ *   user's tab.
  */
-function setPageTitle(sessionName) {
+function setPageTitle(session) {
     var brand = 'Cloude Code';
-    if (sessionName && String(sessionName).trim()) {
-        document.title = String(sessionName).trim() + ' - ' + brand;
+    var name = typeof session === 'string' ? session : sessionDisplayName(session);
+    if (name && String(name).trim()) {
+        document.title = String(name).trim() + ' - ' + brand;
     } else {
         document.title = brand;
     }
@@ -853,13 +899,18 @@ class AppController {
         if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
             window.GlobalAudioToggle.syncForSession();
         }
-        // Header identity: brand icon + session name as title.
+        // Header identity: brand icon + the session's LABEL as title.
+        // NOT sessionName - that is the tmux handle, which identity is
+        // keyed on and which a rename deliberately never moves. What the
+        // user called this session is what the header must say.
+        var displayName = sessionDisplayName({ label: session && session.label,
+                                               name: sessionName });
         setHeaderIdentity({
             icon: 'cloude',
-            title: sessionName || 'session'
+            title: displayName || 'session'
         });
         // v0.7.1 - reflect the attached session in the browser tab title.
-        setPageTitle(sessionName);
+        setPageTitle({ label: session && session.label, name: sessionName });
 
         // Phase 4-5: scope the terminal screen + xterm palette to this
         // session's agent theme. If session.agent_type is null/undefined
@@ -983,12 +1034,18 @@ class AppController {
             // not just page chrome.
             window.Themes.applyTheme(pinnedTheme, { persist: false, forXterm: true });
         }
+        // Same rule as showTerminal(): the header says the LABEL. The
+        // outer SessionInfo carries it; an older caller handing us the
+        // inner Session row carries none, which falls back to the tmux
+        // name exactly as this surface always did.
+        var reLabel = (session && session.label) || (inner && inner.label) || null;
+        var reDisplay = sessionDisplayName({ label: reLabel, name: sessionName });
         setHeaderIdentity({
             icon: 'cloude',
-            title: sessionName || 'session'
+            title: reDisplay || 'session'
         });
         // v0.7.1 - sync browser tab title to the re-entered session.
-        setPageTitle(sessionName);
+        setPageTitle({ label: reLabel, name: sessionName });
 
         // Phase 4-5: re-scope to the session's theme on re-entry. Same
         // null-tolerant semantics as showTerminal() - agent_type may be

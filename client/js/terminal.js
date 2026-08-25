@@ -1612,13 +1612,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 const myId = this._sessionId();
                 const sess = this._currentSession;
                 if (message && message.session_id === myId && sess && message.new_name) {
-                    // Update the in-memory session record so the rest of the
-                    // controller (active-name resolver, header re-paint on
-                    // reconnect) sees the new value immediately.
-                    if (sess.session && typeof sess.session === 'object') {
-                        sess.session.tmux_session = message.new_name;
-                    }
-                    sess.tmux_session = message.new_name;
+                    // ``new_name`` IS A LABEL: the PATCH writes
+                    // sessions.title, never tmux rename-session. Putting it
+                    // in tmux_session was a bug - that field keys identity,
+                    // the theme-pin url and group membership. Why, and what
+                    // it cost: tests/test_rename_broadcast_surfaces.node.mjs
+                    sess.label = message.new_name;
+                    if (sess.session && typeof sess.session === 'object') sess.session.label = message.new_name;
                     if (typeof window.setHeaderIdentity === 'function') {
                         window.setHeaderIdentity({
                             icon: 'cloude',

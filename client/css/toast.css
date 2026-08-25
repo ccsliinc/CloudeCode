@@ -81,6 +81,25 @@
   color: var(--toast-accent);
 }
 
+/* WHICH SESSION THIS TOAST IS ABOUT.
+   Quieter than the title and quieter than the body: it is context, not
+   the message. It still has to be a legible box - a name nobody can see
+   is not a name - so it gets a real font-size and its own line rather
+   than being tucked into the title's row. */
+.toast__session {
+  margin: 0 0 4px 0;
+  color: var(--color-fg-muted, #858585);
+  font-size: 11px;
+  opacity: 0.85;
+  word-break: break-word;
+}
+
+/* The could-not-name case reads as an admission rather than as a name.
+   Italic is the only cue, deliberately: the text already says it. */
+.toast__session[data-unknown="1"] {
+  font-style: italic;
+}
+
 .toast__body {
   margin: 0;
   color: var(--color-fg-muted, #858585);

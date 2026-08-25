@@ -449,6 +449,35 @@ class ToastManager {
     }
     el.appendChild(title);
 
+    // WHICH SESSION THIS IS ABOUT.
+    //
+    // A toast is not a view of a session, it is a record of a moment. It
+    // can arrive for a session that is not on screen, it outlives the
+    // session it names, and the attach backfill replays it later - so a
+    // card with no session line reads as a card about whatever the user
+    // happens to be looking at, which is the wrong session. The server
+    // stamps session_label and session_name at record time, when the
+    // identity is certainly knowable, and this renders them through the
+    // one shared resolver.
+    //
+    // ITS OWN ELEMENT, never appended to the title. A title that happened
+    // to contain the session name would be indistinguishable from this at
+    // the .textContent level - which is exactly how a `~~claude` badge
+    // shipped through a green suite in this codebase.
+    //
+    // THE THIRD OUTCOME IS SPOKEN, NOT DROPPED. A toast recorded before
+    // the server carried identity has neither field. It says so. Silently
+    // omitting the line would be the dishonest option.
+    const session = document.createElement('div');
+    session.className = 'toast__session';
+    const resolved = window.SessionLabel
+      ? window.SessionLabel.resolveToast(newest)
+      : (newest.session_label || newest.session_name || null);
+    session.textContent = resolved
+      || (window.SessionLabel ? window.SessionLabel.UNKNOWN : 'unknown session');
+    if (!resolved) session.dataset.unknown = '1';
+    el.appendChild(session);
+
     if (newest.body) {
       const body = document.createElement('div');
       body.className = 'toast__body';
