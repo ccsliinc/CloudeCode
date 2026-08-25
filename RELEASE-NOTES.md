@@ -1,5 +1,69 @@
 # Release notes
 
+## v1.0.3
+
+Measured against `v1.0.2`. Three fix branches plus the open PR that finally
+brought the v1.0.x line onto `ship/round5`.
+
+Test suite at the release sha: **2561 passed, 0 failed** (2561 collected),
+run with `--ignore=tests/test_nuke_sandbox.py`, which executes the real
+`nuke.sh`. That reconciles exactly against the branch baselines, measured
+rather than reported: v1.0.2 collects 2529, and the three branches collect
+2537, 2542 and 2540, so +8 +13 +11 = 2561. Node suite: 94 files, all green,
+run per file (1665 assertions). JS syntax check: 97 files parsed cleanly
+(95 at v1.0.2, plus the two new pure modules `macOS/setup-verdict.js` and
+`macOS/published-url.js`).
+
+### What shipped in this release
+
+**The tray stops showing an address the server is not listening on.** The
+bind row renders the MEASURED bind, never the configured aspiration, and
+`src/config.py` no longer reports `effective_bind_host` as whatever was
+configured - it reports what was actually bound, via the new
+`record_bound_host` / `bind_report` pair.
+
+**One answer to "is setup finished", and the server owns it.** The tray had
+its own private notion of configured that required three `CLOUDFLARE_*`
+environment variables belonging to a tunnel feature removed in plan v3.2.
+Nothing writes them, so the condition was unsatisfiable by construction and
+the menu offered "Run Setup Script" to a user who was already set up. The
+verdict now comes from the server through the new `macOS/setup-verdict.js`,
+with a local evaluation used only when there is no server to ask, reading
+the same facts. A stopped server is not an unconfigured one and no longer
+renders as one. The same dead gate is gone from `setup.sh` and from
+`macOS/server-manager.js`.
+
+**Tray status glyphs say more.** Undimmed; `stopped` is a grey filled dot,
+`starting` an amber hollow ring, and `attention` moved from red to amber.
+
+**Running setup again no longer destroys a paired TOTP secret.**
+`setup_auth.py` preserves an existing secret by default. Rotation is now an
+explicit, typed-confirmation act: `--rotate-totp` and `--rotate-jwt`. The
+`.totp_paired` sentinel is cleared only when the secret actually changed.
+
+**A fresh install opens onto a usable screen.** The create control moved out
+of `#running-sessions-section` - whose `display:none` made a global control
+disappear whenever there were no running sessions - into an always-present
+`.launchpad-actions` row. `config.example.json` ships `projects: []` instead
+of four invented demo projects pointing at paths that existed on nobody's
+machine. Clicking a project whose folder is gone now explains itself by name
+and path instead of doing nothing. `getPublishedUrl()` no longer falls back
+to a LAN address when the bind is unmeasured, which during the setup lockdown
+sent the browser to a port nothing was listening on. New
+`src/core/tmux_discovery.py` stops tmux discovery depending on a single PATH
+prepend in the launcher.
+
+### Known and unchanged
+
+`scripts/verify_home_mechanics.py` ITEM 48 fails, as it did at v1.0.2.
+`scripts/verify_selection_apps.py`, `verify_selection_regressions.py` and
+`verify_selection_scrolled.py` cannot be evaluated without a live-server
+harness artifact; they behave identically at v1.0.2, so this is a
+CANNOT DETERMINE, not a pass and not a regression.
+`setup.sh` still PROMPTS for Cloudflare values further down the script. Only
+the completeness GATE was removed. The prompts are dead code and were not in
+scope here.
+
 ## v1.0.1
 
 **This is the v1 release. `v1.0.0` was tagged and immediately superseded** -
