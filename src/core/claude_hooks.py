@@ -33,10 +33,13 @@ Safety:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import structlog
+
+from src.core.test_write_guard import assert_test_write_allowed
 
 logger = structlog.get_logger()
 
@@ -236,28 +239,76 @@ def _hooks_disabled() -> bool:
         return False
 
 
-def ensure_hook_settings(
-    settings_path: Path | None = None,
-) -> bool:
-    """Idempotently merge cloudecode's hook block into ``~/.claude/settings.json``.
+#: Env var that overrides the production settings destination. Exists so
+#: ``tests/conftest.py`` can point the DEFAULT at a temp file, which makes
+#: the ordinary path safe as well as guarded. Production leaves it unset.
+SETTINGS_PATH_ENV_VAR = "CLOUDE_CLAUDE_SETTINGS_PATH"
 
-    Called once at FastAPI startup (from ``src/main.py``'s lifespan).
+
+def default_settings_path() -> Path:
+    """Resolve the settings file the production caller means.
+
+    This used to be an inline ``or`` fallback inside
+    :func:`ensure_hook_settings`, which meant a caller that passed
+    nothing INHERITED the developer's real ``~/.claude/settings.json``
+    without ever saying so. A plain ``pytest`` run then merged
+    CloudeCode's managed hook block into the developer's live Claude Code
+    configuration, silently and successfully.
+
+    Making it a named function with no caller-side default turns that
+    into a decision somebody has to write down.
+
+    Inputs:
+        None. Reads :data:`SETTINGS_PATH_ENV_VAR` from the environment.
+    Outputs:
+        Path - the override when set, otherwise
+        ``~/.claude/settings.json``.
+    Example:
+        >>> default_settings_path()
+        PosixPath('/Users/someone/.claude/settings.json')
+    """
+    override = os.environ.get(SETTINGS_PATH_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".claude" / "settings.json"
+
+
+def ensure_hook_settings(settings_path: Path) -> bool:
+    """Idempotently merge cloudecode's hook block into a settings file.
+
+    Called once at FastAPI startup (from ``src/main.py``'s lifespan) as
+    ``ensure_hook_settings(default_settings_path())``.
+
+    ``settings_path`` is REQUIRED and has no default on purpose. See
+    :func:`default_settings_path`.
 
     Args:
-        settings_path: Override for tests. When None (production), uses
-            ``~/.claude/settings.json``.
+        settings_path: The settings file to merge into. Never optional.
 
     Returns:
         True on success (file written or no-op when disabled), False on
         any handled failure (parse error, write failure). The caller
         should LOG and CONTINUE; hook integration is best-effort and
         must never block server boot.
+
+    Raises:
+        OutsideTempWriteError: only during a test run, and only for a
+            destination outside every temp root. Deliberately NOT caught
+            here and deliberately NOT folded into the ``False`` return:
+            a harness violation must fail the test loudly rather than
+            degrade into a handled failure nobody reads.
     """
     if _hooks_disabled():
         logger.info("claude_hooks_disabled_by_config")
         return True
 
-    path = settings_path or (Path.home() / ".claude" / "settings.json")
+    path = settings_path
+
+    # Blast-radius control. Inert in production; under pytest this
+    # refuses any destination outside a temp root, which is the only
+    # check that survives a caller importing this module directly, a
+    # test building its own app, or a subprocess.
+    assert_test_write_allowed(path)
 
     existing: dict[str, Any] = {}
     if path.exists():
