@@ -1,13 +1,19 @@
-"""feat/db-is-authoritative - degraded mode and disagreement, over HTTP.
+"""Degraded mode over HTTP, now that there is nothing to fall back TO.
 
 Split from tests/test_projects_authority_route.py to keep both files
 inside this project's 500-line rule. That file covers the healthy reads
 and the create/rename/delete round trip; this one covers what the routes
-do when the datastore is gone, and what they say when the two sources
-disagree.
+do when the datastore is gone.
 
-Fixtures are imported rather than duplicated, so "his real config shape"
-has one definition and cannot drift between the two files.
+WHAT CHANGED AND WHY IT MATTERS. These tests used to assert that an
+unreachable datastore SERVED THE USER'S PROJECTS FROM config.json. That
+was the right behaviour while config.json held a mirrored copy; it is
+impossible now, because projects live only in the table. So the
+assertions invert: the list is EMPTY, and the whole burden moves onto
+the mode and the message to say that empty means "could not read".
+
+The disagreement class that used to live at the bottom of this file is
+gone with the second source it compared against.
 """
 
 from __future__ import annotations
@@ -31,46 +37,56 @@ from tests.test_projects_authority_route import (  # noqa: F401 - fixture re-exp
 class TestDatastoreUnreachable:
     """The database is deleted mid-run. Read degraded, write refused, say so."""
 
-    def test_get_still_serves_the_users_projects(self, app_env):
+    def test_get_serves_an_empty_list_rather_than_500ing(self, app_env):
+        """A launcher that cannot draw anything is still worse than one
+        that draws nothing and says why.
+
+        Description: the route must not raise. The empty list is not the
+          reassuring part - the authority route below is - but a 500 here
+          would take the whole home screen down.
+        """
         client, state_dir, _ = app_env
         db_path_for(state_dir).unlink()
 
-        body = client.get("/api/v1/projects").json()
+        response = client.get("/api/v1/projects")
 
-        assert len(body) == 9, "the list must not silently empty out"
-        assert "CloudeCode" in [p["name"] for p in body]
+        assert response.status_code == 200
+        assert response.json() == []
 
-    def test_degraded_projects_carry_no_row_id(self, app_env):
-        """A config entry has no row; null is the honest answer, not 0."""
-        client, state_dir, _ = app_env
-        db_path_for(state_dir).unlink()
+    def test_authority_says_the_empty_list_means_could_not_read(self, app_env):
+        """THE assertion this file exists for.
 
-        body = client.get("/api/v1/projects").json()
-
-        assert all(p["id"] is None for p in body)
-
-    def test_authority_announces_read_only_rollback_mode(self, app_env):
+        Description: an empty list and an unreadable datastore render
+          identically to a user unless something says otherwise. This is
+          the something. Without it, losing cloude.db looks exactly like
+          having deleted every project.
+        """
         client, state_dir, _ = app_env
         db_path_for(state_dir).unlink()
 
         body = client.get("/api/v1/projects/authority").json()
 
-        assert body["mode"] == "config_fallback"
+        assert body["mode"] == "db_unreadable"
         assert body["writable"] is False
         assert body["degraded"] is True
+        assert body["project_count"] == 0
         assert "UNREACHABLE" in body["message"]
-        assert "read-only rollback mode" in body["message"]
+        assert "NOT a claim that you have no projects" in body["message"]
 
-    def test_authority_cannot_determine_the_diff_rather_than_claiming_agreement(
-        self, app_env
-    ):
+    def test_authority_reports_no_diff_surface_at_all(self, app_env):
+        """The comparison is absent, not null.
+
+        Description: a ``diff: null`` left behind would have a client
+          rendering "cannot determine" forever about a question nobody
+          asks. Absent is the honest shape.
+        """
         client, state_dir, _ = app_env
         db_path_for(state_dir).unlink()
 
         body = client.get("/api/v1/projects/authority").json()
 
-        assert body["diff"] is None
-        assert body["diff_state"] == "cannot_determine"
+        assert "diff" not in body
+        assert "diff_state" not in body
 
     @pytest.mark.parametrize(
         "call",
@@ -95,7 +111,15 @@ class TestDatastoreUnreachable:
         assert "unreachable" in response.json()["detail"]
 
     def test_a_refused_write_does_not_touch_config_json(self, app_env):
-        """The rollback artifact must not be edited while it is all we have."""
+        """config.json is not a project store and must never be written.
+
+        Description: kept, with its meaning changed. It used to guard a
+          rollback artifact from being edited blind. It now guards
+          against a regression - any future code that starts writing
+          projects back into config.json reintroduces the second source
+          this whole change removed, and this is the assertion that
+          catches it.
+        """
         client, state_dir, config_file = app_env
         before = config_file.read_text()
         db_path_for(state_dir).unlink()
@@ -113,7 +137,7 @@ class TestGuardIsLoadBearing:
     can: the file opens fine and the READ fails, which is what a corrupt
     page or a locked table looks like. ``connect()`` succeeds, so nothing
     downstream would refuse - only ``guard_writable`` sees that the
-    authority mode is config_fallback and stops the write.
+    authority mode is db_unreadable and stops the write.
     """
 
     @staticmethod
@@ -177,72 +201,3 @@ class TestGuardIsLoadBearing:
         client.post("/api/v1/projects", json={"name": "sneaky", "path": "/tmp/sneaky"})
 
         assert config_file.read_text() == before
-
-
-# --- disagreement is surfaced, not silently resolved ----------------------
-
-
-class TestDisagreementIsSurfaced:
-    def test_a_hand_edited_config_addition_is_reported(self, app_env):
-        """A project only config knows about is named, never dropped."""
-        client, _, config_file = app_env
-        entries = _read_config_projects(config_file)
-        entries.append(cfg("added-by-hand", "/tmp/added-by-hand"))
-        _write_config(config_file, entries)
-
-        body = client.get("/api/v1/projects/authority").json()
-
-        assert body["diff"]["agree"] is False
-        assert [x["name"] for x in body["diff"]["only_in_config"]] == [
-            "added-by-hand"
-        ]
-
-    def test_a_project_only_the_database_has_is_reported(self, app_env):
-        client, _, config_file = app_env
-        client.post(
-            "/api/v1/projects", json={"name": "db-only", "path": "/tmp/db-only"}
-        )
-        # Roll config.json back to its pre-create contents by hand, which
-        # is exactly what a user reverting the FILE and not the DB does.
-        _write_config(config_file, [cfg(p["name"], p["path"]) for p in REAL_CONFIG_PROJECTS])
-
-        body = client.get("/api/v1/projects/authority").json()
-
-        assert body["diff"]["agree"] is False
-        assert "db-only" in [x["display_name"] for x in body["diff"]["only_in_db"]]
-
-    def test_the_report_names_the_database_as_authoritative(self, app_env):
-        client, _, config_file = app_env
-        entries = _read_config_projects(config_file)
-        entries.append(cfg("added-by-hand", "/tmp/added-by-hand"))
-        _write_config(config_file, entries)
-
-        body = client.get("/api/v1/projects/authority").json()
-
-        assert body["diff"]["authoritative"] == "db"
-
-    def test_the_served_list_still_comes_from_the_database_during_disagreement(
-        self, app_env
-    ):
-        """Disagreement is reported; it does not change who wins."""
-        client, _, config_file = app_env
-        entries = _read_config_projects(config_file)
-        entries.append(cfg("added-by-hand", "/tmp/added-by-hand"))
-        _write_config(config_file, entries)
-
-        names = [p["name"] for p in client.get("/api/v1/projects").json()]
-
-        assert "added-by-hand" not in names
-        assert len(names) == 9
-
-    def test_duplicates_are_reported_separately_from_missing_projects(
-        self, app_env
-    ):
-        """An expected absence must not read as data loss."""
-        client, _, _ = app_env
-
-        body = client.get("/api/v1/projects/authority").json()
-
-        assert body["diff"]["agree"] is True
-        assert body["diff"]["only_in_config"] == []
-        assert len(body["diff"]["duplicate_config_roots"]) == 3

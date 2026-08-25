@@ -1,5 +1,79 @@
 # Release notes
 
+## Unreleased
+
+### Projects live in cloude.db and nowhere else
+
+`config.json` no longer carries a `projects` key. The database has been
+authoritative for projects since `feat/db-is-authoritative`; the config copy
+was kept as a mirror so an older build could still read it. That mirror is
+now gone, and with it the divergence reporter that compared the two.
+
+**What this fixes.** The launchpad could render two provenance banners at
+once that contradicted each other - one saying "Showing config.json's
+projects", the other saying "cloude.db is authoritative and is what you are
+seeing". They came from two independently-formed opinions in the same
+render method and nothing made them agree. Measured on the reported case:
+the four projects on screen all carried `id: null`, which is the config
+shape, so the second banner was the false one.
+
+Underneath, the comparison read the database LIVE and `config.json` from
+`Settings._auth_config_cache`, which is invalidated only when the app itself
+writes the file. A hand edit therefore left the server comparing a fresh
+measurement against a stale one. Reproduced: with both stores emptied on
+disk, the running server still reported "4 only in config.json". A
+divergence report built on a cache it cannot invalidate is not a
+measurement, and the fix is to stop having two things to compare.
+
+**WHAT THIS COSTS YOU, stated plainly, because it is a real loss.** The
+config copy existed so that a user could fall back to an older build by
+deleting `cloude.db` and coming back up on the file. That path is gone. An
+older build reading `config.json` after this upgrade finds NO projects at
+all, and will start with an empty launchpad. Your projects are not lost -
+they are in `cloude.db`, which the older build cannot read - but you will
+have to re-add them by hand if you downgrade and stay downgraded. This is a
+deliberate trade: one source of truth, no contradiction possible, in
+exchange for the file-level rollback. It sits alongside the existing
+downgrade exposure recorded under v1.0.1 and v0.8.2, and it is the more
+predictable of the two, because it fails the same way every time rather
+than depending on what the old build happens to overwrite.
+
+**The upgrade cannot lose a project.** On the first start after upgrading,
+`projects_config_migration` reads the `projects` key, imports every entry
+the table has never seen, RE-READS the table to prove every config root is
+now either a row or a deliberate deletion, and only then removes the key. A
+pass that cannot prove that leaves `config.json` byte for byte as it found
+it and retries on the next start. A project you DELETED is not resurrected -
+tombstones are the evidence for that. A project whose absence cannot be
+explained at all IS imported and reported separately as
+`imported_undetermined`, which reverses the old reconcile's rule on purpose:
+while the file still held the entry, leaving it alone cost nothing; once the
+key is being removed, leaving it alone means deleting it permanently.
+
+A forwarding note is written where the array was, so anyone who remembers
+the key learns that re-adding it by hand does nothing.
+
+**Also changed.** `resolve_projects()` no longer accepts a config project
+list - the signature is the enforcement. The `config_fallback` mode is
+replaced by `db_unreadable`, which serves an EMPTY list and says in words
+that empty means "could not read", not "you have none"; writes are still
+refused. `GET /projects/authority` no longer returns `diff`, `diff_state` or
+`config_path`. `src/core/project_diff.py` and `src/core/project_snapshot.py`
+are deleted, along with the five config-writing project methods on
+`Settings` that were already dead in production.
+
+### Known and unchanged
+
+A hand edit to `config.json` still does not take effect until the server
+restarts, for every key the file still holds. That is unchanged and it is
+disclosed where it matters - the tray's **Edit Config** item says so before
+opening the file. What changed is that the stale cache can no longer feed a
+REPORT: it used to produce a confident, specific, wrong claim about your
+projects, and now at worst an edit does not apply yet. Making the cache
+mtime-aware was considered and not done here; it touches every config
+consumer and is a separate change with its own risks, and it is no longer
+load-bearing for correctness.
+
 ## v1.0.3
 
 Measured against `v1.0.2`. Three fix branches plus the open PR that finally

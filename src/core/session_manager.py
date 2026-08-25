@@ -926,6 +926,8 @@ class SessionManager:
         destroy_session() never ran. Identical prune logic to the periodic
         UploadSweeper so they share intent.
         """
+        from src.core.project_authority import resolve_projects
+
         auth_cfg = settings.load_auth_config()
         cfg = auth_cfg.uploads
         if not cfg.enabled:
@@ -933,7 +935,15 @@ class SessionManager:
         sweeper = UploadSweeper(
             ttl_seconds=cfg.ttl_seconds,
             interval_seconds=0,
-            project_paths=[p.path for p in auth_cfg.projects],
+            # PROJECT PATHS COME FROM THE DATASTORE, the only place
+            # projects live. An unreadable datastore yields an empty
+            # list, and that is the safe direction here: the sweeper
+            # then confines itself to the default upload dir rather
+            # than pruning under paths it could not verify.
+            project_paths=[
+                x["path"]
+                for x in resolve_projects(settings.get_state_dir()).projects
+            ],
             default_dir=settings.get_working_dir(),
         )
         try:

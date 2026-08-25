@@ -416,3 +416,26 @@ class TestUpgradeMigration:
         )
         assert "CANNOT BE DETERMINED" in (result.notice() or "")
         assert "projects" not in json.loads(env.config_file.read_text())
+
+    def test_a_forwarding_note_replaces_the_retired_key(self, env):
+        """Removing a key the user has seen must leave a trace.
+
+        Description: a key that vanishes with no explanation invites the
+          wrong repair - the user adds it back by hand, the loader
+          ignores it, and nothing says why. The note answers the
+          question at the place they are standing when they ask it.
+        """
+        from src.core.projects_config_migration import (
+            migrate_projects_out_of_config,
+        )
+
+        write_config_with_projects(env.config_file, [cfg("alpha", "/tmp/alpha")])
+        migrate_projects_out_of_config(env.state_dir, env.config_file)
+
+        doc = json.loads(env.config_file.read_text())
+        note = doc.get("_comment_projects_retired")
+        assert isinstance(note, str) and "cloude.db" in note
+        assert "does nothing" in note, (
+            "the note must say that re-adding the key has no effect, not "
+            "merely that projects moved"
+        )

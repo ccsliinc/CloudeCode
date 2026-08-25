@@ -241,7 +241,6 @@ def test_step_five_records_a_known_discriminator(migrated_conn) -> None:
         migrated_conn.execute("BEGIN IMMEDIATE")
         run_first_run_import(
             migrated_conn,
-            projects=[],
             listing=listing,
             owned_tmux_names={"cloude_known"},
             persisted_sessions=[
@@ -280,7 +279,6 @@ def test_step_five_null_discriminator_is_measured_not_forgotten(
         migrated_conn.execute("BEGIN IMMEDIATE")
         run_first_run_import(
             migrated_conn,
-            projects=[],
             listing=listing,
             owned_tmux_names={"cloude_work"},
             persisted_sessions=[

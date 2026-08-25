@@ -127,11 +127,26 @@ def probe_settings(out: dict) -> None:
         return
     out["auth_config_loadable"] = True
 
+    # PROJECTS MOVED OUT OF config.json. They are read from cloude.db,
+    # and a datastore this probe cannot read stays CANNOT_DETERMINE
+    # rather than reporting an empty project list - an install whose
+    # projects could not be read is not an install with no projects.
     try:
-        out["projects"] = [
-            {"name": p.name, "path": p.path, "description": p.description}
-            for p in (auth.projects or [])
-        ]
+        from src.core.project_authority import MODE_DB, resolve_projects
+
+        view = resolve_projects(settings.get_state_dir())
+        if view.mode != MODE_DB:
+            out["projects"] = CANNOT_DETERMINE
+            out.setdefault("errors", []).append(f"projects: {view.mode}")
+        else:
+            out["projects"] = [
+                {
+                    "name": p["name"],
+                    "path": p["path"],
+                    "description": p["description"],
+                }
+                for p in view.projects
+            ]
     except Exception as e:
         out["projects"] = CANNOT_DETERMINE
         out.setdefault("errors", []).append(f"projects: {e}")

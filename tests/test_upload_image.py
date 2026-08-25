@@ -72,7 +72,6 @@ def _make_fake_auth_config():
         refresh_token_ttl_seconds=604800,
         refresh_grace_seconds=10,
         totp_secret="X" * 32,
-        projects=[],
         uploads=uploads,
     )
 

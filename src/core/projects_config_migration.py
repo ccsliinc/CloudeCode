@@ -93,6 +93,20 @@ PROJECTS_KEY = "projects"
 #: stale doc, which is worse than no doc because a reader will act on it.
 PROJECTS_COMMENT_KEY = "_comment_projects"
 
+#: The forwarding note left in its place. Removing a key a user has seen
+#: before, with no trace, invites exactly the wrong repair: they add it
+#: back by hand, the loader ignores it, and nothing tells them why. The
+#: note costs one line and answers the question at the place they are
+#: standing when they ask it.
+PROJECTS_RETIRED_KEY = "_comment_projects_retired"
+PROJECTS_RETIRED_NOTE = (
+    "Projects used to live here. They now live in cloude.db's projects "
+    "table and nowhere else, and this key was removed automatically after "
+    "every entry it held was moved into that table. Adding a projects key "
+    "back here does nothing - the app does not read one. Add projects from "
+    "the launchpad instead."
+)
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -267,13 +281,17 @@ def _drop_projects_key(config_path: Path, doc: Any) -> None:
 
     Description: atomic, so a crash mid-write cannot leave a config that
       parses as neither the old shape nor the new one. Every other key is
-      preserved exactly - this is a removal, not a rewrite.
+      preserved exactly - this is a removal, not a rewrite - and a
+      forwarding note is left where the array was, so a user who
+      remembers the key finds out where it went instead of adding it
+      back by hand and watching the app ignore it.
     Inputs: config_path (Path), doc (dict) - the parsed document.
     Output: None.
     Raises: OSError - the caller translates it.
     """
     doc.pop(PROJECTS_KEY, None)
     doc.pop(PROJECTS_COMMENT_KEY, None)
+    doc[PROJECTS_RETIRED_KEY] = PROJECTS_RETIRED_NOTE
     atomic_write(config_path, json.dumps(doc, indent=2) + "\n")
 
 
