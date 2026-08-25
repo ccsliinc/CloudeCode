@@ -232,6 +232,62 @@ def live_instance_keys(rows: Sequence[Any]) -> Optional[Set[Tuple[str, int]]]:
     return keys
 
 
+def rename_map(rows: Sequence[Any]) -> Dict[Tuple[int, str], str]:
+    """Index a listing by its RENAME-PROOF discriminator.
+
+    Description: the evidence that lets the reaper tell a renamed session
+      from a dead one. The key is ``(creation epoch, tmux #{session_id})``
+      and it takes BOTH halves, because neither is sufficient alone and
+      the live install proved it:
+
+        the EPOCH alone is one-second resolution, so two sessions born in
+        the same second would capture each other's rows.
+
+        the ``#{session_id}`` alone is unique only per SERVER LIFETIME and
+        resets to ``$0`` on every tmux server restart. On the install this
+        was written for, rows 1 and 2 BOTH carried ``$0`` and were
+        genuinely different sessions across a restart - keying on the id
+        alone would have merged a corpse into a live session.
+
+      Together they are as strong as the identity triple minus the one
+      field a rename is allowed to change.
+
+      A key seen TWICE in one listing is DROPPED rather than kept, because
+      two live sessions claiming one discriminator means nothing here can
+      say which row belongs to which, and picking either is a verdict
+      nobody measured. A row with no id contributes nothing: a NULL id is
+      NOT RECORDED, never "matches".
+    Inputs: rows (Sequence[Any]) - ``listing.sessions``.
+    Output: dict[(int, str), str] - discriminator -> live session name.
+    Example:
+        >>> rename_map([{'name': 'b', 'created_at_epoch': 7,
+        ...              'session_id': '$0'}])
+        {(7, '$0'): 'b'}
+    """
+    seen: Dict[Tuple[int, str], str] = {}
+    ambiguous: Set[Tuple[int, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        epoch = row.get("created_at_epoch")
+        sid = row.get("session_id")
+        if not isinstance(name, str) or not name:
+            continue
+        if isinstance(epoch, bool) or not isinstance(epoch, int):
+            continue
+        if not isinstance(sid, str) or not sid:
+            continue
+        key = (int(epoch), sid)
+        if key in seen:
+            ambiguous.add(key)
+            continue
+        seen[key] = name
+    for key in ambiguous:
+        seen.pop(key, None)
+    return seen
+
+
 def _running_candidates(
     conn: sqlite3.Connection, *, socket: str
 ) -> List[Dict[str, Any]]:
@@ -262,7 +318,8 @@ def _running_candidates(
     Example: _running_candidates(conn, socket='cloude')
     """
     rows = conn.execute(
-        "SELECT id, session_uuid, tmux_name, tmux_created_epoch, archived_at "
+        "SELECT id, session_uuid, tmux_name, tmux_created_epoch, "
+        "tmux_session_id, archived_at "
         "FROM sessions WHERE tmux_socket = ? AND lifecycle = ? "
         "AND tmux_name IS NOT NULL AND tmux_created_epoch IS NOT NULL",
         (socket, SESSION_LIFECYCLE_RUNNING),
@@ -327,6 +384,91 @@ def _reap_absent_instances(
     candidates = _running_candidates(conn, socket=socket)
     stamp = now or utc_now()
     stopped: List[str] = []
+    renamed = 0
+
+    # THE RENAME PASS, WHICH RUNS BEFORE ANY REAPING. A session absent
+    # from the listing under its STORED name is not necessarily gone: it
+    # may have been renamed, which changes the name and nothing else.
+    # ``rename_map`` indexes the listing by the one discriminator a
+    # rename cannot move, ``(epoch, #{session_id})``. A stored row whose
+    # discriminator matches a live row under a DIFFERENT name has been
+    # renamed, and the correct write is to move the row's name - not to
+    # declare it dead and let the same session arrive at the adopt path
+    # as a stranger, which is how one session became two rows and one
+    # of them a corpse on the live v1.0.4 install.
+    #
+    # RENAME IS NOT FORK. A fork is a genuinely new tmux session with
+    # its own creation epoch and its own id, so it cannot match any
+    # existing discriminator and lands here as an ordinary unmatched
+    # live row - which this function does not touch at all. The two are
+    # separated by INSTANCE EVIDENCE, never by intent, so no caller can
+    # mislabel one as the other.
+    live_names = rename_map(listing.sessions)
+    stored_by_key: Dict[Tuple[int, str], List[Dict[str, Any]]] = {}
+    for row in candidates:
+        sid = row.get("tmux_session_id")
+        if isinstance(sid, str) and sid:
+            key = (int(row["tmux_created_epoch"]), sid)
+            stored_by_key.setdefault(key, []).append(row)
+
+    for key, rows_for_key in stored_by_key.items():
+        if len(rows_for_key) != 1:
+            # Two stored rows under one discriminator. Nothing here can
+            # say which was renamed, so neither is - a could-not-evaluate,
+            # not a coin flip.
+            logger.warning(
+                "session_rename_ambiguous",
+                tmux_socket=socket,
+                tmux_created_epoch=key[0],
+                tmux_session_id=key[1],
+                stored_rows=len(rows_for_key),
+                note=(
+                    "more than one stored row carries this discriminator; "
+                    "no rename applied, both rows reconcile normally"
+                ),
+            )
+            continue
+        row = rows_for_key[0]
+        live_name = live_names.get(key)
+        if live_name is None or live_name == str(row["tmux_name"]):
+            continue
+        if (live_name, key[0]) in {
+            (str(other["tmux_name"]), int(other["tmux_created_epoch"]))
+            for other in candidates
+            if other["id"] != row["id"]
+        }:
+            # Another stored row already holds the name tmux now reports.
+            # Moving this one onto it would put two rows on one instance
+            # triple, which the identity writer exists to prevent.
+            continue
+        conn.execute(
+            "UPDATE sessions SET tmux_name = ?, lifecycle_checked_at = ?, "
+            "updated_at = ? WHERE id = ? AND lifecycle = ?",
+            (
+                live_name,
+                stamp,
+                stamp,
+                int(row["id"]),
+                SESSION_LIFECYCLE_RUNNING,
+            ),
+        )
+        logger.info(
+            "session_renamed_in_place",
+            session_id=int(row["id"]),
+            session_uuid=row["session_uuid"],
+            tmux_socket=socket,
+            tmux_created_epoch=key[0],
+            tmux_session_id=key[1],
+            old_name=row["tmux_name"],
+            new_name=live_name,
+            note=(
+                "same epoch and same tmux id under a new name: one "
+                "session relabelled. session_uuid, origin, pins, unread "
+                "and lineage all ride on the row and are untouched"
+            ),
+        )
+        row["tmux_name"] = live_name
+        renamed += 1
 
     for row in candidates:
         key = (str(row["tmux_name"]), int(row["tmux_created_epoch"]))
@@ -367,7 +509,7 @@ def _reap_absent_instances(
         stopped_uuids=tuple(stopped),
         examined=len(candidates),
         reason=listing.reason,
-        detail=None,
+        detail=(f"renamed {renamed} row(s) in place" if renamed else None),
     )
 
 
