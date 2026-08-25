@@ -444,3 +444,12 @@ async def test_destroy_session_still_cleans_a_permitted_uploads_dir(
 
     assert not doomed.exists()
     assert not (working_dir / UPLOAD_DIR_NAME).exists()
+
+
+def test_base_that_is_itself_an_uploads_dir_is_refused(tmp_path, monkeypatch):
+    """A nested ``.cloude_uploads/.cloude_uploads`` is a config error."""
+    monkeypatch.setattr(test_write_guard, "temp_roots", lambda: [tmp_path])
+    nested = tmp_path / UPLOAD_DIR_NAME
+    (nested / UPLOAD_DIR_NAME).mkdir(parents=True)
+    verdict = sweep_verdict(str(nested))
+    assert verdict.outcome is SweepOutcome.REFUSED

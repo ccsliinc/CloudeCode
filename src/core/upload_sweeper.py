@@ -246,11 +246,34 @@ def sweep_verdict(base: str | os.PathLike | None) -> SweepVerdict:
             SweepOutcome.SKIP, None,
             f"{bucket} exists but is not a directory; left untouched",
         )
-    if bucket.name != UPLOAD_DIR_NAME or bucket.parent != resolved_base:
+    # NOT a tautology, though it reads like one. ``bucket`` is built as
+    # ``resolved_base / UPLOAD_DIR_NAME``, so asserting its own name or
+    # parent would be a check that cannot fail - the worst kind. These
+    # two can:
+    #
+    #   * a configured base that itself ends in .cloude_uploads produces
+    #     a nested bucket, which is a config error, not a sweep target;
+    #   * realpath can still differ from the constructed path across a
+    #     mount point or an APFS firmlink even with the leaf proven not
+    #     to be a symlink.
+    if resolved_base.name == UPLOAD_DIR_NAME:
         return SweepVerdict(
             SweepOutcome.REFUSED, None,
-            f"{bucket} is not a {UPLOAD_DIR_NAME} leaf directly beneath "
-            f"{resolved_base}",
+            f"base {resolved_base} is itself a {UPLOAD_DIR_NAME} "
+            "directory; a nested uploads bucket is a misconfiguration",
+        )
+    try:
+        real_bucket = Path(os.path.realpath(bucket))
+    except OSError as exc:
+        return SweepVerdict(
+            SweepOutcome.REFUSED, None,
+            f"could not resolve {bucket} ({exc})",
+        )
+    if real_bucket != bucket:
+        return SweepVerdict(
+            SweepOutcome.REFUSED, None,
+            f"{bucket} really lives at {real_bucket}; the sweep target "
+            "must be the path it claims to be",
         )
 
     return SweepVerdict(SweepOutcome.SWEEP, bucket, "")
