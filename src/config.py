@@ -62,7 +62,16 @@ class AgentsConfig(BaseModel):
     # get_agent_command's docstring). Kept as a config.json field for
     # backward-compat deserialization; not read anywhere else in this repo.
     claude_command: str = "claude --dangerously-skip-permissions"
-    codex_command: str = "codex"
+    # Selectable from the provider modal ("codex" row, pinned under
+    # claude). ``--yolo`` skips Codex's per-action approval prompts,
+    # matching the ``--dangerously-skip-permissions`` posture the claude
+    # route already runs with. Wrapped in the same
+    # ``zsh -c 'source ~/.zshrc; ...'`` shim as the cld/cldor/cldl
+    # routes because the tmux pane shell is non-interactive and
+    # non-login: without sourcing the rc file, a version manager-
+    # installed ``codex`` (nvm, asdf, mise) is not on PATH and the pane
+    # dies with "command not found".
+    codex_command: str = "zsh -c 'source ~/.zshrc >/dev/null 2>&1; codex --yolo'"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
     # Plain interactive shell — no agent CLI. Used by the "New console"

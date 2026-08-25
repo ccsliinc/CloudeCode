@@ -167,3 +167,36 @@ against slow-drip + unbounded-body resource exhaustion from a hostile/MITM'd `lo
   error=None`.
 - Touched only `src/api/routes.py` and `tests/test_local_provider.py`. Not committed per
   instructions.
+
+---
+
+## Provider modal: Codex row + OpenRouter grouping — DONE (2026-08-25)
+
+**Goal:** add `codex --yolo` as a pinned pick directly under `claude` in the launch-time
+provider modal, and group the OpenRouter model list under a `claude · via openrouter` heading.
+
+- [x] `client/js/providers.js` — pinned `codex` row at index 1 (modelless, reported as
+      `agentType: 'codex'`); lazy `► claude · via openrouter` section header emitted before the
+      first model row, or before `add model` when the catalog is empty. Modal now returns
+      `{model, provider, agentType}`. `codex` persists via the existing
+      `cloude_provider_last_provider` key (value `'codex'`, model key empty) so it restores on
+      reopen; legacy installs (model key set, provider key absent) still read back as OpenRouter.
+- [x] `client/js/launchpad.js` — both payload builders (`_createNewSessionInner`, `selectProject`)
+      set `payload.agent_type` from `providerChoice.agentType`. Modal choice wins over the FAB's
+      agent argument. Wire format for claude/OpenRouter/local is byte-identical to before.
+- [x] `src/config.py` — `AgentsConfig.codex_command` default is now
+      `zsh -c 'source ~/.zshrc >/dev/null 2>&1; codex --yolo'`. The rc-source shim is required:
+      `codex` here lives under nvm (`~/.nvm/versions/node/v22.22.0/bin/codex`) and the tmux pane
+      shell is non-interactive/non-login, so a bare `codex` is "command not found".
+- [x] `tests/test_session_agent_type.py` — default-command assertion updated.
+
+**Validation**
+- Headless Playwright against the real `providers.js` + `styles.css`: row order and 1:1
+  `items[]`↔DOM index mapping confirmed; all four return shapes correct (claude / codex /
+  openrouter / local); localStorage round-trip confirmed. Edge cases all pass: empty catalog,
+  LM Studio unreachable, stale remembered model, legacy no-provider-key install, and a local
+  model that only arrives after the first paint.
+- Real tmux launch on a scratch socket: `codex --yolo` rendered its TUI cleanly, no
+  "command not found", no rc-file noise leaking into the alt-screen.
+- Full suite: `1 failed, 457 passed`. The 1 failure is the known pre-existing
+  `test_ensure_pipe_pane_does_not_clobber_existing_pipe` (fails on a clean tree too).

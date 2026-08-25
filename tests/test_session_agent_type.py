@@ -121,7 +121,11 @@ def test_attachable_session_agent_type_round_trip():
 def test_agents_config_defaults():
     cfg = AgentsConfig()
     assert cfg.claude_command == "claude --dangerously-skip-permissions"
-    assert cfg.codex_command == "codex"
+    # Wrapped like the claude routes so a version-manager-installed
+    # codex is on PATH in the non-interactive tmux pane shell.
+    assert cfg.codex_command == (
+        "zsh -c 'source ~/.zshrc >/dev/null 2>&1; codex --yolo'"
+    )
     assert cfg.hermes_command == "hermes"
     assert cfg.openclaw_command == "openclaw tui"
 

@@ -1470,7 +1470,8 @@ class Launchpad {
      * Inner implementation for createNewSession / createNewSessionWithAgent.
      * @param {string|null} agentType - 'openclaw' | 'hermes' | 'codex' | null
      *   When null, agent_type is OMITTED from the payload (preserves server
-     *   fallback behavior for the default "+ new project" FAB action).
+     *   fallback behavior for the default "+ new project" FAB action)
+     *   unless the provider modal itself named an agent.
      */
     async _createNewSessionInner(agentType = null) {
         console.log('Launchpad: Creating new project', agentType ? `(agent: ${agentType})` : '');
@@ -1520,8 +1521,11 @@ class Launchpad {
             // Only include agent_type when explicitly set, so the server's
             // existing fallback chain (ProjectConfig.agent_type → "claude")
             // continues to work for the default "new-project" button.
-            if (agentType) {
-                payload.agent_type = agentType;
+            // The provider modal wins over the FAB's agent when it names one
+            // (picking "codex" there is the user's most recent decision).
+            const resolvedAgent = providerChoice.agentType || agentType;
+            if (resolvedAgent) {
+                payload.agent_type = resolvedAgent;
             }
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
@@ -2360,7 +2364,7 @@ class Launchpad {
     /**
      * Select and open existing project.
      * @param {object} project
-     * @param {{model: string|null, provider: string|null}|undefined} [providerChoice] - Pass a
+     * @param {{model: string|null, provider: string|null, agentType: string|null}|undefined} [providerChoice] - Pass a
      *   already-resolved choice when the caller gated its own pre-session
      *   side effect (e.g. persisting a new project entry) on the provider
      *   modal first — avoids prompting the user twice. Omit to have this
@@ -2395,6 +2399,13 @@ class Launchpad {
                 project_name: project.name,
                 ..._dims
             };
+            // Only set when the modal named an agent (currently just
+            // "codex"). Left absent otherwise so the server's existing
+            // fallback chain (ProjectConfig.agent_type → "claude") still
+            // decides, exactly as before.
+            if (providerChoice.agentType) {
+                payload.agent_type = providerChoice.agentType;
+            }
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
                 payload.model = providerChoice.model;

@@ -3,9 +3,11 @@
  *
  * Shown before every real launch (new project, open-folder, clone-github,
  * existing-project row click). Lets the user pick "claude" (pinned, always
- * first), an OpenRouter model (add/remove inline), or a model currently
- * loaded on the local LM Studio box (live-fetched, read-only) — no
- * separate settings screen.
+ * first), "codex" (pinned second — the OpenAI Codex CLI, launched via
+ * agent_type rather than a model id), an OpenRouter model grouped under a
+ * "claude · via openrouter" heading (add/remove inline), or a model
+ * currently loaded on the local LM Studio box (live-fetched, read-only) —
+ * no separate settings screen.
  *
  * Split out of launchpad.js to keep that file under its line budget.
  * Attaches showProviderModal() onto the existing window.Launchpad instance
@@ -24,10 +26,12 @@
     // '' (or absent) = claude, else the model id.
     const LAST_MODEL_KEY = 'cloude_provider_last_model';
     // Which backend that remembered id belongs to: '' = claude,
-    // 'openrouter' or 'local'. Stored SEPARATELY so an install that
-    // predates local support (model key set, provider key absent) still
-    // reads back as an OpenRouter pick — which is exactly what it was.
-    // Without this, a remembered local model would relaunch as OpenRouter.
+    // 'openrouter', 'local', or 'codex'. Stored SEPARATELY so an install
+    // that predates local support (model key set, provider key absent)
+    // still reads back as an OpenRouter pick — which is exactly what it
+    // was. Without this, a remembered local model would relaunch as
+    // OpenRouter. 'codex' is the one value that carries NO model id: it
+    // selects a different agent CLI, not a different model behind claude.
     const LAST_PROVIDER_KEY = 'cloude_provider_last_provider';
 
     // Same guard as the server (src/models.py MODEL_ID_PATTERN /
@@ -39,15 +43,19 @@
     const MODEL_ID_RE = /^(?!-)[A-Za-z0-9._~/-]{1,120}$/;
 
     /**
-     * @returns {{model: string, provider: string}} model '' = claude.
-     *   provider is normalised to 'openrouter' for any pre-existing
-     *   remembered model that has no provider key yet.
+     * @returns {{model: string, provider: string}} model '' = claude OR
+     *   codex (disambiguated by provider). provider is normalised to
+     *   'openrouter' for any pre-existing remembered model that has no
+     *   provider key yet.
      */
     function readLastChoice() {
         try {
+            const provider = localStorage.getItem(LAST_PROVIDER_KEY) || '';
+            // codex is modelless — check it before the model key, which is
+            // always '' for a codex pick and would otherwise read as claude.
+            if (provider === 'codex') return { model: '', provider: 'codex' };
             const model = localStorage.getItem(LAST_MODEL_KEY) || '';
             if (!model) return { model: '', provider: '' };
-            const provider = localStorage.getItem(LAST_PROVIDER_KEY) || '';
             return { model, provider: provider === 'local' ? 'local' : 'openrouter' };
         } catch (_) {
             return { model: '', provider: '' };
@@ -57,7 +65,12 @@
     function rememberChoice(model, provider) {
         try {
             localStorage.setItem(LAST_MODEL_KEY, model || '');
-            localStorage.setItem(LAST_PROVIDER_KEY, model ? (provider || '') : '');
+            // codex is the one modelless pick that still needs its provider
+            // key persisted — every other modelless pick is plain claude.
+            localStorage.setItem(
+                LAST_PROVIDER_KEY,
+                (model || provider === 'codex') ? (provider || '') : ''
+            );
         } catch (_) {
             // localStorage unavailable (private mode, quota) — non-fatal,
             // just means next launch won't pre-select this choice.
@@ -66,11 +79,12 @@
 
     /**
      * Show the provider selector modal.
-     * @returns {Promise<{model: string|null, provider: string|null}|null>}
+     * @returns {Promise<{model: string|null, provider: string|null, agentType: string|null}|null>}
      *   null = cancelled (abort the launch).
-     *   {model: null, provider: null} = claude.
-     *   {model: "...", provider: "openrouter"} = OpenRouter model id.
-     *   {model: "...", provider: "local"} = LM Studio model id.
+     *   {model: null, provider: null, agentType: null} = claude.
+     *   {model: null, provider: null, agentType: "codex"} = Codex CLI.
+     *   {model: "...", provider: "openrouter", agentType: null} = OpenRouter model id.
+     *   {model: "...", provider: "local", agentType: null} = LM Studio model id.
      */
     function showProviderModal() {
         return new Promise((resolve) => {
@@ -102,7 +116,7 @@
             let localHost = '';    // "host:port" the server probed, for the unreachable note
             let localError = '';   // short reason, only when localState === 'unreachable'
             let localState = 'loading'; // 'loading' | 'ready' | 'unreachable'
-            let items = [];        // flat nav list: claude row, model rows, add row, local rows
+            let items = [];        // flat nav list: claude, codex, model rows, add row, local rows
             let activeIndex = -1;
             const lastChoice = readLastChoice();
             let currentModel = lastChoice.model;       // '' = claude, else a model id
@@ -139,17 +153,28 @@
             };
 
             const buildItems = () => {
-                items = [{ type: 'claude' }]
+                items = [{ type: 'claude' }, { type: 'codex' }]
                     .concat(models.map((m) => ({ type: 'model', model: m })))
                     .concat([{ type: 'add' }])
                     .concat(localModels.map((m) => ({ type: 'local', model: m })));
             };
 
-            const providerOf = (item) =>
-                item.type === 'local' ? 'local' : (item.type === 'model' ? 'openrouter' : '');
+            const providerOf = (item) => {
+                if (item.type === 'local') return 'local';
+                if (item.type === 'model') return 'openrouter';
+                if (item.type === 'codex') return 'codex';
+                return '';
+            };
 
             const findIndexForSelection = (sel) => {
-                if (!sel || !sel.model) return 0; // claude is always index 0
+                if (!sel) return 0; // claude is always index 0
+                // codex carries no model id, so it has to be matched on the
+                // provider key alone, before the modelless-means-claude test.
+                if (sel.provider === 'codex') {
+                    const ci = items.findIndex((it) => it.type === 'codex');
+                    return ci >= 0 ? ci : 0;
+                }
+                if (!sel.model) return 0;
                 const wantType = sel.provider === 'local' ? 'local' : 'model';
                 const idx = items.findIndex((it) => it.type === wantType && it.model === sel.model);
                 // Fall back to claude when the remembered choice is gone —
@@ -176,7 +201,9 @@
                 activeIndex = idx;
                 const item = items[idx];
                 if (item && item.type !== 'add') {
-                    currentModel = item.type === 'claude' ? '' : item.model;
+                    // claude and codex are both modelless rows.
+                    currentModel = (item.type === 'claude' || item.type === 'codex')
+                        ? '' : item.model;
                     currentProvider = providerOf(item);
                 }
                 if (scroll) els[idx].scrollIntoView({ block: 'nearest' });
@@ -189,10 +216,19 @@
                     openAddInput();
                     return;
                 }
+                if (item.type === 'codex') {
+                    // Not a model choice at all — a different agent CLI.
+                    // Reported via agentType so the launch payload sets
+                    // agent_type, leaving model/provider wire-identical to
+                    // a plain claude launch.
+                    rememberChoice('', 'codex');
+                    close({ model: null, provider: null, agentType: 'codex' });
+                    return;
+                }
                 const model = item.type === 'claude' ? null : item.model;
                 const provider = providerOf(item) || null;
                 rememberChoice(model || '', provider || '');
-                close({ model, provider });
+                close({ model, provider, agentType: null });
             };
 
             /**
@@ -223,11 +259,29 @@
             const render = () => {
                 buildItems();
                 const chunks = [];
+                // The OpenRouter heading is emitted lazily, immediately
+                // before whichever comes first: the first model row, or the
+                // "add model" row when the catalog is empty. That keeps the
+                // heading attached to its group without adding a
+                // non-selectable entry to items[] (which must stay 1:1 with
+                // the rendered .folder-picker-item elements for setActive).
+                let orHeaderEmitted = false;
                 items.forEach((item, i) => {
+                    if ((item.type === 'model' || item.type === 'add') && !orHeaderEmitted) {
+                        orHeaderEmitted = true;
+                        chunks.push('<div class="provider-section-header">► claude · via openrouter</div>');
+                    }
                     if (item.type === 'claude') {
                         chunks.push(`<div class="folder-picker-item" data-index="${i}">
                             <span class="folder-picker-icon">◆</span>
                             <span class="folder-picker-name provider-item-name">claude</span>
+                        </div>`);
+                        return;
+                    }
+                    if (item.type === 'codex') {
+                        chunks.push(`<div class="folder-picker-item" data-index="${i}">
+                            <span class="folder-picker-icon">◆</span>
+                            <span class="folder-picker-name provider-item-name">codex</span>
                         </div>`);
                         return;
                     }
@@ -405,7 +459,9 @@
                     if (typeTimer) clearTimeout(typeTimer);
                     typeTimer = setTimeout(() => { typeBuffer = ''; }, 800);
                     const matchIdx = items.findIndex((it) => {
-                        const label = it.type === 'claude' ? 'claude' : (it.type === 'add' ? '' : it.model);
+                        const label = (it.type === 'claude' || it.type === 'codex')
+                            ? it.type
+                            : (it.type === 'add' ? '' : it.model);
                         return label && label.toLowerCase().startsWith(typeBuffer);
                     });
                     if (matchIdx >= 0) { clearPending(); setActive(matchIdx); }
