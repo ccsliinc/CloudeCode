@@ -2123,14 +2123,31 @@ class Launchpad {
                     </div>
                 </details>
 
-                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
-                    <div class="launchpad-section-title launchpad-section-title--row">
-                        <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
-                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
-                            <span class="launchpad-section-title__text">running sessions</span>
-                            <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
-                        </button>
-                        <div class="new-fab" id="new-fab">
+                <!-- CREATE CONTROL. It lives HERE, in its own always-present
+                     row, and NOT inside a section title, because it is a
+                     GLOBAL action whose lifetime must not depend on any one
+                     list's contents.
+
+                     It used to be a child of #running-sessions-section's
+                     title row. That section is display:none while the user
+                     has zero sessions, so on a fresh install the only
+                     control that creates a project or a session measured
+                     0x0 and a brand-new user could not create anything at
+                     all - the button that makes your first session only
+                     existed once you already had one. The button was in the
+                     DOM the whole time with visibility:visible, so every
+                     markup assertion passed against the broken build; only
+                     getBoundingClientRect() and a walk up the ancestor
+                     chain could see it. See scripts/verify_fresh_install.py,
+                     which measures exactly that and ships with a --legacy
+                     positive control that re-parents it back here to prove
+                     the check can fail.
+
+                     Do NOT move this back inside a section. If it needs to
+                     sit visually beside a heading, style this row - do not
+                     re-parent the control. -->
+                <div class="launchpad-actions" id="launchpad-actions">
+                    <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" title="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
                                     <line x1="12" y1="5" x2="12" y2="19"/>
@@ -2207,7 +2224,16 @@ class Launchpad {
                                     <span class="new-fab__label">new console</span>
                                 </button>
                             </div>
-                        </div>
+                    </div>
+                </div>
+
+                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
+                    <div class="launchpad-section-title launchpad-section-title--row">
+                        <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
+                            <span class="launchpad-section-chevron" aria-hidden="true">►</span>
+                            <span class="launchpad-section-title__text">running sessions</span>
+                            <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
+                        </button>
                     </div>
                     <div id="running-sessions-list"></div>
                 </div>
