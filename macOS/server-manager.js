@@ -1307,34 +1307,31 @@ class ServerManager {
     } else {
       // Check required env vars
       const envContent = fs.readFileSync(envPath, 'utf8');
+      // The two secrets a provisioned install genuinely cannot run without.
+      //
+      // This list used to also demand CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID
+      // and CLOUDFLARE_DOMAIN. The Cloudflare tunnel system was removed in
+      // Plan v3.2 and those keys went with it - they are not in .env.example,
+      // so no install can ever have them, so isConfigured was permanently
+      // false on a perfectly healthy machine. That is not a cosmetic label
+      // bug: it is what put a "Run Setup Script" item in front of a user who
+      // was already set up, and a second setup run is what destroyed his
+      // paired TOTP secret. A check that can only ever say "broken" is
+      // furniture, and this one had a destructive action wired to it.
       const requiredVars = [
         'TOTP_SECRET',
-        'JWT_SECRET',
-        'CLOUDFLARE_API_TOKEN',
-        'CLOUDFLARE_ZONE_ID',
-        'CLOUDFLARE_DOMAIN'
+        'JWT_SECRET'
       ];
 
       requiredVars.forEach(varName => {
-        // Check if var exists and has a non-empty value
-        const regex = new RegExp(`${varName}=(.+)`, 'm');
+        // Anchor to the start of a line so a key that merely CONTAINS another
+        // key's name cannot satisfy the check for it.
+        const regex = new RegExp(`^${varName}=(.*)$`, 'm');
         const match = envContent.match(regex);
 
         if (!match || !match[1] || match[1].trim() === '' || match[1].trim() === '""') {
           status.isConfigured = false;
           status.missingEnvVars.push(varName);
-        }
-
-        // Check for placeholder values in CLOUDFLARE_DOMAIN
-        if (varName === 'CLOUDFLARE_DOMAIN' && match && match[1]) {
-          const domain = match[1].trim();
-          if (domain.includes('example.com') ||
-            domain.includes('yourdomain.com') ||
-            domain.includes('your-subdomain') ||
-            domain.includes('mydomain.nyc')) {
-            status.isConfigured = false;
-            status.details.push('CLOUDFLARE_DOMAIN contains placeholder value. Run setup to configure.');
-          }
         }
       });
 
