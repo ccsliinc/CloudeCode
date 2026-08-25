@@ -53,29 +53,35 @@ def example() -> dict:
     return json.loads((REPO_ROOT / "config.example.json").read_text())
 
 
-@pytest.mark.parametrize("key", USER_DATA_KEYS)
-def test_example_config_seeds_no_user_data(example: dict, key: str) -> None:
-    """A user-data key must be present (shape) and empty (no fake rows).
+def test_example_config_seeds_no_user_data(example: dict) -> None:
+    """Every declared user-data key must be present (shape) and empty (no rows).
 
     Present, so the file still documents that the key exists and is a list.
     Empty, so ``fs.copyFileSync(config.example.json, config.json)`` cannot
     hand a brand-new user rows they did not create.
 
+    NOT PARAMETRIZED, deliberately. ``USER_DATA_KEYS`` is empty now that
+    projects are DB-only, and pytest turns an empty parametrize into a
+    test that is SKIPPED on every platform - one that can never go red,
+    which is exactly what scripts/ci/skip-audit.py rejects. Iterating
+    inside the body keeps the guard armed for a future key while still
+    actually running today.
+
     Args:
         example: Parsed config.example.json.
-        key: The user-data key under test.
     """
-    assert key in example, (
-        f"{key} vanished from config.example.json. The example must still "
-        f"document the key's existence and type, or the file stops being a "
-        f"description of the file's shape."
-    )
-    assert example[key] == [], (
-        f"config.example.json seeds {len(example[key])} {key}. The bootstrap "
-        f"copies this file verbatim to config.json, so every entry here "
-        f"becomes a row on a brand-new user's very first screen, pointing at "
-        f"a path that exists only on the machine of whoever wrote it."
-    )
+    for key in USER_DATA_KEYS:
+        assert key in example, (
+            f"{key} vanished from config.example.json. The example must still "
+            f"document the key's existence and type, or the file stops being a "
+            f"description of the file's shape."
+        )
+        assert example[key] == [], (
+            f"config.example.json seeds {len(example[key])} {key}. The bootstrap "
+            f"copies this file verbatim to config.json, so every entry here "
+            f"becomes a row on a brand-new user's very first screen, pointing at "
+            f"a path that exists only on the machine of whoever wrote it."
+        )
 
 
 def test_example_config_carries_no_projects_key(example: dict) -> None:
