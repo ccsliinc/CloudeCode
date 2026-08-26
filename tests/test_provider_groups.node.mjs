@@ -220,6 +220,72 @@ test('settings: a legacy wrapper with no family lands under claude', () => {
 });
 
 // ---- report ----------------------------------------------------------
+// ---- pinned family rows (reserved families with no wrappers) ---------
+//
+// The registry as the SERVER actually ships it. The FAMILIES fixture
+// above deliberately omits `pickable`, which is how an older server
+// looks; these use the real shape.
+const PICKABLE = [
+    { name: 'claude', label: 'claude', pickable: true },
+    { name: 'codex', label: 'codex', pickable: true },
+    { name: 'hermes', label: 'hermes', pickable: true },
+    { name: 'openclaw', label: 'openclaw', pickable: true },
+    { name: 'shell', label: 'shell', pickable: false },
+];
+
+test('a pickable family with no wrappers gets exactly one pinned row', () => {
+    const items = Groups.buildWrapperItems(LIVE, PICKABLE);
+    const codex = items.filter((i) => i.agentType === 'codex');
+    assert.equal(codex.length, 1);
+    assert.equal(codex[0].type, 'family');
+    assert.equal(codex[0].label, 'codex');
+});
+
+test('a pinned family row never advertises the model step', () => {
+    const items = Groups.buildWrapperItems(LIVE, PICKABLE);
+    items.filter((i) => i.type === 'family').forEach((i) => {
+        assert.equal(i.acceptsModel, false);
+    });
+});
+
+test('shell is never offered - it has its own new-console entry point', () => {
+    const items = Groups.buildWrapperItems(LIVE, PICKABLE);
+    assert.ok(items.every((i) => i.agentType !== 'shell'));
+    assert.ok(items.every((i) => i.groupLabel !== 'shell'));
+});
+
+test('pinned rows follow registry order, so codex sits under claude', () => {
+    const items = Groups.buildWrapperItems(LIVE, PICKABLE);
+    const names = items.map((i) => i.agentType || 'claude-wrapper');
+    assert.equal(names.indexOf('codex'), 2); // two claude wrappers first
+    assert.ok(names.indexOf('codex') < names.indexOf('hermes'));
+    assert.ok(names.indexOf('hermes') < names.indexOf('openclaw'));
+});
+
+test('a family WITH wrappers gets its wrappers, never a pinned row too', () => {
+    const items = Groups.buildWrapperItems(MULTI, PICKABLE);
+    const codexRows = items.filter((i) => Groups.wrapperFamily({ family: 'codex' }) && i.agentType === 'codex');
+    // MULTI has a codex wrapper, so codex must contribute a wrapper row
+    // and NOT a pinned one - offering both would launch the same family
+    // two different ways from two adjacent rows.
+    assert.equal(codexRows.length, 0);
+});
+
+test('every pinned row carries its own heading when groups are multiple', () => {
+    const items = Groups.buildWrapperItems(LIVE, PICKABLE);
+    const codex = items.filter((i) => i.agentType === 'codex')[0];
+    assert.equal(codex.groupLabel, 'codex');
+});
+
+test('an older server that omits pickable changes nothing', () => {
+    // THE COMPATIBILITY GUARANTEE, asserted rather than assumed. A client
+    // talking to a server that predates the field must behave exactly as
+    // it did before, not offer rows whose launch it cannot predict.
+    const before = Groups.buildWrapperItems(LIVE, FAMILIES);
+    assert.ok(before.every((i) => i.type === 'wrapper'));
+    assert.equal(before.length, 2);
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
 console.log('ALL PASS');

@@ -171,6 +171,7 @@
             /** Label used for type-ahead matching, per item type. */
             const itemLabel = (it) => {
                 if (it.type === 'claude') return 'claude';
+                if (it.type === 'family') return it.label;
                 if (it.type === 'wrapper') return it.label;
                 if (it.type === 'model') return it.model;
                 if (it.type === 'no-model') return 'no model';
@@ -230,6 +231,16 @@
                     close({ model: null, wrapperId: item.wrapperId });
                     return;
                 }
+                if (item.type === 'family') {
+                    // A pinned family row: launched by FAMILY NAME as the
+                    // agent_type, which the server resolves to that
+                    // family's own command. Never a model - a reserved
+                    // family runs one fixed command and does not take an
+                    // OpenRouter model id, so one would arrive at the CLI
+                    // as a prompt argument.
+                    close({ model: null, agentType: item.agentType });
+                    return;
+                }
                 if (item.type === 'claude') {
                     // No wrappers configured: the legacy fallback path.
                     close({ model: null });
@@ -279,6 +290,16 @@
                             <span class="folder-picker-icon">»</span>
                             <span class="folder-picker-name provider-item-name">${safeLabel}</span>
                             ${more}
+                        </div>`;
+                    }
+                    if (item.type === 'family') {
+                        const safeLabel = escapeHtml(item.label);
+                        const heading = item.groupLabel
+                            ? `<div class="provider-family-heading">${escapeHtml(item.groupLabel)}</div>`
+                            : '';
+                        return `${heading}<div class="folder-picker-item" data-index="${i}">
+                            <span class="folder-picker-icon">◆</span>
+                            <span class="folder-picker-name provider-item-name">${safeLabel}</span>
                         </div>`;
                     }
                     if (item.type === 'no-model') {

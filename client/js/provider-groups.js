@@ -54,6 +54,23 @@
     }
 
     /**
+     * Whether a family may be offered as a PINNED, modelless row when it
+     * has no wrappers of its own.
+     *
+     * A missing `pickable` reads as FALSE, deliberately. An older server
+     * does not ship the field, and a client talking to one must behave
+     * exactly as it did before rather than start offering rows whose
+     * launch behaviour it cannot predict.
+     * @param {string} name family name
+     * @param {Array} families family summaries from the API
+     * @returns {boolean}
+     */
+    function familyPickable(name, families) {
+        var match = (families || []).filter(function (f) { return f.name === name; })[0];
+        return !!(match && match.pickable);
+    }
+
+    /**
      * Build the picker's wrapper-step nav items, grouped by family.
      *
      * EXACTLY one item per wrapper, in family order. The family heading is
@@ -69,20 +86,45 @@
      */
     function buildWrapperItems(wrappers, families) {
         var order = familyOrder(wrappers, families);
-        var groupsPresent = order.filter(function (name) {
+        var hasWrappers = function (name) {
             return (wrappers || []).some(function (w) { return wrapperFamily(w) === name; });
+        };
+        // A group appears if it has wrappers, OR it is a pickable family
+        // with none - in which case it contributes ONE pinned row. Before
+        // this, a reserved family was launchable over the API
+        // (agent_type: "codex") but unreachable from the picker unless the
+        // user first authored a wrapper for it, so the two surfaces
+        // disagreed about what could be launched.
+        var groupsPresent = order.filter(function (name) {
+            return hasWrappers(name) || familyPickable(name, families);
         });
         var multi = groupsPresent.length > 1;
         var items = [];
         groupsPresent.forEach(function (name) {
+            var heading = multi ? familyLabel(name, families) : null;
             var inFamily = (wrappers || []).filter(function (w) { return wrapperFamily(w) === name; });
+            if (!inFamily.length) {
+                // Pinned family row. No model step: a reserved family runs
+                // one fixed command and does not take an OpenRouter model
+                // id, exactly as AgentWrapper.accepts_model=false means for
+                // a wrapper. Handing one over would arrive at the CLI as a
+                // prompt argument.
+                items.push({
+                    type: 'family',
+                    agentType: name,
+                    label: familyLabel(name, families),
+                    acceptsModel: false,
+                    groupLabel: heading,
+                });
+                return;
+            }
             inFamily.forEach(function (w, i) {
                 items.push({
                     type: 'wrapper',
                     wrapperId: w.id,
                     label: w.default ? (w.label + ' (default)') : w.label,
                     acceptsModel: !!w.accepts_model,
-                    groupLabel: (multi && i === 0) ? familyLabel(name, families) : null,
+                    groupLabel: (i === 0) ? heading : null,
                 });
             });
         });
@@ -93,6 +135,7 @@
         wrapperFamily: wrapperFamily,
         familyOrder: familyOrder,
         familyLabel: familyLabel,
+        familyPickable: familyPickable,
         buildWrapperItems: buildWrapperItems,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

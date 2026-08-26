@@ -3997,6 +3997,15 @@ class Launchpad {
                 payload.agent_type = agentType;
             } else if (providerChoice.wrapperId) {
                 payload.agent_type = providerChoice.wrapperId;
+            } else if (providerChoice.agentType) {
+                // A PINNED FAMILY ROW (codex / hermes / openclaw). The
+                // family name IS the agent_type, exactly as the reserved
+                // quick-connect buttons above have always posted it, so
+                // the server resolves it through the same path. Ranked
+                // below wrapperId only because the two are mutually
+                // exclusive by construction - the picker returns one or
+                // the other, never both.
+                payload.agent_type = providerChoice.agentType;
             }
             // Omit for claude (server default); set for an OpenRouter model.
             if (providerChoice.model) {
@@ -4759,6 +4768,9 @@ class Launchpad {
             // comment; this path has no explicit agentType to defer to.
             if (providerChoice.wrapperId) {
                 payload.agent_type = providerChoice.wrapperId;
+            } else if (providerChoice.agentType) {
+                // Pinned family row; see _createNewSessionInner's comment.
+                payload.agent_type = providerChoice.agentType;
             }
             const session = await window.API.createSession(payload);
 
