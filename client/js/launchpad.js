@@ -1799,9 +1799,13 @@ class Launchpad {
             if (renameEl) {
                 e.stopPropagation();
                 const sid = renameEl.dataset.renameSid;
-                const currentName = renameEl.dataset.renameName;
                 if (sid) {
-                    this._handleRenameRunningSession(rowEl, sid, currentName);
+                    // No name is passed. The editor reads its seed off
+                    // the row's own name span, so what it opens on and
+                    // what the row displays cannot disagree. Handing it
+                    // `data-rename-name` (the tmux handle) is what made
+                    // a plain Enter overwrite the user's label.
+                    this._handleRenameRunningSession(rowEl, sid);
                 }
                 return;
             }
@@ -1890,28 +1894,55 @@ class Launchpad {
      * v0.7.1 - Inline-edit a running session's name from the launchpad row.
      *
      * Replaces the row's name span with a text input pre-filled with the
-     * current tmux name. Enter saves (calls PATCH /sessions/{id}/name);
-     * Esc cancels (restores the span). On success the server broadcasts
-     * ``session.renamed`` over WS to every attached browser; we ALSO
-     * force-refresh the launchpad list immediately so the new name shows
-     * without waiting on the 5s poller.
+     * name the row is DISPLAYING. Enter saves (calls PATCH
+     * /sessions/{id}/name); Esc cancels (restores the span). On success
+     * the server broadcasts ``session.renamed`` over WS to every attached
+     * browser; we ALSO force-refresh the launchpad list immediately so the
+     * new name shows without waiting on the 5s poller.
+     *
+     * THIS EDITS THE LABEL. ``sessions.title`` is free-form text a human
+     * typed; the tmux name is an internal handle derived from it once, at
+     * creation, and never moved again. This control used to seed itself
+     * from that handle and enforce the handle's own
+     * ``^[A-Za-z0-9_-]{1,64}$`` against it, which did two things: it
+     * refused "Media Compression" in the browser against a server that
+     * accepts it happily, and it showed a user who HAD a label the handle
+     * instead, so a plain Enter stored a handle-derived string over their
+     * own label. Silent data loss.
+     *
+     * THE SEED IS THE RENDERED TEXT, read off the name span rather than
+     * re-derived. That is what makes display and seed agree by
+     * construction rather than by two functions happening to match: if
+     * the row's display half ever regresses to the handle, the seed
+     * regresses with it and one test catches both.
      *
      * @param {HTMLElement} rowEl - The ``.running-session-row`` host.
      * @param {string} sessionId - Server-side session id (not tmux name).
-     * @param {string} currentName - Current tmux name (for the input default).
      */
-    _handleRenameRunningSession(rowEl, sessionId, currentName) {
+    _handleRenameRunningSession(rowEl, sessionId) {
         const nameEl = rowEl.querySelector('.running-session-name');
         if (!nameEl) return;
         // Idempotent - bail if an input is already showing in this row.
         if (rowEl.querySelector('.running-session-rename-input')) return;
 
+        // THE SEED IS WHAT THE ROW IS SHOWING. Read BEFORE the span is
+        // hidden below - `display: none` does not affect textContent, but
+        // the ordering is worth not depending on.
+        const seed = (nameEl.textContent || '').trim();
+
         // Build the input + inline error label.
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'running-session-rename-input';
-        input.value = currentName;
-        input.maxLength = 64;
+        input.value = seed;
+        // The LABEL's limit, from the one module that mirrors the server.
+        // It used to be a hardcoded 64 - the old tmux-name limit - which
+        // silently truncated any longer label at the maxlength with no
+        // error anywhere, because a maxlength does not report anything.
+        input.setAttribute(
+            'maxlength',
+            String((window.SessionLabel && window.SessionLabel.LABEL_MAX_CHARS) || 200)
+        );
         input.spellcheck = false;
         input.autocomplete = 'off';
         input.setAttribute('aria-label', 'New session name');
@@ -1940,12 +1971,30 @@ class Launchpad {
         const save = async () => {
             if (settled) return;
             const raw = (input.value || '').trim();
-            if (!raw || raw === currentName) {
+            // UNCHANGED IS A NO-OP, AND THE BASIS IS THE SEED. This guard
+            // existed before; it compared against the tmux HANDLE, a
+            // value a label-editing user never types, so it could
+            // essentially never fire. The basis has to move with the
+            // seed - a seed of the label against a comparison on the
+            // handle would make every dismissal a write.
+            //
+            // It is also what makes seeding a session with NO label safe.
+            // That session is seeded with the stripped handle, because an
+            // empty box for a row that visibly has a name is worse to use
+            // and no safer; unchanged writing nothing is what stops that
+            // handle being promoted into a stored label nobody typed.
+            if (!raw || raw === seed) {
                 cancel();
                 return;
             }
-            if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) {
-                err.textContent = 'Use 1-64 chars: A-Z a-z 0-9 _ -';
+            // The label rule, from the one module that holds it. NOT a
+            // local regex - a second copy is how the client and server
+            // drift apart without either one looking wrong.
+            const verdict = (window.SessionLabel && window.SessionLabel.validate)
+                ? window.SessionLabel.validate(raw)
+                : { ok: false, reason: 'the label rule is unavailable' };
+            if (!verdict.ok) {
+                err.textContent = verdict.reason;
                 err.style.display = '';
                 input.focus();
                 input.select();
@@ -1955,7 +2004,7 @@ class Launchpad {
             // Stopping the row's swallow-click handlers is already done by
             // the caller (stopPropagation on the renameEl branch).
             try {
-                await window.API.renameSession(sessionId, raw);
+                await window.API.renameSession(sessionId, verdict.value);
                 cleanup();
                 // Immediate refresh so the row paints the new name without
                 // waiting on the 5s poller. The WS broadcast (received by
