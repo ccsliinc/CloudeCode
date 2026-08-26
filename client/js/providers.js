@@ -119,6 +119,13 @@
             // accepts one) pick a model. See the module docstring.
             let step = 'wrapper';
             let selectedWrapper = null;
+            // LOCAL (LM Studio) model step. `localProbe` is null until the
+            // first fetch resolves, and 'loading' while it is in flight. It
+            // is fetched ON DEMAND rather than alongside getProviders(), so
+            // a box that is off costs nothing unless the user actually asks
+            // for local models.
+            let selectedFamily = null;
+            let localProbe = null;
 
             const close = (value) => {
                 document.removeEventListener('keydown', onKeyDown, true);
@@ -145,6 +152,21 @@
              *   add row - reached only from a wrapper that accepts models.
              */
             const buildItems = () => {
+                if (step === 'local-model') {
+                    // A status row is NOT a selectable item: it is a
+                    // sentence about why there is nothing to pick, and
+                    // making it Enter-able would offer a launch that cannot
+                    // happen. So the nav list is genuinely empty and the
+                    // status is rendered separately.
+                    if (!localProbe || localProbe === 'loading'
+                        || localProbe.state !== 'reachable'
+                        || !(localProbe.models || []).length) {
+                        items = [];
+                        return;
+                    }
+                    items = localProbe.models.map((m) => ({ type: 'local-model', model: m }));
+                    return;
+                }
                 if (step === 'model') {
                     items = [{ type: 'no-model' }]
                         .concat(models.map((m) => ({ type: 'model', model: m })))
@@ -172,6 +194,7 @@
             const itemLabel = (it) => {
                 if (it.type === 'claude') return 'claude';
                 if (it.type === 'family') return it.label;
+                if (it.type === 'local-model') return it.model;
                 if (it.type === 'wrapper') return it.label;
                 if (it.type === 'model') return it.model;
                 if (it.type === 'no-model') return 'no model';
@@ -201,10 +224,46 @@
                 listEl.focus();
             };
 
+            /**
+             * Enter the LOCAL model step for a needs_model family.
+             *
+             * Renders a loading state immediately and fetches after, so the
+             * modal never appears to hang on a box that is off. Every
+             * outcome the probe returns - reachable, unreachable,
+             * not-configured, or reachable-but-serving-nothing - gets its
+             * own sentence rather than being collapsed into one empty list.
+             */
+            const enterLocalModelStep = (item) => {
+                selectedFamily = item;
+                step = 'local-model';
+                localProbe = 'loading';
+                clearStatus();
+                render();
+                listEl.focus();
+                window.API.getLocalModels().then((res) => {
+                    if (step !== 'local-model') return;
+                    localProbe = res || { state: 'unreachable', models: [] };
+                    render();
+                }).catch((err) => {
+                    if (step !== 'local-model') return;
+                    // Failing to ASK is not the same as a box that said no,
+                    // so it carries its own reason rather than being
+                    // rendered as a bare unreachable with nothing to act on.
+                    localProbe = {
+                        state: 'unreachable',
+                        models: [],
+                        detail: (err && err.message) || 'the request failed',
+                    };
+                    render();
+                });
+            };
+
             /** Go back from the model step to the wrapper step. */
             const backToWrapperStep = () => {
                 step = 'wrapper';
                 selectedWrapper = null;
+                selectedFamily = null;
+                localProbe = null;
                 addInputOpen = false;
                 clearStatus();
                 render();
@@ -231,7 +290,22 @@
                     close({ model: null, wrapperId: item.wrapperId });
                     return;
                 }
+                if (item.type === 'local-model') {
+                    close({
+                        model: item.model,
+                        agentType: selectedFamily ? selectedFamily.agentType : 'local',
+                    });
+                    return;
+                }
                 if (item.type === 'family') {
+                    if (item.needsModel) {
+                        // This family CANNOT launch bare - the server
+                        // refuses it rather than downgrading - so Enter
+                        // goes to the model step instead of offering a
+                        // launch that is going to fail.
+                        enterLocalModelStep(item);
+                        return;
+                    }
                     // A pinned family row: launched by FAMILY NAME as the
                     // agent_type, which the server resolves to that
                     // family's own command. Never a model - a reserved
@@ -257,14 +331,44 @@
             const render = () => {
                 buildItems();
                 if (headerEl) {
-                    headerEl.textContent = step === 'model'
-                        ? `» ${selectedWrapper ? selectedWrapper.label : 'wrapper'}: select model`
-                        : '» select provider';
+                    if (step === 'local-model') {
+                        headerEl.textContent =
+                            `» ${selectedFamily ? selectedFamily.label : 'local'}: select model`;
+                    } else {
+                        headerEl.textContent = step === 'model'
+                            ? `» ${selectedWrapper ? selectedWrapper.label : 'wrapper'}: select model`
+                            : '» select provider';
+                    }
                 }
                 if (hintEl) {
-                    hintEl.textContent = step === 'model'
+                    hintEl.textContent = (step === 'model' || step === 'local-model')
                         ? '↑/↓ to move · Enter to launch · Esc to go back'
                         : '↑/↓ to move · Enter to launch · type to jump · Esc to cancel';
+                }
+                // The LOCAL step's non-reachable outcomes. Each renders its
+                // OWN sentence: "not configured" and "unreachable" are
+                // different facts and sending someone to check a machine
+                // when they have simply never set the address is a waste of
+                // their time. A reachable box serving nothing is a third
+                // thing again, and is not an error at all.
+                if (step === 'local-model' && !items.length) {
+                    let msg;
+                    if (!localProbe || localProbe === 'loading') {
+                        msg = 'asking the LM Studio server for its models…';
+                    } else if (localProbe.state === 'not-configured') {
+                        msg = 'no LM Studio address is set. add '
+                            + '"local_host": "host:port" under "providers" in '
+                            + 'config.json, then restart.';
+                    } else if (localProbe.state === 'unreachable') {
+                        msg = `could not reach LM Studio at ${escapeHtml(localProbe.host || 'the configured address')}`
+                            + (localProbe.detail ? ` (${escapeHtml(String(localProbe.detail))})` : '');
+                    } else {
+                        msg = `LM Studio at ${escapeHtml(localProbe.host || '')} is running but has no chat models loaded`;
+                    }
+                    listEl.innerHTML =
+                        `<div class="provider-local-status">${msg}</div>`;
+                    activeIndex = -1;
+                    return;
                 }
                 listEl.innerHTML = items.map((item, i) => {
                     if (item.type === 'claude') {
@@ -300,6 +404,13 @@
                         return `${heading}<div class="folder-picker-item" data-index="${i}">
                             <span class="folder-picker-icon">◆</span>
                             <span class="folder-picker-name provider-item-name">${safeLabel}</span>
+                        </div>`;
+                    }
+                    if (item.type === 'local-model') {
+                        const safe = escapeHtml(item.model);
+                        return `<div class="folder-picker-item" data-index="${i}">
+                            <span class="folder-picker-icon">◇</span>
+                            <span class="folder-picker-name provider-item-name">${safe}</span>
                         </div>`;
                     }
                     if (item.type === 'no-model') {
@@ -437,7 +548,10 @@
                     // In the model step, Escape backs out one level rather
                     // than abandoning the launch - the wrapper choice was
                     // a deliberate step, not a modal the user fell into.
-                    if (step === 'model') { backToWrapperStep(); return; }
+                    if (step === 'model' || step === 'local-model') {
+                        backToWrapperStep();
+                        return;
+                    }
                     close(null);
                     return;
                 }

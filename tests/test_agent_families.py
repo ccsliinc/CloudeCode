@@ -82,7 +82,9 @@ def test_reserved_names_exclude_claude():
     resolve to the family default instead of to a wrapper whose id is
     literally "claude" (the v0->v1 migration authors one)."""
     assert "claude" not in RESERVED_FAMILY_NAMES
-    assert RESERVED_FAMILY_NAMES == frozenset({"codex", "hermes", "openclaw", "shell"})
+    assert RESERVED_FAMILY_NAMES == frozenset(
+        {"codex", "hermes", "openclaw", "local", "shell"}
+    )
 
 
 def test_is_valid_family_and_get_family_fallback():

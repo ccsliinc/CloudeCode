@@ -570,6 +570,21 @@ class SessionManager:
             ),
         }
 
+        # LM Studio's address for the `cldl` wrapper, passed as an ENV VAR
+        # rather than interpolated into the command string. That is not a
+        # style choice: a host that never enters shell text cannot be
+        # quoted wrongly, so the whole class of question disappears instead
+        # of being answered carefully in one place and forgotten in the
+        # next. Set only when configured - an empty CLDL_HOST would look to
+        # the wrapper like a deliberate blank, which is a different claim
+        # from "the user has not set this up".
+        try:
+            local_host = settings.load_auth_config().providers.local_host
+        except Exception:  # noqa: BLE001 - a bad config must not block a spawn
+            local_host = ""
+        if local_host:
+            app_env["CLDL_HOST"] = local_host
+
         # feat/settings-gui - the user's global workspace environment.
         # THIS function is the single funnel every spawn goes through
         # (create_session and the adopt path both call it), which is why

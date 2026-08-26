@@ -86,6 +86,12 @@ class AgentsConfig(BaseModel):
     # ``cldor`` defined.
     claude_command: str = ""
     codex_command: str = "codex"
+    # LM Studio via the cldl wrapper. The SERVER ADDRESS is not in this
+    # string: it is injected as CLDL_HOST into the tmux spawn environment
+    # (src/core/session_manager.py::get_env_for_spawn) rather than
+    # interpolated into shell text, which removes the quoting question
+    # entirely instead of answering it carefully.
+    local_command: str = "cldl"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
     # Plain interactive shell - no agent CLI. Used by the "New console"
@@ -114,6 +120,19 @@ _DEFAULT_PROVIDER_MODELS: List[str] = [
 ]
 
 
+def _warn_bad_local_host(raw: str, why: str) -> None:
+    """Log a rejected ``providers.local_host`` without echoing it blindly.
+
+    Inputs: raw (str) - the offending value. why (str) - the reason.
+    Output: None.
+    """
+    import structlog
+
+    structlog.get_logger().warning(
+        "dropped_invalid_local_host", value=raw[:120], reason=why
+    )
+
+
 class ProvidersConfig(BaseModel):
     """OpenRouter model catalog for the provider-selector modal.
 
@@ -124,6 +143,64 @@ class ProvidersConfig(BaseModel):
     ``_DEFAULT_PROVIDER_MODELS``.
     """
     models: List[str] = Field(default_factory=lambda: list(_DEFAULT_PROVIDER_MODELS))
+
+    # LM Studio's OpenAI-compatible server, as ``host:port``.
+    #
+    # CONFIG-ONLY, with no API setter, and that is deliberate. This value is
+    # interpolated into a shell command and used as a fetch target, so an
+    # endpoint that could set it would be an SSRF surface reachable with a
+    # single authenticated POST. Editing config.json is already a
+    # box-access-level operation; a route is not.
+    #
+    # EMPTY BY DEFAULT, not a guessed address. A default pointing at some
+    # other network's box would make "local models unreachable" the normal
+    # state for everyone who does not run LM Studio, which trains the reader
+    # to ignore the row - and it makes the app probe a stranger's IP. Empty
+    # reads as NOT CONFIGURED, which is a different fact from unreachable
+    # and is reported as one.
+    local_host: str = Field(
+        default="",
+        description="LM Studio server as host:port; empty means not configured",
+    )
+
+    @field_validator("local_host")
+    @classmethod
+    def _validate_local_host(cls, v: str) -> str:
+        """Accept ``host:port`` only, or empty. Never a URL, never a path.
+
+        Description: this string reaches a shell command (via CLDL_HOST)
+          and an HTTP fetch target. Validating the SHAPE here means neither
+          consumer has to trust a hand-edited config.json. A value that
+          does not parse is dropped to empty with a warning rather than
+          raising, matching how every other malformed sub-block in this
+          config fails soft - but it is dropped to NOT CONFIGURED, never to
+          a guess.
+        Inputs: v (str) - the configured value.
+        Output: str - a validated ``host:port``, or "".
+        Example: _validate_local_host("10.0.1.5:1234")  # '10.0.1.5:1234'
+        """
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        # Reject anything carrying a scheme, path, query or credentials -
+        # those are the shapes that turn a host:port into an SSRF primitive
+        # or a shell surprise.
+        if any(c in raw for c in "/\\?#@ \t'\"`$;|&<>()"):
+            _warn_bad_local_host(raw, "must be host:port with no scheme or path")
+            return ""
+        host, sep, port = raw.rpartition(":")
+        if not sep or not host:
+            _warn_bad_local_host(raw, "missing :port")
+            return ""
+        if not port.isdigit() or not (1 <= int(port) <= 65535):
+            _warn_bad_local_host(raw, "port is not 1-65535")
+            return ""
+        # Bracketed IPv6 is fine; a bare one is ambiguous against the port
+        # separator and is refused rather than guessed at.
+        if ":" in host and not (host.startswith("[") and host.endswith("]")):
+            _warn_bad_local_host(raw, "bare IPv6 host must be bracketed")
+            return ""
+        return raw
 
     @field_validator("models")
     @classmethod
@@ -983,6 +1060,20 @@ class Settings(BaseSettings):
         # reason 'shell' resolves as a family while 'claude' does not.
         family, explicit = resolve_agent_type(agent_type, agents.wrappers)
 
+        # A family that CANNOT launch without a model is REFUSED here, not
+        # downgraded. `cldl` addresses one specific model on the LM Studio
+        # server and has no meaningful default, so a bare launch would open
+        # a pane that either errors or quietly runs something the user did
+        # not choose - and the session would be recorded as if it had
+        # worked. Raising is the honest answer, and this is the single
+        # choke point every launch path goes through (create AND respawn),
+        # so a respawn cannot reintroduce the bare form later.
+        if family.needs_model and not (model and str(model).strip()):
+            raise ValueError(
+                f"the '{family.name}' agent needs a model and none was given; "
+                "pick one from the launch modal rather than launching bare"
+            )
+
         # A family's own wrappers, in list order; the default one wins when
         # the caller did not name a specific wrapper. Filtering by family
         # is what makes a codex wrapper unreachable from a claude launch.
@@ -1019,11 +1110,18 @@ class Settings(BaseSettings):
         # cld/cldor last resort. Only 'shell' renders raw, because
         # '$SHELL -i' sources the rc itself). See
         # src/core/agent_families.render_static_command.
+        # A needs_model family takes its model as a positional ARGUMENT
+        # (``cldl <model>``); render_static_command only consults ``model``
+        # on the claude last-resort path, so it is passed as an arg here
+        # rather than relying on a parameter that this branch ignores.
+        static_args = list(extra_args or [])
+        if family.needs_model and model:
+            static_args = [model] + static_args
         return render_static_command(
             family,
             getattr(agents, family.command_field, "") or "",
             model=model,
-            extra_args=extra_args,
+            extra_args=static_args,
         )
 
     def load_auth_config(self) -> AuthConfig:

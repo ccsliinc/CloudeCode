@@ -527,6 +527,46 @@ EXAMPLE_WRAPPERS: List[dict] = [
         "openclaw", "openclaw", "openclaw tui", "openclaw_command", "openclaw (guarded)"
     ),
     {
+        "id": "cldl",
+        "family": "local",
+        "label": "cldl (lm studio)",
+        # LM Studio speaks the Anthropic Messages API, so pointing Claude
+        # Code at it is a ROUTING change and nothing more - no protocol
+        # shim, no second client.
+        #
+        # The address comes from CLDL_HOST, which the app injects into the
+        # tmux spawn environment from providers.local_host. It is NOT
+        # interpolated into this script: a value that never enters shell
+        # text cannot be quoted wrongly. The ${CLDL_HOST:?...} form fails
+        # LOUDLY with a sentence rather than silently falling back to a
+        # guessed address and connecting somewhere the user did not choose.
+        #
+        # The API key is a placeholder because LM Studio does not check it;
+        # the SDK simply refuses to start without one. It is not a secret
+        # and there is nothing here to keep out of a config file.
+        "script": (
+            'cldl() (\n'
+            '    local host="${CLDL_HOST:?no LM Studio address: set '
+            'providers.local_host in config.json}"\n'
+            '    local model="${1:?cldl needs a model id as its first argument}"\n'
+            '    export ANTHROPIC_BASE_URL="http://${host}/v1"\n'
+            '    export ANTHROPIC_API_KEY="lm-studio"\n'
+            '    command claude --dangerously-skip-permissions '
+            '--model "$model" "${@:2}"\n'
+            ')'
+        ),
+        "entry": "cldl",
+        "description": (
+            "example - runs Claude Code against a local LM Studio server "
+            "instead of the hosted API. Takes a model id as its first "
+            "argument and reads the server address from CLDL_HOST, which "
+            "the app sets from providers.local_host; it refuses to launch "
+            "rather than guess either one."
+        ),
+        "default": False,
+        "accepts_model": True,
+    },
+    {
         "id": "shell-default",
         "family": "shell",
         "label": "shell (interactive)",

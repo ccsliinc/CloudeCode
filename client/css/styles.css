@@ -738,6 +738,21 @@ body.home-header-active {
     background: var(--color-accent-bg-soft);
 }
 
+/* The LOCAL (LM Studio) model step's status sentence.
+   Not a .folder-picker-item on purpose: it is a statement about why there
+   is nothing to pick, not a thing to pick, so it must not enter the nav
+   index or look Enter-able. Styled explicitly rather than left to the
+   user-agent stylesheet - an unclassed block here would render as bare
+   serif body text in the middle of a monospace picker. */
+.provider-local-status {
+    padding: 12px 14px;
+    color: var(--color-fg-muted);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: normal;
+}
+
 /* Fork control on a running session row.
    Explicitly styled rather than left to the user-agent stylesheet: an
    unclassed <button> in this app renders as a grey OS square, and that

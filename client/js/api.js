@@ -1111,6 +1111,23 @@ class API {
      *   its parent link failed to land. Rejects 404 when the session is
      *   unknown and 409 when it has no Claude conversation to resume.
      */
+    /**
+     * Providers: the chat models an LM Studio server is serving.
+     *
+     * ALWAYS resolves on a reachable CloudeCode server - a local box that
+     * is off is a STATE, not an API error. Branch on `state`, never on
+     * `reachable`: the boolean is false for both `unreachable` and
+     * `not-configured`, and those mean opposite things to the reader. One
+     * says go check the machine; the other says go set the address in
+     * config.json.
+     *
+     * @returns {Promise<{state: string, reachable: boolean, host: string,
+     *   models: string[], detail: ?string}>}
+     */
+    async getLocalModels() {
+        return await this.call('/providers/local/models');
+    }
+
     async forkSession(sessionName) {
         return await this.call(
             `/sessions/${encodeURIComponent(sessionName)}/fork`,

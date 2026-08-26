@@ -64,7 +64,7 @@ def test_list_wrappers_empty(client, config_path):
     # family registry so the settings screen can render one group per
     # family without hardcoding the list client-side.
     assert [f["name"] for f in body["families"]] == [
-        "claude", "codex", "hermes", "openclaw", "shell",
+        "claude", "codex", "hermes", "openclaw", "local", "shell",
     ]
     # With no wrappers at all, every family's static command is what runs.
     assert all(f["in_use"] is True for f in body["families"])

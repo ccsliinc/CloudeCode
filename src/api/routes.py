@@ -14,6 +14,7 @@ from datetime import datetime
 
 from src.models import (
     ForkSessionResponse,
+    LocalModelsResponse,
     Session,
     SessionInfo,
     SessionStats,
@@ -98,6 +99,41 @@ router = APIRouter()
 # emitting a single audit line per uptime window. Removed when the alias
 # itself is dropped in v0.8.x.
 _PINNED_THEME_ALIAS_WARNED: bool = False
+
+
+@router.get(
+    "/providers/local/models",
+    response_model=LocalModelsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def list_local_models():
+    """List the chat models an LM Studio server is serving.
+
+    Description: ALWAYS answers 200. A box that is off is a state the
+      picker renders, not an API failure - see LocalModelsResponse.
+
+      The address comes from ``providers.local_host`` in config.json and
+      there is deliberately NO endpoint that sets it. This handler makes an
+      outbound request to whatever that value names, so a setter would be
+      an SSRF surface reachable with one authenticated POST. Editing
+      config.json is already box-level access; a route is not.
+    Output: LocalModelsResponse.
+    """
+    from src.core.local_models import fetch_local_models, to_payload
+
+    try:
+        host = settings.load_auth_config().providers.local_host
+    except Exception as exc:  # noqa: BLE001 - a bad config is a STATE here
+        logger.warning("local_models_config_unreadable", error=str(exc))
+        return LocalModelsResponse(
+            state="not-configured",
+            detail=f"could not read the provider config: {exc}",
+        )
+
+    # The probe is blocking I/O with its own deadline; keep it off the
+    # event loop so a slow box cannot stall every other request.
+    result = await run_in_threadpool(fetch_local_models, host)
+    return LocalModelsResponse(**to_payload(result))
 
 
 @router.post(

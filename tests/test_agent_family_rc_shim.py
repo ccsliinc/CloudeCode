@@ -55,7 +55,7 @@ from src.core.shell_init import RC_SOURCE
 #: Families that launch a THIRD-PARTY CLI the user installed themselves.
 #: Every one of these can come from a version manager, so every one needs
 #: the rc sourced before the binary is looked up.
-TOOL_FAMILIES = ("claude", "codex", "hermes", "openclaw")
+TOOL_FAMILIES = ("claude", "codex", "hermes", "openclaw", "local")
 
 
 @pytest.mark.parametrize("name", TOOL_FAMILIES)

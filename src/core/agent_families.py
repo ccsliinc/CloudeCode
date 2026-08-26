@@ -133,6 +133,15 @@ class AgentFamily:
       resolved as a bare family before any wrapper-id lookup. False only
       for ``claude``, for the backward-compatibility reason in the module
       docstring.
+    - ``needs_model``: whether a launch is IMPOSSIBLE without a model id.
+      True only for ``local``: ``cldl`` addresses one specific model on the
+      LM Studio server and has no meaningful default, so launching it bare
+      would start a pane that either errors or silently picks something the
+      user did not choose. A family with this set is REFUSED rather than
+      downgraded when no model is given - see
+      ``Settings.get_agent_command``. It also changes how the picker
+      behaves: such a family leads to a model step instead of launching
+      on Enter.
     - ``pickable``: whether this family may be offered as a PINNED,
       modelless row in the launch picker when it has no wrappers of its
       own. A reserved family is launchable by name over the API
@@ -165,6 +174,7 @@ class AgentFamily:
     reserved: bool
     pickable: bool
     description: str
+    needs_model: bool = False
     last_resort: Optional[Callable[[Optional[str]], str]] = None
 
 
@@ -212,6 +222,17 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         last_resort=make_tool_last_resort(
             "openclaw", "openclaw tui", "openclaw", "openclaw_command"
         ),
+    ),
+    AgentFamily(
+        name="local",
+        label="local (lm studio)",
+        command_field="local_command",
+        sources_zshrc=True,
+        reserved=True,
+        pickable=True,
+        needs_model=True,
+        description="the single command every local-model session runs.",
+        last_resort=make_tool_last_resort("cldl", "cldl", "local", "local_command"),
     ),
     AgentFamily(
         name="shell",
@@ -397,6 +418,7 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
             # row when it has no wrappers. See AgentFamily's docstring.
             "reserved": family.reserved,
             "pickable": family.pickable,
+            "needs_model": family.needs_model,
             "command_field": family.command_field,
             "command": getattr(agents, family.command_field, "") or "",
             "description": family.description,
@@ -404,9 +426,34 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
             # The legacy command runs only when this family has no
             # wrappers at all; any wrapper takes precedence.
             "in_use": count == 0,
-            "effective_command": resolve_command(family.name),
+            "effective_command": _effective_command(resolve_command, family),
         })
     return summaries
+
+
+def _effective_command(resolve_command, family: AgentFamily) -> str:
+    """Render a family's live command for display, or say why it cannot.
+
+    Description: a ``needs_model`` family has no command to show until a
+      model is chosen - ``get_agent_command`` REFUSES rather than render a
+      bare one, which is correct for a launch and fatal for a summary that
+      renders every family. So the refusal is caught and turned into a
+      sentence the settings screen can print.
+
+      It returns a NAMED third state rather than an empty string. A blank
+      cell reads as "no command configured", which is a different and
+      wrong claim: the command is configured, it simply cannot be
+      completed without a choice the user has not made yet.
+    Inputs: resolve_command (Callable[[str], str]); family (AgentFamily).
+    Output: str - the rendered command, or a reason it is unavailable.
+    Example: _effective_command(fn, get_family("local"))
+    """
+    try:
+        return resolve_command(family.name)
+    except ValueError as exc:
+        return f"(needs a model: {exc})"
+    except Exception as exc:  # noqa: BLE001 - a summary must never 500
+        return f"(could not resolve: {exc})"
 
 
 def render_static_command(

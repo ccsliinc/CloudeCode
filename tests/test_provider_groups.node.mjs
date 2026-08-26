@@ -286,6 +286,48 @@ test('an older server that omits pickable changes nothing', () => {
     assert.equal(before.length, 2);
 });
 
+// ---- needs_model families (local / LM Studio) ------------------------
+
+const WITH_LOCAL = [
+    { name: 'claude', label: 'claude', pickable: true },
+    { name: 'codex', label: 'codex', pickable: true },
+    { name: 'local', label: 'local (lm studio)', pickable: true, needs_model: true },
+    { name: 'shell', label: 'shell', pickable: false },
+];
+
+test('a needs_model family advertises the model step', () => {
+    // It CANNOT launch bare - the server refuses rather than downgrading -
+    // so the row must read "models >" and Enter must go to the model step,
+    // not offer a launch that is going to fail.
+    const items = Groups.buildWrapperItems(LIVE, WITH_LOCAL);
+    const local = items.filter((i) => i.agentType === 'local')[0];
+    assert.ok(local);
+    assert.equal(local.needsModel, true);
+    assert.equal(local.acceptsModel, true);
+});
+
+test('a modelless pinned family still launches on Enter', () => {
+    const items = Groups.buildWrapperItems(LIVE, WITH_LOCAL);
+    const codex = items.filter((i) => i.agentType === 'codex')[0];
+    assert.equal(codex.needsModel, false);
+    assert.equal(codex.acceptsModel, false);
+});
+
+test('familyNeedsModel reads false when the server omits the field', () => {
+    // Same compatibility rule as pickable: an older server does not ship
+    // it, and a client must not invent a model step it cannot fill.
+    assert.equal(Groups.familyNeedsModel('local', FAMILIES), false);
+    assert.equal(Groups.familyNeedsModel('local', WITH_LOCAL), true);
+});
+
+test('local is not offered at all when the server says it is not pickable', () => {
+    const notPickable = WITH_LOCAL.map(
+        (f) => (f.name === 'local' ? Object.assign({}, f, { pickable: false }) : f)
+    );
+    const items = Groups.buildWrapperItems(LIVE, notPickable);
+    assert.ok(items.every((i) => i.agentType !== 'local'));
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
 console.log('ALL PASS');

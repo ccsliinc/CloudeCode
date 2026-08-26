@@ -71,6 +71,26 @@
     }
 
     /**
+     * Whether a family CANNOT be launched without a model id.
+     *
+     * True for `local` (LM Studio): `cldl` addresses one specific model and
+     * has no meaningful default, so the server REFUSES a bare launch rather
+     * than downgrading it. A row for such a family must therefore lead to a
+     * model step instead of launching on Enter - otherwise the picker
+     * offers an action the server will reject.
+     *
+     * Missing reads as false, matching familyPickable: an older server does
+     * not ship the field.
+     * @param {string} name family name
+     * @param {Array} families family summaries from the API
+     * @returns {boolean}
+     */
+    function familyNeedsModel(name, families) {
+        var match = (families || []).filter(function (f) { return f.name === name; })[0];
+        return !!(match && match.needs_model);
+    }
+
+    /**
      * Build the picker's wrapper-step nav items, grouped by family.
      *
      * EXACTLY one item per wrapper, in family order. The family heading is
@@ -109,11 +129,16 @@
                 // id, exactly as AgentWrapper.accepts_model=false means for
                 // a wrapper. Handing one over would arrive at the CLI as a
                 // prompt argument.
+                var needsModel = familyNeedsModel(name, families);
                 items.push({
                     type: 'family',
                     agentType: name,
                     label: familyLabel(name, families),
-                    acceptsModel: false,
+                    // A needs_model family advertises the model step, so the
+                    // row reads "models >" and Enter goes there rather than
+                    // launching something the server will refuse.
+                    acceptsModel: needsModel,
+                    needsModel: needsModel,
                     groupLabel: heading,
                 });
                 return;
@@ -136,6 +161,7 @@
         familyOrder: familyOrder,
         familyLabel: familyLabel,
         familyPickable: familyPickable,
+        familyNeedsModel: familyNeedsModel,
         buildWrapperItems: buildWrapperItems,
     };
 })(typeof window !== 'undefined' ? window : globalThis);
