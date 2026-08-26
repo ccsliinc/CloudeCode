@@ -927,21 +927,36 @@ class API {
     }
 
     /**
-     * Sessions: Rename a live session's tmux backend in place.
+     * Sessions: Set a session's LABEL - the free-form name a human reads.
      *
-     * PATCH /api/v1/sessions/{id}/name. Server validates the name against
-     * ``^[A-Za-z0-9_-]{1,64}$`` and uniqueness against every live + owned
-     * tmux name. On success the server broadcasts ``session.renamed`` over
-     * every WS bound to this session id - the caller does NOT need to
-     * manually mutate displayed state, just await success and rely on the
-     * WS handler in terminal.js to update header text + document.title.
+     * PATCH /api/v1/sessions/{id}/name. THIS DOES NOT RENAME TMUX. It
+     * writes ``sessions.title`` and stops; the tmux name is an internal
+     * handle derived from the label once, at creation, and never moved
+     * again. Keeping them separate is what stops a rename from moving the
+     * field session identity is keyed on.
+     *
+     * ``session_label.validate_label`` refuses exactly three things:
+     * empty after stripping, longer than ``LABEL_MAX_CHARS`` (200), and
+     * control characters. Spaces, ``:``, ``.``, quotes, ``$`` and
+     * non-ASCII are all legal, because a label is never handed to tmux.
+     * Two sessions may carry the SAME label; there is no uniqueness rule
+     * and so no collision to report. Callers should pre-validate through
+     * ``SessionLabel.validate`` (client/js/session-label.js) rather than
+     * carrying their own rule - this docstring previously advertised the
+     * old ``^[A-Za-z0-9_-]{1,64}$`` tmux-name charset, and all three
+     * rename controls enforced it against a server that had already
+     * stopped applying it.
+     *
+     * On success the server broadcasts ``session.renamed`` over every WS
+     * bound to this session id - the caller does NOT need to manually
+     * mutate displayed state, just await success and rely on the WS
+     * handler in terminal.js to update header text + document.title.
      *
      * @param {string} sessionId - Session id (NOT tmux name).
-     * @param {string} newName - Proposed new tmux name. Caller may
-     *   pre-validate but server is authoritative.
+     * @param {string} newName - The new label. Server is authoritative.
      * @returns {Promise<object>} Updated SessionInfo payload.
-     * @throws on 400 (invalid name), 404 (unknown id), 409 (name collision),
-     *   500 (tmux command failed).
+     * @throws on 400 (empty, too long, or a control character), 404
+     *   (unknown id). No 409 - a label identifies nothing.
      */
     async renameSession(sessionId, newName) {
         return await this.call(
