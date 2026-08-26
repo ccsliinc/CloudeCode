@@ -22,6 +22,15 @@ THREE OUTCOMES, and they exit differently:
              (playwright missing, browser would not launch, harness never
              became ready, tab reported itself hidden). Never a pass.
 
+--legacy runs the SAME measurements against a deliberately pre-fix page,
+and its verdict is inverted so that 0 still means good news:
+  0  CONTROL OK      - the pre-fix bug reproduced, so these measurements
+                       are capable of failing
+  1  CONTROL BROKEN  - nothing reproduced; the control cannot fail and is
+                       therefore not evidence of anything
+  2  CANNOT DETERMINE - as above
+Run it after any change to screen-chrome.css/.js or to the harness.
+
 The hidden-tab check is not paranoia: a backgrounded Chromium tab
 freezes CSS transitions at frame zero and never fires rAF, so computed
 styles read back pre-transition values forever and a passing or failing
@@ -47,11 +56,28 @@ from lib_csp_static_server import (  # noqa: E402
     violations,
 )
 
-# --legacy replicates the PRE-FIX App.showAuth() hide list in the
-# harness. With client/css/screen-chrome.css removed it reproduces the
-# reported bug, which is how the red-before-green claim is checked
-# instead of asserted.
+# --legacy reproduces the PRE-FIX state and must therefore FAIL (exit 1)
+# against fixed code. It is the positive control for this whole script: a
+# control that passes both before and after the fix measures nothing.
+#
+# Reproducing the bug takes BOTH halves, and this is the part that was
+# wrong until 2026-08-26. Setting window.__legacyShowAuth alone restores
+# the pre-fix App.showAuth() hide list in the harness, but the fix is not
+# in that list - the fix is client/css/screen-chrome.css, which hides the
+# authenticated-only chrome with `!important` regardless of what any hide
+# list says. So the flag on its own changed nothing measurable and
+# --legacy exited 0 against correct code, exactly like a passing run. The
+# stylesheet is now suppressed in the same flag (SCREEN_CHROME_CSS below,
+# blanked at the network layer), so the pre-fix DOM-only hiding is the
+# only thing left standing and the two controls the user reported -
+# slash-commands-btn and header-menu-toggle - render on the login screen
+# again.
 LEGACY = "--legacy" in sys.argv
+
+# Path suffix of the one stylesheet --legacy blanks. Matched against the
+# request URL, so it covers the harness's relative href and the app's
+# /static/ href both.
+SCREEN_CHROME_CSS = "css/screen-chrome.css"
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = "/tests/manual/login-chrome-harness.html"
@@ -420,6 +446,15 @@ def main() -> int:
         page.add_init_script(collector_init_script())
         if LEGACY:
             page.add_init_script("window.__legacyShowAuth = true")
+            # Blank the fix itself. Fulfilling with an empty body rather
+            # than aborting keeps the request a clean 200, so no CSP or
+            # console noise is manufactured by the control.
+            page.route(
+                "**/*" + SCREEN_CHROME_CSS,
+                lambda route: route.fulfill(
+                    status=200, content_type="text/css", body=""
+                ),
+            )
         response = page.goto(url)
         if page.evaluate("document.hidden"):
             return None
@@ -529,6 +564,28 @@ def main() -> int:
             "VISIBLE" if m_auth.get(i, {}).get("visible") else "hidden",
             "visible" if m_launch.get(i, {}).get("visible") else "HIDDEN")
         for i, _ in AUTH_ONLY_MOBILE))
+
+    if LEGACY:
+        # The control's verdict is INVERTED, so that 0 keeps meaning "this
+        # run is good news" no matter which mode you are in. Reproducing
+        # the reported bug is the control succeeding; NOT reproducing it
+        # means the control has stopped being able to fail and every
+        # red-before-green claim resting on it is worthless.
+        reproduced = [i for i, _ in AUTH_ONLY
+                      if auth.get(i, {}).get("visible")]
+        if reproduced:
+            print("\nCONTROL OK: --legacy reproduced the reported bug; "
+                  "these rendered on the login screen:")
+            for i in reproduced:
+                print("  -", i)
+            return 0
+        print("\nCONTROL BROKEN: --legacy reproduced NOTHING. It is "
+              "supposed to restore the pre-fix state and show "
+              "authenticated-only chrome on the login screen. A control "
+              "that passes against fixed code cannot fail against broken "
+              "code either, so it is not evidence of anything.",
+              file=sys.stderr)
+        return 1
 
     if failures:
         print("\nFAIL")

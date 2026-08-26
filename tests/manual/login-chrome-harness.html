@@ -125,11 +125,15 @@ window.__setScreen = function (screen) {
         // THE RED PROOF, KEPT RUNNABLE. Replicates the PRE-FIX
         // App.showAuth() exactly: it named logout/settings/file-editor
         // and called SessionSidebar.hide() (which hides the toggle), and
-        // that was the entire list. Run
-        // `scripts/verify_login_chrome.py --legacy` with
-        // client/css/screen-chrome.css removed and this reproduces the
-        // reported bug as measured pixels, so the fix can be shown to
-        // have gone from red to green rather than asserted to have.
+        // that was the entire list.
+        //
+        // This half alone is NOT the pre-fix state and does not reproduce
+        // anything: screen-chrome.css hides all of it with `!important`
+        // whatever this list says, which is why --legacy exited 0 against
+        // correct code for five days. The verifier now blanks that
+        // stylesheet itself whenever --legacy is passed, so there is no
+        // manual step left to forget and no way to run this flag against
+        // a page where it cannot fail.
         for (const id of ['logoutBtn', 'settingsBtn', 'configEditorBtn',
                           'session-sidebar-toggle']) {
             const el = document.getElementById(id);

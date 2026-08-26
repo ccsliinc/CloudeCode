@@ -301,6 +301,37 @@ class TmuxBackend(SessionBackend):
             "set-option", "-g", "history-limit", str(HISTORY_LIMIT), check=False
         )
 
+    async def _apply_remain_on_exit(self) -> None:
+        """Turn on ``remain-on-exit`` globally, BEFORE any window exists.
+
+        Inputs:
+            None.
+
+        Returns:
+            None.
+
+        ``remain-on-exit`` is a WINDOW option, so it has to be set with
+        ``-w``; ``-g`` alone writes the session table and the window is
+        born without it. Setting it globally before ``new-session`` is the
+        whole point: an agent that fails fast - binary not on PATH, auth
+        banner then a non-zero exit - can be gone before a post-creation
+        ``set-option`` lands, and then there is no window left to set the
+        option ON. Measured on tmux 3.7c: with this set first, a session
+        whose command is ``true`` leaves ``pane_dead=1``; without it, the
+        very next ``list-panes`` answers "can't find window".
+
+        Today the dead-on-arrival probe tears that corpse down anyway, so
+        the race is benign - but it is benign by accident, and it cost a
+        previous session five test failures to work out why. The pane is
+        now guaranteed to exist for the probe to read.
+
+        ``check=False`` for the same reason as the history limit: a socket
+        that will not take the option is not a reason to refuse a session.
+        """
+        await self._run_tmux(
+            "set-option", "-wg", "remain-on-exit", "on", check=False
+        )
+
     async def read_history_limit(self) -> Optional[int]:
         """Read the socket's current global ``history-limit``.
 
@@ -473,11 +504,15 @@ class TmuxBackend(SessionBackend):
         # which is exactly the ordering we want on a cold socket.
         await self._apply_history_limit()
 
+        # remain-on-exit BEFORE the window exists - see the method's
+        # docstring. Set after creation it is a race the fast-failing agent
+        # wins.
+        await self._apply_remain_on_exit()
+
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
         # If a command is supplied, tmux runs that as pane 0's process; the
-        # shell exits when the command ends unless ``remain-on-exit`` is set.
-        # For our case (Claude CLI) we want the pane to stick around even if
-        # Claude exits, so we enable remain-on-exit after creation.
+        # shell exits when the command ends unless ``remain-on-exit`` is set,
+        # which is why it is set globally just above rather than here.
         #
         # ``-x`` / ``-y`` fix the window's birth geometry. Without them tmux
         # uses 80x24 and - combined with default ``window-size latest`` and
@@ -544,7 +579,11 @@ class TmuxBackend(SessionBackend):
             msg = stderr.decode("utf-8", errors="replace")
             raise RuntimeError(f"tmux new-session failed: {msg.strip()}")
 
-        # Keep the pane alive even after child exits so scrollback persists.
+        # Belt and braces: re-assert it on THIS session explicitly, so the
+        # invariant does not depend on the socket's global table still
+        # saying what it said a moment ago. The global set above is what
+        # makes the window exist at all when the command exits instantly;
+        # this line is what keeps the setting readable per session.
         await self._run_tmux(
             "set-option", "-t", self.tmux_session, "remain-on-exit", "on", check=False
         )
