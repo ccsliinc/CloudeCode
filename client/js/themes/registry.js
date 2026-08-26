@@ -27,6 +27,12 @@
     // Phase 9: 3-state allowlist for theme effects.js scripts.
     // Shape: { [themeId]: true | false }. Missing key = "ask".
     var JS_ALLOWLIST_KEY = 'cloude.themeJsAllowlist';
+    // Last-applied palette, cached so the PRE-AUTH login screen can paint
+    // the user's theme. `GET /api/v1/themes` is behind require_auth, so
+    // before login there is no manifest to read and `data-theme` alone
+    // paints nothing - no stylesheet in this app keys off that attribute.
+    // Shape: {"id": "<themeId>", "cssVars": { "--x": "y", ... }}.
+    var VARS_CACHE_KEY = 'cloude.theme.vars';
 
     // Hardcoded fallback so the page survives a missing/broken endpoint. This
     // MUST stay in lock-step with client/css/themes/claude/theme.json - the
@@ -89,6 +95,48 @@
             return v && typeof v === 'string' ? v : DEFAULT_THEME_ID;
         } catch (_) {
             return DEFAULT_THEME_ID;
+        }
+    }
+
+    /**
+     * Description: remember a theme's palette so the next page load can
+     *   paint it before the manifest endpoint is reachable. Keyed WITH the
+     *   theme id, so a cache written for one theme can never be painted
+     *   for another.
+     * Inputs: themeId (string). cssVars (object) - the manifest's vars.
+     * Output: void. Storage failures are ignored; the cache is an
+     *   optimisation and its absence is a supported state.
+     * Example: cacheThemeVars('terminal', {'--color-bg': '#000000'})
+     */
+    function cacheThemeVars(themeId, cssVars) {
+        try {
+            localStorage.setItem(VARS_CACHE_KEY, JSON.stringify({
+                id: themeId, cssVars: cssVars || {}
+            }));
+        } catch (_) { /* quota or private mode - not fatal */ }
+    }
+
+    /**
+     * Description: read back a cached palette, but ONLY if it was written
+     *   for the theme that is stored now. A mismatch means the user
+     *   switched themes in another tab, or the cache predates a rename;
+     *   either way painting it would show a palette nobody chose.
+     * Inputs: themeId (string) - the theme the cache must belong to.
+     * Output: object - the cssVars, or {} when there is no usable cache.
+     */
+    function readCachedThemeVars(themeId) {
+        try {
+            var raw = localStorage.getItem(VARS_CACHE_KEY);
+            if (!raw) return {};
+            var parsed = JSON.parse(raw);
+            if (!parsed || parsed.id !== themeId) return {};
+            var vars = parsed.cssVars;
+            if (!vars || typeof vars !== 'object' || Array.isArray(vars)) return {};
+            return vars;
+        } catch (_) {
+            // Corrupt JSON is the same as no cache: fall back to defaults
+            // rather than throwing on the pre-auth path.
+            return {};
         }
     }
 
@@ -516,6 +564,9 @@
         document.documentElement.dataset.theme = themeId;
         paintCssVars(m.cssVars || {});
         activeGlobalId = themeId;
+        // Cache the palette we just proved good, so the next visit's login
+        // screen can paint it before /themes is reachable.
+        cacheThemeVars(themeId, m.cssVars || {});
 
         if (opts && opts.persist === true) {
             try { localStorage.setItem(STORAGE_KEY, themeId); } catch (_) { /* ignore */ }
@@ -816,6 +867,20 @@
         applyStoredThemeIdSync: function () {
             var id = getStoredThemeId();
             document.documentElement.dataset.theme = id;
+            // The attribute alone renders NOTHING: no stylesheet here keys
+            // off [data-theme]. Themes are delivered as cssVars painted
+            // inline on :root from a manifest behind require_auth, so
+            // without this the login screen showed the :root defaults out
+            // of styles.css under every theme.
+            //
+            // paintCssVars is the same painter init() uses and it tracks
+            // the names it applied, so when the real manifest arrives a
+            // moment later it diffs against this set and unsets anything
+            // stale. A cache that is missing, corrupt, or written for a
+            // different theme yields {} and leaves the defaults standing -
+            // which is exactly the old behaviour, so a first-ever visit is
+            // no worse than before.
+            paintCssVars(readCachedThemeVars(id));
             return id;
         },
         get initialized() { return initialized; }
