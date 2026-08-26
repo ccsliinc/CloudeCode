@@ -316,10 +316,28 @@ def _build_route_app(monkeypatch, tmp_path):
 #   409 CONFLICT   two sessions may now carry the same label, because a
 #                  label identifies nothing. There is no name to collide.
 #   500 TMUX FAIL  no tmux command runs, so it cannot fail.
+# SUPERSEDED 2026-08-26. This block used to list a third departure:
+#
 #   WS BROADCAST   ``session.renamed`` announced a tmux name change to
 #                  every attached tab. Nothing renames, so there is
 #                  nothing to announce; the label is read from the
 #                  session payload like any other field.
+#
+# That is WRONG and it is the dangerous direction. The tmux call went; the
+# broadcast did not. src/api/routes.py still sends a SessionRenamedMessage on
+# every successful label write, client/js/terminal.js still dispatches on it,
+# and tests/test_rename_broadcast_surfaces.node.mjs covers the client half.
+# What changed is what the frame ANNOUNCES - a label, not a tmux name - and a
+# tab that is already attached still has to hear about it or it shows a stale
+# name until reload.
+#
+# This comment nearly cost the message type its life: it was read on
+# 2026-08-26 as evidence that WSMessageType.SESSION_RENAMED had no sender and
+# could be deleted. The reason it was believed is structural and worth
+# naming - the harness in this file has no datastore, so every rename here
+# answers 404 and the success path that broadcasts is never reached. There
+# was no failing test to contradict the prose. There is now:
+# tests/test_session_renamed_broadcast_is_live.py measures the sender.
 #
 # ``SessionManager.rename_session`` is NOT gone and its tests above still
 # pass - an external ``tmux rename-session`` is still possible, and the
