@@ -641,6 +641,12 @@
          it, and it degrades to today's plain row while the registry is
          still fetching. -->
     <script src="/static/js/session-theme-tint.js"></script>
+    <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
+         launchpad.js, whose showFolderPickerModal() is now a delegate to
+         window.FolderPickerModal.open(). It reads no controller state -
+         the escaper is passed in - so it has no ordering constraint on
+         anything else. -->
+    <script src="/static/js/folder-picker-modal.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
