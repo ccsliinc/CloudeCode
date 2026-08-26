@@ -231,9 +231,29 @@ class ToastManager {
    */
   add(toast) {
     if (!toast || !toast.id) return;
-    if (this._byId.has(toast.id)) return; // dedupe - backfill + WS race
     if (toast.acknowledged) return; // server says already done; don't show
     if (!this._container()) return;
+    // A KNOWN ID IS EITHER A DUPLICATE OR A SUPERSESSION, AND THE
+    // DIFFERENCE IS IN THE CONTENT, NOT THE ID.
+    //
+    // The server replaces an unacked `Stop` in place and keeps its id
+    // (SessionManager.record_toast), then broadcasts the replaced record.
+    // So the same id can legitimately arrive again carrying a NEWER body
+    // for the same turn-ended event. Returning early on a known id - the
+    // old dedupe - kept the card showing the FIRST turn's transcript tail
+    // for the rest of the session while the server held the newest.
+    //
+    // Refreshing in place is the whole handling: `Map.set` on an existing
+    // key preserves insertion position, so arrival order (which drives
+    // within-tier sort) does not change, the card is not re-created, and
+    // the id the user will ack is the id the server holds. The
+    // backfill/WS race this branch was written for still resolves to one
+    // card, because re-storing identical content renders identically.
+    if (this._byId.has(toast.id)) {
+      this._byId.set(toast.id, toast);
+      this._render();
+      return;
+    }
     this._byId.set(toast.id, toast);
     this._render();
   }

@@ -339,6 +339,40 @@ test('the id dedupe survives - backfill plus the WS race is still one card', () 
         'the same id twice is one event, not two - no count badge');
 });
 
+test('a superseded Stop - same id, newer body - refreshes the card in place', () => {
+    // The server now replaces an unacked Stop in place and keeps its id,
+    // then broadcasts the replaced record. The browser must show the new
+    // body, not the one it first received, and must still show ONE card
+    // with NO count badge: one stored record, one card, no "x2".
+    const { container, mgr } = makeEnv();
+    const first = toast('Stop', 'Your turn', 'turn one');
+    mgr.add(first);
+    mgr.add({ ...first, body: 'turn twelve' });
+
+    const c = cards(container);
+    assert.equal(c.length, 1, 'one server record must render as one card');
+    assert.equal(c[0].querySelector('.toast__count'), null,
+        'a single stored record must not render a count badge');
+    assert.equal(c[0].querySelector('.toast__body').textContent, 'turn twelve',
+        'the card must carry the newest body, not the first one');
+});
+
+test('a superseded Stop does not jump ahead of a newer Notification', () => {
+    // Arrival order drives the within-tier sort. Refreshing a known id
+    // must not re-date it, or an old Stop would climb over things that
+    // genuinely arrived after it.
+    const { container, mgr } = makeEnv();
+    const stop = toast('Stop', 'Your turn', 'one');
+    mgr.add(stop);
+    mgr.add(toast('Notification', 'Waiting', 'answer me'));
+    mgr.add({ ...stop, body: 'two' });
+
+    const c = cards(container);
+    assert.equal(c.length, 2);
+    assert.equal(c[0].querySelector('.toast__body').textContent, 'answer me',
+        'the Notification arrived later and stays on top');
+});
+
 test('a toast arriving mid-fade does not resurrect the card being dismissed', () => {
     const { container, mgr } = makeEnv();
     mgr.add(toast('Stop', 'Your turn', 'first'));
