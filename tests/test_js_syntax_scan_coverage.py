@@ -80,11 +80,48 @@ def test_clean_tree_parses_including_es_modules() -> None:
     )
     matched = re.search(r"\((\d+) as ES modules\)", done.stdout)
     assert matched is not None, done.stdout
-    count = int(matched.group(1))
-    assert count > 0, (
-        "zero files parsed as ES modules. Either client/css/themes/ dropped "
-        "out of the scan or the module fallback is dead; a CommonJS-only "
-        "checker would false-fail on every one of those files."
+
+
+def test_es_module_source_does_not_false_fail() -> None:
+    """A planted ES module in the theme tree must parse, on any node.
+
+    Inputs:  none
+    Outputs: None.
+
+    THIS REPLACES AN ASSERTION THAT THE FALLBACK COUNT IS NON-ZERO, which
+    was measuring the runtime rather than the checker. `node --check` on a
+    bare .js applies module detection on node 22, so ESM source parses on
+    the FIRST attempt there and nothing reaches the --input-type=module
+    branch: the count is legitimately 0. On node 26 the same files fail the
+    CommonJS attempt and fall back, and the count is 24. Same repo, same
+    script, same correct outcome, two different counts - so a non-zero
+    count was never the property worth asserting, and it failed CI on node
+    22 while the tree it was guarding was fully scanned and clean.
+
+    THERE WERE ALWAYS THREE OUTCOMES and the old assertion modelled two.
+    Zero can mean the theme tree fell out of the scan, the fallback broke,
+    OR the runtime did not need the fallback. Only the first two are
+    faults, and the parametrized coverage test above already catches the
+    first by planting a broken file in client/css/themes/matrix.
+
+    What actually matters is that ES module source is not reported as a
+    syntax error. That is asserted directly here by planting real ESM and
+    requiring a clean exit, which holds on every node either way.
+    """
+    planted = REPO_ROOT / "client" / "css" / "themes" / "matrix" / DEBRIS
+    planted.write_text("export const marker = 1;\nimport.meta.url;\n")
+    try:
+        done = _run()
+    finally:
+        planted.unlink(missing_ok=True)
+
+    assert done.returncode == 0, (
+        "valid ES module source was reported as a syntax error, which is "
+        "exactly the false-fail the module goal exists to prevent. "
+        "stdout: %s stderr: %s" % (done.stdout[-800:], done.stderr[-800:])
+    )
+    assert DEBRIS not in done.stderr, (
+        "the planted ES module was named as broken: %s" % done.stderr[-800:]
     )
 
 
