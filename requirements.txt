@@ -36,8 +36,10 @@ structlog==23.2.0
 # HTTP Client (for health checks)
 httpx==0.25.2
 
-# Cloudflare API
-cloudflare>=2.11.0,<3.0
+# Stale. Nothing in this codebase imports yaml; measured 2026-08-26 by
+# scanning src, tests, scripts, packaging and verify for an `import yaml`.
+# It was pulled in as a cloudflare 2.x dependency and is left declared
+# only so its removal is its own change with its own measurement.
 pyyaml>=6.0
 
 # Testing

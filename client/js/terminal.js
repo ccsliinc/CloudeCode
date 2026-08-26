@@ -2191,24 +2191,30 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *     exited. The server teardown below is identical either way:
      *     which one it is, is a statement about the session's state, not
      *     about a different operation.
+     *   options (object) - `{ confirmedBy }`, naming the call site that
+     *     already confirmed; suppresses the dialog. See App.logout().
      * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
-    async destroySession(action = null) {
+    async destroySession(action = null, { confirmedBy = null } = {}) {
         const name = this._currentTmuxName() || (this._currentSession && this._currentSession.id) || 'this session';
         // Same confirm copy as every other close control in the app -
         // client/js/session-row-actions.js owns the wording so the
         // sidebar row, the launcher row, and this path cannot describe
         // the same operation three different ways.
-        if (!window.SessionRowActions) {
-            // Load-order bug. Refuse rather than destroy a session with no
-            // confirmation, or invent a second confirmation path.
-            console.error('Terminal: SessionRowActions missing, refusing to destroy');
-            return;
-        }
-        const confirmed = await window.SessionRowActions.confirm(
-            action || window.SessionRowActions.ACTION_CLOSE, name);
-        if (!confirmed) {
-            return;
+        // `confirmedBy` names where consent was already taken; anything
+        // that cannot name a consent site gets the dialog.
+        if (!confirmedBy) {
+            if (!window.SessionRowActions) {
+                // Load-order bug. Refuse rather than destroy a session with no
+                // confirmation, or invent a second confirmation path.
+                console.error('Terminal: SessionRowActions missing, refusing to destroy');
+                return;
+            }
+            const confirmed = await window.SessionRowActions.confirm(
+                action || window.SessionRowActions.ACTION_CLOSE, name);
+            if (!confirmed) {
+                return;
+            }
         }
 
         try {

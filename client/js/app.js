@@ -1101,10 +1101,17 @@ class AppController {
         );
 
         if (confirmed) {
-            // Destroy active session if exists
+            // Destroy active session if exists.
+            //
+            // `confirmedBy` is passed because the dialog above already
+            // told the user "any active session will be destroyed" and
+            // they said yes. Without it, destroySession() raises its own
+            // confirm and the user is asked a second, differently worded
+            // question about the destruction they just authorised.
             if (window.TerminalController.sessionActive) {
                 try {
-                    await window.TerminalController.destroySession();
+                    await window.TerminalController.destroySession(
+                        null, { confirmedBy: 'App.logout' });
                 } catch (error) {
                     console.error('App: Error destroying session during logout:', error);
                 }
