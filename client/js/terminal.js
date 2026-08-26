@@ -2191,24 +2191,40 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *     exited. The server teardown below is identical either way:
      *     which one it is, is a statement about the session's state, not
      *     about a different operation.
+     *   options (object) - `{ confirmedBy }`. `confirmedBy` is a short
+     *     string naming the call site that ALREADY put a confirmation in
+     *     front of the user for this same destruction, and it suppresses
+     *     the dialog below. Only App.logout() passes it: its own dialog
+     *     says "any active session will be destroyed", so the user has
+     *     answered this exact question one line earlier. Every other
+     *     caller omits it and gets the dialog. Measured before this
+     *     existed: one logout raised two sequential dialogs.
      * Output: Promise<void>. No-op if the user cancels the confirm modal.
      */
-    async destroySession(action = null) {
+    async destroySession(action = null, { confirmedBy = null } = {}) {
         const name = this._currentTmuxName() || (this._currentSession && this._currentSession.id) || 'this session';
         // Same confirm copy as every other close control in the app -
         // client/js/session-row-actions.js owns the wording so the
         // sidebar row, the launcher row, and this path cannot describe
         // the same operation three different ways.
-        if (!window.SessionRowActions) {
-            // Load-order bug. Refuse rather than destroy a session with no
-            // confirmation, or invent a second confirmation path.
-            console.error('Terminal: SessionRowActions missing, refusing to destroy');
-            return;
-        }
-        const confirmed = await window.SessionRowActions.confirm(
-            action || window.SessionRowActions.ACTION_CLOSE, name);
-        if (!confirmed) {
-            return;
+        //
+        // `confirmedBy` is NOT a way to skip the safety check. It is a
+        // caller stating WHERE the user's consent was already taken, for
+        // the one case where asking again would ask a second question
+        // about a decision the user has just made. Anything that cannot
+        // name its consent site gets the dialog.
+        if (!confirmedBy) {
+            if (!window.SessionRowActions) {
+                // Load-order bug. Refuse rather than destroy a session with no
+                // confirmation, or invent a second confirmation path.
+                console.error('Terminal: SessionRowActions missing, refusing to destroy');
+                return;
+            }
+            const confirmed = await window.SessionRowActions.confirm(
+                action || window.SessionRowActions.ACTION_CLOSE, name);
+            if (!confirmed) {
+                return;
+            }
         }
 
         try {
