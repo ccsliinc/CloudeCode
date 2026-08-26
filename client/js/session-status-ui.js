@@ -56,6 +56,15 @@ console.log('[SessionStatusUI Module] Loading...');
         working: 'working - agent active',
         finished_unread: 'finished - unread',
         idle: 'idle - waiting at the shell',
+        // feat/ended-sessions-visibility. NOT a synonym for `dead`, and
+        // the difference is the whole reason it earns a key: `dead` is a
+        // tmux session that still EXISTS holding an exited process, so it
+        // can be attached to and cleared up. `stopped` is the word
+        // sessions.lifecycle already uses for a tmux instance that is
+        // GONE - there is nothing to attach to and nothing to kill, only
+        // a stored record. Reusing `dead` for it would have told the user
+        // to go clear up a pane that does not exist.
+        stopped: 'ended - the session is no longer running',
         unknown: 'status unknown',
         // Back-compat: a stale cached response (pre feat/hook-driven-status
         // server, or a browser tab that hasn't reloaded yet) may still send
@@ -78,6 +87,7 @@ console.log('[SessionStatusUI Module] Loading...');
         working: 'working',
         finished_unread: 'finished-unread',
         idle: 'idle',
+        stopped: 'stopped',
         unknown: 'unknown',
         running: 'working',
     };

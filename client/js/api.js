@@ -1060,11 +1060,44 @@ class API {
      *   number|null, project_attribution: string}>>} - see
      *   ``SessionRecord`` (src/models.py). Newest first, archived rows
      *   included - the caller filters by ``tmux_name`` match against the
-     *   live session list, so an archived/stopped row simply matches
-     *   nothing running and is inert.
+     *   live session list. A STOPPED row is NOT inert to that caller any
+     *   more - the home-screen tree renders it as an ENDED row, which is
+     *   the whole point of feat/ended-sessions-visibility. A DELETED row
+     *   (``archived_at`` set) still is: the caller drops it.
      */
     async listSessionRecords() {
         return await this.call('/sessions/records');
+    }
+
+    /**
+     * Sessions: DELETE one stored session from every listing, keeping the
+     * record.
+     *
+     * A SOFT delete. The server stamps ``sessions.archived_at`` and does
+     * nothing else - the row survives, because session history and
+     * transcripts are built on it.
+     *
+     * THIS IS NOT ``destroySession`` / ``destroyExternalSession``. Those
+     * stop a running process, and the first of them also removes the
+     * session's ``.cloude_uploads`` bucket, which is real user content.
+     * This one touches no process and no file. Do not wire a "delete"
+     * control to whichever of the three is nearest.
+     *
+     * Keyed on ``session_uuid``, never the tmux name: tmux reuses names,
+     * so two rows can differ only by creation epoch.
+     *
+     * @param {string} sessionUuid - the stored row's ``session_uuid``.
+     * @returns {Promise<{success: boolean, message: string}>} - ``message``
+     *   distinguishes a delete that happened from one that had already
+     *   happened. Rejects with status 404 when no row carries that uuid
+     *   (nothing was deleted, and the caller must not say otherwise) and
+     *   503 when the datastore could not be reached.
+     */
+    async deleteSessionRecord(sessionUuid) {
+        return await this.call(
+            `/sessions/records/${encodeURIComponent(sessionUuid)}`,
+            { method: 'DELETE' }
+        );
     }
 
     /**

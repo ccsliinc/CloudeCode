@@ -385,6 +385,30 @@ body.session-sidebar-pinned .session-sidebar-panel {
     background: var(--color-fg-faint);
 }
 
+.status-dot--stopped {
+    /* ENDED - the tmux instance is gone and only the stored record is
+     * left. FILLED, because this is a MEASURED answer, not a
+     * could-not-measure: the hollow ring below is reserved for that and
+     * overloading it would collapse the two the way idle/unknown were
+     * once collapsed.
+     *
+     * WHY OPACITY AND NOT A COLOUR. `idle` is already the lowest-weight
+     * filled dot in the set, and the nearest tokens to it
+     * (--color-fg-faint / --color-fg-subtle) are the SAME value under
+     * the `claude` theme - that identical-token trap is exactly what
+     * made idle and unknown pixel-identical before. Opacity is a
+     * property no theme redefines, so the difference from `idle` holds
+     * in every palette including the ones that flatten the greys, and it
+     * is measurable with getComputedStyle rather than by eye.
+     *
+     * The dot is NOT the primary signal. The row also carries the word
+     * ENDED and offers restart/delete instead of attach - see
+     * launchpad.js _renderTreeSessionRowHtml. Colour alone never carries
+     * meaning here. */
+    background: var(--color-fg-faint);
+    opacity: 0.55;
+}
+
 .status-dot--unknown {
     /* THE ONLY HOLLOW DOT, and the shape is the whole point.
      *
