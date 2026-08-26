@@ -408,6 +408,31 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 
 ## Upgrading and rolling back
 
+### Let Claude do it
+
+Everyone running this is already running Claude Code, so the upgrade is
+something you can hand to the agent. In a Claude Code session opened on this
+checkout:
+
+```
+/upgrade
+```
+
+or just tell it: "upgrade CloudeCode and confirm the data migrated." The
+command ships in this repo at `.claude/commands/upgrade.md` and follows
+[docs/upgrade-with-claude.md](docs/upgrade-with-claude.md), which is written
+for an agent: take a baseline first, upgrade, then verify the database against
+that baseline and report the measurements rather than the word "success".
+
+The two scripts that make it verifiable are `scripts/upgrade-baseline.sh`
+(snapshot version, schema version and per-table row counts before you start,
+read-only) and `scripts/upgrade-verify.sh` (compare afterwards). Each check
+reports one of three outcomes and the exit code says which: 0 all passed,
+1 something failed, 2 something could not be evaluated. **2 is deliberately
+not 0** - "I could not look" is not "nothing is wrong."
+
+You can still do all of it by hand. The rest of this section is that.
+
 Two scripts, `scripts/upgrade.sh` and `scripts/rollback.sh`, move a Path B (from-source) install between release tags. This section is in the root README rather than a separate `docs/` file because upgrading is something you do to the same checkout Install/Configuration/Security already describe, and every fact those scripts depend on (`.env`, `config.json`, `CLOUDE_STATE_DIR`, `config_version`, port 8000) is defined a few sections up. Splitting it out would mean either duplicating that context or forcing you to jump between two files mid-upgrade.
 
 **This covers Path B only.** The packaged `.app` has no in-place upgrader (see Honest limits) - a new version means downloading a new DMG and dragging it over the old one in `/Applications`. What these scripts DO share with the packaged app is everything under the hood: the same version resolver (`src/core/version.py`), the same config migration (`src/core/config_migration.py`), and the same release-tag self-check the app itself runs in the background and reports at `GET /api/v1/version` (TOTP-gated; the home bottom bar's version chip and the server-status panel both read it). If that self-check reports `update_available`, it names the tag and prints the exact command to run.

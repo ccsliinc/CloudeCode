@@ -122,3 +122,17 @@ scripts/verify/.theme-effect-shots/
 
 # Screenshots from scripts/verify/measure-terminal-opacity.py
 scripts/verify/.terminal-opacity-shots/
+.upgrade-baselines/
+
+# Upgrade artifacts. Never pruned automatically; prune by hand.
+.upgrade-backups/
+
+# SHIP the project's slash commands. The user's GLOBAL gitignore carries a
+# blanket `.claude/` rule, which would silently keep .claude/commands out of
+# the repository and make /upgrade unavailable to every other user - the
+# exact opposite of the point. A repo .gitignore outranks the global one, so
+# un-ignore the directory, re-ignore its local-only contents, then allow
+# commands/ back in.
+!.claude/
+.claude/*
+!.claude/commands/

@@ -142,6 +142,15 @@ repeated bug in the project. Check the level before you debug the endpoint.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
 
+## Upgrading an install
+
+`docs/upgrade-with-claude.md` is the runbook, and `/upgrade`
+(`.claude/commands/upgrade.md`) is the entry point. The one rule that matters:
+take `./scripts/upgrade-baseline.sh` BEFORE touching anything, because you
+cannot verify a migration without a record of what the data was, and that is
+the step everyone skips. `./scripts/upgrade-verify.sh` exits 2 when a check
+could not be evaluated; 2 is not 0.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,
