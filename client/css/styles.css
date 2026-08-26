@@ -4448,6 +4448,71 @@ body.home-header-active {
     margin-top: 4px;
 }
 
+/* ---- ENDED session rows (feat/ended-sessions-visibility) -----------
+ * Shown on the home tree and, via .ended-session-delete, on RECENT.
+ *
+ * WHY THIS IS NOT JUST A DIMMED LIVE ROW. A dead row that looks like a
+ * live one is worse than a hidden one, because the user clicks it and
+ * tries to attach to a tmux session that does not exist. So the row
+ * loses the clickable affordance entirely - `cursor: default`, no hover
+ * fill - and gains two controls that CAN act on a record with no
+ * process behind it. The word ENDED and the stopped status dot carry
+ * the state; the reduced fill only reinforces it, and is never the
+ * only signal, because a fill is invisible to anyone who cannot see
+ * the difference between two near-identical greys.
+ */
+.project-session-row--ended {
+    cursor: default;
+    background-image: none;
+    border: 1px dashed var(--color-border-subtle, var(--color-border));
+}
+
+.project-session-row--ended:hover {
+    /* Explicitly cancels the base row's hover fill. Without this the row
+     * would light up under the cursor exactly like an attachable one and
+     * re-teach the click it must not invite. */
+    background-image: none;
+}
+
+.project-session-row--ended .project-session-row__name {
+    /* Legible, deliberately not faded to the point of being hard to
+     * read: this row still names real work the user did. */
+    opacity: 0.8;
+}
+
+.badge-ended {
+    background: var(--color-badge-ended-bg, transparent);
+    color: var(--color-fg-faint);
+    border: 1px solid var(--color-border);
+}
+
+/* Same shape as .recent-session-restart so the two controls read as one
+ * family wherever they appear together, in a muted colour because
+ * deleting a row from a list is not the primary action on it. */
+.ended-session-delete,
+.ended-session-restart {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm, 6px);
+    background: transparent;
+    cursor: pointer;
+}
+
+.ended-session-restart {
+    border: 1px solid var(--color-badge-tmux-fg);
+    color: var(--color-badge-tmux-fg);
+}
+
+.ended-session-delete {
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-faint);
+}
+
+.ended-session-restart:hover,
+.ended-session-delete:hover {
+    background: var(--color-accent-bg-mid, rgba(215, 119, 87, 0.14));
+}
+
 .project-session-row--attention {
     cursor: default;
     /* Stays deliberately unfilled: NEEDS ATTENTION is an outlined,

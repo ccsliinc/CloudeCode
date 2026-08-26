@@ -59,9 +59,15 @@
          theme CSS custom properties (--color-accent, etc.) are available
          as fallbacks for the per-toast accent border. -->
     <link rel="stylesheet" href="/static/css/toast.css" />
-    <!-- Session sidebar + status lights. Loaded after styles.css for the
-         same token-availability reason as toast.css. -->
+    <!-- Session sidebar. Loaded after styles.css for the same
+         token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <!-- The status dot, in its own file because it is SHARED by three
+         surfaces - the sidebar, the launchpad's running-sessions list
+         and the home project tree - so a file named for one of them was
+         never its home. Its vocabulary is defined in
+         client/js/session-status-ui.js. -->
+    <link rel="stylesheet" href="/static/css/status-dot.css" />
     <!-- Row density, the per-row reorder/pin controls, and the two
          three-outcome blocks the list can render instead of rows. Its own
          file so session-sidebar.css stays under the 500-line convention;

@@ -69,6 +69,14 @@ class Launchpad {
         // no project" - see _buildProjectSessionGroups().
         this.sessionAttributionListingOk = true;
         this.sessionAttributionListingDetail = null;
+        // feat/ended-sessions-visibility - the SAME GET /sessions/records
+        // payload `sessionAttribution` is keyed from, kept as a flat list
+        // because the tree needs the rows whose tmux session is GONE, and
+        // those are exactly the ones no live probe can name. Empty until
+        // the fetch answers; a FAILED fetch leaves it empty AND drops
+        // `sessionAttributionListingOk`, so "we could not read the table"
+        // never renders as "you have no ended sessions".
+        this.sessionRecords = [];
         // In-memory only (not persisted across reload, unlike the
         // section-level collapse state in localStorage below) - per-
         // project expand/collapse state for the tree's child-session
@@ -920,6 +928,7 @@ class Launchpad {
             const rows = await window.API.listSessionRecords();
             if (!Array.isArray(rows)) {
                 this.sessionAttribution = new Map();
+                this.sessionRecords = [];
                 this.sessionAttributionListingOk = false;
                 this.sessionAttributionListingDetail =
                     'the server did not return a session record array';
@@ -932,11 +941,13 @@ class Launchpad {
                 }
             }
             this.sessionAttribution = map;
+            this.sessionRecords = rows;
             this.sessionAttributionListingOk = true;
             this.sessionAttributionListingDetail = null;
         } catch (error) {
             console.warn('Launchpad: failed to load session attribution:', error);
             this.sessionAttribution = new Map();
+            this.sessionRecords = [];
             this.sessionAttributionListingOk = false;
             this.sessionAttributionListingDetail =
                 (error && error.message) || 'the server could not be reached';
@@ -1274,12 +1285,28 @@ class Launchpad {
         const restartBtn = canRestart
             ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
             : '';
-        const lifecycleLabel = canRestart ? 'stopped' : this._escapeHtml(lifecycle);
+        const lifecycleLabel = canRestart ? 'ENDED' : this._escapeHtml(lifecycle);
+        // THE SAME ENDED SIGNAL THE TREE USES, not a second vocabulary.
+        // This row already said "stopped" in words; the shared dot is
+        // added so a session looks the same whichever surface drew it,
+        // which is the whole complaint this change answers. The dot is
+        // only shown for a row we can actually call ended - a lifecycle
+        // we could not evaluate keeps its own word and gets no dot
+        // asserting a state nobody measured.
+        const statusDot = (canRestart && window.SessionStatusUI)
+            ? window.SessionStatusUI.dotHtml('stopped')
+            : '';
+        // Delete is offered on EVERY row here, including one whose
+        // lifecycle is unknown: hiding a row from your own list is safe
+        // whatever state it is in, unlike restart, which is gated above.
+        const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>`;
         return `
                 <div class="recent-session-row" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}">
+                  ${statusDot}
                   <span class="recent-session-name">${displayName}</span>
                   <span class="recent-session-lifecycle">${lifecycleLabel}</span>
                   ${restartBtn}
+                  ${deleteBtn}
                 </div>
             `;
     }
@@ -1348,6 +1375,11 @@ class Launchpad {
         if (!container || container.dataset.recentClickBound === '1') return;
         container.dataset.recentClickBound = '1';
         container.addEventListener('click', (ev) => {
+            const del = ev.target.closest && ev.target.closest('.ended-session-delete');
+            if (del) {
+                this._deleteSessionRecord(del.getAttribute('data-uuid'));
+                return;
+            }
             const btn = ev.target.closest && ev.target.closest('.recent-session-restart');
             if (!btn) return;
             this._restartRecentSession(
@@ -1355,6 +1387,53 @@ class Launchpad {
                 btn.getAttribute('data-agent-type')
             );
         });
+    }
+
+    /**
+     * DELETE one stored session from every listing. Keep the record.
+     *
+     * Description: the ONE handler behind every delete control on this
+     *   screen - RECENT rows and ended tree rows both route here, so the
+     *   two cannot drift into meaning different things, which is the
+     *   class of bug this whole change is repairing.
+     *
+     *   IT DOES NOT KILL ANYTHING. The X/close control on a RUNNING row
+     *   is a different verb: it stops the process and removes the
+     *   session's uploads bucket from the project folder. This only
+     *   stamps ``archived_at`` server-side. There is deliberately no
+     *   confirm dialog: nothing is destroyed, the row is retained, and
+     *   the app has a standing rule that confirm copy must name real
+     *   consequences - a dialog warning about nothing teaches people to
+     *   click through the ones that matter.
+     *
+     *   REFRESHES BOTH SURFACES, not just the one clicked. Deleting from
+     *   RECENT while the tree still showed the row would recreate the
+     *   exact contradiction this change removes.
+     * Inputs: sessionUuid (string) - the stored row's ``session_uuid``.
+     * Output: Promise<void>.
+     * Example: await lp._deleteSessionRecord('a1b2-c3');
+     */
+    async _deleteSessionRecord(sessionUuid) {
+        if (!sessionUuid) {
+            // No id means we do not know WHICH row was asked for, and a
+            // delete aimed at nothing must say so rather than quietly
+            // doing nothing and looking like it worked.
+            this.showError('cannot delete: this row carries no session id');
+            return;
+        }
+        try {
+            await window.API.deleteSessionRecord(sessionUuid);
+        } catch (error) {
+            console.error('Launchpad: delete of session record failed:', error);
+            this.showError(
+                'failed to delete session: '
+                + ((error && error.message) || 'the server could not be reached')
+            );
+            return;
+        }
+        await this.loadSessionAttribution();
+        await this.loadRecentSessions();
+        this.renderProjectList();
     }
 
     /**
@@ -2699,6 +2778,15 @@ class Launchpad {
                 });
                 continue;
             }
+            // DELETED WINS OVER LIVE. Deleting is a decision about the
+            // user's list, not about the process, so a row he deleted
+            // stays off the tree even if its tmux session is somehow
+            // still up. Without this the rule would silently read
+            // "deleted, unless it happens to still be running", which is
+            // the kind of exception nobody can predict from the button's
+            // label. The session keeps running and is still reachable
+            // from the live sidebar; only this listing forgets it.
+            if (rec.archived_at) continue;
             const attribution = rec.project_attribution;
             if (attribution === 'unknown') {
                 needsAttention.push({
@@ -2721,7 +2809,102 @@ class Launchpad {
                 });
             }
         }
+        // ENDED SESSIONS, APPENDED AFTER THE LIVE PASS. This loop is the
+        // whole fix for "recent shows two, the tree shows one": the loop
+        // above can only ever describe what the LIVE tmux probe named, so
+        // a session whose instance is gone was invisible to the tree by
+        // construction - not filtered out, unable to appear at all.
+        //
+        // APPENDED, NOT MERGED IN, and the order is the point: a dead row
+        // sitting above the session he is actually working in is
+        // technically correct and practically wrong. Live first, ended
+        // underneath, in every group.
+        for (const s of this._endedSessionsForTree()) {
+            if (s.project_attribution === 'unknown') {
+                needsAttention.push({
+                    session: s,
+                    reason: 'ended; working directory could not be read',
+                });
+            } else if (s.project_attribution === 'none') {
+                noProject.push(s);
+            } else if (s.project_id !== null && s.project_id !== undefined) {
+                const list = byProjectId.get(s.project_id) || [];
+                list.push(s);
+                byProjectId.set(s.project_id, list);
+            } else {
+                needsAttention.push({
+                    session: s,
+                    reason: 'ended; project attribution missing an id',
+                });
+            }
+        }
         return { byProjectId, noProject, needsAttention };
+    }
+
+    /**
+     * The stored sessions that ENDED, shaped like running-session rows.
+     *
+     * Description: reads ``this.sessionRecords`` (GET /sessions/records)
+     *   and returns the rows the tree must show but no live probe can
+     *   name. Three filters, each load-bearing:
+     *
+     *     archived_at        DELETED. The user pressed delete; it is off
+     *                        his screens. This is the ONE thing that
+     *                        hides a row, and it hides it whatever its
+     *                        lifecycle - including a row that is somehow
+     *                        still running, or "delete" would quietly
+     *                        mean "delete unless it is busy".
+     *     lifecycle          only 'stopped' / 'dead' are ENDED. A
+     *                        'running' row is the live probe's business
+     *                        and is already in the list above; an
+     *                        'unknown' row is a CANNOT DETERMINE and is
+     *                        NOT quietly promoted to ended here - the
+     *                        live pass already routes it to NEEDS
+     *                        ATTENTION, which is where an unevaluable
+     *                        row belongs.
+     *     live name          a name the probe DID list is a live session,
+     *                        so the stored row is merely stale. The live
+     *                        answer wins; never render both.
+     *
+     *   THE THREE-OUTCOME GATE. When ``sessionAttributionListingOk`` is
+     *   false the records fetch did not answer, so this returns NOTHING.
+     *   Inventing ended rows out of a failed read would be the exact
+     *   false green this screen keeps removing - and the live pass
+     *   already routes every row to NEEDS ATTENTION in that case, which
+     *   is the honest report.
+     * Inputs: none (reads ``this.sessionRecords``, ``this.runningSessions``
+     *   and the listing latch).
+     * Output: object[] - rows shaped like ``this.runningSessions`` entries
+     *   plus ``ended: true``, ``session_uuid`` and the record's project
+     *   attribution. Empty when the fetch did not answer.
+     * Example: lp._endedSessionsForTree()  // [{name:'cloude_a', ended:true, ...}]
+     */
+    _endedSessionsForTree() {
+        if (!this.sessionAttributionListingOk) return [];
+        const liveNames = new Set((this.runningSessions || []).map(s => s.name));
+        const out = [];
+        for (const rec of (this.sessionRecords || [])) {
+            if (!rec || rec.archived_at) continue;
+            if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
+            if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
+            out.push({
+                name: rec.tmux_name || '',
+                label: rec.title || null,
+                session_uuid: rec.session_uuid,
+                ended: true,
+                status: 'stopped',
+                is_active: false,
+                created_by_cloude: !!rec.owned,
+                created_at_epoch: rec.tmux_created_epoch || 0,
+                working_dir: rec.working_dir || '',
+                agent_type: rec.agent_type || '',
+                agent_family: rec.agent_family || null,
+                agent_family_source: rec.agent_family_source || null,
+                project_id: rec.project_id,
+                project_attribution: rec.project_attribution,
+            });
+        }
+        return out;
     }
 
     /**
@@ -2741,6 +2924,7 @@ class Launchpad {
      * Output: string - HTML for one ``.project-session-row``.
      */
     _renderTreeSessionRowHtml(s) {
+        if (s.ended) return this._renderEndedTreeSessionRowHtml(s);
         const owned = !!s.created_by_cloude;
         const displayName = this._sessionDisplayLabel(s);
         const escapedName = this._escapeHtml(s.name);
@@ -2754,6 +2938,53 @@ class Launchpad {
                   <span class="project-session-row__name">${escapedDisplay}</span>
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                   ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
+                </div>
+            `;
+    }
+
+    /**
+     * Build one ENDED child row for the project tree.
+     *
+     * Description: the same shape as a live row so the tree does not
+     *   visually fragment, differing in exactly the ways a human must be
+     *   able to see WITHOUT hovering anything:
+     *
+     *     - the word ENDED, as text. Colour alone never carries meaning
+     *       here, and a dot is a 9px hint at best.
+     *     - the `stopped` status dot from the shared vocabulary, not a
+     *       second signal invented for this surface.
+     *     - NO `role="button"` and NO `tabindex`. This is the important
+     *       one. A dead row that looks identical to a live one is worse
+     *       than a hidden one, because he would click it and try to
+     *       attach to a tmux session that does not exist.
+     *     - restart and delete instead, which are the only two things
+     *       that CAN be done to a record with no process behind it.
+     *       Restart is the same action RECENT already offers: a NEW
+     *       session in the same working directory, never a resurrection.
+     *
+     *   `data-uuid` carries ``session_uuid`` because delete is keyed on
+     *   it, never on the tmux name - tmux reuses names, and two rows can
+     *   differ only by creation epoch.
+     * Inputs: s (object) - one row from ``_endedSessionsForTree``.
+     * Output: string - HTML for one ``.project-session-row--ended``.
+     */
+    _renderEndedTreeSessionRowHtml(s) {
+        const owned = !!s.created_by_cloude;
+        const escapedName = this._escapeHtml(s.name);
+        const escapedDisplay = this._escapeHtml(this._sessionDisplayLabel(s));
+        const uuid = this._escapeHtml(s.session_uuid || '');
+        const statusDot = window.SessionStatusUI
+            ? window.SessionStatusUI.dotHtml('stopped')
+            : '';
+        return `
+                <div class="project-session-row project-session-row--ended" data-name="${escapedName}" data-ended="1" data-lifecycle="stopped" data-uuid="${uuid}">
+                  ${statusDot}
+                  <span class="project-session-row__name">${escapedDisplay}</span>
+                  <span class="badge badge-ended">ENDED</span>
+                  <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
+                  ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
+                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
+                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>
                 </div>
             `;
     }
@@ -2912,6 +3143,26 @@ class Launchpad {
             const row = e.target.closest('.project-session-row');
             if (!row || row.classList.contains('project-session-row--attention')) return;
             e.stopPropagation();
+            // AN ENDED ROW MUST NOT REACH THE ATTACH PATH. Dropping
+            // role="button" off the markup stops it LOOKING clickable,
+            // but this listener is delegated on the container and matches
+            // the row class, not the role - so without this guard the
+            // whole row would still attach on click and fail against a
+            // tmux session that no longer exists. Its two real actions
+            // are handled below and return before this point.
+            if (row.dataset.ended === '1') {
+                const restart = e.target.closest('.ended-session-restart');
+                if (restart) {
+                    await this._restartRecentSession(
+                        restart.getAttribute('data-working-dir'),
+                        restart.getAttribute('data-agent-type')
+                    );
+                    return;
+                }
+                const del = e.target.closest('.ended-session-delete');
+                if (del) await this._deleteSessionRecord(del.getAttribute('data-uuid'));
+                return;
+            }
             const name = row.dataset.name;
             const isActive = row.dataset.active === '1';
             if (isActive) {

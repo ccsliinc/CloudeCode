@@ -2391,6 +2391,81 @@ async def list_session_records(request: Request):
     return [_session_record_payload(row) for row in rows]
 
 
+@router.delete(
+    "/sessions/records/{session_uuid}",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def delete_session_record(request: Request, session_uuid: str):
+    """DELETE one stored session from every listing. KEEP the row.
+
+    Description: a SOFT delete - it stamps ``sessions.archived_at`` and
+      nothing else. The row is retained deliberately, because session
+      history and transcripts are built on it; "delete" here means "take
+      it off my screen", never "remove it from the database".
+
+      THIS IS NOT THE KILL PATH AND THE TWO MUST NOT BE CONFLATED.
+      ``DELETE /sessions`` (and ``DELETE /sessions/external/{name}``)
+      stop a running process, and the first of them also rmtrees the
+      session's ``.cloude_uploads`` bucket - real user content. This
+      route does none of that. Deleting a row for a session that is
+      still running is allowed and merely unlists it; the lifecycle
+      reconciler keeps updating it underneath, unseen.
+
+      ADDRESSED BY ``session_uuid``, NOT BY TMUX NAME, because tmux
+      reuses names and two rows can differ only by creation epoch. See
+      ``session_store.archive_session``.
+    Inputs: request (Request) - unused beyond auth. session_uuid (str,
+      path) - the row to delete.
+    Output: SuccessResponse - ``message`` says whether this call
+      performed the delete or found it already deleted. Those are
+      different facts and the route reports which one happened rather
+      than flattening both into "ok".
+    Raises: HTTPException 404 - no row carries that uuid, so nothing was
+      deleted. HTTPException 503 - the datastore is absent or unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="no datastore: sessions cannot be deleted on this install",
+        )
+
+    def _write() -> bool:
+        """Open, archive and close on ONE pooled thread.
+
+        Inputs: none (closes over db_path and session_uuid).
+        Output: bool - True when this call performed the delete.
+        Raises: session_store.SessionNotFoundError, DatastoreUnreadableError.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.archive_session(conn, session_uuid)
+
+    try:
+        performed = await run_in_threadpool(_write)
+    except session_store.SessionNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"no session record {session_uuid}"
+        )
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return SuccessResponse(
+        message=(
+            "Session deleted from your lists (the record is kept)"
+            if performed
+            else "Session was already deleted"
+        )
+    )
+
+
 @router.get(
     "/sessions/recent",
     response_model=RecentSessionsResponse,

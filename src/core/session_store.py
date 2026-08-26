@@ -127,6 +127,17 @@ logger = structlog.get_logger()
 
 SESSIONS_TABLE = "sessions"
 
+
+class SessionNotFoundError(LookupError):
+    """No sessions row carries the requested ``session_uuid``.
+
+    Description: its own type so a caller can tell "there was nothing to
+      delete" apart from "the delete ran". A soft delete that matched
+      nothing and returned success would be the same false green this
+      module keeps removing - the caller has no way to know whether the
+      row is hidden or whether the id was wrong.
+    """
+
 def sessions_table_ready(conn: sqlite3.Connection) -> bool:
     """Report whether this database has reached schema v2.
 
@@ -276,6 +287,114 @@ def list_sessions(
     return [dict(row) for row in conn.execute(query, values).fetchall()]
 
 
+def listable_sessions(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Every stored session a USER-FACING LISTING may show, newest first.
+
+    Description: THE ONE SPELLING of "what belongs on a screen", so two
+      surfaces cannot answer it differently - which is exactly the bug
+      this exists to close. RECENT showed a session the home-screen
+      project tree did not, because each carried its own hand-written
+      idea of what to include, and the app read as contradicting itself.
+
+      The rule has two halves and they are NOT the same idea:
+
+        ENDED (``lifecycle='stopped'``) IS INCLUDED. A session whose
+        tmux instance is gone still has a name, a project, a working
+        directory and a history the user put there. Hiding it is how he
+        loses track of work he did.
+
+        DELETED (``archived_at IS NOT NULL``) IS EXCLUDED. That column
+        is the user saying "take this off my screen", and it is the only
+        thing in this schema that means that.
+
+      ``lifecycle='unknown'`` is deliberately still returned. It is a
+      CANNOT DETERMINE, not an absence, and the caller routes it into
+      NEEDS ATTENTION rather than dropping it - suppressing it here
+      would turn "we could not evaluate this" into "there is nothing
+      here", which is the collapse this project keeps removing.
+
+      Lineage rows stay out, inherited from :func:`list_sessions`'s
+      default: a lineage row describes a past CONVERSATION inside a tmux
+      session, not a session of its own.
+    Inputs: conn (sqlite3.Connection).
+    Output: list[dict] - empty on a pre-v2 database. That emptiness is an
+      absence of a TABLE, not an answer about sessions; callers that need
+      to tell those apart ask GET /sessions/import-status.
+    Example: listable_sessions(conn)  # [{'session_uuid': 'u1', ...}]
+    """
+    return list_sessions(conn, include_archived=False)
+
+
+def archive_session(
+    conn: sqlite3.Connection,
+    session_uuid: str,
+    *,
+    now: Optional[str] = None,
+) -> bool:
+    """DELETE one session from the user's screens. Keep the row.
+
+    Description: THE ONLY WRITER OF ``archived_at``, and the first thing
+      in this codebase that writes it at all - the column has existed and
+      been read since v2 with nothing ever setting it.
+
+      IT IS A SOFT DELETE AND THAT IS THE WHOLE DESIGN, not a shortcut.
+      The row is retained because a deleted session's record is what
+      session history and transcripts are built on; "delete" here means
+      "take it off my screen", never "remove it from the database".
+      Nothing in ``src/`` issues ``DELETE FROM sessions`` and this does
+      not change that.
+
+      WHAT IT DOES NOT DO. It kills no process, touches no file, and
+      removes no uploads bucket. Those belong to the separate KILL path
+      (``DELETE /sessions`` -> ``SessionManager.destroy_session``), which
+      is a different verb with different consequences and its own
+      confirm copy. A user may delete a row for a session that is still
+      running; the row simply stops being listed, and the next probe
+      still reconciles its lifecycle underneath.
+
+      KEYED ON ``session_uuid``, NEVER ON ``tmux_name``. tmux reuses
+      names freely, so two rows can share a name and differ only by
+      creation epoch - a name-keyed delete would take a live session
+      down alongside the dead one the user actually pointed at.
+
+      IDEMPOTENT, AND THE FIRST STAMP WINS. The ``archived_at IS NULL``
+      guard means a second delete reports False rather than rewriting
+      when the user made the decision. False is "already deleted", which
+      is a different fact from the exception below.
+    Inputs: conn (sqlite3.Connection). session_uuid (str). now (str |
+      None) - ISO-8601 stamp; defaults to the current UTC time.
+    Output: bool - True when this call performed the delete, False when
+      the row was already deleted.
+    Raises: SessionNotFoundError - no row carries that uuid, so nothing
+      was deleted and the caller must not report success.
+    Example: archive_session(conn, 'a1b2')  # True
+    """
+    from src.core.trail_entry import utc_now
+
+    if not sessions_table_ready(conn):
+        raise SessionNotFoundError(session_uuid)
+    row = conn.execute(
+        "SELECT archived_at FROM sessions WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(session_uuid)
+    if row["archived_at"] is not None:
+        return False
+
+    stamp = now or utc_now()
+    conn.execute(
+        "UPDATE sessions SET archived_at = ?, updated_at = ? "
+        "WHERE session_uuid = ? AND archived_at IS NULL",
+        (stamp, stamp, session_uuid),
+    )
+    conn.commit()
+    logger.info(
+        "session_archived", session_uuid=session_uuid, archived_at=stamp
+    )
+    return True
+
+
 def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """Return the rows the home screen must surface as CANNOT DETERMINE.
 
@@ -299,10 +418,17 @@ def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     # process behind it, so there is nothing to act on and a permanent
     # entry here would be furniture. It inherits its parent's attribution,
     # so an unknown one is already surfaced by the parent's own row.
+    # DELETED ROWS ARE EXCLUDED, and this clause was missing. A row the
+    # user archived kept nagging here forever with no affordance that
+    # could ever clear it, which is furniture, not a monitor. The
+    # parenthesised OR above matters: the filter has to sit OUTSIDE it,
+    # or the project_attribution arm would keep the hole the lifecycle
+    # arm just lost. See listable_sessions() for the shared rule.
     rows = conn.execute(
         "SELECT * FROM sessions "
         "WHERE (lifecycle = ? OR project_attribution = ?) "
         "AND parent_session_id IS NULL "
+        "AND archived_at IS NULL "
         "ORDER BY id DESC",
         (SESSION_LIFECYCLE_UNKNOWN, SESSION_ATTRIBUTION_UNKNOWN),
     ).fetchall()
