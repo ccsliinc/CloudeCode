@@ -276,6 +276,44 @@ def list_sessions(
     return [dict(row) for row in conn.execute(query, values).fetchall()]
 
 
+def listable_sessions(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Every stored session a USER-FACING LISTING may show, newest first.
+
+    Description: THE ONE SPELLING of "what belongs on a screen", so two
+      surfaces cannot answer it differently - which is exactly the bug
+      this exists to close. RECENT showed a session the home-screen
+      project tree did not, because each carried its own hand-written
+      idea of what to include, and the app read as contradicting itself.
+
+      The rule has two halves and they are NOT the same idea:
+
+        ENDED (``lifecycle='stopped'``) IS INCLUDED. A session whose
+        tmux instance is gone still has a name, a project, a working
+        directory and a history the user put there. Hiding it is how he
+        loses track of work he did.
+
+        DELETED (``archived_at IS NOT NULL``) IS EXCLUDED. That column
+        is the user saying "take this off my screen", and it is the only
+        thing in this schema that means that.
+
+      ``lifecycle='unknown'`` is deliberately still returned. It is a
+      CANNOT DETERMINE, not an absence, and the caller routes it into
+      NEEDS ATTENTION rather than dropping it - suppressing it here
+      would turn "we could not evaluate this" into "there is nothing
+      here", which is the collapse this project keeps removing.
+
+      Lineage rows stay out, inherited from :func:`list_sessions`'s
+      default: a lineage row describes a past CONVERSATION inside a tmux
+      session, not a session of its own.
+    Inputs: conn (sqlite3.Connection).
+    Output: list[dict] - empty on a pre-v2 database. That emptiness is an
+      absence of a TABLE, not an answer about sessions; callers that need
+      to tell those apart ask GET /sessions/import-status.
+    Example: listable_sessions(conn)  # [{'session_uuid': 'u1', ...}]
+    """
+    return list_sessions(conn, include_archived=False)
+
+
 def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """Return the rows the home screen must surface as CANNOT DETERMINE.
 
@@ -299,10 +337,17 @@ def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     # process behind it, so there is nothing to act on and a permanent
     # entry here would be furniture. It inherits its parent's attribution,
     # so an unknown one is already surfaced by the parent's own row.
+    # DELETED ROWS ARE EXCLUDED, and this clause was missing. A row the
+    # user archived kept nagging here forever with no affordance that
+    # could ever clear it, which is furniture, not a monitor. The
+    # parenthesised OR above matters: the filter has to sit OUTSIDE it,
+    # or the project_attribution arm would keep the hole the lifecycle
+    # arm just lost. See listable_sessions() for the shared rule.
     rows = conn.execute(
         "SELECT * FROM sessions "
         "WHERE (lifecycle = ? OR project_attribution = ?) "
         "AND parent_session_id IS NULL "
+        "AND archived_at IS NULL "
         "ORDER BY id DESC",
         (SESSION_LIFECYCLE_UNKNOWN, SESSION_ATTRIBUTION_UNKNOWN),
     ).fetchall()
