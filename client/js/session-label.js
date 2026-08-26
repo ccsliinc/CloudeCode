@@ -180,6 +180,47 @@
     }
 
     /**
+     * What a rename editor should OPEN ON, read off the element that is
+     * rendering the name.
+     *
+     * Description: all three rename controls seed themselves from the
+     * RENDERED display value rather than re-deriving one. That is the
+     * whole point: a seed computed a second time can disagree with what
+     * the user is looking at, and when it did, a plain Enter overwrote a
+     * user's label with a handle-derived string. Reading the element
+     * means display and seed cannot disagree by construction - if a
+     * surface's display half ever regresses, its seed regresses with it
+     * and one test catches both.
+     *
+     * WHY `dataset.fullTitle` COMES FIRST. The in-page header
+     * (`#header-title-text`) is MIDDLE-ELIDED by
+     * client/js/header-title-fit.js: its `textContent` is a truncated
+     * string with an ellipsis in it, and the fitter keeps the full value
+     * in `dataset.fullTitle`, re-eliding from it on every resize. So on
+     * that one surface the element holds its display value in two
+     * places, and `textContent` is the WRONG one - seeding from it would
+     * put "client: acme...$rate" in the box and store that truncation
+     * over the real label on a plain Enter. That is the same silent data
+     * loss this rule exists to remove, so the rule has to know about it.
+     *
+     * An element that does not elide carries no `fullTitle` and falls
+     * through to its text, so this is one rule and not a special case.
+     * Inputs: el (Element|null) - the element rendering the name.
+     * Output: string - the seed, trimmed. Empty string when there is
+     *   nothing to seed from, which a caller must treat as "do not open
+     *   an editor" rather than as an empty starting value.
+     * Example: SessionLabel.seedFromElement(titleEl)  -> 'Media Compression'
+     */
+    function seedFromElement(el) {
+        if (!el) return '';
+        var full = el.dataset ? el.dataset.fullTitle : null;
+        var value = (typeof full === 'string' && full.length)
+            ? full
+            : (el.textContent || '');
+        return String(value).trim();
+    }
+
+    /**
      * The server's label rule, mirrored so an obviously bad label is
      * refused without a round trip. THE SERVER REMAINS AUTHORITATIVE -
      * this is an early out, never the decision.
@@ -229,6 +270,7 @@
         stripAppPrefix: stripAppPrefix,
         resolve: resolve,
         resolveToast: resolveToast,
+        seedFromElement: seedFromElement,
         validate: validate,
     };
 })();

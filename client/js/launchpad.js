@@ -1945,7 +1945,7 @@ class Launchpad {
         );
         input.spellcheck = false;
         input.autocomplete = 'off';
-        input.setAttribute('aria-label', 'New session name');
+        input.setAttribute('aria-label', 'New session label');
 
         const err = document.createElement('span');
         err.className = 'running-session-rename-error';

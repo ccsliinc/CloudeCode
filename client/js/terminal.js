@@ -1197,28 +1197,37 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
     /**
      * v0.7.1 - swap the in-session header title span for an inline input
-     * so the user can edit the session name. Triggered by the pencil
+     * so the user can edit the session's LABEL. Triggered by the pencil
      * button next to #header-title-text. Enter/blur saves; Esc cancels.
      *
-     * Idempotent: if a rename input is already showing, this is a no-op.
+     * THIS EDITS THE LABEL, NOT THE TMUX HANDLE. Seed and rule both come
+     * from client/js/session-label.js. Idempotent; opens nothing when
+     * there is no name to seed from.
      */
     _enterHeaderRename() {
         const titleEl = document.getElementById('header-title-text');
         if (!titleEl) return;
         if (titleEl.style.display === 'none') return; // already editing
-        const current = this._currentTmuxName();
-        if (!current) return;
+
+        // THE SEED IS WHAT THE HEADER IS SHOWING. This span is
+        // MIDDLE-ELIDED - see seedFromElement for why that matters.
+        const seed = (window.SessionLabel && window.SessionLabel.seedFromElement)
+            ? window.SessionLabel.seedFromElement(titleEl) : '';
+        if (!seed) return;
 
         // Build the input.
         const input = document.createElement('input');
         input.type = 'text';
         input.id = 'header-rename-input';
         input.className = 'header-rename-input';
-        input.value = current;
-        input.maxLength = 64;
+        input.value = seed;
+        // The LABEL's limit, from the module mirroring the server. A
+        // hardcoded 64 truncated silently: a maxlength reports nothing.
+        input.setAttribute('maxlength',
+            String((window.SessionLabel && window.SessionLabel.LABEL_MAX_CHARS) || 200));
         input.spellcheck = false;
         input.autocomplete = 'off';
-        input.setAttribute('aria-label', 'New session name');
+        input.setAttribute('aria-label', 'New session label');
 
         // Inline error label (hidden until needed). Sits below the input.
         const err = document.createElement('span');
@@ -1259,16 +1268,21 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         const save = async () => {
             if (settled) return;
             const raw = (input.value || '').trim();
-            // Empty / unchanged → cancel.
-            if (!raw || raw === current) {
+            // UNCHANGED IS A NO-OP, AND THE BASIS IS THE SEED. This
+            // guard existed, comparing against the tmux HANDLE - which a
+            // label-editing user never types, so it could never fire.
+            if (!raw || raw === seed) {
                 cancel();
                 return;
             }
-            // Client-side pre-flight; server is still authoritative on the
-            // regex. We mirror the server regex so the user gets immediate
-            // feedback without a round-trip on obvious typos.
-            if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) {
-                err.textContent = 'Use 1-64 chars: A-Z a-z 0-9 _ -';
+            // Pre-flight only; the server stays authoritative. NOT a
+            // local regex - the old one was the TMUX NAME rule applied
+            // to a field that is no longer a tmux name.
+            const verdict = (window.SessionLabel && window.SessionLabel.validate)
+                ? window.SessionLabel.validate(raw)
+                : { ok: false, reason: 'the label rule is unavailable' };
+            if (!verdict.ok) {
+                err.textContent = verdict.reason;
                 err.style.display = '';
                 input.focus();
                 input.select();
@@ -1282,7 +1296,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             }
             settled = true;
             try {
-                await window.API.renameSession(sid, raw);
+                await window.API.renameSession(sid, verdict.value);
                 // On success the server's WS broadcast (session.renamed)
                 // will repaint the header + tab title + launchpad row.
                 // We tear down the input either way via _exitHeaderRename
