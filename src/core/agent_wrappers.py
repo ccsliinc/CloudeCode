@@ -549,7 +549,17 @@ EXAMPLE_WRAPPERS: List[dict] = [
             '    local host="${CLDL_HOST:?no LM Studio address: set '
             'providers.local_host in config.json}"\n'
             '    local model="${1:?cldl needs a model id as its first argument}"\n'
-            '    export ANTHROPIC_BASE_URL="http://${host}/v1"\n'
+            # NO /v1 SUFFIX. The Anthropic SDK appends "/v1/messages"
+            # itself, so a base URL ending in /v1 produces
+            # /v1/v1/messages, which LM Studio answers with a 65-byte
+            # {"error":"Unexpected endpoint or method"} - a 200 carrying
+            # JSON that is not a Message. Claude Code reports that as
+            # "empty or malformed response ... 0 stream events received",
+            # which reads like a streaming or proxy fault and sends you
+            # looking in entirely the wrong place. Found end to end
+            # against a real LM Studio on 2026-08-26; every layer below
+            # this line was working the whole time.
+            '    export ANTHROPIC_BASE_URL="http://${host}"\n'
             '    export ANTHROPIC_API_KEY="lm-studio"\n'
             '    command claude --dangerously-skip-permissions '
             '--model "$model" "${@:2}"\n'

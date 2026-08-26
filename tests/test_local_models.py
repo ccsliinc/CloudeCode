@@ -231,3 +231,55 @@ def test_the_payload_carries_state_and_the_boolean():
     assert body["reachable"] is True
     assert body["models"] == ["m"]
     assert body["host"] == "x:1"
+
+
+# --- the cldl example wrapper ------------------------------------------------
+
+
+def test_the_cldl_base_url_has_no_v1_suffix():
+    """THE BUG THIS EXISTS TO KEEP FIXED, found only end to end.
+
+    The Anthropic SDK appends "/v1/messages" to ANTHROPIC_BASE_URL itself.
+    A base URL ending in /v1 therefore produces /v1/v1/messages, which LM
+    Studio answers 200 with a 65-byte {"error": "Unexpected endpoint or
+    method"} - JSON that is not a Message.
+
+    What makes it worth a test rather than a comment is how it PRESENTS.
+    Claude Code reports it as "API returned an empty or malformed response
+    (HTTP 200) ... 0 stream events received", which reads like a streaming
+    fault or an intercepting proxy. Every layer underneath was verified
+    working at the time: the model list, a non-streaming Messages call
+    that returned real content, a streaming call emitting correct
+    Anthropic SSE event names, and the same again with tools and a system
+    prompt. The one wrong path segment looked like a transport problem.
+    """
+    from src.core.agent_wrappers import EXAMPLE_WRAPPERS
+
+    cldl = [w for w in EXAMPLE_WRAPPERS if w["id"] == "cldl"][0]
+    assert 'ANTHROPIC_BASE_URL="http://${host}"' in cldl["script"]
+    assert "/v1\"" not in cldl["script"], (
+        "the base URL carries a /v1 suffix again; the SDK adds its own"
+    )
+
+
+def test_the_cldl_wrapper_refuses_rather_than_guesses():
+    """Both inputs fail loudly instead of defaulting.
+
+    A guessed host would connect somewhere the user did not choose; a
+    guessed model would run something they did not pick. Both are the
+    silent-wrong-answer shape, so both use ${VAR:?message}.
+    """
+    from src.core.agent_wrappers import EXAMPLE_WRAPPERS
+
+    cldl = [w for w in EXAMPLE_WRAPPERS if w["id"] == "cldl"][0]
+    assert "${CLDL_HOST:?" in cldl["script"]
+    assert "${1:?" in cldl["script"]
+
+
+def test_the_cldl_wrapper_accepts_a_model():
+    """It takes the model as $1, so the picker must offer the model step."""
+    from src.core.agent_wrappers import EXAMPLE_WRAPPERS
+
+    cldl = [w for w in EXAMPLE_WRAPPERS if w["id"] == "cldl"][0]
+    assert cldl["accepts_model"] is True
+    assert cldl["family"] == "local"
