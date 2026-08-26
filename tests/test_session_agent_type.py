@@ -190,6 +190,29 @@ def _settings_with_agents(agents_cfg: AgentsConfig, claude_cli_path=_SENTINEL):
 _EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
 
 
+def _rc(command: str) -> str:
+    """The rc-sourced rendering of a family's static command.
+
+    Description: every family that launches a USER-INSTALLED CLI now
+      sources ``~/.zshrc`` before looking the binary up, because the tmux
+      pane shell is non-interactive and reads no rc, so a version-manager
+      install (nvm, asdf, mise) is otherwise not on PATH. Built from the
+      production helper rather than restated as a literal, so a change to
+      the wrapper shape cannot leave these expectations quietly wrong.
+
+      The assertions below stay EXACT equality. Only the expected
+      rendering moved; none of these tests is about the rc wrapper, they
+      are about WHICH command_field a family resolves from, and that
+      question is unchanged.
+    Inputs: command (str) - the family's configured static command.
+    Output: str - the full tmux-ready shell string.
+    Example: _rc("codex")  # "zsh -c 'source ~/.zshrc ...; codex'"
+    """
+    from src.core.shell_init import rc_prefixed
+
+    return rc_prefixed(command)
+
+
 @pytest.mark.parametrize(
     "agent_type,expected_attr",
     [
@@ -201,7 +224,7 @@ _EXPECT_CLD = "zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; cld'"
 def test_get_agent_command_known_types(agent_type, expected_attr):
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
-    assert s.get_agent_command(agent_type) == getattr(agents, expected_attr)
+    assert s.get_agent_command(agent_type) == _rc(getattr(agents, expected_attr))
 
 
 def test_get_agent_command_claude_no_model_runs_cld():
@@ -213,8 +236,8 @@ def test_get_agent_command_claude_no_model_runs_cld():
 def test_get_agent_command_case_insensitive():
     agents = AgentsConfig()
     s = _settings_with_agents(agents)
-    assert s.get_agent_command("CODEX") == agents.codex_command
-    assert s.get_agent_command("OpenClaw") == agents.openclaw_command
+    assert s.get_agent_command("CODEX") == _rc(agents.codex_command)
+    assert s.get_agent_command("OpenClaw") == _rc(agents.openclaw_command)
 
 
 def test_get_agent_command_unknown_falls_back_to_claude():
@@ -248,7 +271,7 @@ def test_get_agent_command_tolerates_auth_config_failure():
 
     object.__setattr__(s, "load_auth_config", boom)
     defaults = AgentsConfig()
-    assert s.get_agent_command("codex") == defaults.codex_command
+    assert s.get_agent_command("codex") == _rc(defaults.codex_command)
     assert s.get_agent_command("claude") == _EXPECT_CLD
 
 
@@ -357,7 +380,7 @@ def test_get_agent_command_other_types_unaffected_by_claude_command(agent_type):
     types' command resolution."""
     agents = AgentsConfig(claude_command="claude --my-custom-flag")
     s = _settings_with_agents(agents)
-    expected = getattr(agents, f"{agent_type}_command")
+    expected = _rc(getattr(agents, f"{agent_type}_command"))
     assert s.get_agent_command(agent_type) == expected
 
 

@@ -93,13 +93,31 @@ def _settings(tmp_path, wrappers=None, **agent_overrides):
     ("codex", "codex"),
     ("hermes", "hermes"),
     ("openclaw", "openclaw tui"),
-    ("shell", "$SHELL -i"),
 ])
 def test_bare_family_types_still_return_their_static_command(tmp_path, agent_type, expected):
-    """The pre-existing behaviour, preserved: with no wrappers in those
-    families the static command is returned raw, unwrapped."""
+    """With no wrappers in those families, the family's own static command
+    is what runs - resolved from its own ``<family>_command`` field and
+    unaffected by the claude wrapper configured alongside it.
+
+    The command is rendered rc-sourced, because these launch a binary the
+    USER installed and the tmux pane shell reads no rc. That rendering is
+    not what this test is about; it is about WHICH field is read. See
+    tests/test_agent_family_rc_shim.py for the rendering itself.
+    """
+    from src.core.shell_init import rc_prefixed
+
     s = _settings(tmp_path, wrappers=[_wrapper("cld", default=True)])
-    assert s.get_agent_command(agent_type) == expected
+    assert s.get_agent_command(agent_type) == rc_prefixed(expected)
+
+
+def test_the_bare_shell_type_is_returned_raw(tmp_path):
+    """``shell`` is the one family that is NOT rc-sourced.
+
+    ``$SHELL -i`` is an interactive shell that reads the rc itself, and it
+    must reach tmux unwrapped and un-re-quoted.
+    """
+    s = _settings(tmp_path, wrappers=[_wrapper("cld", default=True)])
+    assert s.get_agent_command("shell") == "$SHELL -i"
 
 
 def test_an_existing_shell_session_still_launches_a_shell(tmp_path):
@@ -167,8 +185,12 @@ def test_a_codex_wrapper_does_not_affect_the_claude_launch(tmp_path):
 
 
 def test_a_claude_wrapper_does_not_affect_the_codex_launch(tmp_path):
+    from src.core.shell_init import rc_prefixed
+
     s = _settings(tmp_path, wrappers=[_wrapper("cld", default=True)])
-    assert s.get_agent_command("codex") == "codex"
+    assert s.get_agent_command("codex") == rc_prefixed("codex")
+    # The point of the test: the claude wrapper's script is nowhere in it.
+    assert "cld" not in s.get_agent_command("codex")
 
 
 def test_each_family_resolves_its_own_default_independently(tmp_path):

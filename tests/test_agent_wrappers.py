@@ -245,10 +245,16 @@ def test_reserved_types_unaffected_by_wrappers(tmp_path):
             ],
         }
     }
+    from src.core.shell_init import rc_prefixed
+
     s = _settings_with_config(tmp_path, config_data)
-    assert s.get_agent_command("codex") == "codex"
-    assert s.get_agent_command("hermes") == "hermes"
-    assert s.get_agent_command("openclaw") == "openclaw tui"
+    # Each reserved family resolves from its OWN command field, with the
+    # claude wrapper above having no say. The rc wrapper is the rendering
+    # (see tests/test_agent_family_rc_shim.py); shell alone renders raw,
+    # because "$SHELL -i" sources the rc itself.
+    assert s.get_agent_command("codex") == rc_prefixed("codex")
+    assert s.get_agent_command("hermes") == rc_prefixed("hermes")
+    assert s.get_agent_command("openclaw") == rc_prefixed("openclaw tui")
     assert s.get_agent_command("shell") == "$SHELL -i"
 
 

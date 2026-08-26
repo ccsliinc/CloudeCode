@@ -195,16 +195,38 @@ def test_claude_static_command_is_wrapped_in_a_zshrc_sourcing_shell():
     assert "claude --foo" in out
 
 
+def test_the_shell_static_command_is_returned_raw():
+    """SUPERSEDES ``test_non_claude_static_commands_are_returned_raw``.
+
+    That test asserted the BUG, in the same way
+    ``test_only_claude_has_a_last_resort`` did below. It locked in "every
+    non-claude family reaches tmux unwrapped" as if it were a contract,
+    when for codex / hermes / openclaw it was an oversight: those launch a
+    binary the USER installed, the tmux pane shell is non-interactive and
+    reads no rc, and a version-manager install (nvm, asdf, mise) is
+    therefore not on PATH. The same file's ``make_tool_last_resort``
+    already rc-sourced its script, so the two paths disagreed and the
+    SHIPPED DEFAULT was the broken one. See
+    tests/test_agent_family_rc_shim.py.
+
+    ``shell`` is the one case the old test was right about, and it keeps
+    its assertion: ``$SHELL -i`` is an interactive shell that sources the
+    rc itself, and it must reach tmux unwrapped and un-re-quoted.
+    """
+    assert render_static_command(get_family("shell"), "$SHELL -i") == "$SHELL -i"
+
+
 @pytest.mark.parametrize("name,command", [
     ("codex", "codex"),
     ("hermes", "hermes"),
     ("openclaw", "openclaw tui"),
-    ("shell", "$SHELL -i"),
 ])
-def test_non_claude_static_commands_are_returned_raw(name, command):
-    """Unchanged from before this feature: these reached tmux unwrapped,
-    and $SHELL -i in particular must not be re-quoted."""
-    assert render_static_command(get_family(name), command) == command
+def test_tool_family_static_commands_source_the_rc(name, command):
+    """A user-installed CLI is looked up AFTER the rc has been sourced."""
+    out = render_static_command(get_family(name), command)
+    assert out.startswith("zsh -c ")
+    assert "source ~/.zshrc" in out
+    assert command in out
 
 
 def test_claude_last_resort_without_a_model_is_cld():

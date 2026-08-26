@@ -28,11 +28,32 @@ module:
   because a claude launch commonly names a shell FUNCTION (``cld``) that
   only exists once ``~/.zshrc`` has been sourced, and tmux's spawned pane
   shell is non-interactive.
-* ``codex`` / ``hermes`` / ``openclaw`` / ``shell`` return their command
-  string RAW, because that is what they did before this change and a
-  behaviour change there would be a regression, not a generalization.
-  ``shell_command`` in particular is ``$SHELL -i``, which must reach tmux
-  unwrapped.
+* ``codex`` / ``hermes`` / ``openclaw`` source the rc for the SAME
+  reason claude does: they name a binary the user installed themselves,
+  and a version manager (nvm, asdf, mise) puts its shims on PATH from an
+  rc file. The tmux pane shell reads no rc, so a bare ``codex`` is
+  "command not found".
+* ``shell`` returns its command RAW. ``shell_command`` is ``$SHELL -i``,
+  an INTERACTIVE shell, which sources the rc itself; wrapping it would
+  source the rc twice and hard-code zsh as the launcher for the one
+  family whose entire point is honouring ``$SHELL``.
+
+CORRECTED 2026-08-26, and the original reasoning is worth keeping because
+it is the trap. This section used to say the other four returned their
+command raw "because that is what they did before this change and a
+behaviour change there would be a regression, not a generalization."
+Preserving prior behaviour preserved a defect. The tell was already in
+the tree: ``make_tool_last_resort`` wraps its script in ``rc_prefixed``
+unconditionally, so the two paths disagreed, and they disagreed in the
+worse direction -
+
+    codex_command = ""       -> last resort  -> rc-sourced   -> WORKS
+    codex_command = "codex"  -> static path  -> raw          -> BROKEN
+
+``AgentsConfig.codex_command`` defaults to ``"codex"``, so configuring
+NOTHING worked and shipping the default did not. When two paths to the
+same launch disagree about the environment they need, one of them is
+wrong; do not assume it is the newer one.
 
 So ``sources_zshrc`` is a column in the table, not a conditional in the
 resolver.
@@ -112,6 +133,18 @@ class AgentFamily:
       resolved as a bare family before any wrapper-id lookup. False only
       for ``claude``, for the backward-compatibility reason in the module
       docstring.
+    - ``pickable``: whether this family may be offered as a PINNED,
+      modelless row in the launch picker when it has no wrappers of its
+      own. A reserved family is launchable by name over the API
+      (``agent_type: "codex"``) but, before this column, was unreachable
+      from the UI unless the user first authored a wrapper for it - so
+      the picker and the API disagreed about what could be launched.
+      ``shell`` is the one False: it is not an agent CLI and it already
+      has its own entry point, the "new console" FAB, which posts
+      ``agent_type: 'shell'`` directly. Offering it twice would be two
+      controls for one action. ``claude`` is True but reaches the picker
+      through its wrappers rather than as a pinned row; see
+      ``ProviderGroups.buildWrapperItems``.
     - ``description``: one lowercase line describing what the family runs,
       used by the settings screen's advanced legacy-command row.
     - ``last_resort``: renderer used when the family has neither wrappers
@@ -130,6 +163,7 @@ class AgentFamily:
     command_field: str
     sources_zshrc: bool
     reserved: bool
+    pickable: bool
     description: str
     last_resort: Optional[Callable[[Optional[str]], str]] = None
 
@@ -143,6 +177,7 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         command_field="claude_command",
         sources_zshrc=True,
         reserved=False,
+        pickable=True,
         description="the single command every claude session runs.",
         last_resort=_render_claude_last_resort,
     ),
@@ -150,8 +185,9 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         name="codex",
         label="codex",
         command_field="codex_command",
-        sources_zshrc=False,
+        sources_zshrc=True,
         reserved=True,
+        pickable=True,
         description="the single command every codex session runs.",
         last_resort=make_tool_last_resort("codex", "codex", "codex", "codex_command"),
     ),
@@ -159,8 +195,9 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         name="hermes",
         label="hermes",
         command_field="hermes_command",
-        sources_zshrc=False,
+        sources_zshrc=True,
         reserved=True,
+        pickable=True,
         description="the single command every hermes session runs.",
         last_resort=make_tool_last_resort("hermes", "hermes", "hermes", "hermes_command"),
     ),
@@ -168,8 +205,9 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         name="openclaw",
         label="openclaw",
         command_field="openclaw_command",
-        sources_zshrc=False,
+        sources_zshrc=True,
         reserved=True,
+        pickable=True,
         description="the single command every openclaw session runs.",
         last_resort=make_tool_last_resort(
             "openclaw", "openclaw tui", "openclaw", "openclaw_command"
@@ -179,8 +217,14 @@ AGENT_FAMILIES: Tuple[AgentFamily, ...] = (
         name="shell",
         label="shell",
         command_field="shell_command",
+        # NOT rc-sourced, and this is a decision rather than an omission:
+        # shell_command is "$SHELL -i", an INTERACTIVE shell, which reads
+        # the user's rc itself. Wrapping it would source the rc twice and
+        # hard-code zsh as the launcher for the one family whose whole
+        # point is honouring whatever $SHELL the user actually has.
         sources_zshrc=False,
         reserved=True,
+        pickable=False,
         description="the single command every plain console session runs.",
         last_resort=render_shell_last_resort,
     ),
@@ -334,9 +378,9 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
       resolve_command (Callable[[str], str]) - normally
         ``Settings.get_agent_command``; injected to keep the registry free
         of any dependency on Settings.
-    Output: list[dict] - keys ``name``, ``label``, ``command_field``,
-      ``command``, ``description``, ``wrapper_count``, ``in_use``,
-      ``effective_command``.
+    Output: list[dict] - keys ``name``, ``label``, ``reserved``,
+      ``pickable``, ``command_field``, ``command``, ``description``,
+      ``wrapper_count``, ``in_use``, ``effective_command``.
     """
     wrappers = getattr(agents, "wrappers", []) or []
     summaries: List[dict] = []
@@ -345,6 +389,14 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
         summaries.append({
             "name": family.name,
             "label": family.label,
+            # Both shipped so the LAUNCH PICKER can decide what to offer
+            # without hardcoding a family list client-side, which is the
+            # same reason the registry is shipped at all. ``reserved``
+            # means the name is directly usable as an ``agent_type``;
+            # ``pickable`` means it may be offered as a pinned modelless
+            # row when it has no wrappers. See AgentFamily's docstring.
+            "reserved": family.reserved,
+            "pickable": family.pickable,
             "command_field": family.command_field,
             "command": getattr(agents, family.command_field, "") or "",
             "description": family.description,

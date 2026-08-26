@@ -994,8 +994,11 @@ class Settings(BaseSettings):
 
         # No wrapper for this family: fall back to its static
         # ``agents.<family>_command`` string, rendered per the family's own
-        # rules (claude sources ~/.zshrc and has a cld/cldor last resort;
-        # every other family returns its command raw). See
+        # rules (every family that launches a user-installed CLI sources
+        # ~/.zshrc, because the tmux pane shell reads no rc and a
+        # version-managed binary would not be on PATH; claude also has a
+        # cld/cldor last resort. Only 'shell' renders raw, because
+        # '$SHELL -i' sources the rc itself). See
         # src/core/agent_families.render_static_command.
         return render_static_command(
             family, getattr(agents, family.command_field, "") or "", model=model
