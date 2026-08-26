@@ -279,7 +279,27 @@ def list_sessions(
     if not include_archived:
         clauses.append("archived_at IS NULL")
     if not include_lineage:
-        clauses.append("parent_session_id IS NULL")
+        # A CONVERSATION is hidden. A SESSION is not, even when it knows
+        # which row it was forked out of.
+        #
+        # This used to read ``parent_session_id IS NULL``, from a time
+        # when carrying a parent and being a past Claude conversation
+        # were the same fact. A GUI fork breaks that: it spawns a real
+        # tmux session, with its own ``tmux_created_epoch``, that also
+        # records where it came from. Knowing your origin is not a
+        # reason to be invisible.
+        #
+        # The discriminator is the EPOCH, which session_lineage already
+        # calls the whole safety property - every conversation row is
+        # written with ``tmux_created_epoch = NULL`` so it cannot collide
+        # with an anchor in the partial unique index. It is a conjunction
+        # and not a swap because an IMPORTED STOPPED session also has no
+        # epoch, and keying on the epoch alone would hide every one of
+        # them. See tests/test_session_fork_visibility.py for the four
+        # row shapes stated literally.
+        clauses.append(
+            "(parent_session_id IS NULL OR tmux_created_epoch IS NOT NULL)"
+        )
     query = "SELECT * FROM sessions"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
