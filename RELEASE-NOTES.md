@@ -1,5 +1,105 @@
 # Release notes
 
+## v1.0.8
+
+Measured against `v1.0.7`. Six branches: one listing fix, one launch-path
+fix, and three features - a reserved-family picker, a Claude-executable
+upgrade runbook, GUI fork, and LM Studio as a local model provider.
+
+Test suite at the release sha: **2964 passed, 0 failed**, plus 114
+standalone `tests/*.node.mjs` suites and 132 files through the JS syntax
+check, all passing. Baseline at `v1.0.7` was 2872.
+
+**Schema is UNCHANGED at v9.** This release adds no migration, so first
+start does not migrate the database. `requirements.txt` is unchanged from
+v1.0.7, so the launchd wrapper will not rebuild the venv. Your
+`config.json` and `.env` are not touched by the installer.
+
+### Fork a session from the interface
+
+Every owned running session row carries a `fork` control. It spawns a NEW
+tmux session that resumes that Claude conversation and branches it
+(`--resume <uuid> --fork-session`), labelled with `(fork)` appended.
+
+**The parent is not touched.** Not archived, not stopped, not marked. It
+stays running, listed, resumable and forkable again. There is deliberately
+no "was forked from" state, because in neither fork shape does the parent
+die - recording one would be a verdict about a session that is alive. The
+relationship is a reverse lookup on `parent_session_id`, so it cannot go
+stale. A test compares the parent row byte for byte across a fork.
+
+A session with no recorded Claude conversation is **refused** with a 409
+rather than forked. Forking it would start a brand new conversation
+wearing a fork label, and you would believe you had branched your work.
+
+The label appends forever - `name(fork)(fork)`. Renaming is your job.
+
+### Local models via LM Studio
+
+A new `local` agent family runs a session against an LM Studio server
+instead of the hosted API. Set the address in `config.json`:
+
+```json
+"providers": { "local_host": "127.0.0.1:1234" }
+```
+
+The launch picker gains a **local (lm studio)** row that fetches the live
+model list. There is no default address, deliberately: a guessed one would
+make "unreachable" the normal state for everyone who does not run LM
+Studio, and would point the app at some other network's machine.
+
+The model list reports **three** states, not two - `reachable`,
+`unreachable`, and `not-configured`. The last two get conflated constantly
+and mean opposite things: one says go check the machine, the other says go
+set the address.
+
+A local launch with no model is **refused**, not downgraded to some
+default. `cldl` addresses one specific model, so a bare launch would open
+a pane that errors or quietly runs something you did not choose.
+
+The server address is injected as `CLDL_HOST` into the tmux environment
+rather than interpolated into the command, so it never enters shell text.
+There is no endpoint that sets it - it is an outbound fetch target, so a
+setter would be an SSRF surface reachable with one authenticated POST.
+
+### The launch picker offers every reserved family
+
+`codex`, `hermes` and `openclaw` were launchable over the API and
+unreachable from the interface unless you first authored a wrapper for
+them. A pickable family with no wrappers now gets one pinned row, in
+registry order, which puts codex directly under claude. `shell` stays out:
+it already has the "new console" button, and two controls for one action
+is worse than none.
+
+### A fork is no longer born invisible
+
+`list_sessions` hid any row carrying a `parent_session_id`, from a time
+when that meant "a past Claude conversation". A GUI fork is a real tmux
+session that also knows its origin, and knowing your origin is not a
+reason to be hidden. Visibility now keys on the `tmux_created_epoch` that
+already distinguishes the two - and it is a conjunction, not a swap,
+because an imported stopped session has no epoch either.
+
+### Every family that runs a user-installed CLI sources your rc
+
+`codex`, `hermes` and `openclaw` passed their command to tmux raw. The
+tmux pane shell is non-interactive and reads no rc, so a version-manager
+install (nvm, asdf, mise) was not on PATH and the pane died "command not
+found". The behaviour was inverted: the fallback for an EMPTY command was
+already rc-sourced, so configuring nothing worked and shipping the default
+did not. `shell` stays raw - `$SHELL -i` sources the rc itself.
+
+### Upgrading with Claude
+
+`/upgrade` ships in the repo and follows `docs/upgrade-with-claude.md`.
+Two new scripts make an upgrade verifiable instead of assumed:
+`scripts/upgrade-baseline.sh` records version, schema version and
+per-table row counts BEFORE you start, and `scripts/upgrade-verify.sh`
+compares afterwards. Verify exits 0 when everything passed, 1 when
+something failed, and **2 when something could not be evaluated** - which
+is deliberately not 0, because "I could not look" is not "nothing is
+wrong".
+
 ## v1.0.4
 
 Measured against `v1.0.3`. Nine branches: two schema changes, one behaviour
