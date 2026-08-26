@@ -1050,8 +1050,12 @@ class HealthResponse(BaseModel):
     uptime: int = Field(..., description="Server uptime in seconds")
     session_name: Optional[str] = Field(None, description="Current session name/working dir")
     # Number of dev servers currently tracked across all sessions. Replaces
-    # the legacy ``tunnel_count`` surface; the menu-bar tray reads this
-    # field to show "Local servers: N" in its dropdown.
+    # the legacy ``tunnel_count`` surface, which was deleted with the
+    # Cloudflare tunnel system in plan v3.2. The menu-bar tray reads this
+    # field to show "Local servers: N" in its dropdown - true since
+    # 2026-08-26; before that the tray was still reading ``tunnel_count``,
+    # a field this model does not declare and the response_model therefore
+    # filters out, so the row rendered "Tunnels: 0" forever.
     local_server_count: int = Field(0, description="Number of detected local dev servers")
     # The version of the CODE THIS PROCESS IS RUNNING, frozen at startup.
     #

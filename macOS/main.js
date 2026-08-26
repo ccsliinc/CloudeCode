@@ -962,7 +962,19 @@ function updateMenu() {
   const traySignalLabels = trayStatus.describeSignals(currentTrayInput());
 
   const sessionName = health?.session_name || 'None';
-  const tunnelCount = health?.tunnel_count || 0;
+  // health.tunnel_count has not existed since plan v3.2 demolished the
+  // Cloudflare tunnel system, and it cannot come back by accident: FastAPI's
+  // response_model is a FILTER, so any field HealthResponse does not declare
+  // is deleted from the response before it is sent. This row therefore read
+  // "Tunnels: 0" permanently, describing a subsystem the app does not have.
+  // local_server_count is the field that replaced it, and src/models.py has
+  // said this tray reads it for a while now - it did not, until 2026-08-26.
+  // Three outcomes: a server that has not answered yet is not a server with
+  // zero local servers, and the row says which it is.
+  const localServerCount =
+    typeof health?.local_server_count === 'number'
+      ? String(health.local_server_count)
+      : 'unknown';
 
   // Setup status, from the SERVER whenever it has answered. The tray used to
   // compute its own and got a different answer that the user could not act
@@ -1026,7 +1038,7 @@ function updateMenu() {
       enabled: false
     },
     {
-      label: `Tunnels: ${tunnelCount}`,
+      label: `Local servers: ${localServerCount}`,
       enabled: false
     },
     {
