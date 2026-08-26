@@ -219,3 +219,106 @@ def test_records_still_returns_archived_rows(conn):
         archived_at=ARCHIVED_STAMP,
     )
     assert "archived" in _uuids(session_store.list_sessions(conn))
+
+
+# ---------------------------------------------------------------------
+# THE DELETE ITSELF - a SOFT delete. The row is retained on purpose.
+#
+# There was no delete before this. The "remove"/"X" control on a session
+# row kills tmux, rmtrees the uploads bucket and drops the ownership
+# record, and it has never touched the sessions row - the row survives
+# and falls to 'stopped' at the next probe, which is exactly why a
+# session the user thought he had removed reappeared under RECENT.
+#
+# The row is KEPT because a deleted session's record is about to matter:
+# session history and transcripts are built on it. Deleting means "off my
+# screen", never "gone from the database".
+# ---------------------------------------------------------------------
+
+
+def test_archive_hides_the_row_from_every_listing_surface(conn):
+    """One call, and the row leaves RECENT, the tree feed and attention."""
+    add_row(
+        conn,
+        uuid="doomed",
+        name="cloude_doomed",
+        epoch=4000,
+        lifecycle=SESSION_LIFECYCLE_STOPPED,
+    )
+    assert session_store.archive_session(conn, "doomed") is True
+
+    assert "doomed" not in _uuids(session_store.listable_sessions(conn))
+    assert "doomed" not in _uuids(
+        session_store.list_sessions(
+            conn, lifecycle=SESSION_LIFECYCLE_STOPPED, include_archived=False
+        )
+    )
+    assert "doomed" not in _uuids(session_store.needs_attention(conn))
+
+
+def test_archive_retains_the_row(conn):
+    """THE POINT OF A SOFT DELETE. The record survives, stamped."""
+    add_row(
+        conn,
+        uuid="kept",
+        name="cloude_kept",
+        epoch=4001,
+        lifecycle=SESSION_LIFECYCLE_STOPPED,
+    )
+    session_store.archive_session(conn, "kept")
+
+    row = conn.execute(
+        "SELECT archived_at, tmux_name, lifecycle FROM sessions "
+        "WHERE session_uuid = ?",
+        ("kept",),
+    ).fetchone()
+    assert row is not None, "the row must still exist - this is a soft delete"
+    assert row["archived_at"], "archived_at must carry a timestamp"
+    # Identity and history are untouched: only the visibility flag moved.
+    assert row["tmux_name"] == "cloude_kept"
+    assert row["lifecycle"] == SESSION_LIFECYCLE_STOPPED
+
+
+def test_archive_is_idempotent_and_keeps_the_first_stamp(conn):
+    """A second delete is not an error and does not rewrite history."""
+    add_row(
+        conn,
+        uuid="twice",
+        name="cloude_twice",
+        epoch=4002,
+        lifecycle=SESSION_LIFECYCLE_STOPPED,
+        archived_at=ARCHIVED_STAMP,
+    )
+    assert session_store.archive_session(conn, "twice") is False
+    row = conn.execute(
+        "SELECT archived_at FROM sessions WHERE session_uuid = ?", ("twice",)
+    ).fetchone()
+    assert row["archived_at"] == ARCHIVED_STAMP
+
+
+def test_archive_of_an_unknown_uuid_is_a_named_miss_not_a_silent_success(conn):
+    """Nothing matched is reported as nothing matched."""
+    with pytest.raises(session_store.SessionNotFoundError):
+        session_store.archive_session(conn, "no-such-session")
+
+
+def test_archive_touches_exactly_one_row(conn):
+    """A neighbour with the same tmux NAME is not collateral.
+
+    Description: tmux reuses names freely, so two rows can share
+      ``tmux_name`` and differ only by creation epoch. Archiving is keyed
+      on ``session_uuid`` for that reason - a name-keyed delete would
+      take the live one down with the dead one.
+    """
+    add_row(
+        conn,
+        uuid="old",
+        name="cloude_reused",
+        epoch=5000,
+        lifecycle=SESSION_LIFECYCLE_STOPPED,
+    )
+    add_row(conn, uuid="new", name="cloude_reused", epoch=5001)
+    session_store.archive_session(conn, "old")
+
+    assert "old" not in _uuids(session_store.listable_sessions(conn))
+    assert "new" in _uuids(session_store.listable_sessions(conn))
