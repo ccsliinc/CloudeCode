@@ -1475,9 +1475,18 @@ class SessionManager:
     #
     # Per-session list of ``Toast`` records, newest-first. Pruning rule:
     # keep ALL unacked + at most the LAST 50 acked (acked beyond that cap
-    # fall off the tail). This bounds storage growth while preserving any
-    # pending UX (every unacked toast is still surfaceable to a re-attaching
-    # browser via ``get_toasts(..., unacked_only=True)``).
+    # fall off the tail). Every unacked toast stays surfaceable to a
+    # re-attaching browser via ``get_toasts(..., unacked_only=True)``.
+    #
+    # THAT CAP BOUNDS ONLY THE ACKED TAIL. The unacked half has no cap and
+    # cannot have one, because a cap there would drop a notification the
+    # user has not seen. The unacked list is instead kept small at the
+    # SOURCE: a kind whose older unacked record is strictly superseded by
+    # a newer one is REPLACED IN PLACE rather than appended. Today that is
+    # ``Stop`` and only ``Stop`` - see ``_TOAST_SUPERSEDING_KINDS``. Before
+    # that rule existed, a session that ran 200 assistant turns without the
+    # user dismissing anything held 200 identical "Your turn" records and
+    # replayed all 200 on every attach backfill.
     #
     # Color resolution: when a toast is recorded, we read the session's
     # project theme (via ``resolve_project_theme``), then read the theme
@@ -1597,6 +1606,65 @@ class SessionManager:
         "Notification": "CLAUDE_NOTIFICATION",
     }
 
+    # Kinds whose older UNACKED record is strictly superseded by a newer
+    # one. Deliberately a one-element set, and the exclusions are the
+    # point:
+    #
+    #   Stop      - matcher "*", no throttle, one per assistant turn,
+    #               title always the literal "Your turn". Every older
+    #               unacked Stop says the same thing the newest one says,
+    #               because "your turn" has been continuously true since
+    #               the first of them fired. Nothing is lost.
+    #   Notification - the BODY is the message. Two Notifications are two
+    #               things to read; collapsing them destroys one.
+    #   PermissionRequest - each is a distinct decision about a distinct
+    #               command. Superseding one would silently discard a
+    #               command the user was never shown. Never collapse a
+    #               decision.
+    #
+    # This mirrors client/js/toast.js COALESCE_KEY exactly, including the
+    # keying on title, so server storage and client rendering partition
+    # the same set the same way. See record_toast for why they must.
+    _TOAST_SUPERSEDING_KINDS = frozenset({"Stop"})
+
+    @staticmethod
+    def _find_supersedable_toast(
+        bucket: list[Toast], kind: str, title: str
+    ) -> Optional[Toast]:
+        """Return the record a new ``(kind, title)`` toast should replace.
+
+        Description: Scans a session's toast bucket for an UNACKED record
+            of a superseding kind carrying the same title. Returns None
+            when the kind does not supersede, when nothing matches, or
+            when the only matches are acknowledged.
+        Inputs:
+            bucket: the session's newest-first list of Toast records.
+            kind: wire-level toast kind of the incoming event.
+            title: title of the incoming event. Part of the match key so
+                this partitions identically to the client's coalesce key.
+        Output: the Toast to replace in place, or None to append a new one.
+
+        ACKNOWLEDGED RECORDS ARE NEVER RETURNED. An acked toast is one the
+        user dismissed; reusing its id and clearing nothing would still
+        leave a record the backfill has already stopped serving, and
+        mutating its body would rewrite history the user acted on. A new
+        turn after a dismissal is a genuinely new notification and gets a
+        new id.
+
+        Example:
+            >>> SessionManager._find_supersedable_toast([], "Stop", "Your turn")
+        """
+        if kind not in SessionManager._TOAST_SUPERSEDING_KINDS:
+            return None
+        for existing in bucket:
+            if (
+                existing.kind == kind
+                and not existing.acknowledged
+                and existing.title == title
+            ):
+                return existing
+        return None
+
     def record_toast(
         self,
         session_id: str,
@@ -1612,6 +1680,26 @@ class SessionManager:
         extra theme lookup on the wire. Caller is responsible for the
         WS broadcast (the route layer does this after calling this method
         - keeps storage and fanout decoupled).
+
+        SUPERSESSION. When the session already holds an UNACKED toast of a
+        superseding kind with the same title (``Stop``, and only ``Stop``),
+        this REPLACES that record in place and returns it instead of
+        appending a second one. The id is deliberately preserved:
+
+          - The client dedupes by id and a coalesced card acks EVERY member
+            id on dismiss. A fresh id per turn would leave the browser
+            holding ids the server no longer has (their acks land on
+            nothing) while the server holds an id the browser never saw,
+            which comes straight back on the next attach backfill.
+          - The caller broadcasts the returned Toast either way, so the
+            client sees one id for one card and the count it renders
+            matches the number of records the server actually holds. A
+            card reading "x12" over a single stored record is the same
+            class of lie as twelve cards over twelve records, just
+            pointing the other way.
+
+        The returned Toast is therefore not always newly created. Callers
+        must not assume ``toast.id`` is unseen.
 
         v0.7.0 Part 4 - also emits a ``NotificationEvent`` into the
         attached router (if any) so ntfy + Slack channels fan out from
@@ -1653,29 +1741,47 @@ class SessionManager:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("toast_label_read_threw", error=str(exc))
             session_label = None
-        toast = Toast(
-            id=_uuid.uuid4().hex,
-            session_id=session_id,
-            kind=kind,
-            title=title,
-            body=body,
-            color=color,
-            session_label=session_label,
-            session_name=session_name,
-            created_at=datetime.utcnow(),
-            acknowledged=False,
-        )
         bucket = self._pending_toasts.setdefault(session_id, [])
-        bucket.insert(0, toast)  # newest-first
+        superseded = self._find_supersedable_toast(bucket, kind, title)
+        if superseded is not None:
+            # REPLACE IN PLACE, KEEPING THE ID. See _find_supersedable_toast
+            # for which records qualify and why the id must not change.
+            superseded.body = body
+            superseded.color = color
+            superseded.session_label = session_label
+            superseded.session_name = session_name
+            superseded.created_at = datetime.utcnow()
+            bucket.remove(superseded)
+            bucket.insert(0, superseded)  # newest-first
+            toast = superseded
+            logger.info(
+                "toast_superseded",
+                session_id=session_id,
+                toast_id=toast.id,
+                kind=kind,
+            )
+        else:
+            toast = Toast(
+                id=_uuid.uuid4().hex,
+                session_id=session_id,
+                kind=kind,
+                title=title,
+                body=body,
+                color=color,
+                session_label=session_label,
+                session_name=session_name,
+                created_at=datetime.utcnow(),
+                acknowledged=False,
+            )
+            bucket.insert(0, toast)  # newest-first
+            logger.info(
+                "toast_recorded",
+                session_id=session_id,
+                toast_id=toast.id,
+                kind=kind,
+                color=color,
+            )
         self._prune_toasts(session_id)
-
-        logger.info(
-            "toast_recorded",
-            session_id=session_id,
-            toast_id=toast.id,
-            kind=kind,
-            color=color,
-        )
 
         # v0.7.0 Part 4 - fan out to the notification router (ntfy + Slack).
         # Lazy import to keep the (already-circular-prone) notifications
