@@ -13,6 +13,7 @@ import structlog
 from datetime import datetime
 
 from src.models import (
+    ForkSessionResponse,
     Session,
     SessionInfo,
     SessionStats,
@@ -97,6 +98,134 @@ router = APIRouter()
 # emitting a single audit line per uptime window. Removed when the alias
 # itself is dropped in v0.8.x.
 _PINNED_THEME_ALIAS_WARNED: bool = False
+
+
+@router.post(
+    "/sessions/{session_name}/fork",
+    response_model=ForkSessionResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def fork_session(request: Request, session_name: str):
+    """Fork a running session into a NEW tmux session that branches it.
+
+    Description: spawns a new tmux session running the agent with
+      ``--resume <uuid> --fork-session`` against the parent's Claude
+      conversation, labels it with ``(fork)`` appended, and records
+      ``parent_session_id`` on the CHILD row.
+
+      THE PARENT IS NOT TOUCHED. Not archived, not stopped, not marked. It
+      is still running, still listed, still resumable and still forkable
+      again. There is no "was forked from" state because the process was
+      never touched; the relationship is answered by a reverse lookup on
+      ``parent_session_id``. See src/core/session_fork.py.
+
+      THREE OUTCOMES, and the middle one is the point:
+        404  no row for this tmux session - could not evaluate.
+        409  the session has no recorded Claude conversation, so there is
+             nothing to resume. REFUSED rather than forked, because
+             forking anyway would start a brand new conversation wearing
+             a "(fork)" label and the user would believe they had
+             branched their work.
+        201  forked. ``lineage_recorded`` says whether the parent link
+             actually landed; the tmux session exists either way.
+    Inputs: session_name (str) - the PARENT's tmux session name.
+    Output: ForkSessionResponse.
+    """
+    from contextlib import closing
+
+    from src.core import session_fork
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for, transaction
+
+    session_manager = request.app.state.session_manager
+    # Ask the session manager, never a constant. The socket is overridable
+    # (AuthConfig.session.tmux_socket_name) and rows are keyed on it, so a
+    # hardcoded "cloude" would look up the wrong session entirely on an
+    # install that overrides it - see the same warning at src/main.py:336.
+    socket = session_manager.tmux_socket_name()
+    db_path = db_path_for(settings.get_state_dir())
+
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="no datastore yet, so there is no session to fork from",
+        )
+
+    def _resolve():
+        """Read the parent row on one pooled thread."""
+        with closing(connect(db_path, create=False)) as conn:
+            return session_fork.resolve_fork_source(
+                conn, socket=socket, tmux_name=session_name
+            )
+
+    try:
+        source = await run_in_threadpool(_resolve)
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if source.outcome == session_fork.FORK_UNRESOLVED:
+        raise HTTPException(status_code=404, detail=source.detail or "session not found")
+    if source.outcome == session_fork.FORK_NO_CONVERSATION:
+        raise HTTPException(status_code=409, detail=source.detail or "nothing to resume")
+
+    label = session_fork.fork_label(source.label)
+    logger.info(
+        "api_fork_session_request",
+        parent=session_name,
+        parent_id=source.parent_id,
+        label=label,
+    )
+
+    import uuid as _uuid
+
+    child = await session_manager.create_session(
+        session_id=f"ses_{_uuid.uuid4().hex[:8]}",
+        working_dir=source.working_dir,
+        project_name=label,
+        agent_type=source.agent_type,
+        model=source.model,
+        agent_extra_args=session_fork.fork_arguments(source.claude_session_uuid),
+    )
+
+    child_tmux = getattr(child, "tmux_session", None)
+
+    def _stamp():
+        """Record lineage on the child row, in its own transaction."""
+        with closing(connect(db_path, create=False)) as conn:
+            child_uuid = session_fork.newest_anchor_uuid(
+                conn, socket=socket, tmux_name=child_tmux or ""
+            )
+            if not child_uuid:
+                return False
+            with transaction(conn):
+                return session_fork.mark_as_fork(
+                    conn,
+                    child_session_uuid=child_uuid,
+                    parent_id=source.parent_id,
+                )
+
+    recorded = False
+    detail = None
+    try:
+        recorded = bool(await run_in_threadpool(_stamp))
+    except DatastoreUnreadableError as exc:
+        # The tmux session EXISTS. Say so, and say the link did not land -
+        # never report this as a failed fork, and never as a clean success.
+        detail = f"fork created, but its parent link could not be recorded: {exc}"
+        logger.warning("fork_lineage_not_recorded", parent=session_name, error=str(exc))
+    if not recorded and detail is None:
+        detail = (
+            "fork created, but its parent link could not be recorded; the "
+            "session works and is simply not linked in the tree"
+        )
+
+    return ForkSessionResponse(
+        success=True,
+        session=child.model_dump() if hasattr(child, "model_dump") else {},
+        parent_session_id=source.parent_id,
+        lineage_recorded=recorded,
+        detail=None if recorded else detail,
+    )
 
 
 @router.post("/sessions", response_model=Session, status_code=201, dependencies=[Depends(require_auth)])

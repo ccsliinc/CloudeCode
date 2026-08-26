@@ -738,6 +738,43 @@ body.home-header-active {
     background: var(--color-accent-bg-soft);
 }
 
+/* Fork control on a running session row.
+   Explicitly styled rather than left to the user-agent stylesheet: an
+   unclassed <button> in this app renders as a grey OS square, and that
+   exact defect has shipped here before through a green test suite,
+   because a DOM assertion can see the element exists and cannot see what
+   it looks like. Sized to sit with the rename pencil rather than matching
+   it exactly - this one carries a word, not a glyph. */
+.running-session-fork {
+    height: 24px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    background: transparent;
+    border: 1px solid var(--color-border, #333);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+}
+
+.running-session-fork:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+.running-session-fork:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
 .running-session-rename-input {
     flex: 1;
     background: var(--color-bg-elevated, #1a1a1a);

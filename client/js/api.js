@@ -1093,6 +1093,31 @@ class API {
      *   (nothing was deleted, and the caller must not say otherwise) and
      *   503 when the datastore could not be reached.
      */
+    /**
+     * Sessions: fork a running session into a NEW tmux session.
+     *
+     * Keyed on the PARENT's tmux name, which is what the row carries and
+     * what the server resolves the live anchor from.
+     *
+     * The parent is not touched by this call: it stays running, listed,
+     * resumable and forkable again. The relationship is recorded on the
+     * CHILD row only.
+     *
+     * @param {string} sessionName - the parent's tmux session name.
+     * @returns {Promise<{success: boolean, session: object,
+     *   parent_session_id: number, lineage_recorded: boolean,
+     *   detail: ?string}>} - ``lineage_recorded`` is separate from
+     *   ``success`` on purpose: the fork can be created and working while
+     *   its parent link failed to land. Rejects 404 when the session is
+     *   unknown and 409 when it has no Claude conversation to resume.
+     */
+    async forkSession(sessionName) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionName)}/fork`,
+            { method: 'POST' }
+        );
+    }
+
     async deleteSessionRecord(sessionUuid) {
         return await this.call(
             `/sessions/records/${encodeURIComponent(sessionUuid)}`,

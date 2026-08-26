@@ -1010,6 +1010,24 @@ class ErrorResponse(BaseModel):
     code: int = Field(..., description="HTTP status code")
 
 
+class ForkSessionResponse(BaseModel):
+    """Response for ``POST /sessions/{session_name}/fork``.
+
+    ``lineage_recorded`` is its own field rather than folded into
+    ``success`` on purpose. The tmux session can be created successfully
+    and the lineage stamp still fail to land - the fork EXISTS and works
+    either way, it just is not linked to its parent in the tree. Reporting
+    that as an outright failure would be wrong (the user has a working
+    forked session) and reporting it as an unqualified success would hide
+    a real gap. It is the third outcome, given its own field.
+    """
+    success: bool = True
+    session: dict = Field(default_factory=dict)
+    parent_session_id: Optional[int] = None
+    lineage_recorded: bool = False
+    detail: Optional[str] = None
+
+
 class SuccessResponse(BaseModel):
     """Standard success response."""
     success: bool = True

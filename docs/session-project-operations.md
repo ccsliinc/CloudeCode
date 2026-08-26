@@ -248,13 +248,48 @@ graph LR
 
 ---
 
-## 4. FORK - **NOT IMPLEMENTED**
+## 4. FORK
 
-> **STOP. Nothing in this section describes shipped behaviour.**
-> There is no fork route, no fork button, no fork CLI entry point and no
-> `(fork)` string anywhere in `src/` or `client/`. Verified by search at
-> `fix/ended-sessions-visibility`, 2026-08-26.
-> What DOES exist is the storage and the detector, drawn in 4.2.
+> **GUI FORK IS BUILT. CLI FORK IS STILL SPECIFICATION.**
+> Shipped 2026-08-26 on `feat/gui-fork`: `POST /sessions/{session_name}/fork`,
+> a `fork` control on every owned running session row, and
+> `src/core/session_fork.py`. The CLI-fork shape in 4.1 is still unbuilt,
+> and it is the INVERSE of what ships - read 4.1 before assuming the two
+> are the same feature.
+
+### 4.0 What the GUI fork actually does - THIS PART IS BUILT
+
+```mermaid
+graph TD
+    U["user clicks fork on a running session<br/>client/js/launchpad.js::_forkSession"]
+    U --> R["POST /sessions/{session_name}/fork<br/>src/api/routes.py::fork_session"]
+    R --> S["resolve the parent's LIVE anchor<br/>src/core/session_fork.py::resolve_fork_source"]
+
+    S --> OK["READY - the row carries a claude_session_uuid"]
+    S --> NC["NO CONVERSATION - 409, REFUSED.<br/>forking anyway would start a BRAND NEW conversation<br/>wearing a fork label<br/>src/core/session_fork.py::FORK_NO_CONVERSATION"]
+    S --> UN["UNRESOLVED - 404, could not evaluate<br/>src/core/session_fork.py::FORK_UNRESOLVED"]
+
+    OK --> L["label = parent label + (fork), append-only<br/>src/core/session_fork.py::fork_label"]
+    L --> C["create_session with agent_extra_args<br/>--resume uuid --fork-session<br/>src/core/session_fork.py::fork_arguments"]
+    C --> M["stamp parent_session_id + fork_kind on the CHILD<br/>src/core/session_fork.py::mark_as_fork"]
+    M --> V["child has a parent AND a real epoch,<br/>so it is LISTED, unlike a conversation row<br/>src/core/session_store.py::list_sessions"]
+
+    P["THE PARENT IS NOT TOUCHED.<br/>not archived, not stopped, not marked.<br/>still running, listed, resumable, forkable again"]
+    M -.-> P
+```
+
+**There is no "was forked from" state, and that is deliberate.** The parent
+process is never touched by a fork, so recording a state on it would be
+writing a verdict about a session that is alive. "Was this forked from" is a
+reverse lookup - `src/core/session_fork.py::children_of` - which costs nothing
+and cannot go stale.
+
+The fork arguments travel THROUGH the user's own wrapper rather than around
+it (`src/config.py::Settings.get_agent_command`, `extra_args`), because the
+wrapper is where their auth is set up. They are deliberately not gated on
+`accepts_model`: that flag is about consuming an OpenRouter model id, and
+gating the fork flags on it would make a fork through a modelless wrapper
+silently launch a fresh conversation instead of the forked one.
 
 ### 4.1 The two fork shapes, as specified
 
@@ -316,14 +351,12 @@ tmux session with its own creation epoch, so it can never match an existing
 rename discriminator. See the comment block in
 `src/core/session_lifecycle.py::_reap_absent_instances`.
 
-### 4.3 OPEN DECISIONS - not resolved here
+### 4.3 DECISIONS - both answered by the owner, 2026-08-26
 
-These are the owner's to answer. They are recorded, not decided.
-
-| # | Question | Why it matters |
+| # | Question | ANSWER |
 |---|---|---|
-| F-1 | Does a forked-away PARENT get its own state, or does it reuse `archived_at`? | `archived_at` currently means "the user deleted this from their lists" and has exactly one writer. Overloading it would make a forked-away parent indistinguishable from a user deletion in every listing query. |
-| F-2 | What does the fork marker do on a SECOND fork? | Append again, count, or replace. Unanswered, and the label is free text with a 200-char cap, so repeated appends are bounded but ugly. |
+| F-1 | Does a forked-away PARENT get its own state, or does it reuse `archived_at`? | **NEITHER. The parent is not touched at all.** In neither fork shape does the parent die: a CLI fork keeps the same process, and a GUI fork spawns a second one alongside it. So there is no state to record - it stays running, listed, resumable and forkable again. `archived_at` keeps its single meaning, "the user deleted this from their lists". Asserted by `tests/test_session_fork.py::test_marking_a_fork_leaves_the_parent_byte_identical`. |
+| F-2 | What does the fork marker do on a SECOND fork? | **Append.** `name(fork)(fork)`. Not deduplicated, not numbered, not capped. The owner's words: "it should never get like that, and it will need to be renamed, but thats my job." Inventing a scheme would be guessing at an intent already stated. |
 
 ---
 
@@ -341,7 +374,8 @@ The same word means different things on different paths. This table is why.
 | rename - external | - | - | - | - | `src/core/session_lifecycle.py::_reap_absent_instances` moves `tmux_name` |
 | close / end | `client/js/api.js::destroySession`, `client/js/api.js::destroyExternalSession` | none | `DELETE /sessions`, `DELETE /sessions/external/name` | - | reaper stamps `stopped` |
 | delete a record | `client/js/launchpad.js` via `client/js/api.js::deleteSessionRecord` | none | `DELETE /sessions/records/session_uuid` | - | - |
-| fork | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by `POST /hooks/claude-event` | - |
+| fork - GUI | `client/js/launchpad.js::_forkSession` via `client/js/api.js::forkSession` | none | `POST /sessions/session_name/fork` | - | parent untouched by construction; `src/core/session_fork.py::children_of` derives the relationship |
+| fork - CLI | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by `POST /hooks/claude-event` | - |
 | project create / edit / delete | `client/js/api.js::createProject`, `client/js/api.js::updateProject`, `client/js/api.js::deleteProject` | none | `POST /projects`, `PATCH /projects/project_name`, `DELETE /projects/project_name` | - | `src/core/project_reconcile.py` re-reads config.json on start |
 | group assign | `client/js/session-sidebar-group-actions.js` - drag, menu and keyboard picker all land on one write | none | `POST /session-groups/assign` | - | `src/core/session_group_store.py::prune_missing` |
 

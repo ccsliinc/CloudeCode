@@ -892,7 +892,10 @@ class Settings(BaseSettings):
         return "claude"
 
     def get_agent_command(
-        self, agent_type: Optional[str], model: Optional[str] = None
+        self,
+        agent_type: Optional[str],
+        model: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
     ) -> str:
         """Resolve the shell command string for a given agent_type.
 
@@ -954,6 +957,13 @@ class Settings(BaseSettings):
         restrict model ids to ``^[A-Za-z0-9._~/-]{1,120}$`` before this is
         ever called - this quoting is defense-in-depth, not the only guard.
 
+        ``extra_args`` appends further arguments to the resolved agent
+        CLI, each shlex-quoted at every boundary it crosses. It exists for
+        the FORK path (``--resume <uuid> --fork-session``), and it goes
+        through the user's own wrapper rather than around it so a fork
+        inherits whatever auth that wrapper sets up. It is deliberately
+        NOT gated on ``accepts_model`` - see the call site's comment.
+
         Returned shape: a single shell string, which the tmux backend
         hands directly to ``new-session ... <cmd>`` (tmux itself execs it
         via the pane's default shell, ``-c <string>`` - one level of shell
@@ -990,7 +1000,16 @@ class Settings(BaseSettings):
             # server-side half of the same rule, so a stale client or a
             # hand-rolled API call cannot reintroduce the bug.
             effective_model = model if chosen.accepts_model else None
-            return render_wrapper_invocation(chosen, scripts_dir, model=effective_model)
+            # extra_args is NOT gated on accepts_model. That flag is about
+            # whether the wrapper consumes an OpenRouter MODEL ID; a fork's
+            # --resume/--fork-session are arguments to the agent CLI itself
+            # and every wrapper forwards "$@" to it. Gating them would make
+            # a fork through a modelless wrapper silently launch a fresh
+            # conversation instead of the forked one - a wrong session, with
+            # no error.
+            return render_wrapper_invocation(
+                chosen, scripts_dir, model=effective_model, extra_args=extra_args
+            )
 
         # No wrapper for this family: fall back to its static
         # ``agents.<family>_command`` string, rendered per the family's own
@@ -1001,7 +1020,10 @@ class Settings(BaseSettings):
         # '$SHELL -i' sources the rc itself). See
         # src/core/agent_families.render_static_command.
         return render_static_command(
-            family, getattr(agents, family.command_field, "") or "", model=model
+            family,
+            getattr(agents, family.command_field, "") or "",
+            model=model,
+            extra_args=extra_args,
         )
 
     def load_auth_config(self) -> AuthConfig:

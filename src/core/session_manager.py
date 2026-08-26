@@ -26,7 +26,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 from fastapi import HTTPException
 import structlog
@@ -1997,8 +1997,16 @@ class SessionManager:
         agent_type: Optional[str] = None,
         model: Optional[str] = None,
         terminal_command_id: Optional[str] = None,
+        agent_extra_args: Optional[List[str]] = None,
     ) -> Session:
         """Create a new Claude Code session.
+
+        ``agent_extra_args`` appends arguments to the resolved agent command
+        (see ``Settings.get_agent_command``). It exists for the FORK path,
+        which passes ``--resume <uuid> --fork-session`` so the new tmux
+        session resumes an existing conversation and branches it. The args
+        travel THROUGH the user's own wrapper, not around it, because the
+        wrapper is where their auth is set up.
 
         Multiple sessions coexist - this does NOT raise if other sessions
         are live (the old single-active invariant is gone). A zombie
@@ -2224,7 +2232,9 @@ class SessionManager:
                 # default config this yields the same string the old
                 # ``f"{claude_cli} --dangerously-skip-permissions"`` did
                 # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
-                command = settings.get_agent_command(resolved_agent_type, model=model)
+                command = settings.get_agent_command(
+                    resolved_agent_type, model=model, extra_args=agent_extra_args
+                )
                 await backend.start(
                     command=command,
                     env=spawn_env,

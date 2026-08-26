@@ -288,34 +288,45 @@ def test_every_cited_route_is_declared_by_a_router():
     )
 
 
-def test_fork_is_still_unimplemented_where_the_chart_says_it_is():
-    """The NOT IMPLEMENTED banner is itself a claim, so it is tested.
+def test_the_gui_fork_the_chart_now_claims_actually_exists():
+    """SUPERSEDES ``test_fork_is_still_unimplemented_where_the_chart_says_it_is``.
 
-    Description: the chart's most load-bearing statement is that fork does
-      not exist. If somebody builds it and does not update section 4, the
-      chart becomes actively misleading in the one place it is shouting. So
-      the absence is asserted: no fork route, and no fork call site in the
-      client.
+    Description: that test asserted fork's ABSENCE, because the chart's most
+      load-bearing statement was that fork did not exist. It said, in its own
+      docstring, that when fork was built it SHOULD fail and the assertion
+      should be replaced rather than deleted quietly. Fork was built on
+      2026-08-26; this is the replacement.
 
-      When fork IS built, this test SHOULD fail. Rewrite section 4 and
-      replace this assertion - do not delete it quietly.
+      The claim has flipped, so the assertion flips with it. Section 4 now
+      states that the GUI fork ships, and a chart that claims a route exists
+      is exactly as misleading as one that claims it does not if nobody
+      checks. So: the route must exist, the client must call it, and the CLI
+      fork - which is still specification, and is the INVERSE shape - must
+      still be marked NOT IMPLEMENTED.
     """
     declared = _declared_routes()
     fork_routes = sorted(r for _, r in declared if "fork" in r.lower())
-    assert not fork_routes, (
-        "a fork route now exists "
-        f"({fork_routes}), but docs/session-project-operations.md section 4 "
-        "still says fork is NOT IMPLEMENTED. Rewrite section 4."
+    assert fork_routes, (
+        "docs/session-project-operations.md section 4 says the GUI fork "
+        "ships, but no router declares a fork route."
     )
 
     client = REPO_ROOT / "client" / "js"
-    offenders: List[str] = []
+    callers: List[str] = []
     if client.is_dir():
         for js in sorted(client.glob("*.js")):
             body = js.read_text(encoding="utf-8", errors="replace")
-            if re.search(r"\bforkSession\b|/sessions/fork\b", body):
-                offenders.append(str(js.relative_to(REPO_ROOT)))
-    assert not offenders, (
-        "the client now has a fork call site "
-        f"({offenders}), but section 4 still says fork is NOT IMPLEMENTED."
+            if re.search(r"\bforkSession\b", body):
+                callers.append(str(js.relative_to(REPO_ROOT)))
+    assert callers, (
+        "section 4 says the fork is reachable from the interface, but no "
+        "client file calls forkSession."
+    )
+
+    chart = (REPO_ROOT / "docs" / "session-project-operations.md").read_text(
+        encoding="utf-8"
+    )
+    assert "fork - CLI | **NOT IMPLEMENTED**" in chart, (
+        "the CLI fork is still unbuilt and is the INVERSE shape of the GUI "
+        "fork; the chart must keep saying so."
     )

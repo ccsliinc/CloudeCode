@@ -306,7 +306,10 @@ def _write_script_file(wrapper: AgentWrapper, scripts_dir: Path) -> Path:
 
 
 def render_wrapper_invocation(
-    wrapper: AgentWrapper, scripts_dir: Path, model: Optional[str] = None
+    wrapper: AgentWrapper,
+    scripts_dir: Path,
+    model: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """Build the single shell-string command for launching this wrapper.
 
@@ -322,6 +325,15 @@ def render_wrapper_invocation(
       model (str | None) - forwarded as $1 to the sourced script / entry
         call; None means no model argument at all (matches plain ``cld``
         with no args).
+      extra_args (list[str] | None) - further positional arguments after
+        the model, forwarded through the same ``"$@"`` chain. Used by the
+        FORK path to pass ``--resume <uuid> --fork-session``, so a fork
+        launches through the user's own wrapper (and therefore their own
+        auth setup) rather than around it. Each element is shlex-quoted
+        independently, so a value can never break out of the layer it
+        was placed in. Note the ``_`` throwaway $0 is emitted whenever
+        there is ANY argument, model or not - without it the first real
+        argument would silently become $0 and never reach "$@".
     Output: str - e.g.
       ``zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; source '"'"'/path/cld.zsh'"'"' "$@"; cld "$@"' _ some-model``
     Example: render_wrapper_invocation(cld_wrapper, dir, None) ->
@@ -332,11 +344,16 @@ def render_wrapper_invocation(
     if wrapper.entry and wrapper.entry.strip():
         inner += f"; {shlex.quote(wrapper.entry.strip())} \"$@\""
     outer = rc_prefixed(inner)
-    if model:
-        # `_` is a throwaway $0; the model becomes $1, forwarded through
-        # every "$@" in `inner` above (source's own arg-forwarding, then
-        # the entry call) - see module docstring point 3.
-        outer += f" _ {shlex.quote(model)}"
+    # `_` is a throwaway $0; everything after it starts at $1 and is
+    # forwarded through every "$@" in `inner` above (source's own
+    # arg-forwarding, then the entry call) - see module docstring point 3.
+    # The $0 slot is emitted whenever there is ANY argument: without it the
+    # first real argument lands in $0, which "$@" does not include, and it
+    # would vanish with no error.
+    positional = [model] if model else []
+    positional += [a for a in (extra_args or []) if a]
+    if positional:
+        outer += " _ " + " ".join(shlex.quote(a) for a in positional)
     return outer
 
 

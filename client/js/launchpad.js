@@ -1167,6 +1167,13 @@ class Launchpad {
             // Pencil rename button, in one of three states - never absent.
             // See _renderRenamePencilHtml for why omitting it was the bug.
             const renamePencil = this._renderRenamePencilHtml(s, escapedName);
+            // Fork is offered on OWNED sessions only. An external tmux
+            // session has no row of ours and therefore no recorded Claude
+            // conversation to resume, so the server would refuse it with
+            // a 409 - better not to paint a control that cannot work.
+            const forkBtn = owned
+                ? `<button type="button" class="running-session-fork" data-fork-name="${escapedName}" title="fork this session into a new one (this session is not changed)" aria-label="fork this session">fork</button>`
+                : '';
             // Status dot: real activity status (running/idle/dead/unknown)
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
             // NOT the old ownership-colored placeholder. title + aria-label
@@ -1206,6 +1213,7 @@ class Launchpad {
                     <span class="running-session-name">${escapedDisplay}</span>
                     ${themeSwatch}
                     ${renamePencil}
+                    ${forkBtn}
                     ${markUnread}
                     ${rowAction}
                   </div>
@@ -1413,6 +1421,64 @@ class Launchpad {
      * Output: Promise<void>.
      * Example: await lp._deleteSessionRecord('a1b2-c3');
      */
+    /**
+     * FORK a running session into a new one that branches its Claude
+     * conversation.
+     *
+     * Description: the parent is NOT changed by this. It keeps running,
+     *   stays listed, stays resumable and can be forked again - there is
+     *   no "was forked from" state anywhere, because the process was
+     *   never touched. The new session is labelled with "(fork)" appended
+     *   and renaming it afterwards is the user's job.
+     *
+     *   THREE OUTCOMES ARE SURFACED, not two. A 409 means the session has
+     *   no recorded Claude conversation to resume, which is a REFUSAL and
+     *   is reported as one - forking anyway would start a brand new
+     *   conversation wearing a fork label and the user would believe they
+     *   had branched their work. And a fork that succeeds while its parent
+     *   link fails to land says so, rather than claiming a clean success:
+     *   the session works, it is simply not linked in the tree.
+     * Inputs: sessionName (string) - the PARENT's tmux session name.
+     * Output: Promise<void>.
+     * Example: await lp._forkSession('cloude_work');
+     */
+    async _forkSession(sessionName) {
+        if (!sessionName) {
+            this.showError('cannot fork: this row carries no session name');
+            return;
+        }
+        let result;
+        try {
+            result = await window.API.forkSession(sessionName);
+        } catch (error) {
+            const status = error && error.status;
+            if (status === 409) {
+                this.showError(
+                    'cannot fork: this session has no Claude conversation yet, '
+                    + 'so there is nothing to branch from'
+                );
+            } else {
+                console.error('Launchpad: fork failed:', error);
+                this.showError(
+                    'failed to fork session: '
+                    + ((error && error.message) || 'the server could not be reached')
+                );
+            }
+            return;
+        }
+        if (result && result.lineage_recorded === false) {
+            // Not an error and not a clean success. Say exactly what is
+            // true: the fork exists and works, the link did not land.
+            this.showError(
+                result.detail
+                || 'forked, but the link back to the parent was not recorded'
+            );
+        }
+        await this.loadSessionAttribution();
+        await this.loadRecentSessions();
+        this.renderProjectList();
+    }
+
     async _deleteSessionRecord(sessionUuid) {
         if (!sessionUuid) {
             // No id means we do not know WHICH row was asked for, and a
@@ -1826,6 +1892,7 @@ class Launchpad {
             const rowActionEl = actions
                 ? e.target.closest(`[${actions.ATTR_ACTION}]`)
                 : null;
+            const forkEl = e.target.closest('.running-session-fork');
             const renameEl = e.target.closest('.running-session-rename');
             const markUnreadEl = e.target.closest('[data-mark-unread]');
             const rowEl = e.target.closest('.running-session-row');
@@ -1837,6 +1904,15 @@ class Launchpad {
             if (markUnreadEl) {
                 e.stopPropagation();
                 await this._handleMarkUnread(markUnreadEl);
+                return;
+            }
+
+            // Fork path: spawn a NEW session branching this one. Stops
+            // propagation so the row click (return/adopt) does not also
+            // fire - forking is not navigation.
+            if (forkEl) {
+                e.stopPropagation();
+                await this._forkSession(forkEl.getAttribute('data-fork-name'));
                 return;
             }
 

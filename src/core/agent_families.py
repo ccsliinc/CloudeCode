@@ -409,7 +409,12 @@ def build_family_summaries(agents, resolve_command: Callable[[str], str]) -> Lis
     return summaries
 
 
-def render_static_command(family: AgentFamily, command: str, model: Optional[str] = None) -> str:
+def render_static_command(
+    family: AgentFamily,
+    command: str,
+    model: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
+) -> str:
     """Render a family's static fallback command into a tmux-ready string.
 
     Description: applies the family's ``sources_zshrc`` column, and its
@@ -419,13 +424,23 @@ def render_static_command(family: AgentFamily, command: str, model: Optional[str
       family (AgentFamily) - the family being launched.
       command (str) - the configured static command, possibly empty.
       model (str | None) - only consulted by the claude last-resort path.
+      extra_args (list[str] | None) - further arguments appended to the
+        command BEFORE any rc wrapping, each shlex-quoted independently.
+        Used by the FORK path for ``--resume <uuid> --fork-session``.
+        Appended before quoting on purpose: doing string surgery on an
+        already-quoted ``zsh -c '...'`` is how quoting bugs get made.
+        Ignored on the last-resort path, which takes no arguments.
     Output: str - a single shell string for ``tmux new-session ... <cmd>``.
     Example: render_static_command(get_family("shell"), "$SHELL -i") -> "$SHELL -i"
     """
     if command and command.strip():
+        rendered = command
+        tail = [a for a in (extra_args or []) if a]
+        if tail:
+            rendered = rendered + " " + " ".join(shlex.quote(a) for a in tail)
         if family.sources_zshrc:
-            return rc_prefixed(command)
-        return command
+            return rc_prefixed(rendered)
+        return rendered
     if family.last_resort is not None:
         return family.last_resort(model)
     return command

@@ -254,9 +254,26 @@ class TestShlexQuoteDefenseInDepth:
     literal model string, not multiple tokens or an injected command).
     """
 
-    def test_source_calls_shlex_quote_on_model_in_agent_wrappers(self) -> None:
+    def test_source_quotes_every_positional_in_agent_wrappers(self) -> None:
+        """Source-level defense in depth, tracking the current mechanism.
+
+        This used to grep for the literal ``shlex.quote(model)``. The model
+        is no longer quoted on its own: it is the FIRST element of a
+        positional list that also carries the fork arguments
+        (``--resume <uuid> --fork-session``), and every element is quoted
+        independently. The intent of the check is unchanged - nothing
+        reaches the shell unquoted - so the assertion tracks the mechanism
+        rather than a call shape that no longer exists. The behavioural
+        half of this pair (``test_render_wrapper_invocation_quotes_colon_model_safely``
+        below) is what actually proves the quoting works.
+        """
         src = Path("src/core/agent_wrappers.py").read_text(encoding="utf-8")
-        assert "shlex.quote(model)" in src
+        assert "positional = [model] if model else []" in src, (
+            "the model is no longer the head of the positional list"
+        )
+        assert "shlex.quote(a) for a in positional" in src, (
+            "positionals are no longer quoted element by element"
+        )
 
     def test_source_calls_shlex_quote_on_model_in_agent_families(self) -> None:
         src = Path("src/core/agent_families.py").read_text(encoding="utf-8")
