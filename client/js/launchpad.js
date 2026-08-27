@@ -4685,13 +4685,43 @@ class Launchpad {
             // poller - a deep link can arrive well before the first poll
             // tick, and can also be a session with no launcher project
             // entry at all (external/adopted).
-            try {
-                await this.loadRunningSessions();
-            } catch (err) {
-                console.warn('Launchpad: loadRunningSessions during deep-link resolve failed:', err);
+            // A LISTING THAT DID NOT RUN IS NOT AN EMPTY LISTING, and
+            // treating it as one is what made deep links unreliable.
+            //
+            // On a COLD page load this resolve can fire before the session
+            // list is fetchable - auth has just settled, the first poll
+            // has not happened. loadRunningSessions() records that as
+            // `runningSessionsListing.ok === false`; it does NOT throw. So
+            // the old single attempt proceeded with an empty row set,
+            // found nothing, and rejected the URL.
+            //
+            // The symptom was baffling because ONE class of name survived:
+            // a slug that is also a launcher PROJECT fell through to the
+            // project branch below and opened anyway. So /session/Foo
+            // worked when Foo was a project, and every other session -
+            // Foo-2, Foo-3, any fork, anything renamed - bounced to `/`
+            // with "No active session", which reads like a broken session
+            // rather than a lookup that never got to look.
+            //
+            // Retry only while we CANNOT DETERMINE. A listing that ran and
+            // genuinely returned nothing is an answer, and we take it.
+            let session = null;
+            for (let attempt = 0; attempt < 5; attempt += 1) {
+                try {
+                    await this.loadRunningSessions();
+                } catch (err) {
+                    console.warn('Launchpad: loadRunningSessions during deep-link resolve failed:', err);
+                }
+                session = this._findRunningSessionBySlug(name);
+                if (session) break;
+                const listing = this.runningSessionsListing || { ok: true };
+                if (listing.ok) break;   // it looked, and there is nothing
+                console.warn(
+                    'Launchpad: session listing unavailable during deep-link resolve '
+                    + `(attempt ${attempt + 1}), reason=${listing.reason || 'unknown'}`
+                );
+                await new Promise(r => setTimeout(r, 300));
             }
-
-            const session = this._findRunningSessionBySlug(name);
 
             if (session) {
                 console.log('Launchpad: deep-link resolved to running session:', session.name);
