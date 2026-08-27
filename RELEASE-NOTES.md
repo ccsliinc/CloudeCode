@@ -1,5 +1,37 @@
 # Release notes
 
+## v1.0.9
+
+Measured against `v1.0.8`. Two changes, both found or motivated by
+testing v1.0.8 end to end against a real LM Studio.
+
+### The cldl base URL must not carry /v1
+
+The Anthropic SDK appends `/v1/messages` to `ANTHROPIC_BASE_URL` itself,
+so the v1.0.8 example wrapper's `http://host/v1` produced
+`/v1/v1/messages`. LM Studio answers that 200 with a 65-byte
+`{"error":"Unexpected endpoint or method"}` - JSON that is not a Message.
+
+Worth knowing because of how it PRESENTS. Claude Code reports it as
+"API returned an empty or malformed response (HTTP 200) - check for a
+proxy or gateway intercepting the request ... 0 stream events received",
+which reads like a transport fault. Every layer underneath was verified
+working first: the model list, a non-streaming Messages call returning
+real content, a streaming call emitting correct Anthropic SSE events, and
+the same again with tools and a system prompt.
+
+**If you imported the `cldl` example from v1.0.8, re-import it** - the
+stored copy in your config.json is not rewritten by an upgrade.
+
+### Session id on the home screen
+
+Each session box now shows its durable `sessions.id` bottom-right, and
+`#7 <- #3` when it is a fork. That id is what `parent_session_id` points
+at, so it is the number that lets a fork tree be followed by eye.
+
+An EXTERNAL tmux session the app never created has no row and shows
+nothing there, rather than an invented `#?`.
+
 ## v1.0.8
 
 Measured against `v1.0.7`. Six branches: one listing fix, one launch-path
