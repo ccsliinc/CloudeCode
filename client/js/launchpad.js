@@ -2380,6 +2380,26 @@ class Launchpad {
         try {
             const response = await window.API.adoptSession(tmuxName, true);
             const session = response.session || response;
+            // THE ADOPT RESPONSE HAS NO LABEL, and the header and tab
+            // title are both resolved from one.
+            //
+            // Session (src/models.py) carries the tmux handle, not the
+            // user's chosen name, so attaching this way titled the tab
+            // "ScratchLab-4_fork" while entering the SAME session from the
+            // sidebar - which passes the listing row - titled it "Refactor
+            // spike (round 2)". Same session, two names, depending on how
+            // you got there.
+            //
+            // The label is already in hand: the listing row was what we
+            // matched to decide to attach at all. Carry it across rather
+            // than widening the Session model, and never overwrite a label
+            // the response did supply.
+            if (session && !session.label) {
+                const known = (this.runningSessions || []).find(
+                    r => r.name === tmuxName
+                );
+                if (known && known.label) session.label = known.label;
+            }
             const initialScrollbackB64 = response.initial_scrollback_b64 || '';
             const fifoStartOffset = typeof response.fifo_start_offset === 'number'
                 ? response.fifo_start_offset
