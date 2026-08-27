@@ -98,7 +98,27 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
             "id": "claude",
             "family": DEFAULT_FAMILY,
             "label": "claude",
-            "script": "claude --dangerously-skip-permissions",
+            # ``command`` IS LOAD-BEARING, not tidiness.
+            #
+            # Every wrapper runs inside ``zsh -c 'source ~/.zshrc; ...'``,
+            # because sourcing the rc is how the pane gets the user's PATH
+            # and their own shell FUNCTIONS (cld, cldor). Sourcing it also
+            # brings in their ALIASES, and a bare ``claude`` then resolves
+            # to whichever alias they happen to have.
+            #
+            # Measured on a real install: a user's rc carried
+            #   alias claude="security unlock-keychain ... && claude"
+            # so every session this wrapper launched blocked forever on an
+            # interactive keychain password prompt, in a pane with nobody
+            # to type it. Claude never started, so its SessionStart hook
+            # never fired, so claude_session_uuid was never bound, so
+            # resume and fork could not work - from one alias.
+            #
+            # ``command`` bypasses aliases AND functions, which is exactly
+            # right HERE (this row means "the plain CLI, no wrapper") and
+            # exactly wrong for a wrapper whose whole point is to call a
+            # function the rc defines. Do not add it to those.
+            "script": "command claude --dangerously-skip-permissions",
             "entry": None,
             "description": "plain Claude Code CLI, no wrapper",
             "default": not has_cld,
