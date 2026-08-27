@@ -111,3 +111,26 @@ file you open is always the newest data.
 Every entry point swallows its own errors. A tracer that can break the
 thing it is tracing is worse than no tracer, and this one runs inside
 request handlers and a subprocess spawn path.
+
+## The launch picker asks TWO questions about models
+
+`accepts_model` (per wrapper) and `needs_model` (per family) are not the
+same question and neither implies the other:
+
+- `accepts_model` - does this wrapper take a model id as `$1`?
+  True for `cldor` AND `cldl`.
+- `needs_model` - must the id come from the LOCAL box, and is a bare
+  launch refused? True only for the `local` family.
+
+The first says a model step exists. The second says WHICH catalog it
+opens. Testing only the first sends every LM Studio launch to the
+OpenRouter list - that was the v1.0.26 fix.
+
+A wrapper inherits `needs_model` from its family, and the wrapper branch
+tests it FIRST, because both flags are true for `cldl` and order is the
+whole decision.
+
+Worth knowing about the shape: a family only contributes a pinned row when
+it has NO wrappers. So any check written on the pinned-family path is
+silently unreachable for a family the user has authored a wrapper for -
+which is every family in a real install eventually.
