@@ -3176,13 +3176,25 @@ class SessionManager:
         # whose launch we had written down. The in-memory value still wins
         # when it has one; the row is a fallback, not an override.
         row_identity = self._identity_for_live_name(tmux_session_name)
-        effective_agent_type = sess.agent_type or (
-            row_identity.get("agent_type") if row_identity else None
-        )
+        effective_agent_type = sess.agent_type
+        from_fingerprint = sess.agent_type_via_fingerprint
+        if not effective_agent_type and row_identity:
+            row_agent_type = row_identity.get("agent_type")
+            if row_agent_type:
+                effective_agent_type = row_agent_type
+                # PROVENANCE TRAVELS WITH THE VALUE. The row's agent_type
+                # was written by a LAUNCH - it is the wrapper id we chose -
+                # so a family resolved from it is a fact, not a guess, and
+                # must not render with the tilde that means "fingerprinted".
+                # Carrying the in-memory fingerprint flag onto a value that
+                # did not come from a fingerprint would label a certainty
+                # as a guess, which is the same defect as the reverse and
+                # just as misleading.
+                from_fingerprint = False
         display_family, display_family_source = resolve_family_for_display(
             effective_agent_type,
             _configured_wrappers(),
-            from_fingerprint=sess.agent_type_via_fingerprint,
+            from_fingerprint=from_fingerprint,
         )
 
         return SessionInfo(
