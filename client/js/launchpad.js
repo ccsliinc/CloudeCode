@@ -837,6 +837,13 @@ class Launchpad {
                     // as two code paths.
                     existing.session_row_id = live.session_row_id !== undefined ? live.session_row_id : null;
                     existing.parent_session_id = live.parent_session_id !== undefined ? live.parent_session_id : null;
+                    // The user's chosen name. This merge builds its row
+                    // field by field, so anything not copied here simply
+                    // does not exist on it - and the renderer then falls
+                    // back to the tmux handle. A rename that persisted,
+                    // resolved and was served correctly still vanished on
+                    // screen for want of this line.
+                    if (live.label !== undefined) existing.label = live.label;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -876,6 +883,8 @@ class Launchpad {
                         // See the `existing` branch above.
                         session_row_id: live.session_row_id !== undefined ? live.session_row_id : null,
                         parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
+                        // See the `existing` branch above.
+                        label: live.label !== undefined ? live.label : null,
                     });
                 }
             }
