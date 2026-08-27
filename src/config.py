@@ -568,6 +568,13 @@ class Settings(BaseSettings):
     # session and are the dominant contributor to that file's growth.
     # Set LOG_LEVEL=DEBUG in .env for local troubleshooting.
     log_level: str = "INFO"
+    # Opt-in verbose tracing for the paths that fail SILENTLY - a hook that
+    # fires and delivers nothing, a spawn whose env is present but stale.
+    # Separate from log_level on purpose: raising that to DEBUG also
+    # unmutes every per-second poller into launchd.log, which is what made
+    # that file unreadable. Writes to <state_dir>/debug/trace.jsonl.
+    # See src/core/debug_trace.py and docs/debugging.md.
+    cloude_debug: str = ""
     # LEGACY (feat/state-directory) - no longer the write target for
     # application state. See get_state_dir(). Optional now: a fresh
     # install never needs to set this. Kept ONLY as the "old location"

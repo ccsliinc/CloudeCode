@@ -80,7 +80,25 @@ def enabled() -> bool:
     Output: bool.
     Example: if enabled(): trace("hook.received", ...)
     """
-    return os.environ.get("CLOUDE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    raw = os.environ.get("CLOUDE_DEBUG")
+    if raw is None:
+        # THE PACKAGED APP DOES NOT INHERIT AN ARBITRARY ENV VAR. It is a
+        # GUI .app whose server subprocess is spawned with a constructed
+        # environment, so `export CLOUDE_DEBUG=1` in a shell - or even
+        # `launchctl setenv` - does not reach it. Measured: the flag was
+        # set and no trace file appeared.
+        #
+        # ``.env`` IS how this app is configured, and Settings already
+        # reads it, so the flag is read from there as well. Without this
+        # the whole facility is unreachable in exactly the deployment it
+        # was built to debug.
+        try:
+            from src.config import settings
+
+            raw = getattr(settings, "cloude_debug", None)
+        except Exception:
+            raw = None
+    return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def fingerprint(value: Any) -> str:

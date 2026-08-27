@@ -2,9 +2,23 @@
 
 ## The one switch
 
+**From source:**
+
 ```bash
 CLOUDE_DEBUG=1
 ```
+
+**For the packaged `.app`,** add it to your `.env` instead:
+
+```
+CLOUDE_DEBUG=1
+```
+
+The `.app` is a GUI application whose server subprocess is spawned with a
+constructed environment, so an exported shell variable — or even
+`launchctl setenv` — does not reach it. That was measured: the flag was
+set and no trace file appeared. `.env` is how this app is configured, and
+`Settings` already reads it.
 
 Set it, restart the app, and the paths that fail silently start writing to
 `<state_dir>/debug/trace.jsonl` — on macOS that is
