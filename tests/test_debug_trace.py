@@ -157,3 +157,46 @@ def test_a_very_long_string_is_truncated_with_a_marker(traced):
     row = _lines(traced)[0]
     assert "truncated 5000 chars" in row["blob"]
     assert len(row["blob"]) < 1000
+
+
+# --- redaction must not eat the evidence -------------------------------------
+
+
+def test_a_field_that_merely_contains_a_hint_is_not_redacted(traced):
+    """THE TRACER HID ITS OWN MOST USEFUL FIELD.
+
+    The first rule was ``"key" in key.lower()``, so ``payload_keys`` - a
+    list of field NAMES, the single most diagnostic thing the hook trace
+    records - came out as a fingerprint. A tracer that hides the evidence
+    is worse than one that is merely noisy, and this one hid it while
+    looking like it was working.
+    """
+    debug_trace.trace("x", payload_keys=["session_id", "source"])
+    body = traced.read_text()
+    assert "session_id" in body and "source" in body
+    assert "fp=" not in body
+
+
+def test_a_word_that_happens_to_contain_a_hint_is_safe(traced):
+    debug_trace.trace("x", monkey="not a secret", keyboard="also fine")
+    body = traced.read_text()
+    assert "not a secret" in body and "also fine" in body
+
+
+@pytest.mark.parametrize("key", ["api_key", "x-api-key", "auth.token", "JWT_SECRET"])
+def test_real_credentials_are_still_redacted(traced, key):
+    """The bias stays toward redacting."""
+    debug_trace.trace("x", **{key: "REALSECRET"})
+    assert "REALSECRET" not in traced.read_text()
+
+
+def test_a_non_string_value_under_a_secret_name_is_kept(traced):
+    """A count or a bool is not a credential.
+
+    Fingerprinting one destroys the only information the line carried and
+    protects nothing.
+    """
+    debug_trace.trace("x", token_count=42, has_key=True)
+    body = traced.read_text()
+    assert '"token_count": 42' in body
+    assert '"has_key": true' in body

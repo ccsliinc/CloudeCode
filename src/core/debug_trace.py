@@ -50,6 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,9 +121,24 @@ def fingerprint(value: Any) -> str:
 
 
 def _is_secret(key: str) -> bool:
-    """Whether a field name suggests its value must not be printed."""
-    low = str(key).lower()
-    return any(hint in low for hint in _SECRET_HINTS)
+    """Whether a field name suggests its value must not be printed.
+
+    Description: matched on WORD BOUNDARIES, not bare substrings. The
+      first version used ``"key" in low``, which redacted ``payload_keys``
+      - a list of field NAMES, the single most diagnostic thing the hook
+      trace records - into a fingerprint. A tracer that hides the evidence
+      is worse than one that is merely noisy, and it hid it while looking
+      like it was working.
+
+      The bias is still toward redacting: a name like ``api_key`` or
+      ``x-api-key`` still matches. What no longer matches is a word that
+      merely CONTAINS one of the hints as a fragment.
+    Inputs: key (str).
+    Output: bool.
+    Example: _is_secret("payload_keys")  # False
+    """
+    parts = re.split(r"[^a-z0-9]+", str(key).lower())
+    return any(part in _SECRET_HINTS for part in parts if part)
 
 
 def scrub(payload: Any) -> Any:
@@ -137,7 +153,11 @@ def scrub(payload: Any) -> Any:
     if isinstance(payload, dict):
         out: Dict[str, Any] = {}
         for key, value in payload.items():
-            out[str(key)] = fingerprint(value) if _is_secret(key) else scrub(value)
+            # A NON-STRING VALUE IS NOT A CREDENTIAL. A list of field
+            # names, a count, a bool - fingerprinting those destroys the
+            # only information the line carried and protects nothing.
+            secret = _is_secret(key) and isinstance(value, str)
+            out[str(key)] = fingerprint(value) if secret else scrub(value)
         return out
     if isinstance(payload, (list, tuple)):
         return [scrub(v) for v in payload]
