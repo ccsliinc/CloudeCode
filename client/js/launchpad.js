@@ -1095,6 +1095,35 @@ class Launchpad {
      * pass only builds the DOM. ``data-name`` / ``data-active`` attributes
      * are the hooks event delegation will use.
      */
+    /**
+     * The durable row id, bottom-right of a session box, with its parent
+     * when the session is a fork.
+     *
+     * Description: renders ``#7`` normally and ``#7 ← #3`` for a fork, so
+     *   a fork tree can be followed by eye across screens. The id is
+     *   ``sessions.id``, which is what ``parent_session_id`` points at -
+     *   showing anything else here (the uuid, the tmux name) would give
+     *   the user a number that does not match the link it is meant to
+     *   help them follow.
+     *
+     *   RENDERS NOTHING when there is no id, and that is deliberate. An
+     *   EXTERNAL tmux session the app never created genuinely has no row.
+     *   Printing "#?" or "#0" there would be inventing an identity for a
+     *   session we have no record of, which is worse than a blank corner.
+     * Inputs: s (object) - a running-session row from /sessions/attachable.
+     * Output: string - HTML, possibly empty.
+     * Example: lp._renderSessionIdHtml({session_row_id: 7, parent_session_id: 3})
+     */
+    _renderSessionIdHtml(s) {
+        const id = s && s.session_row_id;
+        if (id === null || id === undefined || id === '') return '';
+        const parent = s.parent_session_id;
+        const forked = (parent !== null && parent !== undefined && parent !== '')
+            ? `<span class="running-session-fork-of" title="forked from session #${this._escapeHtml(String(parent))}">← #${this._escapeHtml(String(parent))}</span>`
+            : '';
+        return `<span class="running-session-id" title="session id ${this._escapeHtml(String(id))}">#${this._escapeHtml(String(id))}${forked}</span>`;
+    }
+
     renderRunningSessions() {
         const container = document.getElementById('running-sessions-list');
         if (!container) return;
@@ -1221,6 +1250,7 @@ class Launchpad {
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                     ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
                     ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
+                    ${this._renderSessionIdHtml(s)}
                   </div>
                 </div>
             `;

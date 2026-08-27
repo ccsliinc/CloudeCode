@@ -780,6 +780,26 @@ class AttachableSession(BaseModel):
     # subset of the unified vocabulary: 'dead' | 'working' |
     # 'finished_unread' | 'idle' | 'unknown' (never 'question' or
     # 'working_subagent' - those require a live hook stream).
+    # THE DURABLE ROW ID, shown bottom-right on the home screen so a
+    # human can point at a session and follow a fork tree. Declared HERE
+    # and not only produced by the enricher: this is a response_model,
+    # which is a FILTER - a field the model does not name is silently
+    # DELETED from every response, even when the server had it the whole
+    # way up to serialization. That exact defect has hit this file more
+    # than once (themeCss, the audio-config block), and the symptom is a
+    # value that provably exists upstream and never arrives.
+    #
+    # OPTIONAL, AND None IS A REAL ANSWER, not a gap: an EXTERNAL tmux
+    # session the app never created has no row, so it has no id. The UI
+    # renders nothing there rather than inventing a number.
+    session_row_id: Optional[int] = Field(
+        None,
+        description="sessions.id for this instance; None when we have no row",
+    )
+    parent_session_id: Optional[int] = Field(
+        None,
+        description="sessions.id this one was forked from; None = not a fork",
+    )
     status: str = Field(
         default="unknown",
         description=(

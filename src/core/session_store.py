@@ -508,3 +508,45 @@ def observed_origin_for(name: str, owned_tmux_names: Set[str]) -> str:
         if name in owned_tmux_names
         else SESSION_ORIGIN_OBSERVED
     )
+
+
+def identity_for_instance(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """The stored ROW IDENTITY for one tmux instance, or None.
+
+    Description: returns the durable ``sessions.id`` a human can point at,
+      plus ``parent_session_id`` so a fork can render where it came from.
+      Both are integers the user can compare across screens, which is the
+      whole point: a fork tree is unreadable when every row is labelled
+      only by a name the user reuses.
+
+      Keyed on the FULL ``(socket, name, epoch)`` triple, never the name
+      alone. A tmux name is reusable and this app re-mints them, so a
+      name-only read can hand back a DEAD session's id for a live pane -
+      and an id is exactly the thing a user would then trust as identity.
+
+      A NULL epoch answers None rather than falling back to the name: a
+      row with no epoch is not a live tmux instance (it is an imported
+      stopped session or a lineage row), so there is nothing to decorate.
+    Inputs: conn (sqlite3.Connection). socket (str). name (str).
+      epoch (int | None).
+    Output: dict with ``id`` and ``parent_session_id``, or None when this
+      instance has no row. None means "we have no record of this", which
+      is a real answer for an external tmux session the app never created.
+    Example: identity_for_instance(conn, socket='cloude', name='a', epoch=1)
+    """
+    if not sessions_table_ready(conn) or not name or epoch is None:
+        return None
+    row = conn.execute(
+        "SELECT id, parent_session_id FROM sessions "
+        "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch = ?",
+        (socket, name, epoch),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"id": int(row["id"]), "parent_session_id": row["parent_session_id"]}

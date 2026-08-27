@@ -2975,6 +2975,32 @@ body.home-header-active {
     flex-wrap: wrap;
 }
 
+/* The durable session id, pinned to the BOTTOM RIGHT of a session box.
+   `margin-left: auto` is what puts it there: the badges row is a flex
+   line, so this takes the remaining space and the id lands hard right
+   while the badges stay left. Styled explicitly rather than inheriting -
+   an unclassed span here picks up the row's body size and reads as a
+   badge, which is the one thing it is not. It is a quiet identifier the
+   eye should find when it goes looking, not a status. */
+.running-session-id {
+    margin-left: auto;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.68em;
+    color: var(--color-fg-muted);
+    opacity: 0.75;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* The "forked from" pointer, rendered inside the id. Deliberately dimmer
+   than the id itself: the session's OWN id is the thing being identified
+   and the parent is context for it, so the two must not read as equals. */
+.running-session-fork-of {
+    margin-left: 4px;
+    opacity: 0.7;
+}
+
 .badge {
     font-size: 0.7em;
     padding: 2px 6px;

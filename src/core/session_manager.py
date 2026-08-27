@@ -3957,6 +3957,49 @@ class SessionManager:
                 except Exception:
                     pass
 
+    def _identity_for_instance(self, tmux_name, epoch):
+        """Read the stored ROW IDENTITY for one tmux INSTANCE, or None.
+
+        Description: same exact-key contract as
+          :meth:`_label_for_instance` and for the same reason - an id is
+          something a human reads AS identity, so a name-only read that
+          could hand back a dead session's id is not acceptable here.
+          Keyed on the full ``(socket, name, epoch)`` triple.
+
+          Never raises: a decoration read must not be able to fail the
+          payload it decorates.
+        Inputs: tmux_name (str | None). epoch (int | None).
+        Output: dict with ``id`` and ``parent_session_id``, or None. None
+          is a real answer - an external tmux session the app never
+          created has no row, and the UI renders nothing rather than
+          inventing an id for it.
+        Example: self._identity_for_instance('cloude_a', 1700000000)
+        """
+        from src.core.session_store import identity_for_instance
+
+        if not tmux_name or epoch is None:
+            return None
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            return identity_for_instance(
+                conn,
+                socket=self._tmux_socket_name(),
+                name=tmux_name,
+                epoch=epoch,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("session_identity_instance_read_threw", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def _label_for_instance(self, tmux_name, epoch):
         """Read the stored LABEL for one tmux INSTANCE, or None.
 
@@ -4228,6 +4271,20 @@ class SessionManager:
                 # weaker guarantee on a row a human reads as identity.
                 row["label"] = self._label_for_instance(
                     name, row.get("created_at_epoch")
+                )
+                # The durable row id the user can point at, plus its
+                # parent when it is a fork. Same exact-key read as the
+                # label above: an id is read AS identity, so a name-only
+                # lookup that could return a dead session's id is not
+                # acceptable. An external session has no row and gets
+                # None, which the UI renders as nothing rather than an
+                # invented number.
+                identity = self._identity_for_instance(
+                    name, row.get("created_at_epoch")
+                )
+                row["session_row_id"] = identity["id"] if identity else None
+                row["parent_session_id"] = (
+                    identity["parent_session_id"] if identity else None
                 )
                 status_row = status_map.get(name)
                 raw_tmux_status = status_row["status"] if status_row else STATUS_UNKNOWN

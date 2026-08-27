@@ -1,0 +1,135 @@
+"""The durable row id shown on a session box, and the exact-key read.
+
+WHY AN ID ON SCREEN AT ALL. A fork tree is unreadable when every row is
+labelled only by a name the user reuses and re-mints. ``sessions.id`` is
+the thing ``parent_session_id`` actually points at, so it is the only
+number that lets a human follow "this came from that" by eye.
+
+WHY THE EXACT KEY. An id is read AS identity. A name-only lookup can
+return a DEAD session's row for a live pane, because tmux names are
+reusable and this app re-mints them - and the user would then trust that
+number. So the read is keyed on the full (socket, name, epoch) triple,
+and a row with no epoch answers None rather than falling back.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from contextlib import closing
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+os.environ.setdefault("DEFAULT_WORKING_DIR", "/tmp")
+os.environ.setdefault("LOG_DIRECTORY", "/tmp")
+os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
+os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
+
+# ruff: noqa: E402
+from src.core.db import connect, db_path_for, transaction
+from src.core.db_migration import ensure_db_migrated
+from src.core.session_store import identity_for_instance
+from src.models import AttachableSession
+
+SOCKET = "cloude"
+
+
+@pytest.fixture()
+def conn(tmp_path):
+    """A migrated cloude.db connection."""
+    ensure_db_migrated(tmp_path, 4, "0.8.2")
+    with closing(connect(db_path_for(tmp_path))) as connection:
+        yield connection
+
+
+def _insert(conn, uuid, *, name, epoch, parent=None):
+    """Insert one sessions row and return its id."""
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO sessions (session_uuid, tmux_socket, tmux_name, "
+            "tmux_created_epoch, parent_session_id, origin, lifecycle, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'created', 'running', 'x', 'x')",
+            (uuid, SOCKET, name, epoch, parent),
+        )
+        return int(cur.lastrowid)
+
+
+# --- the model must DECLARE the fields ---------------------------------------
+
+
+def test_the_response_model_declares_both_fields():
+    """A response_model is a FILTER, not a passthrough.
+
+    A field the model does not name is silently DELETED from every
+    response even when the server had it all the way up to serialization.
+    That defect has hit this file more than once, and the symptom is a
+    value that provably exists upstream and never arrives at the client.
+    """
+    assert "session_row_id" in AttachableSession.model_fields
+    assert "parent_session_id" in AttachableSession.model_fields
+
+
+def test_both_default_to_none_so_an_external_session_serializes():
+    """An external tmux session has no row, so it has no id."""
+    row = AttachableSession(
+        name="ext", created_by_cloude=False, created_at_epoch=1, window_count=1,
+        status="unknown", unread=False,
+    )
+    assert row.session_row_id is None
+    assert row.parent_session_id is None
+
+
+# --- the exact-key read ------------------------------------------------------
+
+
+def test_it_returns_the_id_and_parent(conn):
+    parent = _insert(conn, "p", name="work", epoch=1000)
+    child = _insert(conn, "c", name="work_fork", epoch=2000, parent=parent)
+    got = identity_for_instance(conn, socket=SOCKET, name="work_fork", epoch=2000)
+    assert got == {"id": child, "parent_session_id": parent}
+
+
+def test_a_non_fork_reports_a_null_parent(conn):
+    rid = _insert(conn, "p", name="work", epoch=1000)
+    got = identity_for_instance(conn, socket=SOCKET, name="work", epoch=1000)
+    assert got == {"id": rid, "parent_session_id": None}
+
+
+def test_a_REUSED_NAME_never_returns_the_dead_rows_id(conn):
+    """THE REASON THIS IS KEYED ON THE TRIPLE.
+
+    tmux names are reusable and this app re-mints them. A name-only read
+    would hand back the OLD session's id for the live pane, and the user
+    would trust that number as identity - which is precisely what an id
+    on screen invites them to do.
+    """
+    old = _insert(conn, "old", name="work", epoch=1000)
+    new = _insert(conn, "new", name="work", epoch=2000)
+    assert identity_for_instance(conn, socket=SOCKET, name="work", epoch=2000) == {
+        "id": new, "parent_session_id": None
+    }
+    assert identity_for_instance(conn, socket=SOCKET, name="work", epoch=1000) == {
+        "id": old, "parent_session_id": None
+    }
+
+
+def test_a_missing_epoch_answers_none_rather_than_guessing(conn):
+    """A row with no epoch is not a live instance, so there is nothing to
+    decorate - and falling back to the name is the bug above."""
+    _insert(conn, "p", name="work", epoch=1000)
+    assert identity_for_instance(conn, socket=SOCKET, name="work", epoch=None) is None
+
+
+def test_an_unknown_instance_answers_none(conn):
+    """An external session the app never created has no row. None is a
+    real answer here, and the UI renders nothing rather than a number."""
+    assert identity_for_instance(conn, socket=SOCKET, name="ghost", epoch=1) is None
+
+
+def test_a_different_socket_does_not_match(conn):
+    _insert(conn, "p", name="work", epoch=1000)
+    assert identity_for_instance(conn, socket="other", name="work", epoch=1000) is None
