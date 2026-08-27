@@ -216,14 +216,48 @@ async def fork_session(request: Request, session_name: str):
 
     import uuid as _uuid
 
-    child = await session_manager.create_session(
-        session_id=f"ses_{_uuid.uuid4().hex[:8]}",
+    debug_trace.trace(
+        "fork.creating",
+        parent=session_name,
+        parent_id=source.parent_id,
+        label=label,
         working_dir=source.working_dir,
-        project_name=label,
         agent_type=source.agent_type,
         model=source.model,
-        agent_extra_args=session_fork.fork_arguments(source.claude_session_uuid),
     )
+    try:
+        child = await session_manager.create_session(
+            session_id=f"ses_{_uuid.uuid4().hex[:8]}",
+            working_dir=source.working_dir,
+            project_name=label,
+            agent_type=source.agent_type,
+            model=source.model,
+            agent_extra_args=session_fork.fork_arguments(source.claude_session_uuid),
+        )
+    except Exception as exc:
+        # A BARE 500 IS UNHELPABLE, and this endpoint produced one. The
+        # spawn can fail for reasons that are entirely actionable - a name
+        # collision, an unwritable working directory, a wrapper that will
+        # not resolve - and every one of them arrived at the user as three
+        # digits with no body. Say what happened.
+        logger.warning(
+            "fork_create_failed",
+            parent=session_name,
+            label=label,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        debug_trace.trace(
+            "fork.create_failed",
+            parent=session_name,
+            label=label,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not create the forked session: {exc}",
+        )
 
     child_tmux = getattr(child, "tmux_session", None)
 
