@@ -2975,6 +2975,63 @@ body.home-header-active {
     flex-wrap: wrap;
 }
 
+/* Non-blocking error banners, replacing a native alert().
+   Fixed and stacked at the top so they are unmissable without halting
+   the page - the whole point of the change is that an error message must
+   not stop the program it is describing. Styled explicitly: an unclassed
+   div here would render as bare serif text over the app. */
+#launchpad-error-stack {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(640px, calc(100vw - 32px));
+    pointer-events: none;
+}
+
+.launchpad-error-card {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--color-bg-elevated, #1a1a1a);
+    border: 1px solid var(--color-danger-strong, #e64);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-strong, #fff);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.launchpad-error-text {
+    flex: 1;
+    min-width: 0;
+    /* A server detail can be long and can carry a path. Wrap it rather
+       than truncating: an error you cannot read whole is not actionable. */
+    overflow-wrap: anywhere;
+}
+
+.launchpad-error-dismiss {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.launchpad-error-dismiss:hover { color: var(--color-fg-strong, #fff); }
+
 /* The durable session id, pinned to the BOTTOM RIGHT of a session box.
    `margin-left: auto` is what puts it there: the badges row is a flex
    line, so this takes the remaining space and the id lands hard right

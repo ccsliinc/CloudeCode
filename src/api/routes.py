@@ -71,6 +71,7 @@ from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
+from src.core.session_manager import _configured_wrappers
 from src.core.session_lineage import LINEAGE_UNRESOLVED
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
 
@@ -928,7 +929,7 @@ async def _apply_session_theme(
     # hardcoding the strings, so a future change to the resolver's
     # "no value at all" outcome does not have to be remembered here too.
     placeholder_family, placeholder_family_source = resolve_family_for_display(
-        None, getattr(getattr(settings, "agents", None), "wrappers", None) or []
+        None, _configured_wrappers()
     )
     return SessionInfo(
         session=placeholder_session,

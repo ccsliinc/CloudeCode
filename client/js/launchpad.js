@@ -4996,10 +4996,63 @@ class Launchpad {
     }
 
     showError(message) {
-        // For now, just log and use browser alert
-        // Could be improved with a proper error UI element
+        /**
+         * Surface an error WITHOUT blocking the page.
+         *
+         * Description: this used a native ``alert()``, and three other
+         *   places in this file already documented that errors should be
+         *   inline "(no alert())" while the alert stayed put. It is not a
+         *   style problem. A native alert HALTS the page: timers stop, the
+         *   poller stops, and nothing else can run until a human dismisses
+         *   it. The fork refusal found that the hard way - the server
+         *   answered 409 correctly with a clear reason, the client picked
+         *   the right branch, and the whole app then froze on the modal
+         *   that was supposed to be telling you about it. An error message
+         *   that stops the program is worse than the error.
+         *
+         *   Deliberately NOT routed through ToastManager: that surface is
+         *   for server-pushed session toasts with ack semantics, and a
+         *   dismiss there syncs to the server. A local client-side error
+         *   has nothing to acknowledge and no server record to update.
+         * Inputs: message (string).
+         * Output: void.
+         * Example: lp.showError('cannot fork: no conversation to branch');
+         */
         console.error('Launchpad Error:', message);
-        alert(`Error: ${message}`);
+        try {
+            let host = document.getElementById('launchpad-error-stack');
+            if (!host) {
+                host = document.createElement('div');
+                host.id = 'launchpad-error-stack';
+                document.body.appendChild(host);
+            }
+            const card = document.createElement('div');
+            card.className = 'launchpad-error-card';
+            card.setAttribute('role', 'alert');
+            const text = document.createElement('span');
+            text.className = 'launchpad-error-text';
+            // textContent, never innerHTML: this string can carry a server
+            // detail, a filesystem path or an exception message, none of
+            // which is ours to trust as markup.
+            text.textContent = message;
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'launchpad-error-dismiss';
+            close.setAttribute('aria-label', 'dismiss this error');
+            close.textContent = '\u00d7';
+            const remove = () => { if (card.parentNode) card.parentNode.removeChild(card); };
+            close.addEventListener('click', remove);
+            card.appendChild(text);
+            card.appendChild(close);
+            host.appendChild(card);
+            // Auto-dismiss, but generously: an error you cannot re-read is
+            // an error you cannot act on.
+            setTimeout(remove, 12000);
+        } catch (err) {
+            // The reporter must never become the fault. If the DOM is not
+            // there to write into, the console line above already ran.
+            console.error('Launchpad: could not render error banner:', err);
+        }
     }
 }
 

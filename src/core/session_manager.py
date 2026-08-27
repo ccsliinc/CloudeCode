@@ -185,6 +185,39 @@ class ProbeHealth:
     detail: Optional[str] = None
 
 
+def _configured_wrappers():
+    """The user's configured launch wrappers, or an empty list.
+
+    Description: THE ONE PLACE this is read for display resolution, and it
+      exists because the previous spelling was wrong everywhere and could
+      not fail. Three call sites used::
+
+          getattr(getattr(settings, "agents", None), "wrappers", None) or []
+
+      ``Settings`` has no ``agents`` attribute - the agents block lives on
+      ``settings.load_auth_config().agents`` - so that chain returned None,
+      then ``or []``, on every machine, forever. The defensive getattr
+      turned a WRONG ATTRIBUTE PATH into a plausible empty answer instead
+      of an AttributeError, and an empty wrapper list is not obviously
+      wrong: ``resolve_family_for_display`` simply could not match any
+      wrapper id, so every session launched through a wrapper rendered
+      "unknown family". The session we knew the most about displayed worse
+      than one we had only fingerprinted.
+
+      The defensiveness that matters is kept - a config that will not load
+      must not break a listing - but it is now around the IO, not around a
+      misspelled path.
+    Output: list - AgentWrapper objects; empty only when the config truly
+      has none or could not be read.
+    Example: _configured_wrappers()
+    """
+    try:
+        return settings.load_auth_config().agents.wrappers or []
+    except Exception as exc:  # noqa: BLE001 - a bad config must not break a listing
+        logger.warning("configured_wrappers_unavailable", error=str(exc))
+        return []
+
+
 class SessionManager:
     """Manages Claude Code sessions via a pluggable SessionBackend."""
 
@@ -3137,7 +3170,7 @@ class SessionManager:
         # textually indistinguishable from launched ones.
         display_family, display_family_source = resolve_family_for_display(
             sess.agent_type,
-            getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+            _configured_wrappers(),
             from_fingerprint=sess.agent_type_via_fingerprint,
         )
 
@@ -4338,7 +4371,7 @@ class SessionManager:
                 row["agent_type"] = effective_agent_type
                 display_family, display_family_source = resolve_family_for_display(
                     effective_agent_type,
-                    getattr(getattr(settings, "agents", None), "wrappers", None) or [],
+                    _configured_wrappers(),
                     from_fingerprint=from_fingerprint,
                 )
                 row["agent_family"] = display_family.name if display_family else None
