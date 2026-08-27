@@ -256,6 +256,17 @@ class SessionInfo(BaseModel):
     # two rows. None means the row carries no label yet and the client
     # should fall back to ``tmux_session`` - which is what every v1.0.4
     # client does anyway, so an older client is unaffected.
+    # Same pair as AttachableSession, and declared for the same reason:
+    # this is a response_model, which is a FILTER. A field it does not
+    # name is deleted from every response even when the server had it.
+    session_row_id: Optional[int] = Field(
+        None,
+        description="sessions.id for this instance; None when we have no row",
+    )
+    parent_session_id: Optional[int] = Field(
+        None,
+        description="sessions.id this one was forked from; None = not a fork",
+    )
     label: Optional[str] = Field(
         default=None,
         description=(

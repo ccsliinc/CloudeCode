@@ -830,6 +830,13 @@ class Launchpad {
                     existing.agent_family = live.agent_family !== undefined ? live.agent_family : null;
                     existing.agent_family_source = live.agent_family_source !== undefined ? live.agent_family_source : null;
                     if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
+                    // The durable row id, so an OPEN session shows the same
+                    // "#7" a detached one does. Without this the id appeared
+                    // and vanished depending on whether you happened to have
+                    // the session open, which reads as a glitch rather than
+                    // as two code paths.
+                    existing.session_row_id = live.session_row_id !== undefined ? live.session_row_id : null;
+                    existing.parent_session_id = live.parent_session_id !== undefined ? live.parent_session_id : null;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -866,6 +873,9 @@ class Launchpad {
                         // to a guessed string.
                         agent_family: live.agent_family !== undefined ? live.agent_family : null,
                         agent_family_source: live.agent_family_source !== undefined ? live.agent_family_source : null,
+                        // See the `existing` branch above.
+                        session_row_id: live.session_row_id !== undefined ? live.session_row_id : null,
+                        parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
                     });
                 }
             }

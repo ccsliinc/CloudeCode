@@ -543,10 +543,58 @@ def identity_for_instance(
     if not sessions_table_ready(conn) or not name or epoch is None:
         return None
     row = conn.execute(
-        "SELECT id, parent_session_id FROM sessions "
+        "SELECT id, parent_session_id, agent_type FROM sessions "
         "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch = ?",
         (socket, name, epoch),
     ).fetchone()
     if row is None:
         return None
-    return {"id": int(row["id"]), "parent_session_id": row["parent_session_id"]}
+    return {
+        "id": int(row["id"]),
+        "parent_session_id": row["parent_session_id"],
+        # Carried so a caller can fall back to it. The DB row is
+        # AUTHORITATIVE for what launched this session: an ADOPTED session's
+        # in-memory Session object comes back with agent_type None, while
+        # the row it was adopted from still records the wrapper id exactly.
+        # Resolving the family off the in-memory copy therefore reported
+        # "unknown" about a session whose launch we had written down.
+        "agent_type": row["agent_type"],
+    }
+
+
+def identity_for_live_name(
+    conn: sqlite3.Connection, *, socket: str, name: str
+) -> Optional[Dict[str, Any]]:
+    """Row identity for a LIVE tmux session, keyed on name alone.
+
+    Description: the exact-key :func:`identity_for_instance` needs an
+      epoch, and a live SessionInfo does not carry one - it knows the tmux
+      NAME it is attached to and nothing more. So this takes the NEWEST
+      instance for that name, which for a live session is the right row by
+      construction: the pane you are attached to is the most recent
+      instance of that name, and any older row with the same name is a
+      dead session whose name was reused.
+
+      That is a weaker guarantee than the exact key, and it is stated
+      rather than hidden. Use :func:`identity_for_instance` wherever an
+      epoch is available.
+    Inputs: conn (sqlite3.Connection). socket (str). name (str).
+    Output: dict with ``id``, ``parent_session_id``, ``agent_type``, or
+      None when no row carries that name.
+    Example: identity_for_live_name(conn, socket='cloude', name='a')
+    """
+    if not sessions_table_ready(conn) or not name:
+        return None
+    row = conn.execute(
+        "SELECT id, parent_session_id, agent_type FROM sessions "
+        "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch IS NOT NULL "
+        "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
+        (socket, name),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"]),
+        "parent_session_id": row["parent_session_id"],
+        "agent_type": row["agent_type"],
+    }

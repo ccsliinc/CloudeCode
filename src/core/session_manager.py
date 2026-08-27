@@ -3168,8 +3168,19 @@ class SessionManager:
         # provenance that DOES need to survive - see its docstring on
         # ``Session`` for why fingerprint-derived values are otherwise
         # textually indistinguishable from launched ones.
+        # THE DATABASE ROW IS AUTHORITATIVE FOR WHAT LAUNCHED THIS SESSION.
+        # An ADOPTED session's in-memory Session comes back with
+        # agent_type None, while the row it was adopted from still records
+        # the wrapper id exactly - so resolving the family off the
+        # in-memory copy alone reported "unknown family" about a session
+        # whose launch we had written down. The in-memory value still wins
+        # when it has one; the row is a fallback, not an override.
+        row_identity = self._identity_for_live_name(tmux_session_name)
+        effective_agent_type = sess.agent_type or (
+            row_identity.get("agent_type") if row_identity else None
+        )
         display_family, display_family_source = resolve_family_for_display(
-            sess.agent_type,
+            effective_agent_type,
             _configured_wrappers(),
             from_fingerprint=sess.agent_type_via_fingerprint,
         )
@@ -3186,7 +3197,11 @@ class SessionManager:
             # the tmux name - so a session with no label looks exactly
             # like it did before labels existed.
             label=self._label_for_tmux_name(tmux_session_name),
-            agent_type=sess.agent_type,
+            session_row_id=row_identity["id"] if row_identity else None,
+            parent_session_id=(
+                row_identity["parent_session_id"] if row_identity else None
+            ),
+            agent_type=effective_agent_type,
             agent_family=display_family.name if display_family else None,
             agent_family_source=display_family_source,
             pinned_theme=sess.pinned_theme,
@@ -3982,6 +3997,47 @@ class SessionManager:
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("session_label_read_threw", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _identity_for_live_name(self, tmux_name):
+        """Row identity for a LIVE session, which knows only its tmux name.
+
+        Description: a SessionInfo carries no creation epoch, so the exact
+          triple is not available here. This takes the NEWEST instance of
+          that name, which for a LIVE session is the right row by
+          construction - the pane you are attached to is the most recent
+          instance, and an older row with the same name is a dead session
+          whose name was reused. Weaker than
+          :meth:`_identity_for_instance`, and said out loud rather than
+          hidden.
+
+          Never raises: a decoration read must not fail the payload it
+          decorates.
+        Inputs: tmux_name (str | None).
+        Output: dict with ``id``, ``parent_session_id``, ``agent_type``, or
+          None.
+        Example: self._identity_for_live_name('cloude_work')
+        """
+        from src.core.session_store import identity_for_live_name
+
+        if not tmux_name:
+            return None
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            return identity_for_live_name(
+                conn, socket=self._tmux_socket_name(), name=tmux_name
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("session_identity_live_read_threw", error=str(exc))
             return None
         finally:
             if conn is not None:
