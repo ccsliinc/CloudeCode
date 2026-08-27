@@ -72,6 +72,15 @@ from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
 from src.core import debug_trace
+
+# MODULE SCOPE, DELIBERATELY. This was imported inside two individual
+# handlers, so any NEW handler that used it raised
+# ``NameError: name 'run_in_threadpool' is not defined`` - which FastAPI
+# turns into a bare 500 with no body. Two routes shipped that way (the
+# fork endpoint and the LM Studio model list) and both failed with three
+# digits and nothing to act on. A helper used by more than one handler
+# belongs at the top.
+from fastapi.concurrency import run_in_threadpool
 from src.core.session_manager import _configured_wrappers
 from src.core.session_lineage import LINEAGE_UNRESOLVED
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
