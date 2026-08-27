@@ -57,11 +57,30 @@ PAYLOAD = (
     '"source":"startup"}'
 )
 
-#: Generous relative to the command's own ``curl -m 3``. The point is not
-#: to measure latency, it is to prove the hook does not BLOCK on the
-#: network at all - it backgrounds the call. A regression that dropped the
-#: ``&`` would blow straight through this.
-MAX_HOOK_SECONDS = 2.5
+#: Just above the command's own ``curl -m 2``.
+#:
+#: THIS USED TO BE 2.5 AND ASSERT THE OPPOSITE THING. It read: "the point
+#: is to prove the hook does not BLOCK on the network at all - it
+#: backgrounds the call. A regression that dropped the ``&`` would blow
+#: straight through this." The bound was right; the premise underneath it
+#: was not. Backgrounding was not free - it DELIVERED NOTHING.
+#:
+#: Measured on a real install, same environment, same headers, same
+#: payload, one variable changed:
+#:     with the trailing &   -> the row was never written
+#:     without it            -> bound immediately
+#: The subshell was orphaned and curl reaped before the POST completed.
+#: So the hook fired, exited 0, blocked nobody, and delivered nothing, for
+#: every session - which is why session identity, resume and fork could
+#: not work at all.
+#:
+#: What this file guarantees is unchanged and still worth guarding: a hook
+#: must exit 0, write nothing to stdout, and never block INDEFINITELY. It
+#: is now bounded by ``curl -m 2`` instead of by not waiting at all. The
+#: cost is up to 2s during a server-restart window; the thing bought is a
+#: hook that arrives. See test_the_hook_actually_delivers below, which is
+#: the coverage whose absence let the old shape ship.
+MAX_HOOK_SECONDS = 3.0
 
 
 def _closed_port() -> int:
@@ -124,8 +143,8 @@ def _assert_harmless(result: subprocess.CompletedProcess, elapsed: float) -> Non
         f"stdout as session context"
     )
     assert elapsed < MAX_HOOK_SECONDS, (
-        f"hook blocked for {elapsed:.2f}s; the network call must be "
-        f"backgrounded, not waited on"
+        f"hook blocked for {elapsed:.2f}s; it must be bounded by curl's own "
+        f"-m cap, never open-ended"
     )
 
 
@@ -198,8 +217,11 @@ def test_a_hung_server_does_not_break_the_session():
 
     This is the case a plain connection-refused test misses entirely, and
     it is the realistic one: a server mid-restart holds the port open and
-    says nothing. ``curl -m 3`` caps it, and the ``&`` means the hook is
-    not waiting for that cap either.
+    says nothing. ``curl -m 2`` caps it.
+
+    The hook now WAITS for that cap rather than backgrounding past it, and
+    that is the deliberate trade - see MAX_HOOK_SECONDS. A hook that does
+    not wait also does not arrive.
     """
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
@@ -280,6 +302,78 @@ def test_every_managed_hook_ends_in_a_status_resetting_noop():
     for event in _MANAGED_EVENTS:
         command = _build_managed_command(event)
         assert command.rstrip().endswith("# cloudecode-managed")
-        assert "&" in command, f"{event} hook does not background its call"
-        assert "-m 3" in command, f"{event} hook has no timeout cap"
+        assert "-m 2" in command, f"{event} hook has no timeout cap"
         assert "> /dev/null 2>&1" in command, f"{event} hook is not silenced"
+        # THE ASSERTION THAT USED TO BE HERE was `"&" in command`, with the
+        # message "hook does not background its call". Backgrounding was
+        # the bug: the subshell was orphaned and curl reaped before the
+        # POST completed, so the hook delivered nothing while passing every
+        # harmlessness check in this file. The inverse is asserted now, so
+        # nobody reintroduces it believing it is a safety feature.
+        assert not command.rstrip().rstrip("# cloudecode-managed").rstrip().endswith("&"), (
+            f"{event} hook backgrounds its call again; that orphans curl "
+            "and delivers nothing - see MAX_HOOK_SECONDS"
+        )
+        assert "; :" in command, (
+            f"{event} hook lost the trailing no-op that decouples its exit "
+            "status from curl's"
+        )
+
+
+def test_the_hook_actually_delivers():
+    """THE COVERAGE WHOSE ABSENCE LET A DEAD HOOK SHIP.
+
+    Every other test in this file asserts the hook is HARMLESS - exit 0,
+    no stdout, bounded time. A command that does nothing at all passes all
+    of them perfectly. That is exactly what shipped: the hook backgrounded
+    its own curl, the subshell was orphaned, the POST never completed, and
+    every assertion here stayed green while session identity was dead for
+    every user.
+
+    So this asserts the opposite property: the bytes ARRIVE. It stands up
+    a real listener, runs the real installed command against it, and reads
+    what the server received.
+    """
+    import json
+    import threading
+
+    received = {}
+
+    class _Capture(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - stdlib naming
+            length = int(self.headers.get("Content-Length") or 0)
+            received["body"] = self.rfile.read(length) if length else b""
+            received["session"] = self.headers.get("X-Cloudecode-Session")
+            received["event"] = self.headers.get("X-Cloudecode-Event")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *a):  # noqa: A003 - silence the stdlib logger
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Capture)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+    try:
+        result = _run_hook(f"http://127.0.0.1:{port}/api/v1/hooks/claude-event")
+        thread.join(timeout=5)
+    finally:
+        server.server_close()
+
+    assert result.returncode == 0
+    assert received.get("event") == "SessionStart", (
+        "the endpoint received no POST at all; the hook is not delivering"
+    )
+    assert received.get("session"), "the session header did not arrive"
+    body = received.get("body") or b""
+    assert body, (
+        "the POST arrived with an EMPTY body - the payload piped on stdin "
+        "did not reach curl"
+    )
+    parsed = json.loads(body.decode("utf-8"))
+    assert "session_id" in parsed, (
+        f"the delivered body is not the hook payload: {parsed!r}"
+    )

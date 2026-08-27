@@ -115,16 +115,35 @@ def _build_managed_command(event_kind: str) -> str:
     return (
         # ``cat`` reads the hook's stdin JSON and pipes it into curl's
         # ``--data-binary @-`` so the full payload reaches the endpoint
-        # unchanged. ``-sS`` = silent except on error. ``-m 3`` caps total
-        # time at 3s. ``> /dev/null 2>&1 &`` backgrounds + silences so
-        # Claude Code's own loop is never blocked waiting on us.
-        "(cat | curl -sS -m 3 -X POST \"$CLOUDECODE_HOOK_URL\" "
+        # unchanged. ``-sS`` = silent except on error. ``-m 3`` caps TOTAL
+        # time at 3s, and that cap is the ONLY thing this needs in order to
+        # be safe to run synchronously.
+        #
+        # IT USED TO END IN ``& :`` AND THAT SILENTLY DELIVERED NOTHING.
+        # The reasoning was "background it so Claude Code's own loop is
+        # never blocked waiting on us", which sounds prudent and was fatal:
+        # the shell returned instantly, the backgrounded subshell was
+        # orphaned, and curl was reaped before the POST completed. The hook
+        # ran, exited 0, and wrote nothing anywhere - so every layer
+        # reported success while claude_session_uuid was never bound, and
+        # resume and fork could not work for any session.
+        #
+        # Measured rather than reasoned about, same env, same headers, same
+        # payload, one variable changed:
+        #     with the trailing &   -> row unchanged
+        #     without it            -> uuid bound immediately
+        #
+        # The cost of dropping it is that Claude waits up to 3s on an
+        # unreachable endpoint. That is the trade ``-m 3`` was already
+        # there to make, and a hook that never delivers is not faster, it
+        # is absent.
+        "(cat | curl -sS -m 2 -X POST \"$CLOUDECODE_HOOK_URL\" "
         "-H \"X-Cloudecode-Session: $CLOUDECODE_SESSION_ID\" "
         "-H \"X-Cloudecode-Token: $CLOUDECODE_HOOK_TOKEN\" "
         f"-H \"X-Cloudecode-Event: {event_kind}\" "
         "-H \"Content-Type: application/json\" "
-        "--data-binary @-) > /dev/null 2>&1 & "
-        f": {CLOUDECODE_HOOKS_MARKER}"
+        "--data-binary @-) > /dev/null 2>&1 "
+        f"; : {CLOUDECODE_HOOKS_MARKER}"
     )
 
 

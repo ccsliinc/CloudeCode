@@ -49,6 +49,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core import debug_trace
+
 from src.core.pane_locale import apply_pane_locale
 from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
@@ -607,6 +609,22 @@ class TmuxBackend(SessionBackend):
             args.append(command)
 
         argv = self._tmux_base() + args
+        # DEBUG TRACE. The stale-environment bug lived exactly here and was
+        # invisible: the spawn succeeded, the variable was set, and its
+        # VALUE belonged to a different session. Recording the argv and the
+        # keys we passed makes that answerable in one grep instead of an
+        # hour. Values are scrubbed; the session id is not a secret and is
+        # the whole point of looking.
+        debug_trace.trace(
+            "tmux.new_session",
+            session=self.tmux_session,
+            cwd=str(self.working_dir),
+            env_keys_passed=sorted((env or {}).keys()),
+            cloudecode_session_id=(env or {}).get("CLOUDECODE_SESSION_ID"),
+            dash_e_pairs=[a for i, a in enumerate(args) if i and args[i - 1] == "-e"],
+            has_command=bool(command),
+            argv_head=argv[:6],
+        )
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.DEVNULL,
@@ -615,6 +633,12 @@ class TmuxBackend(SessionBackend):
             env=tmux_env,
         )
         _, stderr = await proc.communicate()
+        debug_trace.trace(
+            "tmux.new_session.result",
+            session=self.tmux_session,
+            returncode=proc.returncode,
+            stderr=stderr.decode("utf-8", errors="replace").strip()[:300],
+        )
         if proc.returncode != 0:
             msg = stderr.decode("utf-8", errors="replace")
             raise RuntimeError(f"tmux new-session failed: {msg.strip()}")

@@ -71,6 +71,7 @@ from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
+from src.core import debug_trace
 from src.core.session_manager import _configured_wrappers
 from src.core.session_lineage import LINEAGE_UNRESOLVED
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
@@ -1634,9 +1635,34 @@ async def claude_event_hook(request: Request):
     # working session, and lineage is telemetry. Nothing about a lineage
     # write may change the status code the hook sees.
     if event_kind in claude_hooks.LIFECYCLE_EVENTS:
+        # DEBUG TRACE. This is the exact point where a hook that "fired
+        # successfully" can still deliver nothing useful, and the only
+        # place the app can see what Claude actually sent. Off unless
+        # CLOUDE_DEBUG=1. See src/core/debug_trace.py for why the ordinary
+        # logs could not answer this.
+        debug_trace.trace(
+            "hook.lifecycle.received",
+            session_id=session_id,
+            event_kind=event_kind,
+            payload_keys=sorted(payload.keys()) if isinstance(payload, dict) else None,
+            payload_type=type(payload).__name__,
+            claude_session_id=(
+                payload.get("session_id") if isinstance(payload, dict) else None
+            ),
+            source=payload.get("source") if isinstance(payload, dict) else None,
+            body_empty=not payload,
+        )
         try:
             outcome = session_manager.record_claude_lifecycle_event(
                 session_id, event_kind, payload
+            )
+            debug_trace.trace(
+                "hook.lifecycle.outcome",
+                session_id=session_id,
+                event_kind=event_kind,
+                outcome=getattr(outcome, "outcome", None),
+                detail=getattr(outcome, "detail", None),
+                row_id=getattr(outcome, "row_id", None),
             )
             if outcome.outcome == LINEAGE_UNRESOLVED:
                 # THE THIRD OUTCOME REACHES A LOG, never a silent pass.
@@ -1656,6 +1682,13 @@ async def claude_event_hook(request: Request):
                 session_id=session_id,
                 event_kind=event_kind,
                 error=str(exc),
+            )
+            debug_trace.trace(
+                "hook.lifecycle.threw",
+                session_id=session_id,
+                event_kind=event_kind,
+                error=str(exc),
+                error_type=type(exc).__name__,
             )
         return {"ok": True}
 

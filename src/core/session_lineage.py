@@ -104,6 +104,8 @@ from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
 
+from src.core import debug_trace  # noqa: E402  (after logger, kept local to this module)
+
 
 #: SUCCESS. The anchor row (or the head of its lineage) carried no
 #: ``claude_session_uuid`` and now carries this one. The common case for
@@ -357,6 +359,19 @@ def record_claude_session(
       claude_uuid='u2', source='fork').outcome  # 'forked'
     """
     stamp = now or utc_now()
+
+    # DEBUG TRACE. Every UNRESOLVED below is a real finding that is
+    # otherwise only a log line nobody greps. Recording the INPUTS here
+    # means the reason is answerable without reproducing the situation -
+    # a missing epoch and an unknown uuid look identical downstream.
+    debug_trace.trace(
+        "lineage.record.input",
+        socket=socket,
+        name=name,
+        epoch=epoch,
+        has_claude_uuid=bool(claude_uuid),
+        source=source,
+    )
 
     if not sessions_table_ready(conn):
         return LineageResult(
