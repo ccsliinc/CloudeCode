@@ -72,6 +72,7 @@ from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
 from src.core import debug_trace
+from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
 # MODULE SCOPE, DELIBERATELY. This was imported inside two individual
 # handlers, so any NEW handler that used it raised
@@ -216,6 +217,23 @@ async def fork_session(request: Request, session_name: str):
         raise HTTPException(status_code=409, detail=source.detail or "nothing to resume")
 
     label = session_fork.fork_label(source.label)
+    # THE LABEL AND THE TMUX NAME ARE NOT THE SAME STRING.
+    #
+    # The label is what a human reads and takes any characters - the
+    # owner's stated model: "it's a label, if it needs to rename a session
+    # run it through a filter". The TMUX NAME is also the URL segment, and
+    # the client router validates it against /^[A-Za-z0-9_\- ]+$/ - no
+    # parentheses.
+    #
+    # Passing the label straight through produced "ScratchLab-4(fork)",
+    # which CREATED correctly - row, lineage, tmux session, Claude with its
+    # own uuid - and was then UNREACHABLE: the deep link answered "Invalid
+    # project name in URL" and clicking the row never attached. A fork you
+    # cannot open is not a fork.
+    #
+    # session_label.sanitize_tmux_name is exactly that filter and already
+    # existed with no caller. It yields "ScratchLab-4_fork".
+    tmux_safe_name = sanitize_tmux_name(label) or label
     logger.info(
         "api_fork_session_request",
         parent=session_name,
@@ -238,7 +256,7 @@ async def fork_session(request: Request, session_name: str):
         child = await session_manager.create_session(
             session_id=f"ses_{_uuid.uuid4().hex[:8]}",
             working_dir=source.working_dir,
-            project_name=label,
+            project_name=tmux_safe_name,
             agent_type=source.agent_type,
             model=source.model,
             agent_extra_args=session_fork.fork_arguments(source.claude_session_uuid),
@@ -278,12 +296,28 @@ async def fork_session(request: Request, session_name: str):
             )
             if not child_uuid:
                 return False
+            row = conn.execute(
+                "SELECT tmux_created_epoch FROM sessions WHERE session_uuid = ?",
+                (child_uuid,),
+            ).fetchone()
+            child_epoch = row["tmux_created_epoch"] if row else None
             with transaction(conn):
-                return session_fork.mark_as_fork(
+                marked = session_fork.mark_as_fork(
                     conn,
                     child_session_uuid=child_uuid,
                     parent_id=source.parent_id,
                 )
+                # The human-facing label, carrying "(fork)". The tmux name
+                # is the filtered form; this is what the UI shows, so the
+                # marker survives without breaking the URL.
+                set_label_for_instance(
+                    conn,
+                    socket=socket,
+                    name=child_tmux or "",
+                    epoch=child_epoch,
+                    label=label,
+                )
+                return marked
 
     recorded = False
     detail = None

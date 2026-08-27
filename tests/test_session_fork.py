@@ -225,3 +225,77 @@ def test_children_of_answers_was_this_forked_from(conn):
 def test_a_session_never_forked_from_has_no_children(conn):
     parent_id = _insert(conn, "p", name="work", epoch=1000, claude_uuid="conv-1")
     assert children_of(conn, parent_id) == []
+
+
+# --- the tmux name must survive the URL --------------------------------------
+
+
+def test_the_fork_tmux_name_passes_the_client_router():
+    """A FORK YOU CANNOT OPEN IS NOT A FORK.
+
+    The label takes any characters - that is the whole point of a label.
+    The TMUX NAME is also the URL segment, and client/js/router.js
+    validates it against /^[A-Za-z0-9_\\- ]+$/, which has no parentheses.
+
+    Passing the label straight through as the tmux name produced
+    "ScratchLab-4(fork)". It CREATED perfectly - row, lineage, real tmux
+    session, Claude with its own uuid - and was then unreachable: the deep
+    link answered "Invalid project name in URL - returned to home." and
+    clicking the row sat at "Waiting for session... No active session".
+    Everything the server did was right and the user could not get to any
+    of it.
+    """
+    import re
+
+    from src.core.session_label import sanitize_tmux_name
+
+    # The pattern is duplicated from client/js/router.js on purpose: this
+    # test exists to catch the two drifting apart, so reading it from the
+    # JS would defeat the check.
+    router_rx = re.compile(r"^[A-Za-z0-9_\- ]+$")
+
+    for parent in ("ScratchLab-4", "Media Compression", "a"):
+        label = fork_label(parent)
+        assert "(fork)" in label, "the human label must keep its marker"
+        safe = sanitize_tmux_name(label)
+        assert router_rx.match(safe), (
+            f"fork tmux name {safe!r} fails the client router's slug "
+            "pattern, so the session would be unreachable by URL"
+        )
+
+
+def test_a_fork_of_a_fork_is_still_router_safe():
+    """Append-only labels must not accumulate into an invalid name."""
+    import re
+
+    from src.core.session_label import sanitize_tmux_name
+
+    router_rx = re.compile(r"^[A-Za-z0-9_\- ]+$")
+    label = fork_label(fork_label(fork_label("work")))
+    assert label == "work(fork)(fork)(fork)"
+    assert router_rx.match(sanitize_tmux_name(label))
+
+
+def test_the_route_uses_the_filtered_name_not_the_label():
+    """Structural: the endpoint must not pass the label through as the
+    tmux name again."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src/api/routes.py").read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != "fork_session":
+            continue
+        body = ast.get_source_segment(src, node) or ""
+        assert "project_name=tmux_safe_name" in body, (
+            "fork_session no longer passes the FILTERED name as project_name"
+        )
+        assert "project_name=label" not in body, (
+            "fork_session passes the raw label as the tmux name again; that "
+            "makes the forked session unreachable by URL"
+        )
+        return
+    raise AssertionError("fork_session route not found")
