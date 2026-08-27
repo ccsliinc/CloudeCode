@@ -173,3 +173,71 @@ def test_the_live_name_read_answers_none_for_an_unknown_name(conn):
     from src.core.session_store import identity_for_live_name
 
     assert identity_for_live_name(conn, socket=SOCKET, name="ghost") is None
+
+
+# --- a rename must survive an in-session fork --------------------------------
+
+
+def test_a_clear_inside_a_session_does_not_hide_its_name(conn):
+    """ONE /clear MADE A RENAMED SESSION LOSE ITS NAME.
+
+    A CONVERSATION row shares the socket and tmux name of the session it
+    happened inside, and carries a NULL epoch - that is the lineage shape.
+    label_for_name took "the newest row for this name", which after a
+    /clear is that conversation, and a conversation never has a title.
+
+    So the rename persisted, the row was right, the instance-keyed read
+    returned it correctly, and the name-keyed read answered None. The UI
+    fell back to the tmux handle and the user's chosen name vanished with
+    no error anywhere.
+    """
+    from src.core.session_label import label_for_name
+
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO sessions (session_uuid, tmux_socket, tmux_name, "
+            "tmux_created_epoch, title, origin, lifecycle, created_at, updated_at) "
+            "VALUES ('anchor', ?, 'cloude_work', 1000, 'My Session', 'created', "
+            "'running', 'x', 'x')",
+            (SOCKET,),
+        )
+    assert label_for_name(conn, socket=SOCKET, name="cloude_work") == "My Session"
+
+    # the /clear: same socket and name, NULL epoch, no title
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO sessions (session_uuid, tmux_socket, tmux_name, "
+            "tmux_created_epoch, parent_session_id, fork_kind, origin, lifecycle, "
+            "created_at, updated_at) VALUES ('convo', ?, 'cloude_work', NULL, "
+            "1, 'clear', 'created', 'running', 'x', 'x')",
+            (SOCKET,),
+        )
+    assert label_for_name(conn, socket=SOCKET, name="cloude_work") == "My Session", (
+        "a conversation row swallowed the session's name"
+    )
+
+
+def test_among_real_instances_the_newest_still_decides(conn):
+    """The original guarantee is unchanged.
+
+    A reused name must not let a dead predecessor lend its label to a live
+    session that was never named.
+    """
+    from src.core.session_label import label_for_name
+
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO sessions (session_uuid, tmux_socket, tmux_name, "
+            "tmux_created_epoch, title, origin, lifecycle, created_at, updated_at) "
+            "VALUES ('old', ?, 'work', 1000, 'Old Name', 'created', 'stopped', 'x', 'x')",
+            (SOCKET,),
+        )
+        conn.execute(
+            "INSERT INTO sessions (session_uuid, tmux_socket, tmux_name, "
+            "tmux_created_epoch, title, origin, lifecycle, created_at, updated_at) "
+            "VALUES ('new', ?, 'work', 2000, NULL, 'created', 'running', 'x', 'x')",
+            (SOCKET,),
+        )
+    assert label_for_name(conn, socket=SOCKET, name="work") is None, (
+        "the dead predecessor lent its label to an unnamed live session"
+    )

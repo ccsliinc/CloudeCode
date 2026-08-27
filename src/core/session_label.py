@@ -459,9 +459,25 @@ def label_for_name(
         return None
     try:
         row = conn.execute(
+            # tmux_created_epoch IS NOT NULL RESTRICTS THIS TO ROWS THAT
+            # ARE ACTUALLY TMUX INSTANCES.
+            #
+            # A CONVERSATION row shares the socket and name of the session
+            # it happened inside and carries a NULL epoch - that is the
+            # lineage shape. Without this clause the "newest row for the
+            # name" is whatever conversation ran most recently, and a
+            # conversation never has a title. So one /clear inside a
+            # session made its NAME disappear: the row was there, the
+            # title was there, the instance-keyed read returned it
+            # correctly, and this one answered None. A rename that
+            # persisted and then refused to render.
+            #
+            # The docstring's reasoning about a dead predecessor is
+            # unaffected: among real instances the newest still decides.
             "SELECT title FROM sessions "
             "WHERE tmux_socket = ? AND tmux_name = ? "
-            "ORDER BY id DESC LIMIT 1",
+            "AND tmux_created_epoch IS NOT NULL "
+            "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
             (socket, name),
         ).fetchone()
     except sqlite3.Error as exc:
