@@ -531,9 +531,28 @@ class TmuxBackend(SessionBackend):
             "-y",
             str(use_rows),
         ]
-        # Merge env overlay into this tmux invocation's environment so the
-        # new session inherits it. tmux captures the environment of the
-        # `new-session` call.
+        # The env overlay. It goes into this invocation's environment AND,
+        # below, onto the command as ``-e`` pairs.
+        #
+        # THE COMMENT THAT USED TO BE HERE SAID "tmux captures the
+        # environment of the new-session call". That is true only when this
+        # call is what STARTS the server. When a server is already running
+        # on our socket - the normal case for every session after the first
+        # - the new session's environment comes from the SERVER's global
+        # table and the client's environment is discarded.
+        #
+        # The consequence was not a missing variable, which would have been
+        # obvious. It was a STALE one: every session after the first
+        # inherited the CLOUDECODE_SESSION_ID captured when the server
+        # started, so Claude's SessionStart hook POSTed a session id
+        # belonging to a DIFFERENT, long-dead session. The hook fired, the
+        # request succeeded, and the binding resolved UNRESOLVED - so
+        # claude_session_uuid was never written, and anything that needs it
+        # (resume, fork) could never work. Measured on a real install: a
+        # pane created today carried an id from six days earlier.
+        #
+        # The locale block below already knew this and used ``-e``. The
+        # lesson had been learned for LANG and not applied to these.
         tmux_env = os.environ.copy()
         tmux_env.setdefault("TERM", "xterm-256color")
         tmux_env.setdefault("COLORTERM", "truecolor")
@@ -562,6 +581,27 @@ class TmuxBackend(SessionBackend):
         pane_lang = tmux_env.get("LANG")
         if pane_lang:
             args.extend(["-e", f"LANG={pane_lang}"])
+
+        # The caller's overlay, explicitly, for the reason spelled out
+        # above: without this the pane gets the SERVER's stale copy.
+        #
+        # Only the keys the caller actually passed - never os.environ - so
+        # this cannot leak the app's whole environment into a user's pane.
+        # A value carrying a newline is skipped rather than truncated: tmux
+        # takes one KEY=VALUE per -e, so a newline would make the remainder
+        # unparseable, and half an environment variable is worse than none.
+        for key, value in sorted((env or {}).items()):
+            if value is None:
+                continue
+            text = str(value)
+            if "\n" in text or "\r" in text or not key or "=" in key:
+                logger.warning(
+                    "tmux_env_pair_skipped",
+                    key=key,
+                    reason="key or value cannot be expressed as one -e pair",
+                )
+                continue
+            args.extend(["-e", f"{key}={text}"])
 
         if command:
             args.append(command)
