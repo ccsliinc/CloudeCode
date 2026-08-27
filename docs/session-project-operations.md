@@ -250,6 +250,23 @@ graph LR
 
 ## 4. FORK
 
+> **BOTH SHAPES NOW OBSERVED IN PRODUCTION, 2026-08-27.** Real data from
+> the mini, one tmux session, two rows:
+>
+>     #10  cloude_ScratchLab-4_fork  uuid 7fe6ac1c  parent 7   fork_kind fork   epoch SET
+>     #11  cloude_ScratchLab-4_fork  uuid e276d79d  parent 10  fork_kind clear  epoch NULL
+>
+> A GUI fork is a SESSION: its own tmux instance, its own epoch, listed.
+> An in-session fork (`/clear`) is a CONVERSATION: same tmux name, NULL
+> epoch, NOT listed. That is exactly the discriminator
+> `session_store.list_sessions` keys on, and both halves are now measured
+> rather than argued for.
+>
+> The GUI fork's LABEL keeps `(fork)`; its TMUX NAME is filtered through
+> `session_label.sanitize_tmux_name`, because the tmux name is also the URL
+> segment and `client/js/router.js` accepts only `[A-Za-z0-9_\- ]`. A fork
+> named with parentheses is created perfectly and cannot be opened.
+
 > **GUI FORK IS BUILT. CLI FORK IS STILL SPECIFICATION.**
 > Shipped 2026-08-26 on `feat/gui-fork`: `POST /sessions/{session_name}/fork`,
 > a `fork` control on every owned running session row, and
