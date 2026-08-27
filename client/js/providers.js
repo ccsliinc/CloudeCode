@@ -234,6 +234,12 @@
              * own sentence rather than being collapsed into one empty list.
              */
             const enterLocalModelStep = (item) => {
+                // `item` is whatever will be launched: a pinned family row
+                // (agentType = the family name) or a WRAPPER in a
+                // needs_model family (agentType = the wrapper id, so the
+                // launch still goes through the user's own script). Both
+                // shapes carry `agentType` and `label`; nothing below cares
+                // which one it got.
                 selectedFamily = item;
                 step = 'local-model';
                 localProbe = 'loading';
@@ -279,6 +285,17 @@
                 }
                 if (item.type === 'wrapper') {
                     const wrapper = wrappers.find((w) => w.id === item.wrapperId);
+                    if (wrapper && item.needsModel) {
+                        // Ask the LOCAL box, not OpenRouter. Checked BEFORE
+                        // accepts_model because both are true for `cldl` and
+                        // only this one names the catalog - testing them the
+                        // other way round is the bug this replaces.
+                        enterLocalModelStep({
+                            agentType: wrapper.id,
+                            label: item.familyLabel || wrapper.label,
+                        });
+                        return;
+                    }
                     if (wrapper && wrapper.accepts_model) {
                         enterModelStep(wrapper);
                         return;

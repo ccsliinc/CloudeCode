@@ -328,6 +328,43 @@ test('local is not offered at all when the server says it is not pickable', () =
     assert.ok(items.every((i) => i.agentType !== 'local'));
 });
 
+// ---- the real install: cldl is a WRAPPER inside a needs_model family --
+// This is the live config on the mini, and it is the shape that broke:
+// `local` HAS a wrapper, so the pinned-family branch never runs for it and
+// the picker had nothing left that named the local catalog.
+const WITH_CLDL = LIVE.concat([
+    w('cldor', 'claude', { label: 'cldor (openrouter)', accepts_model: true }),
+    w('cldl', 'local', { label: 'cldl (lm studio)', accepts_model: true }),
+]);
+
+test('a wrapper inherits its family needs_model', () => {
+    const items = Groups.buildWrapperItems(WITH_CLDL, WITH_LOCAL);
+    const cldl = items.filter((i) => i.wrapperId === 'cldl')[0];
+    assert.ok(cldl, 'cldl must be offered');
+    assert.equal(cldl.needsModel, true, 'cldl must route to the LOCAL catalog');
+    assert.equal(cldl.acceptsModel, true);
+});
+
+test('an OpenRouter wrapper is NOT marked needs_model', () => {
+    // The discriminating half. accepts_model is true for BOTH cldor and
+    // cldl, so a test that only pinned cldl would pass just as happily
+    // against code that marked every wrapper needsModel.
+    const items = Groups.buildWrapperItems(WITH_CLDL, WITH_LOCAL);
+    const cldor = items.filter((i) => i.wrapperId === 'cldor')[0];
+    assert.ok(cldor);
+    assert.equal(cldor.acceptsModel, true);
+    assert.equal(cldor.needsModel, false, 'cldor must keep the OpenRouter catalog');
+});
+
+test('a family with a wrapper contributes no pinned row', () => {
+    // Why the bug was reachable at all: `local` stops being a pinned family
+    // the moment it has a wrapper, so familyNeedsModel had no row to land
+    // on and the wrapper branch was the ONLY path left.
+    const items = Groups.buildWrapperItems(WITH_CLDL, WITH_LOCAL);
+    assert.ok(items.every((i) => i.agentType !== 'local'));
+    assert.equal(items.filter((i) => i.wrapperId === 'cldl').length, 1);
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
 console.log('ALL PASS');

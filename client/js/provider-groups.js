@@ -143,12 +143,23 @@
                 });
                 return;
             }
+            // A wrapper inherits its FAMILY's needs_model. `cldl` is a
+            // wrapper in the `local` family, so the pinned-family branch
+            // above never runs for it - and without this the picker asked
+            // only `accepts_model`, which is true for both `cldor` and
+            // `cldl` and says nothing about WHICH catalog to open. That
+            // sent every LM Studio launch to the OpenRouter list.
+            // accepts_model = "takes a model id"; needsModel = "the id has
+            // to come from the local box". Two questions, both required.
+            var famNeedsModel = familyNeedsModel(name, families);
             inFamily.forEach(function (w, i) {
                 items.push({
                     type: 'wrapper',
                     wrapperId: w.id,
                     label: w.default ? (w.label + ' (default)') : w.label,
                     acceptsModel: !!w.accepts_model,
+                    needsModel: famNeedsModel,
+                    familyLabel: familyLabel(name, families),
                     groupLabel: (i === 0) ? heading : null,
                 });
             });
