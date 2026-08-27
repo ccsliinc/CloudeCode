@@ -299,3 +299,34 @@ def test_the_route_uses_the_filtered_name_not_the_label():
         )
         return
     raise AssertionError("fork_session route not found")
+
+
+def test_the_fork_label_uses_the_display_name_not_the_tmux_handle(conn):
+    """AN INTERNAL PREFIX MUST NOT LEAK INTO THE ONE STRING A HUMAN READS.
+
+    A row with no title falls back to its tmux name, which carries the
+    "cloude_" prefix the app adds and the UI strips again for display.
+    Using it verbatim produced the label "cloude_ScratchLab-4(fork)", and
+    it compounds on every further fork.
+    """
+    _insert(conn, "p", name="cloude_ScratchLab-4", epoch=1000, claude_uuid="c1")
+    src = resolve_fork_source(conn, socket=SOCKET, tmux_name="cloude_ScratchLab-4")
+    assert src.label == "ScratchLab-4", f"label leaked the prefix: {src.label!r}"
+    assert fork_label(src.label) == "ScratchLab-4(fork)"
+
+
+def test_an_explicit_title_still_wins_over_the_derived_name(conn):
+    """A user-set label is authoritative; only the FALLBACK changed."""
+    _insert(conn, "p", name="cloude_work", epoch=1000, claude_uuid="c1",
+            title="My Session")
+    src = resolve_fork_source(conn, socket=SOCKET, tmux_name="cloude_work")
+    assert src.label == "My Session"
+    assert fork_label(src.label) == "My Session(fork)"
+
+
+def test_the_refusal_path_reports_a_clean_label_too(conn):
+    """The 409 names the session; it should name it the way the UI does."""
+    _insert(conn, "p", name="cloude_work", epoch=1000, claude_uuid=None)
+    src = resolve_fork_source(conn, socket=SOCKET, tmux_name="cloude_work")
+    assert src.outcome == FORK_NO_CONVERSATION
+    assert src.label == "work"

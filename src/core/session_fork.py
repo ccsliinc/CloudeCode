@@ -37,6 +37,7 @@ from typing import Any, Dict, Optional
 import structlog
 
 from src.core.db_models import SESSION_FORK_KIND_FORK
+from src.core.session_label import label_from_tmux_name
 from src.core.session_store import sessions_table_ready
 from src.core.trail_entry import utc_now
 
@@ -133,7 +134,7 @@ def resolve_fork_source(
         return ForkSource(
             FORK_NO_CONVERSATION,
             parent_id=data["id"],
-            label=data.get("title") or data.get("tmux_name"),
+            label=data.get("title") or label_from_tmux_name(data.get("tmux_name")),
             detail=(
                 "this session has no recorded Claude conversation yet, so there "
                 "is nothing to resume. Forking it would start a NEW conversation "
@@ -145,7 +146,13 @@ def resolve_fork_source(
         parent_id=data["id"],
         claude_session_uuid=uuid,
         working_dir=data.get("working_dir"),
-        label=data.get("title") or data.get("tmux_name"),
+        # THE DISPLAY NAME, not the raw tmux name. A row with no title
+        # falls back to its tmux handle, which carries the "cloude_"
+        # prefix the app adds and the UI strips again for display. Using
+        # it verbatim made a fork label read "cloude_ScratchLab-4(fork)" -
+        # an internal prefix leaking into the one string a human reads,
+        # and it compounds on every further fork.
+        label=data.get("title") or label_from_tmux_name(data.get("tmux_name")),
         agent_type=data.get("agent_type"),
         model=data.get("model"),
         project_id=data.get("project_id"),
