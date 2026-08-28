@@ -1657,9 +1657,24 @@ class Launchpad {
      */
     _renderRenamePencilHtml(s, escapedName) {
         const pencil = window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : '';
-        if (s.session_id) {
+        // A TMUX NAME IS ENOUGH NOW. This required `s.session_id` - an
+        // app session id the manager only holds for an OPEN session - so
+        // every row the app had not adopted showed a dead pencil,
+        // including a user's own running sessions, all of them at once
+        // after a restart. "Open it first, then you may rename it" is not
+        // a rule anybody would choose; it was the rename endpoint's shape
+        // leaking into the UI.
+        //
+        // That shape was real for the ORIGINAL design, where renaming
+        // meant typing into the pane: you cannot type into a backend you
+        // do not hold. Rename is out-of-band now - it keys the row by
+        // tmux name and addresses the conversation by claude uuid, and
+        // needs neither the session open nor the pane touched. So the
+        // precondition is gone and the pencil follows the name.
+        const renameKey = s.session_id || s.tmux_session || s.name;
+        if (renameKey) {
             return `<span class="running-session-rename" role="button" aria-label="rename session"`
-                + ` data-rename-sid="${this._escapeHtml(s.session_id)}"`
+                + ` data-rename-sid="${this._escapeHtml(renameKey)}"`
                 + ` data-rename-name="${escapedName}" title="rename session">${pencil}</span>`;
         }
         // Ownership is a THREE-valued field here. `== null` catches both

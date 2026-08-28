@@ -1206,7 +1206,22 @@ async def set_pinned_theme(
 
 @router.patch(
     "/sessions/{session_id}/name",
-    response_model=SessionInfo,
+    # NO response_model, DELIBERATELY, and this cost a 500 to learn.
+    #
+    # This route now has TWO legitimate success shapes: a full SessionInfo
+    # when the manager holds the session open, and a small
+    # {renamed, session, label} when it does not - which is normal since
+    # the rename gate was lifted and a tmux name is accepted for a session
+    # that was never adopted.
+    #
+    # A response_model is not a hint, it is enforcement: FastAPI validated
+    # the second shape against SessionInfo and turned a rename that had
+    # ALREADY been written durably into an HTTP 500. That is the worst
+    # failure available here, because the user retries an operation that
+    # already succeeded. (Same family as the earlier ThemeManifest bug in
+    # this file, where a response_model silently DELETED a field that
+    # existed all the way up to serialization - filter there, reject
+    # here.)
     dependencies=[Depends(require_auth)],
 )
 async def rename_session_endpoint(
@@ -1274,7 +1289,27 @@ async def rename_session_endpoint(
                 "session this app has a record of."
             ),
         )
-    info = await session_manager.get_session_info(session_id)
+    # THE LABEL IS ALREADY WRITTEN AND DURABLE AT THIS POINT. What
+    # follows is response-shaping and a courtesy broadcast, and neither
+    # may turn a completed rename into an error.
+    #
+    # `get_session_info` needs a LIVE session, and since the rename gate
+    # was lifted this route legitimately accepts a tmux name for a
+    # session the manager does not hold - which made it raise and return
+    # 500 on a rename that had in fact succeeded. Measured: the row read
+    # title='Gate Lift Proof' while the caller was told the request
+    # failed. A 500 after a durable write is the worst of both, because
+    # the user retries an operation that already happened.
+    info = None
+    try:
+        info = await session_manager.get_session_info(session_id)
+    except Exception as exc:  # noqa: BLE001 - see comment above
+        logger.info(
+            "rename_session_info_unavailable",
+            session_id=session_id,
+            error=str(exc),
+            note="the label write succeeded; only the response shape is degraded",
+        )
 
     # Broadcast to every WS bound to this session so attached tabs update
     # their header text + document.title without a round-trip. Failures on
@@ -1295,7 +1330,18 @@ async def rename_session_endpoint(
             error=str(exc),
         )
 
-    return info
+    if info is not None:
+        return info
+    # No live session to describe, so answer with the fact that IS known:
+    # the rename happened. Reported under its own shape rather than an
+    # empty SessionInfo, which would look like a session with nothing in
+    # it instead of a session this route never held.
+    return {
+        "renamed": True,
+        "session": session_id,
+        "label": new_name,
+        "detail": "renamed; no live session attached to describe",
+    }
 
 
 @router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])

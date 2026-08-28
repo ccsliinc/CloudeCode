@@ -3110,6 +3110,31 @@ class SessionManager:
             logger.error("session_destruction_failed", error=str(e))
             raise
 
+    def _is_live_tmux_name(self, candidate: str) -> bool:
+        """Whether ``candidate`` names a tmux session that exists now.
+
+        Description: lets a label write accept a tmux NAME where it used
+          to demand an app session id. Returns False on any listing
+          failure - a name that cannot be confirmed is not treated as
+          confirmed, so the caller reports a definite failure rather than
+          writing against a guess.
+        Inputs: candidate (str).
+        Output: bool.
+        """
+        if not candidate:
+            return False
+        try:
+            _socket, listing = self.list_attachable_sessions_with_socket()
+            if not getattr(listing, "ok", False):
+                return False
+            return any(
+                (row or {}).get("name") == candidate
+                for row in (getattr(listing, "sessions", None) or [])
+            )
+        except Exception as exc:  # noqa: BLE001 - a probe must not raise here
+            logger.debug("live_tmux_name_check_failed", error=str(exc))
+            return False
+
     def set_session_label(self, session_id: str, label: str) -> bool:
         """Store the user-facing LABEL for one session. No tmux involved.
 
@@ -3141,6 +3166,23 @@ class SessionManager:
 
         sess = self.sessions.get(session_id)
         tmux_name = getattr(sess, "tmux_session", None) if sess else None
+        if not tmux_name:
+            # NOT REQUIRING A LIVE SESSION ANY MORE. This used to be the
+            # end of the road, and it was the reason the rename pencil was
+            # greyed out on every row the app had not adopted - including
+            # a user's own running sessions, all seven of them at once
+            # after a restart. The precondition was real for the ORIGINAL
+            # design, where renaming meant typing into the pane: you
+            # cannot type into a backend you do not hold.
+            #
+            # Rename is out-of-band now. It needs a tmux name to key the
+            # row and a claude uuid to address the conversation, and both
+            # are readable from the datastore and the live listing without
+            # the session being open. So an id we do not hold is no longer
+            # a dead end - it may simply BE a tmux name.
+            tmux_name = self._hook_tmux_names.get(session_id)
+        if not tmux_name and self._is_live_tmux_name(session_id):
+            tmux_name = session_id
         if not tmux_name:
             logger.warning(
                 "session_label_not_tmux_backed",
