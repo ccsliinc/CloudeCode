@@ -3063,6 +3063,18 @@ body.home-header-active {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     letter-spacing: 0.5px;
+    /* THE TRANSPARENT BORDER IS LOAD-BEARING, and its absence was
+     * visible. `.family-pill` below carries `border: 1px solid
+     * transparent` so a coloured variant can fill it without shifting
+     * layout. `.badge` did not, so two pills with identical font and
+     * padding rendered 16px and 18px tall - measured side by side in one
+     * centre-aligned flex strip, which is exactly where a 2px
+     * disagreement reads as bad spacing.
+     *
+     * box-sizing: border-box does not save this: it only stops padding
+     * and border eating into a SET height, and neither of these sets
+     * one, so both are content-sized and the border simply adds 2px. */
+    border: 1px solid transparent;
 }
 
 .badge-tmux     { background: var(--color-badge-tmux-bg);     color: var(--color-badge-tmux-fg); }
