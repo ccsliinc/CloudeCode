@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 9
+CURRENT_SCHEMA_VERSION: int = 10
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -365,7 +365,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   audio_enabled         INTEGER,
   unread_auto           INTEGER NOT NULL DEFAULT 0,
   unread_manual         INTEGER NOT NULL DEFAULT 0,
+  -- TWO NAMES, TWO OWNERS. `title` is the USER's label (v9 made it so).
+  -- `claude_title` is whatever Claude Code currently calls the session on
+  -- its own side, arriving on the SessionStart payload as `session_title`.
+  -- They were one column until v10, which meant Claude's auto-generated
+  -- name could become the user's displayed label, a user rename silently
+  -- discarded Claude's, and - because the write was guarded write-once to
+  -- stop exactly that - a LATER Claude-side /rename could never land.
+  -- One field cannot hold two authorities. `claude_title` is free to
+  -- change as often as Claude changes it; `title` changes only when the
+  -- user says so.
   title                 TEXT,
+  claude_title          TEXT,
 
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL

@@ -352,7 +352,8 @@ def record_claude_session(
       None yields UNRESOLVED, because an instance with no epoch identifies
       no row. claude_uuid (str) - the payload's ``session_id``. source
       (str | None) - the payload's ``source``. title (str | None) - the
-      payload's ``session_title``, stored only on a row that has none.
+      payload's ``session_title``, recorded as CLAUDE's name for the
+      session, never as the user's label.
       now (str | None) - ISO stamp override for tests.
     Output: LineageResult.
     Example: record_claude_session(conn, socket='s', name='a', epoch=1,
@@ -390,7 +391,7 @@ def record_claude_session(
     # POST arriving twice because curl retried.
     known = row_for_claude_uuid(conn, claude_uuid)
     if known is not None:
-        _maybe_set_title(conn, known, title, stamp)
+        _record_claude_title(conn, known, title, stamp)
         return LineageResult(
             outcome=LINEAGE_CONTINUED,
             row_id=int(known["id"]),
@@ -421,7 +422,7 @@ def record_claude_session(
             "WHERE id = ?",
             (claude_uuid, stamp, int(head["id"])),
         )
-        _maybe_set_title(conn, head, title, stamp)
+        _record_claude_title(conn, head, title, stamp)
         logger.info(
             "claude_session_bound",
             row_id=int(head["id"]),
@@ -521,26 +522,36 @@ def _new_row_uuid() -> str:
     return new_session_uuid()
 
 
-def _maybe_set_title(
+def _record_claude_title(
     conn: sqlite3.Connection,
     row: Dict[str, Any],
     title: Optional[str],
     stamp: str,
 ) -> None:
-    """Fill ``sessions.title`` only when the row has none.
+    """Record Claude's own name for the session in ``claude_title``.
 
-    Description: WRITE-ONCE ON PURPOSE. Claude's ``session_title`` is
-      derived from the conversation and changes as it goes; a user-set
-      title must never be overwritten by it, and neither should the first
-      title we recorded start flapping. Silent no-op when the row already
-      has a title or the payload carried none.
+    Description: NOT write-once, and deliberately so. Until v10 this
+      wrote ``sessions.title`` - the USER's label - and had to be
+      write-once to stop Claude's auto-generated name overwriting a name
+      the user had chosen. That guard bought one problem and created
+      another: a genuine later ``/rename`` on Claude's side could never
+      land, because the column was already occupied. Now the two names
+      live in two columns and neither has to defend itself from the
+      other, so this simply keeps ``claude_title`` current.
+
+      Still a silent no-op when the payload carried no title, because
+      SessionStart omits the field entirely for a session Claude has not
+      named. Absent is not empty: it means "no statement", and clearing a
+      known name on the strength of a missing field would be inventing a
+      rename nobody performed.
     Inputs: conn (sqlite3.Connection). row (dict) - the target row.
-      title (str | None). stamp (str) - ISO now.
+      title (str | None) - Claude's name, or None for no statement.
+      stamp (str) - ISO now.
     Output: None.
     """
-    if not title or row.get("title"):
+    if not title or row.get("claude_title") == title:
         return
     conn.execute(
-        "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+        "UPDATE sessions SET claude_title = ?, updated_at = ? WHERE id = ?",
         (title, stamp, int(row["id"])),
     )

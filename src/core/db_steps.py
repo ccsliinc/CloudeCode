@@ -493,6 +493,39 @@ def _step_v8_to_v9(conn: sqlite3.Connection) -> None:
     _v9_backfill_labels(conn)
 
 
+def _step_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """Give Claude's own session name its own column.
+
+    Description: ADDS ``sessions.claude_title``. Until v10, Claude Code's
+      ``session_title`` (carried on the SessionStart payload) was written
+      into ``title`` - the same column v9 had just made the USER's label.
+      One field, two authorities, and every consequence was silent:
+      Claude's auto-generated name could become the user's displayed
+      label; a user rename discarded Claude's name with no record; and the
+      write had to be guarded write-once to stop the first two, which in
+      turn meant a LATER Claude-side ``/rename`` could never land at all.
+
+      NO BACKFILL, DELIBERATELY. For an existing row with a non-null
+      ``title`` there is no evidence anywhere in the database saying
+      whether the user typed it or Claude generated it - the write-once
+      guard did not record provenance. Copying ``title`` into
+      ``claude_title`` would therefore invent an attribution rather than
+      recover one, and would re-create the exact confusion this step
+      exists to end. ``claude_title`` starts NULL on every row and fills
+      itself from the next SessionStart that carries one, which is the
+      only source that can be trusted to say what Claude calls it.
+
+      A v9 READER STILL WORKS against the same file: it does not select
+      ``claude_title`` and sees ``title`` exactly as before.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v9_to_v10(conn)  # after _step_v8_to_v9
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "claude_title" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN claude_title TEXT")
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -507,6 +540,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     6: _step_v6_to_v7,
     7: _step_v7_to_v8,
     8: _step_v8_to_v9,
+    9: _step_v9_to_v10,
 }
 
 

@@ -236,12 +236,16 @@ def set_label(
     """Store a user-chosen label on one session row.
 
     Description: THE USER SET, and deliberately not the same operation as
-      ``session_lineage._maybe_set_title``. That one SEEDS a title and
-      refuses to overwrite, because a fork's inherited title must not
-      flap every time a hook fires. This one is a person deciding what
-      their session is called, so it overwrites - the two are different
-      operations on one column and keeping them apart is why neither has
-      to compromise.
+      ``session_lineage._record_claude_title``. That one records what
+      CLAUDE calls the session, into ``claude_title``. This one is a
+      person deciding what their session is called, into ``title``.
+
+      They used to be two operations on ONE column, which is why that one
+      had to refuse to overwrite - a guard that stopped Claude's
+      auto-generated name replacing a chosen one, at the cost of making a
+      genuine later Claude-side rename impossible to record. Since v10
+      they are two columns with two owners, so neither has to compromise
+      and neither needs a guard against the other.
 
       IDENTITY IS NOT IN THE UPDATE. ``tmux_name``, ``tmux_created_epoch``
       and ``tmux_session_id`` are not in the SET clause and never will

@@ -93,9 +93,24 @@ def rows(conn):
     ]
 
 
-def test_the_schema_version_reaches_nine():
-    """The step is registered, not just written."""
-    assert CURRENT_SCHEMA_VERSION == 9
+def test_the_v9_step_is_registered_not_just_written():
+    """The step is reachable, which is what this file actually needs.
+
+    This asserted ``CURRENT_SCHEMA_VERSION == 9`` and therefore broke at
+    v10 while nothing about v9 had changed. A test in a per-version file
+    that pins the GLOBAL current version fails every future migration for
+    a reason that has nothing to do with its subject - it is a tripwire on
+    someone else's work, not a check on its own.
+
+    What this file cares about is that the 8->9 step exists and that the
+    chain can still reach 9. Both survive every later version.
+    """
+    from src.core.db_steps import STEPS
+
+    assert 8 in STEPS, "the v8->v9 step must be registered to be reachable"
+    assert CURRENT_SCHEMA_VERSION >= 9, (
+        "the code must still be able to reach v9"
+    )
 
 
 def test_a_rename_split_pair_becomes_one_row(tmp_path, at_v8):

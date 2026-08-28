@@ -2046,6 +2046,7 @@ class SessionManager:
         model: Optional[str] = None,
         terminal_command_id: Optional[str] = None,
         agent_extra_args: Optional[List[str]] = None,
+        label: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -2280,8 +2281,25 @@ class SessionManager:
                 # default config this yields the same string the old
                 # ``f"{claude_cli} --dangerously-skip-permissions"`` did
                 # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
+                # Give Claude its name at BIRTH when we already know it.
+                # This is the risk-free half of name syncing: a launch
+                # flag interrupts nothing, unlike `/rename`, which has to
+                # be typed into a live pane and is therefore gated on
+                # that pane being idle.
+                #
+                # Gated on the family that will ACTUALLY run, not on the
+                # agent_type string: `--name` is a claude-family flag, and
+                # handing it to codex or shell does not degrade the
+                # launch, it breaks it. (The cldl picker defect was this
+                # same mistake - a per-family capability read off the
+                # wrong object.)
+                name_args = launch_name_args_for_agent_type(
+                    label=label, agent_type=resolved_agent_type
+                )
                 command = settings.get_agent_command(
-                    resolved_agent_type, model=model, extra_args=agent_extra_args
+                    resolved_agent_type,
+                    model=model,
+                    extra_args=(agent_extra_args or []) + name_args,
                 )
                 await backend.start(
                     command=command,
@@ -2775,13 +2793,22 @@ class SessionManager:
             from src.core.db import transaction
 
             with transaction(conn):
-                return set_label_for_instance(
+                stored = set_label_for_instance(
                     conn,
                     socket=socket,
                     name=tmux_name,
                     epoch=epoch,
                     label=label,
                 )
+            # The label is OURS and is already durable at this point. The
+            # push below is a courtesy that keeps Claude's own name for
+            # the session in step, and it is deliberately outside the
+            # transaction and deliberately unable to fail the rename: a
+            # pane that is busy, dead or unreadable must not turn a
+            # successful rename into an error the user has to think about.
+            if stored:
+                self._push_rename_to_claude(session_id, tmux_name, label)
+            return stored
         except sqlite3.Error as exc:
             logger.warning(
                 "session_label_write_failed",
@@ -2794,6 +2821,98 @@ class SessionManager:
                 conn.close()
             except Exception:
                 pass
+
+    def _push_rename_to_claude(
+        self, session_id: str, tmux_name: str, label: str
+    ) -> str:
+        """Type ``/rename <label>`` into the session, when that is safe.
+
+        Description: keeps Claude Code's own name for the session in step
+          with the user's label. ONE-WAY BY CONSTRUCTION - there is no
+          rename hook to listen to (verified: no ``SessionRename`` event
+          exists, and ``/rename`` does not fire ``UserPromptSubmit``,
+          because slash commands are intercepted before becoming
+          prompts), so pushing is the only way the two sides ever agree
+          without the user typing it twice.
+
+          NEVER RAISES, and never changes the caller's result. The label
+          is already stored before this runs. A deferral is a normal
+          outcome, not an error: the pane may be mid-turn, in which case
+          the keystrokes would queue and execute later against a
+          conversation that has moved on, which is worse than a cosmetic
+          mismatch.
+
+          The decision itself lives in ``claude_rename.decide_push`` as a
+          pure function, so the policy that types into a user's terminal
+          is testable without a terminal.
+        Inputs: session_id (str) - the app's id. tmux_name (str) - the
+          live tmux session name. label (str) - the user's new label.
+        Output: str - one of the ``claude_rename.PUSH_*`` outcomes, for
+          logging and tests. Callers may ignore it.
+        Example: mgr._push_rename_to_claude('abc', 'cloude_x', 'Spike')
+        """
+        from src.core.claude_rename import (
+            PUSH_SENT,
+            decide_push,
+            detect_claude_version,
+            rename_command,
+        )
+
+        try:
+            sess = self.sessions.get(session_id)
+            family = getattr(sess, "agent_family", None) if sess else None
+            status_map = self._build_tmux_status_map()
+            row = status_map.get(tmux_name) or {}
+            outcome, reason = decide_push(
+                label=label,
+                pane_status=row.get("status"),
+                claude_version=detect_claude_version(),
+                is_claude_session=(family in (None, "claude")),
+            )
+            if outcome != PUSH_SENT:
+                logger.info(
+                    "claude_rename_not_pushed",
+                    session_id=session_id,
+                    outcome=outcome,
+                    reason=reason,
+                    note="the CloudeCode label is stored either way",
+                )
+                return outcome
+
+            backend = self.backends.get(session_id)
+            if backend is None or not hasattr(backend, "write"):
+                return "deferred"
+
+            # ``write`` is async and this method is not, because the
+            # rename API it hangs off is synchronous. Schedule rather
+            # than block: the label is already durable, so the send is
+            # allowed to complete after the response has gone out. If
+            # there is no running loop at all (unit tests, a shutdown
+            # race) that is a deferral, not an error.
+            payload = (rename_command(label) + "\r").encode()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.info(
+                    "claude_rename_not_pushed",
+                    session_id=session_id,
+                    outcome="deferred",
+                    reason="no running event loop to schedule the send on",
+                )
+                return "deferred"
+            loop.create_task(backend.write(payload))
+            logger.info(
+                "claude_rename_pushed", session_id=session_id, reason=reason
+            )
+            return outcome
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            # A courtesy that cannot be allowed to fail a rename.
+            logger.warning(
+                "claude_rename_push_threw",
+                session_id=session_id,
+                error=str(exc),
+            )
+            return "deferred"
 
     async def rename_session(
         self, session_id: str, new_name: str
@@ -5101,3 +5220,4 @@ class SessionManager:
         if not sid:
             return None
         return self.adopt_fifo_offsets.pop(sid, None)
+

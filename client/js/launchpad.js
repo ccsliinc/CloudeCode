@@ -1220,7 +1220,7 @@ class Launchpad {
             // conversation to resume, so the server would refuse it with
             // a 409 - better not to paint a control that cannot work.
             const forkBtn = owned
-                ? `<button type="button" class="running-session-fork" data-fork-name="${escapedName}" title="fork this session into a new one (this session is not changed)" aria-label="fork this session">fork</button>`
+                ? `<button type="button" class="running-session-fork" data-fork-name="${escapedName}" title="copy this conversation into a new session and open it - this session is not changed. Note: Claude Code&#39;s own /fork runs the copy in the BACKGROUND and leaves you here; this button behaves like its /branch." aria-label="fork this session into a new one">fork</button>`
                 : '';
             // Status dot: real activity status (running/idle/dead/unknown)
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),

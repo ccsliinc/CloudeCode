@@ -348,12 +348,43 @@ def test_rows_that_predate_lineage_are_untouched_and_still_listed(conn, anchor):
     assert anchor in [r["id"] for r in list_sessions(conn)]
 
 
-def test_title_is_written_once_and_never_overwritten(conn, anchor):
-    """A session title is recorded on first sight and then left alone."""
+# SUPERSEDED AT v10 by the two tests below.
+#
+# The original asserted that a title was written once and then never
+# overwritten. That WAS the correct behaviour while `title` was one column
+# serving two owners: without the guard, Claude's auto-generated name
+# overwrote a label the user had chosen. The guard's cost was invisible
+# and worse - a genuine later `/rename` on Claude's side could never be
+# recorded, because the column was already occupied.
+#
+# v10 gives Claude's name its own column, so the guard has nothing left to
+# defend and write-once is now the wrong assertion. Kept as a comment
+# rather than deleted, because "this used to be required and here is what
+# changed" is worth more to the next reader than a clean file.
+def test_claude_title_tracks_claudes_current_name(conn, anchor):
+    """Claude's own name is kept current, not frozen at first sight."""
     _record(conn, "uuid-A", "startup", title="first title")
     row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
-    assert row["title"] == "first title"
+    assert row["claude_title"] == "first title"
 
     _record(conn, "uuid-A", "compact", title="a later, different title")
     row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
-    assert row["title"] == "first title"
+    assert row["claude_title"] == "a later, different title"
+
+
+def test_claude_title_never_touches_the_user_label(conn, anchor):
+    """The discriminating half: Claude's name must not reach `title`.
+
+    This is the assertion the old one could not make. A payload title
+    landing in `title` is exactly the defect v10 exists to end, and it
+    would be invisible in the UI - the label would simply appear to have
+    changed on its own.
+    """
+    _record(conn, "uuid-A", "startup", title="claude picked this")
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["title"] is None, "Claude's name must never become the user label"
+
+    # And an absent title is 'no statement', not 'clear the name'.
+    _record(conn, "uuid-A", "compact", title=None)
+    row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
+    assert row["claude_title"] == "claude picked this"

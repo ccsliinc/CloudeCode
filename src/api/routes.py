@@ -260,6 +260,13 @@ async def fork_session(request: Request, session_name: str):
             agent_type=source.agent_type,
             model=source.model,
             agent_extra_args=session_fork.fork_arguments(source.claude_session_uuid),
+            # The fork is born already knowing its own name, so Claude's
+            # prompt bar and /resume picker agree with our label from the
+            # first frame. The alternative - renaming after the fact -
+            # has to type into a live pane and is therefore gated on that
+            # pane being idle, which a session that has just launched
+            # generally is not.
+            label=label,
         )
     except Exception as exc:
         # A BARE 500 IS UNHELPABLE, and this endpoint produced one. The
