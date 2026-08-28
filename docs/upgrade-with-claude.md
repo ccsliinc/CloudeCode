@@ -148,3 +148,84 @@ backup         .upgrade-backups/20260826T191455Z_from-0.9.0_to-1.0.7 (manifest c
 and, if anything could not be evaluated, say which check and why, in those
 words. "Could not determine whether the served asset matches: the server was
 not answering on 8000" is a useful sentence. A blank line is not.
+
+---
+
+## Step 4: did the user's EXISTING SESSIONS come across?
+
+This is the question the person upgrading actually asks, and the schema
+checks above do not answer it. Read this section before telling anyone the
+upgrade succeeded.
+
+### Row counts cannot answer it, and will look like they did
+
+`upgrade-verify.sh` fails loudly if any table SHRINKS, so a lost session is
+caught. What it cannot catch is a session that was never imported. A user
+coming from a version with no datastore has zero `sessions` rows in the
+baseline, so the count goes `0 -> 0` and the check reports "no table lost
+rows" - true, and useless. **Zero because there was nothing to import and
+zero because the import never ran are different facts.**
+
+That is why there is a separate `session import` check. Read it.
+
+### What the import actually does
+
+On the first start after upgrading, the app takes ONE tmux listing and
+imports the live sessions it finds into the `sessions` table. It is guarded
+by a one-way latch, `meta.imported_from_json_at`.
+
+The guard is the important part:
+
+| listing outcome | imported | latch | what happens next |
+|---|---|---|---|
+| `ok=True`, sessions found | those sessions | SET | done |
+| `ok=True`, `reason=no_server` | 0 | SET | correct - tmux was not running, so there was genuinely nothing to import |
+| `ok=False` (probe failed) | 0 | **UNSET** | retries on the next start, and the home screen says so |
+
+A failed probe deliberately does NOT stamp the latch. Stamping it would
+permanently skip the import and silently cost the user their history, so
+`session_import.py` has exactly one latch write site, placed after the
+`if not listing.ok` gate, and a test walks the module's AST to assert both.
+
+**`no_server` is `ok=True` on purpose** - it is a real, complete answer of
+zero, not a failure. Do not read "imported 0" as a problem without reading
+the reason beside it.
+
+### What to tell the user
+
+- `session import PASS ... imported N` - their sessions are in.
+- `session import PASS ... imported 0 because no tmux server was running` -
+  nothing to import; start a session and it will be tracked normally.
+- `session import CANNOT-DETERMINE ... has not run yet: <reason>` - NOT a
+  failure and NOT a success. It retries next start. Their existing sessions
+  are not imported until it does. Have them start the app with tmux
+  reachable and re-run the verify.
+
+## Step 5: downgrade, if they want to go back
+
+**The upgrade backs up before it does anything destructive.** `upgrade.sh`
+copies `.env`, `config.json`, `refresh_tokens.db`, `session_metadata.json`,
+`pinned_themes.json`, `unread_state.json`, `cloude.db`, `hook_tokens.json`
+and `migration_trail.jsonl` into a dated directory it prints prominently,
+SQLite files via `VACUUM INTO` + `integrity_check` rather than `cp`, since
+several are live WAL databases. `scripts/rollback.sh` restores that.
+
+**If they downgrade WITHOUT restoring the data, nothing is corrupted.** The
+older app reads `meta.schema_version`, finds a number it does not
+understand, and refuses to touch anything:
+
+> this install's data is at schema vN, this app version only knows schema
+> vM - restore the newer app version, or restore data to vM via the trail.
+> Running read-only until then; **no data has been changed.**
+
+That is a named degraded state, not a crash. Migrating backward is never
+attempted, because that code was never written to understand a newer
+schema. `rollback.sh` is equally careful: with a database present but no
+migration trail beside it, it REFUSES rather than guessing which schema
+belongs to the target version.
+
+Schema changes so far have been ADDITIVE (v10 added `claude_title`, v11
+added `activity_state` and `activity_state_at`), so an older reader that
+selects the columns it knows still reads a newer file correctly. That is
+what makes a data-restoring rollback clean rather than lossy - but it is a
+property of these particular migrations, not a guarantee about future ones.

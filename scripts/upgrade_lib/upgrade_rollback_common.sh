@@ -64,7 +64,7 @@
 INSTALL_REQUIRED_PAIR=(".env" "config.json")          # either both exist or neither does; a half-set is a broken install
 INSTALL_OPTIONAL_FILES=("config.json.bak" ".update-check.json")  # app-created lazily; absence is normal
 STATE_DIR_REQUIRED_FILES=("refresh_tokens.db")          # RefreshStore.init() runs on EVERY server startup - if the server was running, this exists
-STATE_DIR_OPTIONAL_FILES=("session_metadata.json" "pinned_themes.json" "unread_state.json" "cloude.db" "migration_trail.jsonl")  # created lazily on first session / theme pin / unread event; cloude.db + migration_trail.jsonl are created on the first startup that runs feat/datastore-and-trail, so they are legitimately absent on an install that has not been upgraded to it yet
+STATE_DIR_OPTIONAL_FILES=("session_metadata.json" "pinned_themes.json" "unread_state.json" "cloude.db" "migration_trail.jsonl" "hook_tokens.json")  # created lazily on first session / theme pin / unread event; cloude.db + migration_trail.jsonl are created on the first startup that runs feat/datastore-and-trail, so they are legitimately absent on an install that has not been upgraded to it yet; hook_tokens.json holds the per-session HMAC hook tokens and is created on the first session mint - restoring it with the rest is what lets a rolled-back install keep talking to agents that survived the rollback, exactly as it does across a restart. Absent on any install predating it, and harmless to omit (tokens re-mint on the next create), but omitting it silently costs every SURVIVING agent its hooks
 
 # DEFAULT_PORT and resolve_port() live in scripts/resolve-port.sh - the
 # single shared shell-side port resolver every port-aware script in this

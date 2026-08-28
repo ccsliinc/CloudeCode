@@ -151,6 +151,47 @@ def _row_counts(conn: sqlite3.Connection) -> Dict[str, Any]:
     return counts
 
 
+def _session_import_status(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """What the one-time session import did, or that it has not run.
+
+    Description: row counts alone cannot answer the question an upgrading
+      user actually asks - "did my existing sessions come across?" - and
+      the reason is specific. A user coming from a version with no
+      datastore has NO sessions rows in the baseline, so the count goes
+      0 -> 0 and the generic check reports "no table lost rows", which is
+      true and useless. Zero because there was nothing to import and zero
+      because the import never ran are different facts.
+
+      The import records both: ``meta.imported_from_json_at`` is a
+      one-way latch written ONLY after a successful tmux listing, and
+      ``meta.session_import_pending_reason`` names why a run bailed. This
+      reads both and never infers one from the other.
+    Inputs: conn (sqlite3.Connection) - read-only datastore handle.
+    Output: dict with ``ran`` (bool), ``at``, ``imported``,
+      ``listing_reason``, ``pending_reason``, or an ``error`` key.
+    """
+    try:
+        meta = dict(
+            conn.execute("SELECT key, value FROM meta").fetchall()
+        )
+    except sqlite3.Error as exc:
+        return {"error": f"meta unreadable: {exc}"}
+    at = meta.get("imported_from_json_at")
+    detail: Dict[str, Any] = {}
+    try:
+        blob = json.loads(meta.get("imported_from_json_result") or "{}")
+        detail = blob.get("sessions_import_detail") or {}
+    except ValueError:
+        detail = {}
+    return {
+        "ran": bool(at),
+        "at": at,
+        "imported": detail.get("sessions_imported"),
+        "listing_reason": detail.get("listing_reason"),
+        "pending_reason": meta.get("session_import_pending_reason"),
+    }
+
+
 def _trail_tail(conn: sqlite3.Connection, limit: int = 5) -> Any:
     """The most recent migration_trail entries, newest first."""
     try:
@@ -233,6 +274,7 @@ def _snapshot() -> Dict[str, Any]:
             "path": str(db_path),
             "schema_version": _read_schema_version(conn),
             "row_counts": _row_counts(conn),
+            "session_import": _session_import_status(conn),
             "migration_trail_tail": _trail_tail(conn),
         }
     finally:
@@ -421,6 +463,55 @@ def cmd_verify() -> int:
             if changed:
                 detail += "; grew: " + ", ".join(changed)
             results.append(("row counts", PASS, detail))
+
+    # SESSION IMPORT - the question an upgrading user actually asks.
+    #
+    # Separate from row counts on purpose. A user coming from a version
+    # with no datastore has no sessions rows in the baseline, so the count
+    # goes 0 -> 0 and the generic check says "no table lost rows" - true,
+    # and useless. This distinguishes "nothing to import" from "the import
+    # never ran", which look identical in a count.
+    imp = db_now.get("session_import")
+    if not isinstance(imp, dict) or "error" in (imp or {}):
+        results.append((
+            "session import", UNKNOWN,
+            (imp or {}).get("error", "not recorded in this snapshot - "
+                            "the baseline predates this check"),
+        ))
+    elif imp.get("pending_reason"):
+        # The latch is deliberately NOT set when the tmux probe fails, so
+        # the next start retries. That is a real state, not a failure, and
+        # it must not read as success.
+        results.append((
+            "session import", UNKNOWN,
+            f"has not run yet: {imp['pending_reason']}. It retries on the "
+            "next start; existing sessions are NOT imported until it does",
+        ))
+    elif not imp.get("ran"):
+        results.append((
+            "session import", UNKNOWN,
+            "no import record at all - either this install predates the "
+            "import or it has never completed a start with a readable "
+            "datastore",
+        ))
+    else:
+        n = imp.get("imported")
+        reason = imp.get("listing_reason")
+        if reason == "no_server":
+            # ok=True with a real answer of zero: tmux was not running, so
+            # there was genuinely nothing to import. Named rather than
+            # counted, because "0 imported" alone reads like a loss.
+            results.append((
+                "session import", PASS,
+                "ran; imported 0 because no tmux server was running - a "
+                "real answer of zero, not a failed probe",
+            ))
+        else:
+            results.append((
+                "session import", PASS,
+                f"ran at {imp.get('at')}; imported {n} session(s)"
+                + (f" (listing: {reason})" if reason else ""),
+            ))
 
     tail = db_now.get("migration_trail_tail")
     if isinstance(tail, dict) or not tail:
