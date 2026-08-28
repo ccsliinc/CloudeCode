@@ -110,6 +110,26 @@ body.session-sidebar-pinned #launchpad-screen {
     padding-left: calc(var(--sidebar-dock-w) + var(--screen-pad-x));
 }
 
+/* THE BOTTOM BAR IS CHROME, NOT CONTENT, so it must not inherit the
+ * content gutter the rule above adds.
+ *
+ * `.home-bar` lives inside `#launchpad-screen`, so it was pushed to
+ * `320px + 20px` like everything else in there. On content that 20px is
+ * exactly right - it keeps text off the docked panel's border. On a
+ * full-width bar with its own background and top border it reads as a
+ * seam: a 20px notch of page showing between the sidebar's right edge
+ * and where the bar starts. Measured with the sidebar docked: sidebar
+ * right edge 320, bar left edge 340.
+ *
+ * Pulling it back by exactly the screen padding puts the bar's
+ * BACKGROUND flush against the panel while its own `padding: 0 12px`
+ * keeps its buttons off the seam - the same split the bar already makes
+ * between its box and its contents for the home-indicator inset. */
+body.session-sidebar-pinned #launchpad-screen .home-bar {
+    margin-left: calc(-1 * var(--screen-pad-x));
+    width: calc(100% + var(--screen-pad-x));
+}
+
 /* THE HEADER PAYS THE DOCK WIDTH *PLUS* ITS OWN SIDE PADDING.
  *
  * `.screen` can take the bare dock width because everything inside it

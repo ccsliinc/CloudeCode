@@ -2049,11 +2049,104 @@ class SessionManager:
             >>> mgr.record_hook_event("ses_1", "PreToolUse")
         """
         self._activity_tracker.record_event(session_id, kind)
-        if kind == EVENT_STOP:
-            backend = self.backends.get(session_id)
-            tmux_name = getattr(backend, "tmux_session", None) if backend else None
-            if tmux_name:
-                self._unread_store.set_flag(tmux_name, "auto", True)
+        backend = self.backends.get(session_id)
+        tmux_name = getattr(backend, "tmux_session", None) if backend else None
+        if not tmux_name:
+            # After a restart the id is not in `backends` yet, but the
+            # persisted map still knows the name - the same fallback the
+            # lineage path uses, and the reason a surviving agent's status
+            # keeps being recorded instead of silently stopping.
+            tmux_name = self._hook_tmux_names.get(session_id)
+        if kind == EVENT_STOP and tmux_name:
+            self._unread_store.set_flag(tmux_name, "auto", True)
+        self._persist_activity_state(session_id, tmux_name)
+
+    def _restored_activity_state(self, tmux_name: Optional[str]) -> Optional[str]:
+        """The durable activity state for a session, if still trustworthy.
+
+        Description: reads ``activity_state`` / ``activity_state_at`` off
+          the real-instance row and judges it by age through
+          ``activity_persist.restore_state``. Returns None for absent,
+          unparseable, stale or ``dead`` - all of which the caller must
+          leave as not-measured rather than rounding to ``idle``.
+        Inputs: tmux_name (str | None).
+        Output: str | None.
+        """
+        if not tmux_name:
+            return None
+        conn = None
+        try:
+            from src.core.activity_persist import restore_state
+
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            row = conn.execute(
+                "SELECT activity_state, activity_state_at FROM sessions "
+                "WHERE tmux_name = ? AND tmux_created_epoch IS NOT NULL "
+                "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
+                (tmux_name,),
+            ).fetchone()
+            if not row:
+                return None
+            state, _reason = restore_state(row[0], row[1])
+            return state
+        except Exception as exc:  # noqa: BLE001 - a read must not break listing
+            logger.debug("activity_state_restore_failed", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _persist_activity_state(
+        self, session_id: str, tmux_name: Optional[str]
+    ) -> None:
+        """Stamp the freshly-computed activity state onto the session row.
+
+        Description: makes the hook-derived status DURABLE. Without this,
+          the state lives only in ``SessionActivityTracker``, an in-memory
+          dict, and a server restart forgets what every session was doing
+          - which does not degrade to "unknown" but to a confident
+          ``idle``, because the tmux fallback reports a constant under
+          this app's launch path.
+
+          Best-effort and silent on failure by design: a status write must
+          never be able to fail hook delivery. It writes the state the
+          tracker just computed, so the durable value and the live value
+          cannot disagree.
+        Inputs: session_id (str). tmux_name (str | None).
+        Output: None.
+        """
+        if not tmux_name:
+            return
+        conn = None
+        try:
+            from src.core.activity_persist import write_state
+            from src.core.session_status import STATUS_UNKNOWN
+
+            state = self._activity_tracker.resolve(
+                session_id, STATUS_UNKNOWN, unread=False
+            )
+            if not state or state == STATUS_UNKNOWN:
+                return
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return
+            from src.core.db import transaction
+
+            with transaction(conn):
+                write_state(conn, tmux_name, state)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.debug("activity_state_persist_failed", error=str(exc))
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def ack_toast(self, session_id: str, toast_id: str) -> bool:
         """Mark a toast acknowledged. Idempotent.
@@ -3451,6 +3544,19 @@ class SessionManager:
         activity_status = self._activity_tracker.resolve(
             session_id, raw_tmux_status, unread=unread
         )
+        # AFTER A RESTART THE TRACKER IS EMPTY, and what it falls back to
+        # is not "unknown" - it is the tmux tier, which under this app's
+        # launch path reports a CONSTANT (every pane shows its wrapper
+        # shell). So a session whose state was forgotten renders a
+        # confident `idle`, indistinguishable from one genuinely at a
+        # prompt. The durable state is consulted only when no hook has
+        # been seen this run, so a live signal always wins, and only when
+        # it is fresh enough to still describe now - a stale `working`
+        # is a lie about right now, and returns not-measured instead.
+        if not self._activity_tracker.hooks_seen(session_id):
+            restored = self._restored_activity_state(tmux_session_name)
+            if restored:
+                activity_status = restored
 
         # fix/adopted-session-pid - pid is resolved LIVE off the same bulk
         # ``list_pane_status_all()`` row already fetched for status above,
