@@ -1875,6 +1875,36 @@ class SessionManager:
                 return existing
         return None
 
+    def _live_session_id_for_stale_id(self, session_id: str) -> Optional[str]:
+        """Map a pre-restart session id onto the live one for that pane.
+
+        Description: uses the persisted ``session_id -> tmux name`` map,
+          then looks for a CURRENTLY REGISTERED session carrying that
+          tmux name. Both halves are required: the first survives the
+          restart, the second proves the thing it names is live right
+          now.
+
+          Returns None when the name is unknown or nothing live carries
+          it. That is a genuine "no such session", distinct from "an id I
+          have not seen since the restart", and the caller keeps its
+          existing behaviour for it.
+        Inputs: session_id (str) - the id the hook presented.
+        Output: str | None - a live session id, or None.
+        """
+        tmux_name = self._hook_tmux_names.get(session_id)
+        if not tmux_name:
+            return None
+        for live_id, sess in self.sessions.items():
+            if getattr(sess, "tmux_session", None) == tmux_name:
+                logger.info(
+                    "toast_session_id_remapped",
+                    stale_id=session_id,
+                    live_id=live_id,
+                    tmux_name=tmux_name,
+                )
+                return live_id
+        return None
+
     def record_toast(
         self,
         session_id: str,
@@ -1924,6 +1954,24 @@ class SessionManager:
         import uuid as _uuid
 
         session = self.sessions.get(session_id)
+        if session is None:
+            # THE ID MAY SIMPLY PREDATE A RESTART. The pane's
+            # CLOUDECODE_SESSION_ID is baked in at spawn and cannot be
+            # re-issued to a running agent, so after a restart the same
+            # live session comes back under an adopted id and every hook
+            # still presents the old one. The lineage and activity paths
+            # already re-map through the persisted tmux name; without the
+            # same step here a surviving session keeps its status and
+            # lineage but silently loses every toast.
+            #
+            # This resolves to a session that IS live, so the docstring's
+            # reason for raising still holds for the case it was written
+            # about: if nothing live carries that name, there is no WS to
+            # deliver on and the caller's 410 is correct.
+            remapped = self._live_session_id_for_stale_id(session_id)
+            if remapped is not None:
+                session_id = remapped
+                session = self.sessions.get(session_id)
         if session is None:
             raise ValueError(f"Unknown session_id: {session_id!r}")
 
