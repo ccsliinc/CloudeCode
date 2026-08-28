@@ -15,20 +15,12 @@ from src.core.claude_rename import (
     PUSH_SENT,
     PUSH_UNSUPPORTED,
     decide_push,
+    oob_rename_argv,
     launch_name_args,
     name_is_pushable,
     parse_claude_version,
     rename_command,
     supports_rename,
-)
-from src.core.session_status import (
-    STATUS_DEAD,
-    STATUS_FINISHED_UNREAD,
-    STATUS_IDLE,
-    STATUS_QUESTION,
-    STATUS_UNKNOWN,
-    STATUS_WORKING,
-    STATUS_WORKING_SUBAGENT,
 )
 
 VER = (2, 1, 248)
@@ -89,106 +81,81 @@ def test_ordinary_names_including_spaces_and_emoji_are_pushable():
     assert name_is_pushable("Refactor spike 🚀") is True
 
 
-# ---- the send decision -----------------------------------------------
+# ---- the out-of-band decision ---------------------------------------
 
 def _d(**kw):
-    """decide_push with the safe defaults filled in."""
+    """decide_push with the working defaults filled in."""
     base = dict(
-        label="X",
-        activity_status=STATUS_IDLE,
-        hooks_seen=True,
-        claude_version=VER,
-        is_claude_session=True,
+        label="X", claude_uuid="u1", claude_version=VER, is_claude_session=True
     )
     base.update(kw)
     return decide_push(**base)
 
 
-def test_a_pane_at_a_prompt_gets_the_push():
-    for state in (STATUS_IDLE, STATUS_FINISHED_UNREAD):
-        outcome, _ = _d(activity_status=state)
-        assert outcome == PUSH_SENT, state
+def test_a_bound_conversation_gets_the_rename():
+    outcome, reason = _d()
+    assert outcome == PUSH_SENT
+    assert "out of band" in reason
 
 
-def test_a_question_never_gets_typed_into():
-    """The most dangerous state, and the reason this gate exists at all.
+def test_no_activity_gate_exists_any_more():
+    """THE POINT OF THE REWRITE.
 
-    When Claude has asked something and is waiting, text typed into the
-    pane BECOMES the answer. A rename push landing there does not fail -
-    it silently answers the question with "/rename Foo" and the
-    conversation continues from that.
+    The previous design typed into the pane and had to refuse whenever
+    Claude was busy or waiting on an answer - text typed at a question
+    BECOMES the answer. Out-of-band touches no pane, so there is no
+    session state in which the rename must be skipped. If someone
+    reintroduces an activity argument here, this test says why not to.
     """
-    outcome, reason = _d(activity_status=STATUS_QUESTION)
-    assert outcome == PUSH_DEFERRED
-    assert "answer" in reason
+    import inspect
+
+    params = set(inspect.signature(decide_push).parameters)
+    assert "activity_status" not in params
+    assert "hooks_seen" not in params
+    assert params == {"label", "claude_uuid", "claude_version", "is_claude_session"}
 
 
-@pytest.mark.parametrize(
-    "state",
-    [STATUS_WORKING, STATUS_WORKING_SUBAGENT, STATUS_DEAD, STATUS_UNKNOWN, None],
-)
-def test_every_other_state_defers_and_says_why(state):
-    """The discriminating half.
+def test_an_unbound_conversation_defers_because_resume_needs_a_uuid():
+    """The one genuine deferral left.
 
-    A test that only pinned the idle case would pass just as happily
-    against code that sent unconditionally - which is the actual defect
-    this replaces, since that code types into a pane mid-turn.
+    --resume addresses a Claude session BY UUID. A session that has not
+    bound one yet cannot be addressed at all, so this is 'not yet',
+    never 'failed' - the label is already stored on our side.
     """
-    outcome, reason = _d(activity_status=state)
+    outcome, reason = _d(claude_uuid=None)
     assert outcome == PUSH_DEFERRED
-    assert reason, "a deferral with no reason is not actionable"
-
-
-def test_no_hook_signal_defers_even_when_the_status_says_idle():
-    """THE BUG THIS GATE WAS REWRITTEN TO FIX.
-
-    Every session launches through a wrapper (`zsh -c 'cld "$@"'`), so
-    Claude runs as a CHILD of that shell and tmux's
-    `pane_current_command` reports "zsh" forever - measured across all 7
-    live sessions, thinking or idle alike. So the tmux fallback resolves
-    to `idle` unconditionally.
-
-    A gate that trusted that could never refuse. That is not a weak gate,
-    it is an absent one - hazard 39's "verification step that cannot
-    fail", in gate form. Without hook signal the answer must be "I cannot
-    tell", never "idle".
-    """
-    outcome, reason = _d(activity_status=STATUS_IDLE, hooks_seen=False)
-    assert outcome == PUSH_DEFERRED
-    assert "no hook signal" in reason
-
-
-def test_unknown_activity_is_not_an_idle_one():
-    _, reason = _d(activity_status=STATUS_UNKNOWN)
-    assert "could not be read" in reason
+    assert "uuid" in reason
 
 
 def test_non_claude_and_old_claude_are_unsupported_not_deferred():
-    """Unsupported and deferred must not be the same answer.
-
-    Deferred means try again later. Unsupported means never - retrying
-    forever against a codex session would be a busy loop that can only
-    ever fail.
-    """
+    """Deferred means try later; unsupported means never."""
     outcome, _ = _d(is_claude_session=False)
     assert outcome == PUSH_UNSUPPORTED
-
     outcome, reason = _d(claude_version=(2, 1, 100))
     assert outcome == PUSH_UNSUPPORTED
-    assert "2.1.205" in reason, "the reason must name the version needed"
-
-
-def test_a_dead_pane_defers_before_the_hook_question_is_asked():
-    """Order matters: dead is knowable without any hook signal."""
-    outcome, reason = _d(activity_status=STATUS_DEAD, hooks_seen=False)
-    assert outcome == PUSH_DEFERRED
-    assert "dead" in reason
+    assert "2.1.205" in reason
 
 
 def test_an_unpushable_name_defers_rather_than_sending_a_different_one():
     outcome, reason = _d(label="bad\nname")
     assert outcome == PUSH_DEFERRED
     assert "disagree" in reason
+
+
+def test_the_argv_is_a_list_so_no_shell_ever_parses_the_label():
+    """A label is user text and may contain quotes, backticks or $(...).
+
+    Passing argv as a list removes the injection class outright rather
+    than trying to escape it. This repo has already been bitten once by a
+    backtick inside a quoted string being executed as a command.
+    """
+    argv = oob_rename_argv("/usr/bin/claude", "uuid-1", 'evil"; $(rm -rf /) #')
+    assert isinstance(argv, list)
+    assert argv[:4] == ["/usr/bin/claude", "-p", "--resume", "uuid-1"]
+    # The label travels as ONE argv element, unsplit and unparsed.
+    assert argv[4].startswith("/rename ")
+    assert argv[4].endswith('evil"; $(rm -rf /) #')
+    assert len(argv) == 5
 
 
 def test_rename_command_is_the_literal_line():

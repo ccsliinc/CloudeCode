@@ -300,7 +300,25 @@ class SessionManager:
         # ``X-Cloudecode-Token`` header so the loopback hook endpoint can
         # authenticate the originating session. Dropped on
         # ``_wipe_session_state``. NEVER logged.
+        # DURABLE, NOT EPHEMERAL, since 2026-08-28. Held in memory for
+        # speed but backed by ``hook_tokens.json`` in the state dir,
+        # because the same token is baked into each tmux pane's env at
+        # spawn and read from there at hook-fire time - so it cannot be
+        # re-issued to a running agent. A server restart used to forget
+        # the table while every agent kept presenting its baked token,
+        # which 403'd forever and silently killed activity status,
+        # toasts and lineage for every pre-restart session. See
+        # src/core/hook_tokens.py for the full reasoning.
         self._hook_tokens: dict[str, str] = {}
+        # session_id -> tmux name, persisted beside the token. Surviving a
+        # restart needs BOTH: the token gets a hook past authentication,
+        # this is what lets the server work out WHICH session it belongs
+        # to. Restoring only the token produces a hook that authenticates,
+        # returns 200, and resolves to nothing - measured, and from the
+        # agent's side indistinguishable from success.
+        self._hook_tmux_names: dict[str, str] = {}
+        self._hook_tokens_durable: bool = True
+        self._load_hook_tokens()
 
         # SESSION-IDENTITY-V2 - durable per-tmux-name pinned-theme map.
         # Lives in its own file (``pinned_themes.json``) so it survives
@@ -487,7 +505,22 @@ class SessionManager:
         # v0.7.0 Part 3 - drop the HMAC hook token. After this point any
         # incoming hook POST for this session_id rejects with 403 (unknown
         # session → ``validate_hook_token`` returns False).
-        self._hook_tokens.pop(session_id, None)
+        # THE TOKEN IS DELIBERATELY NOT DROPPED HERE, and getting this
+        # wrong once already cost a full debugging cycle.
+        #
+        # This function means "forget the in-memory state for this id" and
+        # its callers are startup stale-cleanup, zombie cleanup and a
+        # failed create - none of which is "the user ended this session".
+        # Deleting the durable token here revoked the credential of a
+        # perfectly live agent, so the very restart the token store exists
+        # to survive wiped the store on the way down. Measured: a seeded
+        # entry survived a restart untouched, while a real session's token
+        # vanished before the server exited.
+        #
+        # Forgetting state and revoking a credential are two different
+        # operations. The token's real lifetime is "as long as a tmux
+        # session by that name is still owned", which is what
+        # ``_gc_hook_tokens`` enforces at load, so nothing accumulates.
         # feat/hook-driven-status - drop the ephemeral hook-signal state.
         # The persisted unread flag (keyed by tmux NAME, not session_id) is
         # deliberately untouched here - it must survive detach/re-adopt.
@@ -520,7 +553,117 @@ class SessionManager:
     # ``validate_hook_token`` before recording a toast. The endpoint is also
     # loopback-only - this is a defense-in-depth pair, not a single layer.
 
-    def _mint_hook_token(self, session_id: str) -> str:
+    def _load_hook_tokens(self) -> None:
+        """Rehydrate the hook-token table from disk at startup.
+
+        Description: without this, every agent that survived the restart
+          presents a token the server has never heard of and is rejected
+          403 forever - silently, because nothing downstream of a hook
+          reports its own absence. Never raises: a store that cannot be
+          read leaves an empty table and sets ``_hook_tokens_durable``
+          False, so the condition is KNOWN rather than merely suffered.
+        Inputs: none (reads ``settings.get_state_dir()``).
+        Output: None.
+        """
+        try:
+            from src.core.hook_tokens import load_tokens
+
+            result = load_tokens(settings.get_state_dir())
+            self._hook_tokens = dict(result.tokens)
+            self._hook_tmux_names = dict(result.tmux_names)
+            self._gc_hook_tokens()
+            self._hook_tokens_durable = result.durable
+            if not result.durable:
+                logger.warning(
+                    "hook_tokens_not_durable",
+                    detail=result.detail,
+                    note=(
+                        "sessions that survive a restart will 403 on every "
+                        "hook until they are recreated"
+                    ),
+                )
+            elif result.tokens:
+                logger.info(
+                    "hook_tokens_restored", count=len(result.tokens)
+                )
+        except Exception as exc:  # noqa: BLE001 - startup must not die here
+            self._hook_tokens = {}
+            self._hook_tmux_names = {}
+            self._hook_tokens_durable = False
+            logger.warning("hook_tokens_load_threw", error=str(exc))
+
+    def _gc_hook_tokens(self) -> None:
+        """Drop stored tokens whose tmux session is no longer owned.
+
+        Description: the token's honest lifetime is "as long as a tmux
+          session by that name is still ours". Bounding it that way -
+          rather than by whether an id is in the in-memory table - is
+          what lets a token survive a restart while still not
+          accumulating for the life of the install.
+
+          READS ``session_metadata.json`` DIRECTLY rather than
+          ``self.owned_tmux_sessions``, because this runs from
+          ``__init__`` before that set is rehydrated. An unreadable or
+          absent metadata file KEEPS EVERYTHING: "I could not find out
+          which sessions are owned" must never be actioned as "none are",
+          which would delete every token on every start and reinstate the
+          bug this store exists to fix.
+        Inputs: none.
+        Output: None.
+        """
+        if not self._hook_tokens:
+            return
+        try:
+            import json as _json
+
+            meta = settings.get_state_dir() / "session_metadata.json"
+            if not meta.exists():
+                return
+            owned = set(
+                _json.loads(meta.read_text()).get("owned_tmux_sessions") or []
+            )
+        except (OSError, ValueError) as exc:
+            logger.debug("hook_token_gc_skipped", error=str(exc))
+            return
+        if not owned:
+            return
+
+        # A token with NO recorded name is kept: it predates schema 2 and
+        # cannot be judged, and discarding what cannot be evaluated is the
+        # false-green move.
+        dead = [
+            sid
+            for sid, name in self._hook_tmux_names.items()
+            if name not in owned
+        ]
+        if not dead:
+            return
+        for sid in dead:
+            self._hook_tokens.pop(sid, None)
+            self._hook_tmux_names.pop(sid, None)
+        logger.info("hook_tokens_gc", dropped=len(dead))
+        self._persist_hook_tokens()
+
+    def _persist_hook_tokens(self) -> None:
+        """Write the token table out. Never raises, never logs a token."""
+        try:
+            from src.core.hook_tokens import save_tokens
+
+            ok, reason = save_tokens(
+                settings.get_state_dir(),
+                self._hook_tokens,
+                tmux_names=self._hook_tmux_names,
+            )
+            self._hook_tokens_durable = ok
+            if not ok:
+                logger.warning("hook_tokens_not_persisted", reason=reason)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            self._hook_tokens_durable = False
+            logger.warning("hook_tokens_persist_threw", error=str(exc))
+
+    def _mint_hook_token(
+        self, session_id: str, tmux_name: Optional[str] = None
+    ) -> str:
         """Mint and store a fresh URL-safe token for ``session_id``.
 
         Replaces any existing token for the same id (e.g. a re-adopt of a
@@ -529,6 +672,18 @@ class SessionManager:
         """
         token = secrets.token_urlsafe(32)
         self._hook_tokens[session_id] = token
+        # THE NAME MUST BE PASSED IN, not looked up. This is called BEFORE
+        # the tmux spawn (the token has to exist to be injected into the
+        # pane's environment), so ``self.sessions`` does not carry this id
+        # yet and a lookup here returns None every time - measured: the
+        # first store written this way recorded `tmux_name: null` for a
+        # session whose name was known to its own caller.
+        name = tmux_name or getattr(
+            self.sessions.get(session_id), "tmux_session", None
+        )
+        if name:
+            self._hook_tmux_names[session_id] = name
+        self._persist_hook_tokens()
         return token
 
     def get_hook_token(self, session_id: str) -> Optional[str]:
@@ -2273,7 +2428,7 @@ class SessionManager:
             # PTYBackend's start() signature also accepts ``env`` (or
             # ignores extra kwargs - see backend) so this is safe across
             # backend types.
-            self._mint_hook_token(session_id)
+            self._mint_hook_token(session_id, tmux_name=tmux_session_name)
             spawn_env = self.get_env_for_spawn(session_id)
 
             if auto_start_claude:
@@ -2829,69 +2984,44 @@ class SessionManager:
     def _push_rename_to_claude(
         self, session_id: str, tmux_name: str, label: str
     ) -> str:
-        """Type ``/rename <label>`` into the session, when that is safe.
+        """Rename the Claude conversation OUT OF BAND, never via the pane.
 
-        Description: keeps Claude Code's own name for the session in step
-          with the user's label. ONE-WAY BY CONSTRUCTION - there is no
-          rename hook to listen to (verified: no ``SessionRename`` event
-          exists, and ``/rename`` does not fire ``UserPromptSubmit``,
-          because slash commands are intercepted before becoming
-          prompts), so pushing is the only way the two sides ever agree
-          without the user typing it twice.
+        Description: runs `claude -p --resume <uuid> "/rename <label>"` as
+          a short-lived subprocess. It never touches the tmux pane, so
+          there is no state of the session in which it could be misread
+          as input - which is what the previous design needed an activity
+          gate for, and why a rename used to be skipped whenever Claude
+          was busy. Measured against a live running session: 0.7s, no
+          fork, same uuid, session responsive immediately after.
 
-          NEVER RAISES, and never changes the caller's result. The label
-          is already stored before this runs. A deferral is a normal
-          outcome, not an error: the pane may be mid-turn, in which case
-          the keystrokes would queue and execute later against a
-          conversation that has moved on, which is worse than a cosmetic
-          mismatch.
+          NEVER RAISES and never changes the caller's result. The label is
+          already stored before this runs; this only keeps Claude's own
+          name in step.
 
-          The decision itself lives in ``claude_rename.decide_push`` as a
-          pure function, so the policy that types into a user's terminal
-          is testable without a terminal.
-        Inputs: session_id (str) - the app's id. tmux_name (str) - the
-          live tmux session name. label (str) - the user's new label.
-        Output: str - one of the ``claude_rename.PUSH_*`` outcomes, for
-          logging and tests. Callers may ignore it.
+          Note what it does NOT do: refresh the running UI. The live
+          process holds its title in memory, so the new name shows on
+          resume and in the /resume picker. That is the accepted cost of
+          not typing into a pane somebody is using.
+        Inputs: session_id (str). tmux_name (str) - kept for logging.
+          label (str) - the user's new label.
+        Output: str - one of the ``claude_rename.PUSH_*`` outcomes.
         Example: mgr._push_rename_to_claude('abc', 'cloude_x', 'Spike')
         """
         from src.core.claude_rename import (
+            OOB_TIMEOUT_SECONDS,
             PUSH_SENT,
             decide_push,
             detect_claude_version,
-            rename_command,
+            oob_rename_argv,
         )
-        from src.core.session_status import STATUS_UNKNOWN
 
         try:
             sess = self.sessions.get(session_id)
             family = getattr(sess, "agent_family", None) if sess else None
-
-            # The HOOK-DRIVEN status, not the raw tmux one. Every session
-            # here launches through a wrapper, so tmux reports the pane's
-            # shell ("zsh") whatever Claude is doing - measured across all
-            # 7 live sessions. A gate reading raw tmux status resolves to
-            # idle every time and can never refuse, which is not a weak
-            # gate but an absent one.
-            status_map = self._build_tmux_status_map()
-            row = status_map.get(tmux_name) or {}
-            tracker = getattr(self, "_activity_tracker", None)
-            hooks_seen = bool(
-                tracker.hooks_seen(session_id) if tracker else False
-            )
-            activity = (
-                tracker.resolve(
-                    session_id,
-                    row.get("status") or STATUS_UNKNOWN,
-                    unread=False,
-                )
-                if tracker
-                else None
-            )
+            claude_uuid = self._claude_uuid_for_tmux_name(tmux_name)
             outcome, reason = decide_push(
                 label=label,
-                activity_status=activity,
-                hooks_seen=hooks_seen,
+                claude_uuid=claude_uuid,
                 claude_version=detect_claude_version(),
                 is_claude_session=(family in (None, "claude")),
             )
@@ -2905,40 +3035,74 @@ class SessionManager:
                 )
                 return outcome
 
-            backend = self.backends.get(session_id)
-            if backend is None or not hasattr(backend, "write"):
+            from src.core.server_status import collect_claude_cli
+
+            info = collect_claude_cli() or {}
+            claude_path = info.get("path")
+            if not claude_path:
                 return "deferred"
 
-            # ``write`` is async and this method is not, because the
-            # rename API it hangs off is synchronous. Schedule rather
-            # than block: the label is already durable, so the send is
-            # allowed to complete after the response has gone out. If
-            # there is no running loop at all (unit tests, a shutdown
-            # race) that is a deferral, not an error.
-            payload = (rename_command(label) + "\r").encode()
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                logger.info(
-                    "claude_rename_not_pushed",
-                    session_id=session_id,
-                    outcome="deferred",
-                    reason="no running event loop to schedule the send on",
-                )
-                return "deferred"
-            loop.create_task(backend.write(payload))
+            import subprocess
+
+            argv = oob_rename_argv(claude_path, claude_uuid, label)
+            # ARGV, NOT A SHELL STRING. The label is user text and may
+            # contain quotes or $(...); passing it as an argv element
+            # means no shell parses it at all.
+            subprocess.Popen(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
             logger.info(
-                "claude_rename_pushed", session_id=session_id, reason=reason
+                "claude_rename_pushed",
+                session_id=session_id,
+                reason=reason,
+                timeout_s=OOB_TIMEOUT_SECONDS,
             )
             return outcome
         except Exception as exc:  # noqa: BLE001 - see docstring
-            # A courtesy that cannot be allowed to fail a rename.
             logger.warning(
                 "claude_rename_push_threw",
                 session_id=session_id,
                 error=str(exc),
             )
             return "deferred"
+
+    def _claude_uuid_for_tmux_name(self, tmux_name: str) -> Optional[str]:
+        """The bound Claude conversation uuid for a tmux session name.
+
+        Description: reads the newest REAL INSTANCE row for the name - one
+          with an epoch - so a `/clear` conversation row (epoch NULL)
+          cannot lend its uuid to a rename aimed at the session. Returns
+          None when nothing is bound yet, which the caller reports as a
+          deferral rather than guessing.
+        Inputs: tmux_name (str).
+        Output: str | None.
+        """
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return None
+            row = conn.execute(
+                "SELECT claude_session_uuid FROM sessions "
+                "WHERE tmux_name = ? AND tmux_created_epoch IS NOT NULL "
+                "AND claude_session_uuid IS NOT NULL "
+                "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
+                (tmux_name,),
+            ).fetchone()
+            return row[0] if row else None
+        except sqlite3.Error as exc:
+            logger.debug("claude_uuid_lookup_failed", error=str(exc))
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     async def rename_session(
         self, session_id: str, new_name: str
@@ -3603,11 +3767,31 @@ class SessionManager:
         session = self.get_session(session_id)
         tmux_name = getattr(session, "tmux_session", None) if session else None
         if not tmux_name:
+            # RESTART FALLBACK. The pane's CLOUDECODE_SESSION_ID is baked
+            # in at spawn and cannot be re-issued to a running agent, but
+            # after a restart nothing in memory carries that id any more -
+            # sessions come back under adopted ids, and session_metadata
+            # only records tmux NAMES. So a surviving agent's hooks used
+            # to authenticate (once tokens became durable) and then
+            # resolve to nothing, which is a 200 that records exactly as
+            # much as a 403 did.
+            #
+            # The persisted map is the missing half. It is consulted ONLY
+            # when the live lookup misses, so a live session always wins
+            # and this can never override current state with a stale name.
+            tmux_name = self._hook_tmux_names.get(session_id)
+            if tmux_name:
+                logger.info(
+                    "lineage_resolved_from_persisted_name",
+                    session_id=session_id,
+                    note="session id predates a restart; resolved by tmux name",
+                )
+        if not tmux_name:
             return LineageResult(
                 outcome=LINEAGE_UNRESOLVED,
                 detail=(
-                    "no live session carries this cloudecode session id, or "
-                    "it is not tmux-backed"
+                    "no live session carries this cloudecode session id, and "
+                    "no persisted tmux name is recorded for it"
                 ),
             )
 
@@ -4861,7 +5045,11 @@ class SessionManager:
         # IFF the user re-launches ``claude`` inside the pane after we
         # adopt. The token is registered regardless so any such re-launch
         # works without extra plumbing.
-        self._mint_hook_token(adopted_id)
+        # Same reasoning as the create path: record the tmux name WITH
+        # the token, so a hook arriving after a restart can still be
+        # resolved to a session. An adopted session is exactly the case
+        # that needs it - its id is minted here and exists nowhere else.
+        self._mint_hook_token(adopted_id, tmux_name=name)
         spawn_env = self.get_env_for_spawn(adopted_id)
         try:
             for var, val in spawn_env.items():

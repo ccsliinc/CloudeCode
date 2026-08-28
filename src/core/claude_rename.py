@@ -40,17 +40,9 @@ effect was not observed. A queued keystroke is not a rename.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import structlog
-
-from src.core.session_status import (
-    STATUS_DEAD,
-    STATUS_FINISHED_UNREAD,
-    STATUS_IDLE,
-    STATUS_QUESTION,
-    STATUS_UNKNOWN,
-)
 
 logger = structlog.get_logger(__name__)
 
@@ -136,57 +128,87 @@ def name_is_pushable(label: str) -> bool:
     return all(ch == " " or ch.isprintable() for ch in label)
 
 
-#: The only two states in which typing into the pane is safe.
+#: OUT-OF-BAND IS THE PRIMARY PATH, and it replaced an activity gate.
 #:
-#: ``idle`` - Claude is sitting at its prompt.
-#: ``finished_unread`` - Claude finished a turn and nobody has looked yet;
-#:   it is equally at a prompt, just with an unread marker on our side.
+#: The first design typed `/rename <name>` into the live pane and had to
+#: be gated on the session being at a prompt - because text typed while
+#: Claude is waiting on an answer BECOMES that answer. That gate was
+#: necessary, fiddly, and it meant a rename simply did not happen while a
+#: session was busy.
 #:
-#: Everything else refuses, and ``question`` is the one that matters most:
-#: when Claude has asked something and is waiting, text typed into the
-#: pane becomes THE ANSWER TO THAT QUESTION. A rename push landing there
-#: does not fail - it silently answers a question with "/rename Foo" and
-#: the conversation carries on from that.
-SAFE_TO_TYPE_STATES = frozenset({STATUS_IDLE, STATUS_FINISHED_UNREAD})
+#: `claude -p --resume <uuid> "/rename <name>"` needs none of it. Measured
+#: on the mini against a live, running session: 0.7 seconds, no pane
+#: contact, no fork, the same uuid, and the session stayed fully
+#: responsive afterwards. It also works UNAUTHENTICATED, because /rename
+#: is a local operation that makes no model call.
+#:
+#: TWO COSTS, both measured rather than assumed.
+#: 1. It is NOT invisible. The call appends a `<local-command-caveat>` and
+#:    a `<command-name>/rename</command-name>` record to the shared
+#:    transcript, so two processes write one conversation. They
+#:    interleaved cleanly here and the live session carried on, but that
+#:    is one sample and not a guarantee - which is exactly why this shape
+#:    is used for a WRITE THAT CANNOT BE MADE ANY OTHER WAY and never for
+#:    reading. Anything we merely want to KNOW is already in the
+#:    transcript, free and read-only, with no second writer.
+#: 2. It does NOT refresh the running UI. The live process holds its title
+#:    in memory; the new name appears on resume and in the /resume picker.
+#:
+#: What it cannot be used for: anything that mutates the conversation the
+#: live process is holding - `/clear`, `/compact`. Two writers, and the
+#: live process wins on its next write, silently discarding the OOB work.
+OOB_TIMEOUT_SECONDS: int = 15
+
+
+def oob_rename_argv(
+    claude_path: str, claude_uuid: str, label: str
+) -> List[str]:
+    """The exact argv for an out-of-band rename.
+
+    Description: a list, never a shell string - the label is user text
+      and may contain quotes, backticks or `$(...)`. Passing it as an
+      argv element means no shell ever parses it, which removes the whole
+      injection class rather than trying to escape it.
+    Inputs: claude_path (str) - resolved claude binary. claude_uuid (str)
+      - the conversation to resume. label (str) - the new name.
+    Output: list[str] - argv.
+    Example: oob_rename_argv('/bin/claude', 'u1', 'Spike')
+      -> ['/bin/claude', '-p', '--resume', 'u1', '/rename Spike']
+    """
+    return [
+        claude_path,
+        "-p",
+        "--resume",
+        claude_uuid,
+        f"/rename {label}",
+    ]
 
 
 def decide_push(
     *,
     label: str,
-    activity_status: Optional[str],
-    hooks_seen: bool,
+    claude_uuid: Optional[str],
     claude_version: Optional[Tuple[int, int, int]],
     is_claude_session: bool,
 ) -> Tuple[str, str]:
-    """Decide whether to push a rename into the live pane, and say why.
+    """Decide whether an out-of-band rename can be performed.
 
-    Description: PURE FUNCTION - no tmux, no I/O, so the whole policy is
-      testable without a terminal. The caller performs the send only on
-      ``PUSH_SENT`` and records the reason either way.
+    Description: PURE FUNCTION, and much smaller than the gate it
+      replaced. Out-of-band needs no activity check at all - it never
+      touches the pane, so there is no state of the session in which it
+      would be misread as input.
 
-      TAKES THE HOOK-DRIVEN ACTIVITY STATUS, NOT THE RAW TMUX ONE, and
-      that distinction is the whole correctness of this gate. Every
-      session here launches through a wrapper - ``zsh -c 'cld "$@"'`` -
-      so Claude runs as a CHILD of that shell and tmux's
-      ``pane_current_command`` reports ``zsh`` forever, whatever Claude
-      is doing. Measured on the live box: all 7 sessions report ``zsh``,
-      thinking or idle alike. A gate reading raw tmux status therefore
-      resolves to ``idle`` every single time and can never refuse - which
-      is not a weak gate, it is a gate that does not exist, and it would
-      have typed into panes mid-turn while every test of it passed.
-
-      ``hooks_seen`` is required rather than inferred. With no hook signal
-      the activity status is only the tmux fallback, which for the reason
-      above is a constant. "No signal" is not "idle"; it is the third
-      outcome, and it defers.
-    Inputs: label (str). activity_status (str | None) - from
-      ``session_activity.SessionActivityTracker.resolve``. hooks_seen
-      (bool) - whether any hook has ever fired for this session.
-      claude_version (tuple | None). is_claude_session (bool).
+      What it does need is a conversation to resume. `--resume` addresses
+      a Claude session by uuid, and a session that has not yet bound one
+      (no SessionStart hook has arrived) cannot be addressed at all. That
+      is a DEFERRAL, not a failure: the name is already stored on our
+      side and can be pushed once the uuid is known.
+    Inputs: label (str). claude_uuid (str | None) - the bound Claude
+      conversation uuid. claude_version (tuple | None).
+      is_claude_session (bool).
     Output: tuple[str, str] - (outcome, human-readable reason).
-    Example: decide_push(label='x', activity_status='idle',
-      hooks_seen=True, claude_version=(2,1,248),
-      is_claude_session=True)[0] -> 'sent'
+    Example: decide_push(label='x', claude_uuid='u1',
+      claude_version=(2,1,248), is_claude_session=True)[0] -> 'sent'
     """
     if not is_claude_session:
         return (PUSH_UNSUPPORTED, "not a Claude session")
@@ -203,33 +225,13 @@ def decide_push(
             "claude would rewrite this name, so the two sides would "
             "disagree - not sending",
         )
-    if activity_status == STATUS_DEAD:
-        return (PUSH_DEFERRED, "pane is dead - nothing is listening")
-    if not hooks_seen:
+    if not claude_uuid:
         return (
             PUSH_DEFERRED,
-            "no hook signal for this session, so its activity is the tmux "
-            "fallback - and a wrapper-launched pane reports its shell "
-            "forever, which cannot distinguish idle from mid-turn",
+            "no Claude conversation uuid is bound yet, so there is "
+            "nothing for --resume to address",
         )
-    if activity_status == STATUS_QUESTION:
-        return (
-            PUSH_DEFERRED,
-            "claude is waiting on an answer - typed text would BECOME "
-            "that answer",
-        )
-    if activity_status in SAFE_TO_TYPE_STATES:
-        return (PUSH_SENT, f"claude is at a prompt ({activity_status})")
-    if activity_status is None or activity_status == STATUS_UNKNOWN:
-        return (
-            PUSH_DEFERRED,
-            "activity could not be read - an unread state is not an idle "
-            "one",
-        )
-    return (
-        PUSH_DEFERRED,
-        f"claude is {activity_status} - the command would queue behind it",
-    )
+    return (PUSH_SENT, "out of band via --resume, no pane contact")
 
 
 def rename_command(label: str) -> str:

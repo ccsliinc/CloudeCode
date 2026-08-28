@@ -2592,6 +2592,38 @@ async def get_projects_presence() -> dict:
 # attached to it, which is the only way RECENT can show a stopped session.
 
 
+def _family_name_for_row(row: dict) -> Optional[str]:
+    """The family to display for a STORED session row.
+
+    Description: prefers a stored ``agent_family`` when a row carries one,
+      and otherwise resolves it from ``agent_type`` through the ordinary
+      display resolver - the same one every live surface uses, so an
+      ended session and a running one cannot disagree about what they
+      are.
+
+      Returns None rather than guessing when neither can answer. That
+      renders as "unknown", which is honest for a row whose agent_type
+      was never recorded (adopted sessions, mostly) and is a different
+      fact from a family that was knowable all along and simply not
+      looked up.
+    Inputs: row (dict) - a ``sessions`` row.
+    Output: str | None - the family name, or None if unresolvable.
+    Example: _family_name_for_row({"agent_type": "claude"}) -> 'claude'
+    """
+    stored = row.get("agent_family")
+    if stored:
+        return str(stored)
+    agent_type = row.get("agent_type")
+    if not agent_type:
+        return None
+    try:
+        wrappers = _configured_wrappers()
+    except Exception:  # noqa: BLE001 - a config read must not blank the pill
+        wrappers = []
+    family, _source = resolve_family_for_display(str(agent_type), wrappers)
+    return family.name if family else None
+
+
 def _session_record_payload(row: dict) -> SessionRecord:
     """Project one sessions row onto the wire model.
 
@@ -2619,7 +2651,17 @@ def _session_record_payload(row: dict) -> SessionRecord:
         project_attribution=str(row.get("project_attribution")),
         working_dir=row.get("working_dir"),
         agent_type=row.get("agent_type"),
-        agent_family=row.get("agent_family"),
+        # RESOLVE FROM agent_type WHEN THE COLUMN IS NULL, which it is on
+        # every row ever written - `sessions.agent_family` is declared and
+        # never populated. A LIVE session hid that, because its family is
+        # resolved at runtime from the in-memory Session; the moment a
+        # session ends there is no Session left, this row is all there is,
+        # and the UI rendered "unknown family" for a session whose
+        # agent_type was sitting in the very same row.
+        #
+        # Same shape as the cldl picker defect: the answer was present and
+        # the layer above asked the wrong object for it.
+        agent_family=_family_name_for_row(row),
         agent_family_source=row.get("agent_family_source"),
         model=row.get("model"),
         archived_at=row.get("archived_at"),

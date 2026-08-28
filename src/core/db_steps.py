@@ -526,6 +526,37 @@ def _step_v9_to_v10(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN claude_title TEXT")
 
 
+def _step_v10_to_v11(conn: sqlite3.Connection) -> None:
+    """Make the hook-derived activity status durable.
+
+    Description: ADDS ``activity_state`` and ``activity_state_at``. The
+      status was previously held only in ``SessionActivityTracker``, an
+      in-memory dict deliberately never persisted on the reasoning that a
+      restart legitimately forgets what a process was doing.
+
+      That reasoning was wrong in one specific way, measured 2026-08-28:
+      the fallback it degrades to is the tmux tier, and under this app's
+      own launch path ``pane_current_command`` is a CONSTANT (`zsh`, for
+      every session, thinking or idle alike). So a forgotten state does
+      not become "unknown", it becomes a confident `idle` - a session
+      mid-turn and a session at a prompt render identically.
+
+      NO BACKFILL. Nothing in the database records what any session was
+      doing before this column existed, and inventing `idle` for every
+      row would be exactly the false green the column exists to end. NULL
+      means "no state recorded", which the reader must render as
+      not-measured rather than as idle.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v10_to_v11(conn)  # after _step_v9_to_v10
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "activity_state" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN activity_state TEXT")
+    if "activity_state_at" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN activity_state_at TEXT")
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -541,6 +572,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     7: _step_v7_to_v8,
     8: _step_v8_to_v9,
     9: _step_v9_to_v10,
+    10: _step_v10_to_v11,
 }
 
 
