@@ -195,7 +195,32 @@ async function showQrPairingWindow() {
           flex-direction:column;align-items:center;justify-content:center;height:100vh;box-sizing:border-box;}
         h1{margin:0 0 8px 0;font-size:22px;font-weight:600;color:#CC785C;}
         p{margin:0 0 20px 0;font-size:13px;color:#999;text-align:center;max-width:340px;line-height:1.5;}
+        /* WHY image-rendering AND box-sizing ARE BOTH LOAD-BEARING.
+         *
+         * The server renders this QR at 510x510 (a 103-char otpauth URI
+         * fits as version 6 = 41 modules, plus a 5-module quiet zone each
+         * side, at box_size 10). Forcing it to 320px is a 0.6275 scale,
+         * so every module lands on a fractional pixel boundary at 6.27px
+         * and the browser's default SMOOTH downscale antialiases each
+         * module edge into grey. That is what made this QR unreadable to
+         * phone scanners: not a wrong code, a blurred one.
+         *
+         * image-rendering pixelated switches the resample to
+         * nearest-neighbour, so module edges stay hard even at a
+         * non-integer scale - which is what a scanner's binarisation
+         * step needs.
+         *
+         * box-sizing border-box is set because the 14px padding IS the
+         * white quiet zone: without it the element is 320 + 28 = 348px
+         * and overflows the 420px window's 32px body padding. The body
+         * sets border-box for itself only, and box-sizing does not
+         * inherit.
+         *
+         * NOTE TO THE NEXT EDITOR: no backticks in this comment. It sits
+         * inside a JS template literal, so one would terminate the
+         * string - which is exactly what happened when it was written. */
         .qr{width:320px;height:320px;background:#fff;border-radius:12px;padding:14px;
+          box-sizing:border-box;image-rendering:pixelated;
           box-shadow:0 8px 32px rgba(0,0,0,0.4);}
         .footer{margin-top:20px;font-size:11px;color:#666;}
       </style></head><body>
