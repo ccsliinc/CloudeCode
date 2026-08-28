@@ -468,6 +468,19 @@ def record_claude_session(
         # this is a background agent: a real child, but not the
         # conversation anyone is typing into, so it must never become the
         # lineage head (see lineage_head, which skips this kind).
+        #
+        # THE TRADE-OFF IN THIS DEFAULT, stated because it is a real one.
+        # Hooks are best-effort; a SessionEnd can be missed. A missed one
+        # makes a genuine /branch look like a background fork, and the
+        # head then fails to advance - the next event attaches to the
+        # conversation the user just left.
+        #
+        # Defaulting the other way is worse, and not by a little: /fork
+        # NEVER sends a SessionEnd, so treating an absent one as a
+        # pane-move reproduces the original bug on every single /fork,
+        # deterministically. This way is correct in the common case and
+        # degrades only on a dropped hook. Wrong-sometimes beats
+        # wrong-always.
         fork_kind = SESSION_FORK_KIND_BACKGROUND
     columns = [
         "session_uuid",

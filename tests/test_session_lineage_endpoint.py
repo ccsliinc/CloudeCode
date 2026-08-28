@@ -187,8 +187,23 @@ def test_session_start_is_accepted_at_all(harness):
     assert resp.status_code == 200
 
 
-def test_a_start_then_a_fork_lands_on_the_right_row(harness):
-    """The decisive end-to-end case, asserted on database rows."""
+# SUPERSEDED. This asserted fork_kind == "fork" for a SessionStart(fork)
+# with no preceding SessionEnd. That was the whole model when it was
+# written - every in-session fork looked alike - and measurement against
+# 2.1.248 showed two different operations hiding behind one source value:
+#
+#     /branch -> SessionEnd(old) then SessionStart(new)   pane MOVED
+#     /fork   -> SessionStart(new) alone                  pane STAYED
+#
+# The shape this test posts is therefore the /fork shape, and /fork
+# creates a background agent that must not become the lineage head. Both
+# cases are now asserted separately below.
+#
+# Note what is NOT affected: the GUI fork. That path stamps its row
+# through session_fork.mark_as_fork, which writes fork_kind explicitly
+# and never consults classify_fork_kind.
+def test_a_fork_with_no_session_end_is_a_background_agent(harness):
+    """The /fork shape: the pane never left the previous conversation."""
     client, token, state, anchor, _mgr = harness
 
     _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
@@ -199,7 +214,45 @@ def test_a_start_then_a_fork_lands_on_the_right_row(harness):
     by_uuid = {r["claude_session_uuid"]: r for r in rows}
     assert by_uuid["uuid-A"]["id"] == anchor
     assert by_uuid["uuid-B"]["parent_session_id"] == anchor
+    assert by_uuid["uuid-B"]["fork_kind"] == "background"
+
+
+def test_a_fork_PRECEDED_BY_A_SESSION_END_is_a_branch(harness):
+    """The /branch shape: the pane moved, so the head must advance.
+
+    The discriminating half. Asserting only the background case above
+    would be satisfied by code that marked every in-session fork
+    background, which would stop the head ever advancing and break
+    /branch and /clear.
+    """
+    client, token, state, anchor, _mgr = harness
+
+    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _post(client, token, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
+    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
+
+    by_uuid = {r["claude_session_uuid"]: r for r in _rows(state)}
+    assert by_uuid["uuid-B"]["parent_session_id"] == anchor
     assert by_uuid["uuid-B"]["fork_kind"] == "fork"
+
+
+def test_one_session_end_cannot_promote_two_later_forks(harness):
+    """The SessionEnd is consumed once, not left standing.
+
+    Otherwise a single /branch would make every subsequent /fork in that
+    session look like a pane-move, which is the original bug with extra
+    steps.
+    """
+    client, token, state, _anchor, _mgr = harness
+
+    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _post(client, token, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
+    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
+    _post(client, token, "SessionStart", {"session_id": "uuid-C", "source": "fork"})
+
+    by_uuid = {r["claude_session_uuid"]: r for r in _rows(state)}
+    assert by_uuid["uuid-B"]["fork_kind"] == "fork", "the branch consumed it"
+    assert by_uuid["uuid-C"]["fork_kind"] == "background", "nothing left to consume"
 
 
 def test_session_end_is_accepted_and_writes_no_lineage_row(harness):
