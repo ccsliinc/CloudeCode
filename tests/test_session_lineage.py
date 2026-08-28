@@ -440,3 +440,76 @@ def test_a_forked_row_inherits_the_users_own_label(conn, anchor):
     ).fetchone())
     assert row["title"] == "My Chosen Name"
     assert row["claude_title"] == "claude picked this"
+
+
+def test_a_background_fork_never_becomes_the_lineage_head(conn, anchor):
+    """THE /branch-AFTER-/fork DEFECT, pinned.
+
+    Claude's /fork spawns a background agent: a real child, but NOT what
+    the pane is running - the terminal carries on with the parent. Before
+    this, the walk to the deepest descendant made it the head, so the
+    next event in that pane attached to the background agent instead of
+    to its real origin. Measured live: a /branch after a /fork recorded
+    parent=<background row> while Claude's own message named the original.
+    """
+    from src.core.session_lineage import lineage_head
+
+    _record(conn, "uuid-A", "startup")
+    head_before = lineage_head(conn, anchor)
+
+    # /fork: SessionStart with NO preceding SessionEnd - the pane stayed.
+    _record(conn, "uuid-BG", "fork", pane_left_previous=False)
+
+    head_after = lineage_head(conn, anchor)
+    assert head_after["id"] == head_before["id"], (
+        "a background fork must not move the head - the pane is still "
+        "running the parent"
+    )
+    bg = conn.execute(
+        "SELECT fork_kind FROM sessions WHERE claude_session_uuid = ?",
+        ("uuid-BG",),
+    ).fetchone()
+    assert bg["fork_kind"] == "background"
+
+
+def test_a_branch_DOES_become_the_head(conn, anchor):
+    """The discriminating half.
+
+    Asserting only the negative above would be satisfied by code that
+    never advanced the head at all, which would break /branch and /clear
+    - the operations where the pane really does move.
+    """
+    from src.core.session_lineage import lineage_head
+
+    _record(conn, "uuid-A", "startup")
+    before = lineage_head(conn, anchor)
+
+    # /branch: the pane left the previous conversation first.
+    _record(conn, "uuid-BR", "fork", pane_left_previous=True)
+
+    after = lineage_head(conn, anchor)
+    assert after["id"] != before["id"]
+    assert after["claude_session_uuid"] == "uuid-BR"
+
+
+def test_a_branch_after_a_background_fork_attaches_to_the_real_origin(conn, anchor):
+    """The exact live sequence that exposed the bug.
+
+    /fork then /branch. The branch must descend from the conversation the
+    pane was running, not from the background agent.
+    """
+    _record(conn, "uuid-A", "startup")
+    origin = conn.execute(
+        "SELECT id FROM sessions WHERE claude_session_uuid = ?", ("uuid-A",)
+    ).fetchone()
+
+    _record(conn, "uuid-BG", "fork", pane_left_previous=False)
+    _record(conn, "uuid-BR", "fork", pane_left_previous=True)
+
+    branch = conn.execute(
+        "SELECT parent_session_id FROM sessions WHERE claude_session_uuid = ?",
+        ("uuid-BR",),
+    ).fetchone()
+    assert branch["parent_session_id"] == origin["id"], (
+        "the branch must descend from what the pane was running"
+    )

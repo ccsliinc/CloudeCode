@@ -320,6 +320,12 @@ class SessionManager:
         # tmux name -> last activity state written, so the listing path
         # writes only on CHANGE. See _persist_settled_activity_state.
         self._last_persisted_activity: dict[str, str] = {}
+        # cloudecode session id -> the claude uuid whose SessionEnd we
+        # most recently saw. This is the ONLY thing that distinguishes
+        # Claude's /branch from its /fork: both arrive as source="fork",
+        # but /branch ends the previous conversation first and /fork does
+        # not. Consumed and cleared by the next SessionStart.
+        self._last_session_end_uuid: dict[str, str] = {}
         self._hook_tokens_durable: bool = True
         self._load_hook_tokens()
 
@@ -3980,9 +3986,15 @@ class SessionManager:
         )
 
         if event_kind != "SessionStart":
-            # SessionEnd (and anything else routed here later) is a no-op
-            # by design, reported under the name that says so rather than
-            # as a success nobody measured.
+            # SessionEnd IS NOW LOAD-BEARING, though it still writes no
+            # lineage of its own. It is the one signal that says the pane
+            # LEFT a conversation, which is what separates /branch (pane
+            # moved) from /fork (pane stayed) - both of which arrive as
+            # source="fork" and are otherwise identical.
+            if event_kind == "SessionEnd":
+                ended = payload.get("session_id") if isinstance(payload, dict) else None
+                if isinstance(ended, str) and ended:
+                    self._last_session_end_uuid[session_id] = ended
             return LineageResult(
                 outcome=LINEAGE_CONTINUED,
                 detail=f"{event_kind} carries no lineage transition",
@@ -4033,6 +4045,15 @@ class SessionManager:
                 detail="the datastore could not be opened to record lineage",
             )
         try:
+            # CONSUMED ONCE. A SessionEnd immediately before this
+            # SessionStart means the pane moved off the old conversation;
+            # anything else means it stayed and this is a background
+            # agent. Popped rather than read so a single SessionEnd can
+            # never mark two later starts as pane-moves.
+            pane_left_previous = (
+                self._last_session_end_uuid.pop(session_id, None) is not None
+            )
+
             from src.core.db import transaction
 
             # THE SOCKET THE LISTING ACTUALLY RAN AGAINST, not the one
@@ -4082,6 +4103,7 @@ class SessionManager:
                     claude_uuid=claude_uuid,
                     source=payload.get("source"),
                     title=payload.get("session_title"),
+                    pane_left_previous=pane_left_previous,
                 )
         except Exception as exc:  # noqa: BLE001 - lineage must never raise
             logger.warning(

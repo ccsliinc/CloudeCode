@@ -1331,6 +1331,54 @@ function updateMenu() {
           };
         })(),
         {
+          label: 'Check for Updates...',
+          // A NOTIFIER, NOT AN AUTO-UPDATER, and the distinction is a
+          // certificate. Squirrel.Mac refuses an update it cannot
+          // signature-validate, and this app is ad-hoc signed, so real
+          // auto-update needs a paid Developer ID plus notarization -
+          // and would then swap a bundle whose Python child owns a
+          // schema-versioned database. This reads a version and tells
+          // the user. Nothing is swapped, so nothing can be half-swapped.
+          click: async () => {
+            const { dialog, shell, app } = require('electron');
+            const { checkForUpdate, RESULT_AVAILABLE, RESULT_CURRENT } =
+              require('./update-check.js');
+            const r = await checkForUpdate(app.getVersion());
+            if (r.result === RESULT_AVAILABLE) {
+              const choice = await dialog.showMessageBox({
+                type: 'info',
+                title: 'Update Available',
+                message: `Cloude Code ${r.latest} is available.`,
+                detail: `You are running ${r.current}.`,
+                buttons: ['Open Release Page', 'Later'],
+                defaultId: 0,
+                cancelId: 1
+              });
+              if (choice.response === 0 && r.url) await shell.openExternal(r.url);
+              return;
+            }
+            if (r.result === RESULT_CURRENT) {
+              await dialog.showMessageBox({
+                type: 'info',
+                title: 'Up to Date',
+                message: `Cloude Code ${r.current} is the latest release.`
+              });
+              return;
+            }
+            // THE THIRD OUTCOME REACHES THE USER. Rendering a failed
+            // check as "up to date" would tell them something nobody
+            // established - and they would act on it.
+            await dialog.showMessageBox({
+              type: 'warning',
+              title: 'Could Not Check for Updates',
+              message: 'The update check did not complete.',
+              detail: `${r.detail || 'no reason reported'}\n\n` +
+                      `You are running ${r.current}. This is not the same ` +
+                      `as being up to date - it means the check failed.`
+            });
+          }
+        },
+        {
           label: 'Show QR for TOTP',
           // ONE OWNER. This menu item used to carry its own full copy of
           // the fetch-render-window logic, near-identical to

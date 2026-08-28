@@ -94,6 +94,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import structlog
 
 from src.core.db_models import (
+    SESSION_FORK_KIND_BACKGROUND,
+    SESSION_FORK_KIND_FORK,
     SESSION_FORK_KIND_UNKNOWN,
     SESSION_FORK_KINDS,
     SESSION_LIFECYCLE_STOPPED,
@@ -239,10 +241,23 @@ def lineage_head(
     row = conn.execute("SELECT * FROM sessions WHERE id = ?", (root_id,)).fetchone()
     current = dict(row) if row is not None else {"id": root_id}
     for _ in range(_MAX_LINEAGE_DEPTH):
+        # SKIPS BACKGROUND FORKS. Claude's /fork spawns an agent that is
+        # a genuine child but is NOT what the pane is running - the
+        # terminal carries on with the parent. Walking into it made the
+        # head a conversation nobody was typing into, so the next event
+        # in that pane attached to the background agent instead of to its
+        # real origin. Measured: a /branch after a /fork recorded
+        # parent=<the background row> when Claude's own message named the
+        # original.
+        #
+        # The walk's premise is "the deepest node is the CURRENT
+        # conversation". A background fork is the one child for which
+        # that is false, so it is the one child the walk must not take.
         child = conn.execute(
             "SELECT * FROM sessions WHERE parent_session_id = ? "
+            "AND (fork_kind IS NULL OR fork_kind != ?) "
             "ORDER BY id DESC LIMIT 1",
-            (int(current["id"]),),
+            (int(current["id"]), SESSION_FORK_KIND_BACKGROUND),
         ).fetchone()
         if child is None:
             return current
@@ -320,6 +335,7 @@ def record_claude_session(
     claude_uuid: str,
     source: Optional[str] = None,
     title: Optional[str] = None,
+    pane_left_previous: bool = True,
     now: Optional[str] = None,
 ) -> LineageResult:
     """Record that a Claude session is running in a tmux instance.
@@ -439,6 +455,20 @@ def record_claude_session(
     # session exists and the one before it is still on disk and still
     # resumable, so it keeps its row and this one gets its own.
     fork_kind = classify_fork_kind(source)
+    if fork_kind == SESSION_FORK_KIND_FORK and not pane_left_previous:
+        # A FORK THE PANE DID NOT FOLLOW. Claude's /branch and its /fork
+        # both arrive as source="fork" and are indistinguishable from the
+        # payload alone - but not from the hook SEQUENCE, measured
+        # against 2.1.248:
+        #
+        #   /branch -> SessionEnd(old) then SessionStart(new)  pane moved
+        #   /fork   -> SessionStart(new) alone                 pane stayed
+        #
+        # The caller reports which it saw. When the pane did not leave,
+        # this is a background agent: a real child, but not the
+        # conversation anyone is typing into, so it must never become the
+        # lineage head (see lineage_head, which skips this kind).
+        fork_kind = SESSION_FORK_KIND_BACKGROUND
     columns = [
         "session_uuid",
         "tmux_socket",

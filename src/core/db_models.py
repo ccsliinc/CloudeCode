@@ -704,10 +704,28 @@ SESSION_FORK_KIND_COMPACT = "compact"
 #: newer Claude Code adding a sixth kind is the expected way to get here.
 #: Recorded rather than guessed at: writing 'fork' for an unrecognised
 #: source would be inventing the one fact the column exists to hold.
+#: A conversation that started WITHOUT the pane leaving the previous one
+#: - Claude's own ``/fork``, which spawns a background agent and keeps
+#: the terminal where it was.
+#:
+#: It is a real child of the conversation it was forked from, so it earns
+#: a lineage row. What it must NOT do is become the lineage HEAD: the
+#: pane is still running the parent, so the next event in that pane
+#: belongs to the parent, not to this. Recording it as an ordinary fork
+#: is what made a later /branch attach to the background agent instead of
+#: to the conversation it actually branched from.
+#:
+#: Distinguished from a /branch purely by the hook sequence, measured
+#: against 2.1.248:
+#:   /branch -> SessionEnd(old) then SessionStart(new)   pane moved
+#:   /fork   -> SessionStart(new) alone                  pane stayed
+SESSION_FORK_KIND_BACKGROUND = "background"
+
 SESSION_FORK_KIND_UNKNOWN = "unknown"
 
 SESSION_FORK_KINDS: Tuple[str, ...] = (
     SESSION_FORK_KIND_FORK,
+    SESSION_FORK_KIND_BACKGROUND,
     SESSION_FORK_KIND_CLEAR,
     SESSION_FORK_KIND_COMPACT,
     SESSION_FORK_KIND_UNKNOWN,
