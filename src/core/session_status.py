@@ -21,6 +21,19 @@ introspection can actually tell us.
 - ``unknown`` - the underlying tmux query failed or returned nothing we can
   parse. We do NOT guess in this case.
 
+MEASURED CAVEAT, 2026-08-28: under this app's own launch path,
+``pane_current_command`` is a CONSTANT and ``running`` is unreachable.
+Sessions launch through a user wrapper (``zsh -c 'cld "$@"'``), so Claude
+runs as a CHILD of that shell and tmux reports only the immediate child -
+``zsh`` - whatever Claude is doing. All 7 live sessions on the reference
+box read ``zsh`` simultaneously, thinking and idle alike. So in practice
+this vocabulary degenerates to {idle, dead} and an ``idle`` here means
+"the pane's own foreground process is a shell", NOT "the agent is not
+busy". Anything that needs the second meaning must read
+``src.core.session_activity`` instead, which is hook-driven and can tell
+them apart. This bit a rename-push gate that read raw pane status and
+therefore could never refuse - see ``src/core/claude_rename.py``.
+
 We do not attempt to detect "waiting for user input" from tmux alone -
 tmux's pane-level introspection cannot distinguish an agent that is
 thinking from one that is blocked on a prompt, so claiming that state from

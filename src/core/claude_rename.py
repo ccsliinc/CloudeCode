@@ -46,7 +46,9 @@ import structlog
 
 from src.core.session_status import (
     STATUS_DEAD,
+    STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
+    STATUS_QUESTION,
     STATUS_UNKNOWN,
 )
 
@@ -134,10 +136,25 @@ def name_is_pushable(label: str) -> bool:
     return all(ch == " " or ch.isprintable() for ch in label)
 
 
+#: The only two states in which typing into the pane is safe.
+#:
+#: ``idle`` - Claude is sitting at its prompt.
+#: ``finished_unread`` - Claude finished a turn and nobody has looked yet;
+#:   it is equally at a prompt, just with an unread marker on our side.
+#:
+#: Everything else refuses, and ``question`` is the one that matters most:
+#: when Claude has asked something and is waiting, text typed into the
+#: pane becomes THE ANSWER TO THAT QUESTION. A rename push landing there
+#: does not fail - it silently answers a question with "/rename Foo" and
+#: the conversation carries on from that.
+SAFE_TO_TYPE_STATES = frozenset({STATUS_IDLE, STATUS_FINISHED_UNREAD})
+
+
 def decide_push(
     *,
     label: str,
-    pane_status: Optional[str],
+    activity_status: Optional[str],
+    hooks_seen: bool,
     claude_version: Optional[Tuple[int, int, int]],
     is_claude_session: bool,
 ) -> Tuple[str, str]:
@@ -147,17 +164,29 @@ def decide_push(
       testable without a terminal. The caller performs the send only on
       ``PUSH_SENT`` and records the reason either way.
 
-      Only ``STATUS_IDLE`` is safe. ``running`` means a turn is in flight
-      and the keystrokes would queue; ``dead`` means there is nothing
-      listening; ``unknown`` means we could not read the pane at all, and
-      an unread pane is not an idle one. Three states, one of which is
-      "could not evaluate", and it does NOT collapse into either answer.
-    Inputs: label (str). pane_status (str | None) - from
-      ``session_status.resolve_pane_status``. claude_version (tuple|None).
-      is_claude_session (bool).
+      TAKES THE HOOK-DRIVEN ACTIVITY STATUS, NOT THE RAW TMUX ONE, and
+      that distinction is the whole correctness of this gate. Every
+      session here launches through a wrapper - ``zsh -c 'cld "$@"'`` -
+      so Claude runs as a CHILD of that shell and tmux's
+      ``pane_current_command`` reports ``zsh`` forever, whatever Claude
+      is doing. Measured on the live box: all 7 sessions report ``zsh``,
+      thinking or idle alike. A gate reading raw tmux status therefore
+      resolves to ``idle`` every single time and can never refuse - which
+      is not a weak gate, it is a gate that does not exist, and it would
+      have typed into panes mid-turn while every test of it passed.
+
+      ``hooks_seen`` is required rather than inferred. With no hook signal
+      the activity status is only the tmux fallback, which for the reason
+      above is a constant. "No signal" is not "idle"; it is the third
+      outcome, and it defers.
+    Inputs: label (str). activity_status (str | None) - from
+      ``session_activity.SessionActivityTracker.resolve``. hooks_seen
+      (bool) - whether any hook has ever fired for this session.
+      claude_version (tuple | None). is_claude_session (bool).
     Output: tuple[str, str] - (outcome, human-readable reason).
-    Example: decide_push(label='x', pane_status='idle',
-      claude_version=(2,1,248), is_claude_session=True)[0] -> 'sent'
+    Example: decide_push(label='x', activity_status='idle',
+      hooks_seen=True, claude_version=(2,1,248),
+      is_claude_session=True)[0] -> 'sent'
     """
     if not is_claude_session:
         return (PUSH_UNSUPPORTED, "not a Claude session")
@@ -174,17 +203,33 @@ def decide_push(
             "claude would rewrite this name, so the two sides would "
             "disagree - not sending",
         )
-    if pane_status == STATUS_IDLE:
-        return (PUSH_SENT, "pane idle at a prompt")
-    if pane_status == STATUS_DEAD:
+    if activity_status == STATUS_DEAD:
         return (PUSH_DEFERRED, "pane is dead - nothing is listening")
-    if pane_status is None or pane_status == STATUS_UNKNOWN:
+    if not hooks_seen:
         return (
             PUSH_DEFERRED,
-            "pane state could not be read - an unread pane is not an "
-            "idle one",
+            "no hook signal for this session, so its activity is the tmux "
+            "fallback - and a wrapper-launched pane reports its shell "
+            "forever, which cannot distinguish idle from mid-turn",
         )
-    return (PUSH_DEFERRED, f"pane is {pane_status} - the command would queue")
+    if activity_status == STATUS_QUESTION:
+        return (
+            PUSH_DEFERRED,
+            "claude is waiting on an answer - typed text would BECOME "
+            "that answer",
+        )
+    if activity_status in SAFE_TO_TYPE_STATES:
+        return (PUSH_SENT, f"claude is at a prompt ({activity_status})")
+    if activity_status is None or activity_status == STATUS_UNKNOWN:
+        return (
+            PUSH_DEFERRED,
+            "activity could not be read - an unread state is not an idle "
+            "one",
+        )
+    return (
+        PUSH_DEFERRED,
+        f"claude is {activity_status} - the command would queue behind it",
+    )
 
 
 def rename_command(label: str) -> str:

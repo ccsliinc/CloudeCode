@@ -23,9 +23,12 @@ from src.core.claude_rename import (
 )
 from src.core.session_status import (
     STATUS_DEAD,
+    STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
-    STATUS_RUNNING,
+    STATUS_QUESTION,
     STATUS_UNKNOWN,
+    STATUS_WORKING,
+    STATUS_WORKING_SUBAGENT,
 )
 
 VER = (2, 1, 248)
@@ -88,41 +91,75 @@ def test_ordinary_names_including_spaces_and_emoji_are_pushable():
 
 # ---- the send decision -----------------------------------------------
 
-def test_only_an_idle_pane_gets_a_push():
-    outcome, _ = decide_push(
-        label="X", pane_status=STATUS_IDLE, claude_version=VER,
+def _d(**kw):
+    """decide_push with the safe defaults filled in."""
+    base = dict(
+        label="X",
+        activity_status=STATUS_IDLE,
+        hooks_seen=True,
+        claude_version=VER,
         is_claude_session=True,
     )
-    assert outcome == PUSH_SENT
+    base.update(kw)
+    return decide_push(**base)
 
 
-@pytest.mark.parametrize("status", [STATUS_RUNNING, STATUS_DEAD, STATUS_UNKNOWN, None])
-def test_every_non_idle_state_defers_and_says_why(status):
+def test_a_pane_at_a_prompt_gets_the_push():
+    for state in (STATUS_IDLE, STATUS_FINISHED_UNREAD):
+        outcome, _ = _d(activity_status=state)
+        assert outcome == PUSH_SENT, state
+
+
+def test_a_question_never_gets_typed_into():
+    """The most dangerous state, and the reason this gate exists at all.
+
+    When Claude has asked something and is waiting, text typed into the
+    pane BECOMES the answer. A rename push landing there does not fail -
+    it silently answers the question with "/rename Foo" and the
+    conversation continues from that.
+    """
+    outcome, reason = _d(activity_status=STATUS_QUESTION)
+    assert outcome == PUSH_DEFERRED
+    assert "answer" in reason
+
+
+@pytest.mark.parametrize(
+    "state",
+    [STATUS_WORKING, STATUS_WORKING_SUBAGENT, STATUS_DEAD, STATUS_UNKNOWN, None],
+)
+def test_every_other_state_defers_and_says_why(state):
     """The discriminating half.
 
     A test that only pinned the idle case would pass just as happily
     against code that sent unconditionally - which is the actual defect
-    being guarded against, since that code types into a pane mid-turn.
+    this replaces, since that code types into a pane mid-turn.
     """
-    outcome, reason = decide_push(
-        label="X", pane_status=status, claude_version=VER,
-        is_claude_session=True,
-    )
+    outcome, reason = _d(activity_status=state)
     assert outcome == PUSH_DEFERRED
     assert reason, "a deferral with no reason is not actionable"
 
 
-def test_unknown_pane_state_is_not_an_idle_one():
-    """The three-outcome rule, at the point it actually bites.
+def test_no_hook_signal_defers_even_when_the_status_says_idle():
+    """THE BUG THIS GATE WAS REWRITTEN TO FIX.
 
-    'I could not read the pane' must not collapse into 'the pane is
-    ready'. It is the same defect class as a green digest over an
-    unreachable host.
+    Every session launches through a wrapper (`zsh -c 'cld "$@"'`), so
+    Claude runs as a CHILD of that shell and tmux's
+    `pane_current_command` reports "zsh" forever - measured across all 7
+    live sessions, thinking or idle alike. So the tmux fallback resolves
+    to `idle` unconditionally.
+
+    A gate that trusted that could never refuse. That is not a weak gate,
+    it is an absent one - hazard 39's "verification step that cannot
+    fail", in gate form. Without hook signal the answer must be "I cannot
+    tell", never "idle".
     """
-    _, reason = decide_push(
-        label="X", pane_status=STATUS_UNKNOWN, claude_version=VER,
-        is_claude_session=True,
-    )
+    outcome, reason = _d(activity_status=STATUS_IDLE, hooks_seen=False)
+    assert outcome == PUSH_DEFERRED
+    assert "no hook signal" in reason
+
+
+def test_unknown_activity_is_not_an_idle_one():
+    _, reason = _d(activity_status=STATUS_UNKNOWN)
     assert "could not be read" in reason
 
 
@@ -133,25 +170,23 @@ def test_non_claude_and_old_claude_are_unsupported_not_deferred():
     forever against a codex session would be a busy loop that can only
     ever fail.
     """
-    outcome, _ = decide_push(
-        label="X", pane_status=STATUS_IDLE, claude_version=VER,
-        is_claude_session=False,
-    )
+    outcome, _ = _d(is_claude_session=False)
     assert outcome == PUSH_UNSUPPORTED
 
-    outcome, reason = decide_push(
-        label="X", pane_status=STATUS_IDLE, claude_version=(2, 1, 100),
-        is_claude_session=True,
-    )
+    outcome, reason = _d(claude_version=(2, 1, 100))
     assert outcome == PUSH_UNSUPPORTED
     assert "2.1.205" in reason, "the reason must name the version needed"
 
 
+def test_a_dead_pane_defers_before_the_hook_question_is_asked():
+    """Order matters: dead is knowable without any hook signal."""
+    outcome, reason = _d(activity_status=STATUS_DEAD, hooks_seen=False)
+    assert outcome == PUSH_DEFERRED
+    assert "dead" in reason
+
+
 def test_an_unpushable_name_defers_rather_than_sending_a_different_one():
-    outcome, reason = decide_push(
-        label="bad\nname", pane_status=STATUS_IDLE, claude_version=VER,
-        is_claude_session=True,
-    )
+    outcome, reason = _d(label="bad\nname")
     assert outcome == PUSH_DEFERRED
     assert "disagree" in reason
 

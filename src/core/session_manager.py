@@ -2857,15 +2857,37 @@ class SessionManager:
             detect_claude_version,
             rename_command,
         )
+        from src.core.session_status import STATUS_UNKNOWN
 
         try:
             sess = self.sessions.get(session_id)
             family = getattr(sess, "agent_family", None) if sess else None
+
+            # The HOOK-DRIVEN status, not the raw tmux one. Every session
+            # here launches through a wrapper, so tmux reports the pane's
+            # shell ("zsh") whatever Claude is doing - measured across all
+            # 7 live sessions. A gate reading raw tmux status resolves to
+            # idle every time and can never refuse, which is not a weak
+            # gate but an absent one.
             status_map = self._build_tmux_status_map()
             row = status_map.get(tmux_name) or {}
+            tracker = getattr(self, "_activity_tracker", None)
+            hooks_seen = bool(
+                tracker.hooks_seen(session_id) if tracker else False
+            )
+            activity = (
+                tracker.resolve(
+                    session_id,
+                    row.get("status") or STATUS_UNKNOWN,
+                    unread=False,
+                )
+                if tracker
+                else None
+            )
             outcome, reason = decide_push(
                 label=label,
-                pane_status=row.get("status"),
+                activity_status=activity,
+                hooks_seen=hooks_seen,
                 claude_version=detect_claude_version(),
                 is_claude_session=(family in (None, "claude")),
             )
