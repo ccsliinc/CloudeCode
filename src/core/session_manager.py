@@ -612,7 +612,21 @@ class SessionManager:
 
           READS ``session_metadata.json`` DIRECTLY rather than
           ``self.owned_tmux_sessions``, because this runs from
-          ``__init__`` before that set is rehydrated. An unreadable or
+          ``__init__`` before that set is rehydrated.
+
+          KNOWN: IT IS ONE RESTART BEHIND. The file is reconciled against
+          live tmux LATER in startup, so a session killed since the last
+          run is still listed as owned when this reads it, and its token
+          survives until the restart after. Measured: after killing four
+          sessions the store still held 7 entries; the next restart took
+          it to 1.
+
+          Left as is because the lag errs in the safe direction. Over-
+          retention keeps a token nothing can present - a dead session
+          has no process to send a hook. Over-deletion would revoke a
+          LIVE agent that cannot be re-issued one, which is the bug this
+          whole store exists to fix. Reading a not-yet-reconciled list
+          and pruning hard against it would be exactly that mistake. An unreadable or
           absent metadata file KEEPS EVERYTHING: "I could not find out
           which sessions are owned" must never be actioned as "none are",
           which would delete every token on every start and reinstate the
