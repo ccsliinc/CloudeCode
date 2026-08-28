@@ -678,11 +678,15 @@ class SessionManager:
         # yet and a lookup here returns None every time - measured: the
         # first store written this way recorded `tmux_name: null` for a
         # session whose name was known to its own caller.
-        name = tmux_name or getattr(
-            self.sessions.get(session_id), "tmux_session", None
-        )
-        if name:
-            self._hook_tmux_names[session_id] = name
+        # NO FALLBACK LOOKUP. An earlier version ended `or getattr(
+        # self.sessions.get(session_id), "tmux_session", None)`, which the
+        # comment above already explains can only ever return None here -
+        # so it was dead code whose sole effect was to require a fully
+        # built manager, and it crashed five terminal tests on a test
+        # double that has no `.sessions`. A fallback that cannot succeed
+        # is not a safety net, it is an extra failure mode.
+        if tmux_name:
+            self._hook_tmux_names[session_id] = tmux_name
         self._persist_hook_tokens()
         return token
 
