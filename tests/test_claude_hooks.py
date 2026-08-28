@@ -174,14 +174,53 @@ def test_validate_hook_token_uses_compare_digest(monkeypatch, tmp_path):
     assert called["count"] == 1, "expected validate_hook_token to call hmac.compare_digest"
 
 
-def test_hook_token_dropped_on_wipe(monkeypatch, tmp_path):
+# SUPERSEDED 2026-08-28. This asserted the opposite of what is now
+# correct, and the reversal was measured rather than argued.
+#
+# It required `_wipe_session_state` to drop the hook token. That reads as
+# obvious hygiene - a token should not outlive its session - but that
+# function means "forget the IN-MEMORY state for this id", and its
+# callers are startup stale-cleanup, zombie cleanup and a failed create.
+# None of them is "the user ended this session".
+#
+# Once tokens became durable (so a session's hooks survive a server
+# restart), this behaviour revoked the credentials of perfectly live
+# agents on the way down - the very restart the token store exists to
+# survive wiped the store. Caught by a differential: a hand-seeded entry
+# survived a restart untouched while a real session's token vanished.
+#
+# Forgetting state and revoking a credential are two different
+# operations. The token's real lifetime is "as long as a tmux session by
+# that name is still owned", enforced by `_gc_hook_tokens` at load.
+def test_wiping_in_memory_state_does_NOT_revoke_the_token(monkeypatch, tmp_path):
+    """A live agent must keep working when its id is forgotten."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_w", tmp_path)
-    mgr._mint_hook_token("ses_w")
+    mgr._mint_hook_token("ses_w", tmux_name="cloude_w")
     assert "ses_w" in mgr._hook_tokens
+
     mgr._wipe_session_state("ses_w")
-    assert "ses_w" not in mgr._hook_tokens
-    assert mgr.get_hook_token("ses_w") is None
+
+    assert mgr.get_hook_token("ses_w") is not None, (
+        "wiping in-memory state must not revoke a live agent's credential - "
+        "the agent cannot be re-issued one, its token is baked into the pane"
+    )
+
+
+def test_a_token_is_garbage_collected_when_its_tmux_name_is_gone(monkeypatch, tmp_path):
+    """The other half: tokens must not accumulate forever.
+
+    Asserting only the negative above would be satisfied by a store that
+    never forgets anything, which is a credential leak rather than a fix.
+    """
+    from src.core.hook_tokens import load_tokens, save_tokens
+
+    save_tokens(tmp_path, {"ses_gone": "t"}, tmux_names={"ses_gone": "cloude_gone"})
+    kept = load_tokens(tmp_path, live_session_ids=["ses_gone"])
+    assert kept.tokens
+
+    dropped = load_tokens(tmp_path, live_session_ids=[])
+    assert dropped.tokens == {}
 
 
 def test_get_env_for_spawn_includes_all_three_vars(monkeypatch, tmp_path):
