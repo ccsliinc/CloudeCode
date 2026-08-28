@@ -3154,10 +3154,20 @@ body.home-header-active {
     word-break: break-word;
 }
 
+/* LAID OUT LIKE .project-session-row, which reads correctly and this
+ * did not. The difference was `justify-content: space-between` over FOUR
+ * children: that distributes the free space BETWEEN every pair, so the
+ * name, the lifecycle word and the two buttons ended up evenly scattered
+ * across the row instead of grouped. The project row avoids it by
+ * letting one child absorb the slack.
+ *
+ * Here the slack goes into the first button's auto margin instead of the
+ * name, so the order reads name, ENDED badge, then buttons pinned right -
+ * the badge stays WITH the name it describes rather than drifting over to
+ * the controls. */
 .recent-session-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
     padding: 8px 12px;
     margin-bottom: 6px;
@@ -3167,16 +3177,37 @@ body.home-header-active {
 
 .recent-session-name {
     font-size: 0.86rem;
+    /* min-width:0 is what lets a long name actually ellipsis inside a
+     * flex row: without it the item's min-content width wins and the
+     * name pushes the buttons off the right edge instead of truncating. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+/* A BADGE, not a word. Same box as .badge / .family-pill - including the
+ * 1px transparent border, so it sits at the identical height beside them
+ * (see .badge for why that border is load-bearing). */
 .recent-session-lifecycle {
-    color: var(--color-fg-faint);
-    font-size: 0.72rem;
+    flex: 0 0 auto;
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.5px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    color: var(--color-fg-faint);
+    background: var(--color-accent-bg-soft);
+}
+
+/* THE SLACK LANDS ON THE FIRST BUTTON, whichever it is. Both controls
+ * are <button>, so one selector covers both cases: restart+delete, and
+ * delete alone (a lifecycle we could not evaluate gets no restart). The
+ * auto margin absorbs the row's free space, pinning every button right
+ * while the name and its badge stay left. */
+.recent-session-row button:first-of-type {
+    margin-left: auto;
 }
 
 .recent-session-restart {
