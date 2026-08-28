@@ -458,6 +458,7 @@ def record_claude_session(
         "lifecycle_checked_at",
         "lifecycle_source",
         "title",
+        "claude_title",
         "created_at",
         "updated_at",
     ]
@@ -481,6 +482,21 @@ def record_claude_session(
         SESSION_LIFECYCLE_STOPPED,
         stamp,
         SESSION_LIFECYCLE_SOURCE_TMUX_LIST,
+        # THE USER'S LABEL IS INHERITED FROM THE ANCHOR, NOT TAKEN FROM
+        # THE PAYLOAD. This line used to be `title` - the payload's
+        # `session_title` - which put CLAUDE's name into the USER's label
+        # column on every new conversation row. That is precisely the
+        # defect schema v10 exists to end, and fixing only the UPDATE
+        # path (`_record_claude_title`) left it alive here, on the INSERT
+        # path, where it is harder to see. Measured on the mini: a
+        # /rename followed by a /clear produced a row whose user label
+        # was the name Claude had been given, which nobody had chosen as
+        # a CloudeCode label.
+        #
+        # A forked or cleared row is the same lineage in the same tmux
+        # session, so the user's label carries over. Claude's name goes
+        # where Claude's name goes.
+        anchor.get("title"),
         title,
         stamp,
         stamp,

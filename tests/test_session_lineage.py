@@ -388,3 +388,55 @@ def test_claude_title_never_touches_the_user_label(conn, anchor):
     _record(conn, "uuid-A", "compact", title=None)
     row = get_instance(conn, socket=SOCKET, name=NAME, epoch=EPOCH)
     assert row["claude_title"] == "claude picked this"
+
+
+def test_a_forked_row_never_takes_the_user_label_from_claude(conn, anchor):
+    """The INSERT path's half of the v10 split, which shipped broken.
+
+    `_record_claude_title` (the UPDATE path) was fixed to write
+    `claude_title`, and the whole suite went green - because nothing
+    covered the INSERT that creates a NEW conversation row. That INSERT
+    was still putting the payload's `session_title` into `title`, the
+    user's label column, which is exactly the defect v10 exists to end.
+
+    Found on the live box, not here: a `/rename` followed by a `/clear`
+    produced a row whose user label was the name Claude had been given,
+    which nobody had ever chosen as a CloudeCode label.
+
+    The lesson is the shape, not the line: fixing one of two write paths
+    and trusting a green suite is how a fix ships half-applied.
+    """
+    _record(conn, "uuid-A", "startup")
+    _record(conn, "uuid-B", "clear", title="claude picked this")
+
+    rows = [dict(r) for r in conn.execute(
+        "SELECT title, claude_title, fork_kind FROM sessions "
+        "WHERE fork_kind = 'clear'"
+    )]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["title"] is None, (
+        "Claude's session_title must never become the user's label"
+    )
+    assert row["claude_title"] == "claude picked this"
+
+
+def test_a_forked_row_inherits_the_users_own_label(conn, anchor):
+    """The other half: a real user label DOES carry over.
+
+    A cleared or forked row is the same lineage in the same tmux session,
+    so the name the user chose still applies to it. Asserting only the
+    negative above would be satisfied by writing NULL unconditionally,
+    which would silently drop every label at the moment a session forks.
+    """
+    conn.execute(
+        "UPDATE sessions SET title = ? WHERE id = ?", ("My Chosen Name", anchor)
+    )
+    _record(conn, "uuid-A", "startup")
+    _record(conn, "uuid-B", "clear", title="claude picked this")
+
+    row = dict(conn.execute(
+        "SELECT title, claude_title FROM sessions WHERE fork_kind = 'clear'"
+    ).fetchone())
+    assert row["title"] == "My Chosen Name"
+    assert row["claude_title"] == "claude picked this"

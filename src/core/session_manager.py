@@ -2293,6 +2293,10 @@ class SessionManager:
                 # launch, it breaks it. (The cldl picker defect was this
                 # same mistake - a per-family capability read off the
                 # wrong object.)
+                from src.core.claude_rename import (
+                    launch_name_args_for_agent_type,
+                )
+
                 name_args = launch_name_args_for_agent_type(
                     label=label, agent_type=resolved_agent_type
                 )
