@@ -23,12 +23,33 @@
  */
 
 .toast-container {
-  /* Pinned top-right above terminal but below modals. Site modal z-index
-     is in the 1000-range; pick 900 so toasts sit just under them. */
+  /* ABOVE THE HEADER, BELOW MODALS - and 900 was neither.
+   *
+   * The old value put toasts UNDER `.header` (z-index 1000), and the two
+   * overlap: the header is `--header-h` tall (80px measured at desktop)
+   * while this container started at a hardcoded 60px, so the header
+   * painted over the top 20px of every toast. That strip is exactly
+   * where `.toast__dismiss` sits, which made the close button
+   * unclickable - `elementFromPoint` on its own centre returned the
+   * header, not the button. A notification the user cannot dismiss is
+   * worse than no notification.
+   *
+   * The original comment reasoned "site modals are in the 1000-range, so
+   * pick 900 to sit under them". The premise was out of date: modals
+   * here are 9998/9999, and 1000 is CHROME. A toast must outrank chrome
+   * and yield to modals, which is what 1100 does.
+   *
+   * `top` STAYS 60px and is deliberately NOT derived from --header-h.
+   * That was tried: the token resolves to 62px here while the rendered
+   * header measures 80px, because the home view carries a subheader row
+   * the token does not account for. Deriving from it would swap one
+   * wrong number for another that merely looks principled. Once the
+   * toast paints ABOVE the header the overlap is harmless, which is why
+   * the z-index is the fix and the offset is not. */
   position: fixed;
-  top: 60px; /* clear of the header bar */
+  top: 60px;
   right: 16px;
-  z-index: 900;
+  z-index: 1100;
   display: flex;
   flex-direction: column;
   gap: 10px;

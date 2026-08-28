@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 
 import structlog
 
+from src.core.session_activity import WORKING_HEARTBEAT_TIMEOUT_SECONDS
 from src.core.session_status import (
     STATUS_DEAD,
     STATUS_UNKNOWN,
@@ -35,18 +36,28 @@ from src.core.session_status import (
 
 logger = structlog.get_logger(__name__)
 
-#: How long a persisted state may be trusted. Chosen from what the states
-#: MEAN, not for roundness: ``working`` and ``question`` describe a live
-#: process, and this repo's own hazard list is explicit that a threshold
-#: must come from the phase between producer and reader rather than from
-#: a period. Hooks fire on every tool call, so a genuinely working session
-#: re-stamps within seconds; anything that has not been re-stamped in an
-#: hour is not working, whatever the row says.
-STALE_AFTER = timedelta(hours=1)
+#: How long a persisted PERISHABLE state may be trusted.
+#:
+#: BORROWED FROM THE LIVE LAYER ON PURPOSE. ``session_activity`` expires a
+#: live ``working`` after ``WORKING_HEARTBEAT_TIMEOUT_SECONDS`` (120s):
+#: past that, no tool event has arrived and the session is no longer
+#: called working. The persisted copy means the SAME THING, so it cannot
+#: honestly be trusted for longer than the live one.
+#:
+#: It was first written as one hour, and that was wrong in a way worth
+#: recording: a restart restored a ``working`` stamped twenty minutes
+#: earlier and the UI showed a busy session that had been sitting at a
+#: prompt the whole time. Two horizons for one state is two answers to
+#: one question. A small grace is added over the live timeout so a
+#: restart landing mid-heartbeat does not discard a state that was true
+#: seconds ago.
+STALE_AFTER = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 60)
 
 #: States that describe a LIVE process and therefore rot. ``idle`` and
-#: ``finished_unread`` describe a session at rest, which does not become
-#: false by sitting still, so they are trusted for longer.
+#: ``finished_unread`` describe a session AT REST, which does not become
+#: false by sitting still - a session that was idle an hour ago and has
+#: received no hook since is still idle, so those are trusted until
+#: something contradicts them.
 PERISHABLE = ("working", "working_subagent", "question")
 
 RESTORE_OK = "restored"

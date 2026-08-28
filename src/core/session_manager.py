@@ -317,6 +317,9 @@ class SessionManager:
         # returns 200, and resolves to nothing - measured, and from the
         # agent's side indistinguishable from success.
         self._hook_tmux_names: dict[str, str] = {}
+        # tmux name -> last activity state written, so the listing path
+        # writes only on CHANGE. See _persist_settled_activity_state.
+        self._last_persisted_activity: dict[str, str] = {}
         self._hook_tokens_durable: bool = True
         self._load_hook_tokens()
 
@@ -2061,6 +2064,50 @@ class SessionManager:
             self._unread_store.set_flag(tmux_name, "auto", True)
         self._persist_activity_state(session_id, tmux_name)
 
+    def _persist_settled_activity_state(
+        self, tmux_name: Optional[str], state: Optional[str]
+    ) -> None:
+        """Stamp a display-computed activity state, only when it changed.
+
+        Description: the counterpart to the hook-time stamp. This runs
+          from the listing path, which holds a REAL pane status, so it is
+          the only place that can honestly record `idle`.
+
+          WRITES ONLY ON CHANGE. The listing runs often; re-stamping an
+          unchanged value would be a database write per poll per session,
+          and it would also keep refreshing `activity_state_at` on a row
+          nothing had happened to - which would defeat the staleness
+          check, since a stale value would look perpetually fresh. The
+          guard is therefore correctness as much as cost.
+        Inputs: tmux_name (str | None). state (str | None).
+        Output: None.
+        """
+        from src.core.session_status import STATUS_UNKNOWN
+
+        if not tmux_name or not state or state == STATUS_UNKNOWN:
+            return
+        if self._last_persisted_activity.get(tmux_name) == state:
+            return
+        conn = None
+        try:
+            from src.core.activity_persist import write_state
+            from src.core.db import transaction
+
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return
+            with transaction(conn):
+                if write_state(conn, tmux_name, state):
+                    self._last_persisted_activity[tmux_name] = state
+        except Exception as exc:  # noqa: BLE001 - never break a listing
+            logger.debug("settled_activity_persist_failed", error=str(exc))
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def _restored_activity_state(self, tmux_name: Optional[str]) -> Optional[str]:
         """The durable activity state for a session, if still trustworthy.
 
@@ -2127,6 +2174,23 @@ class SessionManager:
             from src.core.activity_persist import write_state
             from src.core.session_status import STATUS_UNKNOWN
 
+            # STATUS_UNKNOWN is passed deliberately: at hook time we have
+            # not run a tmux probe, and doing one per hook would mean a
+            # subprocess on every single tool call.
+            #
+            # `resolve` only uses the tmux argument for the dead-check and
+            # for the final fallback, so a hook-derived state (question,
+            # working, working_subagent, finished_unread) comes back
+            # unaffected - those are exactly the values worth stamping
+            # here, because they are what the hooks actually told us.
+            #
+            # When the heartbeat has expired it returns STATUS_UNKNOWN,
+            # and skipping that write is right: we genuinely cannot tell
+            # idle from anything else without tmux. The SETTLED value is
+            # stamped by the display path instead, which has a real pane
+            # status - see `_persist_settled_activity_state`. Without that
+            # counterpart this skip freezes a mid-turn `working` in the
+            # row forever, which is what it did when first written.
             state = self._activity_tracker.resolve(
                 session_id, STATUS_UNKNOWN, unread=False
             )
@@ -3557,6 +3621,15 @@ class SessionManager:
             restored = self._restored_activity_state(tmux_session_name)
             if restored:
                 activity_status = restored
+        else:
+            # THE SETTLED VALUE, stamped where the inputs are real. The
+            # hook path cannot write this: with no tmux probe it resolves
+            # to UNKNOWN once the heartbeat expires and correctly declines
+            # to guess, so without this line a session's row keeps the
+            # `working` written mid-turn and never settles to idle.
+            self._persist_settled_activity_state(
+                tmux_session_name, activity_status
+            )
 
         # fix/adopted-session-pid - pid is resolved LIVE off the same bulk
         # ``list_pane_status_all()`` row already fetched for status above,
