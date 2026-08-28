@@ -159,19 +159,73 @@ const BOOTSTRAP_TOOLTIPS = {
  * installs. Swallows errors silently — caller is responsible for surfacing
  * them if this is user-initiated.
  */
+/**
+ * Read TOTP_SECRET out of the server's own .env.
+ *
+ * Same machine, same user, mode 0600. Returns null rather than throwing:
+ * a missing or unreadable .env is a state the caller reports, not an
+ * exception to propagate out of a menu handler.
+ *
+ * NEVER LOGGED, and never used anywhere except the otpauth URI that
+ * becomes the QR.
+ */
+function readTotpSecret(serverDir) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const text = fs.readFileSync(path.join(serverDir, '.env'), 'utf8');
+    for (const line of text.split('\n')) {
+      const m = /^\s*TOTP_SECRET\s*=\s*(.+?)\s*$/.exec(line);
+      if (m) return m[1].replace(/^['"]|['"]$/g, '');
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
 async function showQrPairingWindow() {
-  const axios = require('axios');
-  const { BrowserWindow } = require('electron');
-  // Probe the actual bound host — loopback is unreachable when uvicorn
-  // is bound to a specific LAN IP.
-  const url = `${serverManager.getLocalApiUrl()}/api/v1/auth/qr`;
+  const { BrowserWindow, dialog } = require('electron');
 
   try {
-    const response = await axios.get(url, { timeout: 5000 });
-    const qrDataUrl = response.data && response.data.qr_image;
-    if (!qrDataUrl || !qrDataUrl.startsWith('data:image/png;base64,')) {
-      throw new Error('Server returned unexpected QR response shape');
+    // GENERATED LOCALLY, NOT FETCHED. This used to GET
+    // /api/v1/auth/qr, which carried three problems at once:
+    //
+    //   1. That endpoint is UNAUTHENTICATED by necessity - it is what
+    //      you use before you have a TOTP - while the server binds
+    //      0.0.0.0. It therefore refuses to serve the secret once
+    //      pairing is complete (403), which is correct, and which also
+    //      means the pairing window could not be reopened without
+    //      exposing the secret to anything able to reach port 8000.
+    //   2. It returned a 510x510 PNG that the window scaled to 320px, a
+    //      0.6275 factor, so every QR module landed on a fractional
+    //      pixel and smooth downscaling blurred the edges into grey -
+    //      measured at 8.2% of pixels in the mid-grey band, which is
+    //      exactly what a scanner cannot binarise.
+    //   3. It moved a secret across a socket between two processes on
+    //      the same machine.
+    //
+    // Rendering here fixes all three. The secret is read from the
+    // server's own .env and never crosses a network boundary, so the
+    // 403 guard can stay shut permanently. The output is SVG: no raster
+    // to resample, exact at any size, and the blur cannot return the way
+    // it would after a pixel-size tweak.
+    const QRCode = require('qrcode');
+    // baseDir is the server directory - the same one getConfigPath()
+    // derives config.json from. There is no getServerDir(); asking for
+    // one returns undefined and this would read '/.env' silently.
+    const secret = readTotpSecret(serverManager.baseDir);
+    if (!secret) {
+      throw new Error(
+        'TOTP secret not readable from the server .env - has setup run?'
+      );
     }
+    const issuer = encodeURIComponent('Cloude Code');
+    const qrSvg = await QRCode.toString(
+      `otpauth://totp/${issuer}:${issuer}?secret=${secret}&issuer=${issuer}`,
+      { type: 'svg', margin: 2, errorCorrectionLevel: 'M',
+        color: { dark: '#000000', light: '#ffffff' } }
+    );
     const qrWindow = new BrowserWindow({
       width: 420,
       height: 520,
@@ -219,14 +273,20 @@ async function showQrPairingWindow() {
          * NOTE TO THE NEXT EDITOR: no backticks in this comment. It sits
          * inside a JS template literal, so one would terminate the
          * string - which is exactly what happened when it was written. */
+        /* SVG now, so no image-rendering hint is needed: there is no
+         * raster to resample and the code is exact at any size. The old
+         * PNG needed image-rendering:pixelated purely to survive a
+         * non-integer downscale. box-sizing stays - the 14px padding IS
+         * the white quiet zone and must sit inside the 320px rather than
+         * be added to it; body sets border-box for itself only. */
         .qr{width:320px;height:320px;background:#fff;border-radius:12px;padding:14px;
-          box-sizing:border-box;image-rendering:pixelated;
-          box-shadow:0 8px 32px rgba(0,0,0,0.4);}
+          box-sizing:border-box;box-shadow:0 8px 32px rgba(0,0,0,0.4);}
+        .qr svg{width:100%;height:100%;display:block;}
         .footer{margin-top:20px;font-size:11px;color:#666;}
       </style></head><body>
         <h1>☁️ Welcome to Cloude Code</h1>
         <p>Scan this QR with Google Authenticator, 1Password, Authy — any TOTP app.</p>
-        <img src="${qrDataUrl}" class="qr" alt="TOTP QR code" />
+        <div class="qr" role="img" aria-label="TOTP QR code">${qrSvg}</div>
         <div class="footer">Paired already? You can close this window.</div>
       </body></html>`;
     qrWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
@@ -1272,120 +1332,17 @@ function updateMenu() {
         })(),
         {
           label: 'Show QR for TOTP',
+          // ONE OWNER. This menu item used to carry its own full copy of
+          // the fetch-render-window logic, near-identical to
+          // showQrPairingWindow(). Two copies meant every QR fix had to
+          // be made twice, and the duplication was only noticed because
+          // a search-and-replace refused to run against two matches
+          // where it expected one.
+          //
+          // showQrPairingWindow() now generates the code locally as SVG
+          // and shows its own error dialog, so this is a straight call.
           click: async () => {
-            // Fetch the QR image live from the running server so it ALWAYS
-            // matches the .env the server was started with — no more stale
-            // on-disk copies out of sync with the active secret.
-            const axios = require('axios');
-            const { BrowserWindow, dialog } = require('electron');
-            // Probe the actual bound host — hardcoded 127.0.0.1 fails
-            // when uvicorn binds exclusively to a LAN interface.
-            const url = `${serverManager.getLocalApiUrl()}/api/v1/auth/qr`;
-
-            try {
-              const response = await axios.get(url, {
-                timeout: 5000
-              });
-
-              const qrDataUrl = response.data && response.data.qr_image;
-              if (!qrDataUrl || !qrDataUrl.startsWith('data:image/png;base64,')) {
-                throw new Error('Server returned unexpected QR response shape');
-              }
-
-              const qrWindow = new BrowserWindow({
-                width: 420,
-                height: 520,
-                resizable: false,
-                minimizable: false,
-                maximizable: false,
-                fullscreenable: false,
-                show: false,
-                backgroundColor: '#1a1a1a',
-                title: 'Cloude Code — TOTP QR',
-                webPreferences: {
-                  nodeIntegration: false,
-                  contextIsolation: true,
-                  sandbox: true
-                }
-              });
-
-              const html = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                  <meta charset="utf-8">
-                  <style>
-                    body {
-                      margin: 0;
-                      padding: 32px;
-                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                      background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-                      color: #ffffff;
-                      display: flex;
-                      flex-direction: column;
-                      align-items: center;
-                      justify-content: center;
-                      height: 100vh;
-                      box-sizing: border-box;
-                    }
-                    h1 {
-                      margin: 0 0 8px 0;
-                      font-size: 22px;
-                      font-weight: 600;
-                      color: #CC785C;
-                    }
-                    p {
-                      margin: 0 0 20px 0;
-                      font-size: 13px;
-                      color: #999;
-                      text-align: center;
-                      max-width: 340px;
-                      line-height: 1.5;
-                    }
-                    .qr {
-                      width: 320px;
-                      height: 320px;
-                      background: #ffffff;
-                      border-radius: 12px;
-                      padding: 14px;
-                      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-                    }
-                    .footer {
-                      margin-top: 20px;
-                      font-size: 11px;
-                      color: #666;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <h1>☁️ Scan with your authenticator</h1>
-                  <p>Google Authenticator, 1Password, Authy — any TOTP app works.</p>
-                  <img src="${qrDataUrl}" class="qr" alt="TOTP QR code" />
-                  <div class="footer">Already set up? You can close this window.</div>
-                </body>
-                </html>
-              `;
-
-              qrWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-              qrWindow.once('ready-to-show', () => {
-                qrWindow.show();
-              });
-              qrWindow.setMenu(null);
-            } catch (err) {
-              const isConnErr = err.code === 'ECONNREFUSED' ||
-                                err.code === 'ETIMEDOUT' ||
-                                err.code === 'ECONNABORTED';
-              dialog.showMessageBox({
-                type: 'error',
-                title: 'QR Code Unavailable',
-                message: isConnErr
-                  ? 'The Cloude Code server isn\'t running.'
-                  : 'Could not fetch TOTP QR code',
-                detail: isConnErr
-                  ? 'Start the server from the menu, then try again.'
-                  : `GET ${url} failed: ${err.message}`
-              });
-            }
+            await showQrPairingWindow();
           }
         },
         {
