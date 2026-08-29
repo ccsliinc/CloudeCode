@@ -20,11 +20,16 @@ complete.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Callable, Dict, List
 
+import structlog
+
 from src.core.db import ensure_install_id, get_meta, set_meta
 from src.core.db_models import (
+    DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP,
+    DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX,
     DDL_V1,
     DDL_V2,
     DDL_V3,
@@ -37,8 +42,11 @@ from src.core.db_models import (
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
     META_SCHEMA_VERSION,
+    META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
 from src.core.migration_trail import utc_now
+
+logger = structlog.get_logger()
 
 
 def _step_v0_to_v1(conn: sqlite3.Connection) -> None:
@@ -557,6 +565,144 @@ def _step_v10_to_v11(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN activity_state_at TEXT")
 
 
+def _v12_find_claude_uuid_duplicates(conn: sqlite3.Connection) -> List[Dict]:
+    """Find every ``claude_session_uuid`` claimed by more than one row.
+
+    Description: the pre-check that decides which branch
+      :func:`_step_v11_to_v12` takes. Read-only - it changes nothing,
+      which is what lets it run every time the step runs without being
+      guarded by its own idempotence check.
+    Inputs: conn (sqlite3.Connection).
+    Output: list[dict] - one entry per duplicated uuid, each
+      ``{"claude_session_uuid": str, "row_ids": list[int], "count": int}``,
+      ordered by uuid. Empty list means none found.
+    Example: _v12_find_claude_uuid_duplicates(conn)  # []
+    """
+    rows = conn.execute(
+        "SELECT claude_session_uuid, GROUP_CONCAT(id) AS ids, COUNT(*) AS c "
+        "FROM sessions "
+        "WHERE claude_session_uuid IS NOT NULL "
+        "GROUP BY claude_session_uuid "
+        "HAVING COUNT(*) > 1 "
+        "ORDER BY claude_session_uuid"
+    ).fetchall()
+    return [
+        {
+            "claude_session_uuid": row["claude_session_uuid"],
+            "row_ids": [int(x) for x in str(row["ids"]).split(",")],
+            "count": int(row["c"]),
+        }
+        for row in rows
+    ]
+
+
+def _step_v11_to_v12(conn: sqlite3.Connection) -> None:
+    """Make ``ux_sessions_claude_uuid`` UNIQUE, unless the data disagrees.
+
+    Description: build step for the owner's 1:1 requirement - "everything
+      should be stored and parented by id... if we do 1 for 1, this should
+      never be an issue." Up to v11 that was enforced only by
+      src/core/session_lineage.py checking before every write; this step
+      makes SQLite refuse a second row for a uuid it already knows.
+
+      THREE OUTCOMES, NEVER TWO, AND NEITHER COLLAPSE IS SAFE HERE.
+      Checked FIRST, before any DDL runs, via
+      :func:`_v12_find_claude_uuid_duplicates`:
+
+        no duplicates    ux_sessions_claude_uuid is created and
+                          ix_sessions_claude_uuid (the v7 plain index,
+                          now redundant) is dropped. This is the SUCCESS
+                          path - the common case, since v7's own comment
+                          notes claude_session_uuid was NULL on every
+                          adopted session on the owner's live machine.
+
+        duplicates found COULD NOT EVALUATE, not a failure of THIS step
+                          and not silently ignored. Neither index
+                          statement runs: ix_sessions_claude_uuid (v7)
+                          stays exactly as it was, so the database is not
+                          left with a dangling reference to an index that
+                          was dropped without its replacement existing.
+                          The exact uuid/row-id groups are recorded under
+                          META_SESSIONS_CLAUDE_UUID_DUPLICATES so a human
+                          can see precisely what to reconcile - never a
+                          silently-picked winner, per this project's own
+                          standing rule against inventing a verdict
+                          nobody measured.
+
+        CREATE UNIQUE INDEX itself fails despite the pre-check finding
+                          nothing (a defensive branch, not one the tests
+                          below expect to hit under normal SQLite
+                          behaviour) - caught narrowly as
+                          ``sqlite3.Error``, recorded the same way as a
+                          found duplicate, and NOT re-raised.
+
+      NEVER RAISES. This is the one property that matters most: the
+      caller (db_steps.run_chain, driven from db_migration.ensure_db_
+      migrated) commits every step from the database's current version up
+      to CURRENT_SCHEMA_VERSION as ONE transaction. An exception here
+      would roll back every step before it in the same run and drop the
+      whole app into DEGRADED_MIGRATION_FAILED / read-only - exactly the
+      "never block boot" posture db_migration.py already holds for every
+      other step, and a live database holding a duplicate uuid is a
+      finding to record, not a reason to take the app down.
+
+      DROPPING AN INDEX IS NOT THE "ADDITIVE ONLY" RULE THIS FILE'S
+      MODULE DOCSTRING WARNS AGAINST. That rule protects STORED DATA -
+      tables, columns, rows a restore could not reconstruct. An index is
+      derived, not stored fact (REVERSAL_SQL_V7's own comment says so),
+      and this step only ever drops ix_sessions_claude_uuid on the branch
+      where ux_sessions_claude_uuid has just been created to replace it -
+      the column stays exactly as indexable as before, only faster and
+      now constrained.
+
+      IDEMPOTENT. Both DDL statements carry IF NOT EXISTS / IF EXISTS, so
+      a retry after an INTERRUPTED trail entry re-runs cleanly whichever
+      branch applies; the duplicate check is a pure SELECT and costs
+      nothing to repeat.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v11_to_v12(conn)  # after _step_v10_to_v11
+    """
+    duplicates = _v12_find_claude_uuid_duplicates(conn)
+    if duplicates:
+        set_meta(
+            conn, META_SESSIONS_CLAUDE_UUID_DUPLICATES, json.dumps(duplicates)
+        )
+        logger.warning(
+            "sessions_claude_uuid_unique_blocked",
+            duplicate_uuid_count=len(duplicates),
+            detail=(
+                "one or more claude_session_uuid values are claimed by "
+                "more than one sessions row; ux_sessions_claude_uuid was "
+                "NOT created and ix_sessions_claude_uuid (plain) stays in "
+                "place - see meta key "
+                f"{META_SESSIONS_CLAUDE_UUID_DUPLICATES!r} for the exact "
+                "uuid/row-id groups"
+            ),
+        )
+        return
+
+    try:
+        conn.execute(DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX)
+        conn.execute(DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP)
+    except sqlite3.Error as exc:
+        # Defensive only - the pre-check above should make this
+        # unreachable in practice. Recorded the same way as a found
+        # duplicate rather than re-raised, for the same never-block-boot
+        # reason.
+        set_meta(
+            conn,
+            META_SESSIONS_CLAUDE_UUID_DUPLICATES,
+            json.dumps([{"error": f"{type(exc).__name__}: {exc}"}]),
+        )
+        logger.warning(
+            "sessions_claude_uuid_unique_index_failed", error=str(exc)
+        )
+        return
+
+    set_meta(conn, META_SESSIONS_CLAUDE_UUID_DUPLICATES, "[]")
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -573,6 +719,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     8: _step_v8_to_v9,
     9: _step_v9_to_v10,
     10: _step_v10_to_v11,
+    11: _step_v11_to_v12,
 }
 
 

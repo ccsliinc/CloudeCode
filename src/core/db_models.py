@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 11
+CURRENT_SCHEMA_VERSION: int = 12
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -891,3 +891,68 @@ REVERSAL_DESTROYS: dict = {
         "session_group_members (whole table)",
     ),
 }
+
+
+# ---- schema v11 -> v12: one conversation, one row, ENFORCED -------------
+#
+# THE OWNER'S REQUIREMENT, VERBATIM: "everything should be stored and
+# parented by id... if we do 1 for 1, this should never be an issue." Up
+# to v11 that was a CONVENTION the code hoped for: ix_sessions_claude_uuid
+# (v7, above) is a PLAIN index, so nothing in SQLite stops a second row
+# from claiming a claude_session_uuid another row already holds. The only
+# thing enforcing 1:1 was src/core/session_lineage.py checking
+# row_for_claude_uuid() before every write - correct today, but a
+# convention a future write path can violate by simply forgetting to
+# check, with no error and no test failure until someone notices the
+# data is wrong. This step turns that convention into a constraint the
+# database itself refuses to violate.
+#
+# WHY v7's "NOT UNIQUE, DELIBERATELY" WAS RIGHT THEN AND IS SUPERSEDED
+# HERE. That comment's fear was real: a UNIQUE index would turn a
+# duplicate hook delivery into an IntegrityError out of a telemetry
+# write. It is superseded because record_claude_session's idempotence
+# check (row_for_claude_uuid, inside the SAME transaction as the write)
+# already makes a duplicate delivery a no-op BEFORE any INSERT is
+# attempted - the uuid is never re-offered to the database at all, so
+# the constraint below has nothing to collide with on that path. See
+# tests/test_claude_session_uuid_unique.py for the empirical proof this
+# holds across every reachable lineage transition, not just the argument.
+#
+# FAIL-SOFT, LIKE EVERY STEP IN THIS CHAIN, BUT WITH A TWIST: this step
+# must not raise, because the caller (db_steps.run_chain, driven from
+# src/core/db_migration.py) commits every step from `current` to
+# CURRENT_SCHEMA_VERSION as ONE transaction - an exception here would
+# roll back not just this step but every step before it in the same
+# migration run, and leave the whole app in DEGRADED_MIGRATION_FAILED /
+# read-only. A DUPLICATE FOUND ON A LIVE DATABASE IS NOT A REASON TO DO
+# THAT. src/core/db_steps.py detects duplicates BEFORE issuing the
+# CREATE UNIQUE INDEX, and when it finds any, it leaves
+# ix_sessions_claude_uuid (the v7 plain index) in place, does not attempt
+# to create ux_sessions_claude_uuid at all, and records the exact
+# uuid/row-id groups it found under META_SESSIONS_CLAUDE_UUID_DUPLICATES
+# - a named COULD NOT EVALUATE, per the three-outcome rule, never a
+# silently-picked winner and never a crash.
+DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_claude_uuid "
+    "ON sessions (claude_session_uuid) "
+    "WHERE claude_session_uuid IS NOT NULL"
+)
+
+#: The v7 plain index this step replaces once the UNIQUE index above is
+#: successfully created. Dropped rather than kept alongside, because a
+#: plain index and a unique index over the same column answer the same
+#: query and keeping both would just be a second index to maintain on
+#: every lineage write for no reader that needs it.
+DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP = (
+    "DROP INDEX IF EXISTS ix_sessions_claude_uuid"
+)
+
+#: Present only when this step has RUN at least once; absent means "this
+#: install has never reached v12's duplicate check" (same absent-vs-empty
+#: convention as META_SESSION_IMPORT_UNATTRIBUTED, above). Value is a
+#: JSON list: ``[]`` means the check ran and found nothing, so
+#: ux_sessions_claude_uuid is live and enforcing; a non-empty list is the
+#: COULD-NOT-EVALUATE outcome, one ``{"claude_session_uuid", "row_ids",
+#: "count"}`` entry per uuid the check found on more than one row, and on
+#: that install the v7 plain index is still what is doing the work.
+META_SESSIONS_CLAUDE_UUID_DUPLICATES = "sessions_claude_uuid_duplicates_v12"
