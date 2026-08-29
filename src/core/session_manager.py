@@ -4295,6 +4295,7 @@ class SessionManager:
         try:
             from src.core.db import transaction
             from src.core.tmux_session_cwd import make_working_dir_probe
+            from src.core.tmux_session_pane_pid import make_pane_pid_probe
 
             # THE SOCKET THE LISTING ACTUALLY RAN AGAINST, not the one
             # settings says it should have. Same lesson main.py already
@@ -4314,6 +4315,13 @@ class SessionManager:
                     name=name,
                     listing=listing,
                     working_dir_probe=make_working_dir_probe(socket),
+                    # RULE 1 OF THE CLAUDE-UUID CORRELATION LADDER needs
+                    # the pane's own foreground pid to read its process
+                    # tree for a `--resume <uuid>` - see
+                    # claude_session_correlate_ladder.py. Wired the same
+                    # way the cwd probe already is: bound to the socket
+                    # the listing actually ran against.
+                    pane_pid_probe=make_pane_pid_probe(socket),
                 )
         except Exception as exc:  # noqa: BLE001 - adoption must not crash
             logger.warning(

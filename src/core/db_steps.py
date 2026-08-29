@@ -703,6 +703,43 @@ def _step_v11_to_v12(conn: sqlite3.Connection) -> None:
     set_meta(conn, META_SESSIONS_CLAUDE_UUID_DUPLICATES, "[]")
 
 
+def _step_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """Add ``claude_session_uuid_source`` and backfill it for existing rows.
+
+    Description: the provenance column for the adopted-session correlator
+      (``src/core/claude_transcript_correlate.py``). Before this step
+      ``session_lineage.record_claude_session`` - reached only from the
+      Claude Code SessionStart hook - was the ONLY writer of
+      ``claude_session_uuid`` that has ever shipped. So every row that
+      already carries a non-NULL uuid at migration time got it from the
+      hook, as a matter of history, not inference: the backfill sets
+      ``claude_session_uuid_source = 'hook'`` on exactly those rows and
+      leaves every other row NULL, because a NULL uuid has no provenance
+      to record and inventing one would be the same false-fact problem
+      this column exists to prevent.
+
+      IDEMPOTENT. The ADD COLUMN is guarded by ``PRAGMA table_info``, and
+      the backfill's ``WHERE claude_session_uuid_source IS NULL`` makes a
+      second run touch nothing - it targets exactly the rows this step
+      has not already labelled, so re-running it after an interrupted
+      attempt cannot mislabel a row a later, different writer ('correlated')
+      may have since claimed.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v12_to_v13(conn)  # after _step_v11_to_v12
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "claude_session_uuid_source" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN claude_session_uuid_source TEXT"
+        )
+    conn.execute(
+        "UPDATE sessions SET claude_session_uuid_source = 'hook' "
+        "WHERE claude_session_uuid IS NOT NULL "
+        "AND claude_session_uuid_source IS NULL"
+    )
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -720,6 +757,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     9: _step_v9_to_v10,
     10: _step_v10_to_v11,
     11: _step_v11_to_v12,
+    12: _step_v12_to_v13,
 }
 
 

@@ -294,11 +294,15 @@ def _insert_raw_session(conn, *, uuid, name, epoch, claude_uuid=None):
 
 
 def test_fresh_database_migrates_cleanly_to_v12(tmp_path):
-    """A brand-new install reaches v12 with the UNIQUE index live."""
+    """A brand-new install reaches the current version with the UNIQUE
+    index live. Schema versions past v12 (v13 added
+    ``claude_session_uuid_source``, see test_db_migration_v13.py) are
+    additive and never remove this index, so a literal version number is
+    not asserted here - only that the v12 index survives however far the
+    chain has advanced."""
     state = ensure_db_migrated(tmp_path, 4, "0.8.2")
     assert state.status == "ok"
     assert state.schema_version == CURRENT_SCHEMA_VERSION
-    assert CURRENT_SCHEMA_VERSION == 12
 
     with closing(connect(db_path_for(tmp_path))) as conn:
         names = _index_names(conn)

@@ -94,6 +94,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import structlog
 
 from src.core.db_models import (
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
     SESSION_FORK_KIND_BACKGROUND,
     SESSION_FORK_KIND_FORK,
     SESSION_FORK_KIND_UNKNOWN,
@@ -434,9 +435,10 @@ def record_claude_session(
 
     if not head_uuid:
         conn.execute(
-            "UPDATE sessions SET claude_session_uuid = ?, updated_at = ? "
+            "UPDATE sessions SET claude_session_uuid = ?, "
+            "claude_session_uuid_source = ?, updated_at = ? "
             "WHERE id = ?",
-            (claude_uuid, stamp, int(head["id"])),
+            (claude_uuid, SESSION_CLAUDE_UUID_SOURCE_HOOK, stamp, int(head["id"])),
         )
         _record_claude_title(conn, head, title, stamp)
         logger.info(
@@ -495,6 +497,7 @@ def record_claude_session(
         "agent_family",
         "agent_family_source",
         "claude_session_uuid",
+        "claude_session_uuid_source",
         "parent_session_id",
         "fork_kind",
         "lifecycle",
@@ -520,6 +523,7 @@ def record_claude_session(
         anchor.get("agent_family"),
         anchor.get("agent_family_source"),
         claude_uuid,
+        SESSION_CLAUDE_UUID_SOURCE_HOOK,
         int(head["id"]),
         fork_kind,
         SESSION_LIFECYCLE_STOPPED,

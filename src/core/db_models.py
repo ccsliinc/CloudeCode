@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 12
+CURRENT_SCHEMA_VERSION: int = 13
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -222,6 +222,45 @@ SESSION_FAMILY_SOURCE_NOT_LAUNCHED = "not_launched"
 #: it has no launch choice to read. Never write this from a create path.
 SESSION_FAMILY_SOURCE_UNKNOWN = "unknown"
 
+# sessions.claude_session_uuid_source - how the uuid on THIS row was
+# learned, mirroring the agent_family_source pattern above: the fact and
+# its provenance are different questions, and a caller rendering a
+# "restart this conversation" control needs to know which kind of
+# evidence it is trusting.
+#
+# THREE STRENGTHS, NOT TWO. A uuid told to us directly by Claude Code
+# (the SessionStart hook, via src/core/session_lineage.py) is a FACT: the
+# CLI reported its own session id on a structured, versioned payload.
+# Nothing correlated can outrank that.
+#
+# Below the hook, the two correlated sources are NOT equally strong, and
+# collapsing them into one label would hide that. A uuid read from the
+# pane's own process argv (`claude --resume <uuid>`, see
+# src/core/claude_resume_argv.py and
+# src/core/claude_session_correlate_ladder.py) is a DIRECT READ of what
+# the process was actually told to open - the same kind of fact the hook
+# reports, just read from `ps` instead of a hook POST, and materially
+# stronger than any timestamp-based inference: it is what closes the gap
+# for a RESUMED or RECOVERED session, which is the primary case this
+# whole feature exists for (measured against the owner's live fleet
+# 2026-08-29 - a resumed conversation predates the pane hosting it by
+# construction, so no timing rule can ever find it).
+#
+# A uuid resolved by src/core/claude_transcript_correlate.py from
+# filesystem TIMING evidence - working directory plus tmux creation time,
+# matched against ~/.claude/projects/<slug>/*.jsonl, with no argv
+# available - is the weakest of the three: an inference, strong enough to
+# act on only when the candidate set was decisive (see that module), but
+# never as strong as a direct read of either kind above.
+SESSION_CLAUDE_UUID_SOURCE_HOOK = "hook"
+SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV = "correlated_argv"
+SESSION_CLAUDE_UUID_SOURCE_CORRELATED = "correlated"
+SESSION_CLAUDE_UUID_SOURCES: Tuple[str, ...] = (
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV,
+    SESSION_CLAUDE_UUID_SOURCE_CORRELATED,
+)
+
 # The socket every session row defaults to. Stored per row rather than
 # assumed globally because the instance identity triple starts with it.
 DEFAULT_TMUX_SOCKET = "cloude"
@@ -352,6 +391,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   model                 TEXT,
 
   claude_session_uuid   TEXT,
+  -- HOW claude_session_uuid WAS LEARNED. 'hook' (Claude Code told us,
+  -- via SessionStart), 'correlated_argv' (read from the pane's own
+  -- process argv - --resume <uuid> - at adopt time, a direct read) or
+  -- 'correlated' (inferred from filesystem transcript timing at adopt
+  -- time when no argv was available - the weakest of the three). NULL
+  -- alongside a NULL uuid means none of the three has ever run for this
+  -- row. See db_models.py's SESSION_CLAUDE_UUID_SOURCE_* block.
+  claude_session_uuid_source TEXT,
   parent_session_id     INTEGER REFERENCES sessions(id),
   fork_kind             TEXT,
 

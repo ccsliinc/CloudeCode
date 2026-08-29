@@ -174,6 +174,7 @@ def persist_adoption(
     name: str,
     listing: TmuxListing,
     working_dir_probe: Optional[Callable[[str], Optional[str]]] = None,
+    pane_pid_probe: Optional[Callable[[str], Optional[int]]] = None,
     now: Optional[str] = None,
 ) -> AdoptPersistResult:
     """Record a sighting and claim it, so the adoption survives a restart.
@@ -207,6 +208,10 @@ def persist_adoption(
       socket (str) - the tmux socket. name (str) - the tmux session name.
       listing (TmuxListing) - a FRESH listing taken for this adoption.
       working_dir_probe (callable | None) - name -> directory or None.
+      pane_pid_probe (callable | None) - name -> the pane's foreground
+      pid, or None. Feeds rule 1 of the claude-uuid correlation ladder
+      (see ``_try_correlate_claude_session``); when omitted, rule 1 is
+      skipped and correlation falls straight to rule 2.
       now (str | None) - ISO-8601 stamp.
     Output: AdoptPersistResult.
     Example: persist_adoption(conn, socket='cloude', name='a',
@@ -327,6 +332,17 @@ def persist_adoption(
             detail=claim.detail,
         )
 
+    pane_pid = pane_pid_probe(name) if pane_pid_probe is not None else None
+    _try_correlate_claude_session(
+        conn,
+        socket=socket,
+        name=name,
+        epoch=epoch,
+        working_dir=working_dir,
+        pane_pid=pane_pid,
+        now=now,
+    )
+
     logger.info(
         "adopt_persisted",
         tmux_name=name,
@@ -344,3 +360,112 @@ def persist_adoption(
         project_attribution=attribution,
         epoch=epoch,
     )
+
+
+def _try_correlate_claude_session(
+    conn: sqlite3.Connection,
+    *,
+    socket: str,
+    name: str,
+    epoch: int,
+    working_dir: Optional[str],
+    pane_pid: Optional[int],
+    now: Optional[str],
+) -> None:
+    """Best-effort fill of ``claude_session_uuid`` for a freshly-claimed row.
+
+    Description: THE GAP THIS CLOSES. An adopted session's SessionStart
+      hook never fired (the app never injected ``CLOUDECODE_SESSION_ID``
+      into a pane it did not spawn), so without this call the row just
+      claimed above stays ``claude_session_uuid IS NULL`` forever - dead
+      for fork resolution, resume, and the rename push.
+
+      RUNS THE TWO-RUNG LADDER (``claude_session_correlate_ladder``), not
+      the timing rule alone. Rule 1 (the pane's own process argv) is the
+      only rule that can ever find a RESUMED conversation - a resumed
+      conversation predates its pane by construction, so no timing rule
+      can find it, and a session recovered after the app's tmux server
+      died is exactly that case. Rule 2 (transcript timing) is kept for
+      the born-in-pane case, where rule 1 has nothing to find. See that
+      module's docstring for the full design correction and
+      ``session_claude_correlate_bind`` for the write-safety properties
+      (unique index, never un-archive, never fork) neither rung bypasses.
+
+      DELIBERATELY SWALLOWS EVERYTHING. Reading `ps`, reading
+      `~/.claude/projects`, and writing the result are all best-effort
+      riders on an adopt that has ALREADY SUCCEEDED by this point -
+      claim.claimed is True before this runs. A permissions error, a
+      garbled transcript, or an unexpected shape in any of the modules
+      involved must never turn a successful adopt into a failed one; the
+      cost of a swallowed exception here is exactly the NULL the row
+      already had.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+      socket (str), name (str), epoch (int) - the just-claimed instance
+      triple. working_dir (str | None) - probed working directory; None
+      short-circuits rule 2 with no filesystem access. pane_pid
+      (int | None) - the pane's foreground pid; None short-circuits rule
+      1 and falls straight to rule 2. now (str | None) - ISO stamp
+      override for tests, forwarded to the bind write.
+    Output: None. Any outcome other than a bind is logged at info/debug
+      and never surfaced to the caller - the caller has nothing to do
+      differently either way.
+    """
+    try:
+        from src.core.claude_session_correlate_ladder import (
+            LADDER_METHOD_PANE_ARGV,
+            correlate_adopted_session_ladder,
+        )
+        from src.core.db_models import (
+            SESSION_CLAUDE_UUID_SOURCE_CORRELATED,
+            SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV,
+        )
+        from src.core.session_claude_correlate_bind import bind_correlated_uuid
+
+        ladder = correlate_adopted_session_ladder(
+            pane_pid=pane_pid, working_dir=working_dir, tmux_created_epoch=epoch
+        )
+        if not ladder.matched:
+            logger.info(
+                "adopt_claude_uuid_not_correlated",
+                tmux_name=name,
+                outcome=ladder.outcome,
+                detail=ladder.detail,
+            )
+            return
+
+        source = (
+            SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV
+            if ladder.method == LADDER_METHOD_PANE_ARGV
+            else SESSION_CLAUDE_UUID_SOURCE_CORRELATED
+        )
+        bind = bind_correlated_uuid(
+            conn,
+            socket=socket,
+            name=name,
+            epoch=epoch,
+            claude_uuid=ladder.claude_session_uuid or "",
+            source=source,
+            now=now,
+        )
+        if bind.wrote:
+            logger.info(
+                "adopt_claude_uuid_correlated",
+                tmux_name=name,
+                claude_session_uuid=ladder.claude_session_uuid,
+                method=ladder.method,
+                transcript_path=ladder.transcript_path,
+            )
+        else:
+            logger.info(
+                "adopt_claude_uuid_bind_skipped",
+                tmux_name=name,
+                outcome=bind.outcome,
+                detail=bind.detail,
+            )
+    except Exception as exc:  # noqa: BLE001 - see docstring: fail soft, always
+        logger.warning(
+            "adopt_claude_uuid_correlate_failed",
+            tmux_name=name,
+            tmux_socket=socket,
+            error=str(exc),
+        )
