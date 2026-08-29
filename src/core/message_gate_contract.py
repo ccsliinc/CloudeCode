@@ -273,6 +273,7 @@ GATE_TOOL_RESULT_WITHOUT_CALL = "tool_result_without_call"
 GATE_ORDERING_ANOMALY = "ordering_anomaly"
 GATE_TIMESTAMP_CAUSALITY_VIOLATION = "timestamp_causality_violation"
 GATE_MULTIPLE_SESSION_ROOTS = "multiple_session_roots"
+GATE_SECRET_MATERIAL_PRESENT = "secret_material_present"
 
 #: The declaration. Every condition this contract knows about, in one
 #: place, each with a decision already recorded - the same shape as
@@ -542,6 +543,36 @@ GATE_CONDITIONS: Tuple[GateCondition, ...] = (
         ),
         measured="1,209 of 19,403 sessions have more than one root "
                  "message, 2026-08-29",
+    ),
+    GateCondition(
+        GATE_SECRET_MATERIAL_PRESENT, SEVERITY_ADVISORY,
+        auto_resolvable=False,
+        description=(
+            "the record's body contains what a detector in "
+            "src/core/message_model_secrets.py recognises as credential "
+            "material - an 'ops_' prefixed 1Password service-account "
+            "token, or a high-entropy value assigned to a name ending in "
+            "token/secret/key/password. The record is stored BYTE-EXACTLY "
+            "and flagged; it is never redacted on the way in, because "
+            "redaction would break the byte-exact fidelity the whole "
+            "model exists to provide. ADVISORY, not stop, and the "
+            "distinction is deliberate: a credential in a message body "
+            "does not make that message's LINKAGE uncertain, which is "
+            "the only thing a stop condition holds up. What this "
+            "condition buys is ENUMERABILITY - the owner has a live "
+            "token in 308 message rows across 117 sessions and has "
+            "recorded a decision not to rotate it until this project "
+            "ends, so the value of the flag is that the eventual "
+            "rotation is a clean cut over a known set rather than a "
+            "hunt. No matched value is ever stored, logged or returned; "
+            "message_secret_findings holds the detector name, the offset "
+            "and length, and a sha256 so the same credential is "
+            "recognisable across records."
+        ),
+        measured="308 message rows across 117 sessions carry the owner's "
+                 "live OP_SERVICE_ACCOUNT_TOKEN, 2026-08-26 (the token "
+                 "first appears in the transcript archive 2026-06-26 and "
+                 "was leaked 2026-08-20; it has not been rotated)",
     ),
 )
 

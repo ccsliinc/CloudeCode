@@ -469,3 +469,67 @@ tests excluded from that count per the task brief:
 and the tmux "server exited unexpectedly" flake in
 `test_session_backend.py`). This change adds `tests/
 test_message_gate_contract.py` and touches no other test file.
+
+## Part 3: the schema this became (v16), added 2026-08-29
+
+This document originally said it deliberately did NOT define the message
+table schema, because the owner was doing that top-down. That is now
+SUPERSEDED, not deleted: the schema below was built directly on the
+measurements above, and the section is left in place so the order the
+work actually happened in stays readable.
+
+**Schema v15 -> v16** (`src/core/message_model_ddl.py`, step in
+`src/core/db_steps.py`) is additive-only: nine CREATE statements, each
+with its own `IF NOT EXISTS`, nothing altered.
+
+- `message_bodies` - one row per DISTINCT BODY. Identity is
+  `(uuid, sha256-of-the-body-as-stored)`, so two different bodies under
+  one uuid are two rows. Never merged, never keep-first.
+- `message_appearances` - one row per `(transcript, line)`. Holds
+  `seq_in_file`, `is_sidechain`, `agent_id`, the envelope values, the
+  original top-level key order, the serializer style marker, and the
+  sha256 of the original line. This is where the subagent linkage stops
+  being an implicit near-duplicate row and becomes an explicit edge.
+- `message_transcripts` - the container, carrying `session_ref` and
+  `session_ref_scheme` so the uuid and agent identity schemes are a
+  stated fact rather than a shape a later reader has to guess.
+- `message_record_types` / `message_roles` / `message_models` /
+  `message_compact_subtypes` - the repeating-value lookups. Worth about
+  1% of size; kept for correctness and cheap filtering, not for bytes.
+- `message_ingest_findings` / `message_secret_findings` - the gate
+  findings, using this contract's vocabulary and no other.
+
+**Two hashes, deliberately.** `body_sha256` is order-insensitive
+(canonical, sorted) and answers "is this the same message?", which is
+what the duplicate-uuid conflict check compares. `body_bytes_sha256` is
+order-sensitive and is what identity keys on, because a nested object's
+key order is part of what must come back byte-exactly. Collapsing them
+was tried and broke export: bodies stored with nested keys sorted came
+back valid, meaning-identical and byte-wrong.
+
+**Three corrections to the measurements above, all made 2026-08-29 by
+re-measuring rather than by reasoning:**
+
+1. **A duplicate uuid CAN carry a differing body, at about 1.1%.** The
+   8,000-group sample above found 0. An independent pass over 3,443
+   duplicate-uuid groups that had raw JSON on both sides found 39
+   (1.13%). The mechanism is not post-hoc editing: 14 differ only in
+   `stop_reason`/`usage` (a streaming snapshot versus the completed
+   message), 15 differ in `content` representation (a bare string versus
+   a single `{"type":"text"}` block), 4 in `usage` alone. No
+   credential-redaction case appeared in that sample.
+2. **There are THREE session identity forms, not two.** The brief named
+   `agent-<hex>`. The live `sessions` table holds `agent:` on 17,996 rows
+   and `agent-` on 224 - the rarer form is the one that was documented.
+3. **The JSON's own `sessionId` does stay stable across copies.** Flagged
+   above as "worth checking, not claimed". Checked on the ingested
+   sample: 11 uuids carried more than one stored body and 0 of them
+   disagreed on `sessionId`.
+
+**Proof, not assertion.** `scripts/message_model_sample_proof.py` opens
+the history database strictly read-only, draws whole sessions covering
+every awkward case, ingests them, and re-exports. Latest run: 40
+transcripts, 9,706 lines, **40 of 40 reconstructed byte-exact**, 0
+fidelity failures. `messages.raw_json` was verified as byte-identical to
+the on-disk `.jsonl` line for 36 of 36 rows before being trusted as the
+source of "the original bytes".

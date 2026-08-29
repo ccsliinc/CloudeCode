@@ -53,6 +53,7 @@ from src.core.db_models import (
     META_SCHEMA_VERSION,
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
+from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
 
 logger = structlog.get_logger()
@@ -820,6 +821,35 @@ def _step_v14_to_v15(conn: sqlite3.Connection) -> None:
     conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX)
 
 
+def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
+    """Create the message identity / appearance model tables.
+
+    Description: build step for the v16 message model - four lookup
+      tables (record_type, role, model, compact_subtype), the transcript
+      container, the message identity table, the appearance table, and
+      the two findings tables. See src/core/message_model_ddl.py's module
+      docstring for why a message uuid is not a row key and why identity
+      and appearance are stored apart.
+
+      Nine CREATE TABLE / CREATE INDEX statements, every one carrying its
+      own IF NOT EXISTS, so - like v7/v8/v14 - this step is idempotent
+      without inspecting PRAGMA table_info. No existing table is altered
+      and no column is added to one.
+
+      NO BACKFILL, AND THAT IS THE CORRECT EMPTY STATE. Nothing before
+      this version wrote a message identity row, so there is no prior
+      data to translate; the same reasoning v13 -> v14 already used for
+      the transcript archive tables. Populating the model from the
+      owner's existing corpus is a separate operation that writes THROUGH
+      this schema.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v15_to_v16(conn)  # after _step_v14_to_v15
+    """
+    for statement in DDL_V16:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -840,6 +870,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     12: _step_v12_to_v13,
     13: _step_v13_to_v14,
     14: _step_v14_to_v15,
+    15: _step_v15_to_v16,
 }
 
 
