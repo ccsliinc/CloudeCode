@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 13
+CURRENT_SCHEMA_VERSION: int = 14
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1003,3 +1003,169 @@ DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP = (
 #: "count"}`` entry per uuid the check found on more than one row, and on
 #: that install the v7 plain index is still what is doing the work.
 META_SESSIONS_CLAUDE_UUID_DUPLICATES = "sessions_claude_uuid_duplicates_v12"
+
+
+# ---- schema v13 -> v14: transcript archive, byte-exact fidelity store ----
+#
+# THE OWNER'S REQUIREMENT, VERBATIM: "once we can confirm all my history is
+# preserved, even without the web interface i can consider it 100% backed
+# up... id like the ability to export a conversation from the database and
+# its byte for byte intact for the ingested session". Measured against the
+# real corpus (~/.claude/projects on mac-mini-m4, 1477 files, 111,061 JSONL
+# lines, 2026-08-29): re-serializing a parsed line with json.dumps() came
+# back byte-identical on 0 of 111,061 lines - every single one differs, all
+# from json.dumps's default `", "` / `": "` separators versus the source's
+# unspaced `","` / `":"`. Storing only parsed fields is therefore not an
+# approximation of byte-exact, it is a guarantee that NO line round-trips.
+#
+# THE RESOLUTION: one copy, not two. ``content_gzip`` on
+# ``transcript_archives`` holds the ENTIRE source file's ORIGINAL BYTES,
+# zlib-compressed - export is a decompress, nothing is re-serialized, so
+# CRLF, a missing trailing newline, a trailing blank line and a line that
+# is not valid JSON all survive automatically, because none of them are
+# interpreted to reconstruct the file. ``transcript_records`` holds no
+# second copy of any line's content - only scalar fields DERIVED by
+# parsing at ingest time (type, uuid, parentUuid, timestamp, byte range
+# into the decompressed blob) so the database can be queried and searched
+# without ever re-parsing the blob for a list view. Real-corpus
+# measurement of zlib level 9 against the whole corpus: ratio ~3.3x
+# (303 MB raw -> ~90 MB compressed). See
+# src/core/transcript_archive.py for the ingest/export/verify code and
+# scripts/transcript-archive/corpus_roundtrip_harness.py for the
+# real-corpus proof run.
+#
+# ROOTING. A transcript file is not always attributable the moment it is
+# read - it may name a Claude session uuid this database has never seen,
+# or (for a subagent transcript) a parent this database cannot yet find.
+# ``root_state`` is never a boolean: 'unrooted' (default at ingest,
+# pending human attribution), 'rooted' (attribution recorded - a session
+# transcript points at ``root_session_id``, a subagent transcript points
+# at ``parent_archive_id``), or 'orphaned' (a human looked and found no
+# root - terminal, so it stops appearing in the pending queue, but the
+# row and its bytes are untouched; per this project's own rule, a check
+# that never clears is furniture, and an unrootable item that keeps
+# nagging forever is the same defect). transcript_root_decisions is an
+# APPEND-ONLY audit trail of every attribution decision a human makes -
+# never overwritten, so a later re-root is a new row, not an edit.
+#
+# NOTHING IS GUESSED. No step here, and no function in
+# transcript_archive.py, ever assigns root_session_id or
+# parent_archive_id without an explicit caller-supplied value - there is
+# no heuristic that silently picks a "most likely" parent. That is the
+# owner's stop-case, verbatim: "if a message or session cannot be rooted
+# we stop and i can do an inspection and i can point to where it
+# belongs."
+DDL_TRANSCRIPT_ARCHIVES = """
+CREATE TABLE IF NOT EXISTS transcript_archives (
+  id                         INTEGER PRIMARY KEY,
+  archive_uuid               TEXT NOT NULL UNIQUE,
+  kind                       TEXT NOT NULL
+                              CHECK (kind IN ('session', 'subagent')),
+  source_path                TEXT NOT NULL,
+  content_gzip                BLOB NOT NULL,
+  content_sha256             TEXT NOT NULL,
+  raw_byte_length            INTEGER NOT NULL,
+  compressed_byte_length     INTEGER NOT NULL,
+  line_ending                TEXT NOT NULL
+                              CHECK (line_ending IN
+                                     ('LF', 'CRLF', 'MIXED', 'NONE')),
+  has_trailing_newline       INTEGER NOT NULL
+                              CHECK (has_trailing_newline IN (0, 1)),
+  trailing_blank_line_count  INTEGER NOT NULL DEFAULT 0,
+  record_count               INTEGER NOT NULL DEFAULT 0,
+  invalid_json_line_count    INTEGER NOT NULL DEFAULT 0,
+  claude_session_uuid        TEXT,
+  root_state                 TEXT NOT NULL DEFAULT 'unrooted'
+                              CHECK (root_state IN
+                                     ('unrooted', 'rooted', 'orphaned')),
+  root_session_id            INTEGER
+                              REFERENCES sessions(id),
+  parent_archive_id          INTEGER
+                              REFERENCES transcript_archives(id),
+  ingested_at                TEXT NOT NULL,
+  ingest_source_mtime        TEXT,
+  rooted_at                  TEXT,
+  rooted_by                  TEXT
+)
+"""
+
+#: One row per JSONL line of a transcript, but only DERIVED scalar
+#: fields - never a second copy of the line's own bytes. ``byte_offset``
+#: / ``byte_length`` locate the line inside the DECOMPRESSED
+#: ``transcript_archives.content_gzip`` blob, so a reader that wants the
+#: raw bytes of one specific line can seek into the decompressed blob
+#: rather than re-splitting the whole file.
+DDL_TRANSCRIPT_RECORDS = """
+CREATE TABLE IF NOT EXISTS transcript_records (
+  id               INTEGER PRIMARY KEY,
+  archive_id        INTEGER NOT NULL
+                    REFERENCES transcript_archives(id) ON DELETE CASCADE,
+  line_no          INTEGER NOT NULL,
+  byte_offset      INTEGER NOT NULL,
+  byte_length      INTEGER NOT NULL,
+  status           TEXT NOT NULL
+                    CHECK (status IN ('ok', 'invalid_json', 'blank')),
+  record_type      TEXT,
+  record_uuid      TEXT,
+  parent_uuid      TEXT,
+  ts               TEXT,
+  UNIQUE (archive_id, line_no)
+)
+"""
+
+#: APPEND-ONLY. Every attribution decision a human makes, kept forever -
+#: a re-root is a new row, never an UPDATE over the previous decision.
+DDL_TRANSCRIPT_ROOT_DECISIONS = """
+CREATE TABLE IF NOT EXISTS transcript_root_decisions (
+  id                  INTEGER PRIMARY KEY,
+  archive_id           INTEGER NOT NULL
+                       REFERENCES transcript_archives(id),
+  decided_at          TEXT NOT NULL,
+  decided_by          TEXT NOT NULL,
+  action              TEXT NOT NULL
+                       CHECK (action IN ('rooted', 'orphaned', 'reopened')),
+  root_session_id     INTEGER,
+  parent_archive_id   INTEGER,
+  note                TEXT
+)
+"""
+
+DDL_TRANSCRIPT_ARCHIVES_ROOT_STATE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_root_state "
+    "ON transcript_archives (root_state)"
+)
+
+DDL_TRANSCRIPT_ARCHIVES_CLAUDE_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_claude_uuid "
+    "ON transcript_archives (claude_session_uuid)"
+)
+
+DDL_TRANSCRIPT_ARCHIVES_PARENT_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_parent "
+    "ON transcript_archives (parent_archive_id)"
+)
+
+DDL_TRANSCRIPT_RECORDS_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_records_uuid "
+    "ON transcript_records (record_uuid)"
+)
+
+DDL_TRANSCRIPT_ROOT_DECISIONS_ARCHIVE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_root_decisions_archive "
+    "ON transcript_root_decisions (archive_id)"
+)
+
+#: Ordered DDL for a v13 -> v14 database. Three new tables and five new
+#: indexes, nothing altered on any existing table and no column added to
+#: one - like v7/v8, every statement carries its own IF NOT EXISTS and
+#: the step needs no PRAGMA inspection to be safe on a retry.
+DDL_V14: Tuple[str, ...] = (
+    DDL_TRANSCRIPT_ARCHIVES,
+    DDL_TRANSCRIPT_RECORDS,
+    DDL_TRANSCRIPT_ROOT_DECISIONS,
+    DDL_TRANSCRIPT_ARCHIVES_ROOT_STATE_INDEX,
+    DDL_TRANSCRIPT_ARCHIVES_CLAUDE_UUID_INDEX,
+    DDL_TRANSCRIPT_ARCHIVES_PARENT_INDEX,
+    DDL_TRANSCRIPT_RECORDS_UUID_INDEX,
+    DDL_TRANSCRIPT_ROOT_DECISIONS_ARCHIVE_INDEX,
+)

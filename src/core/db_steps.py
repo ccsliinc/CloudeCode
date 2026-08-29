@@ -38,6 +38,7 @@ from src.core.db_models import (
     DDL_V6,
     DDL_V7,
     DDL_V8,
+    DDL_V14,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -740,6 +741,29 @@ def _step_v12_to_v13(conn: sqlite3.Connection) -> None:
     )
 
 
+def _step_v13_to_v14(conn: sqlite3.Connection) -> None:
+    """Create the transcript-archive tables: archives, records, decisions.
+
+    Description: build step for the byte-exact transcript fidelity store
+      (src/core/transcript_archive.py). Three new tables and five new
+      indexes, no existing table altered and no column added to one - so,
+      like v7/v8, every statement carries its own ``IF NOT EXISTS`` and
+      this step is idempotent without inspecting ``PRAGMA table_info``.
+
+      NO BACKFILL, AND THAT IS THE CORRECT EMPTY STATE. Nothing before
+      this version ever ingested a transcript, so there is no prior
+      ``transcript_archives`` data to translate - the same reasoning
+      v7 -> v8 already used for session_groups. Bulk ingestion of the
+      owner's existing transcripts is a separate, later task that writes
+      through this schema; this step only makes the schema exist.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v13_to_v14(conn)  # after _step_v12_to_v13
+    """
+    for statement in DDL_V14:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -758,6 +782,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     10: _step_v10_to_v11,
     11: _step_v11_to_v12,
     12: _step_v12_to_v13,
+    13: _step_v13_to_v14,
 }
 
 
