@@ -4254,6 +4254,58 @@ class SessionManager:
             except Exception:  # noqa: BLE001 - close failure is not a verdict
                 pass
 
+    def _persist_fingerprint_family(
+        self, *, session_uuid: str, agent_family: str
+    ) -> None:
+        """Best-effort wrapper around ``session_agent_provenance.persist_fingerprint_family``.
+
+        Description: opens its own connection and transaction rather
+          than reusing ``persist_adoption``'s, because by the time this
+          runs (after the scrollback capture) that connection is long
+          closed. Exists purely so the call site in
+          ``adopt_external_session`` reads as one line: every failure
+          mode - no datastore, a write that matched zero rows, a raised
+          sqlite3.Error - is swallowed here, logged at debug, and never
+          reaches the caller. An adoption must succeed for the user
+          whether or not this decoration lands.
+        Inputs: session_uuid (str) - the just-claimed row's identity.
+          agent_family (str) - a resolved family name, never a raw
+          fingerprint token.
+        Output: None.
+        Example:
+          self._persist_fingerprint_family(
+              session_uuid="abc-123", agent_family="claude")
+        """
+        conn = None
+        try:
+            from src.core.db import transaction
+            from src.core.session_agent_provenance import (
+                persist_fingerprint_family,
+            )
+
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return
+            with transaction(conn):
+                persist_fingerprint_family(
+                    conn,
+                    session_uuid=session_uuid,
+                    agent_family=agent_family,
+                )
+        except Exception as exc:  # noqa: BLE001 - decoration must not break adopt
+            logger.debug(
+                "adopt_fingerprint_family_persist_threw",
+                session_uuid=session_uuid,
+                agent_family=agent_family,
+                error=str(exc),
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 - close failure is not a verdict
+                    pass
+
     def persist_creation(
         self,
         name: str,
@@ -5294,6 +5346,37 @@ class SessionManager:
             session=name,
             agent_type=detected_agent_type,
         )
+
+        # Persist the fingerprint onto the row this adoption just claimed
+        # (``adopt_persist.session_uuid``, when the claim above actually
+        # landed one). Without this, the answer computed right above is
+        # thrown away: it decorates THIS response and nothing else ever
+        # sees it, so every OTHER surface that reads straight off the
+        # ``sessions`` table - Projects, ``/sessions/records`` - renders
+        # "unknown family" forever for a session the app can plainly
+        # identify. ``resolve_family_for_display`` is the same resolver
+        # every display path already uses, so the persisted value cannot
+        # disagree with what a live view of this same session shows.
+        # ``from_fingerprint=True`` keeps the write honest: a fingerprint
+        # match is stored with ``agent_family_source='fingerprint'``, the
+        # tilde-guess convention the client already renders (see
+        # SESSION_FAMILY_SOURCE_FINGERPRINT's docstring), never as
+        # ``'wrapper'``/``'launched'``. A scan that found nothing
+        # (``detected_agent_type`` or the resolved family is None) writes
+        # nothing at all - see ``persist_fingerprint_family``'s docstring
+        # for the exact no-overwrite conditions. Best-effort: any failure
+        # here is logged and swallowed, never raised into the adopt path.
+        if detected_agent_type and adopt_persist.session_uuid:
+            display_family, _display_source = resolve_family_for_display(
+                detected_agent_type,
+                _configured_wrappers(),
+                from_fingerprint=True,
+            )
+            if display_family is not None:
+                self._persist_fingerprint_family(
+                    session_uuid=adopt_persist.session_uuid,
+                    agent_family=display_family.name,
+                )
 
         # Step 5 - register.
         # v0.7.0 - project-scoped theme lookup: ``<working_dir>/.cc.theme``
