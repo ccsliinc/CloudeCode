@@ -39,6 +39,14 @@ from src.core.db_models import (
     DDL_V7,
     DDL_V8,
     DDL_V14,
+    DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
+    DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -764,6 +772,54 @@ def _step_v13_to_v14(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """Add prefix-dedupe columns and project-rooting columns.
+
+    Description: see db_models.py's "schema v14 -> v15" comment block for
+      the full design rationale (prefix dedupe for growing files, project-
+      level rooting as a distinct weaker root). Six ADD COLUMN statements
+      across two existing tables plus two new indexes - no existing
+      column altered, no table rebuilt. Each ADD COLUMN is guarded by
+      PRAGMA table_info, same idiom as v10/v11/v13, since SQLite's
+      ALTER TABLE ADD COLUMN has no IF NOT EXISTS.
+
+      NO BACKFILL NEEDED for growth_kind's DEFAULT 'initial': every row
+      that exists before this migration WAS the only version of its
+      source_path at the time it was ingested, so 'initial' is not a
+      placeholder for those rows, it is the same true fact this column
+      would have recorded for them had it existed then. superseded_by_
+      archive_id, project_id, project_rooted_at and project_rooted_by
+      all default to NULL, correctly meaning "not superseded" / "not yet
+      project-rooted" for every pre-existing row - nothing before this
+      version ever superseded a row or resolved a project.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v14_to_v15(conn)  # after _step_v13_to_v14
+    """
+    archive_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(transcript_archives)")
+    }
+    if "superseded_by_archive_id" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY)
+    if "growth_kind" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND)
+    if "project_id" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID)
+    if "project_rooted_at" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT)
+    if "project_rooted_by" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY)
+
+    decision_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(transcript_root_decisions)")
+    }
+    if "project_id" not in decision_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID)
+
+    conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX)
+    conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -783,6 +839,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     11: _step_v11_to_v12,
     12: _step_v12_to_v13,
     13: _step_v13_to_v14,
+    14: _step_v14_to_v15,
 }
 
 

@@ -616,20 +616,68 @@ def export_archive(conn: sqlite3.Connection, archive_id: int) -> bytes:
       serialization of any line happens here, which is the whole basis of
       the byte-exact guarantee. See the module docstring for why a parsed
       re-serialization cannot make this promise.
+
+      PREFIX-DEDUPE AWARE (schema v15). A row whose bytes were proven, at
+      ingest time, to be a strict byte-prefix of a LATER version's bytes
+      (see src/core/transcript_prefix_dedupe.py) has its own
+      ``content_gzip`` replaced with a near-empty sentinel and
+      ``superseded_by_archive_id`` set to that later row - so a row's own
+      ``content_gzip`` is no longer necessarily where its bytes live. This
+      function walks ``superseded_by_archive_id`` forward until it reaches
+      the row that still holds real content (``superseded_by_archive_id``
+      IS NULL there), decompresses THAT row's blob exactly once, and
+      slices the result to the ORIGINALLY REQUESTED row's own
+      ``raw_byte_length`` - captured before the walk starts, never the
+      byte length of whichever row ends up holding the content. Slicing
+      once from the end of the chain is equivalent to slicing at every
+      link, because supersession is only ever recorded when the whole
+      chain has been proven, link by link, to be one strict growing
+      prefix relationship (see the module docstring's THREE-VERSION CHAIN
+      note in transcript_prefix_dedupe.py). A row with no
+      ``superseded_by_archive_id`` (the common case, and every pre-v15
+      row) takes zero extra steps - this is the same single decompress
+      as before.
     Inputs: conn (sqlite3.Connection). archive_id (int).
     Output: bytes - identical to what was passed to
       ingest_transcript_bytes for this archive, or the process is broken.
-    Raises: LookupError - no archive with this id. zlib.error - the
-      stored blob is corrupt.
+    Raises: LookupError - no archive with this id, or the
+      superseded_by_archive_id chain points at a row that does not exist.
+      zlib.error - the stored blob is corrupt. ValueError - a cycle was
+      detected in the supersession chain (defensive; nothing in this
+      codebase writes one).
     Example: export_archive(conn, 1) -> b'{"type":"user"}\\n'
     """
     row = conn.execute(
-        "SELECT content_gzip FROM transcript_archives WHERE id = ?",
+        "SELECT content_gzip, raw_byte_length, superseded_by_archive_id"
+        " FROM transcript_archives WHERE id = ?",
         (archive_id,),
     ).fetchone()
     if row is None:
         raise LookupError(f"no transcript_archives row with id={archive_id}")
-    return zlib.decompress(row["content_gzip"])
+
+    target_len = row["raw_byte_length"]
+    visited = {archive_id}
+    current = row
+    while current["superseded_by_archive_id"] is not None:
+        next_id = int(current["superseded_by_archive_id"])
+        if next_id in visited:
+            raise ValueError(
+                f"supersession cycle detected starting at archive_id={archive_id}"
+            )
+        visited.add(next_id)
+        current = conn.execute(
+            "SELECT content_gzip, raw_byte_length, superseded_by_archive_id"
+            " FROM transcript_archives WHERE id = ?",
+            (next_id,),
+        ).fetchone()
+        if current is None:
+            raise LookupError(
+                f"superseded_by_archive_id chain broken: archive_id={next_id}"
+                f" (superseding archive_id={archive_id}) does not exist"
+            )
+
+    full = zlib.decompress(current["content_gzip"])
+    return full[:target_len]
 
 
 @dataclass

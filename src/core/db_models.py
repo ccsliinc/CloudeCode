@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 14
+CURRENT_SCHEMA_VERSION: int = 15
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1168,4 +1168,119 @@ DDL_V14: Tuple[str, ...] = (
     DDL_TRANSCRIPT_ARCHIVES_PARENT_INDEX,
     DDL_TRANSCRIPT_RECORDS_UUID_INDEX,
     DDL_TRANSCRIPT_ROOT_DECISIONS_ARCHIVE_INDEX,
+)
+
+
+# ---- schema v14 -> v15: prefix dedupe for growing files, project rooting ----
+#
+# TWO INDEPENDENT ADDITIONS, both additive-only (ALTER TABLE ADD COLUMN plus
+# new indexes; no existing column altered, no table rebuilt), because this
+# project's own migration rule is that every step must be additive - see
+# db_steps.py's module docstring.
+#
+# PART A - PREFIX DEDUPE. A growing JSONL transcript is APPENDED to, so an
+# older ingested version's bytes are frequently a strict byte PREFIX of a
+# later version's bytes. Before v15 every re-ingest of a changed file wrote
+# a second full ``content_gzip`` copy, which is the dominant storage cost
+# for a live, daily-growing transcript (measured: the corpus's largest
+# single file is 72.7 MB). ``superseded_by_archive_id`` lets an OLD row's
+# ``content_gzip`` be replaced with a near-empty sentinel once a NEWER row
+# for the same ``source_path`` is proven (by an explicit byte comparison at
+# ingest time, never assumed from size or mtime) to hold the old row's
+# bytes as its own prefix - export walks this pointer forward to whichever
+# row still holds real content, decompresses ONCE, and slices to the
+# ORIGINAL row's own ``raw_byte_length`` (already stored, needed no new
+# column). See src/core/transcript_archive.py's updated ``export_archive``
+# and src/core/transcript_prefix_dedupe.py for the ingest-time comparison
+# and the supersede write. ``growth_kind`` records the explicit finding
+# rather than leaving it inferred: 'initial' (first version of this
+# source_path - the correct default for every pre-v15 row, since each one
+# WAS the only version at the time it was written), 'append' (proven
+# prefix relationship, old row now superseded), or 'non_append_rewrite'
+# (content changed but was NOT a byte-prefix extension - a truncation, a
+# mid-file edit, or a rewriting tool; both full copies are kept, and this
+# is a surfaced finding, never a silent fallback per the three-outcome
+# rule).
+#
+# PART B - PROJECT-LEVEL ROOTING. A weaker, DISTINCT root than session-level
+# rooting (``root_state`` / ``root_session_id`` / ``parent_archive_id``,
+# unchanged by this migration). ``project_id`` on transcript_archives is
+# populated only when a transcript's corpus-slug maps, unambiguously, to
+# exactly one ``projects.root`` row (see
+# src/core/transcript_project_root.py) - ``root_state`` keeps meaning
+# EXACTLY what it always meant (session/subagent attribution truth), so a
+# project-rooted-but-not-session-rooted archive still correctly shows
+# root_state='unrooted' (session-level attribution is still genuinely
+# pending) while also carrying a project_id (a real, weaker hint a human
+# does not have to rediscover). The two axes cannot be confused because
+# they live in different columns with different meanings, never
+# overloading one flag to mean both. transcript_root_decisions gains its
+# own nullable ``project_id`` so a project-level decision is recorded
+# alongside session/subagent decisions using the SAME 'rooted' action
+# value already used for both those kinds - disambiguated the same way
+# session vs subagent already are, by which FK column is populated
+# (root_session_id vs parent_archive_id vs this new project_id), not by
+# a new action string (adding one would require rewriting the action
+# CHECK constraint, which SQLite cannot do via ALTER TABLE ADD COLUMN
+# without rebuilding the table - forbidden by this migration's
+# additive-only rule). A later session-level rooting decision on an
+# already project-rooted archive is a plain call to the existing
+# root_archive() (moves root_state to 'rooted', writes a NEW
+# transcript_root_decisions row) - the project_id column and its earlier
+# decision row are left untouched, so the upgrade never loses the audit
+# trail that got it there.
+DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY = (
+    "ALTER TABLE transcript_archives ADD COLUMN superseded_by_archive_id "
+    "INTEGER REFERENCES transcript_archives(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND = (
+    "ALTER TABLE transcript_archives ADD COLUMN growth_kind TEXT NOT NULL "
+    "DEFAULT 'initial' CHECK (growth_kind IN "
+    "('initial', 'append', 'non_append_rewrite'))"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_id "
+    "INTEGER REFERENCES projects(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_rooted_at TEXT"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_rooted_by TEXT"
+)
+
+DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID = (
+    "ALTER TABLE transcript_root_decisions ADD COLUMN project_id "
+    "INTEGER REFERENCES projects(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_superseded_by "
+    "ON transcript_archives (superseded_by_archive_id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_project "
+    "ON transcript_archives (project_id)"
+)
+
+#: Ordered DDL for a v14 -> v15 database. Six ALTER TABLE ADD COLUMN
+#: statements plus two new indexes, nothing altered on any existing
+#: column and no table rebuilt. Unlike v14's CREATE TABLE IF NOT EXISTS
+#: idiom, ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite, so the
+#: step function guards each one with PRAGMA table_info before running
+#: it - same idiom v3/v10/v11/v13 already use for the same reason.
+DDL_V15: Tuple[str, ...] = (
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY,
+    DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX,
 )

@@ -125,7 +125,9 @@ except ImportError:  # pragma: no cover - see transcript_archive.py's own guard
     logger = _NoOpLogger()
 
 from src.core.db import transaction
-from src.core.transcript_archive import ingest_transcript_stream, root_archive
+from src.core.transcript_archive import root_archive
+from src.core.transcript_prefix_dedupe import ingest_with_prefix_dedupe
+from src.core.transcript_project_root import root_pending_archives_by_project
 from src.core.transcript_corpus_discover import (
     CorpusEntry,
     SUBAGENTS_DIRNAME,
@@ -158,6 +160,10 @@ class FileOutcome:
     archive_id: Optional[int] = None
     raw_byte_length: Optional[int] = None
     reason: Optional[str] = None
+    #: One of transcript_prefix_dedupe.VALID_GROWTH_KINDS when
+    #: outcome == "ingested"; None otherwise (already_present and
+    #: could_not_read never touch growth_kind).
+    growth_kind: Optional[str] = None
 
 
 @dataclass
@@ -179,6 +185,10 @@ class RunReport:
     wall_clock_seconds: float = 0.0
     could_not_read_detail: List[FileOutcome] = field(default_factory=list)
     rooting: Dict[str, int] = field(default_factory=dict)
+    #: session/subagent rooting leaves an archive unrooted; this fills in
+    #: the weaker project-level root for as many of those as possible -
+    #: see transcript_project_root.root_pending_archives_by_project.
+    project_rooting: Dict[str, int] = field(default_factory=dict)
 
 
 def _latest_archive_for_source(conn, source_path: str) -> Optional[dict]:
@@ -214,7 +224,11 @@ def ingest_one(conn, entry: CorpusEntry) -> FileOutcome:
       row for this source_path already carries the current content's
       hash. A file that cannot be opened or read is reported as
       ``could_not_read`` and NEVER counted as ingested, per this
-      project's three-outcome rule.
+      project's three-outcome rule. When content HAS changed, the write
+      goes through :func:`~src.core.transcript_prefix_dedupe.ingest_with_prefix_dedupe`
+      rather than a bare stream ingest, so a growing file is stored once,
+      not twice - see that module's docstring for the append/
+      non-append-rewrite distinction this delegates to.
     Inputs: conn - sqlite3.Connection, NOT already inside a transaction
       (this function opens its own for the write case, matching every
       other write path in transcript_archive.py). entry (CorpusEntry).
@@ -247,14 +261,14 @@ def ingest_one(conn, entry: CorpusEntry) -> FileOutcome:
 
     mtime = mtime_iso(entry.abs_path)
     try:
-        with transaction(conn):
-            archive_id = ingest_transcript_stream(
-                conn,
-                entry.abs_path,
-                kind=entry.kind,
-                source_path=entry.source_path,
-                source_mtime=mtime,
-            )
+        outcome = ingest_with_prefix_dedupe(
+            conn,
+            entry.abs_path,
+            kind=entry.kind,
+            source_path=entry.source_path,
+            existing_archive_id=existing["id"] if existing else None,
+            source_mtime=mtime,
+        )
     except OSError as exc:
         logger.warning(
             "corpus_ingest_unreadable_during_stream",
@@ -272,8 +286,9 @@ def ingest_one(conn, entry: CorpusEntry) -> FileOutcome:
         source_path=entry.source_path,
         kind=entry.kind,
         outcome="ingested",
-        archive_id=archive_id,
+        archive_id=outcome.archive_id,
         raw_byte_length=size,
+        growth_kind=outcome.growth_kind,
     )
 
 
@@ -425,6 +440,7 @@ def ingest_corpus(conn, corpus_root: Path) -> RunReport:
             report.could_not_read_detail.append(outcome)
 
     report.rooting = root_pending_archives(conn)
+    report.project_rooting = root_pending_archives_by_project(conn)
     report.wall_clock_seconds = time.monotonic() - started
 
     logger.info(

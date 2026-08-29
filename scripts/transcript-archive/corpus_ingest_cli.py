@@ -39,6 +39,7 @@ from src.core.transcript_corpus_ingest import (
     ingest_one,
     root_pending_archives,
 )
+from src.core.transcript_project_root import root_pending_archives_by_project
 
 
 def _cmd_corpus(args: argparse.Namespace) -> int:
@@ -53,6 +54,8 @@ def _cmd_corpus(args: argparse.Namespace) -> int:
     print(f"wall_clock_seconds={report.wall_clock_seconds:.2f}")
     for key, value in sorted(report.rooting.items()):
         print(f"rooting.{key}={value}")
+    for key, value in sorted(report.project_rooting.items()):
+        print(f"project_rooting.{key}={value}")
     for detail in report.could_not_read_detail:
         print(f"UNREADABLE {detail.source_path}: {detail.reason}")
     conn.close()
@@ -83,6 +86,9 @@ def _cmd_file(args: argparse.Namespace) -> int:
         counts = root_pending_archives(conn)
         for key, value in sorted(counts.items()):
             print(f"rooting.{key}={value}")
+        project_counts = root_pending_archives_by_project(conn)
+        for key, value in sorted(project_counts.items()):
+            print(f"project_rooting.{key}={value}")
     conn.close()
     return 0 if outcome.outcome != "could_not_read" else 1
 
