@@ -30,6 +30,7 @@ from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
+from src.core.corpus_ingest_task import CorpusIngestScheduler
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
@@ -47,6 +48,7 @@ from src.api.auth import router as auth_router, limiter as auth_limiter
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
 from src.api.status_routes import router as status_router
+from src.api.corpus_routes import router as corpus_router
 
 # feat/state-directory - resolve (and, if needed, create) the app's state
 # directory ONCE at module load, before anything that depends on it is
@@ -525,6 +527,30 @@ async def lifespan(app: FastAPI):
     app.state.update_checker = update_checker
     update_checker.start()
 
+    # THE TRANSCRIPT ARCHIVE THE APP MAINTAINS FOR ITSELF. Everything
+    # under src/core/transcript_* was built and proven as a library that
+    # nothing called, which made the archive a snapshot taken once
+    # rather than a property this install holds. This starts the loop
+    # that keeps it current: an incremental pass now, then every
+    # CorpusIngestScheduler.interval_seconds.
+    #
+    # IT IS MOUNTED HERE, LAST, DELIBERATELY. It needs the datastore to
+    # have been migrated (ensure_db_migrated, far above) and it needs
+    # nothing else in this function, so it goes after every component
+    # that a user-visible request can depend on. start() creates a task
+    # and returns; boot never waits on a pass, and a pass that fails
+    # resolves to a named status on a report rather than to an
+    # exception - the same fail-soft posture as ensure_db_migrated and
+    # claude_hooks.ensure_hook_settings above. Set CLOUDE_CORPUS_INGEST=0
+    # to switch it off; the status route then reports it as disabled
+    # rather than implying the archive is current.
+    corpus_ingest_scheduler = CorpusIngestScheduler(settings.get_state_dir())
+    app.state.corpus_ingest_scheduler = corpus_ingest_scheduler
+    try:
+        corpus_ingest_scheduler.start()
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning("corpus_ingest_scheduler_start_failed", error=str(exc))
+
     logger.info("application_ready")
     logger.info(
         "server_ready_local_only",
@@ -541,6 +567,16 @@ async def lifespan(app: FastAPI):
     # is politeness rather than a requirement.
     update_checker.stop()
     set_update_checker(None)
+
+    # Stop the archive ingester early: its worker thread cannot be
+    # interrupted from outside, only asked to stop between files, so the
+    # sooner it is asked the shorter the wait. aclose() sets the cancel
+    # event FIRST and only then cancels the task, and its wait is
+    # bounded - shutdown never hangs on a file read.
+    try:
+        await corpus_ingest_scheduler.aclose()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("corpus_ingest_scheduler_stop_failed", error=str(exc))
 
     # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window
@@ -661,6 +697,7 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+app.include_router(corpus_router, prefix="/api/v1")  # Transcript archive status + manual ingest (auth required)
 app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup

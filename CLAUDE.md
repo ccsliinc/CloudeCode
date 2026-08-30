@@ -142,6 +142,59 @@ repeated bug in the project. Check the level before you debug the endpoint.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
 
+## The transcript archive the app maintains
+
+The app keeps a byte-exact archive of this machine's Claude Code
+transcript corpus (`~/.claude/projects`) inside its own `cloude.db`. It
+is a background loop, started last in `lifespan()` and stopped first on
+shutdown, and it is fail-soft in exactly the way `ensure_db_migrated`
+and `claude_hooks.ensure_hook_settings` are: boot never waits on it and
+never fails because of it.
+
+| Piece | File |
+|---|---|
+| One incremental pass, start to finish | `src/core/corpus_ingest_service.py` |
+| The scan plan and the two DB fingerprints it rests on | `src/core/corpus_ingest_scan.py` |
+| Scan cache + liveness artifact on disk | `src/core/corpus_ingest_state.py` |
+| The background loop | `src/core/corpus_ingest_task.py` |
+| The read-only status object | `src/core/corpus_status.py` |
+| `GET /corpus/status`, `POST /corpus/ingest` | `src/api/corpus_routes.py` |
+
+Four things worth knowing before you touch it.
+
+**A steady-state pass must stay invisible.** It is measured at about 40 ms
+over a 400-file archive and about one second of `stat` calls over the
+real 19,065-file corpus. Two shortcuts buy that, and BOTH refuse
+themselves rather than guess: the scan cache skips a file only when its
+size, its mtime and the hash the database holds all agree, and the
+incremental hash query is only used while the `install_id` matches and
+`max_archive_id` has not gone backwards. If you add work to the pass,
+measure it against those numbers.
+
+**A skipped rooting pass is a named state, not zeros.** `report.rooting`
+carries `status: ran` or `status: skipped_unchanged`. Do not "simplify"
+it back to a bare count dict; a reader would then be unable to tell
+"rooted nothing" from "did not look".
+
+**Liveness is published on every terminating path, including failures**,
+and its AGE is the signal. An ingester that dies looks exactly like one
+finding nothing new, so `var`-style artifacts live under
+`<state_dir>/corpus-ingest/` and `GET /corpus/status` reports the age of
+`latest.json` with four outcomes: `current`, `stale`, `never_ran`,
+`cannot_determine`.
+
+**It maintains the ARCHIVE, not the v16 message model.** The message
+model refuses a `source_ref` it has already ingested, on purpose, which
+makes it the wrong layer for transcripts that grow while the app watches
+them. The status endpoint still reports that model's gate findings
+read-only, and says `model_not_populated` rather than "0 findings" when
+it holds nothing.
+
+`CLOUDE_CORPUS_INGEST=0` switches the loop off; it defaults OFF under
+`CLOUDE_TEST_MODE` so a pytest run never reads the developer's real
+corpus. `CLOUDE_CORPUS_ROOT` relocates the corpus,
+`CLOUDE_CORPUS_INGEST_INTERVAL` the sleep between passes.
+
 ## Secret scanning
 
 `./scripts/install-secret-hook.sh` installs a pre-commit hook that refuses a
