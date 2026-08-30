@@ -263,6 +263,7 @@ GATE_AMBIGUOUS_SPAWN_LINK = "ambiguous_spawn_link"
 GATE_PENDING_PARENT_SESSION = "pending_parent_session"
 GATE_UNRESOLVED_SIDECHAIN_LINK = "unresolved_sidechain_link"
 GATE_DUPLICATE_UUID_BODY_CONFLICT = "duplicate_uuid_body_conflict"
+GATE_DUPLICATE_UUID_RECORDING_VARIANT = "duplicate_uuid_recording_variant"
 GATE_IN_SESSION_DUPLICATE_UUID = "in_session_duplicate_uuid"
 GATE_UNKNOWN_RECORD_TYPE = "unknown_record_type"
 GATE_UNEXPECTED_NULL_TIMESTAMP = "unexpected_null_timestamp"
@@ -389,15 +390,45 @@ GATE_CONDITIONS: Tuple[GateCondition, ...] = (
             "id is not a reliable identity and cannot be silently "
             "merged or silently kept-first."
         ),
-        measured="0 observed across two independent samples (this "
-                 "audit: 4,000 duplicate-uuid groups with text_content > "
-                 "200 chars, ordered by uuid; a second measurement: "
-                 "4,000 groups sampled differently) - both samples found "
-                 "differences ONLY in envelope fields (is_sidechain, "
-                 "agent_id, session_id), never in body. Positive control: "
-                 "the comparison function was verified to distinguish "
-                 "two synthetic differing bodies before trusting either "
-                 "zero. 2026-08-29.",
+        measured="45,246 conflicting uuid groups when the test was "
+                 "byte-equality of the sorted body (whole corpus, "
+                 "2,432,762 bodies, 2026-08-30) - 90.7 percent of a "
+                 "49,905-item queue. Re-measured with the equivalence in "
+                 "src/core/message_body_equivalence.py, which normalises "
+                 "only the measured recording-context classes, the same "
+                 "corpus yields 1,534 genuine conflicts and 43,712 "
+                 "recording variants. Positive control: the comparison "
+                 "function was verified to distinguish two synthetic "
+                 "differing bodies before trusting either number, and "
+                 "uuid 769c6599-5116-4388-be8a-d719699deb67 - two copies "
+                 "of one message differing only in a tool_use input "
+                 "command, one carrying a live credential and one edited "
+                 "to a redaction - is asserted to keep gating.",
+    ),
+    GateCondition(
+        GATE_DUPLICATE_UUID_RECORDING_VARIANT, SEVERITY_ADVISORY,
+        auto_resolvable=False,
+        description=(
+            "the same message uuid was observed with two bodies that "
+            "differ ONLY in the recording-context fields declared in "
+            "src/core/message_body_equivalence.py - which session and "
+            "CLI version and fork wrote the copy, the token accounting "
+            "of that particular API call, or a bare content string "
+            "against its one-text-block equivalent. This is the benign "
+            "half of the duplicate-uuid phenomenon and it is reported "
+            "rather than dropped, on purpose: the owner is entitled to "
+            "know once that tens of thousands of his messages were "
+            "replayed by resume and fork, without that fact filling the "
+            "queue he has to work through. BOTH bodies are stored "
+            "regardless, exactly as for the stop condition - this "
+            "severity changes what is GATED, never what is KEPT."
+        ),
+        measured="43,712 of the 45,246 conflicting uuid groups on the "
+                 "full corpus, 2026-08-30. Every difference in the set "
+                 "is drawn from a closed set of 27 JSON paths forming "
+                 "75 distinct signatures; the per-path counts and the "
+                 "class each rule answers are in the EQUIVALENCE_RULES "
+                 "table.",
     ),
     GateCondition(
         GATE_IN_SESSION_DUPLICATE_UUID, SEVERITY_STOP, auto_resolvable=False,

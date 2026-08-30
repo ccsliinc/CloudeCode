@@ -38,31 +38,37 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-#: Top-level keys that are session BOOKKEEPING rather than message
-#: content. Two copies of one message differing only in these are the
-#: same message recorded in two sessions, which is a resumed or forked
-#: session, not a data conflict.
-BOOKKEEPING_KEYS: Tuple[str, ...] = (
-    "sessionId", "slug", "version", "forkedFrom", "promptId", "gitBranch",
-    "cwd", "entrypoint", "userType", "permissionMode",
+from src.core.message_body_equivalence import (  # noqa: E402
+    EQUIVALENCE_RULES,
+    canonical_identity,
+    difference_paths,
 )
 
-#: Top-level keys that ARE the message. A difference in any of these
-#: between two copies of one uuid is a real content conflict.
-CONTENT_KEYS: Tuple[str, ...] = (
-    "message", "content", "toolUseResult", "summary",
-)
+#: Paths the equivalence absorbs, for marking the histogram. Derived from
+#: the rule table, never re-listed.
+ABSORBED_PATHS = frozenset(rule.path for rule in EQUIVALENCE_RULES)
+
+#: The bookkeeping-versus-content split this module used to make with
+#: its own two hand-written key lists is now the equivalence declared in
+#: src/core/message_body_equivalence.py, and this module reads THAT.
+#: Two lists of field names, in two files, drifting apart, is the exact
+#: "second set of patterns" this repo forbids for secret detectors, and
+#: it was worse here: the local CONTENT_KEYS list called any difference
+#: inside ``message`` a content conflict, which counted 820 groups as
+#: real when 764 of them were the streaming-snapshot and content-shape
+#: classes.
 
 
 def conflict_split(conn: sqlite3.Connection) -> Dict[str, object]:
-    """Split duplicate-uuid conflicts into bookkeeping-only and content.
+    """Split duplicate-uuid conflicts into recording variants and real ones.
 
-    Description: reads both stored bodies for every conflicting uuid and
-      compares them key by key. A uuid is CONTENT only if one of
-      CONTENT_KEYS actually differs; everything else is bookkeeping. The
-      per-key histogram is printed so the split can be argued with.
+    Description: loads both stored bodies for every uuid holding more
+      than one, and asks src/core/message_body_equivalence.py whether
+      they are the same message recorded twice. The per-path histogram
+      is printed so the split can be argued with, which is the whole
+      reason this module exists.
     Inputs: conn (sqlite3.Connection on the corpus database).
-    Output: dict with total, bookkeeping_only, content, and key_counts.
+    Output: dict with total, variant, conflict, and key_counts.
     Example: conflict_split(conn)["total"] >= 0 -> True
     """
     uuids = [row[0] for row in conn.execute(
@@ -70,27 +76,17 @@ def conflict_split(conn: sqlite3.Connection) -> Dict[str, object]:
         "NULL GROUP BY message_uuid HAVING COUNT(*) > 1")]
     cursor = conn.cursor()
     keys: collections.Counter = collections.Counter()
-    content = 0
+    conflict = 0
     for uuid in uuids:
         bodies = [json.loads(row[0]) for row in cursor.execute(
             "SELECT body_json FROM message_bodies WHERE message_uuid = ?",
             (uuid,))]
-        if not all(isinstance(body, dict) for body in bodies):
-            content += 1
-            continue
-        differing = set()
-        for key in set().union(*[set(body) for body in bodies]):
-            values = {json.dumps(body.get(key, "__ABSENT__"), sort_keys=True)
-                      for body in bodies}
-            if len(values) > 1:
-                differing.add(key)
-        for key in differing:
-            keys[key] += 1
-        if differing & set(CONTENT_KEYS):
-            content += 1
-    return {"total": len(uuids), "content": content,
-            "bookkeeping_only": len(uuids) - content,
-            "key_counts": keys}
+        for path in difference_paths(bodies):
+            keys[path.split("[")[0]] += 1
+        if len({canonical_identity(body) for body in bodies}) > 1:
+            conflict += 1
+    return {"total": len(uuids), "conflict": conflict,
+            "variant": len(uuids) - conflict, "key_counts": keys}
 
 
 def subagent_share(conn: sqlite3.Connection, code: str) -> Tuple[int, int]:
@@ -156,15 +152,14 @@ def report(db_path: str) -> int:
     print("=" * 68)
 
     split = conflict_split(conn)
-    print("\nA. duplicate_uuid_body_conflict  (STOP, the largest block)")
-    print(f"   conflicting uuids                       {split['total']}")
-    print(f"   differ ONLY in session bookkeeping      "
-          f"{split['bookkeeping_only']}")
-    print(f"   differ in ACTUAL MESSAGE CONTENT        {split['content']}")
-    print("   which top-level keys differ, by uuid count:")
+    print("\nA. duplicate uuids  (was the largest block)")
+    print(f"   uuids with more than one stored body    {split['total']}")
+    print(f"   recording variant (ADVISORY)            {split['variant']}")
+    print(f"   genuine conflict (STOP)                 {split['conflict']}")
+    print("   which json paths differ, by uuid count:")
     for key, count in split["key_counts"].most_common(14):
-        mark = "CONTENT" if key in CONTENT_KEYS else "bookkeeping"
-        print(f"       {key:26s} {count:>7d}  {mark}")
+        mark = "absorbed" if key in ABSORBED_PATHS else "GATES"
+        print(f"       {key:30s} {count:>7d}  {mark}")
 
     for label, code in (("B. unrootable_session (STOP)", "unrootable_session"),
                         ("C. multiple_session_roots (ADVISORY)",
@@ -203,7 +198,7 @@ def report(db_path: str) -> int:
     print("WHAT IS LEFT AFTER THE STRUCTURAL CAUSES ARE SUBTRACTED")
     print("=" * 68)
     residue = [
-        ("duplicate uuids with a real CONTENT difference", split["content"]),
+        ("duplicate uuids with a real difference", split["conflict"]),
         ("unknown record types (distinct values)", len(unknown)),
         ("distinct credentials to rotate", distinct_secrets),
     ]

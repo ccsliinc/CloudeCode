@@ -521,10 +521,17 @@ re-measuring rather than by reasoning:**
 2. **There are THREE session identity forms, not two.** The brief named
    `agent-<hex>`. The live `sessions` table holds `agent:` on 17,996 rows
    and `agent-` on 224 - the rarer form is the one that was documented.
-3. **The JSON's own `sessionId` does stay stable across copies.** Flagged
-   above as "worth checking, not claimed". Checked on the ingested
-   sample: 11 uuids carried more than one stored body and 0 of them
-   disagreed on `sessionId`.
+3. ~~**The JSON's own `sessionId` does stay stable across copies.**
+   Flagged above as "worth checking, not claimed". Checked on the
+   ingested sample: 11 uuids carried more than one stored body and 0 of
+   them disagreed on `sessionId`.~~ **SUPERSEDED 2026-08-30 - this is
+   wrong, and it was wrong because 11 groups is not a measurement.**
+   Against the whole corpus, `sessionId` is the SINGLE MOST COMMON thing
+   two copies of one message disagree about: 40,607 of the 45,246
+   conflicting uuid groups. It could not have been otherwise - a resumed
+   or forked session replays prior messages under its own new session id
+   by construction. The sample of 11 was drawn from sessions the proof
+   script chose for other reasons and happened to contain no replays.
 
 **Proof, not assertion.** `scripts/message_model_sample_proof.py` opens
 the history database strictly read-only, draws whole sessions covering
@@ -533,3 +540,87 @@ transcripts, 9,706 lines, **40 of 40 reconstructed byte-exact**, 0
 fidelity failures. `messages.raw_json` was verified as byte-identical to
 the on-disk `.jsonl` line for 36 of 36 rows before being trusted as the
 source of "the original bytes".
+
+
+## The duplicate-uuid queue, and what shrank it - 2026-08-30
+
+**The problem.** Ingesting the whole corpus (19,541 transcripts,
+2,432,762 bodies, 3,006,908 appearances) produced a 49,905-item review
+queue, and `duplicate_uuid_body_conflict` was 45,246 of it - 90.7
+percent. The condition fired whenever two bodies stored under one uuid
+were not byte-identical after key sorting. A queue that size is a queue
+nobody opens, and a queue nobody opens is worse than no queue.
+
+**What the 45,246 actually were, measured on the whole corpus rather
+than sampled.** Every difference in all 45,246 groups is drawn from a
+CLOSED SET OF 27 JSON PATHS, arranged into only 75 distinct signatures.
+The per-path counts:
+
+| path | groups | verdict |
+|---|---|---|
+| `sessionId` | 40,607 | recording context |
+| `slug` | 30,853 | recording context |
+| `version` | 29,078 | recording context |
+| `forkedFrom.sessionId` / `.messageUuid` | 17,372 | recording context |
+| `promptId` | 4,422 | recording context |
+| `gitBranch` | 2,365 | recording context |
+| `parentUuid` | 1,494 | **gates** |
+| `cwd` | 684 | recording context |
+| `message.usage.*` | 1,013 | recording context |
+| `message.stop_reason` | 426 | recording context |
+| `message.context_management` | 240 | recording context, null only |
+| `entrypoint` | 226 | recording context |
+| `message.content` (shape) | 18 | recording context |
+| `message.content` (real) | 55 | **gates** |
+| `sourceToolAssistantUUID` | 63 | recording context |
+| `attachment.displayPath` | 30 | recording context |
+
+**The equivalence.** `src/core/message_body_equivalence.py` declares one
+rule per measured class, each carrying the count that justifies it, and
+refuses any rule that cannot cite one. It is a pure canonicalisation and
+it decides only what is GATED - two bodies under one uuid are two rows in
+`message_bodies` whatever it says, because the evidence that a transcript
+was edited after the fact is exactly the pair.
+
+**Two decisions worth reading before changing it.**
+
+`message.stop_reason` is dropped rather than null-gated. Measured across
+all 426 groups where it differs, EVERY one has null on one side (289
+`tool_use` against null, 74 `end_turn` against null, 63 with three or
+more copies and the same shape) and ZERO have two different non-null
+values. The residual risk is a `max_tokens` against `end_turn` pair, and
+that pair cannot hide: a truncated completion differs in
+`message.content`, which still gates. Measured co-occurrence of a
+stop_reason difference with a content difference is also ZERO, as is the
+co-occurrence of a usage difference with a content difference.
+
+`parentUuid` was nearly normalised and then was not. 1,155 of the
+affected groups also carry a `forkedFrom`, which reads as fork
+bookkeeping. Measuring settled it: 1,474 of the 1,494 groups name TWO
+REAL PARENTS, and only 20 are the null-against-a-value shape a re-rooted
+fork would produce. Two copies of one message naming different
+predecessors is the conversation graph differing, not the recording. It
+keeps gating, and it is now 96 percent of what is left.
+
+**The result, re-derived from the finished corpus by
+`scripts/message_model_duplicate_reclass.py` without re-ingesting:**
+
+```
+  uuids stored with more than one body      45246
+  genuine conflict  (STOP)                   1534
+  recording variant (ADVISORY)              43712
+
+  STOP items a human must work               2824   (was 46,536)
+  ADVISORY items, reported not queued       47081
+  every item, both severities                49905
+```
+
+The 1,534 that remain are 1,478 parent-graph differences, 40 real
+content differences, and 16 that are both.
+
+**The benign 43,712 are reported, not dropped.**
+`duplicate_uuid_recording_variant` is a registered ADVISORY condition
+with its own finding row. The owner is entitled to know once that tens of
+thousands of his messages were replayed by resume and fork; he is not
+required to read them one at a time. Nothing about which bodies are
+stored changed in either direction.

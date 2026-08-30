@@ -16,11 +16,16 @@ merging or by keeping whichever arrived first.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+from src.core.message_body_equivalence import (
+    DuplicateVerdict,
+    duplicate_verdict,
+)
 from src.core.message_gate_contract import BY_CODE, classify_fidelity
 from src.core.message_model_secrets import scan_text
 from src.core.message_model_serialize import (
@@ -150,20 +155,21 @@ def store_secret_findings(
 
 def upsert_body(
     conn: sqlite3.Connection, value: Any, now: str,
-) -> Tuple[int, bool, Optional[str]]:
+) -> Tuple[int, bool, Optional[DuplicateVerdict]]:
     """Find or create the identity row for one parsed record's body.
 
-    Description: identity is (uuid, sha256-of-canonical-body). A second
-      body under a uuid that already has a DIFFERENT one is inserted as
-      its own row - never merged, never keep-first - and the conflict is
-      reported to the caller so it can raise
-      GATE_DUPLICATE_UUID_BODY_CONFLICT. Losing either body would be data
-      loss, and this is a live case: an independent measurement of 3,443
-      duplicate-uuid groups on 2026-08-29 found 39 (1.13%) with genuinely
-      different bodies.
+    Description: storage identity is (uuid, byte-hash-of-body), and it is
+      unchanged by anything here - a second body under a uuid that
+      already has a different one is ALWAYS inserted as its own row,
+      never merged, never keep-first, whatever the verdict says. Losing
+      either copy would be data loss, and the evidence that a transcript
+      was edited after the fact is exactly the pair. What the verdict
+      decides is only which FINDING the caller records: a genuine
+      conflict, or a benign recording variant, per the measured
+      equivalence in src/core/message_body_equivalence.py.
     Inputs: conn, value (the parsed JSON value of one line), now.
-    Output: (body_id, created, conflict_detail) where conflict_detail is
-      None unless this body conflicts with an already-stored one.
+    Output: (body_id, created, verdict) where verdict is None unless a
+      DIFFERENT body is already stored under the same uuid.
     Example: upsert_body(conn, {"uuid": "u"}, "t")[1] -> True
     """
     split = split_record(value)
@@ -177,19 +183,15 @@ def upsert_body(
     if row is not None:
         return int(row[0]), False, None
 
-    conflict = None
+    verdict: Optional[DuplicateVerdict] = None
     if uuid is not None:
-        other = conn.execute(
-            "SELECT body_sha256 FROM message_bodies WHERE message_uuid = ? "
-            "LIMIT 1", (uuid,)
-        ).fetchone()
-        if other is not None and other[0] != split.body_sha256:
-            conflict = (
-                f"uuid {uuid} already stored with body sha256 "
-                f"{other[0][:16]}...; this copy hashes to "
-                f"{split.body_sha256[:16]}... - both are kept as separate "
-                "identity rows"
-            )
+        stored = [
+            json.loads(row[0]) for row in conn.execute(
+                "SELECT body_json FROM message_bodies WHERE message_uuid = ?",
+                (uuid,))
+        ]
+        if stored:
+            verdict = duplicate_verdict(split.body, stored, uuid)
 
     body_json = stored_body_json(split.body)
     cur = conn.execute(
@@ -212,7 +214,7 @@ def upsert_body(
             now,
         ),
     )
-    return int(cur.lastrowid), True, conflict
+    return int(cur.lastrowid), True, verdict
 
 
 def line_payload(text: str) -> Dict[str, Any]:

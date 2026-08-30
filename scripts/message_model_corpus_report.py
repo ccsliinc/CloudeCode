@@ -53,7 +53,8 @@ from src.core.message_gate_contract import (  # noqa: E402
 #: not in here is NOT MEASURED by this run, with the reason below.
 MEASURABLE: Tuple[str, ...] = (
     "dangling_parent", "unrootable_session", "multiple_session_roots",
-    "duplicate_uuid_body_conflict", "in_session_duplicate_uuid",
+    "duplicate_uuid_body_conflict", "duplicate_uuid_recording_variant",
+    "in_session_duplicate_uuid",
     "unknown_record_type", "unexpected_null_timestamp",
     "fidelity_check_failed", "timestamp_causality_violation",
     "secret_material_present",
@@ -85,6 +86,12 @@ GROUPING: Dict[str, Tuple[str, str]] = {
         "one item per conflicting message uuid, parsed out of the detail "
         "(distinct DETAIL over-counts: a uuid with three differing bodies "
         "raises two findings whose details differ)", "conflict_uuid"),
+    "duplicate_uuid_recording_variant": (
+        "one item per message uuid whose copies differ ONLY in the "
+        "recording-context fields declared in "
+        "src/core/message_body_equivalence.py - advisory, and reported "
+        "so the owner can see the size of the replay phenomenon once "
+        "rather than review it record by record", "conflict_uuid"),
     "unrootable_session": ("one item per transcript (file)", "transcript"),
     "multiple_session_roots": ("one item per transcript (file)", "transcript"),
     "in_session_duplicate_uuid": (
@@ -154,18 +161,36 @@ def distinct_details(conn: sqlite3.Connection, code: str) -> int:
         "WHERE condition_code = ?", (code,)).fetchone()[0])
 
 
-def conflict_uuids(conn: sqlite3.Connection) -> int:
-    """How many DISTINCT message uuids the body-conflict finding names.
+def conflict_uuids(conn: sqlite3.Connection, code: str) -> int:
+    """How many DISTINCT message uuids one duplicate-uuid code names.
 
-    Description: the finding's detail carries both hashes, so a uuid with
-      three differing bodies produces two findings with two different
-      details. Counting distinct details therefore over-counts the review
-      queue; the uuid is the review unit and it is the detail's second
-      word. Cross-checked against the identity table itself, which is the
-      independent measurement: a uuid holding more than one body row.
+    Description: the review unit is the uuid, not the finding row - a
+      uuid with three differing bodies raises two findings whose details
+      differ, so counting distinct details over-counts. Every duplicate
+      finding's detail opens with "uuid <uuid> ", so the uuid is a fixed
+      substring. This is PER CODE on purpose: since 2026-08-30 a uuid
+      holding more than one body row can be either a genuine conflict or
+      a recording variant, so the identity table alone can no longer
+      answer which queue an item belongs in - it only gives their sum,
+      which the caller prints as a cross-check.
+    Inputs: conn, code (str - a duplicate-uuid condition code).
+    Output: int - distinct uuids named by that code's findings.
+    Example: conflict_uuids(conn, "nope") -> 0
+    """
+    return int(conn.execute(
+        "SELECT COUNT(DISTINCT SUBSTR(detail, 6, 36)) FROM "
+        "message_ingest_findings WHERE condition_code = ?",
+        (code,)).fetchone()[0])
+
+
+def duplicate_uuid_total(conn: sqlite3.Connection) -> int:
+    """Every uuid holding more than one stored body, both classes.
+
+    Description: the independent cross-check on the two per-code counts,
+      read off the identity table rather than off the findings.
     Inputs: conn.
-    Output: int - distinct conflicting uuids.
-    Example: conflict_uuids(conn) >= 0 -> True
+    Output: int.
+    Example: duplicate_uuid_total(conn) >= 0 -> True
     """
     return int(conn.execute(
         "SELECT COUNT(*) FROM (SELECT message_uuid FROM message_bodies "
@@ -342,9 +367,10 @@ def report(db_path: str, results_path: str) -> int:
                          f"{secrets['bodies']} bodies")
             elif kind == "conflict_uuid":
                 rows = raw.get(code, 0)
-                items = conflict_uuids(conn)
-                extra = ("counted from the identity table, not from the "
-                         "finding details")
+                items = conflict_uuids(conn, code)
+                extra = ("distinct uuids named by this code; "
+                         f"{duplicate_uuid_total(conn)} uuids hold more "
+                         "than one body row across both duplicate classes")
             elif kind == "detail":
                 rows = raw.get(code, 0)
                 items = distinct_details(conn, code)

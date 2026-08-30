@@ -41,7 +41,6 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from src.core.message_gate_contract import (
     GATE_DANGLING_PARENT,
-    GATE_DUPLICATE_UUID_BODY_CONFLICT,
     GATE_FIDELITY_CHECK_FAILED,
     GATE_SECRET_MATERIAL_PRESENT,
 )
@@ -166,7 +165,7 @@ def ingest_lines(
         is_sidechain = 0
         agent_id = None
         if payload["status"] == "ok":
-            body_id, created, conflict = upsert_body(
+            body_id, created, verdict = upsert_body(
                 conn, payload["value"], stamp
             )
             if created:
@@ -192,15 +191,18 @@ def ingest_lines(
                     )
             else:
                 result.bodies_reused += 1
-            if conflict:
+            if verdict is not None:
+                # Both bodies are already stored at this point; the
+                # verdict only chooses which condition is recorded, stop
+                # for a genuine difference or advisory for a recording
+                # variant. See message_body_equivalence for the measured
+                # classes behind that split.
                 record_finding(
-                    conn, code=GATE_DUPLICATE_UUID_BODY_CONFLICT,
+                    conn, code=verdict.code,
                     subject_kind="body", subject_id=body_id,
-                    detail=conflict, now=stamp,
+                    detail=verdict.detail, now=stamp,
                 )
-                result.findings.append(
-                    (GATE_DUPLICATE_UUID_BODY_CONFLICT, conflict)
-                )
+                result.findings.append((verdict.code, verdict.detail))
             split = payload["split"]
             envelope_json = stored_body_json(split.envelope)
             key_order_json = stored_body_json(split.key_order)
