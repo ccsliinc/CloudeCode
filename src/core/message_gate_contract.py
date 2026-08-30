@@ -498,12 +498,19 @@ GATE_CONDITIONS: Tuple[GateCondition, ...] = (
             "and a repeat is recognised as the same session moved or "
             "copied between the owner's machines, not a conflict."
         ),
-        measured="CANNOT DETERMINE today: exactly 1 host is ingested "
-                 "(hosts table has 1 row), so no cross-host collision is "
-                 "observable yet. This condition exists because a "
-                 "second host (the owner's workstation import, planned) "
-                 "makes it reachable immediately - see "
-                 "docs/message-model-gate.md.",
+        measured="REACHED AND FIRING, 2026-08-30. The second host is "
+                 "ingested (schema v17, message_hosts has 2 rows: this "
+                 "laptop 19,562 transcripts / 76 projects, mac-mini-m4 "
+                 "1,477 / 4). EXACTLY 3 of the mini's 4 project slugs "
+                 "also exist on the laptop - '-Users-jsugamele', "
+                 "'-Users-jsugamele-Development-Assistants-Media' and "
+                 "its '--claude-worktrees-vibrant-leakey-ea30bb' "
+                 "sibling - raising 6 findings, one per project on each "
+                 "side. All 3 carry the SAME observed cwd string on both "
+                 "machines, because both run as the same unix user; that "
+                 "identical string is the ambiguity, not evidence of one "
+                 "directory. UNIQUE (corpus_id, slug) keeps them as "
+                 "distinct projects regardless of how the human rules.",
     ),
     GateCondition(
         GATE_TOOL_CALL_WITHOUT_RESULT, SEVERITY_ADVISORY, auto_resolvable=True,

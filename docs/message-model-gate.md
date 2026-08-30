@@ -624,3 +624,78 @@ with its own finding row. The owner is entitled to know once that tens of
 thousands of his messages were replayed by resume and fork; he is not
 required to read them one at a time. Nothing about which bodies are
 stored changed in either direction.
+
+---
+
+## The host dimension, measured 2026-08-30 (schema v17)
+
+The single-host numbers above stand as history. This is what the same
+gate reports once a SECOND MACHINE is in the same database.
+
+**What is in it.** 21,039 transcripts across three corpora: this laptop's
+`~/.claude/projects` (19,548), mac-mini-m4's `~/.claude/projects` (1,477),
+and this laptop's `~/Library/Application Support/Claude/local-agent-mode-sessions`
+(14) - a corpus nothing had ever indexed, because every scanner written
+so far looks only at the first path. All 21,039 reconstruct byte-exact.
+
+**Host identity is the IOPlatformUUID.** A hostname is mutable and this
+laptop already answers to three different names; a serial number is
+stable but is the one value not worth copying into an 11 GB database.
+A wrong host identity is made detectable by a COLLECTION MANIFEST
+captured on the source machine (its platform uuid plus one sha256 per
+file), which ingest compares against the bytes it actually read:
+21,036 `manifest_verified`, 3 `cannot_determine`, 0 declared. The 3 are
+live session files that grew between collection and read, including the
+session that performed the run.
+
+**The slug collision is real and now fires.** 3 of the mini's 4 project
+slugs also exist on the laptop, because both machines run as the same
+unix user and a slug is a lossy derived string. All 3 carry the SAME
+observed cwd on both machines, which is the ambiguity rather than
+evidence of one directory. `UNIQUE (corpus_id, slug)` keeps them as
+distinct projects by construction; the gate raises 6 findings, one per
+project on each side, because only the owner can say whether the mini's
+copy is the same work.
+
+**A session uuid on two hosts is NOT gated: 213 of them are.** That is
+14.4 percent of the mini's files already duplicated on the laptop.
+
+**The queue, and where the increase actually came from:**
+
+```
+                                   single host   two hosts
+  duplicate uuid, genuine conflict        1534        3123
+  unrootable_session                       909         909
+  in_session_duplicate_uuid                 68          74
+  dangling_parent (settled)                311         311
+  unknown_record_type (distinct)             2           7
+  project_slug_collision                     0           3
+  STOP items a human would work           2824        4427
+```
+
+The obvious reading - "the second machine tripled the hardest block" -
+is wrong, and it took an attribution pass to see that. Splitting the
+3,123 genuine conflicts by which corpus their bodies appear in:
+
+```
+  laptop ~/.claude/projects only          1528
+  involves local-agent-mode-sessions      1589
+  involves mac-mini-m4                       6
+```
+
+**The second HOST cost 6 items. The 14-file corpus cost 1,589.** And
+those 1,589 are one recognisable class: 1,578 of them are the same
+message recorded twice in two different envelope DIALECTS. The
+local-agent-mode corpus writes an `audit.jsonl` with `session_id`,
+`parent_tool_use_id` and `_audit_timestamp`, alongside a nested
+`.claude/projects` tree writing the standard `sessionId` / `parentUuid`
+envelope for the same messages. `message_body_equivalence` has never
+been measured against that dialect, because nothing had ever read this
+corpus. It is a new equivalence class to measure, not corruption, and
+deliberately NOT absorbed by a rule here - a rule added without the
+measurement behind it is what that module forbids.
+
+The 5 new `unknown_record_type` values are similarly informative rather
+than alarming: `agent-name`, `cost-state` and `file-history-delta` come
+from the mini (a newer Claude Code version), `rate_limit_event` and
+`tool_use_summary` from local-agent-mode.

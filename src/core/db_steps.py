@@ -53,6 +53,7 @@ from src.core.db_models import (
     META_SCHEMA_VERSION,
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
+from src.core.message_host_ddl import DDL_V17
 from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
 
@@ -850,6 +851,46 @@ def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """Create the host / corpus / project dimension.
+
+    Description: build step for v17 - three dimension tables
+      (message_hosts, message_corpora, message_projects), six columns
+      added to message_transcripts, four indexes and two views. See
+      src/core/message_host_ddl.py's module docstring for why the host
+      identity is the platform uuid, why a corpus sits between host and
+      project, and why a body gets a VIEW rather than a host_id column.
+
+      Every CREATE carries its own IF NOT EXISTS. The six ALTER TABLE
+      ADD COLUMN statements do NOT - SQLite has no IF NOT EXISTS for
+      them - so each is guarded against the columns already present,
+      which keeps this step idempotent on a retry exactly as v7/v8/v14
+      are. SQLite's ADD COLUMN rewrites only the table header, so this
+      is O(1) even against the owner's 11 GB corpus database.
+
+      NO BACKFILL, AND THE EMPTY STATE IS THE HONEST ONE. Existing v16
+      transcripts get NULL in all six columns, which reads as "not yet
+      attributed to a host" - a real third outcome that the reporting
+      names as CANNOT DETERMINE. Defaulting them to a host would invent
+      an attribution nobody measured, on the exact dimension this step
+      exists to stop inventing. Attributing them is a separate operation
+      that writes THROUGH this schema.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v16_to_v17(conn)  # after _step_v15_to_v16
+    """
+    existing = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(message_transcripts)")
+    }
+    for statement in DDL_V17:
+        if statement.startswith("ALTER TABLE message_transcripts ADD COLUMN"):
+            column = statement.split("ADD COLUMN", 1)[1].split()[0]
+            if column in existing:
+                continue
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -871,6 +912,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     13: _step_v13_to_v14,
     14: _step_v14_to_v15,
     15: _step_v15_to_v16,
+    16: _step_v16_to_v17,
 }
 
 
