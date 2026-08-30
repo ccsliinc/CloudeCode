@@ -142,6 +142,21 @@ repeated bug in the project. Check the level before you debug the endpoint.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
 
+## Secret scanning
+
+`./scripts/install-secret-hook.sh` installs a pre-commit hook that refuses a
+commit staging credential material; `./scripts/uninstall-secret-hook.sh`
+removes it. `.git/hooks` is not version controlled, so the installer is the
+distribution mechanism and has to be run once per clone.
+
+`src/core/message_model_secrets.py` is the single source of truth for what
+counts as a secret, shared with the transcript message model. Add a detector
+there and a case to `tests/test_secret_detectors.py`; never write a second set
+of patterns. No matched value is ever printed, logged or stored, by any path.
+
+Audit the tree with `./venv/bin/python3 scripts/scan_secrets.py`. Exit 2 means
+could-not-scan and is not a pass. Full detail in `docs/secret-scanning.md`.
+
 ## Upgrading an install
 
 `docs/upgrade-with-claude.md` is the runbook, and `/upgrade`
