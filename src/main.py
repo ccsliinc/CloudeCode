@@ -49,6 +49,7 @@ from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
 from src.api.status_routes import router as status_router
 from src.api.corpus_routes import router as corpus_router
+from src.api.archive_routes import router as archive_router
 
 # feat/state-directory - resolve (and, if needed, create) the app's state
 # directory ONCE at module load, before anything that depends on it is
@@ -698,6 +699,7 @@ app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file 
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
 app.include_router(corpus_router, prefix="/api/v1")  # Transcript archive status + manual ingest (auth required)
+app.include_router(archive_router, prefix="/api/v1")  # Read-only message browser over the archive (auth required)
 app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup

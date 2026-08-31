@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from src.core.message_model_serialize import (
     join_lines,
@@ -40,6 +40,13 @@ VERIFY_CANNOT_RENDER: str = "cannot_render"
 ALL_VERIFY_OUTCOMES: Tuple[str, ...] = (
     VERIFY_MATCH, VERIFY_MISMATCH, VERIFY_CANNOT_RENDER,
 )
+
+#: How many appearance rows :func:`iter_export_lines` pulls from the
+#: cursor at a time. This is the whole memory story: peak is one batch
+#: of rendered lines, not one transcript's worth. 256 is the value the
+#: streaming prototype was measured at (78 MB peak on a 182 MB
+#: transcript, against 2,205 MB for the fully buffered path).
+EXPORT_FETCH_BATCH_ROWS: int = 256
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,67 @@ def _render_row(row: Dict[str, object]) -> Tuple[Optional[str], str]:
         return None, f"reassembly failed: {exc}"
 
 
+#: The one appearance-row query the export path runs. Hoisted to a
+#: constant because a second copy of it is a second rendering path in
+#: disguise, and two paths that render bytes independently will diverge
+#: invisibly - both look correct in isolation.
+_EXPORT_ROWS_SQL: str = (
+    "SELECT a.line_no, a.raw_line, a.serializer_style, a.envelope_json, "
+    "       a.key_order_json, a.line_sha256, b.body_json "
+    "FROM message_appearances a "
+    "LEFT JOIN message_bodies b ON b.id = a.body_id "
+    "WHERE a.transcript_id = ? ORDER BY a.line_no"
+)
+
+
+def iter_export_lines(
+    conn: sqlite3.Connection, transcript_id: int,
+) -> Iterator[LineExport]:
+    """Yield one verified LineExport per line, in line order.
+
+    Description: the SINGLE rendering path. :func:`export_transcript` is
+      a consumer of this, so a streamed export and a verified export can
+      never disagree about a line's bytes - there is one implementation,
+      not two that happen to match today. Uses ``fetchmany`` so peak
+      memory is a batch, not a transcript, and retains no rendered text
+      across iterations: measured 78 MB against 2,205 MB on the 182 MB
+      transcript. A transcript id that does not exist yields nothing;
+      the caller that needs that distinguished (:func:`export_transcript`)
+      asks the transcript table for itself.
+    Inputs: conn (sqlite3.Connection), transcript_id (int).
+    Output: Iterator[LineExport], ascending line_no. A line that could
+      not be rendered is yielded with outcome VERIFY_CANNOT_RENDER and
+      ``text`` None; the CALLER decides whether that is fatal, which is
+      what lets strict and non-strict share one path.
+    Raises: json.JSONDecodeError - a stored row's JSON is corrupt, which
+      is not a renderable-or-not verdict but a broken store; it
+      propagates rather than being laundered into an outcome, exactly as
+      the buffered path has always done. The line it fails on is the
+      first line NOT yielded, so a consumer knows where it stopped.
+    Example: sum(1 for _ in iter_export_lines(conn, 4)) -> 980
+    """
+    cursor = conn.execute(_EXPORT_ROWS_SQL, (transcript_id,))
+    while True:
+        batch = cursor.fetchmany(EXPORT_FETCH_BATCH_ROWS)
+        if not batch:
+            return
+        for (line_no, raw_line, style, envelope_json, key_order_json,
+                line_sha, body_json) in batch:
+            text, detail = _render_row({
+                "raw_line": raw_line, "serializer_style": style,
+                "envelope_json": envelope_json,
+                "key_order_json": key_order_json, "body_json": body_json,
+            })
+            if text is None:
+                yield LineExport(line_no, None, VERIFY_CANNOT_RENDER,
+                                 str(line_sha), None, detail)
+                continue
+            actual = sha256_text(text)
+            outcome = VERIFY_MATCH if actual == line_sha else VERIFY_MISMATCH
+            yield LineExport(line_no, text, outcome, str(line_sha), actual,
+                             detail)
+
+
 def export_transcript(
     conn: sqlite3.Connection, transcript_id: int, *, strict: bool = True,
 ) -> ExportResult:
@@ -151,7 +219,12 @@ def export_transcript(
       line, hashes it against the hash stored at ingest, then joins the
       lines with the stored trailing-newline flag and hashes the whole
       file against the transcript's stored content hash. Two levels of
-      comparison, both actually executed.
+      comparison, both actually executed. The rendering itself is
+      delegated to :func:`iter_export_lines` - this function buffers, it
+      does not render, so there is exactly one place bytes are produced.
+      Buffering is inherent to what it returns (whole text plus a
+      LineExport per line), which is why a large transcript must be
+      streamed through the iterator instead.
     Inputs: conn (sqlite3.Connection), transcript_id (int), strict (bool,
       keyword-only - when True, a line that cannot be rendered at all
       raises instead of silently shortening the output).
@@ -169,38 +242,18 @@ def export_transcript(
     has_trailing = bool(head[0])
     expected_content = str(head[1])
 
-    rows = conn.execute(
-        "SELECT a.line_no, a.raw_line, a.serializer_style, a.envelope_json, "
-        "       a.key_order_json, a.line_sha256, b.body_json "
-        "FROM message_appearances a "
-        "LEFT JOIN message_bodies b ON b.id = a.body_id "
-        "WHERE a.transcript_id = ? ORDER BY a.line_no",
-        (transcript_id,)
-    ).fetchall()
-
     exports: List[LineExport] = []
     texts: List[str] = []
-    for line_no, raw_line, style, envelope_json, key_order_json, line_sha, \
-            body_json in rows:
-        text, detail = _render_row({
-            "raw_line": raw_line, "serializer_style": style,
-            "envelope_json": envelope_json, "key_order_json": key_order_json,
-            "body_json": body_json,
-        })
-        if text is None:
-            exports.append(LineExport(line_no, None, VERIFY_CANNOT_RENDER,
-                                      str(line_sha), None, detail))
+    for export in iter_export_lines(conn, transcript_id):
+        exports.append(export)
+        if export.outcome == VERIFY_CANNOT_RENDER:
             if strict:
                 raise ValueError(
-                    f"transcript {transcript_id} line {line_no} cannot be "
-                    f"rendered: {detail}"
+                    f"transcript {transcript_id} line {export.line_no} "
+                    f"cannot be rendered: {export.detail}"
                 )
             continue
-        actual = sha256_text(text)
-        outcome = VERIFY_MATCH if actual == line_sha else VERIFY_MISMATCH
-        exports.append(LineExport(line_no, text, outcome, str(line_sha),
-                                  actual, detail))
-        texts.append(text)
+        texts.append(str(export.text))
 
     joined = join_lines(texts, has_trailing)
     return ExportResult(
@@ -243,7 +296,9 @@ def verify_all(conn: sqlite3.Connection) -> Dict[str, int]:
     return counts
 
 
-def subagent_edges(conn: sqlite3.Connection) -> List[Dict[str, object]]:
+def subagent_edges(
+    conn: sqlite3.Connection, transcript_id: Optional[int] = None,
+) -> List[Dict[str, object]]:
     """Every appearance that names a subagent, as an explicit edge.
 
     Description: the payoff of the identity/appearance split. Before it,
@@ -253,19 +308,36 @@ def subagent_edges(conn: sqlite3.Connection) -> List[Dict[str, object]]:
       transcript it appears in, the originating session the body itself
       names (the JSON's own ``sessionId``, which stays identical across
       copies), and the agent id that makes it a subagent appearance.
-    Inputs: conn (sqlite3.Connection).
+      SCOPING. Unscoped this returns every subagent appearance in the
+      database - measured 1,627,995 rows on the live corpus, which is
+      not a response, it is an outage, and is why no API route may call
+      it without a transcript_id. Scoped it uses the appearance table's
+      (transcript_id, ...) index and was measured at 0.058s on the
+      corpus's worst case, transcript 17956 with 20,931 edges. The
+      default of None preserves the existing unscoped behaviour exactly
+      for in-process callers, so the parameter is purely additive.
+    Inputs: conn (sqlite3.Connection), transcript_id (optional int -
+      when given, only that transcript's edges; when None, every edge in
+      the database).
     Output: list[dict] with keys appearance_id, transcript_session_ref,
-      origin_session_ref, agent_id, is_sidechain, message_uuid.
-    Example: subagent_edges(conn) -> []
+      origin_session_ref, agent_id, is_sidechain, message_uuid, ordered
+      by appearance id.
+    Example: subagent_edges(conn, transcript_id=4) -> []
     """
+    scope = "" if transcript_id is None else "AND a.transcript_id = ? "
+    params: Tuple[object, ...] = (
+        () if transcript_id is None else (transcript_id,)
+    )
     rows = conn.execute(
         "SELECT a.id, t.session_ref, b.origin_session_ref, a.agent_id, "
         "       a.is_sidechain, b.message_uuid "
         "FROM message_appearances a "
         "JOIN message_transcripts t ON t.id = a.transcript_id "
         "LEFT JOIN message_bodies b ON b.id = a.body_id "
-        "WHERE a.agent_id IS NOT NULL OR a.is_sidechain = 1 "
-        "ORDER BY a.id"
+        "WHERE (a.agent_id IS NOT NULL OR a.is_sidechain = 1) "
+        + scope +
+        "ORDER BY a.id",
+        params,
     ).fetchall()
     return [
         {
