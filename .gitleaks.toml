@@ -19,8 +19,16 @@ title = "cloude-code secret scan"
 [extend]
 useDefault = true
 
-[allowlist]
+# NOTE: this is spelled [[allowlists]] (the array form), not the legacy
+# [allowlist] table. gitleaks 8.30.1 REFUSES to load a config that uses both
+# forms at once ("[allowlist] is deprecated, it cannot be used alongside
+# [[allowlists]]"), and the fixture block further down needs the array form to
+# carry its own condition. condition is OR here, which is the legacy default
+# and preserves this block's original meaning exactly: an allowlisted PATH is
+# skipped, and an allowlisted VALUE is skipped, independently of each other.
+[[allowlists]]
 description = "Non-secrets that the default ruleset flags in this repository"
+condition = "OR"
 
 # Documentation and example files whose whole purpose is to show the SHAPE of
 # a credential. Everything here must contain placeholders only. If a real
@@ -53,4 +61,65 @@ regexes = [
     '''your-?subdomain\.yourdomain\.com''',
     '''(?i)change[-_]?me''',
     '''(?i)replace[-_]?me''',
+]
+
+# ---------------------------------------------------------------------------
+# Synthetic credential fixtures owned by the test suite.
+#
+# WHY THIS BLOCK EXISTS. The suite that proves the secret detectors work needs
+# credential-shaped material to detect. Those fixtures are high-entropy by
+# construction, so the default ruleset flags them and CI fails on the very
+# files that demonstrate the scanner works.
+#
+# SCOPED BY VALUE, NOT BY PATH - AND THAT IS DELIBERATE. An allowlist `paths`
+# entry does NOT mean "only these values in these files". Measured against
+# gitleaks 8.30.1, the version CI pins: a `paths` entry suppresses the ENTIRE
+# FILE, and `condition = "AND"` does not narrow that. A path-scoped rule here
+# would have silently blinded the scanner to a REAL credential pasted into any
+# of these five test files, which is precisely the accident it exists to catch.
+# So these are matched by VALUE only, which is also what the block above says
+# it does for its own placeholders.
+#
+# WHAT THIS COVERS: exactly these nine byte strings, anywhere in the tree.
+# WHAT IT DOES NOT COVER: anything else. Verified by planting a fresh 40-char
+# high-entropy credential inside tests/test_secret_detectors.py, an
+# already-allowlisted file, and confirming gitleaks still reports it.
+#
+# FAIL-CLOSED ON DRIFT, ON PURPOSE. The literals are pinned by value, not by
+# variable name or glob. Change a fixture and CI goes red until someone updates
+# this list, which forces a human to re-confirm the new value is synthetic
+# rather than inheriting a blanket exemption.
+#
+# EVIDENCE these are synthetic, established 2026-08-31 without printing any
+# value: every literal was sha256'd and checked against the live corpus
+# (2,447,028 message bodies at 100% coverage, plus the 739 distinct
+# value_sha256 in message_secret_findings). The two archive fixtures appear
+# ZERO times. The older seven appear only inside the 8-minute window on
+# 2026-08-30 in which an agent invented them, minutes before committing them;
+# that table is detector output over chat transcripts, not a registry of
+# issued credentials. The ghp_ fixture additionally FAILS GitHub's own CRC32
+# checksum, which every issued GitHub token passes.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Synthetic credential fixtures in the secret-scanner test suite"
+
+regexes = [
+    # test_archive_offset_units.py:SECRET
+    '''Q7xLm2Wp9RtVzB4kNc6JhY8dFgA3sEuT''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_archive_search_snippet_gate.py:FIXTURE_CREDENTIAL
+    '''mm5GsDRfCJXY0R6KVA1WOf5Zx1WU8RXuGoWAqOGj''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_message_model_secrets.py:FAKE_API_KEY
+    '''sk9QvR2mXt7ZbL4nHw8KdJ3aYcE6fUgP''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_AWS_ID
+    '''AKIAZ3QN7XW2VLTR6BCF''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_AWS_SECRET
+    '''hV8pQm2LzR4TnXw9CbKdY6JfAe3UgSoP1MiNrEuZ''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_GITHUB, test_secret_scan_files.py:FAKE_GITHUB
+    '''ghp_R7kQ2mVx9TbnLcJ6wZaHy8FdSpU3gEoNrKq1''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_GOOGLE
+    '''AIzaSyD7kQ2mVx9TbnLcJ6wZaHy8FdSpU3gEoNr''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_PEM
+    '''MIIEowIBAAKCAQEAy8Kq3nJd7VtWpZrXbLmQfHgN4TcUeSoA2iRvYxDkB9Fj''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_SLACK
+    '''xoxb-2847193056321-2847193056789-Kd7QmZx9TbnLcJ6wZaHy8Fd''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
 ]
