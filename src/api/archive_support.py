@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 #: ``src.core.archive_lines`` names an unknown role/record_type/model.
 CLIENT_PARAM_SUBJECTS: frozenset = frozenset({
     "cursor", "q", "limit", "scope", "scan_budget", "scan_bytes",
-    "project_id", "transcript_id", "max_page_bytes",
+    "project_id", "transcript_id", "max_page_bytes", "start_line",
 })
 CLIENT_PARAM_PREFIX: str = "filter:"
 

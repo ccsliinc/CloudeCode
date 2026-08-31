@@ -128,10 +128,17 @@ def test_no_dead_allowlist_entries() -> None:
 
     An exemption for a value nobody uses any more is furniture: it protects
     nothing and quietly widens the set of strings the scanner ignores.
+
+    Scans both ``*.py`` and ``*.node.mjs`` fixtures under ``tests/``: the
+    masking-test literal (``AKIA7Q2W9E4R6T8Y0U1I3O5P7A9S1D3F5G7H9J1K``, see
+    .gitleaks.toml) lives only in the three node suites that share it, so a
+    Python-only scan would call it dead and tell someone to remove a live
+    exemption.
     """
     hay = "\n".join(
         p.read_text(errors="replace")
-        for p in (REPO_ROOT / "tests").rglob("*.py")
+        for pattern in ("*.py", "*.node.mjs")
+        for p in (REPO_ROOT / "tests").rglob(pattern)
     )
     for literal in _allowlist_regexes():
         assert literal in hay, (

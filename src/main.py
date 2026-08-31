@@ -894,6 +894,45 @@ async def session_deep_link(project: str):
     )
 
 
+# Archive (message browser) SPA routes.
+#
+# Same rationale as session_deep_link() above: FastAPI matches
+# more-specific routes first, so /static/*, /ws/*, /api/*, /health and
+# /manifest.webmanifest all still resolve to their real handlers. The
+# {rest:path} form is scoped UNDER /archive/, so it cannot shadow
+# anything outside that prefix. A bare @app.get("/{rest:path}") catch-all
+# WOULD shadow them and would turn every 404 in the app into a silent
+# 200 serving the SPA - do not write one.
+#
+# TWO routes, not one: {rest:path} does not match the empty string, so
+# /archive needs its own handler or a bare /archive 404s while
+# /archive/p/12 works, which is the confusing half-broken shape.
+#
+# Path-level validation is deliberately permissive here and strict in the
+# client router: a visitor pasting /archive/t/notanumber gets the app
+# shell with a visible, named error, not a bare 404.
+@app.get("/archive")
+async def archive_root():
+    """Serve the SPA shell for the archive screen root."""
+    return HTMLResponse(
+        content=_render_index_html(),
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@app.get("/archive/{rest:path}")
+async def archive_deep_link(rest: str):
+    """Serve the SPA shell for any archive deep link.
+
+    The ``rest`` path parameter is consumed by the client-side router
+    after the SPA boots; this handler does not inspect or validate it.
+    """
+    return HTMLResponse(
+        content=_render_index_html(),
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
 # Web app manifest + apple-touch-icon, served from the ORIGIN ROOT.
 #
 # Both files physically live under client/ and are therefore already

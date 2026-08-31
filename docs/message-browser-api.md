@@ -683,10 +683,10 @@ Router prefix is `/archive`, so full paths are `/api/v1/archive/...`.
 | 6.1 | GET | `/archive/hosts` | Yes, 0.0006s |
 | 6.2 | GET | `/archive/hosts/{host_id}/corpora` | Yes, 0.0016s |
 | 6.3 | GET | `/archive/corpora/{corpus_id}/projects` | Yes, 0.0102s |
-| 6.4 | GET | `/archive/projects/{project_id}/transcripts` | Yes, 0.0018s |
+| 6.4 | GET | `/archive/projects/{project_id}/transcripts` | Yes, 0.0018s; `session_ref_scheme` filter 0.0012s |
 | 6.5 | GET | `/archive/corpora/{corpus_id}/unattributed` | Yes, 0.0079s |
 | 6.6 | GET | `/archive/transcripts/{transcript_id}` | Yes, 0.0003s |
-| 6.7 | GET | `/archive/transcripts/{transcript_id}/lines` | Yes, 0.0016s |
+| 6.7 | GET | `/archive/transcripts/{transcript_id}/lines` | Yes, 0.0016s; `start_line` adds one 0.0008s index seek |
 | 6.8 | GET | `/archive/bodies/{body_id}` | Yes, <0.001s |
 | 6.9 | GET | `/archive/transcripts/{transcript_id}/export` | Streaming, 2.38s for 182 MB |
 | 6.10 | GET | `/archive/transcripts/{transcript_id}/export/verified` | 8 MiB cap, refuses above |
@@ -985,6 +985,48 @@ everything in the corpus.
 | `project_id` | int, path | required | must exist |
 | `limit` | int, query | 50 | 1 to 200 |
 | `cursor` | str, query | none | opaque |
+| `session_ref_scheme` | str, query | none | a scheme the archive holds |
+
+**`session_ref_scheme` (added 2026-08-31).** A POST-FILTER inside the
+already-indexed project range, deliberately the same shape as the
+`role` / `record_type` / `model` filters on 6.7 rather than a second
+mechanism. Measured on the live corpus: 19,588 of 21,039 transcripts
+(93.1%) are `agent`-scheme sidechain files and only 1,451 are `uuid`, so
+a person hunting for a conversation was paging a list that is 93 percent
+noise.
+
+* **Unknown value is `cannot_determine`, not an empty `ok`.** "there is
+  no scheme called `convo` in this archive" and "no transcript in this
+  project has that scheme" are different findings. The first is a 400
+  under the subject `filter:session_ref_scheme`, naming the schemes that
+  do exist. The second is a 200 with `result: []` and
+  `meta.filters.matched_in_scope: 0`.
+* **Existence is resolved against the DATA**, by a `LIMIT 1` probe, for
+  the same reason 6.7 resolves against `message_roles`: a constant in
+  the code is a guess that ages into a lie the day the ingest learns a
+  third scheme. Measured 0.0000s for a value that exists, 0.0037s warm
+  for one that does not.
+* **THE COUNTS ARE SCOPED AND SAY SO.** `meta.filters` carries
+  `matched_in_scope`, `scope_total_before_filter` and
+  `counts_are: "scanned_within_this_scope_only"`. Measured on project
+  12: 77 `uuid` + 3,339 `agent` = 3,416, the unfiltered scope total.
+  These are never corpus totals.
+* **IT FILTERS ON THE COLUMN AND ON NOTHING ELSE**, and the response
+  says so in `meta.filters.session_ref_scheme_means`. The column is not
+  a guarantee of conversation-ness: 19 of the 1,451 `uuid`-scheme
+  transcripts carry a `session_ref` that is not a UUID at all (literal
+  values such as `audit` and `journal`). A UI must not render this
+  filter as "these are the conversations".
+* **Keyset is unaffected.** The predicate sits inside the `WHERE`, so
+  SQLite applies it before `LIMIT`: the query still fetches `size + 1`
+  MATCHING rows, `has_more` still means "a matching row exists past this
+  page", and `next_cursor` still names the last MATCHING row. A cursor
+  minted under one filter positions inside that filter's result set, so
+  a client changing the filter must start a new walk, not replay its
+  cursor.
+* `meta.filters` is emitted on EVERY response, including unfiltered ones
+  (`applied: false`, `matched_in_scope: null`), so a client can tell "I
+  did not filter" from "this build has no filter".
 
 **SQL:**
 
@@ -995,6 +1037,7 @@ SELECT t.id, t.session_ref, t.session_ref_scheme, t.source_path,
        t.host_attribution, t.project_attribution
   FROM message_transcripts t
  WHERE t.project_id = :project_id
+   AND (:scheme_value IS NULL OR t.session_ref_scheme = :scheme_value)
    AND (:cur_ts IS NULL
         OR t.ingested_at < :cur_ts
         OR (t.ingested_at = :cur_ts AND t.id < :cur_id))
@@ -1247,8 +1290,57 @@ The conversation reader. Line METADATA plus, optionally, whole bodies.
 | `role` | str, query | none | `user` or `assistant` |
 | `record_type` | str, query | none | one of the 26 values |
 | `model` | str, query | none | one of the 13 values |
+| `start_line` | int, query | none | 0-based; MUTUALLY EXCLUSIVE with `cursor` |
 
-The three filters are POST-FILTERS applied inside the scope. They are
+**`start_line` (added 2026-08-31).** Opens the page at a 0-BASED
+`line_no` instead of at line 0. Before it, this endpoint took `limit` and
+an opaque `cursor` and nothing else, so there was NO SUPPORTED WAY to
+open a transcript at line N - the UI's own deep link `/archive/t/<id>/l/<n>`
+rendered a client-side `cannot_determine` for every line past the first
+page, and transcript 5767 has 30,805 lines. Hand-synthesising
+`base64url({"line_no": N-1, "v": 1})` does position the page and a client
+must never do it: section 5.1 declares a cursor OPAQUE, so a client built
+on its payload shape breaks by SKIPPING ROWS the day that shape changes.
+
+*Implementation:* `start_line` is applied as `cur_line_no = start_line - 1`
+against the EXISTING `line_no > :cur_line_no` predicate. The SQL below is
+unchanged, so the index path (one search on
+`UNIQUE (transcript_id, line_no)`, no temp b-tree) and the keyset
+guarantee are untouched. `start_line=0` yields `-1`, and `line_no > -1`
+admits line 0.
+
+*Composition with `cursor`: REFUSED.* Supplying both is a 400
+`cannot_determine` under the subject `start_line`. They are two absolute
+statements about where the page begins and every silent reconciliation is
+worse than refusing: letting `cursor` win discards a position the caller
+asked for with no way to tell; letting `start_line` win restarts a paging
+walk and repeats rows; treating it as a floor invents a third rule whose
+result depends on which number happened to be larger. Open a walk with
+`start_line`, continue it with the `next_cursor` you are handed.
+
+*Out of range is a NAMED outcome.* An empty `ok` at `start_line=99999` is
+indistinguishable from the end of a transcript. `meta.start_line.state`
+names one of six states on every response:
+
+| state | result_status | HTTP | Meaning |
+|---|---|---|---|
+| `not_requested` | as usual | as usual | no `start_line` was sent |
+| `in_range` | `ok` / `partial` | 200 | the page opens at that line |
+| `past_last_line` | `not_found` | 404 | measured absence; the reason names the real `MAX(line_no)` |
+| `transcript_has_no_lines` | `ok` | 200 | genuinely empty; there is no range to be outside of |
+| `negative` | `cannot_determine` | 400 | below 0; not clamped |
+| `conflicts_with_cursor` | `cannot_determine` | 400 | both parameters were sent |
+
+The range is MEASURED with `SELECT MAX(line_no) FROM message_appearances
+WHERE transcript_id = ?`, not derived from the header's `line_count`:
+those agree today (transcript 5767, 30,805 rows, max 30804) and nothing
+in the schema forces them to. It is an index seek to the last entry,
+measured 0.0008s, and it runs ONLY when `start_line` is supplied. Note
+`start_line` is deliberately NOT declared `ge=0` at the route: a FastAPI
+bound answers 422 with a validation body that is not an envelope, and
+every outcome on this route must be renderable by the same client code.
+
+The three lookup filters are POST-FILTERS applied inside the scope. They are
 free here because the scope is already an indexed range. Their counts are
 reported as SCANNED, never as a corpus total. See section 7.
 

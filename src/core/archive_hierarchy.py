@@ -28,7 +28,7 @@ at.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from src.core.archive_cursor import (
     CURSOR_PROJECTS,
@@ -38,12 +38,20 @@ from src.core.archive_cursor import (
     decode_cursor,
     encode_cursor,
 )
+from src.core.archive_transcript_page import (
+    SCHEME_SUBJECT,
+    count_in_scope,
+    resolve_session_ref_scheme,
+    scheme_filter_meta,
+    scheme_unknown_reason,
+    transcript_page,
+)
 from src.core.archive_read import (
     API_PREFIX,
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
     RESULT_OK,
-    attribution_state,
+    cannot_determine_envelope,
     clamp_limit,
     count_int,
     cursor_error_envelope,
@@ -55,42 +63,6 @@ from src.core.archive_read import (
     unread_paging,
 )
 
-#: Columns every transcript row carries, on BOTH listings. Section 6.5's
-#: SQL selects a subset of 6.4's; one shared superset is used instead so
-#: the same entity does not arrive with two shapes depending on which
-#: route a client reached it through.
-_TRANSCRIPT_COLUMNS = """
-       t.id, t.session_ref, t.session_ref_scheme, t.source_path,
-       t.line_count, t.raw_byte_length, t.content_sha256, t.ingested_at,
-       t.line_ending, t.has_trailing_newline,
-       t.host_attribution, t.project_attribution
-"""
-
-
-def _transcript_row(row: sqlite3.Row) -> Dict[str, Any]:
-    """Shape one transcript listing row for a client.
-
-    Description: ``attribution_state`` is derived here and nowhere else,
-      so the two listings cannot disagree about whether a transcript's
-      host attribution is evidenced.
-    Inputs: row (sqlite3.Row) selected with _TRANSCRIPT_COLUMNS.
-    Output: dict. Example: _transcript_row(r)["attribution_state"]
-    """
-    return {
-        "transcript_id": row["id"],
-        "session_ref": row["session_ref"],
-        "session_ref_scheme": row["session_ref_scheme"],
-        "source_path": row["source_path"],
-        "line_count": row["line_count"],
-        "raw_byte_length": row["raw_byte_length"],
-        "content_sha256": row["content_sha256"],
-        "ingested_at": row["ingested_at"],
-        "line_ending": row["line_ending"],
-        "has_trailing_newline": bool(row["has_trailing_newline"]),
-        "host_attribution": row["host_attribution"],
-        "project_attribution": row["project_attribution"],
-        "attribution_state": attribution_state(row["host_attribution"]),
-    }
 
 
 def hosts(conn: sqlite3.Connection) -> Dict[str, Any]:
@@ -318,76 +290,13 @@ def projects_for_corpus(
     )
 
 
-def _transcript_page(
-    conn: sqlite3.Connection,
-    *,
-    where: str,
-    params: Dict[str, Any],
-    size: int,
-    cursor: Optional[str],
-    kind: str,
-) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], bool, Optional[str]]:
-    """Run one ``(ingested_at DESC, id DESC)`` keyset page of transcripts.
-
-    Description: the shared body of the project and unattributed
-      listings. The first page omits the keyset clause by passing NULL
-      rather than a sentinel timestamp: a sentinel works today and is a
-      landmine, because the day a timestamp sorts above it page 1
-      silently returns nothing. ``id DESC`` is NOT a theoretical
-      tie-break - all 21,039 transcripts were ingested in a few batches
-      and ``ingested_at`` repeats at microsecond resolution.
-    Inputs: conn, where (str) - scope predicate, params (dict) - its
-      bindings, size (int), cursor (str|None), kind (str).
-    Output: (error envelope or None, rows, has_more, next_cursor). The
-      first is non-None ONLY when the cursor would not parse; the caller
-      returns it unchanged.
-    """
-    cur_ts: Optional[str] = None
-    cur_id: Optional[int] = None
-    if cursor is not None:
-        try:
-            payload = decode_cursor(kind, cursor)
-            cur_ts = str(payload["ingested_at"])
-            cur_id = int(payload["id"])
-        except CursorError as exc:
-            # result=None, NEVER []. See section 3.1.1 of
-            # docs/message-browser-api.md: an [] here reads as "no
-            # transcripts" to a client that ignores result_status.
-            return cursor_error_envelope(exc, limit=size, result=None), [], False, None
-    bindings = dict(params)
-    bindings.update({"cur_ts": cur_ts, "cur_id": cur_id, "limit_plus_one": size + 1})
-    rows = conn.execute(
-        f"""
-        SELECT {_TRANSCRIPT_COLUMNS}
-          FROM message_transcripts t
-         WHERE {where}
-           AND (:cur_ts IS NULL
-                OR t.ingested_at < :cur_ts
-                OR (t.ingested_at = :cur_ts AND t.id < :cur_id))
-         ORDER BY t.ingested_at DESC, t.id DESC
-         LIMIT :limit_plus_one
-        """,
-        bindings,
-    ).fetchall()
-    page, has_more = paged_rows(rows, size)
-    shaped = [_transcript_row(row) for row in page]
-    next_cursor = (
-        encode_cursor(
-            kind,
-            {"ingested_at": page[-1]["ingested_at"], "id": page[-1]["id"]},
-        )
-        if has_more and page
-        else None
-    )
-    return None, shaped, has_more, next_cursor
-
-
 def transcripts_for_project(
     conn: sqlite3.Connection,
     project_id: int,
     *,
     limit: Optional[int] = None,
     cursor: Optional[str] = None,
+    session_ref_scheme: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Page one project's transcripts, newest ingest first.
 
@@ -395,7 +304,16 @@ def transcripts_for_project(
       transcripts). The temp b-tree that sort costs is accepted
       deliberately; section 10.1 carries the re-measure trigger, so
       nobody adds an index on a hunch.
-    Inputs: conn, project_id (int), limit (int|None), cursor (str|None).
+      ``session_ref_scheme`` is a POST-FILTER INSIDE the already-indexed
+      project range, the same shape as the ``/lines`` role/record_type/
+      model filters. A value no transcript in the archive carries is a
+      ``cannot_determine`` naming the schemes that do exist, NOT an empty
+      ``ok`` - the archive not holding a scheme and this project not
+      holding one are different findings. The counts in
+      ``meta.filters`` are complete WITHIN THIS PROJECT and are labelled
+      as such; they are never a corpus total.
+    Inputs: conn, project_id (int), limit (int|None), cursor (str|None),
+      session_ref_scheme (str|None) - a scheme VALUE, not an id.
     Output: envelope; ``result`` is a list of transcript dicts, or ``[]``
       with ``not_found`` when the project does not exist.
     """
@@ -410,16 +328,30 @@ def transcripts_for_project(
             result=[],
             meta={"paging": unread_paging(size)},
         )
-    failure, rows, has_more, next_cursor = _transcript_page(
+    resolved, scheme = resolve_session_ref_scheme(conn, session_ref_scheme)
+    if not resolved:
+        return cannot_determine_envelope(
+            SCHEME_SUBJECT,
+            scheme_unknown_reason(conn, str(session_ref_scheme)),
+            result=None,
+            meta={"paging": unread_paging(size)},
+        )
+    where = "t.project_id = :project_id"
+    params: Dict[str, Any] = {"project_id": project_id}
+    failure, rows, has_more, next_cursor = transcript_page(
         conn,
-        where="t.project_id = :project_id",
-        params={"project_id": project_id},
+        where=where,
+        params=params,
         size=size,
         cursor=cursor,
         kind=CURSOR_TRANSCRIPTS,
+        scheme=scheme,
     )
     if failure is not None:
         return failure
+    matched, scope_total = count_in_scope(
+        conn, where=where, params=params, scheme=scheme
+    )
     return envelope(
         result=rows,
         result_status=RESULT_OK,
@@ -434,7 +366,11 @@ def transcripts_for_project(
                 "kind": "project",
                 "project_id": project_id,
                 "slug": project["slug"],
+                "transcript_count": scope_total,
             },
+            "filters": scheme_filter_meta(
+                scheme, matched_in_scope=matched, scope_total=scope_total
+            ),
         },
     )
 
@@ -466,7 +402,7 @@ def unattributed_for_corpus(
             result=[],
             meta={"paging": unread_paging(size)},
         )
-    failure, rows, has_more, next_cursor = _transcript_page(
+    failure, rows, has_more, next_cursor = transcript_page(
         conn,
         where="t.corpus_id = :corpus_id AND t.project_id IS NULL",
         params={"corpus_id": corpus_id},

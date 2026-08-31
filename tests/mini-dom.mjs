@@ -178,6 +178,27 @@ class MiniElement {
     get id() { return this.getAttribute('id') || ''; }
     set id(v) { this.setAttribute('id', v); }
 
+    // ---- text ----
+    // Added for the archive outcome view, which is required to render
+    // every server-supplied string through a text node rather than
+    // innerHTML: host display names carry real non-ASCII (measured, a
+    // U+2019 in "Joseph’s Mac mini (2)") and `unevaluated` reason
+    // strings are rendered verbatim by requirement. A test that reads
+    // the words a person sees needs the aggregate, so this is a real
+    // getter over the subtree, not a stored string.
+    get textContent() {
+        let out = '';
+        for (const c of this.childNodes) out += c.textContent;
+        return out;
+    }
+
+    set textContent(v) {
+        for (const c of this.childNodes.splice(0)) c.parentNode = null;
+        if (v !== '' && v !== null && v !== undefined) {
+            this.appendChild(this.ownerDocument.createTextNode(v));
+        }
+    }
+
     // ---- tree ----
     appendChild(node) {
         if (node.parentNode) node.parentNode.removeChild(node);
@@ -210,6 +231,24 @@ class MiniElement {
     }
 
     get children() { return this.childNodes.slice(); }
+
+    /**
+     * `firstChild` and `lastChild`. Added because the archive reader
+     * clears a region with the standard
+     * `while (el.firstChild) el.removeChild(el.firstChild)` idiom. Before
+     * these existed that loop silently ran ZERO times here - `undefined`
+     * is falsy - so stale nodes survived a re-render and the tests read
+     * a previous state as if it were the current one. A missing DOM
+     * property that makes a clear a no-op is exactly the shape of a
+     * harness that manufactures a false result.
+     * @returns {?object} the node, or null when there are none
+     */
+    get firstChild() { return this.childNodes[0] || null; }
+
+    /** @returns {?object} the last child node, or null */
+    get lastChild() {
+        return this.childNodes[this.childNodes.length - 1] || null;
+    }
 
     contains(node) {
         for (let n = node; n; n = n.parentNode) if (n === this) return true;
@@ -289,6 +328,22 @@ class MiniElement {
     }
 }
 
+/**
+ * A text node. Subclasses MiniElement so the tree walk, parent chain and
+ * removal paths need no special case; it carries the tagName '#text',
+ * which matches no CSS selector the modules under test use, so it is
+ * invisible to querySelectorAll exactly as a real text node is.
+ */
+class MiniText extends MiniElement {
+    /** Inputs: data (string), doc (MiniDocument). */
+    constructor(data, doc) {
+        super('#text', doc);
+        this._text = String(data);
+    }
+    get textContent() { return this._text; }
+    set textContent(v) { this._text = String(v); }
+}
+
 class MiniDocument extends MiniElement {
     constructor() {
         super('#document', null);
@@ -302,6 +357,8 @@ class MiniDocument extends MiniElement {
     }
 
     createElement(tag) { return new MiniElement(tag, this); }
+
+    createTextNode(data) { return new MiniText(data, this); }
 
     getElementById(id) {
         return this._walk([]).find(el => el.getAttribute('id') === id) || null;
@@ -347,4 +404,4 @@ export function createEnvironment(options = {}) {
     };
 }
 
-export { MiniElement, MiniDocument, Selector };
+export { MiniElement, MiniText, MiniDocument, Selector };

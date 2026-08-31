@@ -32,6 +32,26 @@ class API {
         // the Promise IS the primitive - storing it atomically captures
         // both the "in flight" and "eventual result" states.
         this._refreshPromise = null;
+
+        // Archive read deadlines, milliseconds, by request class. Every
+        // archive request carries one: a loading state with no terminal
+        // condition can never fail, and a spinner that spins forever is
+        // indistinguishable from a healthy slow answer.
+        //
+        // Each number is a measured server timing with headroom, not a
+        // round guess. Hierarchy reads are indexed and measured
+        // sub-millisecond. A full 30,805-row spine measured 0.132 s
+        // server-side. A single body in this corpus measured 54,376,879
+        // bytes, a legitimately slow transfer. A budget-exhausted search
+        // measured 1.70 s and 2.25 s on two runs; 45 s allows for a cold
+        // page cache on a loaded host. Export preflight reads headers only.
+        this.ARCHIVE_TIMEOUTS = {
+            hierarchy: 10000,
+            transcript: 15000,
+            body: 30000,
+            search: 45000,
+            exportPreflight: 20000
+        };
     }
 
     /**

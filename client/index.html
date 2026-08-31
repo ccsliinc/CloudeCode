@@ -145,6 +145,16 @@
          background's status attribute; see the file for why this wins
          over styles.css's `#terminal` rule by specificity, not order). -->
     <link rel="stylesheet" href="/static/css/terminal-opacity.css" />
+
+    <!-- Archive (message browser). archive-outcomes.css goes FIRST so a
+         later archive stylesheet can override outcome presentation, and
+         so cascade order matches dependency order. -->
+    <link rel="stylesheet" href="/static/css/archive-outcomes.css" />
+    <link rel="stylesheet" href="/static/css/archive-screen.css" />
+    <link rel="stylesheet" href="/static/css/archive-nav.css" />
+    <link rel="stylesheet" href="/static/css/archive-reader.css" />
+    <link rel="stylesheet" href="/static/css/archive-search.css" />
+    <link rel="stylesheet" href="/static/css/archive-export.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -549,6 +559,12 @@
     <!-- Launchpad Screen -->
     <div id="launchpad-screen" class="screen"></div>
 
+    <!-- Archive Screen - the message browser. Empty; ArchiveScreen builds
+         it, the same way LaunchpadScreen builds #launchpad-screen. The
+         class="screen" is load-bearing: hideAllScreens() and the docked
+         sidebar layout offset in session-sidebar.css both key on it. -->
+    <div id="archive-screen" class="screen"></div>
+
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
         <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
@@ -952,6 +968,30 @@
     <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
+    <!-- Archive (message browser). Order is DEPENDENCY order: the API
+         half first (api-archive.js extends API.prototype and throws if
+         api.js has not run), then pure helpers, then state, then views,
+         then the composition root. app.js MUST stay last - it is the
+         controller and reaches for these globals at parse time. -->
+    <script src="/static/js/api-archive.js"></script>
+    <script src="/static/js/archive-outcome.js"></script>
+    <script src="/static/js/archive-mask.js"></script>
+    <script src="/static/js/archive-format.js"></script>
+    <script src="/static/js/archive-deeplink.js"></script>
+    <script src="/static/js/archive-virtual-list.js"></script>
+    <script src="/static/js/archive-state.js"></script>
+    <script src="/static/js/archive-outcome-view.js"></script>
+    <script src="/static/js/archive-body-cache.js"></script>
+    <script src="/static/js/archive-line-render.js"></script>
+    <script src="/static/js/archive-nav.js"></script>
+    <script src="/static/js/archive-transcript-list.js"></script>
+    <script src="/static/js/archive-reader.js"></script>
+    <script src="/static/js/archive-search.js"></script>
+    <script src="/static/js/archive-export.js"></script>
+    <script src="/static/js/archive-keys.js"></script>
+    <script src="/static/js/archive-screen-reader.js"></script>
+    <script src="/static/js/archive-screen.js"></script>
+
     <script src="/static/js/app.js"></script>
 
     <!-- v0.7.0 Part 2 — toast notifications container. Fixed top-right via

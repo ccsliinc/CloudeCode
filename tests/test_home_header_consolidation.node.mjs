@@ -221,7 +221,14 @@ test('showLaunchpad() is the only caller that passes a subheader', () => {
     const showLaunchpadIdx = appJs.indexOf('showLaunchpad() {');
     const showAuthIdx = appJs.indexOf('showAuth() {');
     assert.ok(showLaunchpadIdx > -1 && showAuthIdx > -1);
-    const launchpadBody = appJs.slice(showLaunchpadIdx, showLaunchpadIdx + 3500);
+    // WINDOW WIDENED 2026-08-31. A fixed byte slice over a function
+    // body is brittle: adding a comment inside showLaunchpad() pushes
+    // the thing being asserted past the end and this reports a
+    // FAILURE about the wrong subject entirely - the hook is still
+    // there, the window just stopped covering it. Widened rather than
+    // trimmed at the source, because shrinking a comment to fit a
+    // test's magic number is fitting the code to the harness.
+    const launchpadBody = appJs.slice(showLaunchpadIdx, showLaunchpadIdx + 7000);
     assert.match(launchpadBody, /subheader:\s*'select a project or create a new project'/);
     assert.match(launchpadBody, /title:\s*'Cloude Code Launcher'/);
     const authBody = appJs.slice(showAuthIdx, showAuthIdx + 1500);

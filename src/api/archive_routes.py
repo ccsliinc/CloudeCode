@@ -177,6 +177,15 @@ async def get_transcripts_for_project(
     project_id: int,
     limit: int = Query(DEFAULT_PAGE_LIMIT, description="Page size, clamped to 1..200."),
     cursor: Optional[str] = Query(None, description="Opaque keyset cursor."),
+    session_ref_scheme: Optional[str] = Query(
+        None,
+        description=(
+            "Post-filter on the session_ref_scheme COLUMN, inside this "
+            "project. A scheme no transcript in the archive carries is a "
+            "cannot_determine naming the schemes that exist, not an empty "
+            "ok. Counts in meta.filters are within this project only."
+        ),
+    ),
 ) -> JSONResponse:
     """Page one project's transcripts, newest ingest first.
 
@@ -187,6 +196,14 @@ async def get_transcripts_for_project(
             ``id`` tie-break is load-bearing, not decorative, because all
             21,039 transcripts were ingested in a small number of batches
             and the timestamps repeat at microsecond resolution.
+        session_ref_scheme: filter to one scheme value. A POST-FILTER
+            inside the already-indexed project range, the same shape as
+            the ``/lines`` role/record_type/model filters; measured, the
+            plan is unchanged and one filtered page of project 12 cost
+            0.0012s. IT FILTERS ON THE COLUMN AND NOTHING ELSE - 19 of
+            the 1,451 ``uuid``-scheme transcripts carry a ``session_ref``
+            that is not a UUID, so this is not a guarantee of
+            conversation-ness and ``meta.filters`` says so.
 
     Returns:
         The envelope. Every row carries a derived ``attribution_state``:
@@ -196,9 +213,12 @@ async def get_transcripts_for_project(
     result = await asyncio.to_thread(
         run_read, state_dir(), archive_hierarchy.transcripts_for_project,
         project_id, subject=f"project:{project_id}", unreadable_result=None,
-        limit=limit, cursor=cursor,
+        limit=limit, cursor=cursor, session_ref_scheme=session_ref_scheme,
     )
-    return respond(result, route="transcripts", project_id=project_id)
+    return respond(
+        result, route="transcripts", project_id=project_id,
+        session_ref_scheme=session_ref_scheme,
+    )
 
 
 # --- 6.6 / 6.7 / 6.8  One transcript, its lines, one body ------------------
@@ -244,6 +264,15 @@ async def get_transcript_lines(
     role: Optional[str] = Query(None, description="Post-filter: 'user' or 'assistant'."),
     record_type: Optional[str] = Query(None, description="Post-filter: record type."),
     model: Optional[str] = Query(None, description="Post-filter: model name."),
+    start_line: Optional[int] = Query(
+        None,
+        description=(
+            "Open the page at this 0-BASED line_no instead of at line 0. "
+            "MUTUALLY EXCLUSIVE with cursor: sending both is a 400. A "
+            "value past the transcript's highest line_no is a 404 naming "
+            "that value, never an empty page."
+        ),
+    ),
 ) -> JSONResponse:
     """Page one transcript's lines, optionally carrying whole bodies.
 
@@ -265,6 +294,14 @@ async def get_transcript_lines(
         role: filter by role value.
         record_type: filter by record type value.
         model: filter by model value.
+        start_line: 0-based line number to open the page at. Deliberately
+            NOT declared ``ge=0`` here: a FastAPI bound answers 422 with
+            a validation body that is not an envelope, and every outcome
+            on this route must be renderable by the same client code. A
+            negative value is a named cannot_determine instead.
+            Rejected outright when ``cursor`` is also sent - see
+            :mod:`src.core.archive_start_line` for why picking one
+            silently is worse than refusing both.
 
     Returns:
         The envelope; ``result`` is a list of line rows.
@@ -274,11 +311,11 @@ async def get_transcript_lines(
         subject=f"transcript:{transcript_id}", unreadable_result=None,
         limit=limit, cursor=cursor, include_bodies=include_bodies,
         max_page_bytes=max_page_bytes, role=role, record_type=record_type,
-        model=model,
+        model=model, start_line=start_line,
     )
     return respond(
         result, route="lines", transcript_id=transcript_id,
-        include_bodies=include_bodies,
+        include_bodies=include_bodies, start_line=start_line,
     )
 
 

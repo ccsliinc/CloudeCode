@@ -1,0 +1,252 @@
+/* =====================================================================
+ * ARCHIVE SEARCH - the coverage line, the two resume affordances, and
+ * the withheld-preview hit row.
+ *
+ * Load AFTER archive-outcomes.css.
+ *
+ * THREE THINGS THIS FILE IS RESPONSIBLE FOR, all of them about not
+ * letting a distinction die between the module and the pixel.
+ *
+ *   1. THE COVERAGE LINE IS NEVER OPTIONAL AND NEVER SUBTLE. Measured
+ *      live: a search answered `result_status: ok` having read ONE
+ *      transcript out of 3,416. So `ok` is compatible with almost no
+ *      coverage, and the sentence saying how much was read sits at the
+ *      TOP of the results in a monospace face, above the hits, where it
+ *      cannot be scrolled past. Styling it as a footnote would restore
+ *      exactly the false green it exists to kill.
+ *
+ *   2. THE TWO RESUME CONTROLS DO NOT LOOK ALIKE. `more-hits` continues
+ *      the PAGE - there are more matches in what was already read.
+ *      `more-scope` continues the SCAN - there is scope nobody opened.
+ *      They read from two different cursor fields and mean two different
+ *      things, so they get different border weights, different label
+ *      weights and a different leading marker. A person who learns that
+ *      the striped one means "unread scope remains" can then tell the
+ *      two apart at a glance without reading either label.
+ *
+ *   3. A WITHHELD PREVIEW IS NOT AN ERROR. The hit is real, the
+ *      location is real, and only the preview text is absent - on
+ *      purpose, because the body carries a credential. So the row keeps
+ *      the SAME structure and the SAME prominence as every other hit,
+ *      and only the preview cell changes. It is deliberately NOT given
+ *      the danger palette: nothing went wrong.
+ *
+ * No border-radius carries meaning here. Every colour is a theme token.
+ * ===================================================================== */
+
+.archive-search {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.4rem;
+}
+
+/* ---- Coverage ------------------------------------------------------ */
+.archive-search__coverage {
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border-left: 3px solid var(--color-info);
+}
+
+/* ---- Hits ---------------------------------------------------------- */
+.archive-search__hits {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.archive-search__hit {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.archive-search__hit-loc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+    width: 100%;
+    font: inherit;
+    text-align: left;
+    padding: 0.2rem 0.3rem;
+    background: transparent;
+    color: var(--color-fg);
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+.archive-search__hit-loc:hover,
+.archive-search__hit-loc:focus-visible {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border);
+}
+
+.archive-search__hit-transcript {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.archive-search__hit-ref,
+.archive-search__hit-line,
+.archive-search__hit-offset {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-search__preview {
+    margin: 0.25rem 0 0 0.3rem;
+    padding: 0.3rem 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-card);
+}
+
+/* ---- Withheld preview ----------------------------------------------
+ * Marked, not alarmed. The `--withheld` treatment uses the INFO tokens
+ * and a dotted edge, which nothing else in the archive UI uses, so it is
+ * separable from both a normal preview and from any of the six outcome
+ * blocks. It must not read as danger: the server withholding a preview
+ * is the system working. */
+.archive-search__preview--withheld {
+    border-left: 3px dotted var(--color-info);
+    background: var(--color-info-bg);
+    color: var(--color-fg);
+}
+
+.archive-search__preview-label {
+    display: block;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    color: var(--color-info);
+}
+
+.archive-search__preview-label::before {
+    content: "[~] ";
+}
+
+.archive-search__preview-note {
+    display: block;
+    margin-top: 0.2rem;
+    font-family: inherit;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    white-space: normal;
+}
+
+/* ---- The two resume affordances ------------------------------------ */
+.archive-search__resume {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    background: var(--color-bg-card);
+}
+
+.archive-search__resume-reason {
+    margin: 0 0 0.4rem 0;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--color-fg-muted);
+}
+
+.archive-search__resume-btn {
+    font: inherit;
+    padding: 0.35rem 0.8rem;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+}
+
+.archive-search__resume-btn[disabled] {
+    cursor: not-allowed;
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+/* MORE HITS: more matches inside what was already read. Thin solid rail.
+ * Nothing is unknown here, so it is visually quiet. */
+.archive-search__resume[data-resume-kind="more-hits"] {
+    border-left: 2px solid var(--color-border);
+}
+
+.archive-search__resume[data-resume-kind="more-hits"] .archive-search__resume-btn {
+    font-weight: 500;
+}
+
+.archive-search__resume[data-resume-kind="more-hits"] .archive-search__resume-btn::before {
+    content: "[>] ";
+    font-family: var(--font-mono);
+}
+
+/* MORE SCOPE: transcripts nobody opened. Thick striped rail, matching
+ * the `partial` outcome's stripe so the two read as the same family -
+ * they are: both mean "part of this was never looked at". */
+.archive-search__resume[data-resume-kind="more-scope"] {
+    border-left: 5px solid var(--color-warning);
+    background:
+        repeating-linear-gradient(
+            135deg,
+            var(--color-warning-bg) 0,
+            var(--color-warning-bg) 6px,
+            transparent 6px,
+            transparent 12px
+        ),
+        var(--color-bg-card);
+}
+
+.archive-search__resume[data-resume-kind="more-scope"] .archive-search__resume-btn {
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+
+.archive-search__resume[data-resume-kind="more-scope"] .archive-search__resume-btn::before {
+    content: "[!] ";
+    font-family: var(--font-mono);
+}
+
+/* NOT RUN and UNKNOWN: no scan happened, or its status was unreadable.
+ * Dashed, which neither resumable kind uses. */
+.archive-search__resume[data-resume-kind="not-run"],
+.archive-search__resume[data-resume-kind="unknown"] {
+    border-left: 3px dashed var(--color-fg-subtle);
+}
+
+.archive-search__transport-reason {
+    margin: 0.3rem 0 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--color-danger-strong);
+}
+
+/* ---- Narrow viewport ----------------------------------------------
+ * The hit's metadata row wraps under the transcript id at 700px, which
+ * is already the most common breakpoint in this app's CSS. Nothing is
+ * removed: the offset and line number are how a person confirms a
+ * withheld-preview hit is real, so they must survive to the smallest
+ * viewport. */
+@media (max-width: 700px) {
+    .archive-search__hit-loc {
+        flex-direction: column;
+        gap: 0.15rem;
+    }
+
+    .archive-search__coverage {
+        font-size: 0.74rem;
+    }
+
+    .archive-search__resume-btn {
+        width: 100%;
+    }
+}

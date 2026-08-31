@@ -28,6 +28,13 @@ DEFAULT_LINE_STATUS = "ok"
 DEFAULT_FIDELITY = "fidelity_verified"
 DEFAULT_INGESTED_AT = "2026-08-29T22:17:03.086206Z"
 
+#: The two values ``message_transcripts.session_ref_scheme`` accepts, per
+#: the CHECK constraint in ``src/core/message_model_ddl.py``. Named here so
+#: a seeder cannot write a scheme the real ingest could never produce, and
+#: so a test asserting "unknown scheme" has a value it can prove is
+#: outside the domain rather than merely absent today.
+SESSION_REF_SCHEMES = frozenset({"uuid", "agent"})
+
 
 def make_state_dir(tmp_path: Path, name: str = "state") -> Path:
     """Create a state directory holding an empty, current-schema cloude.db.
@@ -140,31 +147,45 @@ def seed_transcript(
     project_attribution: str = "derived",
     line_count: int = 0,
     raw_byte_length: int = 100,
+    session_ref_scheme: str = "uuid",
 ) -> int:
     """Insert one transcript and return its id.
 
     Description: ``project_id=None`` and
       ``host_attribution="cannot_determine"`` are BOTH reachable from
       here, separately, because the tests must prove those two conditions
-      are not the same thing.
+      are not the same thing. ``session_ref_scheme`` is a parameter and
+      not a constant because the scheme FILTER's tests need both values
+      in one fixture; the schema CHECK admits 'uuid' and 'agent' only,
+      so anything else raises here rather than seeding a row the real
+      ingest could never produce.
     Inputs: conn, host_id/corpus_id/project_id (int|None), source_path
       (str, unique per corpus), ingested_at (str) - pass the same value
       twice to build a keyset tie, host_attribution (str),
-      project_attribution (str), line_count (int), raw_byte_length (int).
+      project_attribution (str), line_count (int), raw_byte_length (int),
+      session_ref_scheme (str) - 'uuid' or 'agent'.
     Output: int - the transcript id.
+    Raises: ValueError - session_ref_scheme is outside the schema's
+      CHECK domain.
     Example: seed_transcript(conn, host_id=1, corpus_id=1,
              project_id=None, source_path="a.jsonl")
     """
+    if session_ref_scheme not in SESSION_REF_SCHEMES:
+        raise ValueError(
+            f"session_ref_scheme {session_ref_scheme!r} is outside the schema's "
+            f"CHECK domain {sorted(SESSION_REF_SCHEMES)}"
+        )
     cur = conn.execute(
         "INSERT INTO message_transcripts "
         "(source_ref, session_ref, session_ref_scheme, line_ending, "
         " has_trailing_newline, line_count, content_sha256, raw_byte_length, "
         " ingested_at, host_id, corpus_id, project_id, source_path, "
         " host_attribution, project_attribution) "
-        "VALUES (?, ?, 'uuid', 'LF', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, 'LF', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             f"ref::{source_path}",
             f"session-{source_path}",
+            session_ref_scheme,
             line_count,
             f"sha-{source_path}",
             raw_byte_length,

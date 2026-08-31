@@ -1401,7 +1401,7 @@ field whose own scheme label is wrong.
 | `/archive` | Root. Rail loaded, nothing selected. |
 | `/archive/p/<id>` | Project `<id>` selected; transcript list loaded. |
 | `/archive/t/<id>` | Transcript `<id>` open in the reader. |
-| `/archive/t/<id>/l/<n>` | Transcript `<id>`, scrolled to and highlighting line `<n>`. |
+| `/archive/t/<id>/l/<n>` | Transcript `<id>`, scrolled to and highlighting line `<n>`. `<n>` is 0-BASED and is sent to the server as `start_line`, so the page opens at the line rather than at line 0. |
 
 `<id>` and `<n>` are `[0-9]+` and nothing else. A non-numeric segment is
 a client-side `cannot-determine` with the reason
@@ -2291,7 +2291,7 @@ navigation cannot send, and offers a copyable `curl` command carrying the
 expected sha256.** It does NOT render a Download button that produces a
 401 page. A button that cannot work is worse than a stated blocker.
 
-### K.5 There is no `session_ref_scheme` filter on the transcript list
+### K.5 `session_ref_scheme` filter on the transcript list - RESOLVED 2026-08-31
 
 **The single highest-value API addition for this UI.**
 
@@ -2301,39 +2301,95 @@ not conversations a person had. Only 1,451 (6.9%) are `uuid`-scheme, and
 19 of those are mislabelled (section J.1).
 
 Project 12 has 3,416 transcripts. Finding the handful that are actual
-conversations means paging through pages of `agent-add459f16848bb276`
-rows. The UI can filter client-side, but only within pages it has already
-fetched, so "show me the real conversations in this project" costs 69
-requests at `limit=50` before it can answer.
+conversations meant paging through pages of `agent-add459f16848bb276`
+rows: the client-side toggle could only filter pages already fetched, so
+"show me the real conversations in this project" cost 69 requests at
+`limit=50` before it could answer.
 
-**Requested:** `GET /archive/projects/{id}/transcripts?session_ref_scheme=uuid`,
-plus the same filter on the corpus level, plus a
-`session_ref_scheme_counts` block in `meta` so the UI can render
-`3,416 transcripts (142 conversations, 3,274 agent sidechains)` without a
-second query.
+**SHIPPED.** `GET /archive/projects/{id}/transcripts?session_ref_scheme=uuid`
+exists (API section 6.4). The list now RE-QUERIES the scope on a filter
+change instead of splitting its fetched rows, and the discarded cursor is
+deliberate - a cursor minted under one filter positions inside that
+filter's result set.
 
-Until it exists, the transcript list carries a client-side toggle that
-filters the rows it has, and **labels itself honestly**:
-`filtering 250 of 3,416 loaded rows - this is not a search of the
-project`. It does not present a client-side filter over a partial page
-set as if it were a complete answer.
+Measured live on project 12: `uuid` 77, `agent` 3,339, sum 3,416, which
+is the unfiltered scope total. Those counts arrive in `meta.filters` as
+`matched_in_scope` and `scope_total_before_filter`, labelled
+`counts_are: "scanned_within_this_scope_only"`.
+
+**THE HONESTY TEXT CHANGED, AND HAD TO.** The old sentence
+(`this filters what has been FETCHED, not the scope. There is no
+server-side scheme filter`) was true when written and became a lie in the
+OTHER direction the moment the filter shipped - a UI understating an
+answer that is now complete over the scope. It now reads
+`Showing 50 conversations (uuid scheme). The server filtered the WHOLE
+scope, which holds 77 rows with this scheme out of 3,416.` A missing
+`matched_in_scope` renders `NOT KNOWN`, never 0.
+
+**What it still must not claim.** The filter matches the
+`session_ref_scheme` COLUMN and nothing else, which does not prove
+conversation-ness - see the 19 mislabelled rows in section J.1. The
+server ships that caveat in `meta.filters.session_ref_scheme_means` and
+the list RENDERS the server's sentence rather than keeping a second copy
+that can drift.
+
+**Three outcomes, not two.** An unknown scheme is HTTP 400
+`cannot_determine` naming the schemes that exist, handled by the existing
+`paintOutcome` path. A known scheme matching nothing in this project is
+HTTP 200, zero rows, `matched_in_scope: 0`. Those are different
+statements and they render differently.
+
+**Still not built:** the same filter on the corpus-level unattributed
+listing. The scheme control is HIDDEN for that scope rather than shown
+and silently ignored - a control that does nothing is worse than no
+control.
 
 ### K.6 Smaller frictions
 
-**No `start_line` parameter on `/lines`.** The route `/archive/t/<id>/l/<n>`
-needs to land on line `n` of a 30,805-line transcript. The only documented
-paging control is an opaque `cursor`.
+**`start_line` on `/lines` - RESOLVED 2026-08-31, SHIPPED.** The route
+`/archive/t/<id>/l/<n>` has to land on line `n` of a 30,805-line
+transcript, and the only paging control used to be an opaque `cursor`.
+Synthesizing `base64url({"line_no": <n-1>, "v": 1})` as the cursor DOES
+work - it was measured - and a client must never do it, because the spec
+calls the cursor opaque and a client built on that encoding breaks by
+SKIPPING ROWS when the encoding changes. **Cursor synthesis was never
+built into the client and must not be.**
 
-Measured 2026-08-31: synthesizing
-`base64url({"line_no": <n-1>, "v": 1})` and passing it as `cursor` WORKS -
-`eyJsaW5lX25vIjoyOTEsInYiOjF9` returned line 292 as the first row. But
-the spec calls the cursor opaque, and a client that builds one is
-depending on an internal encoding that is explicitly not a contract.
+`?start_line=<n>` now exists (API section 6.7). The deep link sends it,
+so the SERVER positions the page. Verified live in a headed browser at
+1440x900 with `document.hidden === false`: `/archive/t/5767/l/7111`
+issued exactly one lines request carrying `start_line=7111`, the first
+rendered row was `line_no` 7111, the pane carried
+`data-highlight-line="7111"`, and the element measured 413 px tall with
+its top flush against the scroller viewport - real pixels, not a DOM flag.
 
-The safe path today is: fetch the spine (62 requests, 0.132 s of server
-work total) and scroll to the row. That is what section G's design does
-anyway, so this is not blocking. **Do not build cursor synthesis into the
-client.** Request `?start_line=<n>` instead.
+**Two things the reader had to change with it, and one bug it exposed.**
+
+1. **A windowed spine is NOT a complete spine.** `has_more: false` on a
+   `start_line` page only says nothing follows that page; lines 0..n-1
+   are still missing. Marking it complete would render the
+   end-of-transcript state and manufacture a false "you have seen it all"
+   out of the deep link itself. `complete` is now
+   `hasMore === false && no start_line was sent`.
+2. **The out-of-range note is the SERVER'S now.** The client used to
+   synthesize a `cannot_determine` saying it could not reach the line. A
+   line past the end is a measured 404 from the server naming the real
+   `MAX(line_no)`; `start_line` plus `cursor` is a 400. Both reach the
+   reader as ordinary non-renderable envelopes. The client-side note
+   survives only for the case where the server WAS asked for line n and
+   the rows do not contain it, and it now names which of the two causes
+   applied instead of claiming the endpoint takes no offset.
+3. **`reader.items()` returns ROW OBJECTS, not `{row}` wrappers**, and
+   consecutive `record_type === 'progress'` lines are collapsed into one
+   `{kind:'progress-run', from, to, count, rows}`. `scrollToLine` was
+   reading `items[i].row.line_no`, which is `undefined` for every item -
+   a lookup that could never match. It went unnoticed because until
+   `start_line` shipped the deep link never reached a page where the
+   answer would have been yes. Fixed, and a line inside a collapsed run
+   now EXPANDS that run: scrolling to a collapsed block and reporting
+   success is a landing that measures as one and is not one. Line 7,111
+   of transcript 5767 sits inside the run 7110..7123, so this is the
+   normal case on real data, not an edge.
 
 **`body_bytes` is a deprecated alias that counts CODE POINTS.** The
 server says so in its own `meta.body_bytes_note`. Every size decision in

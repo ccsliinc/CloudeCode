@@ -122,6 +122,13 @@ regexes = [
     '''MIIEowIBAAKCAQEAy8Kq3nJd7VtWpZrXbLmQfHgN4TcUeSoA2iRvYxDkB9Fj''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
     # test_secret_detectors.py:FAKE_SLACK
     '''xoxb-2847193056321-2847193056789-Kd7QmZx9TbnLcJ6wZaHy8Fd''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_archive_mask.node.mjs, test_archive_mask_refusal.node.mjs,
+    # test_archive_line_render.node.mjs: SECRET. Same 40-char literal in all
+    # three, deliberately: it is the masking test suite's shared credential
+    # fixture, uppercase A-Z0-9 only "so that no substring of it can occur
+    # by accident in the lowercase filler" around it, per each file's own
+    # comment. Never a real secret; added 2026-08-31.
+    '''AKIA7Q2W9E4R6T8Y0U1I3O5P7A9S1D3F5G7H9J1K''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
 ]
 
 # ---------------------------------------------------------------------------

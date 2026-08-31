@@ -341,7 +341,14 @@ class AppController {
      * light - the stated rule, applied honestly. The auth screen reports
      * its own failures inline.
      *
-     * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
+     * ARCHIVE: `#archive-bar-status` lives in the shell that
+     * archive-screen.js builds at SCRIPT LOAD, precisely so it exists
+     * before this runs - showArchive() calls this before ArchiveScreen
+     * .show(), the same order showLaunchpad() uses. A third named target
+     * rather than an else-branch: left alone, the archive screen would
+     * put its light in the terminal bar, which is not on screen.
+     *
+     * @param {'auth'|'launchpad'|'terminal'|'archive'} screen - Screen being shown.
      * @returns {void}
      */
     _placeStatusLight(screen) {
@@ -349,7 +356,9 @@ class AppController {
         if (!el) return;
         const target = screen === 'launchpad'
             ? document.getElementById('home-bar-status')
-            : document.getElementById('terminal-bar-status');
+            : screen === 'archive'
+                ? document.getElementById('archive-bar-status')
+                : document.getElementById('terminal-bar-status');
         if (!target || el.parentElement === target) return;
         // Before the label span in both bars, so the dot leads the pair.
         target.insertBefore(el, target.firstChild);
@@ -373,6 +382,8 @@ class AppController {
         if (homeLabel) homeLabel.textContent = text;
         const terminalLabel = document.getElementById('terminal-bar-status-text');
         if (terminalLabel) terminalLabel.textContent = text;
+        const archiveLabel = document.getElementById('archive-bar-status-text');
+        if (archiveLabel) archiveLabel.textContent = text;
     }
 
     /**
@@ -722,10 +733,96 @@ class AppController {
     }
 
     /**
+     * Description: hand a stashed archive route to showArchive(), if
+     *   router.js parked one because auth had not completed when the URL
+     *   was read. Idempotent: clears the stash on the way through, so a
+     *   later showLaunchpad() does not bounce the user back.
+     *
+     *   CALLED FROM showLaunchpad()'S FIRST LINE, AND IT RETURNS THERE.
+     *   Called from showLaunchpad() for the same reason the settings deep
+     *   link is: only ONE of the two login paths fires the
+     *   `authenticated` event (init()'s existing-token branch calls
+     *   showLaunchpad() directly), and BOTH paths reach it.
+     *   FIRST, because MEASURED 2026-08-31: delivering the archive route
+     *   from router.js's `authenticated` listener instead produced a race
+     *   the launchpad won every time - both handlers run on their own
+     *   setTimeout(0), the archive screen was activated, and then
+     *   hideAllScreens() from showLaunchpad() put it straight back. The
+     *   observable result was a fully built and loaded archive screen -
+     *   50 transcript rows in the DOM - inside a `display: none` div,
+     *   with /archive in the address bar, the launcher on screen and no
+     *   error anywhere. Consuming the stash before showLaunchpad() has
+     *   touched any screen state removes the race rather than re-tuning
+     *   it, which is why it is the first line and not the last.
+     * Inputs: none.
+     * Output: boolean - true when a route was delivered; the caller must
+     *   return on true, or it will render the launchpad over the archive.
+     */
+    _showArchiveIfDeepLinked() {
+        const target = window.ArchiveDeepLinkTarget;
+        if (!target) return false;
+        window.ArchiveDeepLinkTarget = null;
+        this.showArchive(target);
+        return true;
+    }
+
+    /**
+     * Description: show the archive (message browser) screen.
+     *
+     * Modelled directly on showLaunchpad(). Two things it deliberately
+     * does NOT do. It does not call SessionSidebar.show(): the sidebar is
+     * the working set of LIVE sessions and the archive is a different
+     * corpus with its own navigation, so showing both puts two unrelated
+     * trees on one screen. It does not call SessionSidebar.hide() either,
+     * because hide() persists a closed state that then affects the
+     * launchpad - the regression documented at showLaunchpad() below. And
+     * it does not touch Themes.setActiveSession: the archive is not a
+     * session and runs under the global theme.
+     *
+     * Inputs: params (object) - {view, projectId, transcriptId, lineNo,
+     *   query} from router.js. May be {} for the bare /archive route.
+     * Output: void.
+     */
+    showArchive(params) {
+        console.log('App: Showing archive screen', params);
+        this.hideAllScreens();
+        document.getElementById('archive-screen').classList.add('active');
+        // Same one-way opt-in as showLaunchpad(): these ship
+        // class="hidden" in index.html so they are absent on first paint.
+        // Stripping it is not the screen gate; ScreenChrome.apply() is.
+        this.logoutBtn.classList.remove('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
+
+        this.currentScreen = 'archive';
+        window.ScreenChrome.apply('archive');
+        this._placeStatusLight('archive');
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.place === 'function') {
+            window.GlobalAudioToggle.place('archive');
+        }
+        // Leaving session scope, exactly as showLaunchpad() does.
+        if (window.Themes && typeof window.Themes.clearSession === 'function') {
+            window.Themes.clearSession();
+        }
+        if (window.ArchiveScreen && typeof window.ArchiveScreen.show === 'function') {
+            window.ArchiveScreen.show(params || {});
+        } else {
+            // A NAMED refusal. The screen div is active and empty at this
+            // point, and a blank screen with no console line is the
+            // hardest defect to trace back to a missing script tag.
+            console.error('App: ArchiveScreen is not loaded - check the ' +
+                'archive script tags in index.html.');
+        }
+    }
+
+    /**
      * Show launchpad screen
      */
     showLaunchpad() {
         console.log('App: Showing launchpad screen');
+        // Archive deep link: consumed FIRST, and it RETURNS. See
+        // _showArchiveIfDeepLinked() for why the position matters.
+        if (this._showArchiveIfDeepLinked()) return;
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
         // These three ship `class="hidden"` in index.html so they are

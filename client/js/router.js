@@ -46,6 +46,79 @@
     // them to us anyway, but be explicit client-side as well).
     var DEEPLINK_RX = /^\/session\/([^\/]+)\/?$/;
 
+    // ARCHIVE ROUTES. Four of them: /archive, /archive/p/<id>,
+    // /archive/t/<id> and /archive/t/<id>/l/<n>.
+    //
+    // NUMERIC IDS ONLY. `session_ref` is not unique and is not close to
+    // unique (measured 2026-08-31: "journal" is the session_ref of 14
+    // different transcripts, "audit" of 5), so it can never appear in a
+    // path - a link like /archive/s/journal would resolve to one of
+    // fourteen with no error, which is the failure mode where the link
+    // works for the sender and shows the recipient a different document.
+    //
+    // WHY THE PATTERNS ARE NOT DECLARED HERE. The design doc (H.5) has
+    // this file carrying its own four regexes. archive-deeplink.js was
+    // built afterwards and already owns them as ROUTE_PATTERNS, in the
+    // canonical MATCH ORDER (line before transcript), with its own test
+    // asserting that order fails on the swallowing form. Declaring them
+    // a second time here would be two declarations of one fact that can
+    // drift, which is the defect class this repo keeps paying for.
+    // So: ONE owner, and this file delegates. If archive-deeplink.js is
+    // not loaded, `parseArchivePath` below returns a NAMED refusal, not
+    // a silent non-match.
+    var ARCHIVE_PREFIX = '/archive';
+
+    /**
+     * Parse the current path as an archive route.
+     *
+     * Description: delegates to ArchiveDeeplink.parse(), which owns the
+     *   four patterns and their match order. Returns three outcomes, not
+     *   two: a route, a stated could-not-resolve, or "not an archive
+     *   path at all" so the caller falls through to the session table.
+     * Inputs: pathname (string), search (string).
+     * Output: {ok: true, route: object}
+     *      or {ok: false, token: 'cannot-determine', reason: string}
+     *      or {ok: false, token: 'no-match', reason: string}.
+     */
+    function parseArchivePath(pathname, search) {
+        var path = typeof pathname === 'string' ? pathname : '';
+        if (path !== ARCHIVE_PREFIX && path.indexOf(ARCHIVE_PREFIX + '/') !== 0) {
+            return { ok: false, token: 'no-match', reason: 'not an archive path' };
+        }
+        if (!window.ArchiveDeeplink || typeof window.ArchiveDeeplink.parse !== 'function') {
+            // NOT a silent fall-through. The path IS an archive path and
+            // this build cannot resolve it; saying so beats rendering the
+            // launcher and letting the person think the link was wrong.
+            return { ok: false, token: 'cannot-determine',
+                     reason: 'archive routing is unavailable: ' +
+                             'archive-deeplink.js did not load.' };
+        }
+        return window.ArchiveDeeplink.parse(path, search || '');
+    }
+
+    /**
+     * Hand a parsed archive route to the app, or stash it until auth.
+     *
+     * Description: the ONE place an archive route becomes a screen, so a
+     *   fresh load, a popstate and a post-login delivery take the
+     *   identical path.
+     * Inputs: route (object) - from parseArchivePath.
+     * Output: boolean - true when the route was delivered now.
+     */
+    function deliverArchiveRoute(route) {
+        if (window.App && typeof window.App.showArchive === 'function') {
+            try {
+                window.App.showArchive(route);
+            } catch (err) {
+                console.error('Router: App.showArchive threw:', err);
+            }
+            window.ArchiveDeepLinkTarget = null;
+            return true;
+        }
+        window.ArchiveDeepLinkTarget = route;
+        return false;
+    }
+
     // Single source of truth for the `/session/<name>` path prefix, used
     // by both the inbound parser (DEEPLINK_RX above) and the outbound
     // builder (buildSessionPath below) so the two halves can never drift.
@@ -124,6 +197,19 @@
      */
     function resetToLauncher() {
         if (window.DeepLinkTarget) return;
+        // An archive URL is a legitimate destination, not a stale session
+        // link, and this function runs from showLaunchpad()/showAuth()
+        // during boot - BEFORE Router.init() has read the path. Without
+        // this guard a fresh load of /archive/t/5767 has its URL rewritten
+        // to '/' before anything parses it, and the deep link is lost with
+        // no error anywhere. Guarded on the PATH rather than on the stash,
+        // because the stash is populated by the very code this would have
+        // run ahead of.
+        if (window.location.pathname === ARCHIVE_PREFIX ||
+                window.location.pathname.indexOf(ARCHIVE_PREFIX + '/') === 0) {
+            return;
+        }
+        if (window.ArchiveDeepLinkTarget) return;
         if (window.location.pathname === '/') return;
         try {
             window.history.replaceState({}, '', '/');
@@ -253,7 +339,51 @@
      *   the initial page load or Back/Forward).
      * - invalid deep link → show banner and rewrite URL to `/`.
      */
-    function applyCurrentPath() {
+    function applyCurrentPath(immediate) {
+        // Archive first: /archive/... can never be a /session/... link,
+        // and the archive router is strict where the session router is
+        // permissive.
+        var archive = parseArchivePath(window.location.pathname,
+                                       window.location.search);
+        if (archive.ok) {
+            clearError();
+            // FIRST LOAD ALWAYS STASHES, EVEN WHEN ALREADY AUTHENTICATED.
+            // MEASURED 2026-08-31 on a warm reload of /archive/p/12:
+            // App.init() is async, so Router.init() runs while auth is
+            // still resolving; showing the archive here won the first
+            // paint and then App.init()'s existing-token branch called
+            // showLaunchpad(), whose hideAllScreens() took it straight
+            // back down. The observable result was an archive screen
+            // fully built and loaded - 50 transcript rows in the DOM,
+            // data-pane="list" - inside a `display: none` div, with the
+            // launcher on screen and no error anywhere. Stashing instead
+            // hands the route to showLaunchpad()'s first line, which is
+            // the ONE owner and consumes it before touching any screen.
+            //
+            // `immediate` is true only for popstate, where the app has
+            // long since settled and there is nothing to race.
+            if (immediate && window.Auth &&
+                    typeof window.Auth.isAuthenticated === 'function' &&
+                    window.Auth.isAuthenticated()) {
+                deliverArchiveRoute(archive.route);
+            } else {
+                window.ArchiveDeepLinkTarget = archive.route;
+            }
+            return;
+        }
+        if (archive.token === 'cannot-determine') {
+            // NO SILENT REDIRECT. The URL stays as typed and the reason
+            // names the offending segment, because rewriting it to
+            // /archive would turn a broken link into a working one
+            // pointing somewhere the sender never meant.
+            showError('archive link could not be resolved: ' + archive.reason);
+            window.ArchiveDeepLinkTarget = { view: 'root', projectId: null,
+                                             transcriptId: null, lineNo: null,
+                                             query: {} };
+            if (immediate) deliverArchiveRoute(window.ArchiveDeepLinkTarget);
+            return;
+        }
+
         var parsed = parseCurrentPath();
 
         if (!parsed.match) {
@@ -263,7 +393,9 @@
             // was on screen. Only a VIEW change, no API call: the
             // session is left running, same as clicking the header title.
             if (window.location.pathname === '/' &&
-                window.App && window.App.currentScreen === 'terminal' &&
+                window.App &&
+                (window.App.currentScreen === 'terminal' ||
+                 window.App.currentScreen === 'archive') &&
                 typeof window.App.showLaunchpad === 'function') {
                 window.App.showLaunchpad();
             }
@@ -304,12 +436,18 @@
     function initRouter() {
         console.log('Router: initializing deep-link router');
 
-        // 1. First-load parse.
-        applyCurrentPath();
+        // 1. First-load parse. NOT immediate: an archive route is stashed
+        //    for App.showLaunchpad() to consume, never rendered from here
+        //    while App.init() is still resolving auth. See the comment in
+        //    applyCurrentPath().
+        applyCurrentPath(false);
 
-        // 2. Back/forward navigation re-applies the same logic.
+        // 2. Back/forward navigation re-applies the same logic, and here
+        //    delivery IS immediate - the app has settled, there is no
+        //    boot sequence left to race, and stashing would mean Back
+        //    silently doing nothing.
         window.addEventListener('popstate', function () {
-            applyCurrentPath();
+            applyCurrentPath(true);
         });
 
         // 3. After auth completes, the App controller broadcasts
@@ -318,6 +456,13 @@
         //    mount before we call into it.
         window.addEventListener('authenticated', function () {
             setTimeout(deliverTargetToLaunchpad, 0);
+            // NO archive delivery here, deliberately. App.showLaunchpad()
+            // consumes window.ArchiveDeepLinkTarget on its FIRST line and
+            // returns. Delivering from this listener as well raced that
+            // path and the launchpad won: the archive screen was
+            // activated and then hidden again, leaving /archive in the
+            // address bar and the launcher on screen with no error.
+            // One owner for the stash.
         });
     }
 
@@ -334,6 +479,11 @@
         // (project OR session) turns out not to exist.
         rejectTarget: rejectTarget,
         showError: showError,
+        // Archive routing - the inbound half. Outbound path building
+        // lives in archive-deeplink.js and archive-screen.js.
+        parseArchivePath: parseArchivePath,
+        deliverArchiveRoute: deliverArchiveRoute,
+        ARCHIVE_PREFIX: ARCHIVE_PREFIX,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
         _SLUG_RX: SLUG_RX,

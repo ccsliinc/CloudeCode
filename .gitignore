@@ -139,7 +139,8 @@ troubleshooting/
 # client/vendor/codemirror/VERSION.md). node_modules and the lockfile are
 # build inputs, not runtime code; only the built bundle under client/vendor/
 # ships.
-scripts/codemirror-vendor/node_modules/
+scripts/codemirror-vendor/node_modules
+scripts/codemirror-vendor/node_modules.nosync/
 scripts/codemirror-vendor/package-lock.json
 
 # Release self-check cache. Written next to config.json inside whatever source
@@ -148,8 +149,19 @@ scripts/codemirror-vendor/package-lock.json
 .update-check.json
 
 # electron-builder output. The .dmg is a release artifact, not source.
-macOS/dist/
-macOS/node_modules/
+# Both plain and .nosync-suffixed forms: iCloud Drive checkouts on this
+# fleet get a <name>.nosync real directory plus a <name> symlink pointing at
+# it (see build/build.nosync below), and a plain trailing-slash pattern does
+# NOT match a symlink, only a real directory - each form needs its own line.
+macOS/dist
+macOS/dist.nosync/
+macOS/node_modules
+macOS/node_modules.nosync/
+
+# Top-level build output workspace, same symlink-plus-.nosync shape as
+# macOS/dist above.
+/build
+/build.nosync/
 
 # Screenshots from scripts/verify/measure-theme-effect-visibility.py
 scripts/verify/.theme-effect-shots/

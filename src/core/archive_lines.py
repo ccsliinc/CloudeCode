@@ -34,8 +34,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.archive_cursor import CURSOR_LINES, CursorError, decode_cursor, encode_cursor
 from src.core.archive_line_rows import attach_bodies
+from src.core.archive_start_line import (
+    START_LINE_SUBJECT,
+    STATE_NO_LINES,
+    resolve_start_line,
+    start_line_meta,
+)
 from src.core.archive_read import (
     API_PREFIX,
+    RESULT_NOT_FOUND,
     DEFAULT_LINE_LIMIT,
     DEFAULT_PAGE_BYTES,
     MAX_LINE_LIMIT,
@@ -220,6 +227,7 @@ def transcript_lines(
     role: Optional[str] = None,
     record_type: Optional[str] = None,
     model: Optional[str] = None,
+    start_line: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Page one transcript's lines, optionally carrying whole bodies.
 
@@ -237,10 +245,24 @@ def transcript_lines(
       total. ``lines_with_null_ts`` is reported because ``ts`` is NULL on
       33,480 corpus rows and this page is the place to prove none of them
       went missing - this ordering is on ``line_no``, so none can.
+      ``start_line`` opens the walk at a 0-BASED line number instead of
+      at line 0. It reuses the existing ``line_no > :cur_line_no``
+      predicate as ``start_line - 1``, so the index path and the keyset
+      guarantee are untouched: every matching row is still visited
+      exactly once and ``next_cursor`` still names the last returned row.
+      SUPPLYING BOTH ``start_line`` AND ``cursor`` IS REFUSED by name -
+      they are two absolute statements about where the page begins and
+      silently picking one either drops a requested position or restarts
+      a paging walk. A ``start_line`` past the transcript's highest
+      ``line_no`` is ``not_found`` naming that highest value, never an
+      empty page that reads as the end of the transcript.
+      ``meta.start_line.state`` names the outcome on every response,
+      including ``not_requested``.
     Inputs: conn, transcript_id (int), limit (int|None, clamped to
       1..MAX_LINE_LIMIT), cursor (str|None), include_bodies (bool),
       max_page_bytes (int|None, clamped to MIN_PAGE_BYTES..MAX_PAGE_BYTES),
-      role/record_type/model (str|None) - filter VALUES, not ids.
+      role/record_type/model (str|None) - filter VALUES, not ids,
+      start_line (int|None) - 0-based line number to open at.
     Output: envelope; ``result`` is a list of line dicts.
     Example: transcript_lines(conn, 4, limit=2)["meta"]["bodies"]
     """
@@ -266,6 +288,51 @@ def transcript_lines(
             result=[],
             meta={"paging": unread_paging(size)},
         )
+    # start_line is resolved AFTER the transcript is proven to exist, so a
+    # bad start_line on a missing transcript reports the missing
+    # transcript - the outer fact - rather than a range measured over no
+    # rows.
+    start = resolve_start_line(conn, transcript_id, start_line, cursor=cursor)
+    if not start.usable:
+        # Three shapes, deliberately not two. A refusal blames the caller
+        # and must reach the client as a 400 with result None; a measured
+        # absence (past the last line) is a not_found carrying this
+        # route's success shape []; an empty transcript is a genuine,
+        # complete, empty ok.
+        base_meta = {
+            "paging": unread_paging(size),
+            "scope": {
+                "kind": "transcript",
+                "transcript_id": transcript_id,
+                "line_count": header["line_count"],
+            },
+            "start_line": start_line_meta(start),
+        }
+        subject = f"{START_LINE_SUBJECT}"
+        if start.is_refusal:
+            return cannot_determine_envelope(
+                subject, str(start.reason), result=None, meta=base_meta
+            )
+        if start.state == STATE_NO_LINES:
+            return envelope(
+                result=[],
+                result_status=RESULT_OK,
+                unevaluated=[],
+                meta={**base_meta, "paging": paging_meta(
+                    limit=size, returned=0, has_more=False, next_cursor=None,
+                ), "note": str(start.reason)},
+            )
+        return envelope(
+            result=[],
+            result_status=RESULT_NOT_FOUND,
+            unevaluated=[{
+                "subject": f"transcript:{transcript_id} line:{start.requested}",
+                "reason": str(start.reason),
+            }],
+            meta=base_meta,
+        )
+    if start.keyset_bound is not None:
+        cur_line_no = start.keyset_bound
     filter_ids: Dict[str, Optional[int]] = {}
     for name, value in (("role", role), ("record_type", record_type), ("model", model)):
         resolved, found_id = _resolve_filter(conn, name, value)
@@ -352,6 +419,7 @@ def transcript_lines(
                 "transcript_id": transcript_id,
                 "line_count": header["line_count"],
             },
+            "start_line": start_line_meta(start),
             "filters": {
                 "role": role,
                 "record_type": record_type,
