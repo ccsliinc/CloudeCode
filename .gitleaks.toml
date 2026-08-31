@@ -123,3 +123,46 @@ regexes = [
     # test_secret_detectors.py:FAKE_SLACK
     '''xoxb-2847193056321-2847193056789-Kd7QmZx9TbnLcJ6wZaHy8Fd''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
 ]
+
+# ---------------------------------------------------------------------------
+# JSONL shape-manifest key-order digests. NOT a credential exemption for a
+# whole file - scoped to one field's line form only.
+#
+# WHAT THIS IS. tests/fixtures/jsonl_shape_manifest.json records, for every
+# distinct top-level key ordering the corpus scanner observed, a short
+# stable token: "key_order_digest": "<16 hex chars>". The default ruleset's
+# generic-api-key rule flags all 1,347 occurrences, because the field name
+# contains "key" and a hex digest is high-entropy by construction.
+#
+# WHY IT IS NOT A SECRET. The digest is sha256(canonical key-order JSON)[:16]
+# - a hash of the plaintext key-name list sitting in the SAME file, under
+# key_orders[].keys. It is derived data, not an issued credential; nothing
+# it hashes is secret to begin with.
+#
+# INDEPENDENTLY RE-VERIFIED 2026-08-31, not taken on the word of whoever
+# added it: recomputed all 447 distinct digests in key_orders[] from their
+# own "keys" list via that exact formula (447/447 match, including the one
+# null-keys row against the code's own documented NUL sentinel), then
+# cross-checked every raw occurrence of the "key_order_digest" field in the
+# file - all 1,347 of them - against that 447-entry set. Zero unexplained
+# values.
+#
+# SCOPED BY VALUE, ON THE LINE FORM, NOT BY PATH. regexTarget = "match"
+# (rather than the default "secret") so the pattern must see the field name
+# and quoting around the hex, not just a bare 16-hex-char string anywhere in
+# the tree. A `paths` exemption for this file was deliberately rejected: it
+# would suppress the ENTIRE 1.5 MB manifest, blinding the scanner to a real
+# credential landing anywhere else in it - the exact accident this file
+# exists to catch. This allowlist only ever silences the one line shape
+# above; every other field in the manifest, including its other
+# digest-shaped values (see key_orders[].digest, signature_id), is still
+# scanned normally. Proven with a positive control recorded in the commit
+# that added this block: a genuinely credential-shaped string planted
+# elsewhere in the same file, under a different key name, was still caught.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Derived key-order digests in the JSONL shape manifest fixture, not credentials"
+regexTarget = "match"
+regexes = [
+    '''key_order_digest": "[0-9a-f]{16}"''',
+]

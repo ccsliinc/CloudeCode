@@ -50,17 +50,31 @@ _needs_gitleaks = pytest.mark.skipif(
 
 
 def _allowlist_regexes() -> list[str]:
-    """Every literal in the fixture allowlist block of .gitleaks.toml.
+    """Every literal in the SYNTHETIC-FIXTURE allowlist block of .gitleaks.toml.
 
-    Description: reads the triple-quoted entries out of the LAST
-      ``regexes = [...]`` block, which is the synthetic-fixture allowlist.
+    Description: reads the triple-quoted entries out of the fixture
+      block's own ``regexes = [...]``, located by its marker rather than
+      by "the last regexes block in the file". A later allowlist block can
+      legitimately exist for a different reason (see the
+      key_order_digest block, added 2026-08-31, which matches a derived
+      hash pattern rather than a literal fixture value) - if this helper
+      kept assuming "last block = the fixture registry" it would silently
+      start reading that other block's entries as if they were dead
+      literals from tests/*.py, which is a different invariant checked
+      separately (test_jsonl_manifest_allowlist_pattern_matches_live_data
+      below).
     Inputs: none (reads the repo config).
     Output: list of str literals.
     Example: _allowlist_regexes() -> ["AKIA...", ...]
     """
     text = CONFIG.read_text()
-    blocks = re.findall(r"regexes = \[(.*?)\n\]", text, re.S)
-    assert blocks, "no regexes block found in .gitleaks.toml"
+    marker = "Synthetic credential fixtures in the secret-scanner test suite"
+    assert marker in text, "fixture allowlist block is missing"
+    tail = text[text.index(marker):]
+    next_block = re.search(r"\n\[\[allowlists\]\]", tail)
+    block_text = tail[:next_block.start()] if next_block else tail
+    blocks = re.findall(r"regexes = \[(.*?)\n\]", block_text, re.S)
+    assert blocks, "no regexes block found in the fixture allowlist"
     return re.findall(r"'''(.*?)'''", blocks[-1], re.S)
 
 
@@ -78,20 +92,34 @@ def test_config_uses_only_the_array_allowlist_form() -> None:
 
 
 def test_fixture_allowlist_is_scoped_by_value_not_by_path() -> None:
-    """The fixture block must not carry `paths`.
+    """No allowlist block from the fixture block onward carries a `paths` KEY.
 
     A `paths` entry suppresses every finding in the whole file, not just the
     listed values, so it would blind the scanner to a REAL credential pasted
     into one of the fixture files. That is the exact accident the scanner
     exists to catch.
+
+    Checks for the actual TOML key assignment (``paths =`` at the start of a
+    line), not the bare English word "paths" anywhere in the text. The
+    looser substring check used to false-fail on ordinary prose: the
+    key_order_digest allowlist block (added 2026-08-31) documents, in a
+    comment, why a `paths` exemption was rejected for that block - the word
+    "paths" appears there deliberately, as an explanation, with no `paths =`
+    key anywhere near it. A test that cannot tell "the key is present" from
+    "the word appears in a sentence about why the key is absent" is not
+    verifying the invariant it claims to; this scopes it to what actually
+    weakens the scanner, and it still covers the whole marker-to-EOF span,
+    so a real `paths =` key added to any future block here is still caught.
     """
     text = CONFIG.read_text()
     marker = "Synthetic credential fixtures in the secret-scanner test suite"
     assert marker in text, "fixture allowlist block is missing"
     block = text[text.index(marker):]
-    assert "paths" not in block, (
-        "the synthetic-fixture allowlist must match by VALUE only. A `paths` "
-        "entry suppresses the entire file, including a real credential."
+    assert re.search(r"^\s*paths\s*=", block, re.M) is None, (
+        "a `paths =` key was found from the synthetic-fixture allowlist "
+        "onward. Value-scoped allowlists in this region must match by "
+        "VALUE only - a `paths` entry suppresses the entire file, "
+        "including a real credential."
     )
 
 
@@ -111,6 +139,40 @@ def test_no_dead_allowlist_entries() -> None:
             "used by any test. Remove it from .gitleaks.toml rather than "
             "leaving a standing exemption behind."
         )
+
+
+def test_jsonl_manifest_allowlist_pattern_matches_live_data() -> None:
+    """The key_order_digest allowlist entry has its OWN dead-entry risk.
+
+    This block does not fit test_no_dead_allowlist_entries above: it does
+    not exempt a literal copied from a tests/*.py fixture, it exempts a
+    STRUCTURAL regex over a field in tests/fixtures/jsonl_shape_manifest.json
+    (see .gitleaks.toml for the full derivation and the 2026-08-31 positive
+    control). "Dead" means something different for a pattern than for a
+    literal: not "unused by any test file", but "matches nothing in the
+    fixture it was written for". A pattern that stopped matching (the field
+    got renamed, the digest length changed) would silently become an
+    allowlist entry that protects nothing while still claiming to - the
+    same furniture problem test_no_dead_allowlist_entries exists to catch,
+    checked the way this entry's class actually needs it checked.
+    """
+    text = CONFIG.read_text()
+    marker = "Derived key-order digests in the JSONL shape manifest fixture"
+    assert marker in text, "jsonl manifest allowlist block is missing"
+    block = text[text.index(marker):]
+    match = re.search(r"regexes = \[\s*'''(.*?)'''", block, re.S)
+    assert match, "no regex literal found in the jsonl manifest allowlist block"
+    pattern = match.group(1)
+
+    manifest = REPO_ROOT / "tests" / "fixtures" / "jsonl_shape_manifest.json"
+    assert manifest.exists(), f"{manifest} is missing"
+    hits = re.findall(pattern, manifest.read_text())
+    assert hits, (
+        "the jsonl manifest allowlist regex matches nothing in "
+        f"{manifest}. Either the field it targets was renamed or removed "
+        "(remove the dead allowlist entry) or the pattern drifted from the "
+        "field's real shape (fix the pattern to match it again)."
+    )
 
 
 def test_hook_runs_both_scanners_with_the_repo_config() -> None:
