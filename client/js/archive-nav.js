@@ -48,215 +48,28 @@ console.log('[ArchiveNav Module] Loading...');
 (function () {
     'use strict';
 
-    /** Root element class. @type {string} */
-    var ROOT_CLASS = 'archive-nav';
-
-    /**
-     * Node kinds this rail can render. `unattributed` is a first-class
-     * kind, not a flag on a corpus, because it is a selectable scope
-     * with its own listing endpoint.
-     * @type {Object<string,string>}
-     */
-    var NODE_KINDS = {
-        HOST: 'host',
-        CORPUS: 'corpus',
-        PROJECT: 'project',
-        UNATTRIBUTED: 'unattributed'
-    };
-
-    /**
-     * The literal rendered wherever a count was not supplied. Never a
-     * zero: "the server did not tell me" and "there are none" are
-     * different findings.
-     * @type {string}
-     */
-    var NOT_KNOWN = 'NOT KNOWN';
-
-    /**
-     * Description: build one element with a class and optional text.
-     *   Text always reaches the DOM as a text node.
-     * Inputs: doc (Document), tag (string), cls (string|null),
-     *   text (string|number|null).
-     * Output: Element.
-     */
-    function el(doc, tag, cls, text) {
-        var node = doc.createElement(tag);
-        if (cls) node.setAttribute('class', cls);
-        if (text !== null && text !== undefined) node.textContent = String(text);
-        return node;
+    // The vocabulary and the pure row renderers live in
+    // archive-nav-row.js, which MUST load before this file. They are
+    // re-exported below so ArchiveNav stays the one name a caller has
+    // to know.
+    var ROW = window.ArchiveNavRow;
+    if (!ROW) {
+        console.error('[ArchiveNav] MISSING DEPENDENCY: window.ArchiveNavRow. ' +
+            'Load client/js/archive-nav-row.js BEFORE this file; the rail ' +
+            'cannot render a single row without it.');
     }
-
-    /**
-     * Description: render a count that may be absent. A missing number
-     *   renders as NOT KNOWN, never as 0.
-     * Inputs: n (number|null|undefined).
-     * Output: string.
-     * Example: renderCount(null) // -> 'NOT KNOWN'
-     */
-    function renderCount(n) {
-        if (typeof n !== 'number' || !isFinite(n)) return NOT_KNOWN;
-        return window.ArchiveFormat
-            ? window.ArchiveFormat.formatCount(n)
-            : String(n);
-    }
-
-    /**
-     * Description: case-insensitive substring filter over already-loaded
-     *   rows. Pure, exported so a test can assert it without a DOM.
-     * Inputs: rows (Array<object>) - nav rows.
-     *         needle (string) - the filter text; '' matches everything.
-     *         fields (Array<string>) - row properties to search.
-     * Output: Array<object> - the matching subset, order preserved.
-     * Example: filterRows([{slug:'abc'}], 'B', ['slug'])  // -> [{slug:'abc'}]
-     */
-    function filterRows(rows, needle, fields) {
-        var list = Array.isArray(rows) ? rows : [];
-        var q = String(needle === null || needle === undefined ? '' : needle).toLowerCase();
-        if (!q) return list.slice();
-        var keys = Array.isArray(fields) && fields.length ? fields : ['slug'];
-        return list.filter(function (row) {
-            for (var i = 0; i < keys.length; i++) {
-                var v = row && row[keys[i]];
-                if (typeof v === 'string' && v.toLowerCase().indexOf(q) !== -1) return true;
-            }
-            return false;
-        });
-    }
-
-    /**
-     * Description: the sentence a filter must always carry, naming what
-     *   it did and did NOT look at. Pure.
-     * Inputs: matched (number) - rows the filter kept.
-     *         loaded (number) - rows this rail has fetched.
-     *         total (number|null) - rows the server says exist, or null.
-     *         noun (string) - e.g. 'projects'.
-     * Output: string - empty only when the filter is inactive.
-     * Example: describeFilter(3, 71, 3416, 'projects')
-     *   // -> 'filter matches 3 of 71 loaded projects. 3,416 exist; this
-     *   //     filters rows already fetched, not the whole corpus.'
-     */
-    function describeFilter(matched, loaded, total, noun) {
-        var line = 'filter matches ' + renderCount(matched) + ' of ' +
-                   renderCount(loaded) + ' loaded ' + noun + '.';
-        if (typeof total === 'number' && total > loaded) {
-            line += ' ' + renderCount(total) + ' exist;';
-        }
-        return line + ' This filters rows already fetched, not the whole corpus.';
-    }
-
-    /**
-     * Description: the label for one nav row, by kind. Pure.
-     * Inputs: kind (string) - a NODE_KINDS value. row (object).
-     * Output: string, never empty. A row with no name at all renders its
-     *   id rather than a blank, because a blank row cannot be clicked
-     *   with intent.
-     */
-    function labelFor(kind, row) {
-        var r = row || {};
-        if (kind === NODE_KINDS.HOST) {
-            return String(r.display_name || r.hostname || ('host ' + r.host_id));
-        }
-        if (kind === NODE_KINDS.CORPUS) {
-            return String(r.corpus_key || r.root_path || ('corpus ' + r.corpus_id));
-        }
-        if (kind === NODE_KINDS.UNATTRIBUTED) {
-            return 'transcripts with no project';
-        }
-        var slug = r.slug || r.observed_cwd || ('project ' + r.project_id);
-        return window.ArchiveFormat
-            ? window.ArchiveFormat.shortenSlug(String(slug))
-            : String(slug);
-    }
-
-    /**
-     * Description: the id a row is addressed by, per kind. Pure.
-     * Inputs: kind (string), row (object).
-     * Output: number|string|null.
-     */
-    function idFor(kind, row) {
-        var r = row || {};
-        if (kind === NODE_KINDS.HOST) return r.host_id;
-        if (kind === NODE_KINDS.CORPUS) return r.corpus_id;
-        if (kind === NODE_KINDS.PROJECT) return r.project_id;
-        return r.corpus_id;
-    }
-
-    /**
-     * Description: the transcript count a row advertises, per kind.
-     * Inputs: kind (string), row (object).
-     * Output: number|null.
-     */
-    function countFor(kind, row) {
-        var r = row || {};
-        var v = kind === NODE_KINDS.PROJECT ? r.transcript_count
-              : kind === NODE_KINDS.CORPUS ? r.transcript_count
-              : kind === NODE_KINDS.UNATTRIBUTED ? r.unattributed_transcript_count
-              : r.transcript_count;
-        return typeof v === 'number' ? v : null;
-    }
-
-    /**
-     * Description: render one row as a <li> carrying a selectable button
-     *   and, for expandable kinds, an empty child slot.
-     * Inputs: doc (Document), kind (string), row (object),
-     *         opts (object) - {expandable: boolean, onActivate: function}
-     * Output: Element - the <li>.
-     */
-    function renderRow(doc, kind, row, opts) {
-        var options = opts || {};
-        var id = idFor(kind, row);
-        var li = el(doc, 'li', ROOT_CLASS + '__node ' + ROOT_CLASS + '__node--' + kind, null);
-        li.setAttribute('data-node-kind', kind);
-        li.setAttribute('data-node-id', String(id === null || id === undefined ? '' : id));
-
-        var btn = el(doc, 'button', ROOT_CLASS + '__row', null);
-        btn.setAttribute('type', 'button');
-        btn.setAttribute('data-action', options.expandable ? 'expand' : 'select');
-        if (options.expandable) btn.setAttribute('aria-expanded', 'false');
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__label', labelFor(kind, row)));
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__count', renderCount(countFor(kind, row))));
-        if (kind === NODE_KINDS.UNATTRIBUTED) {
-            // Named in words as well as by class, because this node's
-            // whole purpose is that it is easy to not notice.
-            btn.appendChild(el(doc, 'span', ROOT_CLASS + '__note',
-                'belongs to no project, invisible from the project tree'));
-        }
-        if (typeof options.onActivate === 'function') {
-            btn.addEventListener('click', function () { options.onActivate(kind, id, row); });
-        }
-        li.appendChild(btn);
-        if (options.expandable) {
-            li.appendChild(el(doc, 'ul', ROOT_CLASS + '__children', null));
-        }
-        return li;
-    }
-
-    /**
-     * Description: replace a node's child slot with a rendered outcome
-     *   block. Used for every non-renderable envelope at every level, so
-     *   a failed expand shows the reason where the person clicked rather
-     *   than looking like an empty branch.
-     * Inputs: doc (Document), slot (Element), envelope (object|null),
-     *         transportError (string|null).
-     * Output: void.
-     */
-    function renderOutcomeInto(doc, slot, envelope, transportError) {
-        slot.textContent = '';
-        var payload = envelope;
-        if (transportError) {
-            // callEnvelope never rejects; it reports the failure here.
-            // Handing archive-outcome.js a null envelope is exactly how
-            // it produces `transport-error`, which is the correct token.
-            payload = null;
-        }
-        var host = el(doc, 'li', ROOT_CLASS + '__outcome', null);
-        var block = window.ArchiveOutcomeView.renderOutcomeBlock(payload, { document: doc });
-        if (transportError) {
-            block.appendChild(el(doc, 'p', ROOT_CLASS + '__transport-reason', transportError));
-        }
-        host.appendChild(block);
-        slot.appendChild(host);
-    }
+    var ROOT_CLASS = ROW.ROOT_CLASS;
+    var NODE_KINDS = ROW.NODE_KINDS;
+    var NOT_KNOWN = ROW.NOT_KNOWN;
+    var el = ROW.el;
+    var renderCount = ROW.renderCount;
+    var filterRows = ROW.filterRows;
+    var describeFilter = ROW.describeFilter;
+    var labelFor = ROW.labelFor;
+    var idFor = ROW.idFor;
+    var countFor = ROW.countFor;
+    var renderRow = ROW.renderRow;
+    var renderOutcomeInto = ROW.renderOutcomeInto;
 
     /**
      * Description: build the navigation rail.
@@ -472,6 +285,28 @@ console.log('[ArchiveNav Module] Loading...');
             loadHosts: loadHosts,
             expand: expand,
             setFilter: setFilter,
+            // The composition root needs THREE things from the filter, and
+            // had none of them: something to focus for `/`, the current
+            // text (it was passing a hardcoded '' into ArchiveKeys.resolve,
+            // which made rung 2 of the Escape ladder unreachable), and a
+            // way to clear it.
+            filterInput: filterInput,
+            /**
+             * Description: the filter box's current text.
+             * Inputs: none. Output: string - '' when nothing is filtered.
+             */
+            filterText: function () { return filterText; },
+            /**
+             * Description: clear the filter and repaint, which is Escape
+             *   rung 2. Clears the INPUT as well as the state: clearing
+             *   only the state leaves the box showing text that no longer
+             *   filters anything, which reads as a broken filter.
+             * Inputs: none. Output: void.
+             */
+            clearFilter: function () {
+                filterInput.value = '';
+                setFilter('');
+            },
             /**
              * Description: rows fetched for one level key, for tests.
              * Inputs: key (string). Output: Array.

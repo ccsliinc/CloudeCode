@@ -36,16 +36,27 @@
 
 .archive-nav__filter {
     font: inherit;
+    font-size: 0.85rem;
     width: 100%;
-    padding: 0.35rem 0.5rem;
+    padding: 8px 10px;
     background: var(--color-bg-elevated);
     color: var(--color-fg);
     border: 1px solid var(--color-border);
+    /* radius-md is the app's default (39 uses in styles.css). The archive
+     * used to give a handful of controls radius-sm and everything else
+     * none, so in the 20 themes with a non-zero radius only those few
+     * looked rounded - the screen was inconsistent with itself. */
+    border-radius: var(--radius-md);
+}
+
+.archive-nav__filter:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
 }
 
 .archive-nav__filter-note {
-    margin: 0.3rem 0 0.5rem 0;
-    font-size: 0.72rem;
+    margin: 6px 0 8px 0;
+    font-size: 0.8rem;
     line-height: 1.4;
     color: var(--color-fg-muted);
 }
@@ -68,35 +79,50 @@
     border-left: 1px solid var(--color-border-subtle);
 }
 
+/* .recent-session-row's shape - 8px 12px, gap 8px, radius-md - not a
+ * fourth set of numbers invented for this rail. */
 .archive-nav__row {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.1rem;
+    gap: 2px;
     width: 100%;
     font: inherit;
     text-align: left;
-    padding: 0.3rem 0.4rem;
+    padding: 8px 12px;
     background: transparent;
     color: var(--color-fg);
     border: 1px solid transparent;
+    border-radius: var(--radius-md);
     cursor: pointer;
+    transition: all 0.3s ease;
 }
 
 .archive-nav__row:hover,
 .archive-nav__row:focus-visible {
     background: var(--color-bg-hover);
-    border-color: var(--color-border);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+/* Written by the archive JS on the keyboard-selected node. Selection is
+ * not hover and both can be true at once, so the difference is GEOMETRY
+ * - a 3px accent rail the hover state does not have - and survives the
+ * three themes that zero every radius token. */
+.archive-nav__row[data-selected="true"] {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
 .archive-nav__label {
-    font-size: 0.86rem;
+    font-size: 0.9rem;
     word-break: break-all;
 }
 
 .archive-nav__count {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     color: var(--color-fg-muted);
 }
 
@@ -105,9 +131,22 @@
  * overlooked, so it is given a leading rail, a dashed edge nothing else
  * in this rail uses, and prose that is always on screen rather than in a
  * title attribute. */
+/* ITEM 37 (styles.css): a `border-left` of a different width and colour
+ * from the ring beside it is joined by a diagonal miter drawn along the
+ * corner arc under `border-radius` - the two-tone corner smear. A solid
+ * rail becomes `box-shadow: inset`; a DASHED one cannot, so it becomes a
+ * clipped background layer instead. The dash is kept because it is what
+ * separates "unattributed" from the solid rails elsewhere without
+ * relying on colour. */
 .archive-nav__node--unattributed > .archive-nav__row {
-    border-left: 3px dashed var(--color-warning);
-    padding-left: 0.5rem;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        var(--color-warning) 0 4px,
+        transparent 4px 8px);
+    background-repeat: no-repeat;
+    background-size: 3px 100%;
+    background-position: left top;
+    padding-left: 12px;
 }
 
 .archive-nav__node--unattributed .archive-nav__label {
@@ -115,8 +154,8 @@
 }
 
 .archive-nav__note {
-    font-size: 0.7rem;
-    line-height: 1.35;
+    font-size: 0.8rem;
+    line-height: 1.4;
     color: var(--color-warning);
 }
 
@@ -132,18 +171,18 @@
 .archive-nav__node--corpus > .archive-nav__row .archive-nav__label {
     font-weight: 600;
     font-family: var(--font-mono);
-    font-size: 0.8rem;
+    font-size: 0.85rem;
 }
 
 .archive-nav__node--project > .archive-nav__row .archive-nav__label {
     font-weight: 400;
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: 0.85rem;
 }
 
 .archive-nav__loading {
-    padding: 0.35rem 0.4rem;
-    font-size: 0.78rem;
+    padding: 8px 12px;
+    font-size: 0.85rem;
     font-style: italic;
     color: var(--color-fg-muted);
 }
@@ -153,11 +192,11 @@
  * a note rather than as a finding so it cannot be mistaken for a server
  * verdict. */
 .archive-nav__filter-empty {
-    padding: 0.45rem 0.4rem;
-    font-size: 0.75rem;
-    line-height: 1.45;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    line-height: 1.4;
     color: var(--color-fg-muted);
-    border-left: 2px solid var(--color-border-subtle);
+    box-shadow: inset 2px 0 0 var(--color-border-subtle);
 }
 
 /* A failed branch renders its reason where the person clicked, and the
@@ -169,9 +208,9 @@
 }
 
 .archive-nav__transport-reason {
-    margin: 0.3rem 0 0 0;
+    margin: 6px 0 0 0;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     color: var(--color-danger-strong);
 }
 
@@ -192,6 +231,6 @@
 
     .archive-nav__row {
         /* A larger hit target, because this is now a touch surface. */
-        padding: 0.55rem 0.4rem;
+        padding: 12px 12px;
     }
 }

@@ -155,6 +155,20 @@
     <link rel="stylesheet" href="/static/css/archive-reader.css" />
     <link rel="stylesheet" href="/static/css/archive-search.css" />
     <link rel="stylesheet" href="/static/css/archive-export.css" />
+    <!-- The transcript list, the archive's primary browse surface. It had
+         NO stylesheet at all until now, so every node under
+         `.archive-tlist` rendered in Chrome's user-agent defaults - white
+         bevelled buttons and 13.33px Arial in every one of the 23 themes.
+         See the header of the file. -->
+    <link rel="stylesheet" href="/static/css/archive-tlist.css" />
+    <!-- LAST, AND THE ORDER IS THE MECHANISM. The alignment layer holds
+         the rules that belong in archive-reader.css, which is under
+         concurrent edit by another owner. Every selector in it is
+         deliberately no more specific than the rule it aligns, so it
+         works by coming after and by nothing else - do not move it above
+         archive-reader.css, and fold it INTO archive-reader.css once that
+         file is free. -->
+    <link rel="stylesheet" href="/static/css/archive-align.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -330,6 +344,28 @@
                  whether or not a session is open. Icon is an open folder,
                  distinct from settings' gear-circle and every other glyph
                  in this row. -->
+            <!-- ARCHIVE. Folded into the header overflow rather than left
+                 inline, which is the same judgement the menu's own header
+                 makes about logout and settings: this is a DESTINATION you
+                 visit occasionally, not a control you reach for while
+                 working, and the inline slots are reserved for the latter.
+                 It is APP-scoped, not session-scoped, so it is correct on
+                 every screen - see the SCOPE BOUNDARY note in
+                 header-menu.js. Deliberately NOT `class="hidden"`: the
+                 hidden gating on its neighbours is driven by session state
+                 in app.js, and the archive is reachable whether or not a
+                 session exists. Icon is a stack of archive boxes, distinct
+                 from the gear, the folder and the door beside it. Wired in
+                 header-menu.js, never inline - src/main.py stamps
+                 `script-src 'self'`, which silently refuses an inline
+                 onclick (see #logoutBtn's comment above). -->
+            <button type="button" id="archiveBtn" aria-label="Message archive" title="message archive" data-tooltip="Message archive">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
             <button type="button" id="configEditorBtn" class="btn-icon hidden" aria-label="File editor" title="file editor" data-tooltip="file editor" aria-expanded="false" aria-controls="config-editor-panel">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -974,6 +1010,12 @@
          then the composition root. app.js MUST stay last - it is the
          controller and reaches for these globals at parse time. -->
     <script src="/static/js/api-archive.js"></script>
+    <!-- THE WAY IN. Both the launchpad row and the header overflow item
+         call ArchiveEntry.open(), so there is ONE navigation into the
+         archive rather than two that can drift apart. Before this the
+         only control in the whole DOM matching /archive/ was the archive
+         screen's own Back button - you had to type the URL. -->
+    <script src="/static/js/archive-entry.js"></script>
     <script src="/static/js/archive-outcome.js"></script>
     <script src="/static/js/archive-mask.js"></script>
     <script src="/static/js/archive-format.js"></script>
@@ -981,14 +1023,22 @@
     <script src="/static/js/archive-virtual-list.js"></script>
     <script src="/static/js/archive-state.js"></script>
     <script src="/static/js/archive-outcome-view.js"></script>
+    <script src="/static/js/archive-body-gate.js"></script>
     <script src="/static/js/archive-body-cache.js"></script>
     <script src="/static/js/archive-line-render.js"></script>
+    <script src="/static/js/archive-nav-row.js"></script>
     <script src="/static/js/archive-nav.js"></script>
+    <script src="/static/js/archive-tlist-row.js"></script>
     <script src="/static/js/archive-transcript-list.js"></script>
+    <script src="/static/js/archive-keys.js"></script>
+    <script src="/static/js/archive-reader-dom.js"></script>
+    <script src="/static/js/archive-reader-paging.js"></script>
+    <script src="/static/js/archive-reader-select.js"></script>
+    <script src="/static/js/archive-reader-body.js"></script>
     <script src="/static/js/archive-reader.js"></script>
+    <script src="/static/js/archive-search-render.js"></script>
     <script src="/static/js/archive-search.js"></script>
     <script src="/static/js/archive-export.js"></script>
-    <script src="/static/js/archive-keys.js"></script>
     <script src="/static/js/archive-screen-reader.js"></script>
     <script src="/static/js/archive-screen.js"></script>
 

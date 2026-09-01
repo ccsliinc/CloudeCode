@@ -55,172 +55,27 @@ console.log('[ArchiveTranscriptList Module] Loading...');
 (function () {
     'use strict';
 
-    /** Root element class. @type {string} */
-    var ROOT_CLASS = 'archive-tlist';
-
-    /** Rows requested per page. The server's own default is 50. @type {number} */
-    var PAGE_SIZE = 50;
-
-    /**
-     * The three scheme filters this list offers. `all` is the default
-     * BECAUSE it is the only one that is not a partial view.
-     * @type {Object<string,string>}
-     */
-    var SCHEME_FILTERS = {
-        ALL: 'all',
-        CONVERSATIONS: 'uuid',
-        SIDECHAINS: 'agent'
-    };
-
-    /**
-     * Attribution values that mean "not established". Kept as a list so
-     * a new server value does not silently classify as established.
-     * @type {string[]}
-     */
-    var UNESTABLISHED_ATTRIBUTION = ['cannot_determine', 'unknown'];
-
-    /**
-     * Description: build an element with a class and optional text.
-     * Inputs: doc (Document), tag (string), cls (string|null), text (any).
-     * Output: Element.
-     */
-    function el(doc, tag, cls, text) {
-        var node = doc.createElement(tag);
-        if (cls) node.setAttribute('class', cls);
-        if (text !== null && text !== undefined) node.textContent = String(text);
-        return node;
+    // The vocabulary and the pure row renderers live in
+    // archive-tlist-row.js, which MUST load before this file. They are
+    // re-exported below so ArchiveTranscriptList stays the one name a
+    // caller has to know.
+    var ROW = window.ArchiveTlistRow;
+    if (!ROW) {
+        console.error('[ArchiveTranscriptList] MISSING DEPENDENCY: ' +
+            'window.ArchiveTlistRow. Load client/js/archive-tlist-row.js ' +
+            'BEFORE this file; nothing below can render a row without it.');
     }
-
-    /**
-     * Description: translate a UI filter choice into the wire value the
-     *   server takes, or null for "do not send the parameter". Pure.
-     *
-     *   `null` and `'all'` are not interchangeable on the wire: sending
-     *   `session_ref_scheme=all` would be an UNKNOWN scheme and answer
-     *   400, so "no filter" has to be an omitted parameter.
-     * Inputs: scheme (string) - a SCHEME_FILTERS value.
-     * Output: string|null.
-     * Example: wireScheme('all') // -> null
-     */
-    function wireScheme(scheme) {
-        if (!scheme || scheme === SCHEME_FILTERS.ALL) return null;
-        return scheme;
-    }
-
-    /**
-     * Description: the sentence under the list, built from what the
-     *   SERVER reported rather than from what this file counted. Pure.
-     *
-     *   It states three separate things and does not merge them: how
-     *   many rows are on screen, how many the whole scope holds under
-     *   this filter, and what the filter is actually matching on. The
-     *   third comes from the server's own `session_ref_scheme_means`, so
-     *   there is one wording and it cannot drift from the API's.
-     * Inputs: loaded (number) - rows on screen, filters (object|null) -
-     *         the server's `meta.filters` block, or null when the last
-     *         response carried none.
-     * Output: string - '' when no filter is applied and nothing is hidden.
-     * Example: describeFilter(50, {applied: true, matched_in_scope: 77,
-     *          scope_total_before_filter: 3416, session_ref_scheme: 'uuid'})
-     */
-    function describeFilter(loaded, filters) {
-        if (!filters || filters.applied !== true) return '';
-        var noun = filters.session_ref_scheme === SCHEME_FILTERS.CONVERSATIONS
-            ? 'conversations (uuid scheme)' : 'agent sidechains';
-        var line = 'Showing ' + fmtCount(loaded) + ' ' + noun + '.';
-        if (typeof filters.matched_in_scope === 'number') {
-            line += ' The server filtered the WHOLE scope, which holds ' +
-                    fmtCount(filters.matched_in_scope) + ' rows with this scheme';
-            if (typeof filters.scope_total_before_filter === 'number') {
-                line += ' out of ' + fmtCount(filters.scope_total_before_filter);
-            }
-            line += '.';
-        } else {
-            line += ' The server did not report how many rows in this scope' +
-                    ' carry this scheme, so that number is NOT KNOWN.';
-        }
-        if (typeof filters.session_ref_scheme_means === 'string') {
-            line += ' Caveat from the server: ' + filters.session_ref_scheme_means;
-        }
-        return line;
-    }
-
-    /**
-     * Description: format a count, deferring to archive-format.js when
-     *   it is loaded so grouping is identical everywhere.
-     * Inputs: n (number|null). Output: string.
-     */
-    function fmtCount(n) {
-        return window.ArchiveFormat ? window.ArchiveFormat.formatCount(n) : String(n);
-    }
-
-    /**
-     * Description: whether an attribution field states a real finding or
-     *   states that nothing was established. Pure.
-     * Inputs: value (string|null).
-     * Output: boolean - true when the link was NOT established.
-     * Example: isUnestablished('cannot_determine')  // -> true
-     */
-    function isUnestablished(value) {
-        return UNESTABLISHED_ATTRIBUTION.indexOf(String(value)) !== -1;
-    }
-
-    /**
-     * Description: render one transcript row. Keyed and linked on
-     *   transcript_id only; session_ref appears as text and never as an
-     *   identity.
-     * Inputs: doc (Document), row (object),
-     *         opts (object) - {onSelect: function(transcriptId, row),
-     *                          unattributed: boolean}
-     * Output: Element - the <li>.
-     */
-    function renderRow(doc, row, opts) {
-        var options = opts || {};
-        var r = row || {};
-        var li = el(doc, 'li', ROOT_CLASS + '__row', null);
-        li.setAttribute('data-transcript-id', String(r.transcript_id));
-        li.setAttribute('data-scheme', String(r.session_ref_scheme || 'unknown'));
-
-        var btn = el(doc, 'button', ROOT_CLASS + '__open', null);
-        btn.setAttribute('type', 'button');
-        btn.setAttribute('data-action', 'open-transcript');
-        // The id is the addressable thing and it goes on the control, so
-        // no click path can end up keyed on the label.
-        btn.setAttribute('data-transcript-id', String(r.transcript_id));
-
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__ref',
-            String(r.session_ref === null || r.session_ref === undefined
-                ? 'no session_ref recorded' : r.session_ref)));
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__id', 'transcript ' + r.transcript_id));
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__lines',
-            fmtCount(r.line_count) + ' lines'));
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__bytes',
-            window.ArchiveFormat ? window.ArchiveFormat.formatBytes(r.raw_byte_length)
-                                 : String(r.raw_byte_length)));
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__ingested',
-            window.ArchiveFormat ? window.ArchiveFormat.formatTimestamp(r.ingested_at)
-                                 : String(r.ingested_at)));
-
-        // The two attribution conditions, side by side and never merged.
-        if (options.unattributed) {
-            btn.appendChild(el(doc, 'span',
-                ROOT_CLASS + '__badge ' + ROOT_CLASS + '__badge--no-project',
-                'NO PROJECT: this transcript is attributed to no project'));
-        }
-        if (isUnestablished(r.host_attribution)) {
-            btn.appendChild(el(doc, 'span',
-                ROOT_CLASS + '__badge ' + ROOT_CLASS + '__badge--host-unknown',
-                'HOST NOT ESTABLISHED: host_attribution is ' + String(r.host_attribution) +
-                '. This is a separate condition from having no project.'));
-        }
-        if (typeof options.onSelect === 'function') {
-            btn.addEventListener('click', function () {
-                options.onSelect(r.transcript_id, r);
-            });
-        }
-        li.appendChild(btn);
-        return li;
-    }
+    var ROOT_CLASS = ROW.ROOT_CLASS;
+    var PAGE_SIZE = ROW.PAGE_SIZE;
+    var SCHEME_FILTERS = ROW.SCHEME_FILTERS;
+    var SCHEME_DEFS = ROW.SCHEME_DEFS;
+    var UNESTABLISHED_ATTRIBUTION = ROW.UNESTABLISHED_ATTRIBUTION;
+    var el = ROW.el;
+    var wireScheme = ROW.wireScheme;
+    var describeFilter = ROW.describeFilter;
+    var fmtCount = ROW.fmtCount;
+    var isUnestablished = ROW.isUnestablished;
+    var renderRow = ROW.renderRow;
 
     /**
      * Description: build the transcript list view.
@@ -255,6 +110,8 @@ console.log('[ArchiveTranscriptList Module] Loading...');
         var nextCursor = null;
         var hasMore = null;
         var scheme = SCHEME_FILTERS.ALL;
+        /** The scheme button group, so its pressed state can be repainted. */
+        var schemeBox = null;
         // The server's meta.filters from the LAST renderable page. Null
         // until one arrives, so "no filter block" is distinguishable
         // from "a filter block saying applied:false".
@@ -267,22 +124,46 @@ console.log('[ArchiveTranscriptList Module] Loading...');
          * Inputs: none. Output: Element.
          */
         function buildSchemeControls() {
-            var box = el(doc, 'div', ROOT_CLASS + '__schemes', null);
-            var defs = [
-                { v: SCHEME_FILTERS.ALL, label: 'All rows' },
-                { v: SCHEME_FILTERS.CONVERSATIONS, label: 'Conversations only' },
-                { v: SCHEME_FILTERS.SIDECHAINS, label: 'Agent sidechains only' }
-            ];
-            for (var i = 0; i < defs.length; i++) {
+            schemeBox = el(doc, 'div', ROOT_CLASS + '__schemes', null);
+            schemeBox.setAttribute('role', 'group');
+            schemeBox.setAttribute('aria-label', 'Session reference scheme filter');
+            for (var i = 0; i < SCHEME_DEFS.length; i++) {
                 (function (def) {
                     var b = el(doc, 'button', ROOT_CLASS + '__scheme', def.label);
                     b.setAttribute('type', 'button');
                     b.setAttribute('data-scheme-filter', def.v);
                     b.addEventListener('click', function () { setSchemeFilter(def.v); });
-                    box.appendChild(b);
-                })(defs[i]);
+                    schemeBox.appendChild(b);
+                })(SCHEME_DEFS[i]);
             }
-            return box;
+            paintSchemePressed();
+            return schemeBox;
+        }
+
+        /**
+         * Description: write which scheme filter is ON.
+         *
+         *   THE FILTER WORKED AND SAID NOTHING. Measured 2026-09-01: the
+         *   three buttons carried no `aria-pressed` and no active class,
+         *   before or after a click, so choosing "Conversations only"
+         *   changed the row count from 50 to 27 while the three controls
+         *   stayed visually and semantically identical. A filter you
+         *   cannot tell is on is a filter you cannot trust.
+         *
+         *   `aria-pressed` is written on EVERY button, not only the
+         *   active one: a toggle button that carries the attribute only
+         *   when pressed is announced as an ordinary button the rest of
+         *   the time, so the off state stops being a state.
+         * Inputs: none. Output: void.
+         */
+        function paintSchemePressed() {
+            if (!schemeBox) return;
+            var buttons = schemeBox.querySelectorAll('[data-scheme-filter]');
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].setAttribute('aria-pressed',
+                    buttons[i].getAttribute('data-scheme-filter') === scheme
+                        ? 'true' : 'false');
+            }
         }
 
         /**
@@ -465,6 +346,10 @@ console.log('[ArchiveTranscriptList Module] Loading...');
          */
         function setSchemeFilter(value) {
             scheme = value || SCHEME_FILTERS.ALL;
+            // Painted BEFORE the reload, not after: the button must show
+            // the choice the moment it is made, not when the server
+            // answers. The reload can fail; the choice was still made.
+            paintSchemePressed();
             if (scope.id === null || scope.id === undefined) {
                 return Promise.resolve('no-scope');
             }
@@ -476,6 +361,38 @@ console.log('[ArchiveTranscriptList Module] Loading...');
             load: load,
             loadMore: loadMore,
             setSchemeFilter: setSchemeFilter,
+            /**
+             * Description: the scheme filter currently applied.
+             * Inputs: none. Output: string - a SCHEME_FILTERS value.
+             */
+            scheme: function () { return scheme; },
+            /**
+             * Description: advance to the next scheme filter, which is
+             *   what the `t` key does.
+             *
+             *   THE CYCLE ORDER LIVES HERE, not in the composition root,
+             *   and that is the point: `SCHEME_DEFS` is also the order
+             *   the three buttons are drawn in, so the keyboard order and
+             *   the visual order are one declaration and cannot drift
+             *   into disagreeing about what "next" means.
+             *
+             *   An unrecognised current value yields index -1, and -1 + 1
+             *   is 0, so the cycle RESTARTS at 'all' rather than throwing
+             *   or sticking. That is a deliberate recovery, not an
+             *   accident of the arithmetic.
+             * Inputs: none.
+             * Output: Promise<string> - the reload's outcome token, from
+             *   setSchemeFilter.
+             * Example: cycleScheme()  // 'all' -> 'uuid' -> 'agent' -> 'all'
+             */
+            cycleScheme: function () {
+                var at = -1;
+                for (var i = 0; i < SCHEME_DEFS.length; i++) {
+                    if (SCHEME_DEFS[i].v === scheme) { at = i; break; }
+                }
+                return setSchemeFilter(
+                    SCHEME_DEFS[(at + 1) % SCHEME_DEFS.length].v);
+            },
             /** Description: loaded rows, for tests. Output: Array. */
             rows: function () { return rows.slice(); },
             /** Description: the paging cursor, for tests. Output: string|null. */
@@ -492,6 +409,7 @@ console.log('[ArchiveTranscriptList Module] Loading...');
         isUnestablished: isUnestablished,
         renderRow: renderRow,
         SCHEME_FILTERS: SCHEME_FILTERS,
+        SCHEME_DEFS: SCHEME_DEFS,
         UNESTABLISHED_ATTRIBUTION: UNESTABLISHED_ATTRIBUTION,
         PAGE_SIZE: PAGE_SIZE,
         ROOT_CLASS: ROOT_CLASS

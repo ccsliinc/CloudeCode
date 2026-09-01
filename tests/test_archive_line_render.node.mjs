@@ -76,7 +76,7 @@ function loadModules(doc) {
     context.globalThis = context;
     vm.createContext(context);
     for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-        'archive-outcome-view.js', 'archive-body-cache.js',
+        'archive-outcome-view.js', 'archive-body-gate.js', 'archive-body-cache.js',
         'archive-line-render.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),

@@ -31,7 +31,18 @@
  * into the filter is the most common way a keyboard map becomes
  * something people turn off.
  *
- * Pure. No DOM, no globals beyond the export.
+ * WHAT IN HERE IS PURE, STATED HONESTLY. `resolve()`, `resolveEscape()`,
+ * `bindings()` and `createSelection()` are pure and DOM-free, so every
+ * branch is testable under plain Node. `openHelp()` is the ONE DOM
+ * function in this file, and it lives here deliberately rather than in a
+ * help-panel module: the panel renders `bindings()` and nothing else, and
+ * a second file is how a key map and the help describing it drift into
+ * two tables that disagree. A help panel that lies is worse than none.
+ *
+ * `createSelection()` is the cursor the composition root drives j/k with.
+ * It holds a COUNT and an INDEX and no rows at all, which is what lets a
+ * selection survive its row leaving a virtualized render window: there is
+ * no element for the selection to lose.
  */
 
 console.log('[ArchiveKeys Module] Loading...');
@@ -56,7 +67,8 @@ console.log('[ArchiveKeys Module] Loading...');
         DISMISS_SEARCH: 'dismiss-search',
         LOAD_MORE: 'load-more',
         OPEN_EXPORT: 'open-export',
-        TOGGLE_SCHEME: 'toggle-scheme'
+        TOGGLE_SCHEME: 'toggle-scheme',
+        OPEN_HELP: 'open-help'
     };
 
     /**
@@ -72,7 +84,13 @@ console.log('[ArchiveKeys Module] Loading...');
         's': ACTIONS.FOCUS_SEARCH,
         'm': ACTIONS.LOAD_MORE,
         'e': ACTIONS.OPEN_EXPORT,
-        't': ACTIONS.TOGGLE_SCHEME
+        't': ACTIONS.TOGGLE_SCHEME,
+        // '?' is Shift+/ and `event.key` reports the CHARACTER PRODUCED,
+        // so the browser hands us a literal '?' while '/' arrives only
+        // unshifted. Binding the character is the whole implementation:
+        // no shiftKey branch, '/' still resolves to FOCUS_FILTER, and
+        // hasCommandModifier already excludes Shift.
+        '?': ACTIONS.OPEN_HELP
     };
 
     /**
@@ -193,15 +211,285 @@ console.log('[ArchiveKeys Module] Loading...');
             { keys: 'm', action: ACTIONS.LOAD_MORE, note: 'load the next page' },
             { keys: 'e', action: ACTIONS.OPEN_EXPORT, note: 'open the export modal' },
             { keys: 't', action: ACTIONS.TOGGLE_SCHEME, note: 'cycle the scheme split' },
+            { keys: '?', action: ACTIONS.OPEN_HELP, note: 'show this key list' },
             { keys: 'Escape', action: ACTIONS.CLEAR_FILTER,
               note: 'clear the filter, then dismiss search, then go back one pane' }
         ];
+    }
+
+    /**
+     * The index meaning "nothing is selected" - a real state with its own
+     * behaviour in move(), not merely a sentinel for "empty".
+     * @type {number}
+     */
+    var NOTHING_SELECTED = -1;
+
+    /**
+     * Description: a PURE index cursor for a virtualized list. It holds a
+     *   COUNT and an INDEX and no rows whatsoever, which is what makes a
+     *   selection survive its row scrolling out of the render window:
+     *   there is no element for the cursor to lose. No DOM, no globals,
+     *   no reference to the data it indexes.
+     * Inputs: none. Output: object -
+     *   count(): number, setCount(n): void, index(): number (-1 when
+     *   nothing is selected), select(i): number, move(delta): number,
+     *   has(): boolean.
+     * Example: sel.setCount(3); sel.move(-1) -> 2, k on a fresh list
+     *   selects the END; sel.setCount(9) leaves the index at 2, because
+     *   paging appended rows and must not move a selection.
+     */
+    function createSelection() {
+        var count = 0;
+        var index = NOTHING_SELECTED;
+
+        /**
+         * Description: coerce a caller-supplied number, treating anything
+         *   non-finite as 0 rather than letting NaN poison the cursor.
+         * Inputs: value (*) - anything. Output: number - a finite integer.
+         */
+        function toInt(value) {
+            var n = Number(value);
+            return isFinite(n) ? (n < 0 ? Math.ceil(n) : Math.floor(n)) : 0;
+        }
+
+        /**
+         * Description: the MOVEMENT clamp - an index into [0, count-1], or
+         *   NOTHING_SELECTED when the list is empty. A negative lands on 0,
+         *   because moving up past the first row means "stay there".
+         * Inputs: i (number). Output: number.
+         */
+        function clampIntoRange(i) {
+            if (count <= 0) return NOTHING_SELECTED;
+            if (i < 0) return 0;
+            if (i >= count) return count - 1;
+            return i;
+        }
+
+        /**
+         * Description: the SELECTION clamp - clampIntoRange except that a
+         *   negative is an explicit clear, select(-1) being the documented
+         *   way to select nothing. The two genuinely differ, so they are
+         *   two functions rather than one with a flag.
+         * Inputs: i (number). Output: number.
+         */
+        function clampOrClear(i) {
+            if (i < 0) return NOTHING_SELECTED;
+            return clampIntoRange(i);
+        }
+
+        return {
+            /** How many rows the cursor indexes. Output: number. */
+            count: function () { return count; },
+
+            /**
+             * Description: tell the cursor how many rows exist now.
+             *   GROWING PRESERVES THE INDEX UNCHANGED - paging appends rows
+             *   and must not move somebody's selection. Shrinking below the
+             *   cursor clamps to the last index; a count of 0 clears to -1.
+             * Inputs: n (number) - new row count; negatives read as 0.
+             * Output: void.
+             */
+            setCount: function (n) {
+                var next = toInt(n);
+                count = next > 0 ? next : 0;
+                if (count === 0) {
+                    index = NOTHING_SELECTED;
+                } else if (index >= count) {
+                    index = count - 1;
+                }
+                // NOTHING_SELECTED stays: a list that gains rows from
+                // empty has still had nothing selected.
+            },
+
+            /** The selected index. Output: number, -1 when none. */
+            index: function () { return index; },
+
+            /**
+             * Description: select an index. Out of range clamps into range;
+             *   anything negative (including -1) clears.
+             * Inputs: i (number). Output: number - the index selected.
+             */
+            select: function (i) {
+                index = clampOrClear(toInt(i));
+                return index;
+            },
+
+            /**
+             * Description: move the cursor by delta and return where it
+             *   landed. From NOTHING_SELECTED a POSITIVE delta selects the
+             *   first row and a NEGATIVE delta selects the LAST, so k on a
+             *   fresh list selects the end rather than doing nothing.
+             *   Clamps at both ends: NO wraparound, because wrapping from
+             *   the last line of a 30,805-line transcript to the first is
+             *   a hostile surprise.
+             * Inputs: delta (number), may be negative.
+             * Output: number - the new index.
+             */
+            move: function (delta) {
+                var d = toInt(delta);
+                if (count <= 0) return (index = NOTHING_SELECTED);
+                if (d === 0) return index;
+                if (index === NOTHING_SELECTED) {
+                    index = d > 0 ? 0 : count - 1;
+                    return index;
+                }
+                index = clampIntoRange(index + d);
+                return index;
+            },
+
+            /** Whether anything is selected. Output: boolean. */
+            has: function () { return index !== NOTHING_SELECTED; }
+        };
+    }
+
+    /**
+     * Attribute the help overlay is tagged with, so the idempotency check
+     * and any test share one named string rather than four literals.
+     * @type {string} */
+    var HELP_MODAL_ATTR = 'data-modal';
+
+    /** Value of HELP_MODAL_ATTR on the help overlay. @type {string} */
+    var HELP_MODAL_NAME = 'archive-help';
+    /** Selector for an already-open help overlay. @type {string} */
+    var HELP_MODAL_SELECTOR = '[' + HELP_MODAL_ATTR + '="' + HELP_MODAL_NAME + '"]';
+
+    /**
+     * Class prefix for this modal's elements, mirroring the BEM-ish shape
+     * archive-export.js uses.
+     * @type {string}
+     */
+    var HELP_ROOT_CLASS = 'archive-help';
+
+    /** data-action on the close button. @type {string} */
+    var HELP_CLOSE_ACTION = 'close-help';
+
+    /** Column headings for the rendered binding table. @type {Array<string>} */
+    var HELP_COLUMNS = ['Keys', 'What it does'];
+    /**
+     * Description: build one element with a class and optional text. Text
+     *   goes in via textContent, never as markup - a binding note is data.
+     * Inputs: doc (Document), tag, className, text (strings|null).
+     * Output: Element.
+     */
+    function helpEl(doc, tag, className, text) {
+        var node = doc.createElement(tag);
+        if (className) node.className = className;
+        if (text !== null && text !== undefined) node.textContent = String(text);
+        return node;
+    }
+
+    /**
+     * Description: render bindings() as a table. Iterates the live table
+     *   rather than restating it, so a binding added above appears here
+     *   with no second edit. Each row carries data-action so a test can
+     *   assert coverage.
+     * Inputs: doc (Document). Output: Element - a <table>.
+     */
+    function buildHelpTable(doc) {
+        var table = helpEl(doc, 'table', HELP_ROOT_CLASS + '__table', null);
+        var thead = helpEl(doc, 'thead', null, null);
+        var headRow = thead.appendChild(helpEl(doc, 'tr', null, null));
+        HELP_COLUMNS.forEach(function (label) {
+            var th = helpEl(doc, 'th', null, label);
+            th.setAttribute('scope', 'col');
+            headRow.appendChild(th);
+        });
+        table.appendChild(thead);
+        var tbody = helpEl(doc, 'tbody', null, null);
+        bindings().forEach(function (binding) {
+            var row = tbody.appendChild(helpEl(doc, 'tr', null, null));
+            row.setAttribute('data-action', binding.action);
+            row.appendChild(helpEl(doc, 'td', HELP_ROOT_CLASS + '__keys', binding.keys));
+            row.appendChild(helpEl(doc, 'td', HELP_ROOT_CLASS + '__note', binding.note));
+        });
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /**
+     * Description: open the keyboard help as a modal, rendered from
+     *   bindings(). Registers with ModalStack, which is what makes Escape
+     *   close THIS and not the screen behind it: resolveEscape() already
+     *   returns null while a modal is open, so the ordering is settled and
+     *   this adds no Escape listener of its own.
+     * Inputs: options (object) - document (Document) REQUIRED, absent
+     *   throws a TypeError naming it because returning quietly would leave
+     *   a `?` key that does nothing and reports nothing; onClose
+     *   (function|undefined) called once when the modal closes.
+     * Output: {overlay: Element, close: function} - `close` is safe to
+     *   call twice. If a help modal is already in `document`, the existing
+     *   one's handle comes back rather than a second being stacked.
+     * Example: ArchiveKeys.openHelp({document: document}).close();
+     */
+    function openHelp(options) {
+        var opts = options || {};
+        var doc = opts.document;
+        if (!doc) throw new TypeError('ArchiveKeys.openHelp requires a "document" argument');
+        var stack = (typeof window !== 'undefined' && window.ModalStack) ? window.ModalStack : null;
+
+        /**
+         * Description: the close path for one overlay, shared by the fresh
+         *   and already-open branches so they cannot drift.
+         * Inputs: node (Element). Output: function - idempotent close.
+         */
+        function closerFor(node) {
+            var closed = false;
+            return function close() {
+                if (closed) return;
+                closed = true;
+                if (stack) stack.pop(node);
+                if (node.parentNode) node.parentNode.removeChild(node);
+                if (typeof opts.onClose === 'function') opts.onClose();
+            };
+        }
+
+        // Already open? Two identical dialogs stacked on one `?` press is
+        // worse than a no-op, so hand back the live one.
+        var existing = typeof doc.querySelector === 'function'
+            ? doc.querySelector(HELP_MODAL_SELECTOR) : null;
+        if (existing) return { overlay: existing, close: closerFor(existing) };
+
+        var overlay = helpEl(doc, 'div', 'modal-overlay ' + HELP_ROOT_CLASS + '-overlay', null);
+        overlay.setAttribute(HELP_MODAL_ATTR, HELP_MODAL_NAME);
+
+        var content = helpEl(doc, 'div', 'modal-content ' + HELP_ROOT_CLASS + '__content', null);
+        content.setAttribute('role', 'dialog');
+        content.setAttribute('aria-modal', 'true');
+        var header = helpEl(doc, 'div', 'modal-header ' + HELP_ROOT_CLASS + '__header',
+            'Keyboard shortcuts');
+        var body = helpEl(doc, 'div', 'modal-body ' + HELP_ROOT_CLASS + '__body', null);
+        body.appendChild(buildHelpTable(doc));
+        var closeBtn = helpEl(doc, 'button', HELP_ROOT_CLASS + '__close', 'Close');
+        closeBtn.setAttribute('type', 'button');
+        closeBtn.setAttribute('data-action', HELP_CLOSE_ACTION);
+        body.appendChild(closeBtn);
+        content.appendChild(header);
+        content.appendChild(body);
+        overlay.appendChild(content);
+
+        var close = closerFor(overlay);
+        if (typeof closeBtn.addEventListener === 'function') {
+            closeBtn.addEventListener('click', close);
+        }
+
+        if (doc.body) doc.body.appendChild(overlay);
+        if (stack) stack.push(overlay, { onEscape: close });
+
+        // Guarded: a mini-DOM test harness may build elements with no
+        // focus method, and a help panel is not worth throwing over.
+        if (typeof closeBtn.focus === 'function') closeBtn.focus();
+
+        return { overlay: overlay, close: close };
     }
 
     window.ArchiveKeys = {
         resolve: resolve,
         resolveEscape: resolveEscape,
         bindings: bindings,
+        createSelection: createSelection,
+        openHelp: openHelp,
+        HELP_MODAL_ATTR: HELP_MODAL_ATTR,
+        HELP_MODAL_NAME: HELP_MODAL_NAME,
         hasCommandModifier: hasCommandModifier,
         ACTIONS: ACTIONS,
         PLAIN_KEYS: PLAIN_KEYS,

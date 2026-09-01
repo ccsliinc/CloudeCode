@@ -138,9 +138,63 @@ class Launchpad {
         // sessions" section heading row; the 6 sub-actions route back
         // into the same handlers the old inline "new project" section used.
         this.setupNewFab();
+        this.setupArchiveEntry();
         this.bindHeaderHelpToggle();
         // Note: loadProjects() will be called by App.showLaunchpad()
         this._startRunningSessionsPoller();
+    }
+
+    /**
+     * Wire the launchpad's archive row.
+     *
+     * WHY THERE IS A ROW HERE AT ALL. Before it, the archive had no entry
+     * point anywhere in the app: `grep -rn 'archive'` over this file and
+     * header-menu.js returned nothing, and the only control in the whole
+     * DOM matching /archive/ was the archive screen's own Back button.
+     * The message browser was reachable only by typing the URL.
+     *
+     * WHY IT IS A `.project-item`. That is the app's existing "here is a
+     * destination, click it" card - the same component every project row
+     * on this screen already uses - so the row inherits the app's card
+     * fill, accent rail, radius, hover glow and 0.3s transition without
+     * restating a single value. Building a bespoke row here is exactly
+     * the mistake the archive's own CSS made.
+     *
+     * WHY IT IS A `div` AND NOT A `button`. styles.css carries a bare
+     * `button { width: 36px; height: 36px }` reset (40px under the 480px
+     * query), and a class only overrides the properties it declares - a
+     * `.project-item` button would be forced to a 36px box. The project
+     * rows are divs for the same reason. `role="button"` and
+     * `tabindex="0"` carry the semantics the element does not, and the
+     * keyboard handler below carries Enter and Space, which a real
+     * button would have given for free.
+     *
+     * WHY IT SITS DIRECTLY UNDER THE ACTIONS ROW. Same reasoning as the
+     * create control above it: it is a GLOBAL destination whose presence
+     * must not depend on any list's contents. The running-sessions and
+     * recent sections are `display:none` when empty and the project list
+     * can be empty on a fresh install, so anywhere below them is a place
+     * this row could vanish from.
+     *
+     * Navigation goes through window.ArchiveEntry, the one entry
+     * implementation the header overflow item also calls.
+     * Inputs: none.
+     * Output: void.
+     */
+    setupArchiveEntry() {
+        const row = document.getElementById('launchpad-archive-entry');
+        if (!row) return;
+        const go = () => {
+            if (window.ArchiveEntry) window.ArchiveEntry.open();
+            else console.warn('[Launchpad] ArchiveEntry is not loaded');
+        };
+        row.addEventListener('click', go);
+        row.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                e.preventDefault();
+                go();
+            }
+        });
     }
 
     /**
@@ -2804,6 +2858,31 @@ class Launchpad {
                                     <span class="new-fab__label">new console</span>
                                 </button>
                             </div>
+                    </div>
+                </div>
+
+                <!-- THE ARCHIVE ROW. See setupArchiveEntry() above for why
+                     it is here, why it is a .project-item and why it is a
+                     div. No inline onclick anywhere in this block:
+                     src/main.py stamps a script-src 'self' CSP, which
+                     refuses inline handlers silently - the element stays
+                     present, sized and clickable while doing nothing.
+                     NOTE FOR ANY FUTURE EDIT OF THIS BLOCK: no backticks
+                     in here. The whole return value is a template
+                     literal, so a backtick in a comment ends the string
+                     and takes the module out with it - which is exactly
+                     what the first draft of this comment did. -->
+                <div class="launchpad-section" id="archive-section">
+                    <div class="launchpad-section-title">
+                        <span class="launchpad-section-title__text">archive</span>
+                    </div>
+                    <div class="project-list">
+                        <div class="project-item" id="launchpad-archive-entry"
+                             role="button" tabindex="0"
+                             aria-label="message archive">
+                            <div class="project-name">message archive</div>
+                            <div class="project-description">browse ingested transcripts by host, project and line. read-only.</div>
+                        </div>
                     </div>
                 </div>
 

@@ -423,3 +423,77 @@
 /* Reduced motion: there is no animation in this file to disable, and the
  * anti-jump scroll correction is deliberately NOT motion - it is the
  * absence of motion. It stays in every mode. */
+
+/* THE PAGER, THE SELECTED ROW AND THE HELP PANEL, added with the fix for
+ * "only the first 500 lines are reachable". All three obey this file's
+ * contract: colour from custom properties only, and MEANING NEVER CARRIED
+ * BY RADIUS (`terminal`, `gameboy` and `legacy_apple` zero every radius
+ * token). Each state is already distinguished by rendered TEXT or by an
+ * assertable attribute before any of these rules apply. The pager replaced
+ * a bare, buttonless sentence and sits under `.archive-reader__sentinel`,
+ * which states how many lines are loaded. */
+.archive-reader__more {
+    display: block;
+    margin: 0.5rem auto 1.5rem;
+    padding: 0.5rem 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--color-accent-contrast);
+    background: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+.archive-reader__more:hover:not([disabled]) {
+    background: var(--color-accent-strong);
+}
+.archive-reader__more:focus-visible {
+    outline: 2px solid var(--color-accent-border-strong);
+    outline-offset: 2px;
+}
+
+/* IN-FLIGHT IS NOT JUST A DIMMER BUTTON: the label changes and `aria-busy`
+ * is set. A disabled pager that never cleared would be a dead end looking
+ * exactly like the end of the transcript, which is why the JS clears it on
+ * BOTH resolve and reject. */
+.archive-reader__more[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+/* THE KEYBOARD SELECTION. `data-selected="true"` marks exactly one
+ * rendered row; the roving tabindex moves with it. The left bar is the
+ * primary signal: it survives a radius-flattening theme and is independent
+ * of the row background, which varies by record type. */
+.archive-reader__row[data-selected="true"] {
+    background: var(--color-accent-bg-faint);
+    box-shadow: inset 3px 0 0 0 var(--color-accent);
+}
+.archive-reader__row:focus-visible {
+    outline: 2px solid var(--color-accent-border-strong);
+    outline-offset: -2px;
+}
+
+/* The `?` help panel. `.modal-overlay`/`.modal-content` already carry the
+ * app's dialog chrome from styles.css; this only sizes the table. */
+.archive-help__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.archive-help__table th,
+.archive-help__table td {
+    padding: 0.35rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+}
+.archive-help__table th {
+    color: var(--color-fg-muted);
+    font-weight: 600;
+}
+.archive-help__table td:first-child {
+    font-family: var(--font-mono);
+    color: var(--color-accent);
+    white-space: nowrap;
+}

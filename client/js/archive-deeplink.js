@@ -59,6 +59,12 @@ console.log('[ArchiveDeeplink Module] Loading...');
     /** Path prefix every archive route lives under. @type {string} */
     var ARCHIVE_PREFIX = '/archive';
 
+    /** Label of the crumb's first segment, spelled once. @type {string} */
+    var CRUMB_ROOT_LABEL = 'ARCHIVE';
+
+    /** Separator drawn between crumb segments. @type {string} */
+    var CRUMB_SEPARATOR = '>';
+
     /**
      * Query parameters permitted in an archive URL, and the only ones
      * build() will ever emit. ALLOWLIST BY DESIGN - see the header note
@@ -348,6 +354,96 @@ console.log('[ArchiveDeeplink Module] Loading...');
                        lineNo: lineNo, query: query });
     }
 
+    /**
+     * Description: push or replace the address bar for a route.
+     *
+     *   IT LIVES HERE, BESIDE build(), ON PURPOSE. The composition root
+     *   used to own this, which meant the one place that BUILDS an
+     *   archive path and the one place that WRITES it to the address bar
+     *   were different files. They cannot drift while they are the same
+     *   module: a change to what a route looks like reaches the address
+     *   bar in the same edit.
+     * Inputs: route (object) - {view, projectId, transcriptId, lineNo,
+     *           query}, the shape build() takes.
+     *         win (object|null) - the window to drive. Injected rather
+     *           than read off the global so a test can drive a stub; null
+     *           means the real one.
+     *         opts (object|undefined) - {replace: boolean}. Default is a
+     *           push, so Back returns to the previous archive location.
+     * Output: string|null - the path written, or null when nothing was
+     *   written. Null is a real answer with three causes, all of them
+     *   legitimate: the route did not build, the path is already current,
+     *   or the History API refused.
+     * Example: syncUrl({view: 'transcript', transcriptId: 5767}, window)
+     *          // -> '/archive/t/5767'
+     */
+    function syncUrl(route, win, opts) {
+        var w = win || (typeof window !== 'undefined' ? window : null);
+        if (!w || !w.location || !w.history) return null;
+        var path = build(route);
+        if (!path) return null;
+        if (w.location.pathname + w.location.search === path) return null;
+        try {
+            if (opts && opts.replace) w.history.replaceState({}, '', path);
+            else w.history.pushState({}, '', path);
+        } catch (e) {
+            // History API blocked (a sandboxed iframe refuses it). Same
+            // tolerance router.js applies: navigation still works, the
+            // URL simply does not follow. Logged with the path rather
+            // than swallowed, so a silent address bar is diagnosable.
+            console.warn('ArchiveDeeplink: history API refused for ' + path, e);
+            return null;
+        }
+        return path;
+    }
+
+    /**
+     * Description: render a location as a breadcrumb.
+     *
+     *   THE HUMAN-READABLE RENDERING OF A LOCATION SITS BESIDE THE
+     *   MACHINE-READABLE ONE for the same reason syncUrl does: a crumb
+     *   that disagrees with the URL is two answers to "where am I", and
+     *   the person can see both at once.
+     *
+     *   NEVER RENDERS A BLANK CRUMB. An unknown segment is rendered as a
+     *   named unknown by the caller; an empty parts list still renders
+     *   the ARCHIVE root, because a bar with nothing in it reads as a
+     *   loading state rather than as the top level.
+     * Inputs: doc (Document), parts (Array<string>|null) - segments after
+     *   the root, already worded by the caller. rootClass (string) - the
+     *   class prefix the screen owns, passed in rather than assumed so
+     *   this module carries no knowledge of the screen's CSS.
+     * Output: Array<Element> - the crumb children in order, for the
+     *   caller to append. This function owns no container.
+     *
+     *   AN ARRAY RATHER THAN A DocumentFragment, deliberately. A fragment
+     *   is the idiomatic browser answer and it is the wrong one here: the
+     *   repo's test harness (tests/mini-dom.mjs) implements createElement
+     *   and createTextNode and NOT createDocumentFragment, so a fragment
+     *   would make this function unreachable from every unit test while
+     *   working perfectly in a browser. An array costs nothing and is
+     *   testable in both.
+     * Example: renderCrumb(document, ['project 8'], 'archive-screen')
+     *          // -> [span.ARCHIVE, span.sep, span['project 8']]
+     */
+    function renderCrumb(doc, parts, rootClass) {
+        var out = [];
+        var items = [CRUMB_ROOT_LABEL].concat(parts || []);
+        for (var i = 0; i < items.length; i++) {
+            if (i > 0) {
+                var sep = doc.createElement('span');
+                sep.className = rootClass + '__crumb-sep';
+                sep.appendChild(doc.createTextNode(CRUMB_SEPARATOR));
+                out.push(sep);
+            }
+            var item = doc.createElement('span');
+            item.className = rootClass + '__crumb-item';
+            item.appendChild(doc.createTextNode(String(items[i])));
+            out.push(item);
+        }
+        return out;
+    }
+
     window.ArchiveDeeplink = {
         parse: parse,
         parseWith: parseWith,
@@ -356,6 +452,9 @@ console.log('[ArchiveDeeplink Module] Loading...');
         buildProjectPath: buildProjectPath,
         buildTranscriptPath: buildTranscriptPath,
         buildLinePath: buildLinePath,
+        syncUrl: syncUrl,
+        renderCrumb: renderCrumb,
+        CRUMB_ROOT_LABEL: CRUMB_ROOT_LABEL,
         ROUTE_PATTERNS: ROUTE_PATTERNS,
         QUERY_ALLOWLIST: QUERY_ALLOWLIST,
         ARCHIVE_PREFIX: ARCHIVE_PREFIX

@@ -30,17 +30,129 @@ console.log('[ArchiveScreenReader Module] Loading...');
     var NOTE_ATTR = 'data-archive-screen-note';
 
     /**
+     * Marker value for the note the deep-link path leaves behind.
+     * @type {string}
+     */
+    var NOTE_MARK_LINE_NOT_REACHED = 'line-not-reached';
+
+    /**
+     * Marker value for every note `loadMoreLines` leaves behind. It is
+     * DELIBERATELY distinct from NOTE_MARK_LINE_NOT_REACHED so a forward
+     * page's refusal can be cleared, and asserted on, without touching
+     * the deep link's own note - two different questions were asked and
+     * they get two different answers.
+     * @type {string}
+     */
+    var NOTE_MARK_LOAD_MORE = 'load-more';
+
+    /**
+     * The outcome TOKEN returned when this module could not evaluate
+     * something. HYPHENATED, and that is not a local choice: it is
+     * `archive-outcome.js`'s `TOKENS` vocabulary, which every caller
+     * switching on a token compares against. Spelled any other way it
+     * would silently match no branch anywhere.
+     * @type {string}
+     */
+    var TOKEN_CANNOT_DETERMINE = 'cannot-determine';
+
+    /**
+     * The `result_status` VALUE the SERVER uses on the wire, which is
+     * UNDERSCORED. Deliberately not the same string as
+     * TOKEN_CANNOT_DETERMINE: different alphabets for different layers.
+     * `classify()` matches against its own `RESULT_STATUSES`, which holds
+     * `cannot_determine`, so a synthesised envelope must use this
+     * spelling or classify() calls it unrecognised and answers
+     * `transport-error`.
+     * @type {string}
+     */
+    var WIRE_STATUS_CANNOT_DETERMINE = 'cannot_determine';
+
+    /**
+     * The outcome token returned when the request never produced a body.
+     * @type {string}
+     */
+    var TOKEN_TRANSPORT_ERROR = 'transport-error';
+
+    /**
+     * Distance from the last line the reader holds to the first line the
+     * next page must start at. `start_line` is a LINE NUMBER and is
+     * inclusive (src/core/archive_start_line.py: `start_line=7111`
+     * returns line 7111 as the FIRST row), so the next window begins one
+     * past the last row already held. Named rather than written as a bare
+     * 1 so the inclusiveness is stated where the arithmetic happens.
+     * @type {number}
+     */
+    var NEXT_LINE_STEP = 1;
+
+    /**
+     * In-flight forward-paging requests, keyed by transcript id. Exists
+     * only to make a second `loadMoreLines` for the same transcript join
+     * the first rather than start a second fetch and append its rows
+     * twice. Entries are removed on settle, success and failure alike.
+     * @type {Object<string, Promise<string>>}
+     */
+    var inFlight = {};
+
+    /**
      * Description: remove notes a previous load left behind. A stale
      *   could-not-evaluate about a different transcript's line is worse
      *   than no note at all.
-     * Inputs: pane (Element).
+     * Inputs: pane (Element), mark (string|undefined) - when given, only
+     *   notes carrying that marker value are removed; when omitted, every
+     *   note this module has inserted is removed.
      * Output: void.
+     * Example: clearNotes(pane, 'load-more')
      */
-    function clearNotes(pane) {
-        var stale = pane.querySelectorAll('[' + NOTE_ATTR + ']');
+    function clearNotes(pane, mark) {
+        var selector = (mark === undefined || mark === null)
+            ? '[' + NOTE_ATTR + ']'
+            : '[' + NOTE_ATTR + '="' + mark + '"]';
+        var stale = pane.querySelectorAll(selector);
         for (var i = 0; i < stale.length; i++) {
             stale[i].parentNode.removeChild(stale[i]);
         }
+    }
+
+    /**
+     * Description: put an outcome envelope into the pane as a note.
+     *
+     *   EVERY block this module shows goes through here, and here goes
+     *   through `archive-outcome-view.js`. That file is the only one that
+     *   decides what an outcome block looks like; a second hand-rolled
+     *   block would be exactly the drift that rule exists to stop.
+     * Inputs: ctx (object) - {pane}. envelope (object) - a real API
+     *   envelope, either one the server sent or one synthesised here.
+     *   mark (string) - the NOTE_ATTR value to tag it with.
+     * Output: Element - the inserted note.
+     */
+    function insertOutcomeNote(ctx, envelope, mark) {
+        var note = window.ArchiveOutcomeView.renderOutcomeBlock(
+            envelope, { document: ctx.pane.ownerDocument });
+        note.setAttribute(NOTE_ATTR, mark);
+        ctx.pane.insertBefore(note, ctx.pane.firstChild);
+        return note;
+    }
+
+    /**
+     * Description: synthesise a CLIENT-SIDE could-not-evaluate and show
+     *   it. The envelope is real, not a special case: it carries the same
+     *   fields the server would send, so the view cannot tell the
+     *   difference and no second rendering path exists.
+     * Inputs: ctx (object) - {pane}. subject (string) - what could not be
+     *   evaluated. reason (string) - why, in words a person can act on.
+     *   mark (string) - the NOTE_ATTR value.
+     * Output: Element - the inserted note.
+     * Example: insertCannotDetermine(ctx, 'transcript:5767',
+     *              'the reader holds no rows', 'load-more')
+     */
+    function insertCannotDetermine(ctx, subject, reason, mark) {
+        return insertOutcomeNote(ctx, {
+            result: null,
+            result_status: WIRE_STATUS_CANNOT_DETERMINE,
+            scope_status: 'resolved',
+            unevaluated: [{ subject: subject, reason: reason }],
+            meta: {}
+        }, mark);
     }
 
     /**
@@ -132,30 +244,21 @@ console.log('[ArchiveScreenReader Module] Loading...');
         ctx.pane.removeAttribute('data-highlight-line');
         // A CLIENT-SIDE could-not-evaluate, synthesised as a real
         // envelope and handed to archive-outcome-view.js rather than
-        // hand-built here. That file is the only one that decides what a
-        // cannot_determine looks like; a second hand-rolled block would
-        // be exactly the drift that rule exists to stop.
-        var note = window.ArchiveOutcomeView.renderOutcomeBlock({
-            result: null,
-            result_status: 'cannot_determine',
-            scope_status: 'resolved',
-            unevaluated: [{
-                subject: 'transcript:' + ctx.transcriptId + ' line:' + lineNo,
-                reason: 'line ' + lineNo + ' is not in the ' +
-                    (rows ? rows.length : 0) + ' rows that were loaded. ' +
-                    (offsetRequested === true
-                        ? 'The page WAS requested with start_line=' + lineNo +
-                          ', so the server and these rows disagree and neither ' +
-                          'has been shown to be right here.'
-                        : 'This page was NOT requested with a start_line, so ' +
-                          'the line was never asked for.') +
-                    ' The reader is NOT showing line ' + lineNo + ' and is NOT ' +
-                    'asserting that the line does not exist.'
-            }],
-            meta: {}
-        }, { document: ctx.pane.ownerDocument });
-        note.setAttribute(NOTE_ATTR, 'line-not-reached');
-        ctx.pane.insertBefore(note, ctx.pane.firstChild);
+        // hand-built here.
+        insertCannotDetermine(
+            ctx,
+            'transcript:' + ctx.transcriptId + ' line:' + lineNo,
+            'line ' + lineNo + ' is not in the ' +
+                (rows ? rows.length : 0) + ' rows that were loaded. ' +
+                (offsetRequested === true
+                    ? 'The page WAS requested with start_line=' + lineNo +
+                      ', so the server and these rows disagree and neither ' +
+                      'has been shown to be right here.'
+                    : 'This page was NOT requested with a start_line, so ' +
+                      'the line was never asked for.') +
+                ' The reader is NOT showing line ' + lineNo + ' and is NOT ' +
+                'asserting that the line does not exist.',
+            NOTE_MARK_LINE_NOT_REACHED);
         return false;
     }
 
@@ -230,11 +333,167 @@ console.log('[ArchiveScreenReader Module] Loading...');
         });
     }
 
+    /**
+     * Description: decide where the next forward page starts, from what
+     *   the reader already holds.
+     * Inputs: reader (object) - must expose spine().
+     * Output: {next: number} when a position exists, or {reason: string}
+     *   naming precisely why there is none. Never a number and a reason.
+     * Example: nextStartLine(reader) // -> {next: 500}
+     */
+    function nextStartLine(reader) {
+        if (typeof reader.spine !== 'function') {
+            return { reason: 'the reader does not expose spine(), so there ' +
+                'is no way to read the position this page would continue from' };
+        }
+        var rows = reader.spine();
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return { reason: 'the reader holds no rows, so there is no ' +
+                'position to page from' };
+        }
+        var last = rows[rows.length - 1];
+        var lineNo = last ? last.line_no : undefined;
+        if (typeof lineNo !== 'number' || !isFinite(lineNo)) {
+            return { reason: 'the last row the reader holds carries no finite ' +
+                'line_no (' + String(lineNo) + '), so the line number this ' +
+                'page would continue from cannot be read' };
+        }
+        return { next: lineNo + NEXT_LINE_STEP };
+    }
+
+    /**
+     * Description: fetch the NEXT window of spine rows and append it.
+     *
+     *   WHAT THIS FIXES. The reader loaded one page and had no forward
+     *   paging at all, so transcript 5767's 30,805 lines were a 500-line
+     *   transcript as far as anyone could see. `start_line` shipped on
+     *   the server 2026-08-31 and until now only the deep link used it.
+     *
+     *   THREE OUTCOMES, ALL THROUGH THE EXISTING MACHINERY. A transport
+     *   failure, an envelope the server itself named a refusal, and a
+     *   renderable page are three different answers. The server's own
+     *   named refusal - `past_last_line` for a start_line past the end,
+     *   for instance - is rendered AS THE SERVER SENT IT, because a
+     *   measurement the server made beats anything guessed here. The
+     *   fourth case, a renderable `ok` carrying zero rows, is a state
+     *   nobody measured: it is neither a success to swallow nor an end of
+     *   transcript to claim, so it is named as a could-not-evaluate.
+     *
+     *   IT NEVER SENDS A CURSOR. `start_line` and `cursor` together is a
+     *   client error the server refuses by name under subject
+     *   `start_line` (HTTP 400). Only `limit` and `startLine` go out.
+     *
+     *   IT NEVER TOUCHES A BODY, AND THAT IS A SECURITY PROPERTY, not an
+     *   accident of scope. Only raw spine rows are appended; bodies are
+     *   fetched later by the reader's own cache path, which is what runs
+     *   them through `archive-mask.js`. This function therefore cannot
+     *   bypass secret masking. Any future change here that fetches a body
+     *   directly, or that renders text off one, would be a
+     *   credential-disclosure path and must not be made in this file.
+     * Inputs: ctx (object) - {reader, pane, api, transcriptId,
+     *   spinePageRows}, the same shape load() takes.
+     * Output: Promise<string> - an outcome token. Concurrent calls for
+     *   the same transcript receive the SAME promise.
+     * Example: loadMoreLines({reader, pane, api: window.API,
+     *              transcriptId: 5767, spinePageRows: 500})  // -> 'ok'
+     */
+    function loadMoreLines(ctx) {
+        var key = String(ctx.transcriptId);
+        // REENTRANCY. A second call while one is in flight joins the
+        // first. Starting a second fetch would append the same window
+        // twice, and a duplicated spine is not visibly wrong.
+        if (Object.prototype.hasOwnProperty.call(inFlight, key)) {
+            return inFlight[key];
+        }
+
+        // Only this module's own notes are cleared, so a stale refusal
+        // about a previous page cannot sit above a page that worked,
+        // while the deep link's note is left alone.
+        clearNotes(ctx.pane, NOTE_MARK_LOAD_MORE);
+
+        var subject = 'transcript:' + ctx.transcriptId + ' load-more';
+        var start = nextStartLine(ctx.reader);
+        if (start.reason !== undefined) {
+            // COULD NOT EVALUATE, and no network call. Asking the server
+            // for a window we cannot name would be a guess.
+            insertCannotDetermine(ctx, subject, start.reason +
+                '. No request was sent and no claim is being made about ' +
+                'whether more lines exist.', NOTE_MARK_LOAD_MORE);
+            return Promise.resolve(TOKEN_CANNOT_DETERMINE);
+        }
+        var next = start.next;
+
+        var request = ctx.api.listArchiveLines(ctx.transcriptId, {
+            limit: ctx.spinePageRows,
+            startLine: next
+        }).then(function (page) {
+            if (page.transportError) {
+                insertCannotDetermine(ctx, subject,
+                    'the request for the page beginning at line ' + next +
+                    ' produced no response body, so whether more lines ' +
+                    'exist was not measured.', NOTE_MARK_LOAD_MORE);
+                return TOKEN_TRANSPORT_ERROR;
+            }
+            var classified = window.ArchiveOutcome.classify(page.envelope);
+            if (!window.ArchiveOutcome.isRenderable(classified.token)) {
+                // The SERVER's envelope, unaltered. This is the path that
+                // carries its named out-of-range answer; swallowing it and
+                // substituting a client-side guess would throw away the
+                // one measurement that was actually taken.
+                insertOutcomeNote(ctx, page.envelope, NOTE_MARK_LOAD_MORE);
+                return classified.token;
+            }
+            var rows = page.envelope.result || [];
+            if (rows.length === 0) {
+                insertCannotDetermine(ctx, subject,
+                    'the server answered ' + classified.token + ' for the ' +
+                    'page beginning at line ' + next + ' and returned zero ' +
+                    'rows without refusing. That is neither an end of ' +
+                    'transcript nor a page, and nothing here measured which ' +
+                    'it is.', NOTE_MARK_LOAD_MORE);
+                return TOKEN_CANNOT_DETERMINE;
+            }
+            // ONLY an explicit boolean false proves the spine is complete.
+            // `null` means the server did not answer has_more and must not
+            // render an end-of-transcript state.
+            //
+            // NOTE THE ASYMMETRY WITH load(), WHICH LOOKS LIKE A BUG AND IS
+            // NOT. load() forces `complete` to false whenever a start_line
+            // was used, because a DEEP LINK jumps into the middle of a
+            // transcript and every line BEFORE the offset is missing - so
+            // even a truthful `has_more: false` leaves an incomplete spine.
+            // Here the offset is the line immediately after the end of a
+            // CONTIGUOUS spine the reader already holds, so nothing before
+            // it is missing, and `has_more === false` genuinely does mean
+            // the whole transcript is now loaded.
+            var complete = window.ArchiveOutcome.hasMore(page.envelope) === false;
+            ctx.reader.appendSpine(rows, complete);
+            return classified.token;
+        });
+
+        // Clear the in-flight entry on SETTLE, both ways. A failure that
+        // left the entry behind would wedge this transcript's paging for
+        // the life of the page, and the rethrow keeps the rejection
+        // visible rather than swallowing it here.
+        var tracked = request.then(function (token) {
+            delete inFlight[key];
+            return token;
+        }, function (err) {
+            delete inFlight[key];
+            throw err;
+        });
+        inFlight[key] = tracked;
+        return tracked;
+    }
+
     window.ArchiveScreenReader = {
         load: load,
+        loadMoreLines: loadMoreLines,
         scrollToLine: scrollToLine,
         clearNotes: clearNotes,
-        NOTE_ATTR: NOTE_ATTR
+        NOTE_ATTR: NOTE_ATTR,
+        NOTE_MARK_LINE_NOT_REACHED: NOTE_MARK_LINE_NOT_REACHED,
+        NOTE_MARK_LOAD_MORE: NOTE_MARK_LOAD_MORE
     };
     console.log('[ArchiveScreenReader Module] Exported as window.ArchiveScreenReader');
 })();

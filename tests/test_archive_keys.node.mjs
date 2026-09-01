@@ -13,6 +13,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createEnvironment } from './mini-dom.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -53,6 +54,37 @@ function load() {
         context, { filename: 'archive-keys.js' }
     );
     return context.window.ArchiveKeys;
+}
+
+/**
+ * Load ArchiveKeys against a real mini-DOM plus a recording ModalStack.
+ *
+ * `openHelp` is the ONE DOM function in archive-keys.js, so it needs a
+ * document and the modal registry the real app supplies. The stack is
+ * recorded rather than stubbed away, because "did it register" is the
+ * assertion that matters: an unregistered overlay means Escape reaches
+ * the screen behind it.
+ * @param {object} env - a createEnvironment() result.
+ * @returns {{keys: object, stack: object}} The module and the stack.
+ */
+function withModalStack(env) {
+    const context = {
+        window: { document: env.document },
+        document: env.document,
+        console: { log() {}, warn() {}, error() {}, debug() {} },
+    };
+    let entries = [];
+    context.window.ModalStack = {
+        push(overlayEl, options) { entries.push({ overlayEl, options }); },
+        pop(overlayEl) { entries = entries.filter((e) => e.overlayEl !== overlayEl); },
+        depth() { return entries.length; },
+    };
+    vm.createContext(context);
+    vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-keys.js'), 'utf8'),
+        context, { filename: 'archive-keys.js' }
+    );
+    return { keys: context.window.ArchiveKeys, stack: context.window.ModalStack };
 }
 
 const keys = load();
@@ -173,7 +205,170 @@ test('every binding in the help table actually resolves', () => {
 test('the action set has not silently grown', () => {
     // A binding added without a test is a binding nobody checked. This
     // fails loudly when the map changes, which is the point.
-    assert.equal(Object.keys(A).length, 11);
+    //
+    // 11 -> 12 on 2026-09-01: OPEN_HELP was added, bound to `?`. The
+    // guard did exactly its job - it failed on the change - and the
+    // number moved only alongside the OPEN_HELP tests below. Bumping it
+    // without adding those would have converted a real guard into a
+    // rubber stamp.
+    assert.equal(Object.keys(A).length, 12);
+});
+
+// =====================================================================
+// OPEN_HELP - the `?` key, and the panel it opens.
+//
+// `bindings()` was a complete, well-written help table that NOTHING
+// CALLED: no help panel, no `?` key, no hint anywhere in the UI. These
+// tests exist because the previous state was not a broken feature, it
+// was an INVISIBLE one, and an invisible feature has no failing test to
+// find.
+// =====================================================================
+
+test('? resolves to OPEN_HELP and / still resolves to FOCUS_FILTER', () => {
+    // `?` is Shift+/ and `event.key` reports the CHARACTER PRODUCED, so
+    // the two are different key strings and neither shadows the other.
+    assert.equal(keys.resolve({ key: '?' }, {}), A.OPEN_HELP);
+    assert.equal(keys.resolve({ key: '/' }, {}), A.FOCUS_FILTER);
+    assert.equal(keys.resolve({ key: '?', shiftKey: true }, {}), A.OPEN_HELP,
+        'an explicit shiftKey must not change the answer');
+});
+
+test('? is claimed by nobody while typing, under a modal, or with a modifier', () => {
+    assert.equal(keys.resolve({ key: '?' }, { inTextField: true }), null);
+    assert.equal(keys.resolve({ key: '?' }, { modalOpen: true }), null,
+        'the open help panel itself must not re-trigger the help panel');
+    assert.equal(keys.resolve({ key: '?', metaKey: true }, {}), null);
+    assert.equal(keys.resolve({ key: '?', ctrlKey: true }, {}), null);
+});
+
+test('the help panel renders one row per binding and none invented', () => {
+    const env = createEnvironment();
+    const ctx = withModalStack(env);
+    const handle = ctx.keys.openHelp({ document: env.document });
+    const rows = env.document.querySelectorAll('tr[data-action]');
+    const rendered = rows.map((r) => r.getAttribute('data-action'));
+    const declared = ctx.keys.bindings().map((b) => b.action);
+    // Object.keys length rather than deepStrictEqual: a vm module lives
+    // in its own realm, so two structurally identical values can still
+    // fail a prototype-sensitive comparison.
+    assert.equal(rendered.length, declared.length,
+        'the panel must render exactly the bindings table, no more, no fewer');
+    for (const action of declared) {
+        assert.ok(rendered.includes(action),
+            `binding ${action} is in the table and not in the panel`);
+    }
+    handle.close();
+});
+
+test('the help panel registers with ModalStack and deregisters on close', () => {
+    const env = createEnvironment();
+    const ctx = withModalStack(env);
+    assert.equal(ctx.stack.depth(), 0);
+    const handle = ctx.keys.openHelp({ document: env.document });
+    assert.equal(ctx.stack.depth(), 1,
+        'without this, Escape would reach the archive screen underneath ' +
+        'and throw away a paging position while closing the panel');
+    handle.close();
+    assert.equal(ctx.stack.depth(), 0);
+    assert.equal(env.document.querySelectorAll('[data-modal="archive-help"]').length, 0);
+    handle.close();  // must be safe twice
+});
+
+test('opening the help panel twice does not stack two panels', () => {
+    const env = createEnvironment();
+    const ctx = withModalStack(env);
+    const a = ctx.keys.openHelp({ document: env.document });
+    const b = ctx.keys.openHelp({ document: env.document });
+    assert.equal(env.document.querySelectorAll('[data-modal="archive-help"]').length, 1);
+    assert.equal(a.overlay, b.overlay);
+    a.close();
+});
+
+test('openHelp REFUSES a missing document rather than silently doing nothing', () => {
+    // Asserted on the error's NAME, not with `instanceof TypeError`.
+    // archive-keys.js runs inside a vm context, which has its OWN
+    // TypeError constructor, so the thrown error is not `instanceof` the
+    // host realm's TypeError and a constructor-based assertion fails
+    // against completely correct code. Same realm trap that makes
+    // deepStrictEqual unusable on values built in the sandbox.
+    let caught = null;
+    try {
+        keys.openHelp({});
+    } catch (err) {
+        caught = err;
+    }
+    assert.ok(caught,
+        'a help panel that quietly fails to open is indistinguishable ' +
+        'from a key that is not bound');
+    assert.equal(caught.name, 'TypeError');
+    assert.ok(/document/.test(caught.message),
+        'the refusal must name the missing argument');
+});
+
+// =====================================================================
+// createSelection - the pure cursor j/k drives.
+//
+// It holds ONLY a count and an index, and that is the whole design: a
+// selection that referenced rows could not survive its row being
+// unmounted by the virtualized window, which is exactly what happens
+// when you scroll a 30,805-line transcript.
+// =====================================================================
+
+test('a fresh selection has nothing selected', () => {
+    const s = keys.createSelection();
+    assert.equal(s.index(), -1);
+    assert.equal(s.has(), false);
+    assert.equal(s.count(), 0);
+});
+
+test('j on a fresh list selects the first row, k selects the last', () => {
+    const down = keys.createSelection();
+    down.setCount(5);
+    assert.equal(down.move(1), 0);
+    const up = keys.createSelection();
+    up.setCount(5);
+    assert.equal(up.move(-1), 4,
+        'k from nothing selects the END, so k on a fresh list is not a no-op');
+});
+
+test('the cursor CLAMPS at both ends and never wraps', () => {
+    // Wrapping from the last line of a 30,805-line transcript to the
+    // first is a hostile surprise, not a convenience.
+    const s = keys.createSelection();
+    s.setCount(3);
+    s.select(2);
+    assert.equal(s.move(1), 2, 'past the end stays at the end');
+    s.select(0);
+    assert.equal(s.move(-1), 0, 'past the start stays at the start');
+});
+
+test('GROWING the list preserves the selected index', () => {
+    // This is the paging case. Appending 500 rows must not move the
+    // person's selection, and must not clear it.
+    const s = keys.createSelection();
+    s.setCount(500);
+    s.select(437);
+    s.setCount(1000);
+    assert.equal(s.index(), 437);
+    assert.equal(s.count(), 1000);
+});
+
+test('SHRINKING below the cursor clamps, and emptying clears', () => {
+    const s = keys.createSelection();
+    s.setCount(500);
+    s.select(437);
+    s.setCount(10);
+    assert.equal(s.index(), 9, 'clamped to the last row that still exists');
+    s.setCount(0);
+    assert.equal(s.index(), -1, 'nothing to select is -1, not 0');
+    assert.equal(s.has(), false);
+});
+
+test('select() clamps an out-of-range index instead of accepting it', () => {
+    const s = keys.createSelection();
+    s.setCount(4);
+    assert.equal(s.select(99), 3);
+    assert.equal(s.select(-1), -1, 'a negative index clears the selection');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

@@ -52,11 +52,11 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.4rem;
+    gap: 8px;
     flex: 0 0 auto;
-    padding: 0.4rem 0.75rem;
+    padding: 8px 16px;
     font-family: var(--font-mono);
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     color: var(--color-fg-muted);
     border-bottom: 1px solid var(--color-border);
     /* Wrap rather than ellipsis: a truncated breadcrumb is a path the
@@ -65,8 +65,15 @@
     overflow-wrap: anywhere;
 }
 
+/* The crumb IS the archive's title row, so its leaf reads like one:
+ * .project-name's accent, at the crumb's own size. */
 .archive-screen__crumb-item {
     color: var(--color-fg);
+}
+
+.archive-screen__crumb-item:last-of-type {
+    color: var(--color-accent);
+    font-weight: bold;
 }
 
 .archive-screen__crumb-sep {
@@ -83,18 +90,26 @@
     display: none;
     flex: 0 0 auto;
     align-self: flex-start;
-    margin: 0.4rem 0.75rem 0;
-    padding: 0.3rem 0.7rem;
+    margin: 8px 16px 0;
+    padding: 6px 12px;
     font: inherit;
+    font-size: 0.85rem;
     color: var(--color-fg);
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    /* radius-md, the app's default (39 uses in styles.css). This control
+     * and the two toolbar buttons used to be the ONLY archive surfaces
+     * with any radius at all, so in the 20 themes with a non-zero radius
+     * exactly three controls looked rounded and nothing else did. */
+    border-radius: var(--radius-md);
     cursor: pointer;
+    transition: all 0.3s ease;
 }
 
 .archive-screen__back:hover {
     background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
 }
 
 .archive-screen__back[hidden] {
@@ -141,39 +156,48 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.4rem;
+    gap: 8px;
     flex: 0 0 auto;
-    padding: 0.4rem 0.6rem;
+    /* NO EXTRA RIGHT PADDING FOR THE SESSION-EDITOR FAB. That button is
+     * hidden on this screen instead - see terminal-tools.css. Padding
+     * here would only move the collision; it would still leave a control
+     * floating over a screen it cannot act on. */
+    padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-card);
 }
 
 .archive-screen__search-input {
     font: inherit;
+    font-size: 0.85rem;
     flex: 1 1 12rem;
     min-width: 0;
-    padding: 0.3rem 0.5rem;
+    padding: 6px 10px;
     color: var(--color-fg);
     background: var(--color-bg);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
 }
 
 .archive-screen__search-btn,
 .archive-screen__export-btn {
     font: inherit;
+    font-size: 0.85rem;
     flex: 0 0 auto;
-    padding: 0.3rem 0.7rem;
+    padding: 6px 12px;
     color: var(--color-fg);
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     cursor: pointer;
+    transition: all 0.3s ease;
 }
 
 .archive-screen__search-btn:hover,
 .archive-screen__export-btn:hover {
     background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
 }
 
 /* --- bottom bar ----------------------------------------------------- */
@@ -184,10 +208,10 @@
 .archive-screen__bar {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 8px;
     flex: 0 0 auto;
     min-height: 2rem;
-    padding: 0.25rem 0.75rem;
+    padding: 6px 16px;
     border-top: 1px solid var(--color-border);
     background: var(--color-bg-card);
 }
@@ -195,11 +219,11 @@
 .archive-screen__status {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 8px;
 }
 
 .archive-screen__status-text {
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     color: var(--color-fg-muted);
 }
 
@@ -267,8 +291,8 @@
     .archive-screen__crumb,
     .archive-screen__tools,
     .archive-screen__bar {
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
+        padding-left: 10px;
+        padding-right: 10px;
     }
 
     .archive-screen__search-input {

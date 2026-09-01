@@ -389,9 +389,96 @@ console.log('[ArchiveVirtualList Module] Loading...');
         };
     }
 
+    /**
+     * Description: a rendered row's height, or null when it cannot be
+     *   measured. NULL IS NOT ZERO: a zero would be written into the
+     *   offset table as a real correction and collapse the row to
+     *   invisible. An unmeasurable row keeps its estimate instead.
+     * Inputs: node (Element) - a painted row.
+     * Output: number|null - pixels, or null for could-not-measure.
+     * Example: measuredHeight(rowEl) // -> 219.23
+     */
+    function measuredHeight(node) {
+        if (!node) return null;
+        if (typeof node.getBoundingClientRect === 'function') {
+            var r = node.getBoundingClientRect();
+            if (r && Number.isFinite(r.height) && r.height > 0) return r.height;
+        }
+        if (Number.isFinite(node.offsetHeight) && node.offsetHeight > 0) {
+            return node.offsetHeight;
+        }
+        return null;
+    }
+
+    /**
+     * Description: read the painted rows' real heights into the list,
+     *   apply them, and pay the anti-jump debt. NORMATIVE: the scrollTop
+     *   compensation happens HERE, in the SAME CALL as the height write,
+     *   before paint. Deferring it produces a visible one-frame leap,
+     *   which reads as a bug rather than as scrolling. The caller still
+     *   owns the spacer height; this only reports the new total.
+     * Inputs: list (object) - a createList() result.
+     *         windowEl (Element) - holds the painted rows.
+     *         win (object) - the windowFor() result just painted.
+     *         scroller (Element|null) - the scrolling ancestor; null
+     *           leaves the returned delta unpaid.
+     * Output: {delta: number, applied: number, totalHeight: number}
+     * Example: reconcileMeasured(list, windowEl, win, scroller)
+     *   // -> {delta: -12.5, applied: 3, totalHeight: 109574.06}
+     */
+    function reconcileMeasured(list, windowEl, win, scroller) {
+        var kids = windowEl ? windowEl.childNodes : [];
+        for (var k = 0; k < kids.length; k++) {
+            var node = kids[k];
+            if (!node || !node.getAttribute) continue;
+            var idx = parseInt(node.getAttribute('data-index'), 10);
+            if (!Number.isInteger(idx)) continue;
+            var h = measuredHeight(node);
+            if (h !== null) list.measure(idx, h);
+        }
+        var r = list.applyMeasurements(win.firstVisible);
+        if (r.delta !== 0 && scroller) {
+            var top = scroller.scrollTop;
+            scroller.scrollTop =
+                (Number.isFinite(top) && top > 0 ? top : 0) + r.delta;
+        }
+        return r;
+    }
+
+    /**
+     * Description: scroll just enough to bring one row fully into view.
+     *   It does NOTHING when the row is already visible, because
+     *   scrolling on every keypress fights the person reading.
+     * Inputs: list (object) - a createList() result.
+     *         scroller (Element|null) - the scrolling ancestor.
+     *         index (number) - the row to reveal; a non-integer or
+     *           negative index means nothing is selected, and is a no-op.
+     *         viewportPx (number) - the scroller's usable height.
+     * Output: boolean - true when scrollTop was written, false when the
+     *   row was already visible or could not be evaluated.
+     * Example: scrollRowIntoView(list, scroller, 412, 800) // -> true
+     */
+    function scrollRowIntoView(list, scroller, index, viewportPx) {
+        if (!scroller || !Number.isInteger(index) || index < 0) return false;
+        if (!Number.isFinite(viewportPx) || viewportPx <= 0) return false;
+        var top = list.offsetOf(index);
+        var bottom = top + list.heightOf(index);
+        var rawTop = scroller.scrollTop;
+        var viewTop = Number.isFinite(rawTop) && rawTop > 0 ? rawTop : 0;
+        if (top < viewTop) { scroller.scrollTop = top; return true; }
+        if (bottom > viewTop + viewportPx) {
+            scroller.scrollTop = bottom - viewportPx;
+            return true;
+        }
+        return false;
+    }
+
     window.ArchiveVirtualList = {
         createList: createList,
+        scrollRowIntoView: scrollRowIntoView,
         estimateHeight: estimateHeight,
+        measuredHeight: measuredHeight,
+        reconcileMeasured: reconcileMeasured,
         rowAt: rowAt,
         ROW_CHROME_PX: ROW_CHROME_PX,
         CHARS_PER_LINE: CHARS_PER_LINE,

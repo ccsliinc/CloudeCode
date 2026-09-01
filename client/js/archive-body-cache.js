@@ -47,117 +47,33 @@ console.log('[ArchiveBodyCache Module] Loading...');
 (function () {
     'use strict';
 
-    /**
-     * Above this many UTF-16 code units a body is not auto-fetched and
-     * not auto-rendered; the row shows the size and a "render anyway"
-     * action. 256 KiB. @type {number}
-     */
-    var BODY_INLINE_MAX = 262144;
-
-    /**
-     * Above this many UTF-16 code units a body is never fetched and
-     * never rendered: download only, with the reason stated. There is no
-     * render option at any depth of the UI. 2 MiB. @type {number}
-     */
-    var BODY_RENDER_HARD_MAX = 2097152;
-
-    /** Hard cap on cached bodies, by count. @type {number} */
-    var BODY_CACHE_MAX_ENTRIES = 300;
-
-    /** Hard cap by total characters. 32 MiB of text. @type {number} */
-    var BODY_CACHE_MAX_CHARS = 33554432;
-
-    /**
-     * Deadline for one body fetch, milliseconds. A 54 MB body is a
-     * legitimate slow transfer, so this is generous; what it is not is
-     * absent. A request with no terminal condition is a state that can
-     * never fail.
-     * @type {number}
-     */
-    var BODY_DEADLINE_MS = 30000;
-
-    /** Entry states. Exported so callers compare constants, not strings. */
-    var STATE_OK = 'included';
-    var STATE_GATED_SOFT = 'gated-soft';
-    var STATE_GATED_HARD = 'gated-hard';
-    var STATE_WITHHELD = 'withheld-server';
-    var STATE_MASK_REFUSED = 'mask-refused';
-    var STATE_CANNOT_DETERMINE = 'cannot-determine';
-    var STATE_LOADING = 'loading';
-    var STATE_NO_BODY = 'no-body';
-
-    /**
-     * Decide, from spine metadata alone, whether a body may be fetched
-     * and rendered. NORMATIVE: every fetch path calls this first and
-     * honours it. Nothing here reads a body.
-     * @param {?object} row a spine row; reads `body_chars`, `body_state`
-     *   and `body_id` only
-     * @returns {{state: string, chars: ?number, reason: ?string}} state is
-     *   included|gated-soft|gated-hard|withheld-server|no-body|
-     *   cannot-determine. `included` means "small enough to fetch", NOT
-     *   "already fetched".
-     * @example gateFor({body_id: 1, body_chars: 54376859})
-     *   // -> {state: 'gated-hard', chars: 54376859, reason: '...'}
-     */
-    function gateFor(row) {
-        if (!row || typeof row !== 'object') {
-            return { state: STATE_CANNOT_DETERMINE, chars: null,
-                reason: 'no spine row for this line' };
-        }
-        // The server's own refusal wins outright: it is a finding the
-        // server made about its own limits and the client must render
-        // it as the server's, not restate it as its own.
-        if (row.body_state === 'withheld_too_large') {
-            return { state: STATE_WITHHELD,
-                chars: Number.isFinite(row.body_chars) ? row.body_chars : null,
-                reason: 'the server withheld this body as too large' };
-        }
-        if (row.body_id === null || row.body_id === undefined) {
-            return { state: STATE_NO_BODY, chars: null,
-                reason: 'this line has no body row' };
-        }
-        var chars = row.body_chars;
-        // A size we cannot read is not a small size. Refusing to guess
-        // here is the difference between a gate and a coin flip.
-        if (!Number.isFinite(chars) || chars < 0) {
-            return { state: STATE_CANNOT_DETERMINE, chars: null,
-                reason: 'body_chars is ' + String(chars) +
-                        ', so the size of this body is not known' };
-        }
-        if (chars > BODY_RENDER_HARD_MAX) {
-            return { state: STATE_GATED_HARD, chars: chars,
-                reason: 'this body is ' + chars + ' characters, past the ' +
-                        BODY_RENDER_HARD_MAX + ' character hard limit. ' +
-                        'Rendering it would hang the tab with no way back, ' +
-                        'so there is no render option.' };
-        }
-        if (chars > BODY_INLINE_MAX) {
-            return { state: STATE_GATED_SOFT, chars: chars,
-                reason: 'this body is ' + chars + ' characters, past the ' +
-                        BODY_INLINE_MAX + ' character inline limit.' };
-        }
-        return { state: STATE_OK, chars: chars, reason: null };
+    // The gate policy, the mask application and the eight states live
+    // in archive-body-gate.js, which MUST load before this file. They
+    // are re-exported below so ArchiveBodyCache stays the one name a
+    // caller has to know.
+    var GATE = window.ArchiveBodyGate;
+    if (!GATE) {
+        console.error('[ArchiveBodyCache] MISSING DEPENDENCY: ' +
+            'window.ArchiveBodyGate. Load client/js/archive-body-gate.js ' +
+            'BEFORE this file. Without it there is NO SIZE GATE and NO ' +
+            'MASK APPLICATION, so nothing may be fetched or rendered.');
     }
-
-    /**
-     * Run archive-mask.js over a fetched body and fold its result into a
-     * cache entry. The ONLY place this module turns body text into
-     * something renderable. `text` is null on every refusal path.
-     * @param {string} body @param {?Array} findings
-     * @param {number} declaredCount
-     * @returns {{state: string, text: ?string, masked: number,
-     *   reason: ?string, findingCount: number}}
-     */
-    function _applyMask(body, findings, declaredCount) {
-        var mask = window.ArchiveMask.maskBody(body, findings, declaredCount);
-        if (mask.status === window.ArchiveMask.MASK_REFUSED) {
-            return { state: STATE_MASK_REFUSED, text: null, masked: 0,
-                reason: mask.reason, findingCount: mask.findingCount };
-        }
-        return { state: STATE_OK, text: mask.text, masked: mask.masked,
-            reason: null, findingCount: Number.isInteger(declaredCount)
-                ? declaredCount : 0 };
-    }
+    var BODY_INLINE_MAX = GATE.BODY_INLINE_MAX;
+    var BODY_RENDER_HARD_MAX = GATE.BODY_RENDER_HARD_MAX;
+    var BODY_CACHE_MAX_ENTRIES = GATE.BODY_CACHE_MAX_ENTRIES;
+    var BODY_CACHE_MAX_CHARS = GATE.BODY_CACHE_MAX_CHARS;
+    var BODY_DEADLINE_MS = GATE.BODY_DEADLINE_MS;
+    var STATE_OK = GATE.STATE_OK;
+    var STATE_GATED_SOFT = GATE.STATE_GATED_SOFT;
+    var STATE_GATED_HARD = GATE.STATE_GATED_HARD;
+    var STATE_WITHHELD = GATE.STATE_WITHHELD;
+    var STATE_MASK_REFUSED = GATE.STATE_MASK_REFUSED;
+    var STATE_CANNOT_DETERMINE = GATE.STATE_CANNOT_DETERMINE;
+    var STATE_LOADING = GATE.STATE_LOADING;
+    var STATE_NO_BODY = GATE.STATE_NO_BODY;
+    var gateFor = GATE.gateFor;
+    var _applyMask = GATE.applyMask;
+    var _reasonFrom = GATE.reasonFrom;
 
     /**
      * Build a body cache bound to one API client.
@@ -482,21 +398,6 @@ console.log('[ArchiveBodyCache Module] Loading...');
                 entries.clear(); inflight.clear(); totalChars = 0;
             }
         };
-    }
-
-    /**
-     * One-line reason from a classified failure envelope, naming what
-     * could not be evaluated rather than leaving a blank.
-     * @param {object} c an ArchiveOutcome.classify() result
-     * @returns {string}
-     */
-    function _reasonFrom(c) {
-        var first = c.reasons && c.reasons.length ? c.reasons[0] : null;
-        if (first && first.reason) {
-            return (first.subject ? first.subject + ': ' : '') + first.reason;
-        }
-        return 'the body request returned ' + c.token +
-               ' and carried no reason';
     }
 
     window.ArchiveBodyCache = {

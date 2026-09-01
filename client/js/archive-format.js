@@ -290,7 +290,75 @@ console.log('[ArchiveFormat Module] Loading...');
                (tail > 0 ? points.slice(points.length - tail).join('') : '');
     }
 
+    /**
+     * Class prefix used by renderTranscriptHeader when a caller supplies
+     * none. Named rather than repeated as a literal.
+     * @type {string}
+     */
+    var READER_ROOT_CLASS = 'archive-reader';
+
+    /**
+     * Description: build one element with a class and, optionally, text.
+     *   Text always goes through a text node, never innerHTML.
+     * Inputs: doc (Document), tag (string), cls (string|null),
+     *         text (string|null).
+     * Output: Element.
+     */
+    function el(doc, tag, cls, text) {
+        var node = doc.createElement(tag);
+        if (cls) node.setAttribute('class', cls);
+        if (text !== null && text !== undefined) {
+            node.appendChild(doc.createTextNode(String(text)));
+        }
+        return node;
+    }
+
+    /**
+     * Description: render the transcript header facts as an element.
+     *   It stays visible through a cannot-determine on the LINES,
+     *   because the header's facts came from a different request that
+     *   succeeded, and hiding them would discard a real measurement.
+     * Inputs: doc (Document), header (object|null) - the server's
+     *           header record, or null when there is none.
+     *         rootClass (string|null) - class prefix.
+     * Output: Element|null - null when `header` is null. Null is not an
+     *   empty header: it means no header request has succeeded yet, and
+     *   the caller renders nothing rather than inventing blank facts.
+     * Example:
+     *   renderTranscriptHeader(document,
+     *     {transcript_id: 5767, line_count: 30805,
+     *      raw_byte_length: 91950363}, 'archive-reader');
+     */
+    function renderTranscriptHeader(doc, header, rootClass) {
+        if (!doc) throw new Error('renderTranscriptHeader needs a document');
+        if (!header) return null;
+        var rc = rootClass || READER_ROOT_CLASS;
+        var box = el(doc, 'div', rc + '__header-facts', null);
+        // FIELD NAMES ARE THE SERVER'S, not invented ones. Measured
+        // 2026-08-31 against the live GET
+        // /api/v1/archive/transcripts/5767: the header record carries
+        // `transcript_id`, `source_path` and `raw_byte_length`. This
+        // block previously read `header.byte_length`, `header.path`
+        // and `header.id` - none of which the server sends - so a
+        // fully successful header request rendered
+        // "30,805 lines / size NOT KNOWN" over a byte count the app
+        // already held. The unit test passed throughout because its
+        // fixture used the same invented names.
+        box.appendChild(el(doc, 'h2', rc + '__title',
+            header.session_ref || header.source_path ||
+                ('transcript ' + header.transcript_id)));
+        box.appendChild(el(doc, 'p', rc + '__facts',
+            (Number.isFinite(header.line_count)
+                ? formatCount(header.line_count) + ' lines'
+                : 'line count ' + NOT_KNOWN) + '  /  ' +
+            (Number.isFinite(header.raw_byte_length)
+                ? formatBytes(header.raw_byte_length)
+                : 'size ' + NOT_KNOWN)));
+        return box;
+    }
+
     window.ArchiveFormat = {
+        renderTranscriptHeader: renderTranscriptHeader,
         formatBytes: formatBytes,
         formatChars: formatChars,
         formatCount: formatCount,

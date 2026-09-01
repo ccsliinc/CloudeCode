@@ -66,9 +66,17 @@ function loadModules(doc) {
     };
     context.globalThis = context;
     vm.createContext(context);
+    // archive-keys.js is here for ONE reason: it owns createSelection(),
+    // which the reader asks window.ArchiveKeys for at construction. Omit
+    // it and the reader logs a MISSING DEPENDENCY and runs with
+    // `selection = null`, so selectedIndex() is permanently -1 and every
+    // selection assertion below tests a reader that has no cursor at all.
     for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-        'archive-outcome-view.js', 'archive-state.js', 'archive-virtual-list.js',
-        'archive-body-cache.js', 'archive-line-render.js', 'archive-reader.js']) {
+        'archive-outcome-view.js', 'archive-state.js', 'archive-keys.js',
+        'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
+        'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
+        'archive-reader-select.js', 'archive-reader-body.js',
+        'archive-reader.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
             context, { filename: f });
@@ -366,6 +374,279 @@ await test('expanding a progress run is an ordinary height correction', () => {
         r.root().querySelectorAll('.archive-row__progress-children').length, 1);
     assert.ok(r.root().textContent.includes('progress x 14'),
         'the count stays visible when expanded');
+});
+
+// ---------------------------------------------------------------------
+// THE PAGER, THE APPEND, AND THE SELECTION CURSOR.
+//
+// Everything below was added after the measurement that the reader could
+// only ever reach its first 500 lines. The four defects were: no pager
+// control at all, an `expand-progress` action with no listener anywhere,
+// a selection that was assumed to die with its row, and an append path
+// nobody had exercised. Each group states in a comment what shape of
+// broken code it is built to catch, because a test that would also pass
+// against the bug is worse than no test.
+// ---------------------------------------------------------------------
+
+/**
+ * A spine of `count` consecutive progress rows starting at `from`.
+ * Used to build the exact regroup-across-append case: a trailing run
+ * that merges with the next page's leading progress rows.
+ * @param {number} from - line_no of the first row.
+ * @param {number} count - how many rows.
+ * @returns {Array<object>} spine rows with record_type 'progress'.
+ */
+function progressRows(from, count) {
+    const rows = [];
+    for (let i = 0; i < count; i++) {
+        rows.push({ line_no: from + i, record_type: 'progress', role: null,
+            body_id: null, body_chars: 40 });
+    }
+    return rows;
+}
+
+/**
+ * One ordinary assistant row.
+ * @param {number} lineNo - the row's line_no.
+ * @returns {object} a spine row.
+ */
+function normalRow(lineNo) {
+    return { line_no: lineNo, record_type: 'assistant', role: 'assistant',
+        body_id: null, body_chars: 400, body_state: 'not_requested' };
+}
+
+/**
+ * Mount a reader with a measurable viewport, the shape every test below
+ * needs before it can say anything about a render window.
+ * @param {object} h - a harness().
+ * @param {number} viewportPx - clientHeight to give the scroller.
+ * @returns {object} the mounted reader.
+ */
+function mountedReader(h, viewportPx) {
+    const r = h.w.ArchiveReader.createReader({
+        document: h.env.document, api: NO_API, requestAnimationFrame: h.raf });
+    r.mount(h.env.document.body);
+    r.root().querySelector('.archive-reader__scroller').clientHeight = viewportPx;
+    return r;
+}
+
+await test('A1: no pager callback means the sentence and NO button; a callback adds the button and keeps the sentence', () => {
+    const h = harness();
+    const r = mountedReader(h, 800);
+    r.setSpine(spineOf(20), false);
+
+    // WITHOUT a callback. A control that cannot do anything is worse
+    // than the sentence alone: it offers a way forward that does not
+    // exist. The honest count must still be there.
+    assert.equal(
+        r.root().querySelectorAll('[data-action="load-more-lines"]').length, 0,
+        'a pager button rendered with no pager wired');
+    assert.ok(r.root().textContent.includes('More lines not loaded yet'),
+        'the sentinel sentence vanished when there was no pager');
+    assert.ok(r.root().textContent.includes('20 of this transcript loaded so far'),
+        'the sentinel must state the honest loaded count');
+
+    // WITH a callback. THE FIX ADDED A CONTROL; IT DID NOT REPLACE THE
+    // COUNT. A button alone would be a control with no number beside it.
+    r.setOnLoadMore(() => Promise.resolve('ok'));
+    const buttons = r.root().querySelectorAll('[data-action="load-more-lines"]');
+    assert.equal(buttons.length, 1, 'exactly one pager button is expected');
+    assert.equal(buttons[0].tagName.toLowerCase(), 'button');
+    assert.equal(buttons[0].getAttribute('type'), 'button',
+        'a button with no explicit type submits a form it happens to sit in');
+    assert.ok(r.root().textContent.includes('More lines not loaded yet'),
+        'the fix added a control and removed the honest count');
+    assert.ok(r.root().textContent.includes('20 of this transcript loaded so far'));
+
+    // And a COMPLETE spine renders neither: there is nothing left to
+    // page to, so the sentence would be a lie and the button a dead end.
+    r.setSpine(spineOf(20), true);
+    assert.equal(
+        r.root().querySelectorAll('[data-action="load-more-lines"]').length, 0);
+    assert.ok(!r.root().textContent.includes('More lines not loaded yet'));
+});
+
+await test('A2: appendSpine grows items and the spacer, and the spacer tracks LOADED rows only', () => {
+    const h = harness();
+    const r = mountedReader(h, 800);
+    r.setSpine(spineOf(100), false);
+    const itemsBefore = r.items().length;
+    const totalBefore = r.list.totalHeight();
+    assert.equal(itemsBefore, 100);
+    assert.ok(totalBefore > 0, 'a 100-row spine measured zero total height');
+
+    // The appended page carries line numbers that continue the first.
+    const page2 = [];
+    for (let i = 100; i < 200; i++) page2.push(normalRow(i));
+    const newLen = r.appendSpine(page2, false);
+
+    assert.equal(newLen, 200, 'appendSpine returns the new raw spine length');
+    assert.equal(r.items().length, 200, 'items did not grow with the append');
+    assert.ok(r.list.totalHeight() > totalBefore,
+        'the spacer did not grow when rows were appended');
+
+    // THE SPACER STAYS HONEST. Doubling the LOADED rows must roughly
+    // double the height, because the height is a running sum over rows
+    // actually loaded. If it were ever sized from a declared full-file
+    // line count - transcript 5767 declares 30,805 while 500 are loaded -
+    // this ratio would be wildly wrong and the scrollbar would promise
+    // content nobody has. Measured 2026-09-01, the spacer was ALREADY
+    // honest; this locks in that it stays honest across an append.
+    const ratio = r.list.totalHeight() / totalBefore;
+    assert.ok(ratio > 1.8 && ratio < 2.2,
+        `doubling the loaded rows moved the spacer by ${ratio}x, so it is ` +
+        'not tracking loaded rows');
+
+    // The spine is the concatenation, with the appended line numbers
+    // intact and in order.
+    const s = r.spine();
+    assert.equal(s.length, 200);
+    assert.equal(s[99].line_no, 99);
+    assert.equal(s[100].line_no, 100);
+    assert.equal(s[199].line_no, 199);
+});
+
+await test('A3: appendSpine keeps an expanded run open across a REGROUP and keeps the selection', () => {
+    const h = harness();
+    const r = mountedReader(h, 800);
+
+    // The exact case the `from`-keyed expansion map exists for: a spine
+    // ending in a progress run, then a page that BEGINS with progress
+    // rows. groupRows merges the two into one longer run, so every item
+    // index at and after the run changes. An expansion keyed by INDEX
+    // would land on the wrong row here and nothing would look wrong.
+    r.setSpine([normalRow(1), ...progressRows(2, 3)], false);
+    assert.equal(r.items().length, 2, 'the trailing run must fold');
+    const run = r.items()[1];
+    assert.equal(run.kind, 'progress-run');
+    assert.equal(run.from, 2);
+    assert.equal(run.count, 3);
+
+    r.setProgressExpanded(1, true);
+    r.selectIndex(1);
+    assert.equal(r.selectedIndex(), 1);
+    assert.equal(
+        r.root().querySelectorAll('.archive-row__progress-children').length, 1,
+        'the run did not open before the append');
+
+    r.appendSpine([...progressRows(5, 2), normalRow(7)], false);
+
+    // The run REGROUPED into a larger one, keyed on the same `from`.
+    const merged = r.items()[1];
+    assert.equal(merged.kind, 'progress-run');
+    assert.equal(merged.from, 2, 'the merged run must keep the original from');
+    assert.equal(merged.count, 5, 'the trailing run did not merge with the new page');
+    assert.equal(r.items().length, 3);
+
+    // AND IT IS STILL OPEN. A reset here is silent data loss from the
+    // reader's point of view: the rows they opened simply close.
+    assert.equal(
+        r.root().querySelectorAll('.archive-row__progress-children').length, 1,
+        'appendSpine closed a run the reader had opened');
+    assert.equal(r.root().querySelector('[data-progress-count]')
+        .getAttribute('data-expanded'), 'true');
+
+    // The selection cursor is untouched. regroup() calls setCount(),
+    // which preserves the index whenever the count grows.
+    assert.equal(r.selectedIndex(), 1,
+        'appendSpine moved or cleared the selection');
+    assert.equal(r.moveSelection(1), 2,
+        'the cursor did not continue from where it was');
+});
+
+await test('A4: a REAL CLICK expands and collapses a progress run', () => {
+    // WHY THIS IS A CLICK AND NOT A CALL. `setProgressExpanded` was
+    // already tested and already worked. The bug was that NOTHING CALLED
+    // IT: `data-action="expand-progress"` had no listener anywhere in the
+    // app. A test that invokes the function directly passes against that
+    // broken code and is therefore worthless for this defect. The only
+    // assertion that can fail on it is one that dispatches the event a
+    // person's mouse would.
+    const h = harness();
+    const r = mountedReader(h, 800);
+    r.setSpine([normalRow(1), ...progressRows(2, 4)], true);
+    assert.equal(r.items().length, 2, 'the run must fold');
+
+    const collapsedChildren = r.root()
+        .querySelectorAll('.archive-row__progress-children [data-line-no]');
+    assert.equal(collapsedChildren.length, 0,
+        'the run rendered its children while collapsed');
+
+    const expandBtn = r.root().querySelector('[data-action="expand-progress"]');
+    assert.ok(expandBtn, 'no expand control was rendered on a collapsed run');
+    expandBtn.dispatchEvent('click');
+
+    // THE HIDDEN LINE NUMBERS APPEAR, and they are the real ones.
+    const shown = [...r.root()
+        .querySelectorAll('.archive-row__progress-children [data-line-no]')]
+        .map((n) => n.getAttribute('data-line-no'));
+    assert.deepEqual(shown, ['2', '3', '4', '5'],
+        `clicking Expand did not reveal lines 2..5 (saw ${JSON.stringify(shown)})`);
+
+    // The control flips to its collapse form rather than staying put,
+    // so the button is not a one-way door.
+    assert.equal(
+        r.root().querySelectorAll('[data-action="expand-progress"]').length, 0);
+    const collapseBtn = r.root().querySelector('[data-action="collapse-progress"]');
+    assert.ok(collapseBtn, 'no collapse control after expanding');
+
+    collapseBtn.dispatchEvent('click');
+    assert.equal(r.root()
+        .querySelectorAll('.archive-row__progress-children [data-line-no]').length, 0,
+        'clicking Collapse left the child lines on screen');
+    assert.ok(r.root().querySelector('[data-action="expand-progress"]'),
+        'the expand control did not come back');
+});
+
+await test('A5: the selection survives leaving the virtualized render window', () => {
+    const h = harness();
+    const r = mountedReader(h, 800);
+    r.setSpine(spineOf(3000), true);
+    const scroller = r.root().querySelector('.archive-reader__scroller');
+
+    // IN WINDOW: exactly one selected row, exactly one tabbable row, and
+    // every other rendered row explicitly untabbable. A roving tabindex
+    // that only writes '0' leaves the rest at the browser default, so
+    // Tab walks all of them.
+    r.selectIndex(1200);
+    assert.equal(r.selectedIndex(), 1200);
+    const rendered = [...r.root().querySelectorAll('[data-index]')];
+    assert.ok(rendered.length > 0, 'nothing rendered at all');
+    assert.ok(rendered.length < 200, 'the window is not bounded');
+    const selectedNodes = rendered.filter(
+        (n) => n.getAttribute('data-selected') === 'true');
+    assert.equal(selectedNodes.length, 1,
+        'exactly one row may carry data-selected="true"');
+    assert.equal(selectedNodes[0].getAttribute('data-index'), '1200');
+    assert.equal(selectedNodes[0].getAttribute('tabindex'), '0');
+    const tabbable = rendered.filter((n) => n.getAttribute('tabindex') === '0');
+    assert.equal(tabbable.length, 1, 'more than one row is reachable by Tab');
+    for (const n of rendered) {
+        if (n.getAttribute('data-index') === '1200') continue;
+        assert.equal(n.getAttribute('tabindex'), '-1',
+            `row ${n.getAttribute('data-index')} carries no explicit tabindex`);
+    }
+
+    // OUT OF WINDOW. The cursor is a COUNT AND AN INDEX and holds no
+    // element, which is the whole reason it can survive its row being
+    // recycled away. Nothing in the DOM is selected, and that is correct:
+    // the row is not on screen to be selected.
+    scroller.scrollTop = 0;
+    r.render();
+    const nowRendered = [...r.root().querySelectorAll('[data-index]')]
+        .map((n) => parseInt(n.getAttribute('data-index'), 10));
+    assert.ok(!nowRendered.includes(1200),
+        'the setup failed: row 1200 is still in the render window');
+    assert.equal(
+        r.root().querySelectorAll('[data-selected="true"]').length, 0,
+        'a row outside the window must not be marked selected');
+    assert.equal(r.selectedIndex(), 1200,
+        'the selection was lost when its row left the window');
+
+    // AND IT CONTINUES FROM THERE, not from the top of the window.
+    assert.equal(r.moveSelection(1), 1201,
+        'moveSelection restarted from somewhere other than the held index');
+    assert.equal(r.selectedIndex(), 1201);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

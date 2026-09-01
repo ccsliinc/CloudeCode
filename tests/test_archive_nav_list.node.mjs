@@ -83,8 +83,8 @@ function load() {
     };
     vm.createContext(context);
     for (const file of ['archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-nav.js',
-                        'archive-transcript-list.js']) {
+                        'archive-outcome-view.js', 'archive-nav-row.js', 'archive-nav.js',
+                        'archive-tlist-row.js', 'archive-transcript-list.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
             context, { filename: file }
@@ -438,6 +438,131 @@ await test('loadMore refuses rather than re-requesting page one when no cursor e
     assert.equal(calls, 1);
     assert.equal(await l.loadMore(), 'no-cursor');
     assert.equal(calls, 1, 'a cursorless loadMore must issue no request at all');
+});
+
+// =====================================================================
+// THE SCHEME TOGGLE GROUP, AND THE THREE THINGS THE COMPOSITION ROOT
+// NEEDS FROM THE FILTER.
+//
+// Both were measured broken 2026-09-01. The three scheme buttons carried
+// no `aria-pressed` at all, so which filter was on was announced
+// nowhere; and the nav exposed no way to focus, read or clear the
+// filter, which is why the composition root passed a hardcoded '' as the
+// filter text and made rung 2 of the Escape ladder unreachable.
+// =====================================================================
+
+/**
+ * The three scheme buttons and their pressed state, read off the DOM.
+ * @param {object} l - a created transcript list.
+ * @returns {Array<{value: string, pressed: string|null}>} in DOM order.
+ */
+function schemeButtons(l) {
+    return [...l.element.querySelectorAll('[data-scheme-filter]')].map((b) => ({
+        value: b.getAttribute('data-scheme-filter'),
+        pressed: b.getAttribute('aria-pressed'),
+    }));
+}
+
+await test('C1: all three scheme buttons carry aria-pressed, exactly one true, and it follows setSchemeFilter', async () => {
+    const l = list.create({ document, api: fakeApi({}) });
+
+    const initial = schemeButtons(l);
+    assert.equal(initial.length, 3, 'three scheme buttons are expected');
+    // Compared as a JOINED STRING, not with deepEqual. SCHEME_DEFS is an
+    // array built inside the vm realm, so .map() on it returns a
+    // vm-realm Array; assert.deepEqual compares prototypes and fails on
+    // two structurally identical arrays from different realms.
+    assert.equal(initial.map((b) => b.value).join(','),
+        list.SCHEME_DEFS.map((d) => d.v).join(','),
+        'the buttons must be built from SCHEME_DEFS, in that order');
+
+    // THE OFF BUTTONS CARRY aria-pressed="false", NOT NO ATTRIBUTE. A
+    // toggle that only carries the attribute when it is pressed is
+    // announced as an ordinary button the rest of the time, so a screen
+    // reader user cannot tell a two-state control from a one-shot one -
+    // and the state they most need to hear is the one that is OFF.
+    for (const b of initial) {
+        assert.notEqual(b.pressed, null,
+            `the "${b.value}" button carries no aria-pressed at all`);
+        assert.ok(b.pressed === 'true' || b.pressed === 'false',
+            `aria-pressed on "${b.value}" is "${b.pressed}", not a boolean`);
+    }
+    assert.equal(initial.filter((b) => b.pressed === 'true').length, 1,
+        'exactly one scheme button may be pressed');
+    assert.equal(initial.find((b) => b.pressed === 'true').value,
+        list.SCHEME_FILTERS.ALL, 'the default filter must be the pressed one');
+
+    // IT FOLLOWS THE FILTER. Nothing has been loaded, so the reload
+    // refuses with 'no-scope' - and the button state must still move,
+    // because the choice WAS made even though the query could not run.
+    assert.equal(await l.setSchemeFilter(list.SCHEME_FILTERS.CONVERSATIONS),
+        'no-scope');
+    const after = schemeButtons(l);
+    assert.equal(after.filter((b) => b.pressed === 'true').length, 1);
+    assert.equal(after.find((b) => b.pressed === 'true').value,
+        list.SCHEME_FILTERS.CONVERSATIONS,
+        'the pressed button did not follow setSchemeFilter');
+    assert.equal(
+        after.find((b) => b.value === list.SCHEME_FILTERS.ALL).pressed, 'false',
+        'the previously pressed button was not un-pressed');
+
+    await l.setSchemeFilter(list.SCHEME_FILTERS.SIDECHAINS);
+    const third = schemeButtons(l);
+    assert.equal(third.filter((b) => b.pressed === 'true').length, 1);
+    assert.equal(third.find((b) => b.pressed === 'true').value,
+        list.SCHEME_FILTERS.SIDECHAINS);
+});
+
+await test('C2: list.scheme() reflects the filter currently applied', async () => {
+    const l = list.create({ document, api: fakeApi({}) });
+    assert.equal(typeof l.scheme, 'function',
+        'the list exposes no scheme(), so the composition root would have ' +
+        'to keep a second copy of the value that could drift from this one');
+    assert.equal(l.scheme(), list.SCHEME_FILTERS.ALL);
+
+    await l.setSchemeFilter(list.SCHEME_FILTERS.SIDECHAINS);
+    assert.equal(l.scheme(), list.SCHEME_FILTERS.SIDECHAINS);
+
+    // And it agrees with what the DOM announces, so the reader and the
+    // caller cannot be told two different things.
+    assert.equal(schemeButtons(l).find((b) => b.pressed === 'true').value,
+        l.scheme(), 'scheme() and aria-pressed disagree');
+
+    // An empty value falls back to ALL rather than to an unknown scheme,
+    // which the server would refuse.
+    await l.setSchemeFilter('');
+    assert.equal(l.scheme(), list.SCHEME_FILTERS.ALL);
+});
+
+await test('C3: the nav exposes filterInput, filterText() and clearFilter(), and clearFilter clears BOTH', () => {
+    const n = nav.create({ document, api: fakeApi({}) });
+
+    // The three things the composition root needs and had none of.
+    assert.ok(n.filterInput, 'no filterInput to focus for the / key');
+    assert.equal(n.filterInput.tagName.toLowerCase(), 'input');
+    assert.equal(n.filterInput.getAttribute('type'), 'search');
+    assert.equal(typeof n.filterText, 'function', 'no way to read the filter text');
+    assert.equal(typeof n.clearFilter, 'function', 'no way to clear the filter');
+
+    assert.equal(n.filterText(), '',
+        'an unfiltered nav must report empty string, not null or undefined');
+
+    // Driven the way a person drives it: typing into the box. Setting
+    // state directly would pass against an input that is wired to
+    // nothing at all.
+    n.filterInput.value = 'nix';
+    n.filterInput.dispatchEvent('input');
+    assert.equal(n.filterText(), 'nix',
+        'typing in the filter box did not reach the filter state');
+
+    n.clearFilter();
+    // BOTH, and this is the whole point of the assertion. Clearing only
+    // the STATE leaves the box showing text that no longer filters
+    // anything, which reads as a broken filter; clearing only the INPUT
+    // leaves rows hidden with nothing on screen explaining why.
+    assert.equal(n.filterText(), '', 'clearFilter left the filter state set');
+    assert.equal(n.filterInput.value, '',
+        'clearFilter left the text in the input box');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

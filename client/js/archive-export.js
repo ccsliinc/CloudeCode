@@ -446,8 +446,35 @@ console.log('[ArchiveExport Module] Loading...');
         return { overlay: overlay, close: close, refresh: refresh, ready: started };
     }
 
+    /**
+     * Description: open the export modal for whatever transcript is
+     *   currently on screen, refusing VISIBLY when that is nothing.
+     *
+     *   The refusal lives here rather than at the call site because this
+     *   module owns what an export needs, and a button that does nothing
+     *   is worse than one that says why. The caller passes the id it has
+     *   - possibly null - and gets a named answer either way.
+     *
+     * Inputs: options (object) - {document, api, transcriptId,
+     *   sameNameCount}, the shape open() takes. `transcriptId` may be
+     *   null, which is the refusal case.
+     * Output: object|null - open()'s handle, or null when nothing was
+     *   opened. Null is a real answer and is logged, not swallowed.
+     * Example: ArchiveExport.openFor({document: document, api: API,
+     *   transcriptId: 5767, sameNameCount: null})
+     */
+    function openFor(options) {
+        var opts = options || {};
+        if (opts.transcriptId === null || opts.transcriptId === undefined) {
+            console.warn('ArchiveExport: export requested with no transcript open');
+            return null;
+        }
+        return open(opts);
+    }
+
     window.ArchiveExport = {
         open: open,
+        openFor: openFor,
         classifyPreflight: classifyPreflight,
         renderBody: renderBody,
         downloadCapability: downloadCapability,

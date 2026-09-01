@@ -41,6 +41,11 @@ function test(name, fn) {
 
 /** Ids the overflow menu owns, in the order index.html declares them. */
 const EXPECTED_IDS = [
+    // `archiveBtn` is FIRST because it is the only DESTINATION in the
+    // list - the other two act on the app you are already in. It is one
+    // of the archive's two entry points; before it existed there was no
+    // way into the archive from anywhere in the app.
+    'archiveBtn',
     'logoutBtn',
     'settingsBtn',
 ];
@@ -143,7 +148,7 @@ test('the module and index.html agree on which controls the menu owns', () => {
         EXPECTED_IDS, 'the exported list is the contract');
 });
 
-test('THE OVERFLOW HOLDS EXACTLY volume, logout and settings', () => {
+test('THE OVERFLOW HOLDS EXACTLY archive, logout and settings', () => {
     const { env, controls } = load();
     const panel = env.document.getElementById('header-menu-panel');
     assert.deepEqual(buttonIds(panel), EXPECTED_IDS);

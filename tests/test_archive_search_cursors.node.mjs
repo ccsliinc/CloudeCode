@@ -88,7 +88,7 @@ function loadSearch() {
     };
     vm.createContext(context);
     for (const file of ['archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-search.js']) {
+                        'archive-outcome-view.js', 'archive-search-render.js', 'archive-search.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
             context, { filename: file }

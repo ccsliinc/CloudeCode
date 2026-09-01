@@ -53,8 +53,20 @@
 
 console.log('[HeaderMenu Module] Loading...');
 
-/** Ids of the controls the overflow owns, in their canonical order. */
+/**
+ * Ids of the controls the overflow owns, in their canonical order.
+ *
+ * `archiveBtn` is FIRST because it is the only DESTINATION in the list -
+ * the other two act on the app you are already in. It joined the
+ * overflow rather than the inline row for the reason this file's header
+ * gives: the inline slots are for controls used constantly, and a
+ * message browser is not one of them. Before it existed there was no way
+ * into the archive from anywhere in the app - measured, the only control
+ * in the whole DOM matching /archive/ was the archive screen's own Back
+ * button.
+ */
 const HEADER_MENU_CONTROL_IDS = [
+    'archiveBtn',
     'logoutBtn',
     'settingsBtn'
 ];
@@ -95,6 +107,7 @@ class HeaderMenu {
 
         this._buildChrome();
         this._wireEvents();
+        this._wireArchive();
         this.applyLayout();
         console.log('[HeaderMenu] initialized');
     }
@@ -181,6 +194,43 @@ class HeaderMenu {
         this.panel.addEventListener('click', (e) => {
             if (e.target === this.panel) return;
             this.close();
+        });
+    }
+
+    /**
+     * Description: wire the archive destination.
+     *
+     *   Wired HERE rather than in app.js's setupEventListeners, and never
+     *   as an inline onclick: src/main.py stamps `script-src 'self'` on
+     *   every response, so an inline handler is silently refused - the
+     *   element stays present, sized and clickable while doing nothing,
+     *   which no DOM test can see (this is exactly how #logoutBtn was
+     *   dead from the initial commit; see its comment in index.html).
+     *
+     *   It calls window.ArchiveEntry, the ONE navigation into the
+     *   archive, which the launchpad row also calls. Two copies of a
+     *   navigation is two copies that can drift.
+     *
+     *   Idempotent via a data attribute rather than a member flag,
+     *   because init() is idempotent by way of `if (this.panel) return`
+     *   and a second HeaderMenu instance would not see the flag.
+     *
+     *   The attribute is read and written with get/setAttribute rather
+     *   than through `dataset`, which the node test harness
+     *   (tests/mini-dom.mjs) does not implement - relying on it threw
+     *   `Cannot read properties of undefined` and took 17 unrelated
+     *   assertions down with it. get/setAttribute is the API every DOM
+     *   in this project actually has.
+     * Inputs: none.
+     * Output: void.
+     */
+    _wireArchive() {
+        const btn = document.getElementById('archiveBtn');
+        if (!btn || btn.getAttribute('data-archive-wired') === '1') return;
+        btn.setAttribute('data-archive-wired', '1');
+        btn.addEventListener('click', () => {
+            if (window.ArchiveEntry) window.ArchiveEntry.open();
+            else console.warn('[HeaderMenu] ArchiveEntry is not loaded');
         });
     }
 

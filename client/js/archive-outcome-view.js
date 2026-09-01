@@ -77,6 +77,14 @@ console.log('[ArchiveOutcomeView Module] Loading...');
     var ROOT_CLASS = 'archive-outcome';
 
     /**
+     * Class prefix used by renderReaderState when a caller supplies
+     * none. Named rather than repeated, so the reader and this file
+     * cannot drift apart on the string that hangs every style rule.
+     * @type {string}
+     */
+    var READER_ROOT_CLASS = 'archive-reader';
+
+    /**
      * The banner word for each token. Deliberately not sentence case:
      * this is the line a person's eye lands on first, and the six must
      * be unmistakable from across a room.
@@ -195,27 +203,34 @@ console.log('[ArchiveOutcomeView Module] Loading...');
     function headlineFor(token, meta, n) {
         var scope = describeScope(meta);
         if (token === 'empty') {
+            // "searched all" is load-bearing wording, not decoration:
+            // tests/test_archive_search_zero_hits.node.mjs asserts on it
+            // as the proof that a COMPLETE empty search makes a positive
+            // claim about the whole scope, where a budget-exhausted one
+            // must refuse to. Keep the phrase if you reword this.
             var searched = (n.scanned !== null && n.inScope !== null)
-                ? ('Searched all ' + n.scanned + ' of ' + n.inScope + ' transcripts in ' + scope + '.')
-                : ('Searched ' + scope + ' in full.');
-            return 'No matches. ' + searched;
+                ? ('searched all ' + n.scanned + ' of ' + n.inScope +
+                   ' transcripts in ' + scope)
+                : ('searched ' + scope + ' in full');
+            return 'Search a wider scope: ' + searched + ', and none matched.';
         }
         if (token === 'partial') {
             var left = n.notScanned !== null ? String(n.notScanned) : 'an unreported number of';
-            return 'The scan stopped before it finished. ' + left +
-                   ' transcripts in ' + scope + ' were never read, so nothing is known about them.';
+            return 'Resume the scan: ' + left + ' transcripts in ' + scope +
+                   ' were never read, so nothing is known about them.';
         }
         if (token === 'cannot-determine') {
-            return 'This could not be evaluated. The server answered, and said it was unable to' +
-                   ' establish an answer for ' + scope + '. That is not the same as finding nothing.';
+            return 'Try again: the server answered but could not establish a result for ' +
+                   scope + ', which is not the same as finding nothing.';
         }
         if (token === 'not-found') {
-            return 'There is no such thing. The server looked and established that ' + scope +
-                   ' does not exist.';
+            return 'Go up to the containing scope: the server looked and established that ' +
+                   scope + ' does not exist.';
         }
         if (token === 'transport-error') {
-            return 'The server did not answer, or answered with something this client could not' +
-                   ' read. Nothing at all is known about ' + scope + '.';
+            return 'Try again: nothing at all is known about ' + scope +
+                   ', because the server did not answer or answered with something' +
+                   ' this client could not read.';
         }
         return 'Results from ' + scope + '.';
     }
@@ -294,11 +309,19 @@ console.log('[ArchiveOutcomeView Module] Loading...');
      *         extraActions (Array<{action,label}>).
      * Output: Element.
      */
-    function renderActions(doc, token, n, extraActions) {
+    function renderActions(doc, token, n, extraActions, omit) {
         var row = el(doc, 'div', ROOT_CLASS + '__actions', null);
+        var skip = Array.isArray(omit) ? omit : [];
         var defs = (DEFAULT_ACTIONS[token] || []).concat(extraActions || []);
         for (var i = 0; i < defs.length; i++) {
             var def = defs[i];
+            // TWO IDENTICAL PRIMARY BUTTONS IS A BUG, NOT REDUNDANCY.
+            // A caller that renders its OWN, richer control for an action
+            // says so here rather than letting both draw one. Measured
+            // before this option existed: a partial search painted
+            // "Resume the scan" twice, a few hundred pixels apart, from
+            // two different modules that did not know about each other.
+            if (skip.indexOf(def.action) !== -1) continue;
             var btn = el(doc, 'button', ROOT_CLASS + '__action', def.label);
             btn.setAttribute('type', 'button');
             btn.setAttribute('data-action', def.action);
@@ -354,11 +377,31 @@ console.log('[ArchiveOutcomeView Module] Loading...');
         root.appendChild(el(doc, 'p', ROOT_CLASS + '__label', LABELS[token] || String(token)));
         root.appendChild(el(doc, 'p', ROOT_CLASS + '__headline', headlineFor(token, meta, n)));
 
+        // THE AUDIT TRAIL GOES BEHIND A DISCLOSURE, AND NOTHING IS
+        // DROPPED. The word count was the bug, never the facts. The
+        // partial state used to state one fact - 801 of 3,416 read - in
+        // five registers one after another, and volunteer the server's
+        // internal byte charge in the middle of a result panel. Every
+        // one of those lines is still built, still exact, and still in
+        // this block's textContent for any test, screen reader or
+        // Ctrl-F that walks it. It is one click away instead of being
+        // the fourth restatement of the sentence above it.
+        //
+        // The summary NAMES what is inside rather than saying
+        // "details", so nobody has to open it to find out whether it is
+        // worth opening. The disclosure is appended only when it would
+        // hold something: an empty <details> is a control that does
+        // nothing.
+        var audit = el(doc, 'details', ROOT_CLASS + '__audit', null);
+        audit.appendChild(el(doc, 'summary', ROOT_CLASS + '__audit-summary',
+            "Audit trail: coverage, counts and the server's own reasons"));
+        var auditItems = 0;
+
         var reasons = renderReasons(doc, token, classified.reasons);
-        if (reasons) root.appendChild(reasons);
+        if (reasons) { audit.appendChild(reasons); auditItems++; }
 
         var coverage = renderCoverage(doc, n);
-        if (coverage) root.appendChild(coverage);
+        if (coverage) { audit.appendChild(coverage); auditItems++; }
 
         // has_more is a three-outcome field of its own: the server
         // returns null on every failure path, and null is not false.
@@ -366,16 +409,85 @@ console.log('[ArchiveOutcomeView Module] Loading...');
         // end of the list had been reached.
         if (window.ArchiveOutcome.hasMore(envelope) === null &&
                 (token === 'partial' || token === 'cannot-determine')) {
-            root.appendChild(el(doc, 'p', ROOT_CLASS + '__has-more',
+            audit.appendChild(el(doc, 'p', ROOT_CLASS + '__has-more',
                 'Whether there is more beyond this: NOT KNOWN.'));
+            auditItems++;
         }
 
-        root.appendChild(renderActions(doc, token, n, opts.extraActions));
+        if (auditItems > 0) root.appendChild(audit);
+
+        root.appendChild(renderActions(doc, token, n, opts.extraActions,
+                                       opts.omitActions));
         return root;
+    }
+
+    /**
+     * Description: build the children for the reader's NON-`ok` state.
+     *   EVERY READER STATE IS ONE OF THE SIX OUTCOME TOKENS OR ONE OF
+     *   THE TWO NON-OUTCOME STATES. There is no hand-rolled empty state
+     *   and no hand-rolled error state: `idle` renders a prompt,
+     *   `loading` renders a stated DEADLINE, and everything else is
+     *   handed whole to renderOutcomeBlock. A spinner with no terminal
+     *   condition is a state that can never fail, which is a false green
+     *   at the pixel level.
+     *   The CALLER keeps ownership of its status element and of setting
+     *   `data-reader-state`; this function only builds children.
+     * Inputs: token (string) - 'idle', 'loading', or an outcome token.
+     *         envelope (object|null) - backs a failure token.
+     *         options (object|null) - {document, rootClass, deadlineMs}.
+     * Output: Element - a container holding the state's children.
+     * Example:
+     *   renderReaderState('loading', null, {document: doc,
+     *     rootClass: 'archive-reader', deadlineMs: 15000});
+     */
+    function renderReaderState(token, envelope, options) {
+        var opts = options || {};
+        var doc = opts.document ||
+            (typeof window !== 'undefined' ? window.document : null);
+        if (!doc) throw new Error('renderReaderState needs a document');
+        var rc = opts.rootClass || READER_ROOT_CLASS;
+        var box = el(doc, 'div', rc + '__state', null);
+
+        if (token === 'idle') {
+            // NORMATIVE COPY. "You have not asked" and "your question
+            // found nothing" are different findings and must not look
+            // alike. `Live session: NOT CHECKED` is rendered verbatim:
+            // this build does not correlate archived transcripts with
+            // live terminal sessions, and it is not asserting that
+            // there are none.
+            box.appendChild(el(doc, 'p', rc + '__idle-head',
+                'Pick a transcript.'));
+            box.appendChild(el(doc, 'p', rc + '__idle-live',
+                'Live session: NOT CHECKED'));
+            box.appendChild(el(doc, 'p', rc + '__idle-note',
+                'This build does not correlate archived transcripts with ' +
+                'live terminal sessions. It is not asserting that there ' +
+                'are none.'));
+            return box;
+        }
+        if (token === 'loading') {
+            var p = el(doc, 'p', rc + '__loading', 'Loading the line index...');
+            p.setAttribute('role', 'status');
+            box.appendChild(p);
+            // The deadline is surfaced so the state is visibly terminal
+            // rather than an open-ended spinner. A deadline nobody
+            // supplied is NOT a deadline of zero, so it is stated as an
+            // unknown rather than rendered as a number nobody measured.
+            var ms = opts.deadlineMs;
+            box.appendChild(el(doc, 'p', rc + '__deadline',
+                Number.isFinite(ms)
+                    ? 'If there is no answer within ' + Math.round(ms / 1000) +
+                      's this becomes NO ANSWER FROM THE SERVER.'
+                    : 'The deadline for this request: NOT KNOWN.'));
+            return box;
+        }
+        box.appendChild(renderOutcomeBlock(envelope, { document: doc }));
+        return box;
     }
 
     window.ArchiveOutcomeView = {
         renderOutcomeBlock: renderOutcomeBlock,
+        renderReaderState: renderReaderState,
         describeScope: describeScope,
         scanNumbers: scanNumbers,
         headlineFor: headlineFor,
