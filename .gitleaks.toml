@@ -129,6 +129,16 @@ regexes = [
     # by accident in the lowercase filler" around it, per each file's own
     # comment. Never a real secret; added 2026-08-31.
     '''AKIA7Q2W9E4R6T8Y0U1I3O5P7A9S1D3F5G7H9J1K''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_message_block_preview_gate.py:SECRET. A 40-char credential with NO
+    # vendor marker, chosen so that only the contextual high-entropy detector
+    # can see it - a body carrying it without an assignment context scans
+    # clean, which is exactly the case the block-preview gate exists to catch.
+    # EVIDENCE it is synthetic, measured 2026-09-01 without printing it, to the
+    # same standard as the nine above: sha256
+    # 037b7f521fe56d14e6ca9f4e6ad0f87e64805a5b36e03ea4b739dea3e4b9792b appears
+    # 0 times in message_secret_findings (739 distinct detected values), and a
+    # direct substring scan of all 2,447,028 message_bodies returns 0 rows.
+    '''b7f3a91c04de26857fabc0193d5e6472aa81cd90''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
 ]
 
 # ---------------------------------------------------------------------------

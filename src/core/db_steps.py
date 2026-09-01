@@ -53,6 +53,7 @@ from src.core.db_models import (
     META_SCHEMA_VERSION,
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
+from src.core.message_block_ddl import DDL_V18
 from src.core.message_host_ddl import DDL_V17
 from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
@@ -891,6 +892,42 @@ def _step_v16_to_v17(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v17_to_v18(conn: sqlite3.Connection) -> None:
+    """Create the derived content-block index.
+
+    Description: build step for v18 - three tables
+      (message_block_types, message_content_blocks,
+      message_body_block_status) and three indexes. See
+      src/core/message_block_ddl.py's module docstring for the measured
+      shape of the corpus this indexes and for why the status table is
+      separate from the block table.
+
+      Every CREATE carries its own IF NOT EXISTS, so the step is
+      idempotent on a retry with no PRAGMA inspection, exactly as
+      v7/v8/v14/v16 are.
+
+      IT DOES NOT TOUCH message_bodies. No ALTER, no UPDATE, no rewrite,
+      not even a read. The 7.23 GiB column this index is derived FROM is
+      not rewritten by the step that creates the index, so the migration
+      is O(1) against an 11 GB corpus rather than a multi-hour rebuild
+      inside startup.
+
+      NO BACKFILL HERE, AND THE EMPTY STATE IS THE HONEST ONE. An
+      existing v17 database gets three empty tables, and every body then
+      has NO row in message_body_block_status - which reads as NEVER
+      PROCESSED, a real third outcome, and not as "this body has no
+      content blocks". Populating 2.4M bodies takes about 20 minutes
+      measured, which is not something a startup migration may do to a
+      user who just wanted the app to open. The backfill is a separate,
+      resumable operation: scripts/message_block_backfill.py.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v17_to_v18(conn)  # after _step_v16_to_v17
+    """
+    for statement in DDL_V18:
+        conn.execute(statement)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -913,6 +950,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     14: _step_v14_to_v15,
     15: _step_v15_to_v16,
     16: _step_v16_to_v17,
+    17: _step_v17_to_v18,
 }
 
 

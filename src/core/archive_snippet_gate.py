@@ -187,6 +187,54 @@ def _evaluate_window(
     return None
 
 
+def layer_one_state(secret_finding_count: int) -> Optional[str]:
+    """Layer 1: a body already flagged secret-bearing is withheld whole.
+
+    Description: named and shared rather than written inline in each
+      caller, so the body-flag rule has exactly ONE definition. A second
+      copy is how two callers end up with two policies, which is the
+      defect this whole module exists to prevent.
+    Inputs: secret_finding_count (int) - the body's stored finding count.
+    Output: None when this layer permits, otherwise the withhold state.
+    Example: layer_one_state(0) is None -> True
+    """
+    return SNIPPET_WITHHELD_FLAGGED_BODY if secret_finding_count > 0 else None
+
+
+def evaluate_text_window(
+    conn: sqlite3.Connection, body_id: int, window: str,
+    index: Optional[KnownSecretIndex],
+) -> str:
+    """All three gate layers over an arbitrary window of a body's text.
+
+    Description: the composed entry point for any caller holding text
+      that came out of a body but did NOT come from the search path's
+      offset cut - notably a content-block preview, whose text is a
+      substring of the same body and therefore carries the same
+      exposure. It reads the body's own finding count for layer 1, so a
+      caller that does not already have it cannot skip that layer by
+      forgetting to pass it.
+    Inputs: conn (sqlite3.Connection), body_id (int), window (str) - the
+      candidate preview text, index - from :func:`load_index` or None.
+    Output: SNIPPET_INCLUDED when the window may be served, otherwise the
+      state naming the layer that withheld it, or RESULT_CANNOT_DETERMINE
+      when the body row could not be read at all.
+    Example: evaluate_text_window(conn, 1, "hi", None)
+      -> "withheld_gate_unavailable"
+    """
+    row = conn.execute(
+        "SELECT secret_finding_count FROM message_bodies WHERE id = ?",
+        (body_id,),
+    ).fetchone()
+    if row is None:
+        return RESULT_CANNOT_DETERMINE
+    flagged = layer_one_state(int(row[0]))
+    if flagged is not None:
+        return flagged
+    withheld = _evaluate_window(window, index)
+    return withheld if withheld is not None else SNIPPET_INCLUDED
+
+
 def snippet_gate_meta(index: Optional[KnownSecretIndex]) -> Dict[str, object]:
     """The gate's own declaration, for ``meta`` in the response envelope.
 
@@ -274,7 +322,7 @@ def build_hit(
     offset = int(row["match_offset"])
     if not snippets:
         snippet, state = None, SNIPPET_WITHHELD_BY_REQUEST
-    elif secret_count > 0:
+    elif layer_one_state(secret_count) is not None:
         snippet, state = None, SNIPPET_WITHHELD_FLAGGED_BODY
     else:
         snippet, state = _snippet_for(conn, body_id, offset, len(q), index)

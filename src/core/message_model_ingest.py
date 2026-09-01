@@ -52,6 +52,7 @@ from src.core.message_model_serialize import (
     split_lines,
     stored_body_json,
 )
+from src.core.message_block_store import store_blocks_for_body
 from src.core.message_model_store import (
     line_payload,
     record_finding,
@@ -174,6 +175,23 @@ def ingest_lines(
                     "SELECT body_json FROM message_bodies WHERE id = ?",
                     (body_id,)
                 ).fetchone()[0]
+                # The derived content-block index is built in the SAME
+                # branch that scans for secrets, for the same reason: a
+                # body's blocks are a pure function of the body, so they
+                # are derived exactly once, when the body row is created.
+                # A reused body already has its blocks. Failure here must
+                # never lose a body, so the verdict is recorded rather
+                # than raised - extract_blocks returns a status and never
+                # throws (see its docstring).
+                block_result = store_blocks_for_body(
+                    conn, body_id, body_json, stamp
+                )
+                if block_result.could_not_evaluate:
+                    result.findings.append((
+                        "content_blocks_not_evaluated",
+                        f"body {body_id}: {block_result.status}"
+                        f" ({block_result.detail})",
+                    ))
                 count = store_secret_findings(conn, body_id, body_json, stamp)
                 if count:
                     result.secret_findings += count
