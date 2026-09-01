@@ -61,73 +61,27 @@ console.log('[ArchiveScreen Module] Loading...');
     var handlers = null;
 
     /** The route currently rendered. @type {object} */
+    /** Names a project reached by URL rather than by a rail click.
+     *  Built lazily: window.API and ArchiveCrumbResolve are both
+     *  globals whose scripts may not have run when this one does. */
+    var projectNamer = null;
+
     var current = { view: 'root', projectId: null, transcriptId: null,
                     lineNo: null, query: {} };
 
-    /** Create an element. Inputs: tag, cls|null, text|null. Output: Element. */
-    function el(tag, cls, text) {
-        var n = document.createElement(tag);
-        if (cls) n.className = cls;
-        if (text !== null && text !== undefined) n.textContent = text;
-        return n;
-    }
+    /** What is known about the open project and transcript, so the crumb
+     *  can name them instead of printing their database ids. Keyed by id
+     *  inside, so a fact about a different route is never rendered.
+     *  @type {?object} */
+    var crumbFacts = null;
 
-    /** Apply attributes to a node and return it, so a control and what
-     *  makes it one read as one expression. Inputs: node, map. Output:
-     *  node. Example: attrs(el('button', 'x', 'Go'), {type: 'button'}) */
-    function attrs(node, map) {
-        var names = Object.keys(map || {});
-        for (var i = 0; i < names.length; i++) {
-            node.setAttribute(names[i], map[names[i]]);
-        }
-        return node;
-    }
-
-    /** Build the screen shell exactly once, idempotent. Output:
-     *  object|null - null when #archive-screen is absent, reported not
-     *  swallowed: it means index.html and this module disagree. */
+    /** Build the screen shell exactly once. The DOM itself lives in
+     *  archive-screen-shell.js; this file keeps only the reference.
+     *  Output: object|null - null when #archive-screen is absent, which
+     *  means index.html and that module disagree. */
     function buildShell() {
         if (shell) return shell;
-        var root = document.getElementById(SCREEN_ID);
-        if (!root) {
-            console.error('ArchiveScreen: #' + SCREEN_ID + ' is missing from ' +
-                'index.html. The screen cannot mount.');
-            return null;
-        }
-        root.textContent = '';
-
-        var crumb = attrs(el('nav', ROOT_CLASS + '__crumb', null),
-                          { 'aria-label': 'Archive location' });
-        var back = attrs(el('button', ROOT_CLASS + '__back', 'Back'),
-                         { type: 'button', 'data-action': 'back-pane' });
-
-        var grid = el('div', ROOT_CLASS + '__grid', null);
-        var navPane = el('div', ROOT_CLASS + '__pane ' + ROOT_CLASS + '__pane--nav', null);
-        var listPane = el('div', ROOT_CLASS + '__pane ' + ROOT_CLASS + '__pane--list', null);
-        var readPane = el('div', ROOT_CLASS + '__pane ' + ROOT_CLASS + '__pane--reader', null);
-        grid.appendChild(navPane);
-        grid.appendChild(listPane);
-        grid.appendChild(readPane);
-
-        // `#archive-bar-status` is the re-parent target for
-        // App._placeStatusLight('archive') and GlobalAudioToggle.place();
-        // the *-text span mirrors the home and terminal bars so
-        // _syncStatusLabel() has a target.
-        var bar = el('div', ROOT_CLASS + '__bar', null);
-        var status = el('span', ROOT_CLASS + '__status', null);
-        status.id = 'archive-bar-status';
-        var statusText = el('span', ROOT_CLASS + '__status-text', null);
-        statusText.id = 'archive-bar-status-text';
-        status.appendChild(statusText);
-        bar.appendChild(status);
-
-        root.appendChild(back);
-        root.appendChild(crumb);
-        root.appendChild(grid);
-        root.appendChild(bar);
-
-        shell = { root: root, crumb: crumb, back: back, grid: grid,
-                  navPane: navPane, listPane: listPane, readPane: readPane };
+        shell = window.ArchiveScreenShell.build();
         return shell;
     }
 
@@ -185,7 +139,13 @@ console.log('[ArchiveScreen Module] Loading...');
 
         var list = window.ArchiveTranscriptList.create({
             api: api,
-            onSelect: function (transcriptId) { openTranscript(transcriptId, null); }
+            onSelect: function (transcriptId, row) {
+                // The row already carries `title` and `session_ref`, so a
+                // click names the session in the crumb immediately rather
+                // than waiting on the header request it is about to make.
+                tracker().learnTranscript(transcriptId, row);
+                openTranscript(transcriptId, null);
+            }
         });
         shell.listPane.appendChild(list.element);
 
@@ -202,30 +162,16 @@ console.log('[ArchiveScreen Module] Loading...');
         var reader = window.ArchiveReader.createReader({ document: document, api: api });
         reader.mount(shell.readPane);
 
-        // The reader's toolbar is built here rather than in
-        // archive-reader.js because search and export are cross-pane:
-        // search writes into the list column and export opens a modal,
-        // neither of which the reader knows about.
-        var tools = el('div', ROOT_CLASS + '__tools', null);
-        var searchInput = attrs(el('input', ROOT_CLASS + '__search-input', null), {
-            type: 'search',
-            placeholder: 'search this transcript',
-            'aria-label': 'Search in the open transcript'
+        // The toolbar is CROSS-PANE (search writes into the list column,
+        // export opens a modal), so it belongs to neither the reader nor
+        // this file's shell - see archive-screen-tools.js.
+        var tools = window.ArchiveScreenTools.create({
+            document: document, pane: shell.readPane, rootClass: ROOT_CLASS,
+            onSearch: function (text) { runSearch(text); },
+            onExport: function () { openExport(); }
         });
-        var searchBtn = attrs(el('button', ROOT_CLASS + '__search-btn', 'Search'),
-                              { type: 'button', 'data-action': 'run-search' });
-        var exportBtn = attrs(el('button', ROOT_CLASS + '__export-btn', 'Export'),
-                              { type: 'button', 'data-action': 'open-export' });
-        tools.appendChild(searchInput);
-        tools.appendChild(searchBtn);
-        tools.appendChild(exportBtn);
-        shell.readPane.insertBefore(tools, shell.readPane.firstChild);
-
-        searchBtn.addEventListener('click', function () { runSearch(searchInput.value); });
-        searchInput.addEventListener('keydown', function (ev) {
-            if (ev.key === 'Enter') runSearch(searchInput.value);
-        });
-        exportBtn.addEventListener('click', function () { openExport(); });
+        var searchInput = tools.searchInput;
+        var exportBtn = tools.exportBtn;
         shell.back.addEventListener('click', function () { goBackPane(); });
 
         // The reader's pager, so its button and the `m` key take one
@@ -263,6 +209,7 @@ console.log('[ArchiveScreen Module] Loading...');
             setPane('project');
             return;
         }
+        tracker().learnProject(id, row);
         current = { view: 'project', projectId: id, transcriptId: null,
                     lineNo: null, query: {} };
         syncUrl(current);
@@ -423,27 +370,86 @@ console.log('[ArchiveScreen Module] Loading...');
     function applyRoute(route) {
         setPane(route.view);
         dismissSearch();
-        if (!wired.nav.rowsLoaded || !wired.nav.rowsLoaded('hosts').length) {
-            wired.nav.loadHosts();
-        }
+        // Load the view the rail is ACTUALLY showing. Asking for hosts
+        // here left the default merged view permanently empty.
+        wired.nav.ensureViewLoaded();
+        // ONE crumb paint for every route shape, from names rather than
+        // ids - see archive-crumb.js. It is repainted below whenever a
+        // fact arrives, because a deep link paints before its header
+        // request resolves and says NOT NAMED YET in the meantime.
+        paintCrumb(tracker().labelsFor(route));
         if (route.projectId !== null && route.projectId !== undefined) {
             wired.list.load({ kind: 'project', id: route.projectId, inScope: null });
-            paintCrumb(['project ' + route.projectId]);
+            nameProject(route.projectId);
         }
         if (route.transcriptId !== null && route.transcriptId !== undefined) {
-            paintCrumb([route.projectId !== null && route.projectId !== undefined
-                ? 'project ' + route.projectId : 'project NOT KNOWN',
-                'transcript ' + route.transcriptId]);
             window.ArchiveScreenReader.load({
-                reader: wired.reader,
+                reader: watchHeader(wired.reader, route.transcriptId),
                 pane: shell.readPane,
                 api: window.API,
                 transcriptId: route.transcriptId,
                 spinePageRows: SPINE_PAGE_ROWS
             }, route.lineNo);
-        } else if (route.projectId === null || route.projectId === undefined) {
-            paintCrumb([]);
         }
+    }
+
+    /**
+     * Description: learn the name of a project the rail never handed
+     *   over, so a deep link's crumb reads as a name rather than
+     *   NOT NAMED YET forever. See archive-crumb-resolve.js.
+     *
+     *   REPAINTS ONLY IF THE ROUTE HAS NOT MOVED ON: a name arriving
+     *   after the user opened something else would render the PREVIOUS
+     *   project over the current one, and a wrong name is believable in
+     *   a way the honest unknown it replaced is not. A miss and a failed
+     *   read both paint nothing, leaving NOT NAMED YET standing.
+     * Inputs: projectId (number). Output: void.
+     */
+    function nameProject(projectId) {
+        if (tracker().facts({ projectId: projectId }).project) return;
+        if (!window.ArchiveCrumbResolve || !window.API) return;
+        if (!projectNamer) {
+            projectNamer = window.ArchiveCrumbResolve.createResolver(window.API);
+        }
+        projectNamer.resolve(projectId).then(function (r) {
+            if (!r || !r.node) return;
+            if (current.projectId !== projectId) return;
+            tracker().learnProject(projectId, r.node);
+            paintCrumb(tracker().labelsFor(current));
+        });
+    }
+
+    /** Description: the crumb's knowledge, built lazily because
+     *  ArchiveCrumb lives on `window` and its script may not have run
+     *  when this module loads. Inputs: none. Output: object. */
+    function tracker() {
+        if (!crumbFacts) crumbFacts = window.ArchiveCrumb.createTracker();
+        return crumbFacts;
+    }
+
+    /**
+     * Description: hand ArchiveScreenReader a reader that also REPORTS
+     *   the header it is given, so the crumb can be repainted with the
+     *   session's real name.
+     *
+     *   A DELEGATING WRAPPER RATHER THAN A CALLBACK PARAMETER, because
+     *   the header is already fetched exactly once, by that module, and a
+     *   second request here to learn the same fact would double every
+     *   transcript open. The wrapper adds no branch: `setHeader` is
+     *   forwarded whatever it receives, including the `null` that means
+     *   the header could not be evaluated - which correctly leaves the
+     *   crumb saying NOT NAMED YET rather than inventing a name.
+     * Inputs: reader (object), transcriptId (number).
+     * Output: object - the reader, with setHeader instrumented.
+     */
+    function watchHeader(reader, transcriptId) {
+        return Object.create(reader, { setHeader: { value: function (h) {
+            if (h) {
+                tracker().learnTranscript(transcriptId, h);
+                paintCrumb(tracker().labelsFor(current));
+            }
+            return reader.setHeader(h);
+        } } });
     }
 
     /** Show the screen for a parsed route, called by App.showArchive()
@@ -475,6 +481,10 @@ console.log('[ArchiveScreen Module] Loading...');
         route: function () { return current; },
         /** Description: sub-views, for tests. Output: object|null. */
         views: function () { return wired; },
+        /** Description: the pane resizer, for tests. Output: object|null. */
+        panes: function () { return shell ? shell.panes : null; },
+        /** Description: the crumb's knowledge. Output: object. */
+        crumbTracker: tracker,
         /** Description: the action table, so a test can assert every
          *   ACTIONS value has a handler. Output: Object<string,function>. */
         handlerTable: handlerTable,

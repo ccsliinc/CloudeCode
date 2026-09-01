@@ -50,7 +50,7 @@
 
 .archive-screen__crumb {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 8px;
     flex: 0 0 auto;
@@ -59,24 +59,46 @@
     font-size: 0.85rem;
     color: var(--color-fg-muted);
     border-bottom: 1px solid var(--color-border);
-    /* Wrap rather than ellipsis: a truncated breadcrumb is a path the
-     * reader cannot check, and these slugs are long by nature
-     * (-Users-jsugamele-Development-Assistants-Infrastructure). */
-    overflow-wrap: anywhere;
+    /* TRUNCATE, DO NOT WRAP. The previous rule wrapped on the grounds
+     * that "a truncated breadcrumb is a path the reader cannot check" -
+     * true of a truncation with no way back, and these slugs really are
+     * long (-Users-jsugamele-Development-Assistants-Infrastructure). The
+     * answer is not to wrap: a crumb that wraps to three lines reflows
+     * the whole grid under it every time a longer name is opened. Each
+     * segment now ellipsises AND carries its full text in a `title`
+     * (written by archive-deeplink.js::renderCrumb), so the path is
+     * still checkable - by hovering - and the row keeps one height. */
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* The crumb IS the archive's title row, so its leaf reads like one:
  * .project-name's accent, at the crumb's own size. */
 .archive-screen__crumb-item {
     color: var(--color-fg);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
+/* The LEAF gets the room. The earlier segments shrink first because the
+ * thing you are looking at matters more than the path you took to it,
+ * and every one of them keeps a readable stub rather than collapsing to
+ * an ellipsis on its own. */
 .archive-screen__crumb-item:last-of-type {
+    flex: 1 1 auto;
     color: var(--color-accent);
     font-weight: bold;
 }
 
+.archive-screen__crumb-item:not(:last-of-type) {
+    flex: 0 1 auto;
+    min-width: 4ch;
+}
+
 .archive-screen__crumb-sep {
+    flex: 0 0 auto;
     color: var(--color-fg-faint);
 }
 
@@ -118,12 +140,66 @@
 
 /* --- the three-column grid ------------------------------------------ */
 
+/* =====================================================================
+ * THE `hidden` ATTRIBUTE HAS TO WIN, AND ON THIS SCREEN IT DID NOT.
+ *
+ * MEASURED 2026-09-01, live server, 1440x900. `archive-screen.js` hides
+ * the search panel with `search.element.hidden = true` and the list with
+ * `wired.list.element.hidden = true`. Both are correct. Both did
+ * NOTHING, because `[hidden] { display: none }` lives in the USER-AGENT
+ * stylesheet and any author `display` declaration outranks it -
+ * `.archive-search { display: flex }` (archive-search.css:37) and
+ * `.archive-tlist { display: flex }` (archive-tlist.css) each did.
+ *
+ * WHAT THE OWNER SAW. The "hidden" search panel rendered its empty
+ * `.archive-search__coverage` paragraph inside the transcript-list pane:
+ * `background: var(--color-bg-elevated)` (rgb 45,45,48), a
+ * `box-shadow: inset 3px 0 0 var(--color-info)` blue rail and
+ * `border-radius: var(--radius-md)`. That is the textless dark bar with
+ * a blue rounded left cap, painted across a transcript row, that this
+ * screen has been shipping. Measured before the fix: the element was at
+ * x=272 y=832 w=336 h=20 with `visibility: visible`, and its parent
+ * `<section class="archive-search" hidden>` occupied a real 36px of the
+ * pane's flex column - so it also SQUEEZED the list it sat under.
+ *
+ * WHY `!important` AND WHY SCOPED. `hidden` is a semantic assertion that
+ * an element is not present; any author rule that beats it is a bug, not
+ * a style. The alternative - one `.archive-search[hidden]` guard - fixes
+ * exactly the two panes that are broken TODAY and leaves the next pane
+ * added to this screen carrying the same latent defect, silently, since
+ * nothing errors and nothing fails a test. Scoped to `#archive-screen`
+ * so it is a statement about this screen and not a global override of
+ * everybody else's deliberate `[hidden]` animations (archive-export.css
+ * documents one such deliberate choice).
+ * ===================================================================== */
+
+#archive-screen [hidden] {
+    display: none !important;
+}
+
 .archive-screen__grid {
     display: grid;
-    /* Fixed rail, fixed list, elastic reader (design doc C.1). `minmax`
-     * with a 0 floor on the reader so a long unbroken body cannot push
-     * the grid wider than the viewport and take the page horizontal. */
-    grid-template-columns: 17rem 22rem minmax(0, 1fr);
+    /* RESIZABLE, AND THE TWO WIDTHS LIVE IN VARIABLES.
+     * `archive-pane-resize.js` writes `--archive-nav-w` and
+     * `--archive-list-w` on this element and NOTHING else; the template
+     * is built here, once, so there is no second place computing a
+     * column count. The fallbacks are the 17rem/22rem this replaced, at
+     * the app's 16px root - they are what renders when the JS has not
+     * run, when localStorage is unavailable, and in any theme or context
+     * that never reaches the resizer at all.
+     *
+     * `minmax` with a 0 floor on the reader so a long unbroken body
+     * cannot push the grid wider than the viewport and take the page
+     * horizontal. */
+    grid-template-columns:
+        var(--archive-nav-w, 17rem)
+        var(--archive-list-w, 22rem)
+        minmax(0, 1fr);
+    /* The containing block for the two absolutely-positioned resizer
+     * handles. They are deliberately NOT grid items: in the flow they
+     * would make this a five-column grid and every rule that says "the
+     * three columns" wrong. */
+    position: relative;
     flex: 1 1 auto;
     min-height: 0;
     min-width: 0;
@@ -243,7 +319,17 @@
 
 @media (max-width: 900px) {
     .archive-screen__grid {
+        /* ONE COLUMN, AND THE TWO WIDTH VARIABLES ARE SIMPLY IGNORED.
+         * That is why the resizer needs no narrow-layout code at all:
+         * there is nothing here reading `--archive-nav-w`, so a width
+         * stored from a wide window cannot leak into the phone layout. */
         grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* A divider between panes that are never side by side names
+     * nothing. Removed from the layout AND from the tab order. */
+    .archive-screen__resizer {
+        display: none;
     }
 
     .archive-screen__back {

@@ -169,6 +169,12 @@
          archive-reader.css, and fold it INTO archive-reader.css once that
          file is free. -->
     <link rel="stylesheet" href="/static/css/archive-align.css" />
+    <!-- The pane resizers, and the rule that every label in the browse
+         panes truncates with an ellipsis plus a `title` rather than
+         wrapping. LAST on purpose: several rules replace a wrap declared
+         in archive-tlist.css, and load order is the whole mechanism -
+         each selector is no more specific than the one it replaces. -->
+    <link rel="stylesheet" href="/static/css/archive-panes.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -1019,6 +1025,9 @@
     <script src="/static/js/archive-outcome.js"></script>
     <script src="/static/js/archive-mask.js"></script>
     <script src="/static/js/archive-format.js"></script>
+    <!-- Subsequence matching for the transcript list's per-column
+         filters. Pure; no DOM. -->
+    <script src="/static/js/archive-fuzzy.js"></script>
     <script src="/static/js/archive-deeplink.js"></script>
     <script src="/static/js/archive-virtual-list.js"></script>
     <script src="/static/js/archive-state.js"></script>
@@ -1026,9 +1035,18 @@
     <script src="/static/js/archive-body-gate.js"></script>
     <script src="/static/js/archive-body-cache.js"></script>
     <script src="/static/js/archive-line-render.js"></script>
+    <!-- archive-nav-fuzzy.js defines no dependency of its own; it must
+         simply precede archive-nav-merged.js, which calls it. -->
+    <script src="/static/js/archive-nav-fuzzy.js"></script>
     <script src="/static/js/archive-nav-row.js"></script>
+    <!-- archive-nav-merged.js reads window.ArchiveNavRow at IIFE time, so
+         it loads AFTER archive-nav-row.js and BEFORE archive-nav.js. -->
+    <script src="/static/js/archive-nav-merged.js"></script>
     <script src="/static/js/archive-nav.js"></script>
     <script src="/static/js/archive-tlist-row.js"></script>
+    <!-- The compact scheme chooser and the three fuzzy inputs. MUST load
+         before archive-transcript-list.js, which builds one. -->
+    <script src="/static/js/archive-tlist-filter.js"></script>
     <script src="/static/js/archive-transcript-list.js"></script>
     <script src="/static/js/archive-keys.js"></script>
     <script src="/static/js/archive-reader-dom.js"></script>
@@ -1040,6 +1058,22 @@
     <script src="/static/js/archive-search.js"></script>
     <script src="/static/js/archive-export.js"></script>
     <script src="/static/js/archive-screen-reader.js"></script>
+    <!-- Draggable, remembered pane widths. MUST load before
+         archive-screen-shell.js, which attaches the two handles to the
+         grid it creates, at script load. -->
+    <script src="/static/js/archive-pane-resize.js"></script>
+    <!-- What a breadcrumb segment SAYS, so no database id reaches one.
+         Pure; no DOM. -->
+    <script src="/static/js/archive-crumb.js"></script>
+    <!-- Names a project reached by URL rather than by a rail click. Reads
+         window.ArchiveCrumb.indexNodes, so it loads AFTER archive-crumb.js
+         and before archive-screen.js, which builds the resolver. -->
+    <script src="/static/js/archive-crumb-resolve.js"></script>
+    <!-- The screen's DOM, and the cross-pane reader toolbar. Both split
+         out of archive-screen.js for the 500-line cap; both MUST load
+         before it, because it builds its shell at ITS script load. -->
+    <script src="/static/js/archive-screen-shell.js"></script>
+    <script src="/static/js/archive-screen-tools.js"></script>
     <script src="/static/js/archive-screen.js"></script>
 
     <script src="/static/js/app.js"></script>

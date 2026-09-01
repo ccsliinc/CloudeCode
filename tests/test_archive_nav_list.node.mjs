@@ -82,9 +82,15 @@ function load() {
         console: { log() {}, warn() {}, error() {}, debug() {} },
     };
     vm.createContext(context);
+    // archive-fuzzy.js and archive-tlist-filter.js are the list's own
+    // header and its per-column matcher; the list builds one of each at
+    // create() time, so a context without them cannot construct a list
+    // at all.
     for (const file of ['archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-nav-row.js', 'archive-nav.js',
-                        'archive-tlist-row.js', 'archive-transcript-list.js']) {
+                        'archive-outcome-view.js', 'archive-nav-row.js',
+                        'archive-nav-fuzzy.js', 'archive-nav-merged.js', 'archive-nav.js',
+                        'archive-fuzzy.js', 'archive-tlist-row.js',
+                        'archive-tlist-filter.js', 'archive-transcript-list.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
             context, { filename: file }
@@ -274,9 +280,14 @@ await test('choosing a scheme RE-QUERIES the scope, it does not repaint', async 
         }
     });
     await view.load({ kind: 'project', id: 12, inScope: 3416 });
-    assert.deepEqual(calls, [null], 'the first load sends no filter');
-    await view.setSchemeFilter(list.SCHEME_FILTERS.CONVERSATIONS);
-    assert.deepEqual(calls, [null, 'uuid'],
+    // The FIRST load now carries the default filter, because the default
+    // is no longer 'all'. `wireScheme` still maps 'all' to null - "no
+    // filter" has to be an OMITTED parameter, since the server answers
+    // 400 for an unknown scheme value of 'all'.
+    assert.deepEqual(calls, ['uuid'],
+        'the first load must carry the default scheme filter');
+    await view.setSchemeFilter(list.SCHEME_FILTERS.ALL);
+    assert.deepEqual(calls, ['uuid', null],
         'changing the filter must issue a NEW request carrying it');
 });
 
@@ -489,21 +500,28 @@ await test('C1: all three scheme buttons carry aria-pressed, exactly one true, a
     }
     assert.equal(initial.filter((b) => b.pressed === 'true').length, 1,
         'exactly one scheme button may be pressed');
+    // THE DEFAULT IS THE OWNER'S OWN SESSIONS, NOT EVERYTHING. Measured
+    // 2026-08-31: 19,588 of 21,039 transcripts (93.1%) are agent
+    // sidechain files, so opening on `all` opened on 93 percent noise.
+    // Asserted against DEFAULT_SCHEME rather than against the literal
+    // 'uuid', so the constant stays the single declaration of it.
+    assert.equal(list.DEFAULT_SCHEME, list.SCHEME_FILTERS.CONVERSATIONS,
+        'the shipped default must be the uuid (top-level session) scheme');
     assert.equal(initial.find((b) => b.pressed === 'true').value,
-        list.SCHEME_FILTERS.ALL, 'the default filter must be the pressed one');
+        list.DEFAULT_SCHEME, 'the default filter must be the pressed one');
 
     // IT FOLLOWS THE FILTER. Nothing has been loaded, so the reload
     // refuses with 'no-scope' - and the button state must still move,
     // because the choice WAS made even though the query could not run.
-    assert.equal(await l.setSchemeFilter(list.SCHEME_FILTERS.CONVERSATIONS),
+    assert.equal(await l.setSchemeFilter(list.SCHEME_FILTERS.ALL),
         'no-scope');
     const after = schemeButtons(l);
     assert.equal(after.filter((b) => b.pressed === 'true').length, 1);
     assert.equal(after.find((b) => b.pressed === 'true').value,
-        list.SCHEME_FILTERS.CONVERSATIONS,
+        list.SCHEME_FILTERS.ALL,
         'the pressed button did not follow setSchemeFilter');
     assert.equal(
-        after.find((b) => b.value === list.SCHEME_FILTERS.ALL).pressed, 'false',
+        after.find((b) => b.value === list.DEFAULT_SCHEME).pressed, 'false',
         'the previously pressed button was not un-pressed');
 
     await l.setSchemeFilter(list.SCHEME_FILTERS.SIDECHAINS);
@@ -518,7 +536,7 @@ await test('C2: list.scheme() reflects the filter currently applied', async () =
     assert.equal(typeof l.scheme, 'function',
         'the list exposes no scheme(), so the composition root would have ' +
         'to keep a second copy of the value that could drift from this one');
-    assert.equal(l.scheme(), list.SCHEME_FILTERS.ALL);
+    assert.equal(l.scheme(), list.DEFAULT_SCHEME);
 
     await l.setSchemeFilter(list.SCHEME_FILTERS.SIDECHAINS);
     assert.equal(l.scheme(), list.SCHEME_FILTERS.SIDECHAINS);
@@ -528,10 +546,10 @@ await test('C2: list.scheme() reflects the filter currently applied', async () =
     assert.equal(schemeButtons(l).find((b) => b.pressed === 'true').value,
         l.scheme(), 'scheme() and aria-pressed disagree');
 
-    // An empty value falls back to ALL rather than to an unknown scheme,
-    // which the server would refuse.
+    // An empty value falls back to the DEFAULT rather than to an unknown
+    // scheme, which the server would refuse with a 400.
     await l.setSchemeFilter('');
-    assert.equal(l.scheme(), list.SCHEME_FILTERS.ALL);
+    assert.equal(l.scheme(), list.DEFAULT_SCHEME);
 });
 
 await test('C3: the nav exposes filterInput, filterText() and clearFilter(), and clearFilter clears BOTH', () => {

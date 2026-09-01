@@ -215,6 +215,26 @@ Object.assign(API.prototype, {
     },
 
     /**
+     * Archive: EVERY project as one list, machine demoted to a field.
+     *
+     * The merged view the rail defaults to. One node per distinct
+     * observed_cwd across all hosts and corpora, carrying display_name
+     * (the folder name), full_path (the raw slug), hosts (every machine
+     * it appears on) and members (the underlying per-corpus rows).
+     *
+     * Deliberately takes no limit/cursor: the server does not paginate
+     * it, because a page of a merged tree would let a caller conclude a
+     * project lives on one machine because the row proving otherwise
+     * fell on page 2.
+     *
+     * @returns {Promise<object>} A callEnvelope result.
+     */
+    async listArchiveMergedProjects() {
+        return await this.callEnvelope('/archive/projects',
+            { timeoutMs: this.ARCHIVE_TIMEOUTS.hierarchy });
+    },
+
+    /**
      * Archive: the transcripts in a corpus that belong to NO project.
      *
      * Its own endpoint because a transcript attributed to no project is

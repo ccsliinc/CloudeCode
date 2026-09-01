@@ -38,6 +38,7 @@ from src.core.archive_cursor import (
     decode_cursor,
     encode_cursor,
 )
+from src.core.archive_titles import titles_meta
 from src.core.archive_transcript_page import (
     SCHEME_SUBJECT,
     count_in_scope,
@@ -371,6 +372,11 @@ def transcripts_for_project(
             "filters": scheme_filter_meta(
                 scheme, matched_in_scope=matched, scope_total=scope_total
             ),
+            # Emitted even on a page where no row has a title, so a
+            # client can tell "this build resolves titles and none of
+            # these have one" from "this build does not know about
+            # titles". Those render identically without it.
+            "titles": titles_meta(),
         },
     )
 
@@ -430,6 +436,7 @@ def unattributed_for_corpus(
         "scope": {"kind": "corpus", "corpus_id": corpus_id},
         "unattributed_transcript_count": total,
     }
+    meta["titles"] = titles_meta()
     if total == 0:
         meta["note"] = "every transcript in this corpus resolved to a project"
     return envelope(result=rows, result_status=RESULT_OK, meta=meta)

@@ -73,6 +73,12 @@ from src.core.message_model_serialize import render_line, sha256_text
 ALL_ROUTES: List[str] = [
     "/api/v1/archive/hosts",
     "/api/v1/archive/hosts/1/corpora",
+    # The MERGED project list: one node per project across every host.
+    # Placed among the envelope routes, not appended, because
+    # ENVELOPE_ROUTES is ALL_ROUTES[:-2] and the last two entries are
+    # the exports, whose 200 is a file rather than an envelope. Adding
+    # it at the end would silently push an export out of that slice.
+    "/api/v1/archive/projects",
     "/api/v1/archive/corpora/1/projects",
     "/api/v1/archive/corpora/1/unattributed",
     "/api/v1/archive/projects/1/transcripts",

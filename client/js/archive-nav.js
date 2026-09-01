@@ -98,19 +98,48 @@ console.log('[ArchiveNav Module] Loading...');
 
         var filterInput = el(doc, 'input', ROOT_CLASS + '__filter', null);
         filterInput.setAttribute('type', 'search');
-        filterInput.setAttribute('placeholder', 'filter loaded rows');
+        filterInput.setAttribute('placeholder', 'filter projects (fuzzy)');
         filterInput.setAttribute('aria-label', 'Filter the rows already loaded');
+
+        // VIEW TOGGLE. Merged is the default because the machine a
+        // project was born on is not how anyone navigates to it. The
+        // by-machine tree is kept, not replaced - the information moved
+        // from a level to a badge, and this is the way back to it.
+        var viewBar = el(doc, 'div', ROOT_CLASS + '__viewbar', null);
+        var mergedBtn = el(doc, 'button', ROOT_CLASS + '__view ' + ROOT_CLASS + '__view--on', 'All projects');
+        mergedBtn.setAttribute('type', 'button');
+        mergedBtn.setAttribute('data-view', 'merged');
+        var byHostBtn = el(doc, 'button', ROOT_CLASS + '__view', 'By machine');
+        byHostBtn.setAttribute('type', 'button');
+        byHostBtn.setAttribute('data-view', 'hosts');
+        var hostSelect = doc.createElement('select');
+        hostSelect.setAttribute('class', ROOT_CLASS + '__hostfilter');
+        hostSelect.setAttribute('aria-label', 'Show only projects from one machine');
+        viewBar.appendChild(mergedBtn);
+        viewBar.appendChild(byHostBtn);
+        viewBar.appendChild(hostSelect);
+
         var filterNote = el(doc, 'p', ROOT_CLASS + '__filter-note', null);
         var hostList = el(doc, 'ul', ROOT_CLASS + '__level ' + ROOT_CLASS + '__level--hosts', null);
+        var mergedList = el(doc, 'ul', ROOT_CLASS + '__level ' + ROOT_CLASS + '__level--merged', null);
+        root.appendChild(viewBar);
         root.appendChild(filterInput);
         root.appendChild(filterNote);
+        root.appendChild(mergedList);
         root.appendChild(hostList);
+        hostList.setAttribute('hidden', 'hidden');
 
         /** Rows fetched per level, keyed 'hosts' | 'corpora:<id>' | 'projects:<id>'. */
         var loaded = {};
         /** Server-declared totals per level key, for the honest filter note. */
         var totals = {};
         var filterText = '';
+        /** 'merged' (default) or 'hosts'. */
+        var view = 'merged';
+        /** Merged project nodes, their unattributed rows, and the host filter. */
+        var merged = { nodes: [], unattributed: [], hosts: [] };
+        var hostFilter = null;
+        var lastPaint = { rendered: 0, total: 0 };
 
         /**
          * Description: render one level's rows into a slot, applying the
@@ -267,6 +296,7 @@ console.log('[ArchiveNav Module] Loading...');
          */
         function setFilter(text) {
             filterText = String(text === null || text === undefined ? '' : text);
+            if (view === 'merged') { paintMerged(); return; }
             if (loaded.hosts) {
                 paint(hostList, 'hosts', NODE_KINDS.HOST, loaded.hosts,
                       ['display_name', 'hostname'], true);
@@ -278,11 +308,149 @@ console.log('[ArchiveNav Module] Loading...');
                 : '';
         }
 
+        /**
+         * Description: fetch the merged project list - the default view.
+         *   One request, not paginated: 77 nodes, and a page of a merged
+         *   tree would let someone conclude a project lives on one
+         *   machine because the row proving otherwise fell on page 2.
+         * Inputs: none. Output: Promise<string> - the outcome token.
+         */
+        function loadMergedProjects() {
+            if (typeof api.listArchiveMergedProjects !== 'function') {
+                renderOutcomeInto(doc, mergedList, null,
+                    'api.listArchiveMergedProjects is not available in this build');
+                return Promise.resolve('transport-error');
+            }
+            return Promise.resolve(api.listArchiveMergedProjects()).then(function (r) {
+                var classified = window.ArchiveOutcome.classify(
+                    r.transportError ? null : r.envelope);
+                if (!window.ArchiveOutcome.isRenderable(classified.token)) {
+                    renderOutcomeInto(doc, mergedList, r.envelope, r.transportError);
+                    return classified.token;
+                }
+                var env = r.envelope || {};
+                var meta = env.meta || {};
+                merged.nodes = env.result || [];
+                merged.unattributed = (meta.unattributed && meta.unattributed.by_corpus) || [];
+                merged.hosts = meta.hosts || [];
+                totals.merged = merged.nodes.length;
+                window.ArchiveNavMerged.paintHostSelect(doc, hostSelect, merged.hosts);
+                paintMerged();
+                if (classified.token === 'partial') renderPartialTail(mergedList, r.envelope);
+                return classified.token;
+            });
+        }
+
+        /**
+         * Description: repaint the merged list under the current fuzzy
+         *   filter and machine filter, and restate what the filter did.
+         * Inputs: none. Output: void.
+         */
+        function paintMerged() {
+            // A MISSING DEPENDENCY IS RENDERED, NEVER THROWN. If
+            // archive-nav-merged.js was not loaded, the merged view
+            // cannot paint - and an exception here would take the whole
+            // rail down on a keystroke, leaving a blank pane that looks
+            // exactly like an archive with no projects in it. Say what
+            // is missing, where the person is looking.
+            if (!window.ArchiveNavMerged) {
+                renderOutcomeInto(doc, mergedList, null,
+                    'window.ArchiveNavMerged is missing: load ' +
+                    'client/js/archive-nav-merged.js (and ' +
+                    'archive-nav-fuzzy.js) before archive-nav.js');
+                lastPaint = { rendered: 0, total: 0, hiddenUnattributed: 0 };
+                return;
+            }
+            lastPaint = window.ArchiveNavMerged.paint(doc, mergedList, {
+                nodes: merged.nodes,
+                unattributed: merged.unattributed,
+                hostId: hostFilter,
+                filterText: filterText,
+                onActivate: activate
+            });
+            filterNote.textContent = filterText
+                ? describeFilter(lastPaint.rendered, lastPaint.total,
+                                 totals.merged || null, 'projects')
+                : '';
+        }
+
+        /**
+         * Description: switch between the merged list and the
+         *   by-machine drill-down. Both stay in the DOM; only one is
+         *   visible, so switching back does not refetch.
+         * Inputs: next (string) - 'merged' or 'hosts'. Output: Promise.
+         */
+        function setView(next) {
+            view = next === 'hosts' ? 'hosts' : 'merged';
+            var isMerged = view === 'merged';
+            mergedBtn.setAttribute('class', ROOT_CLASS + '__view' +
+                (isMerged ? ' ' + ROOT_CLASS + '__view--on' : ''));
+            byHostBtn.setAttribute('class', ROOT_CLASS + '__view' +
+                (isMerged ? '' : ' ' + ROOT_CLASS + '__view--on'));
+            if (isMerged) {
+                hostList.setAttribute('hidden', 'hidden');
+                mergedList.removeAttribute('hidden');
+                hostSelect.removeAttribute('hidden');
+                return merged.nodes.length ? Promise.resolve('ok') : loadMergedProjects();
+            }
+            mergedList.setAttribute('hidden', 'hidden');
+            hostSelect.setAttribute('hidden', 'hidden');
+            hostList.removeAttribute('hidden');
+            return loaded.hosts ? Promise.resolve('ok') : loadHosts();
+        }
+
+        mergedBtn.addEventListener('click', function () { setView('merged'); });
+        byHostBtn.addEventListener('click', function () { setView('hosts'); });
+        hostSelect.addEventListener('change', function () {
+            hostFilter = hostSelect.value || null;
+            paintMerged();
+        });
         filterInput.addEventListener('input', function () { setFilter(filterInput.value || ''); });
 
         return {
             element: root,
             loadHosts: loadHosts,
+            loadMergedProjects: loadMergedProjects,
+            setView: setView,
+            /**
+             * Description: load whatever the ACTIVE view needs, and
+             *   nothing else. The screen used to call loadHosts() on
+             *   every route, which fetched the drill-down the user was
+             *   NOT looking at and never fetched the merged list that
+             *   is the default view - so the rail opened empty, with no
+             *   request made and no error to see. An empty list and a
+             *   list nobody asked for render identically, which is the
+             *   false green this rail is written against.
+             *
+             *   Idempotent: setView() already refuses to refetch a
+             *   loaded view, so calling this on every route costs one
+             *   request per view per session.
+             * Inputs: none. Output: Promise.
+             */
+            ensureViewLoaded: function () { return setView(view); },
+            /**
+             * Description: the active view, for tests and the shell.
+             * Inputs: none. Output: string - 'merged' | 'hosts'.
+             */
+            view: function () { return view; },
+            /**
+             * Description: narrow the merged list to one machine.
+             * Inputs: hostId (number|string|null) - null for all.
+             * Output: void.
+             */
+            setHostFilter: function (hostId) {
+                hostFilter = (hostId === null || hostId === undefined || hostId === '')
+                    ? null : String(hostId);
+                hostSelect.value = hostFilter === null ? '' : hostFilter;
+                paintMerged();
+            },
+            /**
+             * Description: what the last paint rendered, so a test can
+             *   assert the filter without recounting the DOM.
+             * Inputs: none. Output: object.
+             */
+            lastPaint: function () { return lastPaint; },
+            mergedNodes: function () { return merged.nodes.slice(); },
             expand: expand,
             setFilter: setFilter,
             // The composition root needs THREE things from the filter, and

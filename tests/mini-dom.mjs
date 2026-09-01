@@ -153,7 +153,24 @@ class MiniElement {
         this._listeners = new Map();
         this.classList = new MiniTokenList(this);
         this.innerHTML = '';
-        this.style = {};
+        // `style` is a bare object PLUS the two custom-property methods,
+        // because CSS custom properties are NOT reachable as JS
+        // properties on a real CSSStyleDeclaration - `style['--x'] = v`
+        // silently does nothing in a browser and `setProperty` is the
+        // only way in. A stub with a plain object and no setProperty
+        // therefore does not merely lack a method: it makes the ONLY
+        // correct way to write a custom property throw, while the
+        // incorrect way appears to work. Both are provided, and
+        // setProperty writes into the same object so a test can read the
+        // value back either way.
+        this.style = {
+            setProperty(name, value) { this[name] = String(value); },
+            getPropertyValue(name) {
+                const v = this[name];
+                return v === undefined ? '' : String(v);
+            },
+            removeProperty(name) { delete this[name]; },
+        };
     }
 
     // ---- attributes ----

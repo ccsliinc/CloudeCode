@@ -109,82 +109,96 @@ console.log('[ArchiveTranscriptList Module] Loading...');
         var rows = [];
         var nextCursor = null;
         var hasMore = null;
-        var scheme = SCHEME_FILTERS.ALL;
-        /** The scheme button group, so its pressed state can be repainted. */
-        var schemeBox = null;
+        var scheme = ROW.DEFAULT_SCHEME;
         // The server's meta.filters from the LAST renderable page. Null
         // until one arrives, so "no filter block" is distinguishable
         // from "a filter block saying applied:false".
         var filters = null;
 
-        header.appendChild(buildSchemeControls());
+        // The compact scheme chooser and the three fuzzy inputs live in
+        // archive-tlist-filter.js. It emits changes and renders a header;
+        // the rows, the cursor and the paging stay here.
+        var filterUi = window.ArchiveTlistFilter.create({
+            document: doc,
+            rootClass: ROOT_CLASS,
+            schemeDefs: SCHEME_DEFS,
+            scheme: scheme,
+            onScheme: function (v) { setSchemeFilter(v); },
+            onQuery: function () { paint(); }
+        });
+        header.appendChild(filterUi.element);
 
         /**
-         * Description: build the three scheme buttons.
-         * Inputs: none. Output: Element.
+         * Description: the rows to draw, after the CLIENT-side fuzzy
+         *   filter, each with its match spans.
+         *
+         *   THE TWO FILTERS ARE APPLIED IN DIFFERENT PLACES ON PURPOSE.
+         *   The scheme filter is the SERVER's and has already narrowed
+         *   `rows` across the whole scope, so it is never re-applied
+         *   here - a second, invisible copy of that rule could disagree
+         *   with the counts the note quotes. The fuzzy filter is this
+         *   client's and can only ever see what has been fetched, which
+         *   is exactly what its own note says.
+         * Inputs: none.
+         * Output: Array<{row, spans}>.
          */
-        function buildSchemeControls() {
-            schemeBox = el(doc, 'div', ROOT_CLASS + '__schemes', null);
-            schemeBox.setAttribute('role', 'group');
-            schemeBox.setAttribute('aria-label', 'Session reference scheme filter');
-            for (var i = 0; i < SCHEME_DEFS.length; i++) {
-                (function (def) {
-                    var b = el(doc, 'button', ROOT_CLASS + '__scheme', def.label);
-                    b.setAttribute('type', 'button');
-                    b.setAttribute('data-scheme-filter', def.v);
-                    b.addEventListener('click', function () { setSchemeFilter(def.v); });
-                    schemeBox.appendChild(b);
-                })(SCHEME_DEFS[i]);
+        function visibleRows() {
+            var q = filterUi.queries();
+            if (!window.ArchiveFuzzy || !window.ArchiveFuzzy.isActive(q)) {
+                return rows.map(function (r) { return { row: r, spans: {} }; });
             }
-            paintSchemePressed();
-            return schemeBox;
+            return window.ArchiveFuzzy.rank(rows, q, ROW.rowValue)
+                .map(function (m) { return { row: m.row, spans: m.spans }; });
         }
 
         /**
-         * Description: write which scheme filter is ON.
-         *
-         *   THE FILTER WORKED AND SAID NOTHING. Measured 2026-09-01: the
-         *   three buttons carried no `aria-pressed` and no active class,
-         *   before or after a click, so choosing "Conversations only"
-         *   changed the row count from 50 to 27 while the three controls
-         *   stayed visually and semantically identical. A filter you
-         *   cannot tell is on is a filter you cannot trust.
-         *
-         *   `aria-pressed` is written on EVERY button, not only the
-         *   active one: a toggle button that carries the attribute only
-         *   when pressed is announced as an ordinary button the rest of
-         *   the time, so the off state stops being a state.
-         * Inputs: none. Output: void.
-         */
-        function paintSchemePressed() {
-            if (!schemeBox) return;
-            var buttons = schemeBox.querySelectorAll('[data-scheme-filter]');
-            for (var i = 0; i < buttons.length; i++) {
-                buttons[i].setAttribute('aria-pressed',
-                    buttons[i].getAttribute('data-scheme-filter') === scheme
-                        ? 'true' : 'false');
-            }
-        }
-
-        /**
-         * Description: repaint the row list and the honesty note.
+         * Description: repaint the row list and both honesty notes.
          * Inputs: none. Output: void.
          */
         function paint() {
             rowList.textContent = '';
-            // No client-side filtering happens here any more. Every row
-            // in `rows` already satisfies the filter, because the SERVER
-            // applied it across the whole scope. Filtering again here
-            // would be a second, invisible rule that could disagree with
-            // the counts the note quotes.
-            for (var i = 0; i < rows.length; i++) {
-                rowList.appendChild(renderRow(doc, rows[i], {
+            var vis = visibleRows();
+            for (var i = 0; i < vis.length; i++) {
+                rowList.appendChild(renderRow(doc, vis[i].row, {
                     onSelect: onSelect,
-                    unattributed: scope.kind === 'unattributed'
+                    unattributed: scope.kind === 'unattributed',
+                    spans: vis[i].spans
                 }));
             }
             splitNote.textContent = describeFilter(rows.length, filters);
+            filterUi.setNote(vis.length, rows.length, hasMore);
+            // A typed filter that matches nothing is an EMPTY result, and
+            // it is rendered by the one outcome renderer like every other
+            // empty - never as a blank pane, which is indistinguishable
+            // from a list that has not loaded.
+            if (vis.length === 0 && rows.length > 0 && filterUi.isActive()) {
+                paintFilteredEmpty();
+                return;
+            }
             paintFooter();
+        }
+
+        /**
+         * Description: render "your filter matched none of the loaded
+         *   rows" through ArchiveOutcomeView, from a SYNTHESISED envelope
+         *   carrying the same fields the server would send. It is not a
+         *   special case and there is no second rendering path: the view
+         *   cannot tell where the envelope came from.
+         * Inputs: none. Output: void.
+         */
+        function paintFilteredEmpty() {
+            footer.textContent = '';
+            footer.appendChild(window.ArchiveOutcomeView.renderOutcomeBlock({
+                result: [],
+                result_status: 'ok',
+                scope_status: 'resolved',
+                unevaluated: [],
+                meta: {}
+            }, { document: doc }));
+            footer.appendChild(el(doc, 'p', ROOT_CLASS + '__end',
+                'None of the ' + fmtCount(rows.length) + ' rows loaded so far' +
+                ' match the name/ref/date filter. Rows on pages that have not' +
+                ' been loaded were NOT searched.'));
         }
 
         /**
@@ -345,11 +359,11 @@ console.log('[ArchiveTranscriptList Module] Loading...');
          *   'no-scope' when nothing has been loaded yet.
          */
         function setSchemeFilter(value) {
-            scheme = value || SCHEME_FILTERS.ALL;
-            // Painted BEFORE the reload, not after: the button must show
+            scheme = value || ROW.DEFAULT_SCHEME;
+            // Painted BEFORE the reload, not after: the control must show
             // the choice the moment it is made, not when the server
             // answers. The reload can fail; the choice was still made.
-            paintSchemePressed();
+            filterUi.setScheme(scheme);
             if (scope.id === null || scope.id === undefined) {
                 return Promise.resolve('no-scope');
             }
@@ -398,7 +412,13 @@ console.log('[ArchiveTranscriptList Module] Loading...');
             /** Description: the paging cursor, for tests. Output: string|null. */
             cursor: function () { return nextCursor; },
             /** Description: has_more as received. Output: boolean|null. */
-            hasMore: function () { return hasMore; }
+            hasMore: function () { return hasMore; },
+            /** Description: the filter header, for tests and for the
+             *  composition root. Output: object. */
+            filters: function () { return filterUi; },
+            /** Description: the rows actually drawn, after the fuzzy
+             *  filter. Output: Array<{row, spans}>. */
+            visible: visibleRows
         };
     }
 
@@ -410,6 +430,7 @@ console.log('[ArchiveTranscriptList Module] Loading...');
         renderRow: renderRow,
         SCHEME_FILTERS: SCHEME_FILTERS,
         SCHEME_DEFS: SCHEME_DEFS,
+        DEFAULT_SCHEME: ROW.DEFAULT_SCHEME,
         UNESTABLISHED_ATTRIBUTION: UNESTABLISHED_ATTRIBUTION,
         PAGE_SIZE: PAGE_SIZE,
         ROOT_CLASS: ROOT_CLASS

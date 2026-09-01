@@ -147,10 +147,108 @@ console.log('[ArchiveNavRow Module] Loading...');
         if (kind === NODE_KINDS.UNATTRIBUTED) {
             return 'transcripts with no project';
         }
-        var slug = r.slug || r.observed_cwd || ('project ' + r.project_id);
-        return window.ArchiveFormat
-            ? window.ArchiveFormat.shortenSlug(String(slug))
-            : String(slug);
+        // display_name is the FOLDER NAME the server derived from
+        // observed_cwd, already widened where it would collide. It is
+        // preferred over the slug because the slug middle-truncates to
+        // '-Users-jsugamele-Develo...t-Assistants-Developer' in a 272px
+        // rail, which removes precisely the segment that identifies it.
+        // No shortenSlug here: the rail truncates with CSS and puts the
+        // full text in a title attribute, so nothing is destroyed.
+        if (typeof r.display_name === 'string' && r.display_name) {
+            return r.display_name;
+        }
+        // display_name null means the server had no observed_cwd and
+        // refused to guess a folder name out of a slug it cannot invert.
+        // Showing the slug is honest; showing a fabricated leaf is not.
+        var slug = r.full_path || r.slug || r.observed_cwd || ('project ' + r.project_id);
+        return String(slug);
+    }
+
+    /**
+     * Description: the full, untruncated text for a row's `title`
+     *   attribute, so hovering a truncated label reveals everything the
+     *   rail could not fit. Pure.
+     * Inputs: kind (string), row (object).
+     * Output: string - '' when there is nothing more to say than the
+     *   label already says.
+     * Example: titleFor('project', {display_name:'Media', full_path:'-Users-x-Media'})
+     */
+    function titleFor(kind, row) {
+        var r = row || {};
+        if (kind === NODE_KINDS.PROJECT) {
+            var parts = [];
+            if (typeof r.observed_cwd === 'string' && r.observed_cwd) {
+                parts.push(r.observed_cwd);
+            }
+            var slug = r.full_path || r.slug;
+            if (typeof slug === 'string' && slug && slug !== parts[0]) {
+                parts.push('slug: ' + slug);
+            }
+            if (Array.isArray(r.hosts) && r.hosts.length) {
+                parts.push('on: ' + r.hosts.join(', '));
+            }
+            return parts.join('\n');
+        }
+        if (kind === NODE_KINDS.HOST) {
+            return String(r.hostname || r.display_name || '');
+        }
+        if (kind === NODE_KINDS.CORPUS) {
+            return String(r.root_path || r.corpus_key || '');
+        }
+        return '';
+    }
+
+    /**
+     * Description: decide whether the unattributed node is rendered.
+     *   THE ONLY CASE THAT HIDES IT is a count the server measured and
+     *   reported as 0.
+     *
+     *   A count that is missing, null, or flagged `counted: false` keeps
+     *   the node ON SCREEN. Hiding on an unmeasured count would be
+     *   indistinguishable from hiding real transcripts, and these are
+     *   exactly the transcripts that are invisible from the project tree
+     *   by construction - the one population where a wrong hide is
+     *   permanent. Measured 2026-09-01: corpus 1 has 0, corpus 2 has 5.
+     * Inputs: row (object|null) - the corpus row carrying the count.
+     * Output: {show: boolean, reason: string} - reason is for tests and
+     *   for the node's own tooltip, so the decision is inspectable.
+     * Example: shouldShowUnattributed({unattributed_transcript_count: 0})
+     *   // -> {show: false, reason: 'known zero'}
+     */
+    function shouldShowUnattributed(row) {
+        var r = row || {};
+        if (r.counted === false) {
+            return { show: true, reason: 'count could not be determined' };
+        }
+        var n = r.unattributed_transcript_count;
+        if (typeof n !== 'number' || !isFinite(n)) {
+            return { show: true, reason: 'no count was reported' };
+        }
+        if (n === 0) return { show: false, reason: 'known zero' };
+        return { show: true, reason: 'holds ' + n };
+    }
+
+    /**
+     * Description: render the host badges a merged project node carries,
+     *   or null when there is nothing to say. The machine was a LEVEL in
+     *   the old tree and is a badge here; dropping it entirely would
+     *   discard information the merge is only allowed to demote.
+     * Inputs: doc (Document), row (object).
+     * Output: Element|null.
+     */
+    function renderHostBadges(doc, row) {
+        var hosts = row && row.hosts;
+        if (!Array.isArray(hosts) || hosts.length === 0) return null;
+        var wrap = el(doc, 'span', ROOT_CLASS + '__hosts', null);
+        for (var i = 0; i < hosts.length; i++) {
+            var badge = el(doc, 'span', ROOT_CLASS + '__host-badge', String(hosts[i]));
+            badge.setAttribute('title', 'also collected from ' + hosts[i]);
+            wrap.appendChild(badge);
+        }
+        if (hosts.length > 1) {
+            wrap.setAttribute('data-multi-host', 'true');
+        }
+        return wrap;
     }
 
     /**
@@ -198,8 +296,33 @@ console.log('[ArchiveNavRow Module] Loading...');
         btn.setAttribute('type', 'button');
         btn.setAttribute('data-action', options.expandable ? 'expand' : 'select');
         if (options.expandable) btn.setAttribute('aria-expanded', 'false');
-        btn.appendChild(el(doc, 'span', ROOT_CLASS + '__label', labelFor(kind, row)));
+
+        var text = labelFor(kind, row);
+        var label = el(doc, 'span', ROOT_CLASS + '__label', null);
+        // Labels TRUNCATE (CSS ellipsis), never wrap - a wrapped row in a
+        // 272px rail pushes every sibling down and makes the tree
+        // unscannable. The full text goes in `title` so nothing is lost,
+        // and a parallel change makes the pane resizable, so truncation +
+        // resize + tooltip is the whole answer.
+        if (options.positions && options.positions.length &&
+            options.matchField && window.ArchiveNavFuzzy &&
+            String(row && row[options.matchField]) === text) {
+            label.appendChild(window.ArchiveNavFuzzy.highlight(doc, text, options.positions));
+        } else {
+            label.textContent = text;
+        }
+        btn.appendChild(label);
+
+        var badges = renderHostBadges(doc, row);
+        if (kind === NODE_KINDS.PROJECT && badges) btn.appendChild(badges);
+
         btn.appendChild(el(doc, 'span', ROOT_CLASS + '__count', renderCount(countFor(kind, row))));
+
+        // The tooltip carries the full path, the raw slug and the hosts.
+        // `text` is always included so a truncated LABEL is still
+        // readable on hover even when there is no extra detail.
+        var tip = titleFor(kind, row);
+        btn.setAttribute('title', tip ? text + '\n' + tip : text);
         if (kind === NODE_KINDS.UNATTRIBUTED) {
             // Named in words as well as by class, because this node's
             // whole purpose is that it is easy to not notice.
@@ -245,6 +368,9 @@ console.log('[ArchiveNavRow Module] Loading...');
 
     window.ArchiveNavRow = {
         el: el,
+        titleFor: titleFor,
+        shouldShowUnattributed: shouldShowUnattributed,
+        renderHostBadges: renderHostBadges,
         renderCount: renderCount,
         filterRows: filterRows,
         describeFilter: describeFilter,

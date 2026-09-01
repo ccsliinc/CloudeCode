@@ -48,6 +48,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.archive_cursor import CursorError, decode_cursor, encode_cursor
+from src.core.archive_titles import resolve_titles
 from src.core.archive_read import (
     attribution_state,
     count_int,
@@ -334,6 +335,15 @@ def transcript_page(
     ).fetchall()
     page, has_more = paged_rows(rows, size)
     shaped = [transcript_row(row) for row in page]
+    # Titles are resolved for the WHOLE page in one batch rather than per
+    # row: measured +1.1ms for 50 rows against +9.4ms for the naive join
+    # that drags body_json for the losers of the precedence contest. See
+    # archive_titles for the numbers and the three-outcome contract.
+    titles = resolve_titles(conn, [r["transcript_id"] for r in shaped])
+    for shaped_row in shaped:
+        title, source = titles.get(shaped_row["transcript_id"], (None, None))
+        shaped_row["title"] = title
+        shaped_row["title_source"] = source
     next_cursor = (
         encode_cursor(
             kind,

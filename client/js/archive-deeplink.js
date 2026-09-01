@@ -438,6 +438,12 @@ console.log('[ArchiveDeeplink Module] Loading...');
             }
             var item = doc.createElement('span');
             item.className = rootClass + '__crumb-item';
+            // The crumb TRUNCATES with an ellipsis rather than wrapping
+            // (archive-panes.css), so the full text has to survive
+            // somewhere reachable or a long path becomes unreadable with
+            // no way back. Written here, in the one function that builds
+            // a crumb segment, so a caller cannot forget it.
+            item.setAttribute('title', String(items[i]));
             item.appendChild(doc.createTextNode(String(items[i])));
             out.push(item);
         }

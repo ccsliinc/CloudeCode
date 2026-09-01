@@ -115,9 +115,135 @@
     box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
+/* TRUNCATE, NEVER WRAP. `word-break: break-all` let a slug like
+ * -Users-jsugamele-Development-Assistants-Infrastructure wrap to four
+ * lines, which pushed every sibling down the rail and made the tree
+ * unscannable at a glance. The label now clips to one line with an
+ * ellipsis and the full text lives in the row's `title` attribute, so
+ * hovering reveals it and nothing is destroyed. The panes are resizable,
+ * so a person who wants more of the name can have it. */
 .archive-nav__label {
     font-size: 0.9rem;
-    word-break: break-all;
+    display: block;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The row is a column flex container, so its children must be told they
+ * may shrink below their content width or the ellipsis never engages. */
+.archive-nav__row > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* The characters the fuzzy filter matched. Underline as well as colour,
+ * so the highlight survives a theme that flattens the accent and is not
+ * carried by colour alone. */
+.archive-nav__hit {
+    background: transparent;
+    color: var(--color-accent);
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+/* PROJECT ROW DENSITY. The base row is a column flex (label above
+ * count), and adding host badges made every project row THREE lines
+ * tall - 77 of those is a scroll nobody finishes. Project rows use a
+ * two-row grid instead: the label owns the first line and the badges
+ * share the second with the count. Applied only to project nodes, so
+ * host/corpus/unattributed rows keep the layout they already had. */
+.archive-nav__node--project > .archive-nav__row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "label label"
+        "hosts count";
+    align-items: center;
+    column-gap: 6px;
+    padding: 5px 12px;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__label {
+    grid-area: label;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__hosts {
+    grid-area: hosts;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__count {
+    grid-area: count;
+    justify-self: end;
+}
+
+/* HOST BADGES. The machine used to be a level you clicked through; it is
+ * now a badge on the node. A project on two machines gets two badges and
+ * an accent border, because "this exists in both places" is the fact the
+ * merge would otherwise have hidden. */
+.archive-nav__hosts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.archive-nav__host-badge {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    padding: 0 5px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    background: var(--color-bg-subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 11ch;
+}
+
+.archive-nav__hosts[data-multi-host="true"] .archive-nav__host-badge {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+/* View toggle and machine filter. */
+.archive-nav__viewbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.archive-nav__view {
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 3px 9px;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+}
+
+.archive-nav__view--on {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-bg-hover);
+}
+
+.archive-nav__hostfilter {
+    font: inherit;
+    font-size: 0.75rem;
+    flex: 1 1 100%;
+    min-width: 0;
+    padding: 3px 6px;
+    color: var(--color-fg);
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
 }
 
 .archive-nav__count {

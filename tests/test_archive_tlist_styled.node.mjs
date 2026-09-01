@@ -68,7 +68,13 @@ function read(...parts) {
 // class name move across the seam and silently pass.
 const JS = read('client', 'js', 'archive-tlist-row.js')
     + read('client', 'js', 'archive-transcript-list.js');
-const CSS = read('client', 'css', 'archive-tlist.css');
+// THE FEATURE SPANS TWO STYLESHEETS NOW, so both are read. The pane
+// file owns the truncation rules, the resizers and the title/source
+// treatments; reading only the first would let a class move across the
+// seam and silently pass the antijoin below - the same reasoning that
+// already makes this file read BOTH halves of the split renderer.
+const CSS = read('client', 'css', 'archive-tlist.css')
+    + read('client', 'css', 'archive-panes.css');
 const HTML = read('client', 'index.html');
 
 /**
@@ -103,9 +109,16 @@ function emittedClasses() {
     for (const m of JS.matchAll(/ROOT_CLASS\s*\+\s*'(__[a-z0-9-]+)'/g)) {
         out.add('archive-tlist' + m[1]);
     }
-    // The two badges are built as a pair in one concatenation, so their
-    // modifier halves appear as `'__badge--no-project'` style literals.
-    for (const m of JS.matchAll(/'(__badge--[a-z-]+)'/g)) {
+    // MODIFIERS ARE LITERALS AND ARE MATCHED GENERICALLY. They are built
+    // as a pair in one concatenation (`ROOT_CLASS + '__badge ' +
+    // ROOT_CLASS + '__badge--no-project'`) or read off a table, so the
+    // modifier half appears as its own string either way. The pattern is
+    // `__x--y` rather than a hardcoded `__badge--`, because a hardcoded
+    // prefix covers the modifiers that existed the day it was written and
+    // silently covers no new family - which is the same
+    // written-on-the-day-the-gap-existed failure this whole file exists
+    // to avoid.
+    for (const m of JS.matchAll(/'(__[a-z0-9]+--[a-z0-9-]+)'/g)) {
         out.add('archive-tlist' + m[1]);
     }
     return [...out].sort();

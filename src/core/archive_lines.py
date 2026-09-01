@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.archive_cursor import CURSOR_LINES, CursorError, decode_cursor, encode_cursor
 from src.core.archive_line_rows import attach_bodies
+from src.core.archive_project_names import leaf_name
+from src.core.archive_titles import resolve_titles
 from src.core.archive_start_line import (
     START_LINE_SUBJECT,
     STATE_NO_LINES,
@@ -114,7 +116,9 @@ def transcript_header(conn: sqlite3.Connection, transcript_id: int) -> Dict[str,
     """
     row = conn.execute(
         """
-        SELECT t.*, p.slug AS project_slug, k.corpus_key, k.root_path,
+        SELECT t.*, p.slug AS project_slug,
+               p.observed_cwd AS project_observed_cwd,
+               k.corpus_key, k.root_path,
                h.display_name AS host_display_name, h.machine_id
           FROM message_transcripts t
           LEFT JOIN message_projects p ON p.id = t.project_id
@@ -147,8 +151,15 @@ def transcript_header(conn: sqlite3.Connection, transcript_id: int) -> Dict[str,
     ).fetchone()
     raw_bytes = int(row["raw_byte_length"])
     verified_ok = raw_bytes <= VERIFY_BEFORE_SEND_MAX_BYTES
+    # One batch of one. Same resolver as the listing, so a transcript
+    # cannot show one name in the rail and another in its own header.
+    title, title_source = resolve_titles(conn, [transcript_id]).get(
+        transcript_id, (None, None)
+    )
     result = {
         "transcript_id": row["id"],
+        "title": title,
+        "title_source": title_source,
         "source_ref": row["source_ref"],
         "session_ref": row["session_ref"],
         "session_ref_scheme": row["session_ref_scheme"],
@@ -177,10 +188,21 @@ def transcript_header(conn: sqlite3.Connection, transcript_id: int) -> Dict[str,
                 "root_path": row["root_path"],
             }
         ),
+        # The SAME two fields the merged project tree publishes, so a
+        # header and a rail node cannot disagree about a project's name.
+        # display_name comes from observed_cwd and is None when that is
+        # NULL - the slug is never parsed into a folder name, because it
+        # is not invertible. See archive_project_names.
         "project": (
             None
             if row["project_id"] is None
-            else {"project_id": row["project_id"], "slug": row["project_slug"]}
+            else {
+                "project_id": row["project_id"],
+                "slug": row["project_slug"],
+                "display_name": leaf_name(row["project_observed_cwd"]),
+                "full_path": row["project_slug"],
+                "observed_cwd": row["project_observed_cwd"],
+            }
         ),
         "host_attribution": row["host_attribution"],
         "project_attribution": row["project_attribution"],

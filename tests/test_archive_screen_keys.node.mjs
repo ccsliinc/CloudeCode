@@ -78,8 +78,17 @@ const MODULES = [
     'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
         'archive-reader.js',
-    'archive-nav-row.js', 'archive-nav.js', 'archive-tlist-row.js', 'archive-transcript-list.js', 'archive-search-render.js', 'archive-search.js',
+    'archive-nav-row.js', 'archive-nav.js',
+    'archive-fuzzy.js', 'archive-tlist-row.js', 'archive-tlist-filter.js',
+    'archive-transcript-list.js', 'archive-search-render.js', 'archive-search.js',
     'archive-deeplink.js', 'archive-screen-reader.js', 'archive-export.js',
+    // The composition root was split for the 500-line cap: the shell DOM,
+    // the cross-pane toolbar, the pane resizers and the crumb's
+    // vocabulary are four modules it now composes, and it builds its
+    // shell at ITS OWN script load - so all four must be in the context
+    // before archive-screen.js runs, exactly as in index.html.
+    'archive-pane-resize.js', 'archive-crumb.js',
+    'archive-screen-shell.js', 'archive-screen-tools.js',
     'archive-screen.js',
 ];
 
@@ -320,18 +329,26 @@ await test('D2d: t advances the scheme filter', () => {
     h.screen.show({ view: 'root' });
     const list = h.screen.views().list;
     const defs = h.window.ArchiveTranscriptList.SCHEME_DEFS.map((d) => d.v);
-    assert.equal(list.scheme(), defs[0]);
+    // THE CYCLE STARTS AT THE DEFAULT, WHICH IS NOT defs[0]. The list now
+    // opens on the uuid (top-level session) scheme rather than on `all`,
+    // so this walks the cycle from wherever the default sits rather than
+    // hardcoding an index - the ORDER is what `t` is being tested for,
+    // and pinning the start would make this test fail every time the
+    // default is retuned without the cycle being broken at all.
+    const start = defs.indexOf(h.window.ArchiveTranscriptList.DEFAULT_SCHEME);
+    assert.notEqual(start, -1, 'the default scheme is not one of SCHEME_DEFS');
+    assert.equal(list.scheme(), defs[start]);
 
     press(h.document.body, 't');
-    assert.equal(list.scheme(), defs[1],
+    assert.equal(list.scheme(), defs[(start + 1) % defs.length],
         't did not advance the scheme filter');
     press(h.document.body, 't');
-    assert.equal(list.scheme(), defs[2]);
+    assert.equal(list.scheme(), defs[(start + 2) % defs.length]);
     // It CYCLES rather than stopping at the end, or the third press
     // would be a key that silently does nothing again.
     press(h.document.body, 't');
-    assert.equal(list.scheme(), defs[0],
-        't did not wrap back to the first scheme');
+    assert.equal(list.scheme(), defs[start],
+        't did not wrap back around the cycle');
 });
 
 // =====================================================================

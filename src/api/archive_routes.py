@@ -47,6 +47,7 @@ from src.api.archive_search_routes import router as search_router
 from src.api.archive_support import respond, state_dir
 from src.api.auth import require_auth
 from src.core import archive_body, archive_hierarchy, archive_lines
+from src.core import archive_merged_tree
 from src.core import archive_subagents
 from src.core.archive_read import (
     DEFAULT_LINE_LIMIT,
@@ -111,6 +112,36 @@ async def get_corpora_for_host(host_id: int) -> JSONResponse:
         subject=f"host:{host_id}", unreadable_result=None,
     )
     return respond(result, route="corpora", host_id=host_id)
+
+
+@router.get("/archive/projects", response_model=None,
+            dependencies=[Depends(require_auth)])
+async def get_merged_projects() -> JSONResponse:
+    """Every project in the archive as ONE list, machine demoted to a field.
+
+    The host -> corpus -> project routes are unchanged and still serve
+    the physical shape. This serves the shape a person navigates: one
+    node per distinct ``observed_cwd``, carrying ``display_name`` (the
+    folder name, widened leftward only where it would otherwise
+    collide), ``full_path`` (the slug, unparsed), ``hosts`` (every
+    machine it appears on) and ``members`` (the underlying per-corpus
+    rows, so nothing the merge folded up is unreachable).
+
+    Deliberately NOT paginated - 80 project rows merge to 77 nodes, and
+    a page of a merged tree would let a client conclude a project lives
+    on one machine because the row proving otherwise fell on page 2.
+
+    Returns:
+        The envelope; ``result`` is the merged node list, and
+        ``meta.unattributed.by_corpus`` carries the project-less counts
+        with an explicit ``counted`` flag, because the rail hides that
+        node only on a count it can prove is zero.
+    """
+    result = await asyncio.to_thread(
+        run_read, state_dir(), archive_merged_tree.merged_projects,
+        subject="archive:projects", unreadable_result=None,
+    )
+    return respond(result, route="merged-projects")
 
 
 @router.get("/archive/corpora/{corpus_id}/projects", response_model=None,
