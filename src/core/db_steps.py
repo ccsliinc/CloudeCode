@@ -53,8 +53,10 @@ from src.core.db_models import (
     META_SCHEMA_VERSION,
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
+from src.core.archive_overlay_ddl import DDL_V19
 from src.core.message_block_ddl import DDL_V18
 from src.core.message_host_ddl import DDL_V17
+from src.core.message_archive_flag import message_archive_enabled
 from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
 
@@ -823,6 +825,114 @@ def _step_v14_to_v15(conn: sqlite3.Connection) -> None:
     conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX)
 
 
+# ---------------------------------------------------------------------------
+# THE MESSAGE-ARCHIVE GATE (feat/message-archive-flag)
+# ---------------------------------------------------------------------------
+# Steps 15->16, 16->17 and 17->18 build the message archive's schema, and
+# the message archive is off by default. So each of those three steps asks
+# src.core.message_archive_flag.message_archive_enabled() first and returns
+# without executing a single DDL statement when the answer is no.
+#
+# THE VERSION COUNTER STILL ADVANCES, AND THAT IS DELIBERATE. meta.schema_version
+# is one linear number for the whole datastore, not a per-feature ledger. If a
+# gated-off step refused to advance it, an install with the archive off would
+# park at v15 forever and every LATER step - none of which has anything to do
+# with messages - would become unreachable for exactly the users who never
+# opted in. So the step runs, applies nothing, and hands the counter on. The
+# honest reading of "schema_version = 18" is therefore "this install has been
+# offered every migration up to 18", not "every table any version ever
+# described is present" - which was already true of this chain (v17's ALTERs
+# are conditional, v14 and v16 are IF NOT EXISTS) and is now true on purpose.
+#
+# WHICH MAKES THE MATERIALIZER BELOW LOAD-BEARING. An install that migrated to
+# v18 with the flag off has no message tables and no remaining steps that would
+# create them, so turning the flag on could never take effect through the chain.
+# apply_message_model_schema() is the path that closes that: src/main.py calls
+# it once at startup whenever the flag is ON, it is idempotent by construction
+# (every CREATE carries IF NOT EXISTS, every ALTER is guarded against a column
+# already present), and it applies v16, v17 and v18 together rather than only
+# the newest - because the off-to-on transition can be crossing any of them.
+#
+# OFF IS DORMANT, NEVER DESTRUCTIVE. Nothing here drops, truncates or alters a
+# message table when the flag is off. An existing install that turns the
+# feature off keeps every row it had.
+
+
+def _apply_v16_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v16 message-model DDL.
+
+    Description: nine CREATE statements, each carrying its own
+      IF NOT EXISTS, so this is safe to run against a database that
+      already has them.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v16_ddl(conn)
+    """
+    for statement in DDL_V16:
+        conn.execute(statement)
+
+
+def _apply_v17_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v17 host/corpus/project DDL, skipping columns already present.
+
+    Description: SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT
+      EXISTS``, so the six ALTERs are guarded against the live column
+      list read from ``PRAGMA table_info``. Every other statement carries
+      its own IF NOT EXISTS. Idempotent either way.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v17_ddl(conn)
+    """
+    existing = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(message_transcripts)")
+    }
+    for statement in DDL_V17:
+        if statement.startswith("ALTER TABLE message_transcripts ADD COLUMN"):
+            column = statement.split("ADD COLUMN", 1)[1].split()[0]
+            if column in existing:
+                continue
+        conn.execute(statement)
+
+
+def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v18 content-block DDL.
+
+    Description: three CREATE TABLE and three CREATE INDEX statements,
+      each with IF NOT EXISTS. Touches no row of ``message_bodies``.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v18_ddl(conn)
+    """
+    for statement in DDL_V18:
+        conn.execute(statement)
+
+
+def apply_message_model_schema(conn: sqlite3.Connection) -> None:
+    """Materialize the whole message-archive schema, idempotently.
+
+    Description: the off-to-on path. Applies v16, v17 and v18 together so
+      that an install which crossed ANY of those versions with the flag
+      off ends up with the complete schema the first time it starts with
+      the flag on. Purely additive: no DROP, no UPDATE, no rewrite of
+      ``message_bodies``, so it is O(1) against a multi-gigabyte corpus
+      and safe to run on every startup.
+
+      IT DOES NOT CONSULT THE FLAG. The caller has already decided; a
+      second read here would be a second gate that could disagree with
+      the first. src/main.py is the only caller and it calls this only
+      when the flag resolved to enabled.
+    Inputs: conn (sqlite3.Connection) - the caller owns the transaction.
+    Output: None.
+    Raises: sqlite3.Error - propagated so the caller's transaction rolls
+      the whole thing back rather than leaving a half-built schema.
+    Example: apply_message_model_schema(conn)
+    """
+    _apply_v16_ddl(conn)
+    _apply_v17_ddl(conn)
+    _apply_v18_ddl(conn)
+
+
 def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
     """Create the message identity / appearance model tables.
 
@@ -848,8 +958,9 @@ def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _step_v15_to_v16(conn)  # after _step_v14_to_v15
     """
-    for statement in DDL_V16:
-        conn.execute(statement)
+    if not message_archive_enabled():
+        return
+    _apply_v16_ddl(conn)
 
 
 def _step_v16_to_v17(conn: sqlite3.Connection) -> None:
@@ -880,16 +991,9 @@ def _step_v16_to_v17(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _step_v16_to_v17(conn)  # after _step_v15_to_v16
     """
-    existing = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(message_transcripts)")
-    }
-    for statement in DDL_V17:
-        if statement.startswith("ALTER TABLE message_transcripts ADD COLUMN"):
-            column = statement.split("ADD COLUMN", 1)[1].split()[0]
-            if column in existing:
-                continue
-        conn.execute(statement)
+    if not message_archive_enabled():
+        return
+    _apply_v17_ddl(conn)
 
 
 def _step_v17_to_v18(conn: sqlite3.Connection) -> None:
@@ -924,7 +1028,42 @@ def _step_v17_to_v18(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _step_v17_to_v18(conn)  # after _step_v16_to_v17
     """
-    for statement in DDL_V18:
+    if not message_archive_enabled():
+        return
+    _apply_v18_ddl(conn)
+
+
+def _step_v18_to_v19(conn: sqlite3.Connection) -> None:
+    """Create the presentation overlay table.
+
+    Description: build step for v19 - one table
+      (archive_project_overlay) and two partial indexes. See
+      src/core/archive_overlay_ddl.py's module docstring for the identity
+      key an overlay row attaches to and why it is the MERGE key rather
+      than message_projects.id or the slug.
+
+      Every statement carries its own IF NOT EXISTS, so the step is
+      idempotent on a retry with no PRAGMA inspection, exactly as
+      v7/v8/v14/v16/v18 are.
+
+      IT DOES NOT READ, LET ALONE WRITE, ANY ARCHIVE TABLE. No ALTER, no
+      UPDATE, no backfill, and not one SELECT against message_projects,
+      message_transcripts, message_bodies, message_appearances or
+      message_content_blocks. On the owner's 18.7 GB database this
+      migration is three CREATE statements against an empty table, which
+      is O(1) - the overlay is a statement ABOUT the archive and creating
+      somewhere to put those statements cannot require touching it.
+
+      NO BACKFILL, AND THE EMPTY STATE IS THE HONEST ONE. Every existing
+      project starts with NO overlay row, which reads as "the owner has
+      never said anything about this project" - a real third state, not a
+      default, and distinguishable in the API from a project he renamed
+      to its own folder name.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v18_to_v19(conn)  # after _step_v17_to_v18
+    """
+    for statement in DDL_V19:
         conn.execute(statement)
 
 
@@ -951,6 +1090,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     15: _step_v15_to_v16,
     16: _step_v16_to_v17,
     17: _step_v17_to_v18,
+    18: _step_v18_to_v19,
 }
 
 

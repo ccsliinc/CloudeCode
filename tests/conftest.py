@@ -49,6 +49,23 @@ os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_test_state
 # write, so this line is not the safety mechanism; it is what keeps the
 # ordinary startup path working instead of merely failing safe.
 os.environ.setdefault("CLOUDE_TEST_MODE", "1")
+
+# feat/message-archive-flag - the message archive is OFF BY DEFAULT for real
+# users (src/core/message_archive_flag.py). The suite predates the switch and
+# several hundred of its assertions exercise the archive's schema, routes and
+# ingest, so it declares the feature ON here rather than each of those files
+# learning about a flag they are not testing.
+#
+# THIS DOES NOT WEAKEN THE DEFAULT-OFF GUARANTEE, and that is worth being
+# explicit about, because a suite-wide "turn it on" is exactly the shape that
+# could hide a flipped default. tests/test_message_archive_flag.py deletes
+# this variable with monkeypatch before every assertion about the default, and
+# asserts the default three separate ways that this line cannot reach: the
+# pydantic field default on MessageArchiveConfig, the DEFAULT_ENABLED constant,
+# and the resolver's answer for a config.json with no message_archive block.
+# tests/test_message_archive_gating.py likewise deletes it and builds its own
+# app instances with the flag off.
+os.environ.setdefault("CLOUDE_MESSAGE_ARCHIVE", "1")
 os.environ.setdefault(
     "CLOUDE_CLAUDE_SETTINGS_PATH",
     os.path.join(

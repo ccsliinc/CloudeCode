@@ -45,6 +45,11 @@ from typing import Optional
 import structlog
 
 from src.core import corpus_ingest_state as state_io
+from src.core.message_archive_flag import (
+    ENABLE_ENV as MESSAGE_ARCHIVE_ENV,
+    message_archive_enabled,
+    resolve as resolve_message_archive,
+)
 from src.core.corpus_ingest_service import CorpusIngestReport, run_ingest_once
 
 logger = structlog.get_logger()
@@ -89,10 +94,23 @@ def ingest_enabled() -> bool:
       of the owner's actual transcripts into a throwaway database, in
       the background, on every pytest run. A test that wants the loop
       says so with ``CLOUDE_CORPUS_INGEST=1``, which still wins here.
-    Inputs: none (reads ``CLOUDE_CORPUS_INGEST`` and ``CLOUDE_TEST_MODE``).
+
+      THE MESSAGE-ARCHIVE MASTER SWITCH IS CHECKED FIRST AND OVERRIDES
+      EVERYTHING BELOW IT, including ``CLOUDE_CORPUS_INGEST=1``. The
+      scheduler is one of four surfaces the archive can leak through, and
+      it is the one that reads the user's private transcripts, so the
+      refusal lives HERE rather than only at the call site in
+      src/main.py: a stray ``CorpusIngestScheduler(...).start()`` from a
+      script, a test or a future caller must not be able to start an
+      indexer that the install never opted into. See
+      src/core/message_archive_flag.py.
+    Inputs: none (reads ``CLOUDE_MESSAGE_ARCHIVE`` via the archive flag
+      resolver, then ``CLOUDE_CORPUS_INGEST`` and ``CLOUDE_TEST_MODE``).
     Output: bool.
     Example: ingest_enabled()  # True unless the env var says otherwise
     """
+    if not message_archive_enabled():
+        return False
     raw = os.environ.get(ENABLE_ENV)
     if raw is not None:
         value = raw.strip().lower()
@@ -166,7 +184,17 @@ class CorpusIngestScheduler:
         Example: CorpusIngestScheduler(Path("/s")).start() -> True
         """
         if not self.enabled:
-            logger.info("corpus_ingest_disabled", env=ENABLE_ENV)
+            # Name BOTH switches. The scheduler can be off because the
+            # whole message archive is off (the common case, and the
+            # default) or because this loop alone was switched off on an
+            # install where the archive is on. One log line that named
+            # only the second would send a reader to the wrong knob.
+            logger.info(
+                "corpus_ingest_disabled",
+                master_env=MESSAGE_ARCHIVE_ENV,
+                master_state=resolve_message_archive().state,
+                env=ENABLE_ENV,
+            )
             return False
         if self._task is not None and not self._task.done():
             return False

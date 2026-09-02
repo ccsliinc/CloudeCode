@@ -178,12 +178,36 @@ class Launchpad {
      *
      * Navigation goes through window.ArchiveEntry, the one entry
      * implementation the header overflow item also calls.
+     *
+     * WHY THE SECTION IS RENDERED HIDDEN AND THEN REVEALED. The message
+     * archive is off by default (see src/core/message_archive_flag.py),
+     * and with it off there is no /archive page, no /api/v1/archive/*
+     * and no schema. A row leading there would be a door onto a 302 and
+     * a wall of 404s. The markup ships `display:none` so the DEFAULT
+     * rendering is the safe one - a template that forgot to ask would
+     * hide the row, not expose it - and this method reveals it only once
+     * `ArchiveEntry.ensure()` has MEASURED the server as enabled.
+     *
+     * `unknown` leaves it hidden, deliberately. An entry point drawn on
+     * a failed probe is a door drawn on a guess, and the two failure
+     * directions are not symmetric: a hidden row on a working install is
+     * a missing feature the user can still reach by URL, an exposed row
+     * on an install that opted out is a broken screen.
      * Inputs: none.
      * Output: void.
      */
     setupArchiveEntry() {
         const row = document.getElementById('launchpad-archive-entry');
         if (!row) return;
+        const section = document.getElementById('archive-section');
+        if (section && window.ArchiveEntry &&
+            typeof window.ArchiveEntry.ensure === 'function') {
+            window.ArchiveEntry.ensure().then((state) => {
+                if (state !== window.ArchiveEntry.STATE_ENABLED) return;
+                section.style.display = '';
+                section.removeAttribute('hidden');
+            });
+        }
         const go = () => {
             if (window.ArchiveEntry) window.ArchiveEntry.open();
             else console.warn('[Launchpad] ArchiveEntry is not loaded');
@@ -2861,7 +2885,12 @@ class Launchpad {
                     </div>
                 </div>
 
-                <!-- THE ARCHIVE ROW. See setupArchiveEntry() above for why
+                <!-- THE ARCHIVE ROW. HIDDEN BY DEFAULT: the message
+                     archive is off by default and this section is
+                     revealed by setupArchiveEntry only once the server
+                     has been MEASURED as having it. See that method for
+                     why an unmeasured probe leaves it hidden.
+                     See setupArchiveEntry() above for why
                      it is here, why it is a .project-item and why it is a
                      div. No inline onclick anywhere in this block:
                      src/main.py stamps a script-src 'self' CSP, which
@@ -2872,7 +2901,8 @@ class Launchpad {
                      literal, so a backtick in a comment ends the string
                      and takes the module out with it - which is exactly
                      what the first draft of this comment did. -->
-                <div class="launchpad-section" id="archive-section">
+                <div class="launchpad-section" id="archive-section" hidden
+                     style="display:none;">
                     <div class="launchpad-section-title">
                         <span class="launchpad-section-title__text">archive</span>
                     </div>

@@ -32,6 +32,18 @@
  * the path already reads `/archive` (see its guard). Doing it the other
  * way round races that guard.
  *
+ * THE ARCHIVE IS OFF BY DEFAULT, AND THIS MODULE IS WHERE THE CLIENT
+ * FINDS THAT OUT. `ensure()` measures it once per page load against
+ * `GET /api/v1/features`, which the server mounts whether the feature is
+ * on or off precisely so that "off" and "on but broken" are different
+ * answers rather than the same silence. Both entry points - the launchpad
+ * row and the header overflow item - render HIDDEN and reveal themselves
+ * only on `enabled`. `unknown` (a failed probe, an API client that never
+ * loaded, a server that answered something this build does not
+ * understand) leaves them hidden: a door drawn on a guess leads onto a
+ * 302 and a wall of 404s, and the two failure directions are not
+ * symmetric.
+ *
  * A FAILED pushState IS NOT A FAILED NAVIGATION. The History API throws
  * in a sandboxed iframe; router.js already swallows exactly this and
  * carries on, and so does this. The screen still opens; only the address
@@ -68,7 +80,146 @@ console.log('[ArchiveEntry Module] Loading...');
      *   diagnosable from a test without a live App.
      * Example: window.ArchiveEntry.open();
      */
+    /**
+     * The three states this module reports. `unknown` is not a flavour of
+     * `disabled`: a user who turned the archive ON and hit a broken
+     * config must not see what a user who left it off sees, and an entry
+     * point that appears on a guess is exactly the leak the server-side
+     * switch exists to prevent.
+     * @type {string}
+     */
+    var STATE_ENABLED = 'enabled';
+    var STATE_DISABLED = 'disabled';
+    var STATE_UNKNOWN = 'unknown';
+
+    /** Where the switch is published. Always mounted, on or off. */
+    var FEATURES_PATH = '/features';
+
+    /** @type {string} Last measured state. Starts UNKNOWN, never ENABLED. */
+    var _state = STATE_UNKNOWN;
+
+    /** @type {string} One sentence from the server naming why. */
+    var _reason = 'the message archive switch has not been read yet.';
+
+    /** @type {Promise|null} Single-flight probe, so N callers make 1 request. */
+    var _probe = null;
+
+    /** @type {Function[]} Callbacks fired once per resolution. */
+    var _listeners = [];
+
+    /**
+     * Description: report the last measured availability of the archive.
+     *   Callers that gate a door must treat anything other than
+     *   'enabled' as "do not show it" - the safe direction, because the
+     *   cost of a wrong 'enabled' is a door onto routes that 404.
+     * Inputs: none.
+     * Output: string - 'enabled', 'disabled' or 'unknown'.
+     * Example: window.ArchiveEntry.state() === 'enabled'
+     */
+    function state() {
+        return _state;
+    }
+
+    /**
+     * Description: the server's sentence explaining the current state.
+     *   Exists so a refusal can be reported rather than merely obeyed.
+     * Inputs: none.
+     * Output: string.
+     * Example: window.ArchiveEntry.reason()
+     */
+    function reason() {
+        return _reason;
+    }
+
+    /**
+     * Description: register a callback fired once the state resolves. If
+     *   it has already resolved, the callback runs immediately, so a late
+     *   subscriber cannot miss the only event it cares about.
+     * Inputs: fn (Function) - called with the state string.
+     * Output: void.
+     * Example: window.ArchiveEntry.onResolved(function (s) { ... });
+     */
+    function onResolved(fn) {
+        if (typeof fn !== 'function') return;
+        if (_state !== STATE_UNKNOWN) { fn(_state); return; }
+        _listeners.push(fn);
+    }
+
+    /**
+     * Description: publish a resolution to every subscriber exactly once.
+     * Inputs: next (string) - the new state. why (string) - the reason.
+     * Output: void.
+     */
+    function _settle(next, why) {
+        _state = next;
+        _reason = why;
+        var pending = _listeners;
+        _listeners = [];
+        for (var i = 0; i < pending.length; i++) {
+            try { pending[i](next); } catch (e) { /* one bad subscriber
+                must not stop the others from learning the answer */ }
+        }
+    }
+
+    /**
+     * Description: measure whether this server has the message archive,
+     *   once per page load. Backed by `GET /api/v1/features`, which is
+     *   mounted whether the feature is on or off - that is what makes
+     *   "off" distinguishable from "broken". A failed probe resolves to
+     *   'unknown' and NOT to 'enabled': an entry point is never drawn on
+     *   a guess.
+     * Inputs: none.
+     * Output: Promise<string> - the resolved state.
+     * Example: window.ArchiveEntry.ensure().then(function (s) { ... });
+     */
+    function ensure() {
+        if (_probe) return _probe;
+        if (!window.API || typeof window.API.call !== 'function') {
+            _settle(STATE_UNKNOWN,
+                    'the API client is not loaded, so the message archive ' +
+                    'switch could not be read.');
+            _probe = Promise.resolve(_state);
+            return _probe;
+        }
+        _probe = window.API.call(FEATURES_PATH).then(function (data) {
+            var block = (data && data.message_archive) || null;
+            if (!block || typeof block.state !== 'string') {
+                _settle(STATE_UNKNOWN,
+                        'the server did not report a message archive state.');
+                return _state;
+            }
+            if (block.state === STATE_ENABLED) {
+                _settle(STATE_ENABLED, block.reason || '');
+            } else if (block.state === STATE_DISABLED) {
+                _settle(STATE_DISABLED, block.reason || '');
+            } else {
+                // cannot_determine, or a value this client does not know.
+                // Both are "nobody measured it", which is UNKNOWN here.
+                _settle(STATE_UNKNOWN, block.reason || '');
+            }
+            return _state;
+        }).catch(function (err) {
+            _settle(STATE_UNKNOWN,
+                    'the message archive switch could not be read: ' +
+                    (err && err.message ? err.message : String(err)));
+            return _state;
+        });
+        return _probe;
+    }
+
     function open() {
+        if (_state === STATE_DISABLED) {
+            // A DEFINITE no. Both doors are hidden when this is the state,
+            // so reaching here means something called open() anyway - a
+            // stale handler, a console call, a future caller. Refusing is
+            // cheap and the alternative is a screen whose every request
+            // 404s. UNKNOWN deliberately does NOT refuse: nothing was
+            // measured, and turning "I could not tell" into a refusal is
+            // the same false verdict in the other direction.
+            console.warn('[ArchiveEntry] the message archive is switched ' +
+                         'off on this server: ' + _reason);
+            return false;
+        }
         try {
             if (window.location.pathname !== PATH) {
                 window.history.pushState({}, '', PATH);
@@ -89,9 +240,16 @@ console.log('[ArchiveEntry Module] Loading...');
 
     window.ArchiveEntry = {
         open: open,
+        ensure: ensure,
+        state: state,
+        reason: reason,
+        onResolved: onResolved,
         PATH: PATH,
         LABEL: LABEL,
-        DESCRIPTION: DESCRIPTION
+        DESCRIPTION: DESCRIPTION,
+        STATE_ENABLED: STATE_ENABLED,
+        STATE_DISABLED: STATE_DISABLED,
+        STATE_UNKNOWN: STATE_UNKNOWN
     };
     console.log('[ArchiveEntry Module] Exported as window.ArchiveEntry');
 })();

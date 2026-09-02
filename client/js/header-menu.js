@@ -228,6 +228,30 @@ class HeaderMenu {
         const btn = document.getElementById('archiveBtn');
         if (!btn || btn.getAttribute('data-archive-wired') === '1') return;
         btn.setAttribute('data-archive-wired', '1');
+        // HIDDEN UNTIL MEASURED. The message archive is off by default
+        // (src/core/message_archive_flag.py), and with it off there is no
+        // archive screen to reach - the server redirects /archive to the
+        // launchpad and every /api/v1/archive/* route 404s. So the
+        // control is hidden here, at wire time, and revealed only once
+        // ArchiveEntry.ensure() has measured the server as ENABLED.
+        //
+        // It is hidden from JS rather than by a class in index.html for
+        // two reasons: index.html is not this feature's to edit, and a
+        // control that is present-but-hidden in the markup is invisible
+        // to the DOM-presence assertions that already guard this button.
+        // Hiding it here keeps the hide and the reveal in one place.
+        //
+        // 'unknown' leaves it hidden. A failed probe is not permission.
+        btn.style.display = 'none';
+        btn.hidden = true;
+        if (window.ArchiveEntry &&
+            typeof window.ArchiveEntry.ensure === 'function') {
+            window.ArchiveEntry.ensure().then((state) => {
+                if (state !== window.ArchiveEntry.STATE_ENABLED) return;
+                btn.style.display = '';
+                btn.hidden = false;
+            });
+        }
         btn.addEventListener('click', () => {
             if (window.ArchiveEntry) window.ArchiveEntry.open();
             else console.warn('[HeaderMenu] ArchiveEntry is not loaded');
