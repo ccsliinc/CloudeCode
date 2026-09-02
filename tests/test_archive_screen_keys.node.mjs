@@ -74,6 +74,7 @@ const MODULES = [
     'modal-stack.js',
     'archive-outcome.js', 'archive-mask.js', 'archive-format.js',
     'archive-outcome-view.js', 'archive-state.js', 'archive-keys.js',
+    'archive-keys-help.js',
     'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
     'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
@@ -82,6 +83,15 @@ const MODULES = [
     'archive-fuzzy.js', 'archive-tlist-row.js', 'archive-tlist-filter.js',
     'archive-transcript-list.js', 'archive-search-render.js', 'archive-search.js',
     'archive-deeplink.js', 'archive-screen-reader.js', 'archive-export.js',
+    // The conversation view, which is the reader pane's DEFAULT. The
+    // composition root builds it at wire() time, so leaving it out here
+    // fails as "Cannot read properties of undefined" inside wire() -
+    // which reports the wrong cause.
+    'archive-chat-block.js', 'archive-chat-info.js',
+    'archive-chat-subagents.js', 'archive-chat-turn.js',
+    'archive-chat-estimate.js', 'archive-chat-stack.js',
+    'archive-chat-clicks.js', 'archive-chat-view.js',
+    'archive-chat-screen.js', 'archive-screen-views.js',
     // The composition root was split for the 500-line cap: the shell DOM,
     // the cross-pane toolbar, the pane resizers and the crumb's
     // vocabulary are four modules it now composes, and it builds its

@@ -1,6 +1,6 @@
 /**
- * The reader pane's TOOLBAR - the transcript search box and the export
- * button.
+ * The reader pane's TOOLBAR - the view toggle, the transcript search box
+ * and the export button.
  *
  * WHY IT IS NOT IN `archive-reader.js`. Both controls are CROSS-PANE:
  * search writes its hits into the LIST column and export opens a modal,
@@ -30,8 +30,8 @@ console.log('[ArchiveScreenTools Module] Loading...');
      * Inputs: options (object) -
      *   document (Document), pane (Element) - the reader pane,
      *   rootClass (string), onSearch (function(text)),
-     *   onExport (function()).
-     * Output: {element, searchInput, searchBtn, exportBtn}
+     *   onExport (function()), onToggleView (function()).
+     * Output: {element, viewBtn, searchInput, searchBtn, exportBtn}
      * Example: ArchiveScreenTools.create({document: document,
      *              pane: readPane, rootClass: 'archive-screen',
      *              onSearch: runSearch, onExport: openExport})
@@ -44,6 +44,8 @@ console.log('[ArchiveScreenTools Module] Loading...');
         var cls = opts.rootClass || 'archive-screen';
         var onSearch = typeof opts.onSearch === 'function' ? opts.onSearch : function () {};
         var onExport = typeof opts.onExport === 'function' ? opts.onExport : function () {};
+        var onToggleView = typeof opts.onToggleView === 'function'
+            ? opts.onToggleView : function () {};
 
         /** Description: element with a class, text and attributes.
          *  Inputs: tag, suffix, text, map. Output: Element. */
@@ -57,6 +59,18 @@ console.log('[ArchiveScreenTools Module] Loading...');
         }
 
         var tools = el('div', '__tools', null, {});
+        // THE VIEW TOGGLE COMES FIRST because it decides what the rest
+        // of the pane is. Its LABEL NAMES THE DESTINATION, not the
+        // current state ("Raw" while showing the conversation), which is
+        // the only wording that stays unambiguous when the control is
+        // read on its own. The key is named in the label so the
+        // keystroke is discoverable without opening the help panel.
+        var viewBtn = el('button', '__view-btn', 'Raw (v)',
+                         { type: 'button', 'data-action': 'toggle-view',
+                           'aria-pressed': 'false', 'data-view': 'chat',
+                           'aria-label': 'Switch between the conversation ' +
+                               'view and the byte-exact raw view' });
+        tools.appendChild(viewBtn);
         var searchInput = el('input', '__search-input', null, {
             type: 'search',
             placeholder: 'search this transcript',
@@ -76,8 +90,9 @@ console.log('[ArchiveScreenTools Module] Loading...');
             if (ev.key === 'Enter') onSearch(searchInput.value);
         });
         exportBtn.addEventListener('click', function () { onExport(); });
+        viewBtn.addEventListener('click', function () { onToggleView(); });
 
-        return { element: tools, searchInput: searchInput,
+        return { element: tools, viewBtn: viewBtn, searchInput: searchInput,
                  searchBtn: searchBtn, exportBtn: exportBtn };
     }
 

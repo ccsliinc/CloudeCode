@@ -208,44 +208,12 @@
     color: var(--color-accent);
 }
 
-/* View toggle and machine filter. */
-.archive-nav__viewbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-.archive-nav__view {
-    font: inherit;
-    font-size: 0.78rem;
-    padding: 3px 9px;
-    cursor: pointer;
-    color: var(--color-fg-muted);
-    background: transparent;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-}
-
-.archive-nav__view--on {
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-    background: var(--color-bg-hover);
-}
-
-.archive-nav__hostfilter {
-    font: inherit;
-    font-size: 0.75rem;
-    flex: 1 1 100%;
-    min-width: 0;
-    padding: 3px 6px;
-    color: var(--color-fg);
-    background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-}
-
+/* THE VIEW BAR IS GONE. The "All projects" / "By machine" buttons and
+ * the machine dropdown were removed from the rail at the owner's
+ * instruction ("i dont think we need the button and dropdown on the left
+ * column"), so their rules are removed with them rather than left behind
+ * as styling for markup nobody builds. The by-machine tree itself still
+ * exists and is still reachable programmatically; see archive-nav.js. */
 .archive-nav__count {
     font-family: var(--font-mono);
     font-size: 0.8rem;

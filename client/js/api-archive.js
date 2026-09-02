@@ -1,5 +1,5 @@
 /**
- * API Module, archive half - the message browser's eleven read endpoints.
+ * API Module, archive half - the message browser's twelve read endpoints.
  *
  * WHY THIS IS A SEPARATE FILE. `api.js` reached 1,847 lines with the
  * archive methods in it, against this repo's 500-line file cap
@@ -346,6 +346,35 @@ Object.assign(API.prototype, {
     },
 
     /**
+     * Archive: one transcript's turns, shaped for the CHAT view.
+     *
+     * This is the reading endpoint, as opposed to `listArchiveLines`,
+     * which is the byte-exact record. It returns `turns[]`, each with
+     * `line_no`, `body_id`, `role`, `record_type`, `ts`, `model`,
+     * `blocks[]`, `subagents[]`, `secret_finding_count` and `info`.
+     *
+     * IT MAY NOT EXIST. This client shipped alongside the route rather
+     * than after it, and a 404 from a route that was never deployed is
+     * NOT an empty conversation - see archive-chat-screen.js, which
+     * turns that case into a named could-not-determine. Do not "fix" a
+     * caller that treats a 404 here as no messages.
+     *
+     * @param {number|string} transcriptId - Numeric transcript id.
+     * @param {object} [opts] - {limit, cursor, startLine}.
+     * @returns {Promise<object>} A callEnvelope result.
+     * @example listArchiveMessages(4, {limit: 200})
+     *          // GET /archive/transcripts/4/messages?limit=200
+     */
+    async listArchiveMessages(transcriptId, { limit, cursor, startLine } = {}) {
+        const q = this._archiveQuery({
+            limit: limit, cursor: cursor, start_line: startLine
+        });
+        return await this.callEnvelope(
+            `/archive/transcripts/${encodeURIComponent(transcriptId)}/messages${q}`,
+            { timeoutMs: this.ARCHIVE_TIMEOUTS.transcript });
+    },
+
+    /**
      * Archive: one message body.
      *
      * The 30 s deadline is deliberately the longest of the read paths: a
@@ -433,4 +462,4 @@ Object.assign(API.prototype, {
     }
 });
 
-console.log('[API Archive Module] Loaded: 11 archive endpoints on API.prototype');
+console.log('[API Archive Module] Loaded: 12 archive endpoints on API.prototype');

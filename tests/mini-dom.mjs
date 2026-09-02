@@ -85,13 +85,49 @@ class Selector {
  * match the element, and each earlier compound must match some ancestor,
  * in order. Only the descendant combinator (whitespace) is supported -
  * `>`, `+` and `~` are not used by the modules under test.
+ *
+ * THE SPLIT IS BRACKET-AWARE, AND IT WAS NOT. Splitting on every run of
+ * whitespace tore `[data-field="parent uuid"]` into two compounds, both
+ * of them nonsense, and querySelector then returned NULL - which is
+ * indistinguishable from "no such element" and is exactly the silent
+ * wrong answer a test harness must never give. Found 2026-09-01 while
+ * asserting on a chat info-panel row whose label contains a space; the
+ * assertion failed loudly, but the same bug in an
+ * `assert.equal(qsa(...).length, 0)` would have PASSED for the wrong
+ * reason. Whitespace inside square brackets is now part of the compound.
  */
 class ChainSelector {
     /** Inputs: text (string) - one selector, possibly with descendants. */
     constructor(text) {
-        this.parts = String(text).trim().split(/\s+/)
+        this.parts = ChainSelector.splitCompounds(String(text).trim())
             .filter(Boolean)
             .map(p => new Selector(p));
+    }
+
+    /**
+     * Description: split a selector into compounds on whitespace that is
+     *   OUTSIDE square brackets. A hand-written scanner rather than a
+     *   regex because the nesting is what the regex cannot see.
+     * Inputs: text (string).
+     * Output: Array<string>.
+     * Example: splitCompounds('dl [data-field="a b"]')
+     *   // -> ['dl', '[data-field="a b"]']
+     */
+    static splitCompounds(text) {
+        const out = [];
+        let cur = '';
+        let depth = 0;
+        for (const ch of text) {
+            if (ch === '[') depth++;
+            else if (ch === ']') depth = depth > 0 ? depth - 1 : 0;
+            if (depth === 0 && /\s/.test(ch)) {
+                if (cur) { out.push(cur); cur = ''; }
+                continue;
+            }
+            cur += ch;
+        }
+        if (cur) out.push(cur);
+        return out;
     }
 
     /** Inputs: el (MiniElement). Output: boolean. */

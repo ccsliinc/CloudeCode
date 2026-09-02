@@ -2,15 +2,23 @@
  * The transcript list's FILTER HEADER: the compact scheme chooser and
  * the three per-column fuzzy inputs.
  *
- * WHY THE SCHEME CHOOSER IS A DISCLOSURE AND NOT A `<select>`. The three
- * options already carry an `aria-pressed` contract, written on EVERY
- * option rather than only the active one so the off state stays a state
- * (see archive-transcript-list.js). A native `<select>` has no
- * `aria-pressed` and no way to grow one, so swapping to it would have
- * silently dropped that contract while looking like a pure size win.
- * The options stay real buttons; what changed is that they live behind a
- * trigger that names the current choice, so the header costs ONE row
- * instead of three.
+ * SUPERSEDED: THE SCHEME CHOOSER IS NOW A REAL `<select>`. This file
+ * used to argue for a hand-built trigger-plus-menu over a native
+ * `<select>`, on the grounds that the options carried an `aria-pressed`
+ * contract a `<select>` cannot grow. The owner overruled it on sight:
+ * "i dont like the dropdown its fake and doesnt match." He was right
+ * about the thing the argument never addressed - a div dressed as a
+ * select inherits none of the platform's control behaviour and none of
+ * the app's own form styling, so it reads as a foreign object in its own
+ * header no matter how correct its ARIA is.
+ *
+ * WHAT WAS TRADED, STATED RATHER THAN GLOSSED. `aria-pressed="false"` on
+ * the inactive options is gone, because a native `<option>` has no such
+ * attribute. What replaces it is the platform's own selected-option
+ * semantics, which every screen reader already announces, plus a
+ * `data-scheme-active` on the select itself so a test can still assert
+ * the active choice without reading `value`. That is a real difference
+ * and it is a smaller one than an unstyled fake control.
  *
  * THE TWO FILTERS HAVE DIFFERENT SCOPES AND MUST NEVER BE DESCRIBED IN
  * ONE SENTENCE. The scheme filter is SERVER-side: it re-queries the
@@ -68,8 +76,7 @@ console.log('[ArchiveTlistFilter Module] Loading...');
         var queries = {};
         var optionButtons = [];
         var root = el('div', rootClass + '__filters', null);
-        var trigger = null;
-        var menu = null;
+        var select = null;
         var note = el('p', rootClass + '__fuzzy-note', null);
 
         /** Description: element with a class and optional text.
@@ -81,79 +88,77 @@ console.log('[ArchiveTlistFilter Module] Loading...');
             return n;
         }
 
-        /** Description: the label of the active scheme, for the trigger.
+        /** Description: the label of the active scheme.
          *  Inputs: none. Output: string. */
         function activeLabel() {
             for (var i = 0; i < defs.length; i++) {
                 if (defs[i].v === scheme) return defs[i].label;
             }
             // An unrecognised value is NAMED, not silently shown as the
-            // first option - a trigger that displays a choice nobody made
+            // first option - a control that displays a choice nobody made
             // is how a filter becomes untrustworthy.
             return 'UNKNOWN FILTER (' + String(scheme) + ')';
         }
 
-        /** Description: repaint the trigger text and every option's
-         *  aria-pressed. Inputs: none. Output: void. */
+        /** Description: write the active scheme onto the select, its
+         *  data attribute and its options. Inputs: none. Output: void. */
         function paintPressed() {
-            if (trigger) {
-                trigger.textContent = 'Showing: ' + activeLabel();
-                trigger.setAttribute('data-scheme-active', String(scheme));
-                trigger.setAttribute('title',
-                    'Showing: ' + activeLabel() + '. Click to change which ' +
-                    'kind of transcript this list asks the server for.');
-            }
+            if (!select) return;
+            // `value` is the browser's own record of the choice;
+            // `data-scheme-active` is this view's, and they are written
+            // together so a test never has to read one and trust the
+            // other. An UNRECOGNISED scheme leaves `value` unset by the
+            // platform - a <select> cannot hold a value no <option>
+            // carries - so the attribute is the only place that fact
+            // survives, and activeLabel() names it in the title.
+            select.value = String(scheme);
+            select.setAttribute('data-scheme-active', String(scheme));
+            select.setAttribute('title',
+                'Showing: ' + activeLabel() + '. Changes which kind of ' +
+                'transcript this list asks the server for.');
             for (var i = 0; i < optionButtons.length; i++) {
-                var b = optionButtons[i];
-                b.setAttribute('aria-pressed',
-                    b.getAttribute('data-scheme-filter') === scheme ? 'true' : 'false');
+                var o = optionButtons[i];
+                var on = o.getAttribute('data-scheme-filter') === scheme;
+                if (on) o.setAttribute('selected', 'selected');
+                else o.removeAttribute('selected');
             }
         }
 
-        /** Description: open or close the option menu. Inputs: open
-         *  (boolean). Output: void. */
-        function setOpen(open) {
-            menu.hidden = !open;
-            trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-        }
-
-        /** Description: build the trigger plus its menu of real buttons.
+        /** Description: build the scheme chooser as a REAL form control,
+         *  so it inherits the platform's behaviour and the app's own
+         *  control styling instead of imitating both.
          *  Inputs: none. Output: Element. */
         function buildScheme() {
             var box = el('div', rootClass + '__scheme-box', null);
-            trigger = el('button', rootClass + '__scheme-trigger', null);
-            trigger.setAttribute('type', 'button');
-            trigger.setAttribute('aria-haspopup', 'true');
-            trigger.setAttribute('aria-expanded', 'false');
-            trigger.setAttribute('data-action', 'open-scheme-menu');
-            menu = el('div', rootClass + '__scheme-menu', null);
-            menu.setAttribute('role', 'group');
-            menu.setAttribute('aria-label', 'Session reference scheme filter');
-            menu.hidden = true;
+            var lab = el('label', rootClass + '__scheme-label', 'Showing');
+            lab.setAttribute('for', rootClass + '-scheme');
+            select = doc.createElement('select');
+            select.setAttribute('class', rootClass + '__scheme');
+            select.setAttribute('id', rootClass + '-scheme');
+            select.setAttribute('aria-label', 'Session reference scheme filter');
             for (var i = 0; i < defs.length; i++) {
-                menu.appendChild(buildOption(defs[i]));
+                select.appendChild(buildOption(defs[i]));
             }
-            trigger.addEventListener('click', function () {
-                setOpen(menu.hidden);
+            select.addEventListener('change', function () {
+                var v = select.value;
+                setScheme(v);
+                onScheme(v);
             });
-            box.appendChild(trigger);
-            box.appendChild(menu);
+            box.appendChild(lab);
+            box.appendChild(select);
             return box;
         }
 
-        /** Description: one option button. Inputs: def. Output: Element. */
+        /** Description: one <option>. The hint stays as its title, which
+         *  is where it already was; a native option cannot hold more.
+         *  Inputs: def. Output: Element. */
         function buildOption(def) {
-            var b = el('button', rootClass + '__scheme', def.label);
-            b.setAttribute('type', 'button');
-            b.setAttribute('data-scheme-filter', def.v);
-            if (def.hint) b.setAttribute('title', def.hint);
-            b.addEventListener('click', function () {
-                setOpen(false);
-                setScheme(def.v);
-                onScheme(def.v);
-            });
-            optionButtons.push(b);
-            return b;
+            var o = el('option', rootClass + '__scheme-option', def.label);
+            o.setAttribute('value', def.v);
+            o.setAttribute('data-scheme-filter', def.v);
+            if (def.hint) o.setAttribute('title', def.hint);
+            optionButtons.push(o);
+            return o;
         }
 
         /** Description: build the three fuzzy inputs. Inputs: none.
@@ -252,10 +257,15 @@ console.log('[ArchiveTlistFilter Module] Loading...');
             isActive: isActive,
             /** Description: the typed queries. Output: Object. */
             queries: readQueries,
-            /** Description: the option buttons, for tests. Output: Array. */
+            /** Description: the <option> elements, for tests. Output: Array. */
             options: function () { return optionButtons.slice(); },
-            /** Description: the trigger button, for tests. Output: Element. */
-            trigger: function () { return trigger; },
+            /** Description: the scheme <select>, for tests. `trigger` is
+             *  kept as its name because every existing caller and test
+             *  holds it, and renaming it would have been a second change
+             *  riding along on this one. Output: Element. */
+            trigger: function () { return select; },
+            /** Description: the scheme <select>. Output: Element. */
+            select: function () { return select; },
             /** Description: the note element, for tests. Output: Element. */
             note: function () { return note; }
         };

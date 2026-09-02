@@ -153,6 +153,7 @@
     <link rel="stylesheet" href="/static/css/archive-screen.css" />
     <link rel="stylesheet" href="/static/css/archive-nav.css" />
     <link rel="stylesheet" href="/static/css/archive-reader.css" />
+    <link rel="stylesheet" href="/static/css/archive-chat.css" />
     <link rel="stylesheet" href="/static/css/archive-search.css" />
     <link rel="stylesheet" href="/static/css/archive-export.css" />
     <!-- The transcript list, the archive's primary browse surface. It had
@@ -1049,6 +1050,10 @@
     <script src="/static/js/archive-tlist-filter.js"></script>
     <script src="/static/js/archive-transcript-list.js"></script>
     <script src="/static/js/archive-keys.js"></script>
+    <!-- The keyboard help MODAL, split out of archive-keys.js when the
+         `v` binding took that file over the 500-line cap. It reads
+         ArchiveKeys.bindings() at OPEN time, so it MUST load after it. -->
+    <script src="/static/js/archive-keys-help.js"></script>
     <script src="/static/js/archive-reader-dom.js"></script>
     <script src="/static/js/archive-reader-paging.js"></script>
     <script src="/static/js/archive-reader-select.js"></script>
@@ -1058,6 +1063,23 @@
     <script src="/static/js/archive-search.js"></script>
     <script src="/static/js/archive-export.js"></script>
     <script src="/static/js/archive-screen-reader.js"></script>
+    <!-- THE CONVERSATION VIEW, which is the reader's DEFAULT. Six files,
+         loaded innermost first because each one reads the globals of the
+         ones above it AT CALL TIME, not at load: block -> estimate,
+         block/info/subagents -> turn, turn/estimate/stack -> view,
+         view -> screen. archive-mask.js, archive-outcome*.js and
+         archive-virtual-list.js are all already loaded above; the chat
+         view reuses them rather than growing its own masking, its own
+         outcome vocabulary or its own windowing engine. -->
+    <script src="/static/js/archive-chat-block.js"></script>
+    <script src="/static/js/archive-chat-info.js"></script>
+    <script src="/static/js/archive-chat-subagents.js"></script>
+    <script src="/static/js/archive-chat-turn.js"></script>
+    <script src="/static/js/archive-chat-estimate.js"></script>
+    <script src="/static/js/archive-chat-stack.js"></script>
+    <script src="/static/js/archive-chat-clicks.js"></script>
+    <script src="/static/js/archive-chat-view.js"></script>
+    <script src="/static/js/archive-chat-screen.js"></script>
     <!-- Draggable, remembered pane widths. MUST load before
          archive-screen-shell.js, which attaches the two handles to the
          grid it creates, at script load. -->
@@ -1074,6 +1096,11 @@
          before it, because it builds its shell at ITS script load. -->
     <script src="/static/js/archive-screen-shell.js"></script>
     <script src="/static/js/archive-screen-tools.js"></script>
+    <!-- Both reader-pane views and the switch between them. Reads
+         ArchiveReader, ArchiveChatScreen and ArchiveScreenTools at CALL
+         time, so it only has to load before archive-screen.js, which
+         builds it at wire(). -->
+    <script src="/static/js/archive-screen-views.js"></script>
     <script src="/static/js/archive-screen.js"></script>
 
     <script src="/static/js/app.js"></script>

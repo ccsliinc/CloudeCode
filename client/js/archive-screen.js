@@ -159,19 +159,18 @@ console.log('[ArchiveScreen Module] Loading...');
         search.element.hidden = true;
         shell.listPane.appendChild(search.element);
 
-        var reader = window.ArchiveReader.createReader({ document: document, api: api });
-        reader.mount(shell.readPane);
-
-        // The toolbar is CROSS-PANE (search writes into the list column,
-        // export opens a modal), so it belongs to neither the reader nor
-        // this file's shell - see archive-screen-tools.js.
-        var tools = window.ArchiveScreenTools.create({
-            document: document, pane: shell.readPane, rootClass: ROOT_CLASS,
+        // Both reader-pane views, the toolbar and the switch between
+        // them: archive-screen-views.js, split out when the second view
+        // took this file over the 500-line cap.
+        var views = window.ArchiveScreenViews.create({
+            document: document, api: api, pane: shell.readPane,
+            rootClass: ROOT_CLASS,
             onSearch: function (text) { runSearch(text); },
             onExport: function () { openExport(); }
         });
-        var searchInput = tools.searchInput;
-        var exportBtn = tools.exportBtn;
+        var reader = views.reader;
+        var searchInput = views.searchInput;
+        var exportBtn = views.exportBtn;
         shell.back.addEventListener('click', function () { goBackPane(); });
 
         // The reader's pager, so its button and the `m` key take one
@@ -189,6 +188,7 @@ console.log('[ArchiveScreen Module] Loading...');
         });
 
         wired = { nav: nav, list: list, search: search, reader: reader,
+                  chat: views.chat, views: views,
                   searchInput: searchInput, exportBtn: exportBtn };
         document.addEventListener('keydown', onKeydown);
         return wired;
@@ -324,6 +324,7 @@ console.log('[ArchiveScreen Module] Loading...');
         t[A.OPEN_EXPORT] = function () { openExport(); };
         t[A.TOGGLE_SCHEME] = function () { wired.list.cycleScheme(); };
         t[A.OPEN_HELP] = function () { window.ArchiveKeys.openHelp({ document: document }); };
+        t[A.TOGGLE_VIEW] = function () { wired.views.toggle(); };
         handlers = t;
         return handlers;
     }
@@ -383,8 +384,16 @@ console.log('[ArchiveScreen Module] Loading...');
             nameProject(route.projectId);
         }
         if (route.transcriptId !== null && route.transcriptId !== undefined) {
+            // BOTH views load, so the `v` toggle is instant in both
+            // directions rather than fetching on first reveal. The chat
+            // opens a NEW chain: arriving here is a new question, not a
+            // step deeper into the previous one.
+            var trow = tracker().facts({ transcriptId: route.transcriptId }).transcript;
+            wired.chat.open(route.transcriptId,
+                (trow && (trow.title || trow.session_ref))
+                    ? String(trow.title || trow.session_ref) : null);
             window.ArchiveScreenReader.load({
-                reader: watchHeader(wired.reader, route.transcriptId),
+                reader: wired.views.watchHeader(route.transcriptId, onHeader),
                 pane: shell.readPane,
                 api: window.API,
                 transcriptId: route.transcriptId,
@@ -428,28 +437,21 @@ console.log('[ArchiveScreen Module] Loading...');
     }
 
     /**
-     * Description: hand ArchiveScreenReader a reader that also REPORTS
-     *   the header it is given, so the crumb can be repainted with the
-     *   session's real name.
-     *
-     *   A DELEGATING WRAPPER RATHER THAN A CALLBACK PARAMETER, because
-     *   the header is already fetched exactly once, by that module, and a
-     *   second request here to learn the same fact would double every
-     *   transcript open. The wrapper adds no branch: `setHeader` is
-     *   forwarded whatever it receives, including the `null` that means
-     *   the header could not be evaluated - which correctly leaves the
-     *   crumb saying NOT NAMED YET rather than inventing a name.
-     * Inputs: reader (object), transcriptId (number).
-     * Output: object - the reader, with setHeader instrumented.
+     * Description: a transcript header arrived. Repaint the crumb from
+     *   the name it carries, and rename the chat chain's root. Called
+     *   ONLY with a real header; a null one means the header could not
+     *   be evaluated and correctly leaves NOT NAMED YET standing.
+     * Inputs: transcriptId (number), h (object). Output: void.
      */
-    function watchHeader(reader, transcriptId) {
-        return Object.create(reader, { setHeader: { value: function (h) {
-            if (h) {
-                tracker().learnTranscript(transcriptId, h);
-                paintCrumb(tracker().labelsFor(current));
-            }
-            return reader.setHeader(h);
-        } } });
+    function onHeader(transcriptId, h) {
+        tracker().learnTranscript(transcriptId, h);
+        paintCrumb(tracker().labelsFor(current));
+        // AND THE CHAT CHAIN'S ROOT. A deep link opens before any name
+        // is known, so it renders an honest `name NOT KNOWN (t6)` -
+        // correct at that instant, and wrong to leave standing once the
+        // header arrives. nameRoot renames only the ROOT and only while
+        // the chain is still on it; see archive-chat-screen.js.
+        if (wired && wired.chat) wired.chat.nameRoot(transcriptId, h);
     }
 
     /** Show the screen for a parsed route, called by App.showArchive()

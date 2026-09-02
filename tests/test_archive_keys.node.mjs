@@ -59,8 +59,12 @@ function load() {
 /**
  * Load ArchiveKeys against a real mini-DOM plus a recording ModalStack.
  *
- * `openHelp` is the ONE DOM function in archive-keys.js, so it needs a
- * document and the modal registry the real app supplies. The stack is
+ * `openHelp` NOW LIVES IN archive-keys-help.js and archive-keys.js
+ * delegates to it, so BOTH files are loaded here - loading only the
+ * first would make every assertion below fail with "archive-keys-help.js
+ * is not loaded", which is the delegation's own named refusal doing
+ * exactly its job. It needs a document and the modal registry the real
+ * app supplies. The stack is
  * recorded rather than stubbed away, because "did it register" is the
  * assertion that matters: an unregistered overlay means Escape reaches
  * the screen behind it.
@@ -80,10 +84,12 @@ function withModalStack(env) {
         depth() { return entries.length; },
     };
     vm.createContext(context);
-    vm.runInContext(
-        fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-keys.js'), 'utf8'),
-        context, { filename: 'archive-keys.js' }
-    );
+    for (const f of ['archive-keys.js', 'archive-keys-help.js']) {
+        vm.runInContext(
+            fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
+            context, { filename: f }
+        );
+    }
     return { keys: context.window.ArchiveKeys, stack: context.window.ModalStack };
 }
 
@@ -211,7 +217,14 @@ test('the action set has not silently grown', () => {
     // number moved only alongside the OPEN_HELP tests below. Bumping it
     // without adding those would have converted a real guard into a
     // rubber stamp.
-    assert.equal(Object.keys(A).length, 12);
+    //
+    // 12 -> 13 on 2026-09-01: TOGGLE_VIEW was added, bound to `v`, for
+    // the conversation/raw switch. Same rule as last time - the number
+    // moved alongside the tests for it, in
+    // tests/test_archive_controls_trimmed.node.mjs and the help-table
+    // coverage assertion above, which already proves `v` resolves and
+    // appears exactly once in bindings().
+    assert.equal(Object.keys(A).length, 13);
 });
 
 // =====================================================================
@@ -291,9 +304,15 @@ test('openHelp REFUSES a missing document rather than silently doing nothing', (
     // host realm's TypeError and a constructor-based assertion fails
     // against completely correct code. Same realm trap that makes
     // deepStrictEqual unusable on values built in the sandbox.
+    //
+    // Loaded through withModalStack so archive-keys-help.js is PRESENT.
+    // Using the bare `keys` here would exercise the delegation's
+    // module-missing refusal instead and pass for the wrong reason.
+    const env = createEnvironment();
+    const { keys: k } = withModalStack(env);
     let caught = null;
     try {
-        keys.openHelp({});
+        k.openHelp({});
     } catch (err) {
         caught = err;
     }
@@ -303,6 +322,24 @@ test('openHelp REFUSES a missing document rather than silently doing nothing', (
     assert.equal(caught.name, 'TypeError');
     assert.ok(/document/.test(caught.message),
         'the refusal must name the missing argument');
+});
+
+test('openHelp NAMES the missing help module rather than failing as "not a function"', () => {
+    // archive-keys.js alone, exactly as `load()` provides it. An error
+    // reading "openHelp is not a function" would report the wrong cause
+    // - the function IS there, the module it delegates to is not - and
+    // this is the whole reason the delegation is a named refusal and not
+    // an optional-chaining no-op.
+    let caught = null;
+    try {
+        keys.openHelp({ document: createEnvironment().document });
+    } catch (err) {
+        caught = err;
+    }
+    assert.ok(caught, 'a missing module must never fail silently');
+    assert.equal(caught.name, 'ReferenceError');
+    assert.ok(/archive-keys-help\.js/.test(caught.message),
+        'the refusal must name the FILE somebody has to add to index.html');
 });
 
 // =====================================================================

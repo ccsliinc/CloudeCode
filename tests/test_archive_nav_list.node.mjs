@@ -470,11 +470,19 @@ await test('loadMore refuses rather than re-requesting page one when no cursor e
 function schemeButtons(l) {
     return [...l.element.querySelectorAll('[data-scheme-filter]')].map((b) => ({
         value: b.getAttribute('data-scheme-filter'),
-        pressed: b.getAttribute('aria-pressed'),
+        // SUPERSEDED CONTRACT, RENAMED RATHER THAN DROPPED. These were
+        // <button aria-pressed>; the owner replaced the whole fake
+        // dropdown with a real <select> ("i dont like the dropdown its
+        // fake and doesnt match"), so the state now lives where the
+        // platform puts it. The FIELD keeps its name so every assertion
+        // below still reads as one contract; what it reads has moved
+        // from aria-pressed to the option's own selected attribute.
+        pressed: b.getAttribute('selected') === 'selected' ? 'true' : 'false',
+        tag: b.tagName.toLowerCase(),
     }));
 }
 
-await test('C1: all three scheme buttons carry aria-pressed, exactly one true, and it follows setSchemeFilter', async () => {
+await test('C1: all three scheme options are real <option>s, exactly one selected, and it follows setSchemeFilter', async () => {
     const l = list.create({ document, api: fakeApi({}) });
 
     const initial = schemeButtons(l);
@@ -487,19 +495,19 @@ await test('C1: all three scheme buttons carry aria-pressed, exactly one true, a
         list.SCHEME_DEFS.map((d) => d.v).join(','),
         'the buttons must be built from SCHEME_DEFS, in that order');
 
-    // THE OFF BUTTONS CARRY aria-pressed="false", NOT NO ATTRIBUTE. A
-    // toggle that only carries the attribute when it is pressed is
-    // announced as an ordinary button the rest of the time, so a screen
-    // reader user cannot tell a two-state control from a one-shot one -
-    // and the state they most need to hear is the one that is OFF.
+    // EVERY OPTION IS A REAL <option> INSIDE A REAL <select>. That is
+    // what replaced the aria-pressed contract this test used to check:
+    // an <option> has no aria-pressed and needs none, because a select
+    // announces its own two-state nature and its own current choice.
+    // What still has to hold is that exactly ONE is marked.
     for (const b of initial) {
-        assert.notEqual(b.pressed, null,
-            `the "${b.value}" button carries no aria-pressed at all`);
-        assert.ok(b.pressed === 'true' || b.pressed === 'false',
-            `aria-pressed on "${b.value}" is "${b.pressed}", not a boolean`);
+        assert.equal(b.tag, 'option',
+            `the "${b.value}" choice is a <${b.tag}>, not a real option`);
     }
+    assert.equal(l.element.querySelectorAll('select').length, 1,
+        'the scheme chooser must be one real form control');
     assert.equal(initial.filter((b) => b.pressed === 'true').length, 1,
-        'exactly one scheme button may be pressed');
+        'exactly one scheme option may be selected');
     // THE DEFAULT IS THE OWNER'S OWN SESSIONS, NOT EVERYTHING. Measured
     // 2026-08-31: 19,588 of 21,039 transcripts (93.1%) are agent
     // sidechain files, so opening on `all` opened on 93 percent noise.
@@ -508,7 +516,7 @@ await test('C1: all three scheme buttons carry aria-pressed, exactly one true, a
     assert.equal(list.DEFAULT_SCHEME, list.SCHEME_FILTERS.CONVERSATIONS,
         'the shipped default must be the uuid (top-level session) scheme');
     assert.equal(initial.find((b) => b.pressed === 'true').value,
-        list.DEFAULT_SCHEME, 'the default filter must be the pressed one');
+        list.DEFAULT_SCHEME, 'the default filter must be the selected one');
 
     // IT FOLLOWS THE FILTER. Nothing has been loaded, so the reload
     // refuses with 'no-scope' - and the button state must still move,
@@ -522,7 +530,7 @@ await test('C1: all three scheme buttons carry aria-pressed, exactly one true, a
         'the pressed button did not follow setSchemeFilter');
     assert.equal(
         after.find((b) => b.value === list.DEFAULT_SCHEME).pressed, 'false',
-        'the previously pressed button was not un-pressed');
+        'the previously selected option was not de-selected');
 
     await l.setSchemeFilter(list.SCHEME_FILTERS.SIDECHAINS);
     const third = schemeButtons(l);
@@ -544,7 +552,7 @@ await test('C2: list.scheme() reflects the filter currently applied', async () =
     // And it agrees with what the DOM announces, so the reader and the
     // caller cannot be told two different things.
     assert.equal(schemeButtons(l).find((b) => b.pressed === 'true').value,
-        l.scheme(), 'scheme() and aria-pressed disagree');
+        l.scheme(), 'scheme() and the selected option disagree');
 
     // An empty value falls back to the DEFAULT rather than to an unknown
     // scheme, which the server would refuse with a 400.

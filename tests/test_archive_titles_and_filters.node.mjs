@@ -390,47 +390,68 @@ await test('the filter DEFAULTS to the owner\'s own sessions, not to everything'
     assert.equal(l.scheme(), list.DEFAULT_SCHEME);
 });
 
-await test('the chooser is ONE control, and it names the active option', () => {
+await test('the chooser is ONE control, and it is a REAL one', () => {
+    // SUPERSEDED, 2026-09-01. This used to assert a hand-built trigger
+    // plus a floating menu, and a comment here used to argue that a
+    // <select> "would have been smaller and would have silently dropped"
+    // the aria-pressed contract. The owner overruled that on sight: "i
+    // dont like the dropdown its fake and doesnt match." The argument
+    // was correct about ARIA and never addressed the thing that actually
+    // mattered - a div dressed as a select inherits none of the
+    // platform's behaviour and none of the app's control styling.
     const l = list.create({ document, api: {} });
-    const trigger = l.element.querySelector('.archive-tlist__scheme-trigger');
-    assert.notEqual(trigger, null, 'there is no compact trigger');
-    // BOTH HALVES, and the second is the one that caught a mutation the
-    // first could not: `aria-expanded` is what the control ANNOUNCES and
-    // `menu.hidden` is what is actually on screen. Asserting only the
-    // announcement passes a menu that is visibly open while claiming to
-    // be closed - a state that is wrong for a sighted person and wrong
-    // for a screen reader in opposite directions.
-    assert.equal(trigger.getAttribute('aria-expanded'), 'false',
-        'the trigger announces the options as open before anyone opened them');
-    const menu = l.element.querySelector('.archive-tlist__scheme-menu');
-    assert.notEqual(menu, null, 'there is no option menu');
-    assert.equal(menu.hidden, true,
-        'the options are open by default, which is the row-eating layout ' +
-        'this replaced');
+
+    const select = l.element.querySelector('select.archive-tlist__scheme');
+    assert.notEqual(select, null, 'the scheme chooser is not a real select');
+    assert.equal(l.element.querySelectorAll('select').length, 1,
+        'one control, not three rows of buttons and not two selects');
+
+    // THE FAKE IS GONE, and its absence is asserted rather than assumed:
+    // a leftover trigger would be a second, stale control for the same
+    // choice, which is worse than either shape on its own.
+    assert.equal(l.element.querySelectorAll('.archive-tlist__scheme-trigger').length, 0);
+    assert.equal(l.element.querySelectorAll('.archive-tlist__scheme-menu').length, 0);
+    assert.equal(l.element.querySelectorAll('[aria-haspopup]').length, 0);
+    assert.equal(l.element.querySelectorAll('[data-action="open-scheme-menu"]').length, 0);
+
+    // IT STILL NAMES THE ACTIVE OPTION without anybody opening it. That
+    // was the real requirement behind the old trigger, and a <select>
+    // satisfies it natively through its value plus the selected option.
     const activeLabel = list.SCHEME_DEFS
         .find((d) => d.v === list.DEFAULT_SCHEME).label;
-    assert.ok(trigger.textContent.includes(activeLabel),
-        `the trigger does not name the active option (${activeLabel}): ` +
-        JSON.stringify(trigger.textContent));
+    assert.equal(select.value, list.DEFAULT_SCHEME);
+    assert.equal(select.getAttribute('data-scheme-active'), list.DEFAULT_SCHEME);
+    const on = [...l.element.querySelectorAll('[data-scheme-filter]')]
+        .find((o) => o.getAttribute('selected') === 'selected');
+    assert.notEqual(on, null, 'no option is marked as the current choice');
+    assert.equal(on.textContent, activeLabel);
 });
 
-await test('the aria-pressed contract SURVIVES the compaction', () => {
-    // A `<select>` would have been smaller and would have silently
-    // dropped this, which is why it is asserted rather than assumed.
+await test('the state contract SURVIVES the swap to a native control', () => {
+    // The old contract was aria-pressed on EVERY option, so the off
+    // state stayed a state. An <option> has no aria-pressed and needs
+    // none - a <select> announces its own current choice - so what is
+    // asserted now is the platform's own equivalent, in the two
+    // independent places this view writes it: exactly one option carries
+    // `selected`, and the select's value and data attribute agree with
+    // it. That is a REAL change from the previous contract, not a
+    // rewording of it, and it is recorded rather than glossed.
     const l = list.create({ document, api: {} });
-    const opts = l.element.querySelectorAll('[data-scheme-filter]');
+    const opts = [...l.element.querySelectorAll('[data-scheme-filter]')];
     assert.equal(opts.length, list.SCHEME_DEFS.length,
-        'not every option is reachable from the compact chooser');
-    const pressed = [...opts].map((b) => b.getAttribute('aria-pressed'));
-    for (const p of pressed) {
-        assert.ok(p === 'true' || p === 'false',
-            'an option carries no aria-pressed, so its OFF state is not a state');
+        'not every option is reachable from the chooser');
+    for (const o of opts) {
+        assert.equal(o.tagName.toLowerCase(), 'option',
+            'an option is not a real <option>, so the control is still fake');
     }
-    assert.equal(pressed.filter((p) => p === 'true').length, 1);
-    assert.equal(
-        [...opts].find((b) => b.getAttribute('aria-pressed') === 'true')
-            .getAttribute('data-scheme-filter'),
-        list.DEFAULT_SCHEME);
+    const on = opts.filter((o) => o.getAttribute('selected') === 'selected');
+    assert.equal(on.length, 1, 'exactly one option may be current');
+    assert.equal(on[0].getAttribute('data-scheme-filter'), list.DEFAULT_SCHEME);
+
+    const select = l.element.querySelector('select.archive-tlist__scheme');
+    assert.equal(select.value, on[0].getAttribute('data-scheme-filter'),
+        'the select value and the marked option disagree, so a reader and ' +
+        'a caller would be told two different things');
 });
 
 // ---- 6. FUZZY MATCHING -------------------------------------------------

@@ -68,6 +68,7 @@ console.log('[ArchiveKeys Module] Loading...');
         LOAD_MORE: 'load-more',
         OPEN_EXPORT: 'open-export',
         TOGGLE_SCHEME: 'toggle-scheme',
+        TOGGLE_VIEW: 'toggle-view',
         OPEN_HELP: 'open-help'
     };
 
@@ -85,6 +86,7 @@ console.log('[ArchiveKeys Module] Loading...');
         'm': ACTIONS.LOAD_MORE,
         'e': ACTIONS.OPEN_EXPORT,
         't': ACTIONS.TOGGLE_SCHEME,
+        'v': ACTIONS.TOGGLE_VIEW,
         // '?' is Shift+/ and `event.key` reports the CHARACTER PRODUCED,
         // so the browser hands us a literal '?' while '/' arrives only
         // unshifted. Binding the character is the whole implementation:
@@ -211,6 +213,7 @@ console.log('[ArchiveKeys Module] Loading...');
             { keys: 'm', action: ACTIONS.LOAD_MORE, note: 'load the next page' },
             { keys: 'e', action: ACTIONS.OPEN_EXPORT, note: 'open the export modal' },
             { keys: 't', action: ACTIONS.TOGGLE_SCHEME, note: 'cycle the scheme split' },
+            { keys: 'v', action: ACTIONS.TOGGLE_VIEW, note: 'conversation view / raw view' },
             { keys: '?', action: ACTIONS.OPEN_HELP, note: 'show this key list' },
             { keys: 'Escape', action: ACTIONS.CLEAR_FILTER,
               note: 'clear the filter, then dismiss search, then go back one pane' }
@@ -342,154 +345,38 @@ console.log('[ArchiveKeys Module] Loading...');
         };
     }
 
-    /**
-     * Attribute the help overlay is tagged with, so the idempotency check
-     * and any test share one named string rather than four literals.
-     * @type {string} */
-    var HELP_MODAL_ATTR = 'data-modal';
-
-    /** Value of HELP_MODAL_ATTR on the help overlay. @type {string} */
-    var HELP_MODAL_NAME = 'archive-help';
-    /** Selector for an already-open help overlay. @type {string} */
-    var HELP_MODAL_SELECTOR = '[' + HELP_MODAL_ATTR + '="' + HELP_MODAL_NAME + '"]';
-
-    /**
-     * Class prefix for this modal's elements, mirroring the BEM-ish shape
-     * archive-export.js uses.
-     * @type {string}
-     */
-    var HELP_ROOT_CLASS = 'archive-help';
-
-    /** data-action on the close button. @type {string} */
-    var HELP_CLOSE_ACTION = 'close-help';
-
-    /** Column headings for the rendered binding table. @type {Array<string>} */
-    var HELP_COLUMNS = ['Keys', 'What it does'];
-    /**
-     * Description: build one element with a class and optional text. Text
-     *   goes in via textContent, never as markup - a binding note is data.
-     * Inputs: doc (Document), tag, className, text (strings|null).
-     * Output: Element.
-     */
-    function helpEl(doc, tag, className, text) {
-        var node = doc.createElement(tag);
-        if (className) node.className = className;
-        if (text !== null && text !== undefined) node.textContent = String(text);
-        return node;
-    }
-
-    /**
-     * Description: render bindings() as a table. Iterates the live table
-     *   rather than restating it, so a binding added above appears here
-     *   with no second edit. Each row carries data-action so a test can
-     *   assert coverage.
-     * Inputs: doc (Document). Output: Element - a <table>.
-     */
-    function buildHelpTable(doc) {
-        var table = helpEl(doc, 'table', HELP_ROOT_CLASS + '__table', null);
-        var thead = helpEl(doc, 'thead', null, null);
-        var headRow = thead.appendChild(helpEl(doc, 'tr', null, null));
-        HELP_COLUMNS.forEach(function (label) {
-            var th = helpEl(doc, 'th', null, label);
-            th.setAttribute('scope', 'col');
-            headRow.appendChild(th);
-        });
-        table.appendChild(thead);
-        var tbody = helpEl(doc, 'tbody', null, null);
-        bindings().forEach(function (binding) {
-            var row = tbody.appendChild(helpEl(doc, 'tr', null, null));
-            row.setAttribute('data-action', binding.action);
-            row.appendChild(helpEl(doc, 'td', HELP_ROOT_CLASS + '__keys', binding.keys));
-            row.appendChild(helpEl(doc, 'td', HELP_ROOT_CLASS + '__note', binding.note));
-        });
-        table.appendChild(tbody);
-        return table;
-    }
-
-    /**
-     * Description: open the keyboard help as a modal, rendered from
-     *   bindings(). Registers with ModalStack, which is what makes Escape
-     *   close THIS and not the screen behind it: resolveEscape() already
-     *   returns null while a modal is open, so the ordering is settled and
-     *   this adds no Escape listener of its own.
-     * Inputs: options (object) - document (Document) REQUIRED, absent
-     *   throws a TypeError naming it because returning quietly would leave
-     *   a `?` key that does nothing and reports nothing; onClose
-     *   (function|undefined) called once when the modal closes.
-     * Output: {overlay: Element, close: function} - `close` is safe to
-     *   call twice. If a help modal is already in `document`, the existing
-     *   one's handle comes back rather than a second being stacked.
-     * Example: ArchiveKeys.openHelp({document: document}).close();
-     */
-    function openHelp(options) {
-        var opts = options || {};
-        var doc = opts.document;
-        if (!doc) throw new TypeError('ArchiveKeys.openHelp requires a "document" argument');
-        var stack = (typeof window !== 'undefined' && window.ModalStack) ? window.ModalStack : null;
-
-        /**
-         * Description: the close path for one overlay, shared by the fresh
-         *   and already-open branches so they cannot drift.
-         * Inputs: node (Element). Output: function - idempotent close.
-         */
-        function closerFor(node) {
-            var closed = false;
-            return function close() {
-                if (closed) return;
-                closed = true;
-                if (stack) stack.pop(node);
-                if (node.parentNode) node.parentNode.removeChild(node);
-                if (typeof opts.onClose === 'function') opts.onClose();
-            };
-        }
-
-        // Already open? Two identical dialogs stacked on one `?` press is
-        // worse than a no-op, so hand back the live one.
-        var existing = typeof doc.querySelector === 'function'
-            ? doc.querySelector(HELP_MODAL_SELECTOR) : null;
-        if (existing) return { overlay: existing, close: closerFor(existing) };
-
-        var overlay = helpEl(doc, 'div', 'modal-overlay ' + HELP_ROOT_CLASS + '-overlay', null);
-        overlay.setAttribute(HELP_MODAL_ATTR, HELP_MODAL_NAME);
-
-        var content = helpEl(doc, 'div', 'modal-content ' + HELP_ROOT_CLASS + '__content', null);
-        content.setAttribute('role', 'dialog');
-        content.setAttribute('aria-modal', 'true');
-        var header = helpEl(doc, 'div', 'modal-header ' + HELP_ROOT_CLASS + '__header',
-            'Keyboard shortcuts');
-        var body = helpEl(doc, 'div', 'modal-body ' + HELP_ROOT_CLASS + '__body', null);
-        body.appendChild(buildHelpTable(doc));
-        var closeBtn = helpEl(doc, 'button', HELP_ROOT_CLASS + '__close', 'Close');
-        closeBtn.setAttribute('type', 'button');
-        closeBtn.setAttribute('data-action', HELP_CLOSE_ACTION);
-        body.appendChild(closeBtn);
-        content.appendChild(header);
-        content.appendChild(body);
-        overlay.appendChild(content);
-
-        var close = closerFor(overlay);
-        if (typeof closeBtn.addEventListener === 'function') {
-            closeBtn.addEventListener('click', close);
-        }
-
-        if (doc.body) doc.body.appendChild(overlay);
-        if (stack) stack.push(overlay, { onEscape: close });
-
-        // Guarded: a mini-DOM test harness may build elements with no
-        // focus method, and a help panel is not worth throwing over.
-        if (typeof closeBtn.focus === 'function') closeBtn.focus();
-
-        return { overlay: overlay, close: close };
-    }
-
     window.ArchiveKeys = {
         resolve: resolve,
         resolveEscape: resolveEscape,
         bindings: bindings,
         createSelection: createSelection,
-        openHelp: openHelp,
-        HELP_MODAL_ATTR: HELP_MODAL_ATTR,
-        HELP_MODAL_NAME: HELP_MODAL_NAME,
+        // THE HELP MODAL LIVES IN archive-keys-help.js AND IS RE-EXPORTED
+        // HERE. It was moved out when this file crossed the 500-line cap;
+        // the DOM half of a module whose header says "pure decision
+        // logic" was the honest thing to cut. Every existing caller and
+        // test holds `ArchiveKeys.openHelp`, so the name stays, and the
+        // delegation NAMES the missing module rather than throwing
+        // "openHelp is not a function", which would report the wrong
+        // cause. See the note in archive-keys-help.js.
+        /**
+         * Description: open the keyboard help modal.
+         * Inputs: options (object) - {document, onClose}.
+         * Output: {overlay, close} - see archive-keys-help.js.
+         */
+        openHelp: function (options) {
+            if (!window.ArchiveKeysHelp) {
+                throw new ReferenceError('archive-keys-help.js is not loaded, ' +
+                    'so the keyboard help cannot open. Fix the script order ' +
+                    'in client/index.html.');
+            }
+            return window.ArchiveKeysHelp.openHelp(options);
+        },
+        get HELP_MODAL_ATTR() {
+            return window.ArchiveKeysHelp ? window.ArchiveKeysHelp.HELP_MODAL_ATTR : null;
+        },
+        get HELP_MODAL_NAME() {
+            return window.ArchiveKeysHelp ? window.ArchiveKeysHelp.HELP_MODAL_NAME : null;
+        },
         hasCommandModifier: hasCommandModifier,
         ACTIONS: ACTIONS,
         PLAIN_KEYS: PLAIN_KEYS,
