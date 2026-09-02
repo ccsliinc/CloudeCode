@@ -1061,6 +1061,17 @@
     <script src="/static/js/archive-nav-card.js"></script>
     <script src="/static/js/archive-nav-info.js"></script>
     <script src="/static/js/archive-nav-tree.js"></script>
+    <!-- The rail's ORDER: comparators, the persisted choice, and how a
+         project's date renders. Both readers reach for it at PAINT
+         time, not at load time (archive-nav-row.js calls activityCell
+         inside renderRow, archive-nav-merged.js calls sortNodes inside
+         paint), so any position before the first paint is correct - and
+         both guard on its absence rather than throwing. -->
+    <script src="/static/js/archive-nav-order.js"></script>
+    <!-- The by-machine drill-down, split out of archive-nav.js when the
+         order control took that file over the 500-line cap. Read at
+         create() time, so it must load BEFORE archive-nav.js. -->
+    <script src="/static/js/archive-nav-drill.js"></script>
     <script src="/static/js/archive-nav-merged.js"></script>
     <script src="/static/js/archive-nav.js"></script>
     <script src="/static/js/archive-tlist-row.js"></script>

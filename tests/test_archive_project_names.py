@@ -230,11 +230,13 @@ def test_fetch_project_rows_joins_host_and_counts():
             id INTEGER PRIMARY KEY, corpus_id INTEGER, slug TEXT, observed_cwd TEXT);
         CREATE TABLE message_transcripts (
             id INTEGER PRIMARY KEY, project_id INTEGER,
-            session_ref_scheme TEXT);
+            session_ref_scheme TEXT, newest_message_ts TEXT);
         INSERT INTO message_hosts VALUES (1, 'H1');
         INSERT INTO message_corpora VALUES (1, 1);
         INSERT INTO message_projects VALUES (1, 1, '-Users-j-Infra', '/Users/j/Infra');
-        INSERT INTO message_transcripts VALUES (1, 1, 'uuid'), (2, 1, 'agent');
+        INSERT INTO message_transcripts VALUES
+            (1, 1, 'uuid', '2026-08-30T10:00:00Z'),
+            (2, 1, 'agent', NULL);
         """
     )
     rows = fetch_project_rows(conn)
@@ -247,5 +249,10 @@ def test_fetch_project_rows_joins_host_and_counts():
         # change that made session_count an alias of the total fails
         # this assertion rather than passing it.
         "session_count": 1, "session_counted": True,
+        # Transcript 1 is dated and transcript 2 is not, so the project's
+        # timestamp is the newest of the ones that HAVE one - a NULL
+        # member is not evidence against the project as a whole.
+        "newest_activity_at": "2026-08-30T10:00:00Z",
+        "activity_counted": True,
     }]
     assert merge_projects(rows)[0]["display_name"] == "Infra"

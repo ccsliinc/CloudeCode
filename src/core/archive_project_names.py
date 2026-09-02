@@ -83,6 +83,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from src.core.message_activity import merge_activity
+
 #: ``display_name`` when ``observed_cwd`` is NULL. The caller renders the
 #: slug instead; it does not receive a folder name scraped out of a
 #: string that cannot be decoded into one.
@@ -296,6 +298,12 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "transcript_count": total,
             "session_count": session_total,
             "session_counted": session_counted,
+            # The NEWEST across the machines this folder lives on: the
+            # owner worked in it then, whichever box he was sitting at.
+            # merge_activity also carries the unmeasured case up rather
+            # than letting a maximum over the readable members pass for
+            # the answer - see src/core/message_activity.py.
+            **merge_activity(members),
             "members": [
                 {
                     "project_id": m.get("project_id"),
@@ -306,6 +314,8 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "transcript_count": m.get("transcript_count"),
                     "session_count": m.get("session_count"),
                     "session_counted": m.get("session_counted"),
+                    "newest_activity_at": m.get("newest_activity_at"),
+                    "activity_counted": m.get("activity_counted"),
                 }
                 for m in members
             ],
@@ -356,17 +366,22 @@ def fetch_project_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """
     totals: Dict[Any, int] = {}
     sessions: Dict[Any, int] = {}
+    activity: Dict[Any, Optional[str]] = {}
     session_counted = True
+    activity_counted = True
     try:
         for row in conn.execute(
             "SELECT project_id, COUNT(*) AS n_total, "
-            "SUM(CASE WHEN session_ref_scheme = ? THEN 1 ELSE 0 END) AS n_uuid "
+            "SUM(CASE WHEN session_ref_scheme = ? THEN 1 ELSE 0 END) AS n_uuid, "
+            "MAX(newest_message_ts) AS newest "
             "FROM message_transcripts WHERE project_id IS NOT NULL "
             "GROUP BY project_id",
             (SESSION_SCHEME_OWN,),
         ).fetchall():
             totals[row["project_id"]] = int(row["n_total"])
             sessions[row["project_id"]] = int(row["n_uuid"] or 0)
+            newest = row["newest"]
+            activity[row["project_id"]] = newest if isinstance(newest, str) else None
     except sqlite3.Error:
         # The combined statement could not run. Fall back to the total
         # alone rather than losing both numbers, and say so - a session
@@ -382,6 +397,8 @@ def fetch_project_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         }
         sessions = {}
         session_counted = False
+        activity = {}
+        activity_counted = False
 
     rows = conn.execute(
         """
@@ -404,6 +421,18 @@ def fetch_project_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "transcript_count": totals.get(row["id"], 0),
             "session_count": sessions.get(row["id"], 0) if session_counted else None,
             "session_counted": session_counted,
+            # THREE OUTCOMES, and the two that look alike are kept apart
+            # here rather than by the caller. A None with
+            # activity_counted True is a MEASURED absence - the project's
+            # transcripts were read and none of their messages carries a
+            # timestamp. A None with activity_counted False is the
+            # database declining to answer. Sorting them into the same
+            # bucket would put a project we could not read next to one we
+            # read and found genuinely undated.
+            "newest_activity_at": (
+                activity.get(row["id"]) if activity_counted else None
+            ),
+            "activity_counted": activity_counted,
         }
         for row in rows
     ]

@@ -356,6 +356,22 @@ console.log('[ArchiveNavCard Module] Loading...');
         btn.appendChild(label);
         btn.appendChild(renderCounts(doc, row));
 
+        // WHEN, beside HOW MUCH. This is the value the rail's default
+        // order is built on, and a card ordered by a number it does not
+        // show asks the reader to take the ordering on trust. Three
+        // outcomes: a real day, a MEASURED 'undated', and a
+        // 'no date' that means nobody could establish one - the last two
+        // are different findings and read differently on the face.
+        var when = window.ArchiveNavOrder
+            ? window.ArchiveNavOrder.activityCell(row) : null;
+        if (when) {
+            var whenEl = el(doc, 'span', ROOT_CLASS + '__when' +
+                (when.known ? '' : ' ' + ROOT_CLASS + '__when--unknown'),
+                when.text);
+            whenEl.setAttribute('title', when.title);
+            btn.appendChild(whenEl);
+        }
+
         // NO HOST PILLS ON THE FACE. They were removed at the owner's
         // instruction - "the machine pills are probably not necessary to
         // display, but should fold into an info button" - and they are
@@ -387,6 +403,20 @@ console.log('[ArchiveNavCard Module] Loading...');
             });
         }
         card.appendChild(info);
+
+        // PARKED, and it says so. A card sitting at the end of a
+        // most-recent-first list looks like the oldest project in the
+        // archive; this marker is the only thing that distinguishes "we
+        // could not place it" from "it really is the oldest". Marked as
+        // an attribute as well as in words, so a test asserts the
+        // classification rather than the wording.
+        if (options.unsorted) {
+            li.setAttribute('data-unsorted', options.unsorted.short);
+            var mark = el(doc, 'span', ROOT_CLASS + '__unsorted',
+                          'not in this order: ' + options.unsorted.short);
+            mark.setAttribute('title', options.unsorted.title);
+            card.appendChild(mark);
+        }
 
         li.appendChild(card);
         return li;

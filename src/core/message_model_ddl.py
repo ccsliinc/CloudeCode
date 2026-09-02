@@ -137,6 +137,21 @@ LOOKUP_TABLES: Tuple[Tuple[str, str], ...] = (
 # value here is a schema change: the CHECK is relaxed IN PLACE by schema
 # step 19 -> 20, which never rewrites this table (see
 # src/core/message_scheme_repair.py for why a rebuild is unsafe here).
+#
+# ``newest_message_ts`` is WHEN THE OWNER WAS LAST WORKING IN THIS
+# TRANSCRIPT, which is not ``ingested_at`` - that is when this tool read
+# the file, and on the live corpus every one of 80 projects ingested on
+# one of just two days, so it cannot order anything. The real signal is
+# ``message_bodies.ts``, but bodies are deduplicated and reach a
+# transcript only through ``message_appearances`` (3.1M rows), so
+# computing it per request costs 3.9s warm and 14.9s cold against a 10ms
+# route. It is therefore DERIVED ONCE and stored here, by ingest and by
+# schema step 20 -> 21. A NULL is a MEASURED absence - both writers set
+# the column for every transcript they touch, NULL included - so it means
+# "this transcript's messages carry no timestamp" and never "nobody
+# looked". See src/core/message_activity.py for the measurements and for
+# the third outcome, which is a fact about the database rather than the
+# row and is therefore carried beside the value, not inside it.
 
 DDL_MESSAGE_TRANSCRIPTS = """
 CREATE TABLE IF NOT EXISTS message_transcripts (
@@ -152,7 +167,8 @@ CREATE TABLE IF NOT EXISTS message_transcripts (
   line_count            INTEGER NOT NULL DEFAULT 0,
   content_sha256        TEXT NOT NULL,
   raw_byte_length       INTEGER NOT NULL,
-  ingested_at           TEXT NOT NULL
+  ingested_at           TEXT NOT NULL,
+  newest_message_ts     TEXT
 )
 """
 

@@ -35,7 +35,7 @@ def _archive(unattributed_in_corpus_2: int = 5) -> sqlite3.Connection:
             id INTEGER PRIMARY KEY, corpus_id INTEGER, slug TEXT, observed_cwd TEXT);
         CREATE TABLE message_transcripts (
             id INTEGER PRIMARY KEY, project_id INTEGER, corpus_id INTEGER,
-            session_ref_scheme TEXT);
+            session_ref_scheme TEXT, newest_message_ts TEXT);
         INSERT INTO message_hosts VALUES (1, 'Joe-MBP-M1'), (2, 'Mac mini');
         INSERT INTO message_corpora VALUES
             (1, 1, 'claude-projects'), (2, 1, 'agent-sessions'),
@@ -45,8 +45,10 @@ def _archive(unattributed_in_corpus_2: int = 5) -> sqlite3.Connection:
             (2, 3, '-Users-j-Media', '/Users/j/Media'),
             (3, 1, '-Users-j-Solo',  '/Users/j/Solo');
         INSERT INTO message_transcripts VALUES
-            (1, 1, 1, 'uuid'), (2, 1, 1, 'agent'),
-            (3, 2, 3, 'uuid'), (4, 3, 1, 'agent');
+            (1, 1, 1, 'uuid',  '2026-08-30T10:00:00Z'),
+            (2, 1, 1, 'agent', '2026-08-29T10:00:00Z'),
+            (3, 2, 3, 'uuid',  '2026-07-01T10:00:00Z'),
+            (4, 3, 1, 'agent', '2025-12-29T10:00:00Z');
         """
     )
     for n in range(unattributed_in_corpus_2):

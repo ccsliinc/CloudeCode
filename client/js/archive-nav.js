@@ -123,10 +123,26 @@ console.log('[ArchiveNav Module] Loading...');
         // been a second, larger decision the owner did not ask for, and
         // it would have taken `hostList` and its paging with it.
 
+        /**
+         * THE ORDER CONTROL - a real <select>, matching the rail's other
+         * dropdown. Options, persistence and comparators all live in
+         * archive-nav-order.js. The stored choice is read ONCE here, not
+         * per paint, which would hit localStorage on every keystroke in
+         * the filter box.
+         */
+        var order = window.ArchiveNavOrder
+            ? window.ArchiveNavOrder.mount(doc, {
+                onChange: function (mode) { orderMode = mode; paintMerged(); }
+            })
+            : null;
+        var orderMode = order ? order.value()
+            : (window.ArchiveNavOrder ? window.ArchiveNavOrder.DEFAULT_MODE : 'recent');
+
         var filterNote = el(doc, 'p', ROOT_CLASS + '__filter-note', null);
         var hostList = el(doc, 'ul', ROOT_CLASS + '__level ' + ROOT_CLASS + '__level--hosts', null);
         var mergedList = el(doc, 'ul', ROOT_CLASS + '__level ' + ROOT_CLASS + '__level--merged', null);
         root.appendChild(filterInput);
+        if (order) root.appendChild(order.element);
         root.appendChild(filterNote);
         root.appendChild(mergedList);
         root.appendChild(hostList);
@@ -229,74 +245,34 @@ console.log('[ArchiveNav Module] Loading...');
         }
 
         /**
-         * Description: fetch and render the top level.
-         * Inputs: none. Output: Promise<string> - the outcome token, so a
-         *   caller (or a test) can assert what happened without reading
-         *   the DOM.
+         * The by-machine drill-down, in its own file since this one hit
+         * the 500-line cap. `loaded` and `totals` are handed over as the
+         * rail's own objects, not copies - see archive-nav-drill.js.
          */
+        var drill = window.ArchiveNavDrill
+            ? window.ArchiveNavDrill.create({
+                doc: doc, root: root, api: api, hostList: hostList,
+                el: el, ROOT_CLASS: ROOT_CLASS, NODE_KINDS: NODE_KINDS,
+                TREE: TREE, loaded: loaded, totals: totals,
+                paint: paint, renderOutcomeInto: renderOutcomeInto,
+                activate: function (k, i, r) { return activate(k, i, r); }
+            })
+            : null;
+
+        /** The three drill-down entry points. A missing module is
+         *  RENDERED, never thrown - a TypeError here would take the rail
+         *  down on a click, leaving a blank pane. */
         function loadHosts() {
-            return Promise.resolve(api.listArchiveHosts()).then(function (r) {
-                var classified = window.ArchiveOutcome.classify(r.transportError ? null : r.envelope);
-                if (!window.ArchiveOutcome.isRenderable(classified.token)) {
-                    renderOutcomeInto(doc, hostList, r.envelope, r.transportError);
-                    return classified.token;
-                }
-                loaded.hosts = (r.envelope && r.envelope.result) || [];
-                totals.hosts = loaded.hosts.length;
-                paint(hostList, 'hosts', NODE_KINDS.HOST, loaded.hosts,
-                      ['display_name', 'hostname'], true);
-                if (classified.token === 'partial') {
-                    // Rows AND the banner. Dropping the rows to show the
-                    // banner would hide what did come back; dropping the
-                    // banner would claim the list is complete.
-                    TREE.renderPartialTail(doc, hostList, r.envelope);
-                }
-                return classified.token;
-            });
+            if (drill) return drill.loadHosts();
+            renderOutcomeInto(doc, hostList, null,
+                'window.ArchiveNavDrill is missing: load ' +
+                'client/js/archive-nav-drill.js before archive-nav.js');
+            return Promise.resolve('transport-error');
         }
-
-        /**
-         * Description: expand a host into its corpora, or a corpus into
-         *   its projects plus its unattributed node.
-         * Inputs: kind (string) - HOST or CORPUS. id (number|string).
-         * Output: Promise<string> - the outcome token.
-         */
         function expand(kind, id) {
-            var slot = TREE.slotFor(root, kind, id);
-            if (!slot) return Promise.resolve('not-found');
-            slot.textContent = '';
-            slot.appendChild(el(doc, 'li', ROOT_CLASS + '__loading', 'loading...'));
-
-            var isHost = kind === NODE_KINDS.HOST;
-            var key = (isHost ? 'corpora:' : 'projects:') + id;
-            var call = isHost ? api.listArchiveCorpora(id) : api.listArchiveProjects(id);
-
-            return Promise.resolve(call).then(function (r) {
-                var classified = window.ArchiveOutcome.classify(r.transportError ? null : r.envelope);
-                if (!window.ArchiveOutcome.isRenderable(classified.token)) {
-                    renderOutcomeInto(doc, slot, r.envelope, r.transportError);
-                    return classified.token;
-                }
-                var rows = (r.envelope && r.envelope.result) || [];
-                loaded[key] = rows;
-                totals[key] = rows.length;
-                paint(slot, key, isHost ? NODE_KINDS.CORPUS : NODE_KINDS.PROJECT, rows,
-                      isHost ? ['corpus_key', 'root_path'] : ['slug', 'observed_cwd'], isHost);
-                if (!isHost) TREE.appendUnattributedNode(doc, slot, loadedCorpora(), id, activate);
-                if (classified.token === 'partial') TREE.renderPartialTail(doc, slot, r.envelope);
-                return classified.token;
-            });
+            return drill ? drill.expand(kind, id) : Promise.resolve('not-found');
         }
-
-        /** Every corpus row loaded, flattened, so the unattributed node
-         *  can find its own count. Inputs: none. Output: Array<object>. */
-        function loadedCorpora() {
-            var out = [];
-            for (var k in loaded) {
-                if (k.indexOf('corpora:') === 0) out = out.concat(loaded[k]);
-            }
-            return out;
-        }
+        function loadedCorpora() { return drill ? drill.loadedCorpora() : []; }
 
         /**
          * Description: re-filter every level already on screen.
@@ -375,7 +351,8 @@ console.log('[ArchiveNav Module] Loading...');
                 filterText: filterText,
                 onActivate: activate,
                 onInfo: openInfo,
-                overlay: overlay
+                overlay: overlay,
+                orderMode: orderMode
             });
             filterNote.textContent = filterText
                 ? describeFilter(lastPaint.rendered, lastPaint.total,
@@ -445,6 +422,22 @@ console.log('[ArchiveNav Module] Loading...');
              * Inputs: none. Output: object.
              */
             lastPaint: function () { return lastPaint; },
+            /** The order control, or null when its module is absent. */
+            orderControl: function () { return order; },
+            /** The active order id. Inputs: none. Output: string. */
+            orderMode: function () { return orderMode; },
+            /** Change the order as a click would: set the control,
+             *  persist, repaint - so the three cannot get out of step.
+             *  Inputs: mode (string). Output: boolean. */
+            setOrder: function (mode) {
+                if (!window.ArchiveNavOrder ||
+                    !window.ArchiveNavOrder.isMode(mode)) return false;
+                orderMode = mode;
+                if (order) order.set(mode);
+                window.ArchiveNavOrder.writeMode(mode);
+                paintMerged();
+                return true;
+            },
             mergedNodes: function () { return merged.nodes.slice(); },
             /**
              * Description: open the info modal for one project node

@@ -45,6 +45,12 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, List
 
+from src.core.message_activity import (
+    ACTIVITY_KNOWN,
+    ACTIVITY_MEANS,
+    ACTIVITY_NONE,
+    ACTIVITY_UNKNOWN,
+)
 from src.core.archive_project_names import (
     MERGE_MEANS,
     NAMES_MEAN,
@@ -161,6 +167,27 @@ def merged_projects(conn: sqlite3.Connection) -> Dict[str, Any]:
                 "sessions_mean": SESSIONS_MEAN,
                 "session_uncounted_nodes": sum(
                     1 for n in nodes if n.get("session_counted") is False
+                ),
+            },
+            # THREE COUNTS, NOT TWO. A node whose timestamp is a measured
+            # absence and one whose timestamp nobody could establish are
+            # reported separately, because a client that ordered by time
+            # has to place them differently: the first is genuinely
+            # undated, the second is unread. Collapsing them here would
+            # hand the rail a number it could only render as one of them.
+            "activity": {
+                "activity_means": ACTIVITY_MEANS,
+                "known_nodes": sum(
+                    1 for n in nodes
+                    if n.get("activity_status") == ACTIVITY_KNOWN
+                ),
+                "none_nodes": sum(
+                    1 for n in nodes
+                    if n.get("activity_status") == ACTIVITY_NONE
+                ),
+                "unknown_nodes": sum(
+                    1 for n in nodes
+                    if n.get("activity_status") == ACTIVITY_UNKNOWN
                 ),
             },
             "hosts": hosts,

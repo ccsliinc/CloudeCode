@@ -115,12 +115,35 @@ console.log('[ArchiveNavMerged Module] Loading...');
         var opts = state || {};
         var nodes = filterByHost(opts.nodes, opts.hostId);
         var text = String(opts.filterText || '');
+
+        // ORDER FIRST, THEN FILTER-RANK. When there is no filter text the
+        // fuzzy ranker preserves input order, so the chosen order is what
+        // shows. When there IS filter text, RELEVANCE WINS - a person who
+        // has typed is looking for one project, and re-sorting his best
+        // match to the bottom because it happens to be old would make the
+        // filter useless. The order still decides ties, because it is the
+        // input order the ranker preserves.
+        var ordered = nodes;
+        var parkedReasons = {};
+        if (window.ArchiveNavOrder) {
+            var sorted = window.ArchiveNavOrder.sortNodes(nodes, opts.orderMode);
+            ordered = sorted.nodes;
+            for (var p = 0; p < sorted.parked.length; p++) {
+                // Keyed on full_path, which is the slug and is unique per
+                // node; display_name is deliberately NOT unique (it is
+                // widened only as far as it has to be) and would collide.
+                parkedReasons[String(sorted.parked[p].node.full_path)] =
+                    sorted.parked[p].reason;
+            }
+        }
+
         var ranked = window.ArchiveNavFuzzy
-            ? window.ArchiveNavFuzzy.rank(nodes, text, FIELDS)
-            : nodes.map(function (n) { return { row: n, positions: [], field: null }; });
+            ? window.ArchiveNavFuzzy.rank(ordered, text, FIELDS)
+            : ordered.map(function (n) { return { row: n, positions: [], field: null }; });
 
         slot.textContent = '';
         for (var i = 0; i < ranked.length; i++) {
+            var parked = parkedReasons[String(ranked[i].row.full_path)] || null;
             slot.appendChild(ROW.renderRow(doc, ROW.NODE_KINDS.PROJECT, ranked[i].row, {
                 expandable: false,
                 onActivate: opts.onActivate,
@@ -131,7 +154,11 @@ console.log('[ArchiveNavMerged Module] Loading...');
                 onInfo: opts.onInfo,
                 overlay: opts.overlay,
                 positions: ranked[i].positions,
-                matchField: ranked[i].field
+                matchField: ranked[i].field,
+                // Passed even when null, so the row renderer has one
+                // code path and cannot leave a stale marker behind on a
+                // repaint into a reused element.
+                unsorted: parked
             }));
         }
 

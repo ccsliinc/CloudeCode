@@ -44,6 +44,7 @@ from src.core.message_gate_contract import (
     GATE_FIDELITY_CHECK_FAILED,
     GATE_SECRET_MATERIAL_PRESENT,
 )
+from src.core.message_activity import newest_ts_for_bodies
 from src.core.message_model_findings import LineFacts, findings_for_transcript
 from src.core.message_model_serialize import (
     scalar_fields,
@@ -158,6 +159,13 @@ def ingest_lines(
 
     facts: List[LineFacts] = []
     appearance_ids: Dict[int, int] = {}
+    #: Every body this transcript points at, so its newest message
+    #: timestamp can be derived once at the end from the STORED ts
+    #: column. Collected here rather than read back through
+    #: message_appearances afterwards because that table has no index on
+    #: transcript_id, so the read-back would be a full 3.1M row scan per
+    #: ingested file. See src/core/message_activity.py.
+    body_ids: List[Optional[int]] = []
     for line_no, line in enumerate(lines):
         payload = line_payload(line.text)
         body_id: Optional[int] = None
@@ -242,6 +250,7 @@ def ingest_lines(
              is_sidechain, agent_id),
         )
         appearance_ids[line_no] = int(acur.lastrowid)
+        body_ids.append(body_id)
         result.appearances += 1
         setattr(result, outcome, getattr(result, outcome) + 1)
         if outcome == "fidelity_failed":
@@ -269,6 +278,19 @@ def ingest_lines(
             is_root=(payload["status"] == "ok"
                      and scalars["parent_uuid"] is None),
         ))
+
+    # WHEN THIS TRANSCRIPT WAS WORKED IN, written now rather than
+    # computed per request. NULL is stored deliberately when no body
+    # carries a timestamp, so that afterwards a NULL is a measured
+    # absence and not a row that was never visited - the whole reason
+    # the project rail can tell "no timestamps here" apart from "nobody
+    # looked". The value is read back out of message_bodies.ts, the same
+    # column the schema step's backfill reads, so the two derivations
+    # cannot drift apart.
+    conn.execute(
+        "UPDATE message_transcripts SET newest_message_ts = ? WHERE id = ?",
+        (newest_ts_for_bodies(conn, body_ids), result.transcript_id),
+    )
 
     _persist_findings(conn, result, facts, appearance_ids, stamp)
     _check_dangling_parents(conn, result, facts, appearance_ids, stamp)

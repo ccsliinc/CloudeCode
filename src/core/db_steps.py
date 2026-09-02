@@ -54,6 +54,7 @@ from src.core.db_models import (
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
 from src.core.archive_overlay_ddl import DDL_V19
+from src.core.message_activity import install_transcript_activity
 from src.core.message_scheme_repair import repair_session_ref_schemes
 from src.core.message_block_ddl import DDL_V18
 from src.core.message_host_ddl import DDL_V17
@@ -1098,6 +1099,35 @@ def _step_v19_to_v20(conn: sqlite3.Connection) -> None:
     repair_session_ref_schemes(conn)
 
 
+def _step_v20_to_v21(conn: sqlite3.Connection) -> None:
+    """Give every transcript the timestamp its PROJECT is ordered by.
+
+    Description: adds ``message_transcripts.newest_message_ts`` and fills
+      it with the newest ``message_bodies.ts`` reachable from that
+      transcript, so the project rail can sort by when the owner last
+      WORKED in a project rather than by when this tool collected the
+      files. Those are different facts, and measured on the live corpus
+      the collection date puts all 80 projects on two days while the work
+      date spreads across nine months.
+
+      THIS STEP IS THE EXPENSIVE ONE, ON PURPOSE. It scans
+      ``message_appearances`` once (3.1M rows, about 15s cold on a 22 GB
+      archive). That is the whole point: paying it once here is what
+      lets the route stay at ~10ms instead of paying 3.9s on every
+      paint. See src/core/message_activity.py for the numbers and for
+      why no index removes the cost.
+
+      ADD COLUMN ONLY - no table is rewritten and nothing cascades, so
+      the hazard that forced step 19 -> 20 to edit the schema text in
+      place does not apply. Idempotent, and a no-op on an install with
+      the message archive gated off and therefore no transcripts table.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v20_to_v21(conn)  # after _step_v19_to_v20
+    """
+    install_transcript_activity(conn)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1123,6 +1153,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     17: _step_v17_to_v18,
     18: _step_v18_to_v19,
     19: _step_v19_to_v20,
+    20: _step_v20_to_v21,
 }
 
 

@@ -156,6 +156,7 @@ def seed_transcript(
     line_count: int = 0,
     raw_byte_length: int = 100,
     session_ref_scheme: str = "uuid",
+    newest_message_ts: Optional[str] = None,
 ) -> int:
     """Insert one transcript and return its id.
 
@@ -171,7 +172,12 @@ def seed_transcript(
       (str, unique per corpus), ingested_at (str) - pass the same value
       twice to build a keyset tie, host_attribution (str),
       project_attribution (str), line_count (int), raw_byte_length (int),
-      session_ref_scheme (str) - 'uuid' or 'agent'.
+      session_ref_scheme (str) - 'uuid' or 'agent',
+      newest_message_ts (str|None) - the newest message timestamp in this
+      transcript. None is a MEASURED absence here exactly as it is in
+      production (see src/core/message_activity.py), so a test seeding
+      None is seeding "this transcript has no dated message", never
+      "this test did not bother".
     Output: int - the transcript id.
     Raises: ValueError - session_ref_scheme is outside the schema's
       CHECK domain.
@@ -188,8 +194,8 @@ def seed_transcript(
         "(source_ref, session_ref, session_ref_scheme, line_ending, "
         " has_trailing_newline, line_count, content_sha256, raw_byte_length, "
         " ingested_at, host_id, corpus_id, project_id, source_path, "
-        " host_attribution, project_attribution) "
-        "VALUES (?, ?, ?, 'LF', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " host_attribution, project_attribution, newest_message_ts) "
+        "VALUES (?, ?, ?, 'LF', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             f"ref::{source_path}",
             f"session-{source_path}",
@@ -204,6 +210,7 @@ def seed_transcript(
             source_path,
             host_attribution,
             project_attribution,
+            newest_message_ts,
         ),
     )
     return int(cur.lastrowid)

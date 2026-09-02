@@ -71,6 +71,7 @@ function load() {
                         'archive-outcome-view.js', 'archive-nav-fuzzy.js',
                         'archive-nav-row.js', 'archive-nav-card.js',
                         'archive-nav-info.js', 'archive-nav-tree.js',
+                        'archive-nav-order.js', 'archive-nav-drill.js',
                         'archive-nav-merged.js', 'archive-nav.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),

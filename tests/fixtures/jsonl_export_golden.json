@@ -1,7 +1,7 @@
 {
   "golden_format_version": 1,
-  "schema_version": 20,
-  "note": "Pinned to schema v20. If CURRENT_SCHEMA_VERSION moves, the test fails ON PURPOSE so a human re-confirms these bytes are still right for the new schema before re-blessing.",
+  "schema_version": 21,
+  "note": "Pinned to schema v21. If CURRENT_SCHEMA_VERSION moves, the test fails ON PURPOSE so a human re-confirms these bytes are still right for the new schema before re-blessing.",
   "serializer_styles": [
     {
       "name": "compact",

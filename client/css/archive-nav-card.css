@@ -292,3 +292,54 @@
     opacity: 0.55;
     border-style: dashed;
 }
+
+/* ---- when this project was last worked in --------------------------
+ * The card face is a single-column grid, so this lands as its own line
+ * under the counts. Same treatment as .archive-nav__counts above and for
+ * the same measured reason: a BLOCK with nowrap + ellipsis, because
+ * text-overflow does nothing for a flex item whose children overflow. */
+.archive-nav__node--project .archive-nav__when {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--color-fg-muted);
+}
+
+/* NOT a warning colour, and never colour alone: "undated" and "no date"
+ * are findings, not faults, and the WORDS carry the difference so a
+ * monochrome theme loses nothing. */
+.archive-nav__node--project .archive-nav__when--unknown {
+    font-style: italic;
+    opacity: 0.85;
+}
+
+/* ---- a card the active order cannot place --------------------------
+ * These sit at the END of the list, and the end of a most-recent-first
+ * list IMPLIES a date. This is the only thing standing between "we could
+ * not place it" and "this is the oldest project you have", so it is
+ * words on the card, not a shade of grey. It sits on the CARD rather
+ * than inside the button: it is a statement about the row's position,
+ * not a label for the thing the button selects. */
+.archive-nav__node--project .archive-nav__unsorted {
+    display: block;
+    padding: 0 12px 8px 12px;
+    font-size: 0.66rem;
+    line-height: 1.35;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--color-fg-muted);
+}
+
+/* A dotted top edge, so the parked block reads as a group without
+ * relying on a radius (three themes zero every radius token) or on a
+ * colour that a monochrome theme would flatten. */
+.archive-nav__node--project[data-unsorted] .archive-nav__card {
+    border-style: dashed;
+}
