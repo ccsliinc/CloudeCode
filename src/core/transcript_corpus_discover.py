@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 #: Read granularity for the pre-ingest hashing pass. Matches
 #: transcript_archive.DEFAULT_STREAM_CHUNK_SIZE so the two passes over a
@@ -26,6 +26,12 @@ HASH_CHUNK_SIZE = 4 * 1024 * 1024
 #: The subdirectory name Claude Code always uses for subagent
 #: transcripts - part of the structural rooting rule, not a guess.
 SUBAGENTS_DIRNAME = "subagents"
+
+#: How many example paths each discovery outcome list keeps. The COUNTS
+#: are exact; the lists are a sample, because a corpus with tens of
+#: thousands of unrecognised files must not turn one report into a
+#: multi-megabyte JSON blob.
+OUTCOME_SAMPLE_LIMIT = 50
 
 
 @dataclass
@@ -59,56 +65,189 @@ def default_corpus_root() -> Path:
     return Path.home() / ".claude" / "projects"
 
 
-def discover_corpus(corpus_root: Path) -> List[CorpusEntry]:
-    """Walk a corpus root and classify every ``*.jsonl`` by location alone.
+@dataclass
+class DiscoveryOutcome:
+    """What one corpus walk found, refused, and could not look at.
+
+    Description: THE THREE-OUTCOME RULE APPLIED TO DISCOVERY ITSELF.
+      Before this existed :func:`discover_corpus` returned a bare list,
+      so "this path holds no transcripts", "this path holds files whose
+      shape I refuse to classify" and "I could not read this directory
+      at all" were the same answer: absence from the list. That is
+      exactly how 442 real workflow transcripts sat outside the archive
+      for months with every ingest report reading green - the scanner
+      was not failing to walk them, it was walking past them and saying
+      nothing.
+    Inputs: constructed only by :func:`discover_corpus_detailed`.
+    Output: n/a (data holder).
+    """
+
+    entries: List[CorpusEntry] = field(default_factory=list)
+    #: Paths the walk reached and deliberately did not classify - a
+    #: non-``.jsonl`` file, or a session directory with no
+    #: ``subagents/``. Exact count, sampled paths.
+    unrecognised_count: int = 0
+    unrecognised_sample: List[str] = field(default_factory=list)
+    #: Directories the walk could not list. This is NOT "nothing there";
+    #: it is "I do not know what is there", and it must never be
+    #: rendered as either of the other two.
+    unreadable_count: int = 0
+    unreadable_sample: List[Dict[str, str]] = field(default_factory=list)
+
+
+def _note(count: int, sample: list, value) -> int:
+    """Record one outcome, keeping the count exact and the sample bounded.
+
+    Description: see :data:`OUTCOME_SAMPLE_LIMIT`.
+    Inputs: count (int), sample (list, mutated), value (str | dict).
+    Output: int - the incremented count.
+    Example: _note(0, [], "a/b") -> 1
+    """
+    if len(sample) < OUTCOME_SAMPLE_LIMIT:
+        sample.append(value)
+    return count + 1
+
+
+def _iter_dir(path: Path, outcome: DiscoveryOutcome) -> Optional[List[Path]]:
+    """List one directory, or record that it could not be listed.
+
+    Description: an ``OSError`` here is the third outcome, not an empty
+      directory - it is recorded on the outcome and the caller skips
+      that branch rather than reporting it as "nothing found".
+    Inputs: path (Path), outcome (DiscoveryOutcome, mutated).
+    Output: list[Path] sorted | None when the listing failed.
+    Example: _iter_dir(Path("/nope"), DiscoveryOutcome()) -> None
+    """
+    try:
+        return sorted(path.iterdir())
+    except OSError as exc:
+        outcome.unreadable_count = _note(
+            outcome.unreadable_count,
+            outcome.unreadable_sample,
+            {"path": str(path), "reason": str(exc)},
+        )
+        return None
+
+
+def _walk_subagents(
+    sub: Path, prefix: str, outcome: DiscoveryOutcome,
+) -> None:
+    """Collect every ``*.jsonl`` at ANY depth under one ``subagents/`` dir.
+
+    Description: RECURSIVE ON PURPOSE, and the recursion is what closes
+      the workflows gap. Claude Code nests workflow subagent transcripts
+      at ``subagents/workflows/<wf_id>/*.jsonl`` (and iCloud forks that
+      directory into ``workflows 2``), which the previous one-level
+      listing could not see. Depth is not part of the rooting decision -
+      ``<slug>/<uuid>/`` is already fixed by the two path segments above
+      this call - so walking deeper adds transcripts without adding a
+      single guess.
+
+      THE SUFFIX FILTER IS LOAD-BEARING. ``tool-results/`` artifacts
+      (.txt, .pdf, .jpg) live beside these trees and are NOT transcripts;
+      the archive's byte-exactness guarantees are built on JSONL. They
+      are counted as ``unrecognised``, never ingested.
+    Inputs: sub (Path - the ``subagents`` directory), prefix (str -
+      ``<slug>/<uuid>/subagents``), outcome (DiscoveryOutcome, mutated).
+    Output: None.
+    Example: _walk_subagents(Path("/c/s/u/subagents"), "s/u/subagents", o)
+    """
+    listing = _iter_dir(sub, outcome)
+    if listing is None:
+        return
+    for item in listing:
+        if item.is_file():
+            if item.suffix == ".jsonl":
+                outcome.entries.append(
+                    CorpusEntry(
+                        abs_path=item,
+                        source_path=f"{prefix}/{item.name}",
+                        kind="subagent",
+                    )
+                )
+            else:
+                outcome.unrecognised_count = _note(
+                    outcome.unrecognised_count,
+                    outcome.unrecognised_sample,
+                    f"{prefix}/{item.name}",
+                )
+        elif item.is_dir():
+            _walk_subagents(item, f"{prefix}/{item.name}", outcome)
+
+
+def discover_corpus_detailed(corpus_root: Path) -> DiscoveryOutcome:
+    """Walk a corpus root, classifying by location alone, and SAY what it skipped.
 
     Description: two shapes only, both structural - a top-level file
       directly under a project-slug directory is ``kind="session"``; a
-      file under ``<slug>/<uuid>/subagents/`` is ``kind="subagent"``.
-      Anything else (a ``*.jsonl`` at an unrecognised depth) is skipped
-      from discovery entirely, since this module has never seen such a
-      shape in the real corpus and inventing a classification for an
-      unknown shape would be exactly the kind of guess the rooting rules
-      forbid.
-    Inputs: corpus_root (Path) - typically :func:`default_corpus_root`
-      or a local read-only copy of it.
-    Output: list[CorpusEntry], sorted by source_path for deterministic
-      run ordering (matters for resumability logs, not for correctness).
-    Example: discover_corpus(Path("~/.claude/projects")) -> [...]
+      ``*.jsonl`` at any depth under ``<slug>/<uuid>/subagents/`` is
+      ``kind="subagent"``. Everything the walk reaches and does not
+      classify is counted as ``unrecognised``, and everything it could
+      not list is counted as ``unreadable``. Those are three different
+      answers and they are reported as three different answers.
+    Inputs: corpus_root (Path).
+    Output: DiscoveryOutcome.
+    Example: discover_corpus_detailed(Path("/c")).unreadable_count -> 0
     """
-    entries: List[CorpusEntry] = []
+    outcome = DiscoveryOutcome()
     corpus_root = Path(corpus_root)
     if not corpus_root.is_dir():
-        return entries
+        return outcome
 
-    for slug_dir in sorted(p for p in corpus_root.iterdir() if p.is_dir()):
+    top = _iter_dir(corpus_root, outcome)
+    if top is None:
+        return outcome
+    for slug_dir in top:
+        if not slug_dir.is_dir():
+            continue
         slug = slug_dir.name
-        for item in sorted(slug_dir.iterdir()):
-            if item.is_file() and item.suffix == ".jsonl":
-                entries.append(
-                    CorpusEntry(
-                        abs_path=item,
-                        source_path=f"{slug}/{item.name}",
-                        kind="session",
+        listing = _iter_dir(slug_dir, outcome)
+        if listing is None:
+            continue
+        for item in listing:
+            if item.is_file():
+                if item.suffix == ".jsonl":
+                    outcome.entries.append(
+                        CorpusEntry(
+                            abs_path=item,
+                            source_path=f"{slug}/{item.name}",
+                            kind="session",
+                        )
                     )
-                )
+                else:
+                    outcome.unrecognised_count = _note(
+                        outcome.unrecognised_count,
+                        outcome.unrecognised_sample,
+                        f"{slug}/{item.name}",
+                    )
             elif item.is_dir():
                 sub = item / SUBAGENTS_DIRNAME
                 if not sub.is_dir():
+                    outcome.unrecognised_count = _note(
+                        outcome.unrecognised_count,
+                        outcome.unrecognised_sample,
+                        f"{slug}/{item.name}",
+                    )
                     continue
-                for sfile in sorted(sub.iterdir()):
-                    if sfile.is_file() and sfile.suffix == ".jsonl":
-                        entries.append(
-                            CorpusEntry(
-                                abs_path=sfile,
-                                source_path=(
-                                    f"{slug}/{item.name}/"
-                                    f"{SUBAGENTS_DIRNAME}/{sfile.name}"
-                                ),
-                                kind="subagent",
-                            )
-                        )
-    return entries
+                _walk_subagents(
+                    sub, f"{slug}/{item.name}/{SUBAGENTS_DIRNAME}", outcome,
+                )
+    return outcome
+
+
+def discover_corpus(corpus_root: Path) -> List[CorpusEntry]:
+    """Walk a corpus root and return every classified transcript.
+
+    Description: the entries half of :func:`discover_corpus_detailed`.
+      Callers that want the skipped and unreadable counts - and every
+      caller that publishes a report should - call that function
+      instead.
+    Inputs: corpus_root (Path) - typically :func:`default_corpus_root`
+      or a local read-only copy of it.
+    Output: list[CorpusEntry].
+    Example: discover_corpus(Path("~/.claude/projects")) -> [...]
+    """
+    return discover_corpus_detailed(corpus_root).entries
 
 
 def hash_file(path: Path) -> tuple:

@@ -169,7 +169,7 @@ from src.core.transcript_project_root import root_pending_archives_by_project
 from src.core.transcript_corpus_discover import (
     CorpusEntry,
     SUBAGENTS_DIRNAME,
-    discover_corpus,
+    discover_corpus_detailed,
     hash_file,
     mtime_iso,
 )
@@ -227,6 +227,10 @@ class RunReport:
     """
 
     total_discovered: int = 0
+    #: See CorpusIngestReport - discovery's refused and unreadable
+    #: outcomes, never folded into total_discovered or into silence.
+    discovery_unrecognised: int = 0
+    discovery_unreadable: int = 0
     newly_ingested: int = 0
     already_present: int = 0
     could_not_read: int = 0
@@ -387,10 +391,18 @@ def _derive_parent_source_path(subagent_source_path: str) -> Optional[str]:
     """Recover a subagent transcript's parent session source_path.
 
     Description: pure path arithmetic, no content read - see rule (a)
-      in the module docstring. Expects exactly
-      ``<slug>/<uuid>/subagents/<file>.jsonl``; anything else is not a
-      shape this module has ever observed and is refused rather than
-      guessed at.
+      in the module docstring. Expects
+      ``<slug>/<uuid>/subagents/`` followed by at least one more
+      segment; anything else is refused rather than guessed at.
+
+      THE TAIL BELOW ``subagents/`` IS DELIBERATELY IGNORED. Workflow
+      subagent transcripts sit at
+      ``<slug>/<uuid>/subagents/workflows/<wf_id>/<file>.jsonl`` (and
+      iCloud forks that directory into ``workflows 2``), but the parent
+      session is fixed by the FIRST TWO segments alone, which are the
+      same two segments a one-level subagent uses. Accepting the deeper
+      shape therefore adds no heuristic - it removes an arbitrary depth
+      check that was refusing paths whose parent was never in doubt.
     Inputs: subagent_source_path (str).
     Output: str | None - ``<slug>/<uuid>.jsonl``, or None if the path
       does not match the expected shape.
@@ -399,7 +411,7 @@ def _derive_parent_source_path(subagent_source_path: str) -> Optional[str]:
       -> "slug/abc-123.jsonl"
     """
     parts = PurePosixPath(subagent_source_path).parts
-    if len(parts) != 4 or parts[2] != SUBAGENTS_DIRNAME:
+    if len(parts) < 4 or parts[2] != SUBAGENTS_DIRNAME:
         return None
     slug, session_uuid = parts[0], parts[1]
     return f"{slug}/{session_uuid}.jsonl"
@@ -577,8 +589,11 @@ def ingest_corpus(conn, corpus_root: Path) -> RunReport:
     """
     started = time.monotonic()
     report = RunReport()
-    entries = discover_corpus(corpus_root)
+    discovery = discover_corpus_detailed(corpus_root)
+    entries = discovery.entries
     report.total_discovered = len(entries)
+    report.discovery_unrecognised = discovery.unrecognised_count
+    report.discovery_unreadable = discovery.unreadable_count
     duplicate_sample: List[str] = []
 
     for entry in entries:

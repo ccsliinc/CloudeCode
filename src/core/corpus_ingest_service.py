@@ -106,7 +106,7 @@ from src.core.corpus_ingest_scan import (
 from src.core.db import DatastoreError, connect, db_path_for, read_schema_version
 from src.core.transcript_corpus_discover import (
     default_corpus_root,
-    discover_corpus,
+    discover_corpus_detailed,
 )
 from src.core.transcript_corpus_ingest import (
     ingest_one,
@@ -182,6 +182,16 @@ class CorpusIngestReport:
     #: to establish what the archive already holds. Reported because a
     #: run that quietly fell back to the slow route is worth seeing.
     scan_mode: str = ""
+    #: DISCOVERY'S OWN THIRD OUTCOME, kept separate from ``discovered``.
+    #: A path the walk reached and refused to classify is not a file it
+    #: found, and a directory it could not list is neither. Collapsing
+    #: either into silence is what hid 442 workflow transcripts.
+    discovery_unrecognised: int = 0
+    discovery_unreadable: int = 0
+    discovery_unrecognised_sample: List[str] = field(default_factory=list)
+    discovery_unreadable_sample: List[Dict[str, str]] = field(
+        default_factory=list
+    )
     rooting: Dict[str, object] = field(default_factory=dict)
     project_rooting: Dict[str, object] = field(default_factory=dict)
     host_attribution: Dict[str, object] = field(default_factory=dict)
@@ -213,6 +223,14 @@ class CorpusIngestReport:
             "not_reached": self.not_reached,
             "bytes_ingested": self.bytes_ingested,
             "scan_mode": self.scan_mode,
+            "discovery_unrecognised": self.discovery_unrecognised,
+            "discovery_unreadable": self.discovery_unreadable,
+            "discovery_unrecognised_sample": list(
+                self.discovery_unrecognised_sample
+            ),
+            "discovery_unreadable_sample": list(
+                self.discovery_unreadable_sample
+            ),
             "growth_kinds": dict(self.growth_kinds),
             "could_not_read_detail": list(self.could_not_read_detail[:50]),
             "rooting": dict(self.rooting),
@@ -467,8 +485,13 @@ def _ingest_pass(
     Output: None.
     Example: _ingest_pass(Path("/s"), Path("/r"), conn, None, report)
     """
-    entries = discover_corpus(root)
+    discovery = discover_corpus_detailed(root)
+    entries = discovery.entries
     report.discovered = len(entries)
+    report.discovery_unrecognised = discovery.unrecognised_count
+    report.discovery_unreadable = discovery.unreadable_count
+    report.discovery_unrecognised_sample = list(discovery.unrecognised_sample)
+    report.discovery_unreadable_sample = list(discovery.unreadable_sample)
     cache = state_io.load_scan_cache(state_dir)
     cached_meta = state_io.load_scan_meta(state_dir)
     signature = _db_signature(conn)
