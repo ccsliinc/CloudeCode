@@ -36,6 +36,7 @@ DEFAULT_INGESTED_AT = "2026-08-29T22:17:03.086206Z"
 SESSION_REF_SCHEMES = frozenset({"uuid", "agent"})
 
 
+
 def make_state_dir(tmp_path: Path, name: str = "state") -> Path:
     """Create a state directory holding an empty, current-schema cloude.db.
 

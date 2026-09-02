@@ -43,6 +43,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from src.api.archive_export_routes import router as export_router
+from src.api.archive_messages_routes import router as messages_router
 from src.api.archive_search_routes import router as search_router
 from src.api.archive_support import respond, state_dir
 from src.api.auth import require_auth
@@ -446,3 +447,4 @@ async def get_subagents(
 # full path, so there is no prefix to apply.
 router.routes.extend(search_router.routes)
 router.routes.extend(export_router.routes)
+router.routes.extend(messages_router.routes)

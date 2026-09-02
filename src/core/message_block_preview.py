@@ -49,11 +49,19 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.core.archive_snippet_gate import (
+    KnownSecretIndex,
     SNIPPET_INCLUDED,
     SNIPPET_WITHHELD_BY_REQUEST,
     evaluate_text_window,
     load_index,
 )
+
+#: Sentinel for "the caller did not supply an index", which is NOT the
+#: same as supplying None. None is a real value here - it is what
+#: ``load_index`` returns when the index could not be built, and the gate
+#: turns it into a withhold. A plain ``index=None`` default would make
+#: every existing caller silently start withholding everything.
+_INDEX_UNSET: object = object()
 
 #: Longest preview served for one block, in characters. A preview is a
 #: glance, not a payload: the caller who wants the whole block asks for
@@ -100,6 +108,7 @@ def gated_block_preview(
     text_length: int,
     want_preview: bool = True,
     max_chars: int = BLOCK_PREVIEW_MAX_CHARS,
+    index: Optional[KnownSecretIndex] = _INDEX_UNSET,
 ) -> BlockPreview:
     """Decide whether one block's text may be previewed, and return it.
 
@@ -112,9 +121,21 @@ def gated_block_preview(
       carries none. text_length (int) - the block's full length.
       want_preview (bool) - False asks for no preview at all.
       max_chars (int) - preview ceiling.
+      index (KnownSecretIndex | None) - the known-secret index, when the
+      caller has already built it for a whole page. OPTIONAL AND
+      ADDITIVE: omitting it keeps the original behaviour exactly, which
+      is to build (or reuse) the index here. Passing it changes NO
+      policy - the same index reaches the same three layers - it only
+      stops ``load_index`` being re-entered per block. That matters:
+      measured on a 100-turn page of transcript 5767, the per-block
+      re-entry ran its COUNT/MAX fingerprint query 400 times and cost
+      133 ms of the page's 399 ms. Passing None EXPLICITLY still means
+      "no index", which the gate turns into a withhold; the sentinel
+      below is what distinguishes that from "not supplied".
     Output: BlockPreview.
     Example: gated_block_preview(conn, 1, None, 0).state -> "included"
     """
+    resolved = load_index(conn) if index is _INDEX_UNSET else index
     if not want_preview:
         return BlockPreview(
             state=SNIPPET_WITHHELD_BY_REQUEST, text=None,
@@ -129,7 +150,7 @@ def gated_block_preview(
             state=SNIPPET_INCLUDED, text=None, text_length=text_length,
         )
     window = text[:max_chars]
-    state = evaluate_text_window(conn, body_id, window, load_index(conn))
+    state = evaluate_text_window(conn, body_id, window, resolved)
     if state != SNIPPET_INCLUDED:
         return BlockPreview(state=state, text=None, text_length=text_length)
     return BlockPreview(

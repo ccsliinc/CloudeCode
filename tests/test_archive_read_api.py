@@ -85,6 +85,10 @@ ALL_ROUTES: List[str] = [
     "/api/v1/archive/transcripts/1",
     "/api/v1/archive/transcripts/1/lines",
     "/api/v1/archive/transcripts/1/subagents",
+    # The reading view. Sits WITH the envelope routes, not appended:
+    # ENVELOPE_ROUTES is ALL_ROUTES[:-2] and the last two entries are
+    # the exports, whose 200 is a file rather than an envelope.
+    "/api/v1/archive/transcripts/1/messages",
     "/api/v1/archive/bodies/1",
     "/api/v1/archive/search?q=hello&project_id=1",
     "/api/v1/archive/transcripts/1/export",
@@ -353,6 +357,7 @@ def test_hosts_and_hierarchy_walk(archive):
     "/api/v1/archive/projects/1/transcripts",
     "/api/v1/archive/transcripts/1/lines",
     "/api/v1/archive/transcripts/1/subagents",
+    "/api/v1/archive/transcripts/1/messages",
 ])
 def test_a_malformed_cursor_is_400_cannot_determine_not_a_page_one_reset(
     archive, path,
