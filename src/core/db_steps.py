@@ -26,7 +26,7 @@ from typing import Callable, Dict, List
 
 import structlog
 
-from src.core.db import ensure_install_id, get_meta, set_meta
+from src.core.db import column_exists, ensure_install_id, get_meta, set_meta
 from src.core.db_models import (
     DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP,
     DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX,
@@ -47,6 +47,8 @@ from src.core.db_models import (
     DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY,
     DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
     DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
+    DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
+    DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -1128,6 +1130,35 @@ def _step_v20_to_v21(conn: sqlite3.Connection) -> None:
     install_transcript_activity(conn)
 
 
+def _step_v21_to_v22(conn: sqlite3.Connection) -> None:
+    """Make transcript ingest idempotent on CONTENT, not on path.
+
+    Description: adds the index on ``transcript_archives.content_sha256``
+      that the content-addressed idempotency check reads on every file of
+      every pass, and the nullable ``dedupe_kind`` column that names why
+      a row stores a sentinel instead of its own bytes. See
+      src/core/transcript_content_dedupe.py for the mechanism and
+      db_models' v22 block for the 3.78 GB re-archive that made a
+      path-keyed check untenable.
+
+      ADD COLUMN plus CREATE INDEX. No table is rewritten, nothing is
+      backfilled, and every pre-existing row keeps NULL ``dedupe_kind``,
+      which reads as "this row holds its own bytes" - the truth for every
+      row written before this step.
+
+      IDEMPOTENT ON BOTH HALVES: the index carries its own IF NOT EXISTS,
+      and the ALTER is guarded by ``column_exists`` because SQLite's
+      ALTER TABLE ADD COLUMN has none - same idiom as v3/v10/v11/v13/v15.
+      It is also a no-op on an install whose transcript tables were never
+      created.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v21_to_v22(conn)  # after _step_v20_to_v21
+    """
+    conn.execute(DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX)
+    if not column_exists(conn, "transcript_archives", "dedupe_kind"):
+        conn.execute(DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND)
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1154,6 +1185,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     18: _step_v18_to_v19,
     19: _step_v19_to_v20,
     20: _step_v20_to_v21,
+    21: _step_v21_to_v22,
 }
 
 

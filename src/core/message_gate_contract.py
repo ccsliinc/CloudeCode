@@ -275,6 +275,7 @@ GATE_ORDERING_ANOMALY = "ordering_anomaly"
 GATE_TIMESTAMP_CAUSALITY_VIOLATION = "timestamp_causality_violation"
 GATE_MULTIPLE_SESSION_ROOTS = "multiple_session_roots"
 GATE_SECRET_MATERIAL_PRESENT = "secret_material_present"
+GATE_CONTENT_DUPLICATE_MASS_REARCHIVE = "content_duplicate_mass_rearchive"
 
 #: The declaration. Every condition this contract knows about, in one
 #: place, each with a decision already recorded - the same shape as
@@ -612,7 +613,33 @@ GATE_CONDITIONS: Tuple[GateCondition, ...] = (
                  "first appears in the transcript archive 2026-06-26 and "
                  "was leaked 2026-08-20; it has not been rotated)",
     ),
+    GateCondition(
+        GATE_CONTENT_DUPLICATE_MASS_REARCHIVE, SEVERITY_ADVISORY,
+        auto_resolvable=False,
+        description=(
+            "one corpus ingest pass met more than "
+            "src.core.transcript_content_dedupe.MASS_REARCHIVE_THRESHOLD "
+            "files whose content_sha256 was ALREADY stored in this "
+            "database under a DIFFERENT source_path. That is the "
+            "signature of the whole corpus being re-encoded under new "
+            "path names at once - what happened on 2026-08-31 when "
+            "~/Development became a symlink and every ~/.claude/projects "
+            "slug changed - and before the content-addressed key existed "
+            "it silently re-stored 19,294 files and 3.78 GB with no "
+            "signal of any kind. ADVISORY, not stop: nothing about any "
+            "row's LINKAGE is uncertain, which is the only thing a stop "
+            "condition holds up, and with the content-addressed key in "
+            "place the pass now stores metadata rows rather than bytes, "
+            "so no harm has occurred. What this condition buys is that a "
+            "corpus-wide path re-encoding can never again happen "
+            "SILENTLY - the storage is now correct either way, and the "
+            "owner still gets told his corpus moved."
+        ),
+        measured="19,294 files / 3.78 GB re-archived under a second path "
+                 "encoding by the path-keyed check, 2026-08-31",
+    ),
 )
+
 
 BY_CODE: Dict[str, GateCondition] = {c.code: c for c in GATE_CONDITIONS}
 

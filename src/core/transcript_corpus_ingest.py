@@ -20,9 +20,34 @@ claude_transcript_correlate.PROBE_ENTRYPOINT) and every subagent
 transcript. Nothing here ever skips a file for what it appears to be.
 
 IDEMPOTENCY KEY, STATED EXPLICITLY (this was the task's own instruction -
-"this is the most important design decision"). The identity of "already
-ingested" is the pair ``(source_path, content_sha256)``, evaluated in
-that order:
+"this is the most important design decision").
+
+CORRECTED 2026-09-02, AND THE ORIGINAL ORDERING IS LEFT DESCRIBED BELOW
+RATHER THAN QUIETLY REWRITTEN, because the wrong version plus its
+correction is more useful than a clean lie. The key used to be the pair
+``(source_path, content_sha256)`` evaluated PATH FIRST, and the ordering
+was the defect: the hash was only ever compared when the path lookup HIT.
+Bytes this database already held, arriving under a path it had never
+seen, produced ``existing = None`` and were stored AGAIN in full. When
+``~/Development`` became a symlink every corpus slug changed at once and
+that re-stored 19,294 files / 3.78 GB, silently. See
+src/core/transcript_content_dedupe.py for the incident, for why
+``Path.resolve()`` would NOT have prevented it, and for the mechanism.
+
+THE KEY NOW HAS THREE STEPS, and the third is the one that cannot be
+fooled by a rename:
+
+  0. ``content_sha256`` GLOBALLY (:func:`~src.core.transcript_content_dedupe.find_archive_by_content`).
+     If ANY row in the database already holds these exact bytes, the
+     file is recorded as a metadata-only row pointing at that row - a
+     real archive for its own source_path, storing no second copy of the
+     content. This is checked whenever the path lookup did not already
+     settle the question, so a corpus that moved costs metadata, never
+     gigabytes.
+
+The two path-scoped steps still run first, unchanged, because they are
+cheaper and answer the common case (an unchanged file, and a growing
+one):
 
   1. ``source_path`` (corpus-relative, e.g. ``<slug>/<uuid>.jsonl`` or
      ``<slug>/<uuid>/subagents/agent-x.jsonl`` - never an absolute path,
@@ -108,6 +133,7 @@ learned which transcript is ours").
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -125,8 +151,20 @@ except ImportError:  # pragma: no cover - see transcript_archive.py's own guard
     logger = _NoOpLogger()
 
 from src.core.db import transaction
+from src.core.db_models import DEDUPE_KIND_CONTENT_DUPLICATE
+from src.core.message_gate_contract import (
+    GATE_CONTENT_DUPLICATE_MASS_REARCHIVE,
+)
+from src.core.message_model_store import record_finding
+from src.core.trail_entry import utc_now
 from src.core.transcript_archive import root_archive
 from src.core.transcript_prefix_dedupe import ingest_with_prefix_dedupe
+from src.core.transcript_content_dedupe import (
+    MASS_REARCHIVE_THRESHOLD,
+    find_archive_by_content,
+    mass_rearchive_detail,
+    store_content_duplicate,
+)
 from src.core.transcript_project_root import root_pending_archives_by_project
 from src.core.transcript_corpus_discover import (
     CorpusEntry,
@@ -164,6 +202,17 @@ class FileOutcome:
     #: outcome == "ingested"; None otherwise (already_present and
     #: could_not_read never touch growth_kind).
     growth_kind: Optional[str] = None
+    #: ``'content_duplicate'`` when this file's bytes were ALREADY stored
+    #: under a different source_path and the row written here is
+    #: metadata-only (see transcript_content_dedupe). None on every
+    #: ordinary ingest. Named on the outcome rather than inferred by a
+    #: caller from ``growth_kind == 'initial'`` plus a set
+    #: ``superseded_by_archive_id``, which is a rule someone has to know.
+    dedupe_kind: Optional[str] = None
+    #: Raw bytes this file did NOT cost, because the content was already
+    #: stored. 0 on every ordinary ingest. Reported so a pass can say
+    #: what content addressing actually saved rather than asserting it.
+    bytes_not_restored: int = 0
 
 
 @dataclass
@@ -182,6 +231,16 @@ class RunReport:
     already_present: int = 0
     could_not_read: int = 0
     bytes_ingested: int = 0
+    #: A SUBSET of ``newly_ingested``, not a fourth bucket: these files
+    #: DID get their own archive row (they are archived under their own
+    #: source_path), it just holds no second copy of bytes this database
+    #: already had. Kept as a subset on purpose so
+    #: total_discovered == newly_ingested + already_present +
+    #: could_not_read stays true, while the new case still has a name.
+    content_duplicates: int = 0
+    #: Raw bytes NOT written a second time across the whole pass. This is
+    #: the number the 2026-08-31 incident would have shown as 3.78 GB.
+    bytes_not_restored: int = 0
     wall_clock_seconds: float = 0.0
     could_not_read_detail: List[FileOutcome] = field(default_factory=list)
     rooting: Dict[str, int] = field(default_factory=dict)
@@ -260,6 +319,38 @@ def ingest_one(conn, entry: CorpusEntry) -> FileOutcome:
         )
 
     mtime = mtime_iso(entry.abs_path)
+
+    # CONTENT-ADDRESSED CHECK, BEFORE ANY BYTES ARE WRITTEN. The two
+    # branches above are path-scoped and cannot see a file that moved; this
+    # one is global. It runs only when the path lookup did not already
+    # settle the question, so an unchanged file still costs one indexed
+    # lookup by source_path and nothing else.
+    #
+    # NOTE THE ORDER AGAINST PREFIX DEDUPE, which is load-bearing. A file
+    # that GREW has a hash nothing has ever seen, so this lookup misses and
+    # the prefix-dedupe path below runs exactly as before - growing files
+    # are untouched by this. A file whose hash IS known is byte-identical
+    # to something already stored, which by definition is not growth.
+    match = find_archive_by_content(conn, current_sha)
+    if match is not None:
+        with transaction(conn):
+            dup_id = store_content_duplicate(
+                conn,
+                kind=entry.kind,
+                source_path=entry.source_path,
+                match=match,
+                source_mtime=mtime,
+            )
+        return FileOutcome(
+            source_path=entry.source_path,
+            kind=entry.kind,
+            outcome="ingested",
+            archive_id=dup_id,
+            raw_byte_length=size,
+            growth_kind="initial",
+            dedupe_kind=DEDUPE_KIND_CONTENT_DUPLICATE,
+            bytes_not_restored=size,
+        )
     try:
         outcome = ingest_with_prefix_dedupe(
             conn,
@@ -407,6 +498,67 @@ def root_pending_archives(
     return counts
 
 
+def _record_mass_rearchive_finding(
+    conn, report: RunReport, sample_paths: List[str]
+) -> bool:
+    """Write the ADVISORY finding when one pass re-met the corpus at new paths.
+
+    Description: a handful of content duplicates is ordinary shape and is
+      deliberately NOT reported - a finding on every pass is furniture,
+      not a monitor. Past :data:`~src.core.transcript_content_dedupe.MASS_REARCHIVE_THRESHOLD`
+      it is evidence the corpus itself was re-encoded, which is exactly
+      what happened on 2026-08-31 with no signal at all.
+
+      NEVER RAISES INTO THE INGEST PATH. The findings table only exists on
+      an install that took the message-archive schema, and a database that
+      cannot record an observation must not lose the ingest that made it -
+      a failure here is logged and the pass continues, which is the one
+      place in this module where swallowing an error is the correct trade
+      (the storage it would abort is the thing being protected).
+    Inputs: conn - sqlite3.Connection, NOT inside a transaction. report
+      (RunReport) - the finished counts. sample_paths (list[str]).
+    Output: bool - True when a finding row was written; False when the
+      threshold was not met OR the finding could not be recorded.
+    Example: _record_mass_rearchive_finding(conn, report, ["a/b.jsonl"])
+    """
+    if report.content_duplicates <= MASS_REARCHIVE_THRESHOLD:
+        return False
+    detail = mass_rearchive_detail(
+        duplicate_count=report.content_duplicates,
+        bytes_not_restored=report.bytes_not_restored,
+        sample_paths=sample_paths,
+    )
+    try:
+        with transaction(conn):
+            record_finding(
+                conn,
+                code=GATE_CONTENT_DUPLICATE_MASS_REARCHIVE,
+                subject_kind="transcript",
+                # SUBJECT_ID IS THE PASS, NOT A FILE, and there is no
+                # "pass" id to name. The count is the finding and it is in
+                # ``detail``; this column takes the number of duplicates so
+                # the row is never zero and never points at one arbitrary
+                # file as though that file were the problem.
+                subject_id=report.content_duplicates,
+                detail=detail,
+                now=utc_now(),
+            )
+    except (sqlite3.Error, ValueError) as exc:
+        logger.warning(
+            "corpus_ingest_mass_rearchive_finding_unrecorded",
+            content_duplicates=report.content_duplicates,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return False
+    logger.warning(
+        "corpus_ingest_mass_rearchive",
+        content_duplicates=report.content_duplicates,
+        bytes_not_restored=report.bytes_not_restored,
+        threshold=MASS_REARCHIVE_THRESHOLD,
+    )
+    return True
+
+
 def ingest_corpus(conn, corpus_root: Path) -> RunReport:
     """Walk a corpus, ingest every readable file, then root what is decisive.
 
@@ -427,17 +579,30 @@ def ingest_corpus(conn, corpus_root: Path) -> RunReport:
     report = RunReport()
     entries = discover_corpus(corpus_root)
     report.total_discovered = len(entries)
+    duplicate_sample: List[str] = []
 
     for entry in entries:
         outcome = ingest_one(conn, entry)
         if outcome.outcome == "ingested":
             report.newly_ingested += 1
             report.bytes_ingested += outcome.raw_byte_length or 0
+            if outcome.dedupe_kind == DEDUPE_KIND_CONTENT_DUPLICATE:
+                report.content_duplicates += 1
+                report.bytes_not_restored += outcome.bytes_not_restored
+                if len(duplicate_sample) < 3:
+                    duplicate_sample.append(outcome.source_path)
         elif outcome.outcome == "already_present":
             report.already_present += 1
         else:
             report.could_not_read += 1
             report.could_not_read_detail.append(outcome)
+
+    # A MASS RE-ARCHIVE MUST NEVER BE SILENT AGAIN. See
+    # transcript_content_dedupe's module docstring: the 2026-08-31 corpus
+    # rename produced 19,294 of these and emitted no signal of any kind.
+    # This is written BEFORE rooting so a pass that dies during rooting
+    # has still recorded what it saw.
+    _record_mass_rearchive_finding(conn, report, duplicate_sample)
 
     report.rooting = root_pending_archives(conn)
     report.project_rooting = root_pending_archives_by_project(conn)
@@ -450,6 +615,8 @@ def ingest_corpus(conn, corpus_root: Path) -> RunReport:
         already_present=report.already_present,
         could_not_read=report.could_not_read,
         bytes_ingested=report.bytes_ingested,
+        content_duplicates=report.content_duplicates,
+        bytes_not_restored=report.bytes_not_restored,
         wall_clock_seconds=report.wall_clock_seconds,
         **report.rooting,
     )

@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 21
+CURRENT_SCHEMA_VERSION: int = 22
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1283,4 +1283,70 @@ DDL_V15: Tuple[str, ...] = (
     DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
     DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
     DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX,
+)
+
+
+# ---------------------------------------------------------------------------
+# v21 -> v22 - CONTENT-ADDRESSED INGEST IDEMPOTENCY
+# ---------------------------------------------------------------------------
+#
+# THE INCIDENT THIS EXISTS FOR, MEASURED. transcript_corpus_ingest's
+# idempotency key was ``(source_path, content_sha256)`` evaluated in that
+# order: the path lookup came FIRST, and the hash was only ever compared
+# when that lookup hit. So a file whose bytes this database already held,
+# arriving under a source_path it had never seen, produced
+# ``existing = None`` and fell straight through to a full second copy
+# recorded as ``growth_kind='initial'``. When ``~/Development`` became a
+# symlink every corpus slug directory under ``~/.claude/projects`` was
+# renamed, every ``source_path`` changed, and 19,294 files whose
+# ``content_sha256`` was ALREADY stored were archived a second time -
+# 3.78 GB, the whole corpus held twice under two path encodings, with no
+# error, no warning and no finding anywhere.
+#
+# WHY PATH CANONICALISATION IS NOT THE FIX, stated here so the next
+# reader does not reach for it. The two encodings are two different
+# DIRECTORY NAMES inside ~/.claude/projects (Claude Code derives a slug
+# from the cwd, and the symlinked cwd produces a different slug), not two
+# paths to one file. ``Path.resolve()`` has nothing to resolve: both
+# directories exist, independently, side by side. Content addressing is
+# the only key that recognises them as the same transcript.
+#
+# THE INDEX. ``content_sha256`` has been on transcript_archives since
+# v14 and was never indexed, because until now nothing ever looked a row
+# up by it - the only reads were by id or by source_path. The
+# content-addressed check queries it on EVERY file of every pass, so
+# without this index each pass is one full table scan per file.
+DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_content_sha "
+    "ON transcript_archives (content_sha256)"
+)
+
+# WHY A NEW COLUMN AND NOT A NEW growth_kind VALUE. ``growth_kind`` carries
+# a CHECK constraint listing exactly ('initial', 'append',
+# 'non_append_rewrite'). SQLite cannot widen a CHECK with ALTER TABLE ADD
+# COLUMN, and rebuilding transcript_archives is forbidden by this
+# migration chain's additive-only rule (and would be reckless against a
+# table holding the owner's whole history). A content-duplicate row is
+# genuinely the FIRST archive for its source_path, so 'initial' is the
+# honest growth_kind for it; what needed saying separately is WHY its
+# ``content_gzip`` is a sentinel, and that is what this column says.
+#
+# NULL on every row that predates this and on every ordinary ingest. A
+# non-null value means: this row stores no bytes of its own, its content
+# lives at ``superseded_by_archive_id``, and the reason is named here
+# rather than inferred from the shape of two other columns.
+DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND = (
+    "ALTER TABLE transcript_archives ADD COLUMN dedupe_kind TEXT"
+)
+
+#: The one value this codebase writes into ``dedupe_kind``: the row's
+#: bytes were already stored, verbatim, under a different source_path.
+DEDUPE_KIND_CONTENT_DUPLICATE = "content_duplicate"
+
+#: Ordered DDL for a v21 -> v22 database. One index (idempotent by its
+#: own IF NOT EXISTS) and one ALTER TABLE ADD COLUMN (guarded by
+#: PRAGMA table_info in the step, same idiom as v3/v10/v11/v13/v15).
+DDL_V22: Tuple[str, ...] = (
+    DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
+    DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
 )
