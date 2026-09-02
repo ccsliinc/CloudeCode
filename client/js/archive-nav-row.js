@@ -109,6 +109,58 @@ console.log('[ArchiveNavRow Module] Loading...');
     }
 
     /**
+     * The unattributed node's name. It says WHAT THESE TRANSCRIPTS ARE,
+     * not merely what they lack: their source path has no
+     * `.claude/projects` layer in it, so the slug deriver returned "none
+     * declared" rather than failing to derive one. A bare count next to
+     * the word "unattributed" reads as an attribution failure somebody
+     * ought to chase; this reads as an answer.
+     *
+     * It deliberately does NOT say "audit logs". Every one of the five
+     * such transcripts measured on 2026-09-02 was a local-agent sandbox
+     * audit log, and that is a fact about today's corpus, not about the
+     * category - the day a different kind of project-less transcript is
+     * ingested, a label asserting "audit logs" would be lying while
+     * looking authoritative. The dated measurement goes in the tooltip
+     * (see titleFor), where it can be read as the dated observation it
+     * is. @type {string}
+     */
+    var UNATTRIBUTED_LABEL = 'transcripts with no project layer';
+
+    /**
+     * Description: the note under the unattributed node, DERIVED from the
+     *   same shouldShowUnattributed() verdict that decided to show it, so
+     *   the words and the reason cannot disagree. Three outcomes, because
+     *   the node is shown for three different reasons and only one of
+     *   them is settled: a measured non-zero count is ANSWERED, while a
+     *   count that could not be established or was never reported is
+     *   genuinely open and must not be dressed up as answered. Pure.
+     * Inputs: row (object) - the same row shouldShowUnattributed reads.
+     * Output: {text: string, answered: boolean}.
+     * Example: unattributedNote({unattributed_transcript_count: 5})
+     *   // -> {text: 'belongs to no project ...', answered: true}
+     */
+    function unattributedNote(row) {
+        var verdict = shouldShowUnattributed(row);
+        if (verdict.reason === 'count could not be determined' ||
+            verdict.reason === 'no count was reported') {
+            return {
+                answered: false,
+                text: 'belongs to no project, invisible from the project ' +
+                      'tree - and how many there are is not established, ' +
+                      'so this node is shown rather than hidden'
+            };
+        }
+        return {
+            answered: true,
+            text: 'belongs to no project because its path has no project ' +
+                  'layer to declare one - a complete answer, not a failed ' +
+                  'attribution. It is invisible from the project tree, ' +
+                  'which is why it is listed here.'
+        };
+    }
+
+    /**
      * Description: the sentence a filter must always carry, naming what
      *   it did and did NOT look at. Pure.
      * Inputs: matched (number) - rows the filter kept.
@@ -145,7 +197,7 @@ console.log('[ArchiveNavRow Module] Loading...');
             return String(r.corpus_key || r.root_path || ('corpus ' + r.corpus_id));
         }
         if (kind === NODE_KINDS.UNATTRIBUTED) {
-            return 'transcripts with no project';
+            return UNATTRIBUTED_LABEL;
         }
         // display_name is the FOLDER NAME the server derived from
         // observed_cwd, already widened where it would collide. It is
@@ -175,6 +227,15 @@ console.log('[ArchiveNavRow Module] Loading...');
      */
     function titleFor(kind, row) {
         var r = row || {};
+        if (kind === NODE_KINDS.UNATTRIBUTED) {
+            // A DATED OBSERVATION, which is why it lives here and not in
+            // the label: it says what these were when someone last looked,
+            // and stays true afterwards even if the mix changes.
+            return 'Their source path has no .claude/projects layer, so no ' +
+                   'project could be declared for them.\nMeasured ' +
+                   '2026-09-02: all 5 were local-agent sandbox audit logs ' +
+                   '(permission and decision trails), not conversations.';
+        }
         if (kind === NODE_KINDS.PROJECT) {
             var parts = [];
             if (typeof r.observed_cwd === 'string' && r.observed_cwd) {
@@ -334,9 +395,15 @@ console.log('[ArchiveNavRow Module] Loading...');
         btn.setAttribute('title', tip ? text + '\n' + tip : text);
         if (kind === NODE_KINDS.UNATTRIBUTED) {
             // Named in words as well as by class, because this node's
-            // whole purpose is that it is easy to not notice.
-            btn.appendChild(el(doc, 'span', ROOT_CLASS + '__note',
-                'belongs to no project, invisible from the project tree'));
+            // whole purpose is that it is easy to not notice. The tone
+            // follows the verdict: an ANSWERED bucket must not be painted
+            // in the warning colour, or the rail keeps asking a question
+            // that has already been answered and the colour stops meaning
+            // anything on the nodes that are genuinely open.
+            var note = unattributedNote(row);
+            var cls = ROOT_CLASS + '__note' +
+                      (note.answered ? ' ' + ROOT_CLASS + '__note--answered' : '');
+            btn.appendChild(el(doc, 'span', cls, note.text));
         }
         if (typeof options.onActivate === 'function') {
             btn.addEventListener('click', function () { options.onActivate(kind, id, row); });
@@ -347,6 +414,7 @@ console.log('[ArchiveNavRow Module] Loading...');
         }
         return li;
     }
+
 
     /**
      * Description: replace a node's child slot with a rendered outcome
@@ -379,6 +447,8 @@ console.log('[ArchiveNavRow Module] Loading...');
         el: el,
         titleFor: titleFor,
         shouldShowUnattributed: shouldShowUnattributed,
+        unattributedNote: unattributedNote,
+        UNATTRIBUTED_LABEL: UNATTRIBUTED_LABEL,
         renderHostBadges: renderHostBadges,
         renderCount: renderCount,
         filterRows: filterRows,

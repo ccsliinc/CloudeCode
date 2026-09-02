@@ -54,6 +54,7 @@ from src.core.db_models import (
     META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
 from src.core.archive_overlay_ddl import DDL_V19
+from src.core.message_scheme_repair import repair_session_ref_schemes
 from src.core.message_block_ddl import DDL_V18
 from src.core.message_host_ddl import DDL_V17
 from src.core.message_archive_flag import message_archive_enabled
@@ -1067,6 +1068,36 @@ def _step_v18_to_v19(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _step_v19_to_v20(conn: sqlite3.Connection) -> None:
+    """Admit the 'opaque' session_ref_scheme, and correct the rows.
+
+    Description: ``session_ref_scheme`` used to be answered by
+      elimination - anything without an agent prefix was called a uuid -
+      so 19 transcripts whose ref is a literal filename stem ('audit',
+      'journal') were stored as uuid and counted in the owner's own
+      sessions. This step widens the column's CHECK to admit the third,
+      MEASURED value and rewrites exactly those rows.
+
+      IT REWRITES NO TABLE. message_appearances references this table
+      ON DELETE CASCADE and PRAGMA foreign_keys is a no-op inside the
+      transaction every step runs in, so the standard rebuild recipe
+      cannot be made safe here. The CHECK is edited in place instead -
+      see src/core/message_scheme_repair.py for the full argument and
+      the measurements behind it.
+
+      IDEMPOTENT ON BOTH HALVES. The relax is skipped when the stored
+      constraint already lists the value, and the backfill is defined as
+      "rows whose stored scheme disagrees with the classifier", which is
+      empty on a second run. It is also a no-op on an install that
+      crossed v16..v18 with the message archive gated off and therefore
+      has no message_transcripts table at all.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v19_to_v20(conn)  # after _step_v18_to_v19
+    """
+    repair_session_ref_schemes(conn)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1091,6 +1122,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     16: _step_v16_to_v17,
     17: _step_v17_to_v18,
     18: _step_v18_to_v19,
+    19: _step_v19_to_v20,
 }
 
 

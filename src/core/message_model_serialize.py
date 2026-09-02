@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -392,25 +393,72 @@ def scalar_fields(body: Any) -> Dict[str, Any]:
 #: about, where the guess is usually right and therefore invisible.
 AGENT_REF_PREFIXES: Tuple[str, ...] = ("agent:", "agent-")
 
+#: The canonical 8-4-4-4-12 hex form, anchored at both ends. Case is
+#: accepted in either direction because RFC 4122 says a reader must, and
+#: a direct count of the live corpus on 2026-09-02 found 1,432 uuid-scheme
+#: refs of which zero carry an upper-case digit - so accepting upper case
+#: costs nothing today and refuses to manufacture a false OPAQUE_SCHEME
+#: the day a differently-cased id arrives.
+#:
+#: DELIBERATELY NOT ``uuid.UUID()``. That constructor also accepts braces,
+#: a ``urn:uuid:`` prefix and the 32-character undashed form, none of which
+#: this corpus produces; admitting them would let a ref that is plainly not
+#: one of this corpus's session ids pass as one. It is also deliberately
+#: version-agnostic: requiring a version-4 nibble would be an assumption
+#: about how ids are minted, and this classifier's whole job is to stop
+#: assuming shapes it never measured.
+_CANONICAL_UUID = re.compile(
+    r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
+)
+
+#: The scheme names this classifier can return, and the exact set the
+#: ``message_transcripts.session_ref_scheme`` CHECK constraint permits.
+UUID_SCHEME: str = "uuid"
+AGENT_SCHEME: str = "agent"
+
+#: THE THIRD OUTCOME. A ref that carries neither an agent prefix nor a
+#: well-formed uuid: the string is present and readable, it simply
+#: declares no identity scheme this corpus recognises. That is a
+#: MEASUREMENT of the ref, not a bucket for anything unrecognised and not
+#: a "could not evaluate" - the classifier looked at the whole string and
+#: found it matched neither pattern.
+#:
+#: 'opaque' rather than 'unknown' precisely because 'unknown' reads as
+#: "nobody measured this", which is the third state of a different
+#: question and the one value this must never be confused with.
+OPAQUE_SCHEME: str = "opaque"
+
+SESSION_REF_SCHEMES: Tuple[str, ...] = (UUID_SCHEME, AGENT_SCHEME, OPAQUE_SCHEME)
+
 
 def session_ref_scheme(session_ref: str) -> str:
-    """Say which legitimate session identity scheme a ref uses.
+    """Say which session identity scheme a ref uses, or that it uses none.
 
     Description: the corpus names sessions either by uuid or by one of
       the AGENT_REF_PREFIXES forms used for subagent sessions. Both are
       valid; an agent id is NOT a malformed uuid and must never be
-      repaired into one. This returns a stated fact stored on the
-      transcript row rather than leaving every later reader to re-derive
-      it from the string's shape.
-    Inputs: session_ref (str).
-    Output: 'agent' or 'uuid'.
+      repaired into one.
+
+      THREE OUTCOMES, NOT TWO. This used to return 'uuid' BY ELIMINATION
+      for anything without an agent prefix, so a ref that was neither -
+      a literal 'audit' or 'journal' derived from a filename stem, which
+      is what 19 rows of the live corpus carried on 2026-09-02 - was
+      recorded as a uuid and counted in the owner's own sessions. Five of
+      those were local-agent permission-and-decision audit trails, not
+      conversations at all. The uuid answer is now MEASURED against
+      _CANONICAL_UUID rather than inferred from the absence of a prefix,
+      and a ref matching neither returns OPAQUE_SCHEME.
+    Inputs: session_ref (str) - the ref exactly as the corpus holds it.
+    Output: str - one of SESSION_REF_SCHEMES.
     Example: session_ref_scheme("agent:a7b0a2e") -> "agent"
+      session_ref_scheme("audit") -> "opaque"
     """
-    return (
-        "agent"
-        if any(session_ref.startswith(p) for p in AGENT_REF_PREFIXES)
-        else "uuid"
-    )
+    if any(session_ref.startswith(p) for p in AGENT_REF_PREFIXES):
+        return AGENT_SCHEME
+    if _CANONICAL_UUID.match(session_ref):
+        return UUID_SCHEME
+    return OPAQUE_SCHEME
 
 
 def split_lines(text: str) -> Tuple[List[str], bool]:

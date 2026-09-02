@@ -121,13 +121,22 @@ LOOKUP_TABLES: Tuple[Tuple[str, str], ...] = (
 # Transcripts - the container an appearance belongs to
 # ---------------------------------------------------------------------------
 #
-# TWO IDENTITY SCHEMES, BOTH LEGITIMATE. Sessions are named either by a
-# uuid (a real session) or by the literal form 'agent-a00fdb4' (a
+# THREE OUTCOMES, TWO OF THEM IDENTITY SCHEMES. Sessions are named either
+# by a uuid (a real session) or by the literal form 'agent-a00fdb4' (a
 # subagent session). ``session_ref_scheme`` records which one this
 # transcript carries, so 'agent-...' is never treated as a malformed
 # uuid and a uuid is never treated as an agent id. The scheme is a stated
 # fact about the row, not something a later reader has to guess from the
 # string's shape.
+#
+# 'opaque' is the THIRD value and it is a measurement: the ref carries no
+# agent prefix AND is not a well-formed uuid. It exists because the
+# classifier used to answer 'uuid' by elimination, which put 19 refs that
+# were literal filename stems ('audit', 'journal') into the owner's own
+# sessions count. See message_model_serialize.OPAQUE_SCHEME. Adding a
+# value here is a schema change: the CHECK is relaxed IN PLACE by schema
+# step 19 -> 20, which never rewrites this table (see
+# src/core/message_scheme_repair.py for why a rebuild is unsafe here).
 
 DDL_MESSAGE_TRANSCRIPTS = """
 CREATE TABLE IF NOT EXISTS message_transcripts (
@@ -135,7 +144,7 @@ CREATE TABLE IF NOT EXISTS message_transcripts (
   source_ref            TEXT NOT NULL UNIQUE,
   session_ref           TEXT NOT NULL,
   session_ref_scheme    TEXT NOT NULL
-                         CHECK (session_ref_scheme IN ('uuid', 'agent')),
+                         CHECK (session_ref_scheme IN ('uuid', 'agent', 'opaque')),
   line_ending           TEXT NOT NULL
                          CHECK (line_ending IN ('LF', 'CRLF', 'MIXED', 'NONE')),
   has_trailing_newline  INTEGER NOT NULL

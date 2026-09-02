@@ -20,6 +20,9 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.db_models import CURRENT_SCHEMA_VERSION
+from src.core.message_model_serialize import (
+    SESSION_REF_SCHEMES as _PRODUCTION_SCHEMES,
+)
 from src.core.db_steps import run_chain
 
 #: One valid value from each CHECK-constrained column, so a seeder that
@@ -28,12 +31,16 @@ DEFAULT_LINE_STATUS = "ok"
 DEFAULT_FIDELITY = "fidelity_verified"
 DEFAULT_INGESTED_AT = "2026-08-29T22:17:03.086206Z"
 
-#: The two values ``message_transcripts.session_ref_scheme`` accepts, per
-#: the CHECK constraint in ``src/core/message_model_ddl.py``. Named here so
-#: a seeder cannot write a scheme the real ingest could never produce, and
+#: The values ``message_transcripts.session_ref_scheme`` accepts, per the
+#: CHECK constraint in ``src/core/message_model_ddl.py``. Named here so a
+#: seeder cannot write a scheme the real ingest could never produce, and
 #: so a test asserting "unknown scheme" has a value it can prove is
 #: outside the domain rather than merely absent today.
-SESSION_REF_SCHEMES = frozenset({"uuid", "agent"})
+#:
+#: DERIVED from the classifier's own tuple rather than retyped, so a
+#: fourth scheme cannot be added to production while the seeder quietly
+#: keeps refusing it.
+SESSION_REF_SCHEMES = frozenset(_PRODUCTION_SCHEMES)
 
 
 

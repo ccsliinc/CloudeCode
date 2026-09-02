@@ -253,6 +253,17 @@
     color: var(--color-warning);
 }
 
+/* An ANSWERED note is not a warning. The unattributed node is shown even
+ * when its bucket is fully understood, because these transcripts are
+ * invisible from the project tree by construction and the rail is the
+ * only place they appear at all. Painting that explanation in the warning
+ * colour would keep flagging a question that has an answer, and would
+ * dilute the colour on the notes that are genuinely open. */
+.archive-nav__note--answered {
+    color: var(--color-text-secondary, var(--color-text-muted, inherit));
+    font-style: italic;
+}
+
 /* ---- Host and corpus rows -----------------------------------------
  * Weight and case, not colour, separate the three depths, so the tree's
  * structure survives a monochrome theme. */
