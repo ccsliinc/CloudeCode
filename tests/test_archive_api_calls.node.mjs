@@ -354,5 +354,31 @@ await test('api-archive.js REFUSES to load before api.js, by name', async () => 
         'api-archive.js loaded alone did not raise the named refusal');
 });
 
+await test('the merged project list is fetched from the OVERLAY route', async () => {
+    // THE RAIL IS THE ONLY WAY INTO THE ARCHIVE, and it paints from this
+    // one call. Pointed at `/archive/projects` every card renders the
+    // archive's own name and reports its overlay state as absent, which
+    // is honest and is also the owner's rename silently not applying -
+    // a failure with no error anywhere in it. Pinned here because the
+    // difference between the two routes is invisible at the call site:
+    // both return the same node shape and both answer 200.
+    assert.equal(await urlFor((a) => a.listArchiveMergedProjects()),
+        `${BASE}/archive/overlay/projects`);
+});
+
+await test('the RAW project route stays addressable and is not the merged call', async () => {
+    // Two routes answer two questions. This asserts the raw one was not
+    // deleted or redirected when the rail moved off it - a regression
+    // that would leave nothing able to report the archive's own names.
+    const source = fs.readFileSync(
+        path.join(ROOT, 'src', 'api', 'archive_routes.py'), 'utf8');
+    assert.ok(source.includes('"/archive/projects"'),
+        'GET /archive/projects is gone from archive_routes.py; the raw ' +
+        'archive names are no longer addressable by anything');
+    // And the merged client call is NOT pointed at it.
+    assert.notEqual(await urlFor((a) => a.listArchiveMergedProjects()),
+        `${BASE}/archive/projects`);
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

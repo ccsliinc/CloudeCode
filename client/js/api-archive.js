@@ -37,6 +37,19 @@ if (typeof API !== 'function') {
         'Fix the script order in client/index.html.');
 }
 
+/**
+ * The route the rail's merged-project list comes from.
+ *
+ * Named rather than inlined because two routes serve the same node shape
+ * and the difference between them is a behaviour, not a spelling:
+ * `/archive/projects` is the archive's own names and
+ * `/archive/overlay/projects` is those names with the owner's
+ * presentation layered on. A reader who finds a bare string at the call
+ * site cannot see that a choice was made there.
+ * @type {string}
+ */
+const MERGED_PROJECTS_ENDPOINT = '/archive/overlay/projects';
+
 Object.assign(API.prototype, {
     // =====================================================================
     // ARCHIVE (message browser)
@@ -227,10 +240,28 @@ Object.assign(API.prototype, {
      * project lives on one machine because the row proving otherwise
      * fell on page 2.
      *
+     * WHY THIS CALLS THE OVERLAY ROUTE AND NOT `/archive/projects`.
+     * `/archive/overlay/projects` returns the SAME merged nodes from the
+     * same `merged_projects` read, plus the owner's presentation: an
+     * override name where one exists, the group, hidden projects
+     * filtered, and per node an `overlay` block whose status is 'none',
+     * 'applied' or 'cannot_determine'. Pointed at the raw route the rail
+     * renders the archive's own names and every card reports its overlay
+     * state as ABSENT - which is honest, and is also the owner's rename
+     * silently not taking effect. The archive's own name is not lost by
+     * moving: every node still carries it as `archive_display_name`, so
+     * the modal can show "shown as X, really Y" from one request.
+     *
+     * `/archive/projects` IS DELIBERATELY STILL THERE and unchanged. Two
+     * routes answer two questions - what is in the archive, and how the
+     * owner wants it shown - and folding the second into the first would
+     * make the raw list unreachable. Anything that needs the archive's
+     * own truth calls that route directly rather than reaching for this.
+     *
      * @returns {Promise<object>} A callEnvelope result.
      */
     async listArchiveMergedProjects() {
-        return await this.callEnvelope('/archive/projects',
+        return await this.callEnvelope(MERGED_PROJECTS_ENDPOINT,
             { timeoutMs: this.ARCHIVE_TIMEOUTS.hierarchy });
     },
 
