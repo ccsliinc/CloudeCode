@@ -1077,6 +1077,42 @@ class ForkSessionResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class RestartSessionResponse(BaseModel):
+    """Response for ``POST /sessions/{session_uuid}/restart``.
+
+    THREE FIELDS THAT MUST NOT BE COLLAPSED INTO ``success``.
+
+    ``conversation`` says whether the old conversation was actually
+    resumed: ``'resumed'`` (``--resume <uuid> --fork-session`` against the
+    stored ``claude_session_uuid``), ``'none_recorded'`` (the replaced row
+    never learned a Claude session uuid, so this is a NEW conversation
+    wearing the old name - stated, never implied), or ``'unknown'`` (the
+    replaced row itself could not be read). A client that renders all
+    three identically has reintroduced the defect: a blank session
+    presented as a continued one.
+
+    ``lineage_recorded`` is separate from ``success`` for the same reason
+    it is on ``ForkSessionResponse`` - the replacement can be created and
+    working while the ``parent_session_id`` stamp fails to land. That is a
+    working session that is simply not linked, which is neither a failure
+    nor an unqualified success.
+
+    ``title_carried`` reports the label the replacement was born with, so
+    the caller can show what it actually got rather than what it asked
+    for.
+    """
+    success: bool = True
+    session: dict = Field(default_factory=dict)
+    conversation: str = Field(
+        ...,
+        description="'resumed' | 'none_recorded' | 'unknown' - never collapse these",
+    )
+    replaced_session_id: Optional[int] = None
+    lineage_recorded: bool = False
+    title_carried: Optional[str] = None
+    detail: Optional[str] = None
+
+
 class SuccessResponse(BaseModel):
     """Standard success response."""
     success: bool = True

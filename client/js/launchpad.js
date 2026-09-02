@@ -1571,7 +1571,7 @@ class Launchpad {
         const lifecycle = row.lifecycle || 'unknown';
         const canRestart = lifecycle === 'stopped';
         const restartBtn = canRestart
-            ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
+            ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((row.title && String(row.title).trim()) || '')}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
             : '';
         const lifecycleLabel = canRestart ? 'ENDED' : this._escapeHtml(lifecycle);
         // THE SAME ENDED SIGNAL THE TREE USES, not a second vocabulary.
@@ -1670,10 +1670,12 @@ class Launchpad {
             }
             const btn = ev.target.closest && ev.target.closest('.recent-session-restart');
             if (!btn) return;
-            this._restartRecentSession(
-                btn.getAttribute('data-working-dir'),
-                btn.getAttribute('data-agent-type')
-            );
+            this._restartRecentSession({
+                sessionUuid: btn.getAttribute('data-uuid'),
+                title: btn.getAttribute('data-title'),
+                workingDir: btn.getAttribute('data-working-dir'),
+                agentType: btn.getAttribute('data-agent-type'),
+            });
         });
     }
 
@@ -1783,20 +1785,167 @@ class Launchpad {
     }
 
     /**
-     * RESTART a stopped RECENT session: launch a fresh session in the
-     * same working directory (and agent type, when known). This is
-     * deliberately NOT a resurrection of the dead tmux instance (that
-     * process and its pane are gone) - it is a new session, the same
-     * action the "new console" FAB performs, seeded from the stopped
-     * row's own metadata.
-     * Inputs: workingDir (string), agentType (string|'').
+     * Decide HOW a restart will be performed, as data. Pure: no network,
+     * no DOM, no state read - which is what makes the decision assertable
+     * on its own rather than only through its side effects.
+     *
+     * THE BUG THIS SHAPE EXISTS TO KILL. The restart used to be built
+     * from ``working_dir`` and ``agent_type`` alone. The row's TITLE was
+     * never put into the button's markup at all, and its
+     * ``session_uuid`` was in the dataset and never passed to the
+     * handler - so restarting a session the user had named, and had been
+     * talking to for hours, produced an unnamed blank console. It
+     * discarded identity the client was already holding.
+     *
+     * TWO MODES, AND THE SECOND IS NOT A QUIET FALLBACK:
+     *
+     *   'restart' - a ``session_uuid`` is known, so the SERVER can read
+     *     the stored row and is the only thing that can answer whether
+     *     there is a Claude conversation to resume (the wire's
+     *     ``SessionRecord`` carries no ``claude_session_uuid``, on
+     *     purpose). The uuid is the whole payload; the server owns
+     *     title, directory, agent, model and the lineage stamp. Sending
+     *     our own copies would be handing it a second, staler
+     *     declaration of facts it already holds.
+     *
+     *   'create_unidentified' - the row carries NO ``session_uuid``, so
+     *     there is nothing to look up and no conversation link can even
+     *     be attempted. A session is still created (the user asked for
+     *     one, and the name, directory and agent are all still worth
+     *     carrying) and ``notice`` is non-null so the caller MUST say
+     *     what could not be determined. This is the third outcome, not a
+     *     silent degrade to a blank console.
+     *
+     * Inputs: opts (object) - {sessionUuid, title, workingDir, agentType},
+     *   every field optional and any of them possibly '' or null (they
+     *   come from ``getAttribute``, which yields null for an absent
+     *   attribute).
+     * Output: {mode, sessionUuid, payload, notice} - ``payload`` is the
+     *   create body in 'create_unidentified' mode and null otherwise;
+     *   ``notice`` is null exactly when nothing needs saying.
+     * Example:
+     *   lp._restartPlan({sessionUuid: 'u1', title: 'Media'}).mode
+     *   // 'restart'
+     */
+    _restartPlan(opts) {
+        const o = opts || {};
+        const sessionUuid = (o.sessionUuid || '').trim();
+        const title = (o.title || '').trim();
+        const workingDir = (o.workingDir || '').trim();
+        const agentType = (o.agentType || '').trim();
+        if (sessionUuid) {
+            return { mode: 'restart', sessionUuid, payload: null, notice: null };
+        }
+        const payload = {};
+        if (workingDir) payload.working_dir = workingDir;
+        if (agentType) payload.agent_type = agentType;
+        // THE TITLE TRAVELS EVEN HERE. ``project_name`` is what names the
+        // tmux session, so carrying it is the difference between the
+        // replacement wearing the user's own label and wearing a generated
+        // handle. It is the one piece of identity this mode CAN carry.
+        if (title) payload.project_name = title;
+        return {
+            mode: 'create_unidentified',
+            sessionUuid: '',
+            payload,
+            notice:
+                'started a new session'
+                + (title ? ` called "${title}"` : '')
+                + ': this row carries no stored session id, so whether it had '
+                + 'a conversation to continue CANNOT BE DETERMINED and none '
+                + 'was resumed',
+        };
+    }
+
+    /**
+     * Turn a restart response into the one sentence the user must see.
+     * Pure, and separate from the request so the three cases can be
+     * asserted without a server.
+     *
+     * THREE OUTCOMES, NEVER TWO. ``conversation`` is 'resumed' (the old
+     * conversation continues, in a new tmux session), 'none_recorded'
+     * (the replaced row never learned a Claude session uuid, so this is a
+     * NEW conversation wearing the old name) or 'unknown' (the replaced
+     * row could not be read). Rendering the second or third the same way
+     * as the first is exactly the defect this whole change repairs: a
+     * blank session presented as a continued one.
+     *
+     * A RESUMED restart whose LINEAGE stamp failed still gets a sentence.
+     * The session exists and works; it is simply not linked back to the
+     * one it replaced, which is neither a failure nor a clean success.
+     *
+     * Inputs: result (object|null) - the RestartSessionResponse body.
+     * Output: string|null - null ONLY for a fully clean resume, so a
+     *   non-null return means "say this".
+     * Example:
+     *   lp._restartNotice({conversation: 'none_recorded'})  // a sentence
+     */
+    _restartNotice(result) {
+        if (!result) {
+            return 'restarted, but the server did not say what happened to '
+                + 'the conversation: CANNOT DETERMINE whether it was resumed';
+        }
+        const kind = result.conversation;
+        const named = result.title_carried
+            ? ` "${result.title_carried}"` : '';
+        if (kind === 'none_recorded') {
+            return `restarted${named}, but this session never recorded a `
+                + 'Claude conversation, so a NEW conversation was started - '
+                + 'nothing was resumed';
+        }
+        if (kind !== 'resumed') {
+            return `restarted${named}, but whether the previous conversation `
+                + 'was resumed CANNOT BE DETERMINED';
+        }
+        if (result.lineage_recorded === false) {
+            return result.detail
+                || `restarted${named} and resumed the conversation, but the `
+                    + 'link back to the session it replaced was not recorded';
+        }
+        return null;
+    }
+
+    /**
+     * RESTART a stopped session, carrying everything it already knew.
+     *
+     * WHAT THIS IS AND IS NOT. It is NOT a resurrection: the old tmux
+     * session's pane is gone, and the replacement necessarily gets a new
+     * ``#{session_created}``, so the identity triple
+     * ``(tmux_socket, tmux_name, tmux_created_epoch)`` can never match
+     * the old row and is not made to. (``POST /sessions/respawn`` is the
+     * other verb - it puts a process back into a session that still
+     * EXISTS, which only works because ``remain-on-exit`` kept the pane.)
+     * Creating fresh is the correct ACTION here. What was wrong before
+     * was throwing away the title and the conversation link while doing
+     * it.
+     *
+     * The replacement resumes the stored ``claude_session_uuid`` with
+     * ``--fork-session`` (server side, see src/core/session_restart.py:
+     * a bare ``--resume`` would collide with the UNIQUE index the old row
+     * still holds that uuid under) and records ``parent_session_id`` back
+     * to the row it replaced.
+     *
+     * Inputs: opts (object) - {sessionUuid, title, workingDir, agentType}.
+     *   Also accepts the pre-change positional form
+     *   ``(workingDir, agentType)`` so a caller that has not been updated
+     *   degrades to the old behaviour with a stated notice rather than
+     *   silently passing a string where an object is read.
      * Output: Promise<void>.
      */
-    async _restartRecentSession(workingDir, agentType) {
+    async _restartRecentSession(opts, legacyAgentType) {
+        const normalized = (typeof opts === 'string' || opts == null)
+            ? { workingDir: opts || '', agentType: legacyAgentType || '' }
+            : opts;
+        const plan = this._restartPlan(normalized);
         try {
-            const payload = { working_dir: workingDir || undefined };
-            if (agentType) payload.agent_type = agentType;
-            await window.API.createSession(payload);
+            if (plan.mode === 'restart') {
+                const result = await window.API.restartSession(plan.sessionUuid);
+                const notice = this._restartNotice(result);
+                if (notice) this.showError(notice);
+            } else {
+                await window.API.createSession(plan.payload);
+                if (plan.notice) this.showError(plan.notice);
+            }
             await this.loadRunningSessions();
             await this.loadRecentSessions();
         } catch (error) {
@@ -3437,7 +3586,7 @@ class Launchpad {
                   <span class="badge badge-ended">ENDED</span>
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                   ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
-                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
+                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((s.title && String(s.title).trim()) || '')}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
                   <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>
                 </div>
             `;
@@ -3607,10 +3756,12 @@ class Launchpad {
             if (row.dataset.ended === '1') {
                 const restart = e.target.closest('.ended-session-restart');
                 if (restart) {
-                    await this._restartRecentSession(
-                        restart.getAttribute('data-working-dir'),
-                        restart.getAttribute('data-agent-type')
-                    );
+                    await this._restartRecentSession({
+                        sessionUuid: restart.getAttribute('data-uuid'),
+                        title: restart.getAttribute('data-title'),
+                        workingDir: restart.getAttribute('data-working-dir'),
+                        agentType: restart.getAttribute('data-agent-type'),
+                    });
                     return;
                 }
                 const del = e.target.closest('.ended-session-delete');

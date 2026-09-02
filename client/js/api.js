@@ -1155,6 +1155,31 @@ class API {
         );
     }
 
+    /**
+     * Sessions: RESTART a stopped session, carrying its stored identity.
+     *
+     * The uuid is the whole request. The server reads the stored row and
+     * is the only thing that CAN decide whether there is a Claude
+     * conversation to resume - ``SessionRecord`` on the wire deliberately
+     * carries no ``claude_session_uuid``, so a client that tried to
+     * decide this itself would be asserting something it never measured.
+     *
+     * @param {string} sessionUuid - the stopped row's durable identity
+     *   (``data-uuid`` on the restart control), NOT the tmux name: tmux
+     *   names are reusable and a live session may have taken it since.
+     * @returns {Promise<{success: boolean, session: object,
+     *   conversation: string, replaced_session_id: ?number,
+     *   lineage_recorded: boolean, title_carried: ?string,
+     *   detail: ?string}>} - ``conversation`` is 'resumed' |
+     *   'none_recorded' | 'unknown' and those are three different things.
+     */
+    async restartSession(sessionUuid) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionUuid)}/restart`,
+            { method: 'POST' }
+        );
+    }
+
     async deleteSessionRecord(sessionUuid) {
         return await this.call(
             `/sessions/records/${encodeURIComponent(sessionUuid)}`,

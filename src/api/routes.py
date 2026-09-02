@@ -14,6 +14,7 @@ from datetime import datetime
 
 from src.models import (
     ForkSessionResponse,
+    RestartSessionResponse,
     LocalModelsResponse,
     Session,
     SessionInfo,
@@ -393,6 +394,170 @@ async def fork_session(request: Request, session_name: str):
         detail=None if recorded else detail,
     )
 
+
+@router.post(
+    "/sessions/{session_uuid}/restart",
+    response_model=RestartSessionResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def restart_session(request: Request, session_uuid: str):
+    """Replace a STOPPED session with a fresh one that carries its identity.
+
+    Description: the launchpad's RESTART control. It creates a NEW tmux
+      session - it cannot do anything else, because the old one's pane is
+      gone and the replacement necessarily gets a new
+      ``#{session_created}``, so the identity triple can never match the
+      old row. What this endpoint adds over a bare ``POST /sessions`` is
+      that the replacement carries everything the old row already knew:
+      its TITLE, its working directory, its agent and model, its Claude
+      CONVERSATION (resumed via ``--resume <uuid> --fork-session``), and
+      a ``parent_session_id`` back to the row it replaced. See
+      src/core/session_restart.py for why fork-session rather than a bare
+      resume, and why no new ``fork_kind`` was invented.
+
+      KEYED ON ``session_uuid``, NOT ON THE TMUX NAME. A tmux name is
+      reusable and this app re-mints them; resolving a stopped session by
+      name could match a LIVE session that took the name afterwards.
+
+      THREE OUTCOMES, and the middle one is why this is not a bare create:
+        404  no row with this ``session_uuid`` - could not evaluate.
+        201, ``conversation='resumed'`` - the old conversation continues.
+        201, ``conversation='none_recorded'`` - the replaced row never
+             learned a Claude session uuid. The session is still created,
+             carrying the name/dir/agent, and the response SAYS it is a
+             new conversation. Never presented as a resume.
+    Inputs: session_uuid (str) - the stopped row's durable identity.
+    Output: RestartSessionResponse.
+    """
+    from contextlib import closing
+
+    from src.core import session_fork, session_restart
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for, transaction
+
+    session_manager = request.app.state.session_manager
+    socket = session_manager.tmux_socket_name()
+    db_path = db_path_for(settings.get_state_dir())
+
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="no datastore yet, so there is no session to restart",
+        )
+
+    def _resolve():
+        """Read the replaced row on one pooled thread."""
+        with closing(connect(db_path, create=False)) as conn:
+            return session_restart.resolve_restart_source(
+                conn, session_uuid=session_uuid
+            )
+
+    try:
+        source = await run_in_threadpool(_resolve)
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if source.outcome == session_restart.RESTART_UNRESOLVED:
+        raise HTTPException(
+            status_code=404, detail=source.detail or "session not found"
+        )
+
+    resumable = source.outcome == session_restart.RESTART_RESUMABLE
+    label = (source.title or "").strip() or None
+    # THE LABEL AND THE TMUX NAME ARE NOT THE SAME STRING - see the same
+    # comment on the fork route. The label is what a human reads; the tmux
+    # name is also the URL segment and the client router rejects anything
+    # outside /^[A-Za-z0-9_\- ]+$/. A title with a bracket in it would
+    # create fine and then be unreachable.
+    tmux_safe_name = (sanitize_tmux_name(label) or None) if label else None
+
+    logger.info(
+        "api_restart_session_request",
+        replaced_session_uuid=session_uuid,
+        replaced_session_id=source.parent_id,
+        conversation="resumed" if resumable else "none_recorded",
+        label=label,
+    )
+
+    import uuid as _uuid
+
+    try:
+        child = await session_manager.create_session(
+            session_id=f"ses_{_uuid.uuid4().hex[:8]}",
+            working_dir=source.working_dir,
+            project_name=tmux_safe_name,
+            agent_type=source.agent_type,
+            model=source.model,
+            # RESUME ONLY WHEN THERE IS SOMETHING TO RESUME. An empty list
+            # here is the whole difference between the two success
+            # outcomes, and it is derived from a measured column rather
+            # than from a client's claim.
+            agent_extra_args=(
+                session_fork.fork_arguments(source.claude_session_uuid)
+                if resumable else None
+            ),
+            label=label,
+        )
+    except Exception as exc:
+        logger.warning(
+            "restart_create_failed",
+            replaced_session_uuid=session_uuid,
+            label=label,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not create the replacement session: {exc}",
+        )
+
+    child_tmux = getattr(child, "tmux_session", None)
+
+    def _stamp():
+        """Record lineage on the replacement row, in its own transaction."""
+        with closing(connect(db_path, create=False)) as conn:
+            child_uuid = session_fork.newest_anchor_uuid(
+                conn, socket=socket, tmux_name=child_tmux or ""
+            )
+            if not child_uuid:
+                return False
+            with transaction(conn):
+                return session_fork.mark_as_fork(
+                    conn,
+                    child_session_uuid=child_uuid,
+                    parent_id=source.parent_id,
+                )
+
+    recorded = False
+    detail = source.detail if not resumable else None
+    try:
+        recorded = bool(await run_in_threadpool(_stamp))
+    except DatastoreUnreadableError as exc:
+        # THE SESSION EXISTS. Say so, and say the link did not land -
+        # never report this as a failed restart, never as a clean success.
+        lineage_note = (
+            f"the replacement was created, but its link back to the "
+            f"session it replaced could not be recorded: {exc}"
+        )
+        detail = f"{detail} {lineage_note}" if detail else lineage_note
+    else:
+        if not recorded:
+            lineage_note = (
+                "the replacement was created, but its link back to the "
+                "session it replaced could not be recorded; it works and "
+                "is simply not linked in the tree"
+            )
+            detail = f"{detail} {lineage_note}" if detail else lineage_note
+
+    return RestartSessionResponse(
+        success=True,
+        session=child.model_dump() if hasattr(child, "model_dump") else {},
+        conversation="resumed" if resumable else "none_recorded",
+        replaced_session_id=source.parent_id,
+        lineage_recorded=recorded,
+        title_carried=label,
+        detail=detail,
+    )
 
 @router.post("/sessions", response_model=Session, status_code=201, dependencies=[Depends(require_auth)])
 async def create_session(request: Request, body: CreateSessionRequest):
