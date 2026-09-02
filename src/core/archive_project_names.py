@@ -101,6 +101,29 @@ NAMES_MEAN: str = (
     "folder name is guessed from the slug."
 )
 
+#: The ``session_ref_scheme`` value that means "a conversation the owner
+#: had", as opposed to ``agent``, which is a sidechain file spawned by
+#: one. Named rather than inlined because the number it produces is the
+#: PRIMARY figure on a project card and the two differ by an order of
+#: magnitude: measured 2026-09-02, 19,588 of 21,039 transcripts are
+#: agent sidechains, so showing the total under a "sessions" label would
+#: overstate every project by roughly 14x.
+SESSION_SCHEME_OWN: str = "uuid"
+
+#: What the session count counts, shipped in ``meta`` so the rail cannot
+#: describe it as something else.
+SESSIONS_MEAN: str = (
+    "session_count is the number of transcripts in the project whose "
+    "session_ref_scheme is 'uuid' - the owner's own conversations - and "
+    "transcript_count is EVERY transcript including agent sidechains. "
+    "Measured 2026-09-02: 1,451 of 21,039 transcripts are uuid-scheme. "
+    "session_counted is false when the count was attempted and could "
+    "not be established; session_count is then null and MUST NOT be "
+    "rendered as 0, because a measured zero and an unmeasured one are "
+    "different findings. A node's session_count is null when ANY of its "
+    "members' counts is missing, for the same reason transcript_count is."
+)
+
 #: What merging does, likewise shipped rather than implied.
 MERGE_MEANS: str = (
     "one node per distinct observed_cwd across every host and corpus. "
@@ -208,7 +231,10 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
       ``hosts`` is sorted for a stable rail; ``transcript_count`` sums
       the members, and is None if ANY member's count is missing, because
       a total that silently omits an unmeasured member is a number
-      nobody measured.
+      nobody measured. ``session_count`` obeys the identical rule and
+      carries ``session_counted`` alongside it, so a client can tell a
+      measured zero from a count that could not be established without
+      inferring it from a null.
     Inputs: rows (sequence of dict) - each with project_id, slug,
       observed_cwd, host_id, host_display_name, corpus_id,
       transcript_count.
@@ -239,6 +265,19 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if all(isinstance(c, int) for c in counts)
             else None
         )
+        # The SAME rule for the session count, and deliberately not a
+        # softer one: a node whose members disagree about whether they
+        # were counted has no honest total, so it reports none. A member
+        # that says session_counted is False poisons the sum even if it
+        # also carries a number, because that number was not measured.
+        session_counts = [m.get("session_count") for m in members]
+        session_counted = (
+            all(m.get("session_counted") is not False for m in members)
+            and all(isinstance(c, int) for c in session_counts)
+        )
+        session_total: Optional[int] = (
+            sum(int(c) for c in session_counts) if session_counted else None
+        )
         hosts = sorted({
             str(m.get("host_display_name"))
             for m in members
@@ -255,6 +294,8 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "hosts": hosts,
             "host_count": len(hosts),
             "transcript_count": total,
+            "session_count": session_total,
+            "session_counted": session_counted,
             "members": [
                 {
                     "project_id": m.get("project_id"),
@@ -263,6 +304,8 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "host_display_name": m.get("host_display_name"),
                     "slug": m.get("slug"),
                     "transcript_count": m.get("transcript_count"),
+                    "session_count": m.get("session_count"),
+                    "session_counted": m.get("session_counted"),
                 }
                 for m in members
             ],
@@ -275,24 +318,71 @@ def merge_projects(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def fetch_project_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    """Read every project in the archive with its host and count.
+    """Read every project in the archive with its host and both counts.
 
     Description: 80 rows measured, so this is deliberately NOT paginated
       - the merged tree is only meaningful whole, and a page of it would
       let a client believe a project exists on one machine because the
-      row proving otherwise was on page 2. The counts come from one
-      grouped scan rather than a correlated subquery per project.
+      row proving otherwise was on page 2.
+
+      BOTH COUNTS COME FROM ONE GROUPED SCAN, NOT TWO AND NOT 77. The
+      rail paints every project at once, so a per-project count query
+      would be an N+1 on the only way into the archive (77 requests
+      measured). A second grouped query would have been correct but
+      wasteful, so the total and the own-session count are produced by
+      the SAME statement with a conditional SUM - the route therefore
+      issues exactly the number of statements it issued before this
+      field existed. Measured on the live corpus 2026-09-02, 21,039
+      transcripts: the old total-only statement ran at a 0.764ms median
+      and this one runs at 4.862ms, so the added cost is 4.10ms and no
+      extra round trip. The extra time is not the aggregate, it is the
+      loss of the covering index - ``ix_message_transcripts_project``
+      covers ``project_id`` alone, so reading ``session_ref_scheme``
+      forces a row fetch. A covering ``(project_id, session_ref_scheme)``
+      index would remove it and is deliberately NOT added here, because
+      it would mean a new migration step for 4ms.
+
+      THREE OUTCOMES ON THE SESSION COUNT. A project with no uuid-scheme
+      transcripts is a measured ZERO. A database whose schema cannot
+      answer the question at all - an older archive version without
+      ``session_ref_scheme``, say - falls back to the total-only
+      statement so the totals are still measured, and every row comes
+      back ``session_count: None`` with ``session_counted: False``. The
+      two are never rendered as each other: a zero is an answer and a
+      null is the absence of one.
     Inputs: conn (sqlite3.Connection).
     Output: list[dict] shaped for :func:`merge_projects`.
-    Example: fetch_project_rows(conn)[0]["slug"]
+    Example: fetch_project_rows(conn)[0]["session_count"]
     """
-    counts: Dict[Any, int] = {
-        row["project_id"]: int(row["n"])
+    totals: Dict[Any, int] = {}
+    sessions: Dict[Any, int] = {}
+    session_counted = True
+    try:
         for row in conn.execute(
-            "SELECT project_id, COUNT(*) AS n FROM message_transcripts "
-            "WHERE project_id IS NOT NULL GROUP BY project_id"
-        ).fetchall()
-    }
+            "SELECT project_id, COUNT(*) AS n_total, "
+            "SUM(CASE WHEN session_ref_scheme = ? THEN 1 ELSE 0 END) AS n_uuid "
+            "FROM message_transcripts WHERE project_id IS NOT NULL "
+            "GROUP BY project_id",
+            (SESSION_SCHEME_OWN,),
+        ).fetchall():
+            totals[row["project_id"]] = int(row["n_total"])
+            sessions[row["project_id"]] = int(row["n_uuid"] or 0)
+    except sqlite3.Error:
+        # The combined statement could not run. Fall back to the total
+        # alone rather than losing both numbers, and say so - a session
+        # count nobody produced must not arrive as 0. If the fallback
+        # fails too the error propagates, which is correct: at that point
+        # there is no project list to render at all.
+        totals = {
+            row["project_id"]: int(row["n"])
+            for row in conn.execute(
+                "SELECT project_id, COUNT(*) AS n FROM message_transcripts "
+                "WHERE project_id IS NOT NULL GROUP BY project_id"
+            ).fetchall()
+        }
+        sessions = {}
+        session_counted = False
+
     rows = conn.execute(
         """
         SELECT p.id, p.slug, p.observed_cwd, p.corpus_id,
@@ -311,7 +401,9 @@ def fetch_project_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "corpus_id": row["corpus_id"],
             "host_id": row["host_id"],
             "host_display_name": row["host_display_name"],
-            "transcript_count": counts.get(row["id"], 0),
+            "transcript_count": totals.get(row["id"], 0),
+            "session_count": sessions.get(row["id"], 0) if session_counted else None,
+            "session_counted": session_counted,
         }
         for row in rows
     ]

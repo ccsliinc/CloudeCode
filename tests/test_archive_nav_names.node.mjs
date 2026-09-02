@@ -69,8 +69,9 @@ function load() {
     vm.createContext(context);
     for (const file of ['archive-outcome.js', 'archive-format.js',
                         'archive-outcome-view.js', 'archive-nav-fuzzy.js',
-                        'archive-nav-row.js', 'archive-nav-merged.js',
-                        'archive-nav.js']) {
+                        'archive-nav-row.js', 'archive-nav-card.js',
+                        'archive-nav-info.js', 'archive-nav-tree.js',
+                        'archive-nav-merged.js', 'archive-nav.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
             context, { filename: file }
@@ -145,8 +146,21 @@ await test('a project with a null display_name shows its slug, never a guess', (
 
 // --- the machine is a badge, not a level ---------------------------------
 
-await test('a project on two machines is ONE row naming both', () => {
-    const { merged, document, row } = load();
+// SUPERSEDED 2026-09-02: THE MACHINE PILLS ARE NOT ON THE CARD FACE ANY
+// MORE. This test used to assert two `.archive-nav__host-badge` elements
+// and a `data-multi-host` attribute on a project row. The owner removed
+// them - "the machine pills are probably not necessary to display, but
+// should fold into an info button" - so the machines moved INTO the info
+// modal, where each one is a link back to that machine's list.
+//
+// The assertion is inverted rather than deleted, because "the pills are
+// gone" is now a fact worth keeping a test on: a card that quietly grew
+// them back would push every project row a line taller again, which is
+// the density problem the merge was supposed to end. The machines are
+// still asserted, in tests/test_archive_nav_cards.node.mjs, where they
+// now live.
+await test('a project on two machines is ONE card, and it carries NO pills', () => {
+    const { merged, document } = load();
     const slot = document.createElement('ul');
     merged.paint(document, slot, {
         nodes: [node('Media', '-Users-j-Media', '/Users/j/Media',
@@ -154,13 +168,14 @@ await test('a project on two machines is ONE row naming both', () => {
         unattributed: [], hostId: null, filterText: '', onActivate() {},
     });
     const rows = slot.querySelectorAll('.archive-nav__node--project');
-    assert.equal(rows.length, 1, 'one project, one row');
-    const badges = rows[0].querySelectorAll('.archive-nav__host-badge')
-        .map((b) => b.textContent);
-    assert.deepEqual(badges, ['Joe-MBP-M1', 'Mac mini']);
-    assert.equal(
-        rows[0].querySelector('.archive-nav__hosts').getAttribute('data-multi-host'),
-        'true');
+    assert.equal(rows.length, 1, 'one project, one card');
+    assert.equal(rows[0].querySelectorAll('.archive-nav__host-badge').length, 0,
+        'the machine pills must not be on the card face');
+    assert.equal(rows[0].querySelectorAll('.archive-nav__hosts').length, 0,
+        'the pill container must not be on the card face either');
+    // What replaces them: an affordance that opens the modal.
+    assert.ok(rows[0].querySelector('.archive-nav__info-btn'),
+        'the card must carry the info affordance the pills folded into');
 });
 
 await test('the machine filter narrows to projects with a member there', () => {

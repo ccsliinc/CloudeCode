@@ -79,7 +79,8 @@ function loadModules(doc, files) {
 /** The nav rail's module set. @type {string[]} */
 const NAV_FILES = ['archive-outcome.js', 'archive-outcome-view.js',
     'archive-fuzzy.js', 'archive-nav-fuzzy.js', 'archive-nav-row.js',
-    'archive-nav-merged.js', 'archive-nav.js'];
+    'archive-nav-card.js', 'archive-nav-info.js', 'archive-nav-tree.js',
+                        'archive-nav-merged.js', 'archive-nav.js'];
 
 /** The transcript list's module set. @type {string[]} */
 const LIST_FILES = ['archive-outcome.js', 'archive-outcome-view.js',

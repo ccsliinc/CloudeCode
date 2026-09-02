@@ -228,11 +228,13 @@ def test_fetch_project_rows_joins_host_and_counts():
         CREATE TABLE message_corpora (id INTEGER PRIMARY KEY, host_id INTEGER);
         CREATE TABLE message_projects (
             id INTEGER PRIMARY KEY, corpus_id INTEGER, slug TEXT, observed_cwd TEXT);
-        CREATE TABLE message_transcripts (id INTEGER PRIMARY KEY, project_id INTEGER);
+        CREATE TABLE message_transcripts (
+            id INTEGER PRIMARY KEY, project_id INTEGER,
+            session_ref_scheme TEXT);
         INSERT INTO message_hosts VALUES (1, 'H1');
         INSERT INTO message_corpora VALUES (1, 1);
         INSERT INTO message_projects VALUES (1, 1, '-Users-j-Infra', '/Users/j/Infra');
-        INSERT INTO message_transcripts VALUES (1, 1), (2, 1);
+        INSERT INTO message_transcripts VALUES (1, 1, 'uuid'), (2, 1, 'agent');
         """
     )
     rows = fetch_project_rows(conn)
@@ -240,5 +242,10 @@ def test_fetch_project_rows_joins_host_and_counts():
         "project_id": 1, "slug": "-Users-j-Infra",
         "observed_cwd": "/Users/j/Infra", "corpus_id": 1, "host_id": 1,
         "host_display_name": "H1", "transcript_count": 2,
+        # 2 transcripts, exactly 1 of them the owner's own. The two
+        # numbers differ HERE, in the smallest possible fixture, so a
+        # change that made session_count an alias of the total fails
+        # this assertion rather than passing it.
+        "session_count": 1, "session_counted": True,
     }]
     assert merge_projects(rows)[0]["display_name"] == "Infra"

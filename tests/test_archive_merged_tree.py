@@ -34,7 +34,8 @@ def _archive(unattributed_in_corpus_2: int = 5) -> sqlite3.Connection:
         CREATE TABLE message_projects (
             id INTEGER PRIMARY KEY, corpus_id INTEGER, slug TEXT, observed_cwd TEXT);
         CREATE TABLE message_transcripts (
-            id INTEGER PRIMARY KEY, project_id INTEGER, corpus_id INTEGER);
+            id INTEGER PRIMARY KEY, project_id INTEGER, corpus_id INTEGER,
+            session_ref_scheme TEXT);
         INSERT INTO message_hosts VALUES (1, 'Joe-MBP-M1'), (2, 'Mac mini');
         INSERT INTO message_corpora VALUES
             (1, 1, 'claude-projects'), (2, 1, 'agent-sessions'),
@@ -44,12 +45,14 @@ def _archive(unattributed_in_corpus_2: int = 5) -> sqlite3.Connection:
             (2, 3, '-Users-j-Media', '/Users/j/Media'),
             (3, 1, '-Users-j-Solo',  '/Users/j/Solo');
         INSERT INTO message_transcripts VALUES
-            (1, 1, 1), (2, 1, 1), (3, 2, 3), (4, 3, 1);
+            (1, 1, 1, 'uuid'), (2, 1, 1, 'agent'),
+            (3, 2, 3, 'uuid'), (4, 3, 1, 'agent');
         """
     )
     for n in range(unattributed_in_corpus_2):
         conn.execute(
-            "INSERT INTO message_transcripts (project_id, corpus_id) VALUES (NULL, 2)"
+            "INSERT INTO message_transcripts "
+            "(project_id, corpus_id, session_ref_scheme) VALUES (NULL, 2, 'uuid')"
         )
     return conn
 
@@ -192,3 +195,157 @@ def test_every_underlying_project_id_is_reachable_from_some_node():
     every_id = {r["id"] for r in conn.execute("SELECT id FROM message_projects")}
     assert reachable == every_id
     assert len(every_id) > len(env["result"]), "fixture must exercise a fold"
+
+
+# ---------------------------------------------------------------------------
+# The per-project SESSION count
+#
+# THE CARD SHOWS THIS NUMBER AS THE PRIMARY ONE, so all three of its
+# outcomes are pinned here rather than only the happy path. The live
+# corpus contains no project with zero own-sessions (measured 2026-09-02:
+# all 77 nodes counted, 1,446 sessions across 21,034 attributed
+# transcripts), so a genuine zero exists ONLY in this fixture. Without
+# these tests the zero path ships unexecuted.
+# ---------------------------------------------------------------------------
+
+
+def _archive_without_scheme() -> sqlite3.Connection:
+    """The same archive on a schema that cannot answer the question.
+
+    Description: ``message_transcripts`` with no ``session_ref_scheme``
+      column, which is what an older archive version looks like. Used to
+      prove the count degrades to a NAMED unknown rather than to a zero,
+      and that the totals survive the degradation.
+    Output: sqlite3.Connection.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE message_hosts (id INTEGER PRIMARY KEY, display_name TEXT);
+        CREATE TABLE message_corpora (
+            id INTEGER PRIMARY KEY, host_id INTEGER, corpus_key TEXT);
+        CREATE TABLE message_projects (
+            id INTEGER PRIMARY KEY, corpus_id INTEGER, slug TEXT, observed_cwd TEXT);
+        CREATE TABLE message_transcripts (
+            id INTEGER PRIMARY KEY, project_id INTEGER, corpus_id INTEGER);
+        INSERT INTO message_hosts VALUES (1, 'Joe-MBP-M1');
+        INSERT INTO message_corpora VALUES (1, 1, 'claude-projects');
+        INSERT INTO message_projects VALUES (1, 1, '-Users-j-Solo', '/Users/j/Solo');
+        INSERT INTO message_transcripts VALUES (1, 1, 1), (2, 1, 1);
+        """
+    )
+    return conn
+
+
+def _by_name(env):
+    """Index a merged envelope's nodes by display_name."""
+    return {node["display_name"]: node for node in env["result"]}
+
+
+def test_the_session_count_is_the_uuid_scheme_transcripts_only():
+    """Not the total. The fixture makes the two numbers differ."""
+    nodes = _by_name(merged_projects(_archive()))
+    media = nodes["Media"]
+    # 3 transcripts across two hosts, 2 of them the owner's own.
+    assert media["transcript_count"] == 3
+    assert media["session_count"] == 2
+    assert media["session_counted"] is True
+
+
+def test_a_project_with_only_agent_sidechains_reports_a_measured_zero():
+    """0 with counted TRUE. The case the live corpus does not contain."""
+    solo = _by_name(merged_projects(_archive()))["Solo"]
+    assert solo["transcript_count"] == 1
+    assert solo["session_count"] == 0, "a measured zero must be a number"
+    assert solo["session_counted"] is True, "and it must say it was measured"
+
+
+def test_an_unanswerable_schema_reports_null_and_counted_false_not_zero():
+    """The third outcome. A zero here would be a verdict nobody measured."""
+    node = merged_projects(_archive_without_scheme())["result"][0]
+    assert node["session_count"] is None
+    assert node["session_counted"] is False
+
+
+def test_the_totals_survive_a_session_count_that_could_not_be_taken():
+    """Losing one number must not silently lose the other."""
+    node = merged_projects(_archive_without_scheme())["result"][0]
+    assert node["transcript_count"] == 2, (
+        "the fallback must still measure the total; dropping both would "
+        "turn one unanswerable question into two"
+    )
+
+
+def test_a_measured_zero_and_an_unmeasured_count_are_not_equal():
+    """The negative control, stated as an assertion rather than assumed."""
+    zero = _by_name(merged_projects(_archive()))["Solo"]
+    unknown = merged_projects(_archive_without_scheme())["result"][0]
+    assert zero["session_count"] != unknown["session_count"]
+    assert zero["session_counted"] != unknown["session_counted"]
+
+
+def test_the_node_total_is_the_sum_of_its_members_session_counts():
+    """The merge must not report one host's count for a two-host project."""
+    media = _by_name(merged_projects(_archive()))["Media"]
+    assert len(media["members"]) == 2
+    assert sum(m["session_count"] for m in media["members"]) == media["session_count"]
+
+
+def test_one_uncounted_member_makes_the_whole_node_uncounted():
+    """A total that omits an unmeasured member is a number nobody measured."""
+    from src.core.archive_project_names import merge_projects
+    rows = [
+        {"project_id": 1, "slug": "-a", "observed_cwd": "/a", "corpus_id": 1,
+         "host_id": 1, "host_display_name": "H1", "transcript_count": 4,
+         "session_count": 2, "session_counted": True},
+        {"project_id": 2, "slug": "-a", "observed_cwd": "/a", "corpus_id": 2,
+         "host_id": 2, "host_display_name": "H2", "transcript_count": 1,
+         "session_count": None, "session_counted": False},
+    ]
+    node = merge_projects(rows)[0]
+    assert node["session_count"] is None, "2 + unknown is not 2"
+    assert node["session_counted"] is False
+
+
+def test_the_response_says_what_the_session_count_counts():
+    """Shipped in meta, so the rail cannot label it something else."""
+    meta = merged_projects(_archive())["meta"]
+    assert "uuid" in meta["counts"]["sessions_mean"]
+    assert "agent sidechains" in meta["counts"]["sessions_mean"]
+    assert meta["counts"]["session_uncounted_nodes"] == 0
+    unknown = merged_projects(_archive_without_scheme())["meta"]
+    assert unknown["counts"]["session_uncounted_nodes"] == 1, (
+        "a node nobody could count must be visible in the roll-up, not "
+        "only in the row"
+    )
+
+
+def test_the_session_count_costs_no_extra_statement():
+    """ONE grouped scan, not two and not one per project.
+
+    The rail paints every project at once, so a per-project query is an
+    N+1 on the only way into the archive. Counted by instrumenting the
+    connection rather than by reading the code, because the code is what
+    is under test.
+    """
+    conn = _archive()
+    statements: list = []
+    # set_trace_callback sees every statement SQLite actually executes,
+    # which is the measurement. Wrapping conn.execute would only see the
+    # calls this module chose to make through that one method.
+    conn.set_trace_callback(statements.append)
+    merged_projects(conn)
+    conn.set_trace_callback(None)
+
+    over_transcripts = [s for s in statements if "message_transcripts" in s]
+    # One for the per-project counts, one for the unattributed rows.
+    assert len(over_transcripts) == 2, (
+        f"expected 2 statements over message_transcripts, got "
+        f"{len(over_transcripts)}: {over_transcripts}"
+    )
+    grouped = [s for s in over_transcripts if "GROUP BY project_id" in s]
+    assert len(grouped) == 1, "the two counts must come from ONE statement"
+    assert "session_ref_scheme" in grouped[0], (
+        "and that one statement must be the one carrying the session count"
+    )

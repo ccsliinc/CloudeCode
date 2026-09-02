@@ -88,7 +88,8 @@ function load() {
     // at all.
     for (const file of ['archive-outcome.js', 'archive-format.js',
                         'archive-outcome-view.js', 'archive-nav-row.js',
-                        'archive-nav-fuzzy.js', 'archive-nav-merged.js', 'archive-nav.js',
+                        'archive-nav-fuzzy.js', 'archive-nav-card.js', 'archive-nav-info.js', 'archive-nav-tree.js',
+                        'archive-nav-merged.js', 'archive-nav.js',
                         'archive-fuzzy.js', 'archive-tlist-row.js',
                         'archive-tlist-filter.js', 'archive-transcript-list.js']) {
         vm.runInContext(

@@ -124,6 +124,12 @@ console.log('[ArchiveNavMerged Module] Loading...');
             slot.appendChild(ROW.renderRow(doc, ROW.NODE_KINDS.PROJECT, ranked[i].row, {
                 expandable: false,
                 onActivate: opts.onActivate,
+                // The info affordance and the presentation overlay are
+                // passed straight through. This file ranks and paints;
+                // it does not know what a modal is, and it does not know
+                // where a display-name override comes from.
+                onInfo: opts.onInfo,
+                overlay: opts.overlay,
                 positions: ranked[i].positions,
                 matchField: ranked[i].field
             }));

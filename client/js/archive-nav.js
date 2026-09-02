@@ -70,6 +70,13 @@ console.log('[ArchiveNav Module] Loading...');
     var countFor = ROW.countFor;
     var renderRow = ROW.renderRow;
     var renderOutcomeInto = ROW.renderOutcomeInto;
+    // The drill-down's DOM helpers, extracted to keep this file under the
+    // 500-line cap. Same hard-dependency contract as ROW above.
+    var TREE = window.ArchiveNavTree;
+    if (!TREE) {
+        console.error('[ArchiveNav] MISSING DEPENDENCY: window.ArchiveNavTree. ' +
+            'Load client/js/archive-nav-tree.js BEFORE this file.');
+    }
 
     /**
      * Description: build the navigation rail.
@@ -136,6 +143,44 @@ console.log('[ArchiveNav Module] Loading...');
         var merged = { nodes: [], unattributed: [], hosts: [] };
         var hostFilter = null;
         var lastPaint = { rendered: 0, total: 0 };
+        /**
+         * A CLIENT-SIDE presentation overlay, only for a build with no
+         * overlay endpoint. The real contract arrives ON each node from
+         * GET /archive/overlay/projects and is read by
+         * ArchiveNavCard.presentationFor; this rail never writes either.
+         */
+        var overlay = opts.overlay ||
+            (typeof window !== 'undefined' ? window.ArchiveProjectOverlay : null) || null;
+        /** The info-modal opener; its single-instance rule lives in
+         *  archive-nav-info.js. Built lazily - the module may be absent. */
+        var info = null;
+
+        /**
+         * Description: open the project info modal.
+         * Inputs: row (object), pres (object|null).
+         * Output: object|null - null when the modal module is not in this
+         *   build. NOT thrown: an exception on a click inside the only way
+         *   into the archive leaves a pane that looks like an empty archive.
+         */
+        function openInfo(row, pres) {
+            if (!window.ArchiveNavInfo) {
+                console.error('[ArchiveNav] window.ArchiveNavInfo is missing: load ' +
+                    'client/js/archive-nav-info.js');
+                return null;
+            }
+            if (!info) {
+                info = window.ArchiveNavInfo.wire({
+                    document: doc,
+                    overlay: overlay,
+                    onFilterHost: function (hostId) {
+                        hostFilter = (hostId === null || hostId === undefined ||
+                                      hostId === '') ? null : String(hostId);
+                        paintMerged();
+                    }
+                });
+            }
+            return info.open(row, pres);
+        }
 
         /**
          * Description: render one level's rows into a slot, applying the
@@ -160,7 +205,11 @@ console.log('[ArchiveNav Module] Loading...');
             for (var i = 0; i < visible.length; i++) {
                 slot.appendChild(renderRow(doc, kind, visible[i], {
                     expandable: expandable,
-                    onActivate: activate
+                    onActivate: activate,
+                    // The drill-down renders projects too, and they are the
+                    // same card. Its rows carry no `hosts`, which is the
+                    // case the modal reports as COULD NOT EVALUATE.
+                    onInfo: openInfo, overlay: overlay
                 }));
             }
         }
@@ -177,21 +226,6 @@ console.log('[ArchiveNav Module] Loading...');
                 return;
             }
             onSelect(kind, id, row);
-        }
-
-        /**
-         * Description: find a node's child slot in the rendered tree.
-         * Inputs: kind (string), id (number|string).
-         * Output: Element|null.
-         */
-        function slotFor(kind, id) {
-            var nodes = root.querySelectorAll('[data-node-kind="' + kind + '"]');
-            for (var i = 0; i < nodes.length; i++) {
-                if (nodes[i].getAttribute('data-node-id') === String(id)) {
-                    return nodes[i].querySelector('.' + ROOT_CLASS + '__children');
-                }
-            }
-            return null;
         }
 
         /**
@@ -215,22 +249,10 @@ console.log('[ArchiveNav Module] Loading...');
                     // Rows AND the banner. Dropping the rows to show the
                     // banner would hide what did come back; dropping the
                     // banner would claim the list is complete.
-                    renderPartialTail(hostList, r.envelope);
+                    TREE.renderPartialTail(doc, hostList, r.envelope);
                 }
                 return classified.token;
             });
-        }
-
-        /**
-         * Description: append the partial banner AFTER the rows that did
-         *   arrive, so both are visible at once.
-         * Inputs: slot (Element), envelope (object). Output: void.
-         */
-        function renderPartialTail(slot, envelope) {
-            var tail = el(doc, 'li', ROOT_CLASS + '__outcome', null);
-            tail.appendChild(window.ArchiveOutcomeView.renderOutcomeBlock(
-                envelope, { document: doc }));
-            slot.appendChild(tail);
         }
 
         /**
@@ -240,7 +262,7 @@ console.log('[ArchiveNav Module] Loading...');
          * Output: Promise<string> - the outcome token.
          */
         function expand(kind, id) {
-            var slot = slotFor(kind, id);
+            var slot = TREE.slotFor(root, kind, id);
             if (!slot) return Promise.resolve('not-found');
             slot.textContent = '';
             slot.appendChild(el(doc, 'li', ROOT_CLASS + '__loading', 'loading...'));
@@ -260,30 +282,20 @@ console.log('[ArchiveNav Module] Loading...');
                 totals[key] = rows.length;
                 paint(slot, key, isHost ? NODE_KINDS.CORPUS : NODE_KINDS.PROJECT, rows,
                       isHost ? ['corpus_key', 'root_path'] : ['slug', 'observed_cwd'], isHost);
-                if (!isHost) appendUnattributedNode(slot, id);
-                if (classified.token === 'partial') renderPartialTail(slot, r.envelope);
+                if (!isHost) TREE.appendUnattributedNode(doc, slot, loadedCorpora(), id, activate);
+                if (classified.token === 'partial') TREE.renderPartialTail(doc, slot, r.envelope);
                 return classified.token;
             });
         }
 
-        /**
-         * Description: give the no-project transcripts a visible node,
-         *   ALWAYS, including when the count is 0 or unreported. The
-         *   count comes from the corpora listing, where the server
-         *   already reported it.
-         * Inputs: slot (Element), corpusId (number|string). Output: void.
-         */
-        function appendUnattributedNode(slot, corpusId) {
-            var corpora = [];
+        /** Every corpus row loaded, flattened, so the unattributed node
+         *  can find its own count. Inputs: none. Output: Array<object>. */
+        function loadedCorpora() {
+            var out = [];
             for (var k in loaded) {
-                if (k.indexOf('corpora:') === 0) corpora = corpora.concat(loaded[k]);
+                if (k.indexOf('corpora:') === 0) out = out.concat(loaded[k]);
             }
-            var match = null;
-            for (var i = 0; i < corpora.length; i++) {
-                if (String(corpora[i].corpus_id) === String(corpusId)) match = corpora[i];
-            }
-            slot.appendChild(renderRow(doc, NODE_KINDS.UNATTRIBUTED,
-                match || { corpus_id: corpusId }, { expandable: false, onActivate: activate }));
+            return out;
         }
 
         /**
@@ -331,7 +343,7 @@ console.log('[ArchiveNav Module] Loading...');
                 merged.hosts = meta.hosts || [];
                 totals.merged = merged.nodes.length;
                 paintMerged();
-                if (classified.token === 'partial') renderPartialTail(mergedList, r.envelope);
+                if (classified.token === 'partial') TREE.renderPartialTail(doc, mergedList, r.envelope);
                 return classified.token;
             });
         }
@@ -361,7 +373,9 @@ console.log('[ArchiveNav Module] Loading...');
                 unattributed: merged.unattributed,
                 hostId: hostFilter,
                 filterText: filterText,
-                onActivate: activate
+                onActivate: activate,
+                onInfo: openInfo,
+                overlay: overlay
             });
             filterNote.textContent = filterText
                 ? describeFilter(lastPaint.rendered, lastPaint.total,
@@ -432,6 +446,14 @@ console.log('[ArchiveNav Module] Loading...');
              */
             lastPaint: function () { return lastPaint; },
             mergedNodes: function () { return merged.nodes.slice(); },
+            /**
+             * Description: open the info modal for one project node
+             *   without a click, for deep links and tests. `infoModal`
+             *   reports the open one, or null.
+             * Inputs: row (object). Output: object|null - modal handle.
+             */
+            openInfo: function (row) { return openInfo(row, null); },
+            infoModal: function () { return info ? info.current() : null; },
             expand: expand,
             setFilter: setFilter,
             // The composition root needs THREE things from the filter, and

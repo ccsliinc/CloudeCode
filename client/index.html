@@ -152,6 +152,16 @@
     <link rel="stylesheet" href="/static/css/archive-outcomes.css" />
     <link rel="stylesheet" href="/static/css/archive-screen.css" />
     <link rel="stylesheet" href="/static/css/archive-nav.css" />
+    <!-- archive-nav-card.css overrides the rail's generic project row with
+         the app's own card, so it loads AFTER archive-nav.css. It also
+         styles the project info modal, which renders an outcome block, so
+         it must come after archive-outcomes.css above. -->
+    <link rel="stylesheet" href="/static/css/archive-nav-card.css" />
+    <!-- The card's info modal. Split from archive-nav-card.css at this
+         repo's 500-line cap, same seam as archive-nav-card.js /
+         archive-nav-info.js. It overrides styles.css's `.modal-overlay`,
+         which is loaded far above. -->
+    <link rel="stylesheet" href="/static/css/archive-nav-info.css" />
     <link rel="stylesheet" href="/static/css/archive-reader.css" />
     <link rel="stylesheet" href="/static/css/archive-chat.css" />
     <link rel="stylesheet" href="/static/css/archive-search.css" />
@@ -1040,8 +1050,17 @@
          simply precede archive-nav-merged.js, which calls it. -->
     <script src="/static/js/archive-nav-fuzzy.js"></script>
     <script src="/static/js/archive-nav-row.js"></script>
-    <!-- archive-nav-merged.js reads window.ArchiveNavRow at IIFE time, so
-         it loads AFTER archive-nav-row.js and BEFORE archive-nav.js. -->
+    <!-- The next three all read window.ArchiveNavRow at IIFE time, so they
+         load AFTER archive-nav-row.js and BEFORE archive-nav.js.
+         archive-nav-card.js renders a project as a card; archive-nav-row.js
+         delegates to it at CALL time, so the order between those two is not
+         load-bearing, but archive-nav-tree.js IS a hard dependency of
+         archive-nav.js, which reads window.ArchiveNavTree at create() time.
+         archive-nav-info.js is the card's info modal and registers with
+         modal-stack.js, which is already loaded far above. -->
+    <script src="/static/js/archive-nav-card.js"></script>
+    <script src="/static/js/archive-nav-info.js"></script>
+    <script src="/static/js/archive-nav-tree.js"></script>
     <script src="/static/js/archive-nav-merged.js"></script>
     <script src="/static/js/archive-nav.js"></script>
     <script src="/static/js/archive-tlist-row.js"></script>

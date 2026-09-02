@@ -287,6 +287,15 @@ console.log('[ArchiveNavRow Module] Loading...');
      */
     function renderRow(doc, kind, row, opts) {
         var options = opts || {};
+        // A PROJECT IS A CARD, and the card lives in archive-nav-card.js.
+        // Delegated at CALL time rather than by loading that file first,
+        // so this module keeps no dependency on it and stays the thing
+        // every other kind is built from. A build that forgot the card
+        // file still renders projects - as the plain rows below, which
+        // is degraded rather than blank.
+        if (kind === NODE_KINDS.PROJECT && window.ArchiveNavCard) {
+            return window.ArchiveNavCard.renderCard(doc, row, options);
+        }
         var id = idFor(kind, row);
         var li = el(doc, 'li', ROOT_CLASS + '__node ' + ROOT_CLASS + '__node--' + kind, null);
         li.setAttribute('data-node-kind', kind);

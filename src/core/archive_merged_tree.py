@@ -22,6 +22,15 @@ response did not carry them. It reports one row per corpus, ALWAYS,
 including at zero. Measured 2026-09-01: corpus 1 has 0, corpus 2 has 5,
 corpus 3 has 0.
 
+TWO COUNTS PER NODE, BECAUSE ONE WOULD LIE. ``transcript_count`` is
+every transcript; ``session_count`` is only those whose
+``session_ref_scheme`` is ``uuid``, which is what the middle column
+already shows by default. They differ by more than an order of magnitude
+(19,588 of 21,039 transcripts are agent sidechains, measured 2026-09-02),
+so a card that labelled the total "sessions" would overstate every
+project. Both come out of ONE grouped statement - see
+``fetch_project_rows`` for why that matters and what it costs.
+
 THE COUNT IS THE THING THE CLIENT MUST BE ABLE TO TRUST, because the
 client hides the node on a known zero. A count this module could not
 measure is emitted as ``null`` with ``counted: false``, never as 0. A
@@ -39,6 +48,7 @@ from typing import Any, Dict, List
 from src.core.archive_project_names import (
     MERGE_MEANS,
     NAMES_MEAN,
+    SESSIONS_MEAN,
     fetch_project_rows,
     merge_projects,
 )
@@ -147,6 +157,12 @@ def merged_projects(conn: sqlite3.Connection) -> Dict[str, Any]:
                 "merge_means": MERGE_MEANS,
             },
             "naming": {"names_mean": NAMES_MEAN},
+            "counts": {
+                "sessions_mean": SESSIONS_MEAN,
+                "session_uncounted_nodes": sum(
+                    1 for n in nodes if n.get("session_counted") is False
+                ),
+            },
             "hosts": hosts,
             "unattributed": {
                 "by_corpus": unattributed,
