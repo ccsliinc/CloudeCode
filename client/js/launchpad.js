@@ -2795,6 +2795,18 @@ class Launchpad {
                         console.error('Launchpad: Failed to save adopted project:', error);
                     }
                 }
+
+                // Repaint the project tree from the list we just changed.
+                // renderProjectList() draws from the cached this.projects, and
+                // the 5s poller repaints from that cache without ever refilling
+                // it - so without this the new project stays invisible until some
+                // other action reloads. Guarded on its own: the session was
+                // created, and a failed repaint must not read as a failed create.
+                try {
+                    await this.loadProjects();
+                } catch (error) {
+                    console.error('Launchpad: Failed to refresh projects after session create:', error);
+                }
             }
 
             window.dispatchEvent(new CustomEvent('session-created', {
@@ -4534,6 +4546,18 @@ class Launchpad {
                 }
             }
 
+            // Repaint the project tree from the list we just changed.
+            // renderProjectList() draws from the cached this.projects, and
+            // the 5s poller repaints from that cache without ever refilling
+            // it - so without this the new project stays invisible until some
+            // other action reloads. Guarded on its own: the session was
+            // created, and a failed repaint must not read as a failed create.
+            try {
+                await this.loadProjects();
+            } catch (error) {
+                console.error('Launchpad: Failed to refresh projects after session create:', error);
+            }
+
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: { session }
             }));
@@ -4644,6 +4668,18 @@ class Launchpad {
                 if (!error.message.includes('already exists')) {
                     console.error('Launchpad: Failed to save project:', error);
                 }
+            }
+
+            // Repaint the project tree from the list we just changed.
+            // renderProjectList() draws from the cached this.projects, and
+            // the 5s poller repaints from that cache without ever refilling
+            // it - so without this the new project stays invisible until some
+            // other action reloads. Guarded on its own: the session was
+            // created, and a failed repaint must not read as a failed create.
+            try {
+                await this.loadProjects();
+            } catch (error) {
+                console.error('Launchpad: Failed to refresh projects after session create:', error);
             }
 
             // Trigger session-created event
