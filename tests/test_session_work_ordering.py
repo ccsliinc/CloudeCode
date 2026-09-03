@@ -27,10 +27,21 @@ well. The regression is the reorder-on-open, so that is measured directly.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from contextlib import closing
 from pathlib import Path
 
 import pytest
+
+# ---- minimal env bootstrap so ``src.config`` import succeeds -----------
+# Same pattern as tests/test_agent_family_display.py; this repo has no
+# conftest.py, so each module that reaches src.config - which importing
+# SessionManager does, transitively - bootstraps its own.
+os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_workord_wd_"))
+os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_workord_logs_"))
+os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
+os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 from src.core import claude_hooks
 from src.core.db import connect, db_path_for
@@ -293,3 +304,83 @@ def test_a_projects_own_sessions_are_the_only_ones_counted(conn):
     _session(conn, name="s_none", epoch=3, project_id=None,
              last_work_at="2026-12-31T00:00:00Z")
     assert _order(conn) == ["beta", "alpha"]
+
+
+# ---------------------------------------------------------------------
+# The wiring: which hook events reach the stamp at all
+# ---------------------------------------------------------------------
+
+
+def _routing_probe():
+    """A stand-in SessionManager that records stamp attempts instead of writing.
+
+    Description: ``_persist_work_stamp`` is called from
+      ``record_hook_event`` for EVERY hook event, and its first job is to
+      decide which of them are WORK. That decision is the whole feature,
+      and exercising it through a real SessionManager would need tmux, a
+      datastore and a live backend - none of which the decision depends
+      on. The probe supplies only the three attributes the method touches
+      before the decision is made.
+    Inputs: none.
+    Output: tuple[object, list] - the probe, and the list it appends to
+      once a stamp is actually attempted.
+    """
+    import types
+
+    calls: list = []
+    probe = types.SimpleNamespace(
+        _last_work_stamp_at={},
+        _instance_epochs={},
+        _work_stamp_epoch=lambda sid, name: calls.append((sid, name)) or None,
+    )
+    return probe, calls
+
+
+@pytest.mark.parametrize(
+    "kind,is_work",
+    [
+        ("UserPromptSubmit", True),
+        ("PreToolUse", True),
+        ("PostToolUse", True),
+        ("Stop", True),
+        ("Notification", True),
+        ("PermissionRequest", True),
+        ("SubagentStart", True),
+        ("SubagentStop", True),
+        # THE TWO THAT MUST NOT REACH IT. SessionStart fires with
+        # source='resume' when the user REJOINS a conversation - the exact
+        # gesture this whole change exists to stop counting as work.
+        ("SessionStart", False),
+        ("SessionEnd", False),
+    ],
+)
+def test_only_work_events_reach_the_stamp(kind, is_work):
+    from src.core.session_manager import SessionManager
+
+    probe, calls = _routing_probe()
+    SessionManager._persist_work_stamp(probe, "ses_1", "cloude_x", kind)
+    assert bool(calls) is is_work, kind
+
+
+def test_the_first_event_is_never_throttled_and_the_second_is():
+    """A burst of tool calls costs one write, not one per call.
+
+    The first event for a session must still land immediately, or a
+    session would take a full interval to reach the top of the list on
+    its first sign of work - which is exactly when a person is looking
+    for it.
+    """
+    from src.core.session_manager import SessionManager
+
+    probe, calls = _routing_probe()
+    SessionManager._persist_work_stamp(probe, "ses_2", "cloude_x", "PreToolUse")
+    SessionManager._persist_work_stamp(probe, "ses_2", "cloude_x", "PreToolUse")
+    assert len(calls) == 1
+
+
+def test_a_session_with_no_tmux_name_is_not_stamped():
+    from src.core.session_manager import SessionManager
+
+    probe, calls = _routing_probe()
+    SessionManager._persist_work_stamp(probe, "ses_3", None, "PreToolUse")
+    assert calls == []
