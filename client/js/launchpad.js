@@ -1290,15 +1290,20 @@ class Launchpad {
      * are the hooks event delegation will use.
      */
     /**
-     * The durable row id, bottom-right of a session box, with its parent
-     * when the session is a fork.
+     * The durable row id, bottom-right of a session box.
      *
-     * Description: renders ``#7`` normally and ``#7 ← #3`` for a fork, so
-     *   a fork tree can be followed by eye across screens. The id is
-     *   ``sessions.id``, which is what ``parent_session_id`` points at -
-     *   showing anything else here (the uuid, the tmux name) would give
-     *   the user a number that does not match the link it is meant to
-     *   help them follow.
+     * Description: renders ``#7``. The id is ``sessions.id``; showing
+     *   anything else here (the uuid, the tmux name) would give the user
+     *   a number that does not match the record it names.
+     *
+     *   THE PARENT LINK IS NOT RENDERED. It used to append ``← #3``. Two
+     *   reasons it is gone. Restarts made before row reuse landed set
+     *   ``parent_session_id`` on the session that replaced them, so this
+     *   badge pointed at the abandoned predecessor - precisely the
+     *   relationship the owner asked not to be shown. And those rows are
+     *   now excluded from every list, so the arrow pointed at a row that
+     *   appears nowhere on screen - a reference the user cannot follow is
+     *   noise, not information.
      *
      *   RENDERS NOTHING when there is no id, and that is deliberate. An
      *   EXTERNAL tmux session the app never created genuinely has no row.
@@ -1306,16 +1311,12 @@ class Launchpad {
      *   session we have no record of, which is worse than a blank corner.
      * Inputs: s (object) - a running-session row from /sessions/attachable.
      * Output: string - HTML, possibly empty.
-     * Example: lp._renderSessionIdHtml({session_row_id: 7, parent_session_id: 3})
+     * Example: lp._renderSessionIdHtml({session_row_id: 7})  // '#7'
      */
     _renderSessionIdHtml(s) {
         const id = s && s.session_row_id;
         if (id === null || id === undefined || id === '') return '';
-        const parent = s.parent_session_id;
-        const forked = (parent !== null && parent !== undefined && parent !== '')
-            ? `<span class="running-session-fork-of" title="forked from session #${this._escapeHtml(String(parent))}">← #${this._escapeHtml(String(parent))}</span>`
-            : '';
-        return `<span class="running-session-id" title="session id ${this._escapeHtml(String(id))}">#${this._escapeHtml(String(id))}${forked}</span>`;
+        return `<span class="running-session-id" title="session id ${this._escapeHtml(String(id))}">#${this._escapeHtml(String(id))}</span>`;
     }
 
     renderRunningSessions() {
@@ -3439,11 +3440,33 @@ class Launchpad {
         if (!this.sessionAttributionListingOk) return [];
         const liveNames = new Set((this.runningSessions || []).map(s => s.name));
         const records = this.sessionRecords || [];
+        // THE SAME EXCLUSION /sessions/recent APPLIES, for the same
+        // reason. A restart made before row reuse landed left this row
+        // behind and started a new one pointing back at it, so the pair
+        // rendered under one project TWICE - once running, once ended.
+        // The live-name check above cannot catch it: the two rows
+        // legitimately carry DIFFERENT tmux names ('Media_Compression'
+        // against 'cloude_Media_Compression').
+        //
+        // parent_session_id is a stored fact, not a classifier - when the
+        // successor is RUNNING this row is already on screen as that
+        // successor. Computed from `records`, which already carries both
+        // lifecycle and parent_session_id, so it needs no extra fetch.
+        const replacedByRunning = new Set();
+        for (const rec of records) {
+            if (!rec || rec.lifecycle !== 'running') continue;
+            const parent = rec.parent_session_id;
+            if (parent !== null && parent !== undefined && parent !== '') {
+                replacedByRunning.add(String(parent));
+            }
+        }
         const out = [];
         for (const rec of records) {
             if (!rec || rec.archived_at) continue;
             if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
             if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
+            if (rec.id !== null && rec.id !== undefined
+                && replacedByRunning.has(String(rec.id))) continue;
             // A RESTARTED SESSION NO LONGER PRODUCES A SECOND ROW, so
             // there is nothing here to fold away. A restart moves the
             // existing row onto the new tmux instance and that row is

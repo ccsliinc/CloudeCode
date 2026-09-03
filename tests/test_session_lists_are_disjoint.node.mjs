@@ -382,5 +382,93 @@ await test('the recent filter excludes by LIVE NAME, not by stored lifecycle', a
         'renderRecentSessions no longer builds a live-name exclusion set');
 });
 
+// =====================================================================
+// 5. THE PROJECT TREE obeys the same one-list rule, including for the
+//    legacy rows a name comparison cannot catch.
+// =====================================================================
+
+/**
+ * Drive _endedSessionsForTree() against canned running rows and records.
+ * @param {object[]} running  What the live tmux probe reported.
+ * @param {object[]} records  What GET /sessions/records returned.
+ * @returns {Promise<string[]>} tmux names the tree would list as ENDED.
+ */
+async function endedInTree(running, records) {
+    const { lp } = await loadBoth({
+        attachable: running,
+        recent: { state: 'ok', sessions: [], notice: null },
+    });
+    lp.sessionAttributionListingOk = true;
+    lp.sessionRecords = records;
+    lp.runningSessions = running;
+    return lp._endedSessionsForTree().map(r => r.name);
+}
+
+await test('the tree drops an ended row its RUNNING successor already shows', async () => {
+    // The two rows carry DIFFERENT tmux names on purpose - that is the
+    // whole reason the live-name guard misses them, and it is exactly
+    // the shape of the owner's real data.
+    const ended = await endedInTree(
+        [live('cloude_Media_Compression')],
+        [
+            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
+              session_uuid: 'u4', archived_at: null, parent_session_id: null },
+            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
+              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
+        ]
+    );
+    assert.ok(!ended.includes('Media_Compression'),
+        `the tree listed a session twice: ended=${JSON.stringify(ended)}`);
+    assert.equal(ended.length, 0);
+});
+
+await test('the tree KEEPS an ended row whose successor is not running', async () => {
+    // POSITIVE CONTROL. Once nothing on screen represents the row,
+    // hiding it would make it unreachable.
+    const ended = await endedInTree(
+        [],
+        [
+            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
+              session_uuid: 'u4', archived_at: null, parent_session_id: null },
+            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'stopped',
+              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
+        ]
+    );
+    assert.equal(ended.length, 2,
+        `the tree hid rows nothing else represents: ${JSON.stringify(ended)}`);
+});
+
+await test('the tree keeps an ordinary ended session with no successor', async () => {
+    const ended = await endedInTree(
+        [live('cloude_Media_Compression')],
+        [
+            { id: 9, tmux_name: 'cloude_Old_Thing', lifecycle: 'stopped',
+              session_uuid: 'u9', archived_at: null, parent_session_id: null },
+            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
+              session_uuid: 'u7', archived_at: null, parent_session_id: null },
+        ]
+    );
+    assert.deepStrictEqual(ended.length, 1);
+    assert.ok(ended.includes('cloude_Old_Thing'));
+});
+
+// =====================================================================
+// 6. THE PARENT-LINK BADGE IS GONE from the running row.
+// =====================================================================
+
+await test('a running row does not render an arrow to the session it replaced', async () => {
+    const { lp } = await loadBoth({
+        attachable: [],
+        recent: { state: 'ok', sessions: [], notice: null },
+    });
+    const html = lp._renderSessionIdHtml({ session_row_id: 7, parent_session_id: 4 });
+    assert.ok(/#7/.test(html), `the row id itself must still render: ${html}`);
+    assert.ok(!/\u2190/.test(html) && !/&larr;/.test(html),
+        `the parent arrow is still rendered: ${html}`);
+    assert.ok(!/#4/.test(html),
+        `the replaced session is still named: ${html}`);
+    assert.ok(!/fork-of/.test(html), `fork-of markup remains: ${html}`);
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);
