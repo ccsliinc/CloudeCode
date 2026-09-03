@@ -2921,6 +2921,15 @@ def _session_record_payload(row: dict) -> SessionRecord:
         model=row.get("model"),
         archived_at=row.get("archived_at"),
         title=row.get("title"),
+        # See SessionRecord's lineage block in src/models.py for why all
+        # five travel together: no one of them classifies a row on its
+        # own, and shipping a subset would leave the client guessing at
+        # exactly the distinction they exist to make.
+        id=row.get("id"),
+        parent_session_id=row.get("parent_session_id"),
+        fork_kind=row.get("fork_kind"),
+        created_at=row.get("created_at"),
+        last_seen_running_at=row.get("last_seen_running_at"),
     )
 
 

@@ -267,14 +267,31 @@ test('the title centres by growing/shrinking into real space, not a grid track',
         'must not regress to the grid-track approach - see the file banner');
 });
 
-test('--home-header-flank-w mirrors .controls\' real width: two buttons, not three', () => {
+test('--home-header-flank-w mirrors .controls\' real width: two buttons with the archive icon hidden', () => {
     const body = ruleBody(styleRules, '.header--home');
     assert.ok(body !== null, '.header--home rule missing');
     assert.match(body, /--home-header-flank-w:\s*calc\(var\(--control-size\)\s*\*\s*2\s*\+\s*8px\)/,
         'header-menu.js permanently folds logoutBtn/settingsBtn into its '
-        + 'overflow panel - only #configEditorBtn and the kebab stay inline. '
+        + 'overflow panel. With the message archive switched OFF, #archiveBtn '
+        + 'is hidden and only #configEditorBtn and the kebab stay inline. '
         + 'Guessing three buttons here once starved the title to a couple '
         + 'of characters at 390px.');
+});
+
+test('--home-header-flank-w widens to three when the archive icon is showing', () => {
+    // #archiveBtn moved out of the overflow into the inline row, but it is
+    // GATED: _wireArchive() sets el.hidden until ArchiveEntry.ensure()
+    // measures the server as enabled. So the flank cannot be a constant -
+    // whichever count it hardcoded would be wrong on half the installs,
+    // off-centring the title by half a control in one direction or the
+    // other. Keyed on [hidden] because that attribute is what the JS
+    // actually writes.
+    const body = ruleBody(styleRules, '.header--home:has(#archiveBtn:not([hidden]))');
+    assert.ok(body !== null,
+        'no :has(#archiveBtn:not([hidden])) branch - the home title will sit '
+        + 'off-centre by half a control whenever the archive icon is visible');
+    assert.match(body, /--home-header-flank-w:\s*calc\(var\(--control-size\)\s*\*\s*3\s*\+\s*16px\)/,
+        'three controls is 3 * --control-size plus TWO 8px .controls gaps');
 });
 
 // ---------------------------------------------------------------------

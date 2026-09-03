@@ -56,17 +56,18 @@ console.log('[HeaderMenu Module] Loading...');
 /**
  * Ids of the controls the overflow owns, in their canonical order.
  *
- * `archiveBtn` is FIRST because it is the only DESTINATION in the list -
- * the other two act on the app you are already in. It joined the
- * overflow rather than the inline row for the reason this file's header
- * gives: the inline slots are for controls used constantly, and a
- * message browser is not one of them. Before it existed there was no way
- * into the archive from anywhere in the app - measured, the only control
- * in the whole DOM matching /archive/ was the archive screen's own Back
- * button.
+ * `archiveBtn` USED TO BE FIRST HERE AND IS NOT ANY MORE. It was folded
+ * in on the argument that the inline slots are for controls used
+ * constantly and a message browser is not one of them. The owner asked
+ * for the opposite and the reason is worth keeping: reaching the archive
+ * cost a tap on an unlabelled kebab plus a read of a three-item menu,
+ * and the launchpad's compensating entry point was a full-width row with
+ * a title and a description sitting in the body, spending vertical space
+ * on every visit to buy back a destination nobody could find. One 36px
+ * icon beside the file-editor icon costs neither. See
+ * HEADER_INLINE_CONTROL_IDS below.
  */
 const HEADER_MENU_CONTROL_IDS = [
-    'archiveBtn',
     'logoutBtn',
     'settingsBtn'
 ];
@@ -75,8 +76,27 @@ const HEADER_MENU_CONTROL_IDS = [
  * Ids that must stay inline in the header at every width. Asserted by
  * tests: this is the "we keep editor very accessible" requirement, and
  * it is easier to defend as data than as a comment.
+ *
+ * `archiveBtn` sits beside `configEditorBtn` deliberately: they are the
+ * app's two BROWSERS, one over your files and one over your transcripts,
+ * and putting them next to each other is the whole reason the archive
+ * icon reads as what it is without a label.
+ *
+ * IT IS STILL GATED. Being inline changes WHERE the control lives, not
+ * WHETHER it exists: `_wireArchive()` below hides it at wire time and
+ * reveals it only once `ArchiveEntry.ensure()` has MEASURED the server
+ * as having the archive switched on. `disabled` and `unknown` both leave
+ * it hidden. Moving a control out of a menu must not turn a measured
+ * gate into an always-on door.
+ *
+ * A THIRD INLINE CONTROL IS A LAYOUT FACT, not just a list entry. The
+ * home header centres its title against `--home-header-flank-w`, which
+ * mirrors `.controls`' real width; styles.css now widens that token
+ * under `:has(#archiveBtn:not([hidden]))` so the flank tracks whether
+ * this button is actually showing. Adding a fourth means updating it
+ * again.
  */
-const HEADER_INLINE_CONTROL_IDS = ['configEditorBtn'];
+const HEADER_INLINE_CONTROL_IDS = ['archiveBtn', 'configEditorBtn'];
 
 class HeaderMenu {
     constructor() {

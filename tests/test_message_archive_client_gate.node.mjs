@@ -212,29 +212,23 @@ await test('the probe is single-flight', async () => {
         'three callers produced three requests for one unchanging answer');
 });
 
-// ---- 2. THE LAUNCHPAD ROW ----------------------------------------------
+// ---- 2. THERE IS NO LAUNCHPAD ROW TO GATE ANY MORE ---------------------
+// The launchpad shipped a hidden #archive-section that setupArchiveEntry
+// revealed on the ENABLED state. Both are gone: the entry point is the
+// header icon, gated in section 3 below. This is the stronger position
+// for a feature switch, not a weaker one - ONE door means one gate, and
+// a second gate that drifts out of step with the first is how an install
+// with the archive OFF ends up with a visible door onto a 302.
 
-await test('the launchpad archive section ships HIDDEN in the markup', () => {
-    const at = LAUNCHPAD.indexOf('id="archive-section"');
-    assert.ok(at > -1, 'the archive section is gone entirely');
-    const tag = LAUNCHPAD.slice(at - 80, at + 200);
-    assert.ok(/display:\s*none/.test(tag),
-        'the archive section renders VISIBLE by default; an install with ' +
-        'the feature off would show a row leading to a redirect');
-    assert.ok(/\bhidden\b/.test(tag), 'the section carries no hidden attribute');
-});
-
-await test('the launchpad reveals the section only on the ENABLED state', () => {
-    const at = LAUNCHPAD.indexOf('setupArchiveEntry() {');
-    assert.ok(at > -1, 'setupArchiveEntry is gone');
-    const body = LAUNCHPAD.slice(at, at + 1200);
-    assert.ok(/ArchiveEntry\.ensure\(\)/.test(body),
-        'the launchpad never measures whether the archive exists');
-    assert.ok(/STATE_ENABLED/.test(body),
-        'the reveal is not gated on the ENABLED state specifically, so ' +
-        'an unknown probe could open the door');
-    assert.ok(/style\.display\s*=\s*''/.test(body),
-        'nothing ever un-hides the section, so the row can never appear');
+await test('the launchpad has no archive door left to gate', () => {
+    assert.ok(LAUNCHPAD.length > 1000, 'launchpad.js did not load; vacuous');
+    assert.ok(!LAUNCHPAD.includes('id="archive-section"'),
+        'the launchpad archive section is back and needs its own gate again');
+    assert.ok(!LAUNCHPAD.includes('id="launchpad-archive-entry"'),
+        'the launchpad archive row is back and needs its own gate again');
+    assert.ok(!/ArchiveEntry/.test(LAUNCHPAD),
+        'launchpad.js reaches for ArchiveEntry again, so it is gating (or ' +
+        'failing to gate) something this suite does not know about');
 });
 
 // ---- 3. THE HEADER CONTROL ---------------------------------------------

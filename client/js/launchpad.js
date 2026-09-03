@@ -138,87 +138,9 @@ class Launchpad {
         // sessions" section heading row; the 6 sub-actions route back
         // into the same handlers the old inline "new project" section used.
         this.setupNewFab();
-        this.setupArchiveEntry();
         this.bindHeaderHelpToggle();
         // Note: loadProjects() will be called by App.showLaunchpad()
         this._startRunningSessionsPoller();
-    }
-
-    /**
-     * Wire the launchpad's archive row.
-     *
-     * WHY THERE IS A ROW HERE AT ALL. Before it, the archive had no entry
-     * point anywhere in the app: `grep -rn 'archive'` over this file and
-     * header-menu.js returned nothing, and the only control in the whole
-     * DOM matching /archive/ was the archive screen's own Back button.
-     * The message browser was reachable only by typing the URL.
-     *
-     * WHY IT IS A `.project-item`. That is the app's existing "here is a
-     * destination, click it" card - the same component every project row
-     * on this screen already uses - so the row inherits the app's card
-     * fill, accent rail, radius, hover glow and 0.3s transition without
-     * restating a single value. Building a bespoke row here is exactly
-     * the mistake the archive's own CSS made.
-     *
-     * WHY IT IS A `div` AND NOT A `button`. styles.css carries a bare
-     * `button { width: 36px; height: 36px }` reset (40px under the 480px
-     * query), and a class only overrides the properties it declares - a
-     * `.project-item` button would be forced to a 36px box. The project
-     * rows are divs for the same reason. `role="button"` and
-     * `tabindex="0"` carry the semantics the element does not, and the
-     * keyboard handler below carries Enter and Space, which a real
-     * button would have given for free.
-     *
-     * WHY IT SITS DIRECTLY UNDER THE ACTIONS ROW. Same reasoning as the
-     * create control above it: it is a GLOBAL destination whose presence
-     * must not depend on any list's contents. The running-sessions and
-     * recent sections are `display:none` when empty and the project list
-     * can be empty on a fresh install, so anywhere below them is a place
-     * this row could vanish from.
-     *
-     * Navigation goes through window.ArchiveEntry, the one entry
-     * implementation the header overflow item also calls.
-     *
-     * WHY THE SECTION IS RENDERED HIDDEN AND THEN REVEALED. The message
-     * archive is off by default (see src/core/message_archive_flag.py),
-     * and with it off there is no /archive page, no /api/v1/archive/*
-     * and no schema. A row leading there would be a door onto a 302 and
-     * a wall of 404s. The markup ships `display:none` so the DEFAULT
-     * rendering is the safe one - a template that forgot to ask would
-     * hide the row, not expose it - and this method reveals it only once
-     * `ArchiveEntry.ensure()` has MEASURED the server as enabled.
-     *
-     * `unknown` leaves it hidden, deliberately. An entry point drawn on
-     * a failed probe is a door drawn on a guess, and the two failure
-     * directions are not symmetric: a hidden row on a working install is
-     * a missing feature the user can still reach by URL, an exposed row
-     * on an install that opted out is a broken screen.
-     * Inputs: none.
-     * Output: void.
-     */
-    setupArchiveEntry() {
-        const row = document.getElementById('launchpad-archive-entry');
-        if (!row) return;
-        const section = document.getElementById('archive-section');
-        if (section && window.ArchiveEntry &&
-            typeof window.ArchiveEntry.ensure === 'function') {
-            window.ArchiveEntry.ensure().then((state) => {
-                if (state !== window.ArchiveEntry.STATE_ENABLED) return;
-                section.style.display = '';
-                section.removeAttribute('hidden');
-            });
-        }
-        const go = () => {
-            if (window.ArchiveEntry) window.ArchiveEntry.open();
-            else console.warn('[Launchpad] ArchiveEntry is not loaded');
-        };
-        row.addEventListener('click', go);
-        row.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-                e.preventDefault();
-                go();
-            }
-        });
     }
 
     /**
@@ -1641,7 +1563,32 @@ class Launchpad {
         const section = document.getElementById('recent-sessions-section');
         const countEl = document.getElementById('recent-sessions-count');
         const state = this.recentSessionsState || 'never_probed';
-        const rows = this.recentSessions || [];
+        // SUPERSEDED ROWS COME OUT OF RECENT TOO, and this is not
+        // tidiness - it is the invariant session_store.listable_sessions
+        // exists to hold. RECENT and the project tree are two surfaces
+        // over the same records; the last time they carried separate
+        // ideas of what to show, RECENT listed a session the tree did
+        // not and the app read as contradicting itself. Folding a
+        // restarted predecessor away in the tree while RECENT went on
+        // listing it would recreate exactly that.
+        //
+        // Classified against `sessionRecords`, NOT against these rows:
+        // /sessions/recent returns only `lifecycle='stopped'`, so the
+        // RUNNING successor that supersedes a row is by construction
+        // absent from this list, and a lookup restricted to it could
+        // never find one. The row stays visible whenever the record set
+        // has not been read (`sessionAttributionListingOk` false) - a
+        // classifier with no records to read has measured nothing.
+        const recentAll = this.recentSessions || [];
+        let rows = recentAll;
+        if (this.sessionAttributionListingOk &&
+            window.SessionSupersede &&
+            typeof window.SessionSupersede.isSuperseded === 'function') {
+            const records = this.sessionRecords || [];
+            rows = recentAll.filter(
+                (r) => !window.SessionSupersede.isSuperseded(r, records)
+            );
+        }
 
         if (state !== 'ok') {
             const notice = this._escapeHtml(
@@ -3056,37 +3003,21 @@ class Launchpad {
                     </div>
                 </div>
 
-                <!-- THE ARCHIVE ROW. HIDDEN BY DEFAULT: the message
-                     archive is off by default and this section is
-                     revealed by setupArchiveEntry only once the server
-                     has been MEASURED as having it. See that method for
-                     why an unmeasured probe leaves it hidden.
-                     See setupArchiveEntry() above for why
-                     it is here, why it is a .project-item and why it is a
-                     div. No inline onclick anywhere in this block:
-                     src/main.py stamps a script-src 'self' CSP, which
-                     refuses inline handlers silently - the element stays
-                     present, sized and clickable while doing nothing.
-                     NOTE FOR ANY FUTURE EDIT OF THIS BLOCK: no backticks
-                     in here. The whole return value is a template
-                     literal, so a backtick in a comment ends the string
-                     and takes the module out with it - which is exactly
-                     what the first draft of this comment did. -->
-                <div class="launchpad-section" id="archive-section" hidden
-                     style="display:none;">
-                    <div class="launchpad-section-title">
-                        <span class="launchpad-section-title__text">archive</span>
-                    </div>
-                    <div class="project-list">
-                        <div class="project-item" id="launchpad-archive-entry"
-                             role="button" tabindex="0"
-                             aria-label="message archive">
-                            <div class="project-name">message archive</div>
-                            <div class="project-description">browse ingested transcripts by host, project and line. read-only.</div>
-                        </div>
-                    </div>
-                </div>
-
+                <!-- THE ARCHIVE ROW USED TO BE HERE AND IS GONE ON
+                     PURPOSE. It was a full-width .project-item card
+                     with a title and a description, plus its own section
+                     heading - four lines of vertical space above the
+                     project list, spent on every visit to the launchpad
+                     to buy back a destination that otherwise had no
+                     entry point at all. The entry point is now the
+                     #archiveBtn ICON in the header (see index.html and
+                     header-menu.js's HEADER_INLINE_CONTROL_IDS), which
+                     is reachable from EVERY screen rather than only this
+                     one, and costs no body space anywhere.
+                     Do not re-add a row here: there would then be two
+                     doors to keep gated on the same feature switch, and
+                     the launchpad one is the one that has to be
+                     rediscovered each time it drifts. -->
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
                     <div class="launchpad-section-title launchpad-section-title--row">
                         <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
@@ -3507,11 +3438,49 @@ class Launchpad {
     _endedSessionsForTree() {
         if (!this.sessionAttributionListingOk) return [];
         const liveNames = new Set((this.runningSessions || []).map(s => s.name));
+        const records = this.sessionRecords || [];
         const out = [];
-        for (const rec of (this.sessionRecords || [])) {
+        for (const rec of records) {
             if (!rec || rec.archived_at) continue;
             if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
             if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
+            // SUPERSESSION IS ANNOTATED HERE AND ACTED ON AT RENDER TIME,
+            // NOT FILTERED HERE. A restart replacement carries the old
+            // session's title verbatim, so a restarted session appeared
+            // under its project TWICE - once running, once ended, same
+            // name - and grew by one more on every restart.
+            //
+            // Dropping the row right here would be the obvious fix and it
+            // is the wrong one: this method cannot see whether the
+            // SUCCESSOR is actually going to be rendered in the same
+            // group. If it is not (different project, routed to NEEDS
+            // ATTENTION, filtered by a live-name collision), a row
+            // removed here is a session the user can no longer reach from
+            // this screen at all. So the verdict travels WITH the row and
+            // the renderer, which knows what is on screen beside it,
+            // decides whether folding it away is safe.
+            //
+            // window.SessionSupersede absent -> no annotation -> every
+            // ended row renders exactly as it did before this fix. A
+            // classifier that failed to load must never hide anything.
+            let supersededBy = null;
+            if (window.SessionSupersede &&
+                typeof window.SessionSupersede.successorOf === 'function') {
+                const successor =
+                    window.SessionSupersede.successorOf(rec, records);
+                // successorOf returns non-null ONLY on a definite
+                // SUPERSEDED verdict; 'not-superseded' and
+                // 'cannot-determine' both yield null, and both leave the
+                // row a first-class peer. See that module's header for why
+                // the third outcome is rendered identically to a measured
+                // no rather than folded away with it.
+                if (successor) {
+                    const sid = successor.id;
+                    if (sid !== null && sid !== undefined && sid !== '') {
+                        supersededBy = sid;
+                    }
+                }
+            }
             out.push({
                 name: rec.tmux_name || '',
                 label: rec.title || null,
@@ -3527,6 +3496,12 @@ class Launchpad {
                 agent_family_source: rec.agent_family_source || null,
                 project_id: rec.project_id,
                 project_attribution: rec.project_attribution,
+                // The durable row id, so the renderer can match this row
+                // against the `superseded_by` its successor is named by.
+                // Every other surface already carries this field under
+                // this name - see _renderSessionIdHtml.
+                session_row_id: (rec.id === undefined ? null : rec.id),
+                superseded_by: supersededBy,
             });
         }
         return out;
@@ -3548,6 +3523,90 @@ class Launchpad {
      *   ``this.runningSessions`` entries).
      * Output: string - HTML for one ``.project-session-row``.
      */
+    /**
+     * Render one project group's session rows, folding each superseded
+     * session under the session that replaced it.
+     *
+     * Description: the render half of the restart-duplicate fix. A
+     *   restarted session leaves its predecessor behind carrying the
+     *   SAME title, so the group listed the name twice - once running,
+     *   once ended - and gained another every restart.
+     *
+     *   THE FOLD IS CONDITIONAL ON THE SUCCESSOR BEING HERE, and that
+     *   condition is the whole safety property. A predecessor is removed
+     *   from the peer list only when the row that replaced it is in THIS
+     *   group's list and will be drawn; it then reappears underneath that
+     *   row behind a disclosure, one click away, with its restart, delete
+     *   and open controls untouched. When the successor is NOT here - a
+     *   different project, NEEDS ATTENTION, or simply not rendered - the
+     *   predecessor stays exactly where it was, as an ordinary peer,
+     *   because folding it under something that is not on screen would
+     *   make it unreachable. Hiding a row is only ever allowed to be a
+     *   MOVE, never a disappearance.
+     *
+     *   The predecessor rows are rendered by the same
+     *   _renderEndedTreeSessionRowHtml every other ended row uses, into
+     *   the same container, so _bindProjectSessionRowClicks binds them
+     *   with no special case and nothing about them behaves differently
+     *   once revealed.
+     * Inputs: sessions (object[]) - one group's rows, live and ended,
+     *   in display order.
+     * Output: string - the group's inner HTML.
+     * Example: lp._renderTreeSessionRowsHtml(children)
+     */
+    _renderTreeSessionRowsHtml(sessions) {
+        const list = Array.isArray(sessions) ? sessions : [];
+        // Which successors are actually present in THIS group. Built from
+        // the rows being rendered, never from the record set, because the
+        // question is "is it on screen beside me" and only this list can
+        // answer that.
+        const presentIds = new Set();
+        for (const s of list) {
+            const id = s && s.session_row_id;
+            if (id !== null && id !== undefined && id !== '') {
+                presentIds.add(String(id));
+            }
+        }
+        const foldedUnder = new Map();
+        const peers = [];
+        for (const s of list) {
+            const parent = s && s.superseded_by;
+            const key = (parent === null || parent === undefined || parent === '')
+                ? null
+                : String(parent);
+            if (key !== null && presentIds.has(key)) {
+                const bucket = foldedUnder.get(key) || [];
+                bucket.push(s);
+                foldedUnder.set(key, bucket);
+                continue;
+            }
+            peers.push(s);
+        }
+        return peers.map((s) => {
+            const own = this._renderTreeSessionRowHtml(s);
+            const id = (s && s.session_row_id !== null && s.session_row_id !== undefined)
+                ? String(s.session_row_id) : null;
+            const folded = (id !== null) ? foldedUnder.get(id) : null;
+            if (!folded || folded.length === 0) return own;
+            const n = folded.length;
+            const noun = n === 1 ? 'earlier session' : 'earlier sessions';
+            const panelId = `superseded-${this._escapeHtml(id)}`;
+            return own + `
+                <div class="project-session-superseded">
+                  <button type="button" class="project-session-superseded__toggle"
+                          data-superseded-toggle="${this._escapeHtml(id)}"
+                          aria-expanded="false" aria-controls="${panelId}">
+                    <span class="project-session-superseded__chevron" aria-hidden="true">►</span>
+                    <span class="project-session-superseded__label">${n} ${noun} this one replaced</span>
+                  </button>
+                  <div class="project-session-superseded__list" id="${panelId}" style="display:none;">
+                    ${folded.map(f => this._renderTreeSessionRowHtml(f)).join('')}
+                  </div>
+                </div>
+            `;
+        }).join('');
+    }
+
     _renderTreeSessionRowHtml(s) {
         if (s.ended) return this._renderEndedTreeSessionRowHtml(s);
         const owned = !!s.created_by_cloude;
@@ -3632,7 +3691,7 @@ class Launchpad {
         if (!sessions || sessions.length === 0) return '';
         const nodeKey = '__no_project__';
         const collapsed = this._collapsedProjectNodes.has(nodeKey);
-        const rows = sessions.map(s => this._renderTreeSessionRowHtml(s)).join('');
+        const rows = this._renderTreeSessionRowsHtml(sessions);
         return `
                 <div class="project-node project-node--virtual" data-project-node="no-project">
                   <button type="button" class="project-node__header project-node__toggle" data-node-key="${nodeKey}" aria-expanded="${!collapsed}" aria-controls="project-node-sessions-${nodeKey}">
@@ -3692,6 +3751,45 @@ class Launchpad {
      * sessions poller repainting the tree does not snap a collapsed
      * project back open.
      */
+    /**
+     * Wire the "N earlier sessions this one replaced" disclosures.
+     *
+     * Description: the affordance that makes folding a superseded
+     *   session safe. Delegated on ``#project-list`` in the same style as
+     *   the node toggles beside it, so it survives every re-render the 5s
+     *   poller does without rebinding.
+     *
+     *   Deliberately NOT persisted into ``_collapsedProjectNodes``.
+     *   That set records the user's standing choice about a PROJECT; a
+     *   predecessor list is a lookup you open, read and leave, and
+     *   remembering it would leave the duplicate permanently back on
+     *   screen - which is the thing being fixed.
+     *
+     *   ``stopPropagation`` so opening the disclosure cannot also be read
+     *   as a click on the project node behind it.
+     * Inputs: none.
+     * Output: void.
+     */
+    _bindSupersededToggles() {
+        const container = document.getElementById('project-list');
+        if (!container || container.__boundSupersededToggles) return;
+        container.__boundSupersededToggles = true;
+        container.addEventListener('click', (e) => {
+            const toggle = e.target.closest('.project-session-superseded__toggle');
+            if (!toggle) return;
+            e.stopPropagation();
+            const wrap = toggle.closest('.project-session-superseded');
+            if (!wrap) return;
+            const list = wrap.querySelector('.project-session-superseded__list');
+            if (!list) return;
+            const expand = toggle.getAttribute('aria-expanded') !== 'true';
+            toggle.setAttribute('aria-expanded', String(expand));
+            list.style.display = expand ? '' : 'none';
+            const chev = toggle.querySelector('.project-session-superseded__chevron');
+            if (chev) chev.textContent = expand ? '▼' : '►';
+        });
+    }
+
     _bindProjectNodeToggles() {
         const container = document.getElementById('project-list');
         if (!container || container.__boundNodeToggles) return;
@@ -3925,7 +4023,7 @@ class Launchpad {
                 ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle details for ${this._escapeHtml(project.name)}"${controlsAttr}><span class="project-node__chevron" aria-hidden="true">►</span>${countHtml}</button>`
                 : '';
             const sessionsHtml = hasChildren
-                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${children.map(s => this._renderTreeSessionRowHtml(s)).join('')}</div>`
+                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${this._renderTreeSessionRowsHtml(children)}</div>`
                 : '';
             // Item 43: the description is the part of the row that a
             // collapsed node sheds. Rendered with the collapse already
@@ -3959,6 +4057,7 @@ class Launchpad {
         projectListEl.innerHTML = authorityHtml + projectNodesHtml + noProjectHtml + attentionHtml;
 
         this._bindProjectNodeToggles();
+        this._bindSupersededToggles();
         this._bindProjectSessionRowClicks();
 
         // Add click handlers for project selection

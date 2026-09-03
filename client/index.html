@@ -361,22 +361,34 @@
                  whether or not a session is open. Icon is an open folder,
                  distinct from settings' gear-circle and every other glyph
                  in this row. -->
-            <!-- ARCHIVE. Folded into the header overflow rather than left
-                 inline, which is the same judgement the menu's own header
-                 makes about logout and settings: this is a DESTINATION you
-                 visit occasionally, not a control you reach for while
-                 working, and the inline slots are reserved for the latter.
-                 It is APP-scoped, not session-scoped, so it is correct on
-                 every screen - see the SCOPE BOUNDARY note in
-                 header-menu.js. Deliberately NOT `class="hidden"`: the
-                 hidden gating on its neighbours is driven by session state
-                 in app.js, and the archive is reachable whether or not a
-                 session exists. Icon is a stack of archive boxes, distinct
-                 from the gear, the folder and the door beside it. Wired in
-                 header-menu.js, never inline - src/main.py stamps
-                 `script-src 'self'`, which silently refuses an inline
-                 onclick (see #logoutBtn's comment above). -->
-            <button type="button" id="archiveBtn" aria-label="Message archive" title="message archive" data-tooltip="Message archive">
+            <!-- ARCHIVE. INLINE, and immediately before the file
+                 editor on purpose: these are the app's two BROWSERS -
+                 one over your files, one over your transcripts - and
+                 sitting them together is what lets this icon read as
+                 what it is without a text label.
+                 It was in the header OVERFLOW until the owner asked for
+                 an icon instead ("make it an icon next to files up on
+                 top, dont waste page space"). It is claimed inline by
+                 header-menu.js's HEADER_INLINE_CONTROL_IDS, so the fold
+                 never moves it. The launchpad body row that used to
+                 compensate for it being buried is gone with it - see
+                 the note where it stood in launchpad.js.
+                 It is APP-scoped, not session-scoped, so it is correct
+                 on every screen - see the SCOPE BOUNDARY note in
+                 header-menu.js. Deliberately NOT class="hidden": the
+                 hidden gating on its neighbours is driven by SESSION
+                 state in app.js, and the archive is reachable whether
+                 or not a session exists. Its own gating is a different
+                 thing and still very much in force - _wireArchive()
+                 hides this button at wire time and reveals it only once
+                 ArchiveEntry.ensure() has measured the server as having
+                 the message archive switched ON; disabled and unknown
+                 both leave it hidden. Icon is a stack of archive boxes,
+                 distinct from the gear, the folder and the door beside
+                 it. Wired in header-menu.js, never inline - src/main.py
+                 stamps script-src 'self', which silently refuses an
+                 inline onclick (see #logoutBtn's comment above). -->
+            <button type="button" id="archiveBtn" class="btn-icon" aria-label="Message archive" title="message archive" data-tooltip="Message archive">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>
                     <path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -395,12 +407,16 @@
                  header's RIGHT flank, and .header--home sizes
                  #header-home-spacer to mirror that flank's width so the
                  title lands on the real centre. The flank token
-                 (--home-header-flank-w) budgets TWO inline controls
-                 (#configEditorBtn and the kebab #header-menu-toggle);
-                 a third inline child here on the home screen made the
-                 right flank wider than the spacer it was supposed to
-                 equal, which pushed the title off centre by half the
-                 difference. -->
+                 (--home-header-flank-w) budgets the inline controls
+                 (#archiveBtn when the archive is switched on,
+                 #configEditorBtn, and the kebab #header-menu-toggle);
+                 an inline child here on the home screen that the token
+                 does not account for makes the right flank wider than
+                 the spacer it is supposed to equal, which pushes the
+                 title off centre by half the difference. The token has
+                 a :has(#archiveBtn:not([hidden])) branch in styles.css
+                 precisely because that button's presence is measured at
+                 runtime rather than fixed. -->
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
                  never a header one - see .info near the end of this file
@@ -716,6 +732,15 @@
          the escaper is passed in - so it has no ordering constraint on
          anything else. -->
     <script src="/static/js/folder-picker-modal.js"></script>
+    <!-- Restart-supersession classifier. Must load BEFORE launchpad.js,
+         whose _endedSessionsForTree() folds a superseded session under
+         the session that replaced it. Pure functions over record dicts -
+         it touches no DOM and reads no controller state, so it has no
+         other ordering constraint. When it is ABSENT, launchpad falls
+         back to showing every ended row, which is the pre-fix behaviour
+         and the safe direction: a missing classifier must never be able
+         to hide a session. -->
+    <script src="/static/js/session-supersede.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

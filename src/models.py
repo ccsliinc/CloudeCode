@@ -1733,6 +1733,41 @@ class SessionRecord(BaseModel):
         description="Visibility only. NEVER hides a running session",
     )
     title: Optional[str] = Field(default=None)
+    # LINEAGE, SHIPPED SO THE CLIENT CAN TELL A RESTART REPLACEMENT FROM A
+    # DELIBERATE FORK. Both write fork_kind='fork' and a parent_session_id
+    # (see src/core/session_restart.py's "THE LINEAGE THAT IS RECORDED"
+    # block for why no 'restart' kind was invented), so neither field
+    # discriminates on its own. What does is WHEN: a restart replaces a
+    # session that was ALREADY dead, so the parent's last_seen_running_at
+    # precedes the child's created_at by however long it sat stopped,
+    # while a fork branches a session that is still RUNNING and whose
+    # last_seen_running_at therefore keeps advancing past its child's
+    # birth. The client needs all four columns to make that comparison,
+    # and `id` because parent_session_id points at sessions.id and
+    # nothing else on this model carried it.
+    id: Optional[int] = Field(
+        default=None,
+        description="sessions.id - what parent_session_id points at",
+    )
+    parent_session_id: Optional[int] = Field(
+        default=None,
+        description="sessions.id of the row this one branched from",
+    )
+    fork_kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "Claude Code's own SessionStart.source. NOT a restart marker "
+            "- a restart replacement records 'fork' like any other fork"
+        ),
+    )
+    created_at: Optional[str] = Field(default=None)
+    last_seen_running_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "When this session was last PROVEN alive by a tmux probe. "
+            "None means never - which is a cannot-determine, not a zero"
+        ),
+    )
 
 
 class SessionImportStatus(BaseModel):

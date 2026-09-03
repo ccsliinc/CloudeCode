@@ -119,60 +119,47 @@ test('archive-entry.js is registered as a script and loads before app.js', () =>
     assert.ok(app > entry, 'app.js must stay last');
 });
 
-// ---- 2. THE LAUNCHPAD ENTRY POINT --------------------------------------
+// ---- 2. THE LAUNCHPAD BODY ROW IS GONE, ON PURPOSE --------------------
+// It was a full-width .project-item card with a title and a description,
+// under its own section heading, costing four lines of vertical space on
+// every visit to the home screen. The owner asked for the archive as a
+// header ICON instead ("dont waste page space"), and one entry point that
+// is present on EVERY screen beats one that is present on one screen.
+// These assertions are the guard against it creeping back: two doors onto
+// the same feature switch is two gates to keep in step, which is the
+// drift section 5 below exists to prevent.
 
-test('the launchpad renders an archive row', () => {
-    assert.ok(LAUNCHPAD.includes('id="launchpad-archive-entry"'),
-        'the launchpad markup has no archive row at all - the archive is ' +
-        'unreachable from the home screen');
-    assert.ok(/\/archive|message archive/i.test(LAUNCHPAD),
-        'nothing on the launchpad names the archive, so nobody can find it');
-});
-
-test('the archive row reuses .project-item rather than a bespoke card', () => {
-    const at = LAUNCHPAD.indexOf('id="launchpad-archive-entry"');
-    const block = LAUNCHPAD.slice(at - 300, at + 500);
-    assert.ok(block.includes('project-item'),
-        'the archive row does not use the app card component, so it will drift ' +
-        'from every other row on the screen the first time either changes');
-    assert.ok(block.includes('project-name') && block.includes('project-description'),
-        'the row does not use the app label/description pair');
-});
-
-test('the archive row is reachable by keyboard', () => {
-    const at = LAUNCHPAD.indexOf('id="launchpad-archive-entry"');
-    const block = LAUNCHPAD.slice(at - 300, at + 500);
-    // It is a div (styles.css forces a 36px box on any bare button), so
-    // the semantics a real button would have given for free are carried
-    // explicitly, and Enter/Space are handled in setupArchiveEntry.
-    assert.ok(block.includes('role="button"'), 'the row has no button role');
-    assert.ok(block.includes('tabindex="0"'), 'the row cannot be focused');
-    assert.ok(/e\.key === 'Enter'/.test(LAUNCHPAD) && /' '/.test(LAUNCHPAD),
-        'setupArchiveEntry does not handle Enter and Space, so the row is ' +
-        'focusable but not activatable');
-});
-
-test('the launchpad wires the row, and wires it at init', () => {
-    assert.ok(/setupArchiveEntry\(\)\s*\{/.test(LAUNCHPAD),
-        'setupArchiveEntry is not defined');
-    assert.ok(/this\.setupArchiveEntry\(\);/.test(LAUNCHPAD),
-        'setupArchiveEntry is defined but never called, so the row is inert');
+test('the launchpad no longer spends body space on an archive row', () => {
+    assert.ok(!LAUNCHPAD.includes('id="launchpad-archive-entry"'),
+        'the launchpad archive row is back; it was removed so the header ' +
+        'icon could be the single entry point');
+    assert.ok(!LAUNCHPAD.includes('id="archive-section"'),
+        'the launchpad archive SECTION is back, heading and all');
+    assert.ok(!/setupArchiveEntry/.test(LAUNCHPAD),
+        'setupArchiveEntry is back; the row it wired no longer exists, so ' +
+        'it can only be wiring something new and ungoverned');
 });
 
 // ---- 3. THE HEADER ENTRY POINT -----------------------------------------
 
-test('the header overflow owns an archive control', () => {
+test('the header owns an archive control, INLINE', () => {
     assert.ok(HTML.includes('id="archiveBtn"'), 'index.html has no #archiveBtn');
     // Asserted against the CONTROL_IDS ARRAY, not against the file. A
     // bare substring search for 'archiveBtn' over header-menu.js also
     // matches the getElementById call inside _wireArchive, so removing
     // the id from the contract left this check green - proven by
     // mutation, which is the only reason the hole was found.
-    const idsBlock = /HEADER_MENU_CONTROL_IDS = \[([\s\S]*?)\]/.exec(HEADER);
-    assert.ok(idsBlock, 'header-menu.js no longer declares HEADER_MENU_CONTROL_IDS');
-    assert.ok(/'archiveBtn'/.test(idsBlock[1]),
-        'header-menu.js does not claim #archiveBtn in HEADER_MENU_CONTROL_IDS, so ' +
-        'it is never folded into the panel and renders loose in the header row');
+    const inlineBlock = /HEADER_INLINE_CONTROL_IDS = \[([\s\S]*?)\]/.exec(HEADER);
+    assert.ok(inlineBlock, 'header-menu.js no longer declares HEADER_INLINE_CONTROL_IDS');
+    assert.ok(/'archiveBtn'/.test(inlineBlock[1]),
+        'header-menu.js does not claim #archiveBtn in HEADER_INLINE_CONTROL_IDS, ' +
+        'so the fold will sweep it into the overflow panel and the owner gets ' +
+        'a menu entry again instead of the icon he asked for');
+    const menuBlock = /HEADER_MENU_CONTROL_IDS = \[([\s\S]*?)\]/.exec(HEADER);
+    assert.ok(menuBlock, 'header-menu.js no longer declares HEADER_MENU_CONTROL_IDS');
+    assert.ok(!/'archiveBtn'/.test(menuBlock[1]),
+        '#archiveBtn is claimed by BOTH lists; _fold() would move it into the ' +
+        'panel and the inline contract would be a comment, not a fact');
     assert.ok(/_wireArchive\(\)\s*\{/.test(HEADER), '#archiveBtn is never wired');
     assert.ok(/this\._wireArchive\(\);/.test(HEADER),
         '_wireArchive is defined but never called');
@@ -192,13 +179,14 @@ test('the header control is NOT hidden behind session state', () => {
 // clickable while doing nothing at all, and no DOM test can see it.
 // #logoutBtn was dead from the initial commit for exactly this reason.
 
-test('neither entry point carries an inline event handler', () => {
+test('the entry point carries no inline event handler', () => {
     const at = HTML.indexOf('id="archiveBtn"');
     assert.ok(!/on[a-z]+\s*=/.test(HTML.slice(at - 120, at + 400)),
         '#archiveBtn carries an inline handler, which CSP refuses silently');
-    const lp = LAUNCHPAD.indexOf('id="launchpad-archive-entry"');
-    assert.ok(!/on[a-z]+\s*=\s*["']/.test(LAUNCHPAD.slice(lp - 200, lp + 500)),
-        'the launchpad archive row carries an inline handler');
+    // There is no second entry point to check any more - the launchpad
+    // row is gone (section 2). Its absence is asserted there rather than
+    // by an inline-handler check over markup that does not exist, which
+    // would pass vacuously.
 });
 
 // ---- 5. ONE IMPLEMENTATION, NOT TWO ------------------------------------
@@ -206,9 +194,10 @@ test('neither entry point carries an inline event handler', () => {
 // guard, or a route parameter, or a different history mode, and from
 // then on the two doors lead to different places with nothing to say so.
 
-test('both entry points route through window.ArchiveEntry', () => {
-    assert.ok(/window\.ArchiveEntry/.test(LAUNCHPAD),
-        'the launchpad navigates to the archive by some other means');
+test('the entry point routes through window.ArchiveEntry', () => {
+    assert.ok(!/window\.ArchiveEntry/.test(LAUNCHPAD),
+        'the launchpad reaches for ArchiveEntry again; it has no archive ' +
+        'control any more, so this can only be a second door growing back');
     assert.ok(/window\.ArchiveEntry/.test(HEADER),
         'the header navigates to the archive by some other means');
     // Neither may call showArchive or pushState itself.

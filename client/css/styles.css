@@ -482,6 +482,28 @@ h1:hover {
     --home-header-flank-w: calc(var(--control-size) * 2 + 8px);
 }
 
+/* THREE INLINE CONTROLS WHEN THE ARCHIVE ICON IS SHOWING, TWO WHEN IT IS
+ * NOT - and the flank has to track that, not pick one and be wrong half
+ * the time. `#archiveBtn` moved out of the header overflow into the
+ * inline row (header-menu.js, HEADER_INLINE_CONTROL_IDS), but it is
+ * still gated on the message-archive feature switch: `_wireArchive()`
+ * sets `el.hidden = true` at wire time and clears it only once the
+ * server has been measured as ENABLED. So on a server with the archive
+ * off, `.controls` really is two buttons wide and a hardcoded three-slot
+ * spacer would push the title off-centre by half a control - the same
+ * defect, in the other direction, that the two-not-three note above
+ * records.
+ *
+ * `[hidden]` is the right hook because it is what the JS actually
+ * writes, and the attribute reflects the property, so the selector
+ * re-evaluates the moment the probe resolves. Keyed on `:has()`, already
+ * used by the sidebar-toggle rule below, so this adds no new
+ * requirement. Gap is 8px (`.controls`), hence one more control plus one
+ * more gap. */
+.header--home:has(#archiveBtn:not([hidden])) {
+    --home-header-flank-w: calc(var(--control-size) * 3 + 16px);
+}
+
 .header--home .header-home-spacer {
     display: block;
     visibility: hidden;
