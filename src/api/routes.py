@@ -2949,6 +2949,11 @@ def _session_record_payload(row: dict) -> SessionRecord:
         fork_kind=row.get("fork_kind"),
         created_at=row.get("created_at"),
         last_seen_running_at=row.get("last_seen_running_at"),
+        # The client orders its session lists by this. ``.get`` because a
+        # database that has not reached v23 has no such column, and that
+        # absence must arrive as None - "no work recorded" - rather than
+        # as a KeyError out of a listing route.
+        last_work_at=row.get("last_work_at"),
     )
 
 

@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 22
+CURRENT_SCHEMA_VERSION: int = 23
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -436,6 +436,30 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- stale one, and a stale `working` is a lie about right now.
   activity_state        TEXT,
   activity_state_at     TEXT,
+  -- WHEN WORK LAST HAPPENED IN THIS SESSION. Stamped ONLY from a Claude
+  -- Code hook event that represents the conversation doing something
+  -- (see claude_hooks.WORK_EVENTS): a prompt submitted, a tool called, a
+  -- subagent run, a turn stopped, a permission asked for.
+  --
+  -- IT IS NOT AN "OPENED" TIME AND MUST NEVER BECOME ONE. Attaching to a
+  -- session, selecting it in the sidebar, deep-linking to it or
+  -- re-binding it after a server restart all leave this column alone.
+  -- That is the entire reason it exists: the session list is read as a
+  -- TIMELINE of what has been worked on, and a list that reshuffles when
+  -- you merely look at a row destroys the recall it is read for.
+  --
+  -- IT IS NOT `updated_at` AND NOT `activity_state_at`. `updated_at` is
+  -- written by unrelated bookkeeping, including a restart's rebind, so a
+  -- restart would read as work. `activity_state_at` is written by the
+  -- LISTING path too, whenever a settled state changes - including the
+  -- working -> idle expiry, which is a session going quiet, not a
+  -- session working.
+  --
+  -- NULL means NO WORK HAS BEEN RECORDED, which is a third outcome and
+  -- not a zero: such a row sorts BELOW every row that has a value,
+  -- in its own stable order, and is labelled as such in the UI rather
+  -- than blended in at the bottom of the worked rows.
+  last_work_at          TEXT,
 
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
@@ -1350,3 +1374,52 @@ DDL_V22: Tuple[str, ...] = (
     DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
     DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
 )
+
+
+# --- v22 -> v23: sessions.last_work_at ------------------------------------
+#
+# THE ORDERING KEY FOR THE SESSION AND PROJECT LISTS, and the reason it is
+# a new column rather than a reuse of one already present.
+#
+# The lists are read as a TIMELINE - "what have I been working on, most
+# recent first" - and every existing candidate answers a DIFFERENT
+# question:
+#
+#   projects.last_opened_at   is written by POST /sessions, i.e. by
+#                             CLICKING a project. Ordering by it means the
+#                             list reshuffles when you merely look at it.
+#   sessions.updated_at       is unrelated bookkeeping. A restart's rebind
+#                             writes it, so a restart would read as work.
+#   sessions.activity_state_at is written by the listing path as well as
+#                             the hook path, including the working -> idle
+#                             expiry. Going quiet is not working.
+#   sessions.last_seen_running_at is a tmux LIVENESS probe. It advances on
+#                             a session nobody has touched in a week.
+#
+# So there was no column that meant "work happened here", and inferring
+# one from a column that means something else is how an ordering silently
+# stops describing what its label claims.
+#
+# NULLABLE, AND NULL IS A THIRD OUTCOME. It means no work has been
+# recorded for this session yet - not "worked on at the epoch" and not
+# "worked on now". Rows carrying NULL sort below every row that has a
+# value, keep a stable order among themselves, and are LABELLED as
+# unrecorded in the UI rather than being blended into the tail of the
+# worked rows. Every row predating this migration carries NULL, which is
+# the honest answer for all of them: nothing was measuring this before.
+#
+# NO INDEX. The sessions table is tens of rows on a real install (8 on the
+# machine this was written against); an index would cost a write on every
+# tool call to speed up a scan that never becomes expensive.
+DDL_V23_SESSIONS_LAST_WORK_AT = (
+    "ALTER TABLE sessions ADD COLUMN last_work_at TEXT"
+)
+
+#: Ordered DDL for a v22 -> v23 database. One ALTER TABLE ADD COLUMN,
+#: guarded by PRAGMA table_info in the step because SQLite's ALTER TABLE
+#: ADD COLUMN has no IF NOT EXISTS - same idiom as v3/v10/v11/v13/v15/v22.
+DDL_V23: Tuple[str, ...] = (DDL_V23_SESSIONS_LAST_WORK_AT,)
+
+#: Same reasoning as REVERSAL_SQL_V3 and V4: additive-only forward,
+#: RESTORE backward. Stated so the absence is a decision, not a gap.
+REVERSAL_SQL_V23: Tuple[str, ...] = ()

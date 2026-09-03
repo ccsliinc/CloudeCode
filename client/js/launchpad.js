@@ -110,6 +110,15 @@ class Launchpad {
         // `sessionAttributionListingOk`, so "we could not read the table"
         // never renders as "you have no ended sessions".
         this.sessionRecords = [];
+        // tmux name -> newest `last_work_at`, the key the session lists
+        // are ORDERED by. Built from the same GET /sessions/records
+        // payload (see _buildWorkStampIndex). An absent name means NO
+        // WORK RECORDED, which is a third outcome: those rows sort below
+        // every measured row and are labelled, never treated as work at
+        // the epoch. Empty until the fetch answers, and emptied again by
+        // a FAILED fetch, so a listing that could not be read degrades to
+        // "nothing measured" rather than to a stale order.
+        this._workStampByName = new Map();
         // In-memory only (not persisted across reload, unlike the
         // section-level collapse state in localStorage below) - per-
         // project expand/collapse state for the tree's child-session
@@ -960,23 +969,103 @@ class Launchpad {
         this.runningSessions = this.runningSessions.filter(
             s => !s || s.status !== 'dead'
         );
-        // Sort: active first, then owned, then external; within each, newest first
+        // feat/project-session-tree (S8) - the tree needs to know which
+        // project (if any) each row belongs to, so re-fetch attribution
+        // every time the running-session set changes (poller tick
+        // included). Non-fatal; a failure here degrades the tree to
+        // NEEDS ATTENTION, it never throws out of loadRunningSessions().
+        //
+        // IT NOW RUNS BEFORE THE SORT, NOT AFTER. The same fetch carries
+        // ``last_work_at``, which is the sort key below, so sorting first
+        // would have ordered every first paint by a value that had not
+        // arrived yet - and then never re-sorted, because the sort is not
+        // repeated after this call.
+        await this.loadSessionAttribution();
+        this._sortRunningSessionsByWork();
+        this.renderRunningSessions();
+        this.renderProjectList();
+    }
+
+    /**
+     * Order the running-session rows by WORK, newest work first.
+     *
+     * Description: THIS LIST IS A TIMELINE, and it is read by scanning
+     *   down it to recall what is in flight. The previous order led with
+     *   ``is_active`` - "is this the session I am attached to" - so
+     *   clicking a row to look at it hoisted that row to the top and the
+     *   timeline was destroyed by the act of reading it. That term is
+     *   gone, and no term that a click can change has replaced it.
+     *
+     *   ``last_work_at`` comes from the sessions table (see
+     *   ``loadSessionAttribution`` and src/core/session_work_stamp.py)
+     *   and is stamped ONLY from Claude Code hook events that mean the
+     *   conversation did something. Attaching, selecting or deep-linking
+     *   never moves it.
+     *
+     *   THREE OUTCOMES, AND UNRECORDED IS THE THIRD. A session with no
+     *   ``last_work_at`` has not been measured working - which is true of
+     *   every session that predates this feature, and of one started
+     *   seconds ago that has not run a turn yet. It is NOT treated as
+     *   work at the epoch and NOT as work now: those rows sort BELOW
+     *   every measured row, keep their own newest-created-first order
+     *   among themselves, and are labelled in the row itself (see
+     *   ``_workRecencyAttrs``) so they are visibly distinct rather than
+     *   silently blended into the tail of the measured ones.
+     *
+     *   ``created_by_cloude`` is kept as a tie-break only, below the work
+     *   key. It is an ORIGIN fact that no click can flip, so it never
+     *   reintroduces the defect.
+     * Inputs: none. Sorts ``this.runningSessions`` in place.
+     * Output: void.
+     */
+    _sortRunningSessionsByWork() {
         this.runningSessions.sort((a, b) => {
-            if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
+            const aw = this._workStampFor(a);
+            const bw = this._workStampFor(b);
+            if (!!aw !== !!bw) return aw ? -1 : 1;
+            if (aw && bw && aw !== bw) return aw < bw ? 1 : -1;
             if (!!a.created_by_cloude !== !!b.created_by_cloude) {
                 return a.created_by_cloude ? -1 : 1;
             }
             return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
         });
-        this.renderRunningSessions();
-        // feat/project-session-tree (S8) - the tree needs to know which
-        // project (if any) each of the rows just sorted above belongs
-        // to, so re-fetch attribution and repaint the tree every time
-        // the running-session set changes (poller tick included). Both
-        // calls are non-fatal; a failure here degrades the tree to NEEDS
-        // ATTENTION, it never throws out of loadRunningSessions().
-        await this.loadSessionAttribution();
-        this.renderProjectList();
+    }
+
+    /**
+     * Description: the ``last_work_at`` for one running-session row, or
+     *   null when none has been recorded. Read out of the attribution
+     *   fetch's own records rather than off the row, because the row
+     *   comes from the tmux probe and the stamp lives in the database.
+     *
+     *   Keyed by tmux NAME and resolved to the MAXIMUM stamp under that
+     *   name. A name is reusable and a dead instance can hold an older
+     *   row under it; the newest stamp is the live instance's by
+     *   construction, because a dead session cannot have worked more
+     *   recently than the one that replaced it.
+     * Inputs: session (object) - a running-session row with ``name``.
+     * Output: string|null - an ISO timestamp, or null for unrecorded.
+     */
+    _workStampFor(session) {
+        if (!session || !session.name) return null;
+        if (!this._workStampByName) return null;
+        return this._workStampByName.get(session.name) || null;
+    }
+
+    /**
+     * Description: the DOM attributes that make an unrecorded row visibly
+     *   distinct instead of silently last. A row with no measured work
+     *   carries ``data-work="unrecorded"`` (which the stylesheet can
+     *   target) and a title saying so in words, so "nothing has happened
+     *   here yet" never reads as "this is the stalest thing you own".
+     * Inputs: session (object). Output: string - HTML attributes.
+     */
+    _workRecencyAttrs(session) {
+        const stamp = this._workStampFor(session);
+        if (stamp) {
+            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
+        }
+        return ' data-work="unrecorded" title="no work recorded yet - ordered'
+            + ' below every session that has been worked in"';
     }
 
     /**
@@ -1008,6 +1097,7 @@ class Launchpad {
                 this.sessionAttributionByInstance = new Map();
                 this.sessionAttributionAmbiguous = new Set();
                 this.sessionRecords = [];
+                this._workStampByName = new Map();
                 this.sessionAttributionListingOk = false;
                 this.sessionAttributionListingDetail =
                     'the server did not return a session record array';
@@ -1018,6 +1108,7 @@ class Launchpad {
             this.sessionAttributionByInstance = resolved.byInstance;
             this.sessionAttributionAmbiguous = resolved.ambiguous;
             this.sessionRecords = rows;
+            this._workStampByName = this._buildWorkStampIndex(rows);
             this.sessionAttributionListingOk = true;
             this.sessionAttributionListingDetail = null;
         } catch (error) {
@@ -1026,10 +1117,53 @@ class Launchpad {
             this.sessionAttributionByInstance = new Map();
             this.sessionAttributionAmbiguous = new Set();
             this.sessionRecords = [];
+            // A FAILED FETCH IS NOT AN EMPTY WORK HISTORY, and the two
+            // must not render alike. Cleared to empty so every row reads
+            // as unrecorded and is LABELLED as such, which is honest -
+            // rather than keeping a stale index and ordering the list by
+            // stamps that may no longer be current.
+            this._workStampByName = new Map();
             this.sessionAttributionListingOk = false;
             this.sessionAttributionListingDetail =
                 (error && error.message) || 'the server could not be reached';
         }
+    }
+
+    /**
+     * Build the tmux-name -> newest ``last_work_at`` index the session
+     * ordering reads.
+     *
+     * Description: the MAXIMUM stamp per tmux name, not the stamp on
+     *   whichever row happened to be scanned last. A name is reusable -
+     *   this app itself re-mints one with a -2/-3 uniquifier, and a
+     *   session recreated after its pane died takes the name back with a
+     *   new creation epoch - so several rows can carry one name. Taking
+     *   the maximum is correct without needing to know which row is live,
+     *   because a dead instance cannot have worked more recently than the
+     *   one that replaced it.
+     *
+     *   ARCHIVED ROWS ARE INCLUDED, deliberately and unlike ``byName``.
+     *   Archiving is the user saying "take this off my screen"; it says
+     *   nothing about when work happened, and a row that is off screen
+     *   contributes no row to order anyway. Excluding it could only
+     *   understate a live session's own history if the two shared a name.
+     *
+     *   A row with no ``last_work_at`` contributes NOTHING rather than a
+     *   zero - an absent name in this map is the third outcome the
+     *   callers read as "unrecorded".
+     * Inputs: rows (SessionRecord[]) - GET /sessions/records payload.
+     * Output: Map<string, string> - tmux name -> ISO stamp.
+     */
+    _buildWorkStampIndex(rows) {
+        const index = new Map();
+        for (const row of (Array.isArray(rows) ? rows : [])) {
+            if (!row || !row.tmux_name || !row.last_work_at) continue;
+            const seen = index.get(row.tmux_name);
+            if (!seen || row.last_work_at > seen) {
+                index.set(row.tmux_name, row.last_work_at);
+            }
+        }
+        return index;
     }
 
     /**
@@ -3544,6 +3678,32 @@ class Launchpad {
      * Output: string - the group's inner HTML.
      * Example: lp._renderTreeSessionRowsHtml(children)
      */
+    /**
+     * Description: the DOM attributes that make a project with NO
+     *   recorded work visibly distinct from one that was merely worked in
+     *   a long time ago. Both sit at the bottom of a list ordered by
+     *   ``work_at``, and without this they would be indistinguishable
+     *   there - which is the exact collapse (unknown rendered as "oldest")
+     *   the ordering change exists to undo.
+     *
+     *   ``work_at`` is MAX(sessions.last_work_at) across the project's
+     *   sessions and arrives on the project itself from GET /projects.
+     *   Null means no session under this project has ever been measured
+     *   working; it is never inferred from ``last_opened_at``, because
+     *   opening is not working.
+     * Inputs: project (object) - one row of ``this.projects``.
+     * Output: string - HTML attributes.
+     */
+    _projectWorkAttrs(project) {
+        const stamp = project && project.work_at;
+        if (stamp) {
+            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
+        }
+        return ' data-work="unrecorded" title="no work recorded in this'
+            + ' project yet - ordered below every project that has been'
+            + ' worked in"';
+    }
+
     _renderTreeSessionRowsHtml(sessions) {
         const list = Array.isArray(sessions) ? sessions : [];
         return list.map((s) => this._renderTreeSessionRowHtml(s)).join('');
@@ -3559,7 +3719,7 @@ class Launchpad {
             ? window.SessionStatusUI.dotHtml(s.status)
             : '';
         return `
-                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}" role="button" tabindex="0">
+                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">
                   ${statusDot}
                   <span class="project-session-row__name">${escapedDisplay}</span>
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
@@ -3937,7 +4097,7 @@ class Launchpad {
                 : '';
 
             return `
-                <div class="project-node" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}">
+                <div class="project-node" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
                   <div class="project-node__row">
                     ${chevronHtml}
                     <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>

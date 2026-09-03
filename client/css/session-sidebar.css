@@ -406,3 +406,15 @@ body.session-sidebar-pinned .session-sidebar-panel {
     border-color: var(--color-danger);
     outline: none;
 }
+
+/* NO WORK RECORDED YET, made visible rather than merely implied.
+ *
+ * The sidebar is ordered by `last_work_at`, so a session that has never
+ * been measured working sits at the bottom - the same place a human
+ * reads as "the stalest thing I own". Those are different statements.
+ * The row is dimmed and carries a title saying so, so the third outcome
+ * is something you can SEE, not something the ordering silently folds
+ * into the tail of the measured rows. */
+.session-sidebar-row[data-work="unrecorded"] .session-sidebar-row-name {
+    opacity: 0.72;
+}

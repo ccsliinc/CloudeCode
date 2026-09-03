@@ -132,6 +132,7 @@ def views_to_responses(view: ProjectsView, response_cls: Any) -> List[Any]:
             path=item["path"],
             description=item["description"],
             root=item["root"],
+            work_at=item.get("work_at"),
         )
         for item in view.projects
     ]

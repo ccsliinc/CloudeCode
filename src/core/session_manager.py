@@ -24,6 +24,7 @@ import base64
 import secrets
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
@@ -40,6 +41,7 @@ from src.models import (
     LogEntry,
     Toast,
 )
+from src.core import claude_hooks
 from src.core.workspace_settings import build_spawn_env
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
@@ -79,6 +81,22 @@ logger = structlog.get_logger()
 # session creation.
 _TERMINAL_COMMAND_WRITE_ATTEMPTS = 20
 _TERMINAL_COMMAND_WRITE_DELAY_SECONDS = 0.1
+
+#: Minimum gap between two ``sessions.last_work_at`` writes for ONE
+#: session. See ``SessionManager._persist_work_stamp``.
+#:
+#: CHOSEN AGAINST THE READER, NOT AGAINST THE WRITER. This column is a
+#: sort key for a list a human scans; two sessions worked five seconds
+#: apart are, to that reader, simultaneous, so coarseness at this scale
+#: cannot change an ordering anybody can perceive. Meanwhile a tool-heavy
+#: turn emits a PreToolUse/PostToolUse pair per call, continuously, and
+#: an unthrottled stamp would be one UPDATE per tool call for a value
+#: nothing reads at that resolution.
+#:
+#: The FIRST event for a session is never throttled - an absent entry is
+#: not a recent one - so a session reaches the top of the list on its
+#: first sign of work, not 15 seconds later.
+WORK_STAMP_MIN_INTERVAL_SECONDS = 15.0
 
 
 # Characters that must never survive into a tmux session name.
@@ -349,6 +367,12 @@ class SessionManager:
         # new write for a DIFFERENT (new) instance that happens to start
         # in the same state.
         self._last_persisted_activity: dict[tuple, str] = {}
+        # cloudecode session id -> monotonic clock of the last
+        # ``sessions.last_work_at`` write, so a burst of tool events costs
+        # one UPDATE rather than one per call. See
+        # ``WORK_STAMP_MIN_INTERVAL_SECONDS`` for why a throttle is safe
+        # here when it would not be for the activity state.
+        self._last_work_stamp_at: dict[str, float] = {}
         # cloudecode session id -> the claude uuid whose SessionEnd we
         # most recently saw. This is the ONLY thing that distinguishes
         # Claude's /branch from its /fork: both arrive as source="fork",
@@ -2161,6 +2185,138 @@ class SessionManager:
         if kind == EVENT_STOP and tmux_name:
             self._unread_store.set_flag(tmux_name, "auto", True)
         self._persist_activity_state(session_id, tmux_name)
+        self._persist_work_stamp(session_id, tmux_name, kind)
+
+    def _persist_work_stamp(
+        self, session_id: str, tmux_name: Optional[str], kind: str
+    ) -> None:
+        """Stamp ``sessions.last_work_at`` when this event WAS work.
+
+        Description: the ordering key behind the session and project
+          lists. Only ``claude_hooks.WORK_EVENTS`` reach the write - the
+          lifecycle pair is filtered out here, because ``SessionStart``
+          fires with ``source='resume'`` when the user merely REJOINS a
+          conversation, and letting that through would hoist a row for
+          being looked at, which is the whole defect this key exists to
+          remove. See src/core/session_work_stamp.py.
+
+          THROTTLED, AND THE THROTTLE IS SAFE HERE IN A WAY IT WOULD NOT
+          BE FOR THE ACTIVITY STATE. This column is read only as a sort
+          key over a list a human scans; being coarse by a few seconds
+          changes no ordering a person can perceive, while a tool-heavy
+          turn fires PreToolUse/PostToolUse pairs continuously and would
+          otherwise be one UPDATE per call. The FIRST event for a session
+          always writes (an absent entry is not a recent one), so a row
+          reaches the top of the list on the first sign of work rather
+          than after a delay.
+
+          Best-effort and silent on failure by design: an ordering key
+          that could not be written must never fail hook delivery for the
+          session that was working.
+        Inputs: session_id (str). tmux_name (str | None). kind (str) -
+          the hook event kind as received.
+        Output: None.
+        """
+        if not tmux_name or kind not in claude_hooks.WORK_EVENTS:
+            return
+        last = self._last_work_stamp_at.get(session_id)
+        stamped_at = time.monotonic()
+        if last is not None and (stamped_at - last) < WORK_STAMP_MIN_INTERVAL_SECONDS:
+            return
+        # THE ATTEMPT IS RECORDED, NOT THE SUCCESS. Recording only on a
+        # successful write would leave a session whose epoch cannot be
+        # resolved probing tmux on every single work event forever -
+        # turning a bounded once-per-session cost into a subprocess per
+        # tool call, which is precisely the cost the activity-state path
+        # refuses to pay. A failure therefore backs off exactly as far as
+        # a success does, and retries on the next interval.
+        self._last_work_stamp_at[session_id] = stamped_at
+        epoch = self._work_stamp_epoch(session_id, tmux_name)
+        if epoch is None:
+            return
+        conn = None
+        try:
+            from src.core.db import transaction
+            from src.core.session_work_stamp import stamp_work
+
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return
+            with transaction(conn):
+                source = stamp_work(
+                    conn,
+                    tmux_name,
+                    tmux_socket=self._tmux_socket_name(),
+                    tmux_created_epoch=epoch,
+                )
+            if source is None:
+                logger.debug(
+                    "work_stamp_not_written",
+                    session_id=session_id,
+                    tmux_name=tmux_name,
+                    note="the instance was resolved but no row matched it",
+                )
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.debug("work_stamp_persist_failed", error=str(exc))
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _work_stamp_epoch(
+        self, session_id: str, tmux_name: str
+    ) -> Optional[int]:
+        """The tmux ``#{session_created}`` for a session, probing once if needed.
+
+        Description: the work stamp writes durable state, so it is keyed
+          on the full instance triple and never on a tmux name plus a
+          recency guess (see src/core/session_work_stamp.py and
+          tests/test_no_name_keyed_session_identity.py, which enforces
+          that rule across the codebase).
+
+          ``_instance_epochs`` is populated by the create and adopt
+          persist steps, so it MISSES for every session that predates the
+          current server process - which after any restart is all of them,
+          and is the ordinary case rather than an exotic one. Rather than
+          weaken the key, this resolves the epoch from tmux itself and
+          caches it back into ``_instance_epochs``, so the probe costs one
+          subprocess per session per server lifetime and every subsequent
+          hook event reads it from memory.
+
+          THE ACTIVITY-STATE PATH DELIBERATELY REFUSES TO DO THIS and
+          that is not a contradiction. It runs unconditionally on every
+          single hook event, so a probe there is a subprocess per tool
+          call; this runs at most once per ``WORK_STAMP_MIN_INTERVAL_SECONDS``
+          per session AND caches the result permanently, so the two have
+          completely different cost profiles for the same action.
+
+          A name tmux does not list is a CANNOT-DETERMINE and returns
+          None. Nothing is stamped, the session orders as unrecorded, and
+          the row says so on screen - which is the honest outcome, and a
+          far smaller cost than stamping the wrong row.
+        Inputs: session_id (str). tmux_name (str).
+        Output: int | None - the epoch, or None when it cannot be resolved.
+        """
+        cached = self._instance_epochs.get(session_id)
+        if cached is not None:
+            return cached
+        try:
+            listing = coerce_listing(self.list_attachable_sessions())
+            if not listing.ok:
+                return None
+            for row in listing.sessions:
+                if row.get("name") != tmux_name:
+                    continue
+                epoch = row.get("created_at_epoch")
+                if epoch is None:
+                    return None
+                self._instance_epochs[session_id] = int(epoch)
+                return int(epoch)
+        except Exception as exc:  # noqa: BLE001 - a probe must not break hooks
+            logger.debug("work_stamp_epoch_probe_failed", error=str(exc))
+        return None
 
     def _persist_settled_activity_state(
         self,

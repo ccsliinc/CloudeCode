@@ -661,6 +661,17 @@ class ProjectResponse(BaseModel):
     path: str = Field(..., description="Project directory path")
     description: Optional[str] = Field(None, description="Project description")
     root: Optional[str] = Field(None, description="Normalised project root, the identity key")
+    work_at: Optional[str] = Field(
+        None,
+        description=(
+            "MAX(sessions.last_work_at) across this project's sessions - "
+            "the key GET /projects is ordered by. None means NO WORK HAS "
+            "BEEN RECORDED, which is a third outcome and not a zero: such "
+            "a project sorts below every project that has a value and is "
+            "labelled as unrecorded rather than blended in with them. "
+            "Never derived from last_opened_at - opening is not working"
+        ),
+    )
 
 
 class UpdateProjectRequest(BaseModel):
@@ -1768,6 +1779,19 @@ class SessionRecord(BaseModel):
         description=(
             "When this session was last PROVEN alive by a tmux probe. "
             "None means never - which is a cannot-determine, not a zero"
+        ),
+    )
+    last_work_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "When WORK last happened in this session - stamped only from "
+            "a Claude Code hook event that means the conversation did "
+            "something (claude_hooks.WORK_EVENTS). NOT an opened time: "
+            "attaching, selecting or deep-linking to a session never "
+            "moves it. NOT last_seen_running_at, which is a liveness "
+            "probe that advances on a session nobody has touched. None "
+            "means no work has been recorded - a third outcome, sorted "
+            "below every value and labelled, never treated as the epoch"
         ),
     )
 

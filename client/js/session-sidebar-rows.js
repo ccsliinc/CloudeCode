@@ -462,7 +462,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             `<div class="session-sidebar-row" data-name="${name}" ` +
             `data-active="${r.is_this_tab ? '1' : '0'}" ` +
             `data-pinned="${r.is_pinned ? '1' : '0'}" ` +
-            `data-rename-state="${rename.state}" ` +
+            `data-rename-state="${rename.state}" ` + (window.SessionSidebarFetch ? window.SessionSidebarFetch.workAttr(r) : '') +
             `role="option" aria-selected="${r.is_this_tab ? 'true' : 'false'}" ` +
             `tabindex="-1"${sidAttr}${themeAttrs}>` +
             '<div class="session-sidebar-row-main">' +

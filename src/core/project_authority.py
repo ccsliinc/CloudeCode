@@ -156,9 +156,10 @@ class ProjectsView:
 def _row_to_view(row: Dict[str, Any]) -> Dict[str, Any]:
     """Project one authoritative table row into the API's project shape.
 
-    Inputs: row (dict) - a ``projects`` table row.
+    Inputs: row (dict) - a ``projects`` table row, plus the ``work_at``
+      roll-up ``list_projects_ordered`` computes.
     Output: dict - ``{"id", "name", "path", "description", "root",
-      "agent_type"}``.
+      "agent_type", "work_at"}``.
     """
     return {
         "id": row["id"],
@@ -167,6 +168,13 @@ def _row_to_view(row: Dict[str, Any]) -> Dict[str, Any]:
         "description": row["description"],
         "root": row["root"],
         "agent_type": row["default_agent_type"],
+        # MAX(sessions.last_work_at) across this project's sessions - the
+        # key the list is ordered by. Carried to the client so it can
+        # LABEL a project with no recorded work instead of letting it sit
+        # anonymously at the bottom looking like the least recent one.
+        # ``.get`` because this function is also handed rows from paths
+        # that do not compute the roll-up.
+        "work_at": row.get("work_at"),
     }
 
 

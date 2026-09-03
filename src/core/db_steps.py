@@ -26,7 +26,13 @@ from typing import Callable, Dict, List
 
 import structlog
 
-from src.core.db import column_exists, ensure_install_id, get_meta, set_meta
+from src.core.db import (
+    column_exists,
+    ensure_install_id,
+    get_meta,
+    set_meta,
+    table_exists,
+)
 from src.core.db_models import (
     DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP,
     DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX,
@@ -49,6 +55,7 @@ from src.core.db_models import (
     DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
     DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
     DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
+    DDL_V23_SESSIONS_LAST_WORK_AT,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -1159,6 +1166,37 @@ def _step_v21_to_v22(conn: sqlite3.Connection) -> None:
     if not column_exists(conn, "transcript_archives", "dedupe_kind"):
         conn.execute(DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND)
 
+
+def _step_v22_to_v23(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.last_work_at``, the session/project ordering key.
+
+    Description: one nullable column, no backfill and no index. See
+      db_models' v23 block for why work needed a column of its own rather
+      than a reuse of ``updated_at``, ``activity_state_at`` or
+      ``last_seen_running_at``.
+
+      NOTHING IS BACKFILLED, DELIBERATELY. Every pre-existing row keeps
+      NULL, and NULL means "no work has been recorded for this session",
+      which is the truth for all of them - nothing was measuring work
+      before this step. Seeding them from ``created_at`` or
+      ``last_seen_running_at`` would manufacture a work history that never
+      happened, and it would do it in exactly the column the lists are
+      about to be ordered by.
+
+      IDEMPOTENT: guarded by ``column_exists`` because SQLite's ALTER
+      TABLE ADD COLUMN has no IF NOT EXISTS - same idiom as
+      v3/v10/v11/v13/v15/v22. A no-op on an install whose sessions table
+      was never created (pre-v2).
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v22_to_v23(conn)  # after _step_v21_to_v22
+    """
+    if not table_exists(conn, "sessions"):
+        return
+    if not column_exists(conn, "sessions", "last_work_at"):
+        conn.execute(DDL_V23_SESSIONS_LAST_WORK_AT)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1186,6 +1224,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     19: _step_v19_to_v20,
     20: _step_v20_to_v21,
     21: _step_v21_to_v22,
+    22: _step_v22_to_v23,
 }
 
 
