@@ -1016,6 +1016,28 @@ class Launchpad {
                     this._listingDetailFromError(err, status));
             }
         }
+        // A DEAD PANE IS NOT A RUNNING SESSION. tmux `has-session`
+        // stays true for a pane held open by `remain-on-exit` after its
+        // foreground process exited, so a husk arrives here from
+        // GET /sessions/attachable - which enumerates the socket and
+        // MUST keep returning it, because the lifecycle reaper depends
+        // on that enumeration being complete. Membership of the
+        // "running" section is this function's decision, not the
+        // enumeration's, so the filter belongs here and nowhere else.
+        // Until now the husk was rendered among the running rows and
+        // counted in the heading, while its own red dot - read from
+        // `#{pane_dead}` - had been telling the truth all along.
+        //
+        // THREE OUTCOMES: only a MEASURED `dead` is dropped. `unknown`
+        // stays, because "the probe could not tell" is not "it ended";
+        // dropping it would assert a death nobody measured, which is
+        // the same false verdict in the opposite direction. See
+        // tests/test_running_sessions_unknown.node.mjs, which pins the
+        // unknown row's rendering, and
+        // tests/test_dead_pane_not_running.node.mjs for this filter.
+        this.runningSessions = this.runningSessions.filter(
+            s => !s || s.status !== 'dead'
+        );
         // Sort: active first, then owned, then external; within each, newest first
         this.runningSessions.sort((a, b) => {
             if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
