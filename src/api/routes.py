@@ -3115,7 +3115,10 @@ async def list_recent_sessions(request: Request):
 
     from src.core import session_store
     from src.core.db import DatastoreUnreadableError, connect, db_path_for
-    from src.core.db_models import SESSION_LIFECYCLE_STOPPED
+    from src.core.db_models import (
+        SESSION_LIFECYCLE_RUNNING,
+        SESSION_LIFECYCLE_STOPPED,
+    )
 
     session_manager = request.app.state.session_manager
     health = session_manager.last_probe_health()
@@ -3144,11 +3147,68 @@ async def list_recent_sessions(request: Request):
           ``lifecycle='stopped', archived_at IS NULL``.
         """
         with closing(connect(db_path, create=False)) as conn:
-            return session_store.list_sessions(
+            rows = session_store.list_sessions(
                 conn,
                 lifecycle=SESSION_LIFECYCLE_STOPPED,
                 include_archived=False,
             )
+            # A SESSION APPEARS IN EXACTLY ONE LIST, and this is the half
+            # the client cannot do for itself.
+            #
+            # Restarts made BEFORE row reuse landed left an abandoned row
+            # behind and started a new one pointing back at it. The
+            # abandoned row is stopped, so it lands in RECENT, while its
+            # successor is running and lands in RUNNING - the same
+            # session, twice, which is exactly the duplication the owner
+            # sees. The client cannot filter these by name: the two rows
+            # legitimately carry DIFFERENT tmux names
+            # ("Media_Compression" and "cloude_Media_Compression"), so a
+            # name comparison misses them entirely.
+            #
+            # ``parent_session_id`` is not a heuristic and needs no
+            # classifier - it is a stored fact saying this row was
+            # replaced by that one. When the successor is running, this
+            # row is ALREADY on screen as that successor, so listing it
+            # again is a duplicate rather than history.
+            #
+            # This is legacy cleanup, not a mechanism. A restart no
+            # longer creates a parent link at all (see
+            # session_restart.rebind_instance), so nothing new can ever
+            # enter this set.
+            # FAIL OPEN. If this read cannot be made, we do not know
+            # whether anything is represented elsewhere - and the two
+            # errors are not symmetrical. Showing a duplicate is untidy;
+            # HIDING a session the user can no longer reach from this
+            # screen is the failure a list filter must never produce. So
+            # an unevaluable read excludes nothing.
+            try:
+                replaced = {
+                    int(r["parent_session_id"])
+                    for r in conn.execute(
+                        "SELECT parent_session_id FROM sessions"
+                        " WHERE lifecycle = ?"
+                        " AND parent_session_id IS NOT NULL",
+                        (SESSION_LIFECYCLE_RUNNING,),
+                    ).fetchall()
+                }
+            except Exception as exc:  # noqa: BLE001 - see FAIL OPEN above
+                logger.warning(
+                    "recent_replaced_scan_unavailable",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    note=(
+                        "could not read which rows a running session "
+                        "replaced; nothing excluded, so a duplicate may "
+                        "show rather than a session going missing"
+                    ),
+                )
+                return rows
+            if not replaced:
+                return rows
+            return [
+                row for row in rows
+                if row.get("id") not in replaced
+            ]
 
     try:
         rows = await run_in_threadpool(_read)
