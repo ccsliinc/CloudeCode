@@ -2504,8 +2504,19 @@ class SessionManager:
         terminal_command_id: Optional[str] = None,
         agent_extra_args: Optional[List[str]] = None,
         label: Optional[str] = None,
+        reuse_session_id: Optional[int] = None,
     ) -> Session:
         """Create a new Claude Code session.
+
+        ``reuse_session_id`` names an EXISTING ``sessions.id`` that this
+        new tmux instance should be recorded onto, instead of inserting a
+        second row. It exists for the RESTART path: a restarted session is
+        the same session the user named and talked to, so it keeps its row
+        - its ``session_uuid``, title, conversation link, lineage, pins
+        and group membership all ride on that row and are untouched. See
+        ``session_restart.rebind_instance``. When the named row cannot be
+        reused the session is still created and simply keeps its own row;
+        reuse is never allowed to fail a creation.
 
         ``agent_extra_args`` appends arguments to the resolved agent command
         (see ``Settings.get_agent_command``). It exists for the FORK path,
@@ -2861,6 +2872,7 @@ class SessionManager:
                     working_dir=str(work_path),
                     agent_type=resolved_agent_type,
                     agent_launched=bool(auto_start_claude),
+                    reuse_session_id=reuse_session_id,
                 )
                 create_persist_outcome = persisted.outcome
                 if persisted.epoch is not None:
@@ -4433,6 +4445,7 @@ class SessionManager:
         working_dir: Optional[str] = None,
         agent_type: Optional[str] = None,
         agent_launched: Optional[bool] = None,
+        reuse_session_id: Optional[int] = None,
     ):
         """Write ``origin='created'`` for one tmux session, durably.
 
@@ -4515,6 +4528,7 @@ class SessionManager:
                     agent_launched=agent_launched,
                     working_dir=working_dir,
                     working_dir_probe=make_working_dir_probe(socket),
+                    reuse_session_id=reuse_session_id,
                 )
         except Exception as exc:  # noqa: BLE001 - creation must not crash
             logger.warning(

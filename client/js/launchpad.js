@@ -1563,32 +1563,28 @@ class Launchpad {
         const section = document.getElementById('recent-sessions-section');
         const countEl = document.getElementById('recent-sessions-count');
         const state = this.recentSessionsState || 'never_probed';
-        // SUPERSEDED ROWS COME OUT OF RECENT TOO, and this is not
-        // tidiness - it is the invariant session_store.listable_sessions
-        // exists to hold. RECENT and the project tree are two surfaces
-        // over the same records; the last time they carried separate
-        // ideas of what to show, RECENT listed a session the tree did
-        // not and the app read as contradicting itself. Folding a
-        // restarted predecessor away in the tree while RECENT went on
-        // listing it would recreate exactly that.
+        // A SESSION APPEARS IN EXACTLY ONE LIST. RECENT means "not
+        // running", so anything currently running is excluded here and
+        // shown under running sessions instead. The two lists come from
+        // two different sources - RUNNING is a live tmux probe, RECENT is
+        // a database read of `lifecycle='stopped'` - and those two can
+        // disagree: a row whose reaper has not run yet still reads
+        // `stopped` while its tmux session is plainly in the listing. So
+        // the exclusion is done against the LIVE probe, which is the
+        // fresher of the two, rather than trusting the stored lifecycle.
         //
-        // Classified against `sessionRecords`, NOT against these rows:
-        // /sessions/recent returns only `lifecycle='stopped'`, so the
-        // RUNNING successor that supersedes a row is by construction
-        // absent from this list, and a lookup restricted to it could
-        // never find one. The row stays visible whenever the record set
-        // has not been read (`sessionAttributionListingOk` false) - a
-        // classifier with no records to read has measured nothing.
+        // This is the same guard `_endedSessionsForTree()` already
+        // applies, and it is applied here for the same reason: RECENT and
+        // the project tree are two surfaces over the same records, and
+        // when they carry different ideas of what to show the app reads
+        // as contradicting itself.
         const recentAll = this.recentSessions || [];
-        let rows = recentAll;
-        if (this.sessionAttributionListingOk &&
-            window.SessionSupersede &&
-            typeof window.SessionSupersede.isSuperseded === 'function') {
-            const records = this.sessionRecords || [];
-            rows = recentAll.filter(
-                (r) => !window.SessionSupersede.isSuperseded(r, records)
-            );
-        }
+        const liveNames = new Set(
+            (this.runningSessions || []).map(s => s && s.name).filter(Boolean)
+        );
+        const rows = liveNames.size
+            ? recentAll.filter(r => !(r && r.tmux_name && liveNames.has(r.tmux_name)))
+            : recentAll;
 
         if (state !== 'ok') {
             const notice = this._escapeHtml(
@@ -1866,10 +1862,14 @@ class Launchpad {
             return `restarted${named}, but whether the previous conversation `
                 + 'was resumed CANNOT BE DETERMINED';
         }
-        if (result.lineage_recorded === false) {
+        if (result.row_reused === false) {
+            // Not an error and not a clean success: the session is back
+            // and the conversation continued, but it could not keep its
+            // own record, so it may show up as a second entry.
             return result.detail
-                || `restarted${named} and resumed the conversation, but the `
-                    + 'link back to the session it replaced was not recorded';
+                || `restarted${named} and resumed the conversation, but it `
+                    + 'could not keep its original record and may appear '
+                    + 'as a second entry';
         }
         return null;
     }
@@ -3444,43 +3444,12 @@ class Launchpad {
             if (!rec || rec.archived_at) continue;
             if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
             if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
-            // SUPERSESSION IS ANNOTATED HERE AND ACTED ON AT RENDER TIME,
-            // NOT FILTERED HERE. A restart replacement carries the old
-            // session's title verbatim, so a restarted session appeared
-            // under its project TWICE - once running, once ended, same
-            // name - and grew by one more on every restart.
-            //
-            // Dropping the row right here would be the obvious fix and it
-            // is the wrong one: this method cannot see whether the
-            // SUCCESSOR is actually going to be rendered in the same
-            // group. If it is not (different project, routed to NEEDS
-            // ATTENTION, filtered by a live-name collision), a row
-            // removed here is a session the user can no longer reach from
-            // this screen at all. So the verdict travels WITH the row and
-            // the renderer, which knows what is on screen beside it,
-            // decides whether folding it away is safe.
-            //
-            // window.SessionSupersede absent -> no annotation -> every
-            // ended row renders exactly as it did before this fix. A
-            // classifier that failed to load must never hide anything.
-            let supersededBy = null;
-            if (window.SessionSupersede &&
-                typeof window.SessionSupersede.successorOf === 'function') {
-                const successor =
-                    window.SessionSupersede.successorOf(rec, records);
-                // successorOf returns non-null ONLY on a definite
-                // SUPERSEDED verdict; 'not-superseded' and
-                // 'cannot-determine' both yield null, and both leave the
-                // row a first-class peer. See that module's header for why
-                // the third outcome is rendered identically to a measured
-                // no rather than folded away with it.
-                if (successor) {
-                    const sid = successor.id;
-                    if (sid !== null && sid !== undefined && sid !== '') {
-                        supersededBy = sid;
-                    }
-                }
-            }
+            // A RESTARTED SESSION NO LONGER PRODUCES A SECOND ROW, so
+            // there is nothing here to fold away. A restart moves the
+            // existing row onto the new tmux instance and that row is
+            // simply `running` again - it leaves this list because it is
+            // no longer stopped, not because anything hid it. See
+            // src/core/session_restart.py: rebind_instance.
             out.push({
                 name: rec.tmux_name || '',
                 label: rec.title || null,
@@ -3496,12 +3465,9 @@ class Launchpad {
                 agent_family_source: rec.agent_family_source || null,
                 project_id: rec.project_id,
                 project_attribution: rec.project_attribution,
-                // The durable row id, so the renderer can match this row
-                // against the `superseded_by` its successor is named by.
-                // Every other surface already carries this field under
-                // this name - see _renderSessionIdHtml.
+                // The durable row id. Every other surface already carries
+                // this field under this name - see _renderSessionIdHtml.
                 session_row_id: (rec.id === undefined ? null : rec.id),
-                superseded_by: supersededBy,
             });
         }
         return out;
@@ -3524,31 +3490,20 @@ class Launchpad {
      * Output: string - HTML for one ``.project-session-row``.
      */
     /**
-     * Render one project group's session rows, folding each superseded
-     * session under the session that replaced it.
+     * Render one project group's session rows.
      *
-     * Description: the render half of the restart-duplicate fix. A
-     *   restarted session leaves its predecessor behind carrying the
-     *   SAME title, so the group listed the name twice - once running,
-     *   once ended - and gained another every restart.
+     * Description: a flat render, deliberately. There used to be a fold
+     *   here that hid a restarted session's abandoned predecessor behind
+     *   a disclosure counting the earlier sessions it had superseded.
+     *   That mechanism existed to explain a duplicate the RESTART path
+     *   was creating: it inserted a second row and left the first one
+     *   behind carrying the same title, so a group listed it twice
+     *   and gained another entry on every restart.
      *
-     *   THE FOLD IS CONDITIONAL ON THE SUCCESSOR BEING HERE, and that
-     *   condition is the whole safety property. A predecessor is removed
-     *   from the peer list only when the row that replaced it is in THIS
-     *   group's list and will be drawn; it then reappears underneath that
-     *   row behind a disclosure, one click away, with its restart, delete
-     *   and open controls untouched. When the successor is NOT here - a
-     *   different project, NEEDS ATTENTION, or simply not rendered - the
-     *   predecessor stays exactly where it was, as an ordinary peer,
-     *   because folding it under something that is not on screen would
-     *   make it unreachable. Hiding a row is only ever allowed to be a
-     *   MOVE, never a disappearance.
-     *
-     *   The predecessor rows are rendered by the same
-     *   _renderEndedTreeSessionRowHtml every other ended row uses, into
-     *   the same container, so _bindProjectSessionRowClicks binds them
-     *   with no special case and nothing about them behaves differently
-     *   once revealed.
+     *   A restart now reuses the session's own row (see
+     *   src/core/session_restart.py: rebind_instance), so there is no
+     *   predecessor, no duplicate, and nothing to disclose. The fix moved
+     *   to where the defect was.
      * Inputs: sessions (object[]) - one group's rows, live and ended,
      *   in display order.
      * Output: string - the group's inner HTML.
@@ -3556,55 +3511,7 @@ class Launchpad {
      */
     _renderTreeSessionRowsHtml(sessions) {
         const list = Array.isArray(sessions) ? sessions : [];
-        // Which successors are actually present in THIS group. Built from
-        // the rows being rendered, never from the record set, because the
-        // question is "is it on screen beside me" and only this list can
-        // answer that.
-        const presentIds = new Set();
-        for (const s of list) {
-            const id = s && s.session_row_id;
-            if (id !== null && id !== undefined && id !== '') {
-                presentIds.add(String(id));
-            }
-        }
-        const foldedUnder = new Map();
-        const peers = [];
-        for (const s of list) {
-            const parent = s && s.superseded_by;
-            const key = (parent === null || parent === undefined || parent === '')
-                ? null
-                : String(parent);
-            if (key !== null && presentIds.has(key)) {
-                const bucket = foldedUnder.get(key) || [];
-                bucket.push(s);
-                foldedUnder.set(key, bucket);
-                continue;
-            }
-            peers.push(s);
-        }
-        return peers.map((s) => {
-            const own = this._renderTreeSessionRowHtml(s);
-            const id = (s && s.session_row_id !== null && s.session_row_id !== undefined)
-                ? String(s.session_row_id) : null;
-            const folded = (id !== null) ? foldedUnder.get(id) : null;
-            if (!folded || folded.length === 0) return own;
-            const n = folded.length;
-            const noun = n === 1 ? 'earlier session' : 'earlier sessions';
-            const panelId = `superseded-${this._escapeHtml(id)}`;
-            return own + `
-                <div class="project-session-superseded">
-                  <button type="button" class="project-session-superseded__toggle"
-                          data-superseded-toggle="${this._escapeHtml(id)}"
-                          aria-expanded="false" aria-controls="${panelId}">
-                    <span class="project-session-superseded__chevron" aria-hidden="true">►</span>
-                    <span class="project-session-superseded__label">${n} ${noun} this one replaced</span>
-                  </button>
-                  <div class="project-session-superseded__list" id="${panelId}" style="display:none;">
-                    ${folded.map(f => this._renderTreeSessionRowHtml(f)).join('')}
-                  </div>
-                </div>
-            `;
-        }).join('');
+        return list.map((s) => this._renderTreeSessionRowHtml(s)).join('');
     }
 
     _renderTreeSessionRowHtml(s) {
@@ -3751,45 +3658,6 @@ class Launchpad {
      * sessions poller repainting the tree does not snap a collapsed
      * project back open.
      */
-    /**
-     * Wire the "N earlier sessions this one replaced" disclosures.
-     *
-     * Description: the affordance that makes folding a superseded
-     *   session safe. Delegated on ``#project-list`` in the same style as
-     *   the node toggles beside it, so it survives every re-render the 5s
-     *   poller does without rebinding.
-     *
-     *   Deliberately NOT persisted into ``_collapsedProjectNodes``.
-     *   That set records the user's standing choice about a PROJECT; a
-     *   predecessor list is a lookup you open, read and leave, and
-     *   remembering it would leave the duplicate permanently back on
-     *   screen - which is the thing being fixed.
-     *
-     *   ``stopPropagation`` so opening the disclosure cannot also be read
-     *   as a click on the project node behind it.
-     * Inputs: none.
-     * Output: void.
-     */
-    _bindSupersededToggles() {
-        const container = document.getElementById('project-list');
-        if (!container || container.__boundSupersededToggles) return;
-        container.__boundSupersededToggles = true;
-        container.addEventListener('click', (e) => {
-            const toggle = e.target.closest('.project-session-superseded__toggle');
-            if (!toggle) return;
-            e.stopPropagation();
-            const wrap = toggle.closest('.project-session-superseded');
-            if (!wrap) return;
-            const list = wrap.querySelector('.project-session-superseded__list');
-            if (!list) return;
-            const expand = toggle.getAttribute('aria-expanded') !== 'true';
-            toggle.setAttribute('aria-expanded', String(expand));
-            list.style.display = expand ? '' : 'none';
-            const chev = toggle.querySelector('.project-session-superseded__chevron');
-            if (chev) chev.textContent = expand ? '▼' : '►';
-        });
-    }
-
     _bindProjectNodeToggles() {
         const container = document.getElementById('project-list');
         if (!container || container.__boundNodeToggles) return;
@@ -4057,7 +3925,6 @@ class Launchpad {
         projectListEl.innerHTML = authorityHtml + projectNodesHtml + noProjectHtml + attentionHtml;
 
         this._bindProjectNodeToggles();
-        this._bindSupersededToggles();
         this._bindProjectSessionRowClicks();
 
         // Add click handlers for project selection

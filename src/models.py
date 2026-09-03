@@ -1083,23 +1083,25 @@ class RestartSessionResponse(BaseModel):
     THREE FIELDS THAT MUST NOT BE COLLAPSED INTO ``success``.
 
     ``conversation`` says whether the old conversation was actually
-    resumed: ``'resumed'`` (``--resume <uuid> --fork-session`` against the
-    stored ``claude_session_uuid``), ``'none_recorded'`` (the replaced row
-    never learned a Claude session uuid, so this is a NEW conversation
-    wearing the old name - stated, never implied), or ``'unknown'`` (the
-    replaced row itself could not be read). A client that renders all
-    three identically has reintroduced the defect: a blank session
-    presented as a continued one.
+    resumed: ``'resumed'`` (a bare ``--resume <uuid>`` against the stored
+    ``claude_session_uuid``), ``'none_recorded'`` (the row never learned a
+    Claude session uuid, so this is a NEW conversation wearing the old
+    name - stated, never implied), or ``'unknown'`` (the row itself could
+    not be read). A client that renders all three identically has
+    reintroduced the defect: a blank session presented as a continued one.
 
-    ``lineage_recorded`` is separate from ``success`` for the same reason
-    it is on ``ForkSessionResponse`` - the replacement can be created and
-    working while the ``parent_session_id`` stamp fails to land. That is a
-    working session that is simply not linked, which is neither a failure
-    nor an unqualified success.
+    ``row_reused`` says whether the restarted session kept its OWN record
+    - the same ``sessions.id``, and with it its title, conversation link,
+    group membership and history. That is the normal outcome and it is
+    what stops a restart leaving an abandoned twin behind. It is separate
+    from ``success`` because the session can be live and working while
+    reuse was refused (another row already holds the new tmux instance, or
+    the row was deleted mid-flight), and that is neither a failure nor an
+    unqualified success: the user gets a working session that may show up
+    as a second entry.
 
-    ``title_carried`` reports the label the replacement was born with, so
-    the caller can show what it actually got rather than what it asked
-    for.
+    ``title_carried`` reports the label the session came back with, so the
+    caller can show what it actually got rather than what it asked for.
     """
     success: bool = True
     session: dict = Field(default_factory=dict)
@@ -1108,7 +1110,7 @@ class RestartSessionResponse(BaseModel):
         description="'resumed' | 'none_recorded' | 'unknown' - never collapse these",
     )
     replaced_session_id: Optional[int] = None
-    lineage_recorded: bool = False
+    row_reused: bool = False
     title_carried: Optional[str] = None
     detail: Optional[str] = None
 

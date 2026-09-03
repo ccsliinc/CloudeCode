@@ -150,6 +150,7 @@ def persist_creation(
     working_dir_probe: Optional[Callable[[str], Optional[str]]] = None,
     agent_type: Optional[str] = None,
     agent_launched: Optional[bool] = None,
+    reuse_session_id: Optional[int] = None,
     now: Optional[str] = None,
 ) -> CreatePersistResult:
     """Record a just-created tmux instance as ``origin='created'``.
@@ -266,6 +267,64 @@ def persist_creation(
     else:
         recorded_agent_type = None
         family_source = None
+
+    # ROW REUSE, WHEN THE CALLER NAMED A ROW TO REUSE. A RESTART is the
+    # same session coming back, so it keeps its row rather than leaving
+    # the old one behind and inserting a second. Tried FIRST because a
+    # successful rebind is exactly the write record_instance would
+    # otherwise do on a NEW row - and only one of the two may run.
+    #
+    # A refusal is not a failure. If the row vanished or another row
+    # already holds this instance, we fall through and record the
+    # instance the ordinary way: the session is live either way, and an
+    # unreused row is a cosmetic duplicate while a forced write is a
+    # corrupted identity.
+    if reuse_session_id is not None:
+        from src.core.session_restart import rebind_instance
+
+        rebound = rebind_instance(
+            conn,
+            row_id=int(reuse_session_id),
+            socket=socket,
+            name=name,
+            epoch=epoch,
+            tmux_session_id=live.get("tmux_session_id"),
+            working_dir=resolved_dir,
+            lifecycle_source=CREATE_LIFECYCLE_SOURCE,
+            now=now,
+        )
+        if rebound.rebound:
+            logger.info(
+                "create_persisted_by_reuse",
+                tmux_name=name,
+                tmux_socket=socket,
+                tmux_created_epoch=epoch,
+                session_uuid=rebound.session_uuid,
+                reused_session_id=int(reuse_session_id),
+                note=(
+                    "restart reused the existing row; no second row was "
+                    "inserted, so nothing references a session the user "
+                    "cannot see"
+                ),
+            )
+            return CreatePersistResult(
+                outcome=CREATE_RECORDED,
+                session_uuid=rebound.session_uuid,
+                epoch=epoch,
+            )
+        logger.warning(
+            "create_persist_reuse_declined",
+            tmux_name=name,
+            tmux_socket=socket,
+            tmux_created_epoch=epoch,
+            reused_session_id=int(reuse_session_id),
+            outcome=rebound.outcome,
+            detail=rebound.detail,
+            note=(
+                "falling through to an ordinary instance record; the "
+                "session is live and simply keeps a separate row"
+            ),
+        )
 
     result = record_instance(
         conn,

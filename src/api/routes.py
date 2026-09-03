@@ -402,19 +402,24 @@ async def fork_session(request: Request, session_name: str):
     dependencies=[Depends(require_auth)],
 )
 async def restart_session(request: Request, session_uuid: str):
-    """Replace a STOPPED session with a fresh one that carries its identity.
+    """Bring a STOPPED session back on a new tmux instance, same record.
 
-    Description: the launchpad's RESTART control. It creates a NEW tmux
-      session - it cannot do anything else, because the old one's pane is
-      gone and the replacement necessarily gets a new
-      ``#{session_created}``, so the identity triple can never match the
-      old row. What this endpoint adds over a bare ``POST /sessions`` is
-      that the replacement carries everything the old row already knew:
-      its TITLE, its working directory, its agent and model, its Claude
-      CONVERSATION (resumed via ``--resume <uuid> --fork-session``), and
-      a ``parent_session_id`` back to the row it replaced. See
-      src/core/session_restart.py for why fork-session rather than a bare
-      resume, and why no new ``fork_kind`` was invented.
+    Description: the launchpad's RESTART control. It spawns a NEW tmux
+      session - it cannot do anything else, because the old pane is gone
+      and the new one necessarily gets a new ``#{session_created}`` - but
+      it does NOT create a new session record. The existing row is moved
+      onto the new tmux instance in place, so the session keeps its
+      ``sessions.id`` and ``session_uuid`` and, with them, its TITLE, its
+      working directory, its agent and model, its Claude CONVERSATION
+      (continued with a bare ``--resume <uuid>``), its group membership
+      and everything that references it. See
+      src/core/session_restart.py: rebind_instance for why that is safe,
+      and resume_arguments for why the fork flag is gone.
+
+      ONE SESSION, ONE ROW, ONE LIST ENTRY. Inserting a second row was
+      what left an abandoned twin holding the user's title and
+      conversation while the live session wore a copy of the name, which
+      is what doubled the session list on every restart.
 
       KEYED ON ``session_uuid``, NOT ON THE TMUX NAME. A tmux name is
       reusable and this app re-mints them; resolving a stopped session by
@@ -423,20 +428,22 @@ async def restart_session(request: Request, session_uuid: str):
       THREE OUTCOMES, and the middle one is why this is not a bare create:
         404  no row with this ``session_uuid`` - could not evaluate.
         201, ``conversation='resumed'`` - the old conversation continues.
-        201, ``conversation='none_recorded'`` - the replaced row never
-             learned a Claude session uuid. The session is still created,
-             carrying the name/dir/agent, and the response SAYS it is a
-             new conversation. Never presented as a resume.
+        201, ``conversation='none_recorded'`` - the row never learned a
+             Claude session uuid. The session still comes back, carrying
+             the name/dir/agent, and the response SAYS it is a new
+             conversation. Never presented as a resume.
+
+      ``row_reused`` is reported separately and is read back from the row
+      itself rather than taken from the create path's own report.
     Inputs: session_uuid (str) - the stopped row's durable identity.
     Output: RestartSessionResponse.
     """
     from contextlib import closing
 
-    from src.core import session_fork, session_restart
-    from src.core.db import DatastoreUnreadableError, connect, db_path_for, transaction
+    from src.core import session_restart
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
 
     session_manager = request.app.state.session_manager
-    socket = session_manager.tmux_socket_name()
     db_path = db_path_for(settings.get_state_dir())
 
     if not db_path.exists():
@@ -493,10 +500,15 @@ async def restart_session(request: Request, session_uuid: str):
             # outcomes, and it is derived from a measured column rather
             # than from a client's claim.
             agent_extra_args=(
-                session_fork.fork_arguments(source.claude_session_uuid)
+                session_restart.resume_arguments(source.claude_session_uuid)
                 if resumable else None
             ),
             label=label,
+            # ONE SESSION, ONE ROW. The restarted session keeps the row it
+            # already had - see session_restart.rebind_instance. This is
+            # what stops a restart from leaving an abandoned twin behind
+            # and doubling the session list.
+            reuse_session_id=source.parent_id,
         )
     except Exception as exc:
         logger.warning(
@@ -513,48 +525,55 @@ async def restart_session(request: Request, session_uuid: str):
 
     child_tmux = getattr(child, "tmux_session", None)
 
-    def _stamp():
-        """Record lineage on the replacement row, in its own transaction."""
-        with closing(connect(db_path, create=False)) as conn:
-            child_uuid = session_fork.newest_anchor_uuid(
-                conn, socket=socket, tmux_name=child_tmux or ""
-            )
-            if not child_uuid:
-                return False
-            with transaction(conn):
-                return session_fork.mark_as_fork(
-                    conn,
-                    child_session_uuid=child_uuid,
-                    parent_id=source.parent_id,
-                )
+    def _verify_reuse():
+        """Did the row actually come back on the new tmux instance?
 
-    recorded = False
+        Read back INDEPENDENTLY rather than trusting the create path's
+        own report: this asks the row whether it now carries the new
+        tmux name and is running, which is the thing the user cares
+        about, not whether a function said it wrote it.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            row = conn.execute(
+                "SELECT tmux_name, lifecycle FROM sessions WHERE id = ? "
+                "LIMIT 1",
+                (source.parent_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return (
+                row["tmux_name"] == child_tmux
+                and row["lifecycle"] == "running"
+            )
+
+    reused = False
     detail = source.detail if not resumable else None
     try:
-        recorded = bool(await run_in_threadpool(_stamp))
+        reused = bool(await run_in_threadpool(_verify_reuse))
     except DatastoreUnreadableError as exc:
-        # THE SESSION EXISTS. Say so, and say the link did not land -
-        # never report this as a failed restart, never as a clean success.
-        lineage_note = (
-            f"the replacement was created, but its link back to the "
-            f"session it replaced could not be recorded: {exc}"
+        # THE SESSION EXISTS AND WORKS. Say so, and say we could not
+        # confirm the row was reused - never report this as a failed
+        # restart, and never as a clean success either.
+        note = (
+            f"the session was restarted, but whether it kept its "
+            f"original record could not be confirmed: {exc}"
         )
-        detail = f"{detail} {lineage_note}" if detail else lineage_note
+        detail = f"{detail} {note}" if detail else note
     else:
-        if not recorded:
-            lineage_note = (
-                "the replacement was created, but its link back to the "
-                "session it replaced could not be recorded; it works and "
-                "is simply not linked in the tree"
+        if not reused:
+            note = (
+                "the session was restarted, but it could not keep its "
+                "original record and now has a separate one; it works, "
+                "and it may appear as a second entry"
             )
-            detail = f"{detail} {lineage_note}" if detail else lineage_note
+            detail = f"{detail} {note}" if detail else note
 
     return RestartSessionResponse(
         success=True,
         session=child.model_dump() if hasattr(child, "model_dump") else {},
         conversation="resumed" if resumable else "none_recorded",
         replaced_session_id=source.parent_id,
-        lineage_recorded=recorded,
+        row_reused=reused,
         title_carried=label,
         detail=detail,
     )

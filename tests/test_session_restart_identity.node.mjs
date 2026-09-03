@@ -386,24 +386,35 @@ await test('a missing response body is CANNOT DETERMINE, never a clean pass', as
 //    a failure nor a clean success, and gets said out loud.
 // =====================================================================
 
-await test('a resumed restart with lineage_recorded false still reports the gap', async () => {
+await test('a resumed restart with row_reused false still reports the gap', async () => {
     const { lp, errors } = loadLaunchpad({
         restartResult: {
             success: true, conversation: 'resumed',
-            lineage_recorded: false, title_carried: 'Media', detail: null,
+            row_reused: false, title_carried: 'Media', detail: null,
         },
     });
     await lp._restartRecentSession({ sessionUuid: 'uuid-1' });
     assert.equal(errors.length, 1);
-    assert.ok(/link back to the session it replaced was not recorded/.test(errors[0]),
+    assert.ok(/could not keep its original record/.test(errors[0]),
         `got: ${errors[0]}`);
 });
 
-await test("the server's own detail wins over the generic lineage sentence", async () => {
+await test('a resumed restart that DID reuse its row says nothing at all', async () => {
+    // The normal outcome. A restart that kept its own record is an
+    // ordinary success and must not narrate anything at the user.
     const { lp } = loadLaunchpad();
     assert.equal(
         lp._restartNotice({
-            conversation: 'resumed', lineage_recorded: false,
+            conversation: 'resumed', row_reused: true, title_carried: 'Media',
+        }),
+        null);
+});
+
+await test("the server's own detail wins over the generic reuse sentence", async () => {
+    const { lp } = loadLaunchpad();
+    assert.equal(
+        lp._restartNotice({
+            conversation: 'resumed', row_reused: false,
             detail: 'the datastore was unreadable',
         }),
         'the datastore was unreadable');

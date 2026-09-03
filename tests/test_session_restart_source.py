@@ -35,12 +35,13 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 from src.core.db import connect, db_path_for, transaction
 from src.core.db_migration import ensure_db_migrated
 from src.core.db_models import SESSION_FORK_KIND_FORK
-from src.core.session_fork import fork_arguments, mark_as_fork
+from src.core.session_fork import mark_as_fork
 from src.core.session_restart import (
     RESTART_NO_CONVERSATION,
     RESTART_RESUMABLE,
     RESTART_UNRESOLVED,
     resolve_restart_source,
+    resume_arguments,
 )
 from src.core.trail_entry import utc_now
 
@@ -198,24 +199,36 @@ def test_the_three_outcomes_are_distinct_strings():
 
 
 # ---------------------------------------------------------------------
-# 4. THE LAUNCH AND THE LINEAGE. --fork-session, not a bare --resume, and
-#    parent_session_id back to the row that was replaced.
+# 4. THE LAUNCH. A BARE --resume, because the row is reused and there is
+#    no second row left to collide with.
 # ---------------------------------------------------------------------
 
 
-def test_a_resumable_restart_launches_with_fork_session_not_a_bare_resume(conn):
-    """A bare --resume continues the SAME uuid, which would collide with
-    ux_sessions_claude_uuid - the replaced row still legitimately holds it."""
+def test_a_resumable_restart_launches_with_a_bare_resume(conn):
+    """One conversation, on one row, under one uuid.
+
+    --fork-session was only ever there because the old restart INSERTED a
+    second row, and two rows cannot share a claude_session_uuid. Reusing
+    the row removes the second row, so the flag has nothing left to
+    prevent - and removing it matters, because a fork MINTS A NEW uuid,
+    which meant a restarted session quietly stopped being the
+    conversation the user had been having.
+    """
     _insert_session(conn)
     src = resolve_restart_source(conn, session_uuid="s-1")
-    args = fork_arguments(src.claude_session_uuid)
-    assert args == ["--resume", "claude-abc", "--fork-session"]
-    assert "--fork-session" in args
+    args = resume_arguments(src.claude_session_uuid)
+    assert args == ["--resume", "claude-abc"]
+    assert "--fork-session" not in args, (
+        "a fork would mint a new uuid and abandon the user's conversation"
+    )
 
 
 def test_the_unique_index_on_claude_session_uuid_is_real(conn):
-    """The reason a bare resume is not an option, asserted rather than
-    asserted-about: a second row cannot carry the same conversation uuid."""
+    """Still true, and still the constraint - it is simply not reached.
+
+    A SECOND row carrying the same conversation is rejected. Reuse never
+    creates one, which is exactly why a bare resume is safe now.
+    """
     import sqlite3
 
     _insert_session(conn)

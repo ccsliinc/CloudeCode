@@ -1169,9 +1169,12 @@ class API {
      *   names are reusable and a live session may have taken it since.
      * @returns {Promise<{success: boolean, session: object,
      *   conversation: string, replaced_session_id: ?number,
-     *   lineage_recorded: boolean, title_carried: ?string,
+     *   row_reused: boolean, title_carried: ?string,
      *   detail: ?string}>} - ``conversation`` is 'resumed' |
      *   'none_recorded' | 'unknown' and those are three different things.
+     *   ``row_reused`` says whether the session kept its OWN record - the
+     *   normal outcome, and what stops a restart leaving a duplicate
+     *   behind. False means it works but may show as a second entry.
      */
     async restartSession(sessionUuid) {
         return await this.call(

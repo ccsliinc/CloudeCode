@@ -732,15 +732,6 @@
          the escaper is passed in - so it has no ordering constraint on
          anything else. -->
     <script src="/static/js/folder-picker-modal.js"></script>
-    <!-- Restart-supersession classifier. Must load BEFORE launchpad.js,
-         whose _endedSessionsForTree() folds a superseded session under
-         the session that replaced it. Pure functions over record dicts -
-         it touches no DOM and reads no controller state, so it has no
-         other ordering constraint. When it is ABSENT, launchpad falls
-         back to showing every ended row, which is the pre-fix behaviour
-         and the safe direction: a missing classifier must never be able
-         to hide a session. -->
-    <script src="/static/js/session-supersede.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
