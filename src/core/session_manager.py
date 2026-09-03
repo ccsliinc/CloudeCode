@@ -45,7 +45,13 @@ from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
-from src.core.session_status import STATUS_UNKNOWN
+from src.core.session_status import (
+    LIVENESS_GONE,
+    LIVENESS_LIVE,
+    LIVENESS_UNKNOWN,
+    STATUS_UNKNOWN,
+    resolve_listing_liveness,
+)
 from src.core.session_activity import (
     EVENT_STOP,
     SessionActivityTracker,
@@ -3765,7 +3771,7 @@ class SessionManager:
         """
         sess = self.sessions.get(session_id)
         backend = self.backends.get(session_id)
-        if sess is None or backend is None or not backend.is_alive():
+        if sess is None or backend is None:
             return None
         if sess.status != SessionStatus.RUNNING:
             return None
@@ -3783,6 +3789,28 @@ class SessionManager:
             status_map = self._build_tmux_status_map()
         row = status_map.get(tmux_session_name) if tmux_session_name else None
         raw_tmux_status = row["status"] if row else STATUS_UNKNOWN
+
+        # EXISTENCE IS NOT LIVENESS. This gate used to sit up with the
+        # None checks as ``not backend.is_alive()``, which for tmux is
+        # ``has-session`` - rc=0 for a session whose pane is a DEAD HUSK
+        # held open by ``remain-on-exit``. So a session whose process had
+        # exited stayed in the running list forever, while the red dot
+        # beside it (which reads ``#{pane_dead}``) told the truth the
+        # whole time. The pane status resolved just above is the
+        # measurement that separates the two, and it is free: it comes
+        # from the bulk probe this function already fetched.
+        liveness = resolve_listing_liveness(
+            exists=backend.is_alive(),
+            pane_status=raw_tmux_status if tmux_session_name else None,
+        )
+        if liveness == LIVENESS_GONE:
+            return None
+        if liveness == LIVENESS_UNKNOWN:
+            # THE THIRD OUTCOME. Dropping the row would assert the
+            # session ENDED; keeping a fallback status would let it read
+            # as alive. Neither was measured, so the row survives and
+            # says ``unknown``.
+            raw_tmux_status = STATUS_UNKNOWN
         # feat/hook-driven-status - the raw tmux classification (dead check
         # + graceful-fallback source) is combined with this session's live
         # hook signal (if any) and its persisted unread flag into ONE
@@ -3802,7 +3830,17 @@ class SessionManager:
         # is a lie about right now, and returns not-measured instead.
         if not self._activity_tracker.hooks_seen(session_id):
             restored = self._restored_activity_state(tmux_session_name)
-            if restored:
+            # A PERSISTED STATE MAY NEVER OVERRIDE A MEASURED ONE.
+            # The store already refuses to hand BACK a `dead` (only
+            # tmux can see a pane die), but the reverse was
+            # unguarded: `idle` is not in PERISHABLE, so a stored
+            # `idle` is trusted indefinitely and would overwrite a
+            # tmux-MEASURED `dead`, resurrecting a husk as a live
+            # session. Restore is therefore consulted ONLY when the
+            # pane was measured LIVE - a measured death and an
+            # unmeasurable pane both keep what was measured, or the
+            # honest absence of a measurement.
+            if restored and liveness == LIVENESS_LIVE:
                 activity_status = restored
         else:
             # THE SETTLED VALUE, stamped where the inputs are real. The
