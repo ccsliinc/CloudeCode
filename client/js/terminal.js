@@ -332,6 +332,11 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 }
                 // Send input as binary frame
                 this.ws.send(new TextEncoder().encode(data));
+                // Answering a session clears that session's toasts. Same
+                // isMouse gate as the two guards above, same reason: a
+                // pointer move is not an answer. After the send, so a
+                // dropped frame does not clear a toast nobody answered.
+                if (!isMouse) this._noteUserInputToSession();
             }
         });
 
@@ -405,6 +410,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                     const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r - VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
                     console.log('[SHIFT-ENTER] sending ESC+CR (\\x1b\\r), bytes:', bytes);
                     this.ws.send(bytes);
+                    this._noteUserInputToSession();
                 }
                 return false;  // swallow the event so xterm doesn't also emit \r
             }
@@ -765,6 +771,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     sendKeyToTerminal(keyData) {
         if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
+        this._noteUserInputToSession();
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(new TextEncoder().encode(keyData));
         } else {
@@ -1178,6 +1185,30 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     _sessionId() {
         return this._unwrapSession(this._currentSession).id || null;
+    }
+
+    /**
+     * The user just sent real input to THIS tab's session, so clear that
+     * session's toasts. Scoped to the ATTACHED session and nothing else -
+     * typing into session B is no evidence at all about session A. The
+     * full reasoning (why input rather than a timer, why it acks rather
+     * than hides, why every kind including a blocking prompt) lives in
+     * one place, on ToastManager.dismissForSessionActivity().
+     *
+     * Callers are user input ONLY: term.onData (mouse reports excluded),
+     * the Shift+Enter chord, the D-pad, and slash-command insertion.
+     * Deliberately NOT _writeSynthetic(), which exists precisely so the
+     * app's own writes cannot be mistaken for the user.
+     *
+     * Output: void.
+     */
+    _noteUserInputToSession() {
+        const sessionId = this._sessionId();
+        if (!sessionId) return;
+        if (window.ToastManager
+            && typeof window.ToastManager.dismissForSessionActivity === 'function') {
+            window.ToastManager.dismissForSessionActivity(sessionId);
+        }
     }
 
     /**
@@ -2365,6 +2396,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // Send text to terminal without newline
         this.ws.send(new TextEncoder().encode(text));
+        this._noteUserInputToSession();
 
         console.log('Terminal: Inserted text:', text);
     }

@@ -672,8 +672,18 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // ResizeObserver. Those cannot be satisfied by trimming comments; the
     // line count can, so treat it as the weaker of the two signals and
     // raise it only alongside a stated reason.
+    // RAISED 2390 -> 2425, with the stated reason this comment demands.
+    // Toasts now clear themselves when the user answers the session that
+    // raised them, which needs four call sites in this file (term.onData
+    // after the send, the Shift+Enter chord, the D-pad, slash-command
+    // insertion) plus the one small method they share. Everything that
+    // could live elsewhere does: the whole policy - why user input rather
+    // than a dwell timer, why it acks rather than hides, why it is scoped
+    // to one session - is written once on
+    // ToastManager.dismissForSessionActivity() in client/js/toast.js, and
+    // this file's docstring points at it rather than repeating it.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2390, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2425, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {
