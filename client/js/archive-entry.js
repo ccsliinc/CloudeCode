@@ -238,8 +238,64 @@ console.log('[ArchiveEntry Module] Loading...');
         return false;
     }
 
+    /**
+     * Description: leave the archive and return to the launcher.
+     *
+     *   WHY THIS EXISTS AT ALL. Until it did there was NO in-app way out.
+     *   The archive screen's own `Back` button is `data-action=back-pane`
+     *   and steps one pane WITHIN the archive (see
+     *   archive-screen.js::goBackPane, whose backRoute() bottoms out at
+     *   'root' and stays there), and the header title's click handler was
+     *   gated on `currentScreen === 'terminal'`, so on the archive it did
+     *   nothing. The only exit was the browser's own Back button.
+     *
+     *   WHY THE URL IS WRITTEN HERE AND NOT LEFT TO showLaunchpad().
+     *   showLaunchpad() ends in `Router.resetToLauncher()`, which
+     *   EXPLICITLY REFUSES to touch the address bar while the path starts
+     *   with `/archive` - a guard that exists so a cold load of
+     *   /archive/t/5767 is not rewritten to `/` before anything parses
+     *   it. Correct for that job, and it means a bare showLaunchpad()
+     *   call from the archive leaves `/archive` in the address bar with
+     *   the launcher on screen; the next refresh silently lands the user
+     *   back in the archive they just left. So the exit writes `/` for
+     *   the same reason open() writes `/archive`: this transition belongs
+     *   to neither the inbound router nor archive-screen.js's within-the-
+     *   archive sync, so it is owned here, next to its opposite, where
+     *   the two cannot drift apart.
+     *
+     *   pushState, NOT history.back(). Back would return the user to
+     *   whatever preceded the archive, which is nicer when they arrived
+     *   by clicking - and wrong when they arrived by typing the URL or
+     *   following a link, where there is no such entry and Back leaves
+     *   the app entirely. A deterministic push to `/` never strands
+     *   anyone; the archive stays one Back press away either way.
+     *
+     * Inputs: none.
+     * Output: boolean - true when the launcher was shown, false when the
+     *   app shell was unavailable to show it.
+     * Example: window.ArchiveEntry.close();
+     */
+    function close() {
+        try {
+            if (window.location.pathname !== '/') {
+                window.history.pushState({}, '', '/');
+            }
+        } catch (e) {
+            // Same tolerance as open(): a wrong address bar is not a
+            // reason to refuse to navigate.
+        }
+        if (window.App && typeof window.App.showLaunchpad === 'function') {
+            window.App.showLaunchpad();
+            return true;
+        }
+        console.warn('[ArchiveEntry] App.showLaunchpad is unavailable; ' +
+                     'the archive could not be left.');
+        return false;
+    }
+
     window.ArchiveEntry = {
         open: open,
+        close: close,
         ensure: ensure,
         state: state,
         reason: reason,

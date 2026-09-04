@@ -609,6 +609,25 @@ class AppController {
             if (this.currentScreen === 'terminal') {
                 console.log('App: Title clicked, returning to launcher');
                 this.goHome();
+                return;
+            }
+            // THE ARCHIVE'S ONLY IN-APP EXIT. Its own Back button steps
+            // panes within the archive and bottoms out at the root pane,
+            // so before this the browser's Back button was the only way
+            // out. Routed through ArchiveEntry.close() rather than
+            // showLaunchpad() because the address bar has to be written
+            // too - see that function for why showLaunchpad() cannot do
+            // it itself.
+            if (this.currentScreen === 'archive') {
+                console.log('App: Title clicked, leaving the archive');
+                if (window.ArchiveEntry && typeof window.ArchiveEntry.close === 'function') {
+                    window.ArchiveEntry.close();
+                } else {
+                    // Named, not silent: a title that does nothing is
+                    // indistinguishable from a title nobody clicked.
+                    console.warn('App: ArchiveEntry.close is unavailable; ' +
+                                 'the archive has no exit.');
+                }
             }
         });
 
@@ -769,15 +788,50 @@ class AppController {
     /**
      * Description: show the archive (message browser) screen.
      *
-     * Modelled directly on showLaunchpad(). Two things it deliberately
-     * does NOT do. It does not call SessionSidebar.show(): the sidebar is
-     * the working set of LIVE sessions and the archive is a different
-     * corpus with its own navigation, so showing both puts two unrelated
-     * trees on one screen. It does not call SessionSidebar.hide() either,
-     * because hide() persists a closed state that then affects the
-     * launchpad - the regression documented at showLaunchpad() below. And
-     * it does not touch Themes.setActiveSession: the archive is not a
-     * session and runs under the global theme.
+     * Modelled directly on showLaunchpad(). It does not call
+     * SessionSidebar.show(): the sidebar is the working set of LIVE
+     * sessions and the archive is a different corpus with its own
+     * navigation, so showing both puts two unrelated trees on one screen.
+     *
+     * IT NOW CALLS SessionSidebar.hide(), AND THE COMMENT THAT SAID IT
+     * MUST NOT WAS STALE. That comment read "hide() persists a closed
+     * state that then affects the launchpad". True when it was written;
+     * false since 4af93ca, which changed hide() to close({persist: false})
+     * for exactly that reason - see hide()'s own doc comment, which now
+     * says leaving a screen is not the user closing the bar. Nobody
+     * re-read the claim after the thing it described was fixed, so the
+     * archive went on being the one authenticated screen that left the
+     * conversation list on top of itself. What the user reported:
+     * "when clicking into it, it should take over the page, no
+     * conversations sidebar". With the bar PINNED the cost is not merely
+     * cosmetic - `body.session-sidebar-pinned .screen` pads every screen,
+     * `#archive-screen` included, by --sidebar-dock-w, so the archive was
+     * rendering into a 320px-narrower box with the panel sitting in the
+     * gap. hide() takes the panel off screen, drops that body class via
+     * SessionSidebarPin.apply(), stops the poller, and leaves the user's
+     * open/pinned PREFERENCE untouched, so showLaunchpad()'s and
+     * showTerminal()'s existing show() call restores it on the way out.
+     *
+     * IT ALSO DROPS THE SESSION IDENTITY, which is the second half of the
+     * same report ("it stays on current session"). Arriving from a
+     * terminal, showArchive() used to leave FOUR live references to the
+     * session the user had just navigated away from: the sidebar's
+     * active-row pin (setActiveSession was never cleared), the header
+     * title, the browser tab title, and the per-session theme scope.
+     * Clearing them is not cosmetic tidying - a screen that still claims
+     * to be a session is a screen whose Back, theme and audio controls
+     * all act on something that is no longer on screen.
+     *
+     * THE WEBSOCKET IS PAUSED, NOT DETACHED, and the distinction is the
+     * whole point. This reuses TerminalController.pauseForHome() - the
+     * same call App.goHome() makes - which closes only the browser-side
+     * socket under the existing _intentionalClose flag. The tmux session
+     * and the server's session record both stay alive and adopted, so the
+     * session keeps appearing in GET /sessions/list and re-entering it
+     * reconnects through the usual reconnectToExistingSession() path.
+     * Anything stronger here (detachSession, destroySession) would mean a
+     * user lost a live session by looking at the archive, which is a far
+     * worse bug than the layout one this change is fixing.
      *
      * Inputs: params (object) - {view, projectId, transcriptId, lineNo,
      *   query} from router.js. May be {} for the bare /archive route.
@@ -785,6 +839,15 @@ class AppController {
      */
     showArchive(params) {
         console.log('App: Showing archive screen', params);
+        // Captured BEFORE hideAllScreens()/currentScreen is reassigned,
+        // for the same reason showTerminal() captures cameFromTerminal:
+        // the question is what the user was on a moment ago, and by the
+        // end of this function that is no longer readable anywhere.
+        const cameFromTerminal = this.currentScreen === 'terminal';
+        if (cameFromTerminal && window.TerminalController
+            && typeof window.TerminalController.pauseForHome === 'function') {
+            window.TerminalController.pauseForHome();
+        }
         this.hideAllScreens();
         document.getElementById('archive-screen').classList.add('active');
         // Same one-way opt-in as showLaunchpad(): these ship
@@ -800,10 +863,51 @@ class AppController {
         if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.place === 'function') {
             window.GlobalAudioToggle.place('archive');
         }
+        // THE ARCHIVE IS A FULL-PAGE MODE. Order matters: clear the
+        // active-session pin FIRST so that if anything re-renders the row
+        // list on the way down it cannot re-mark a row active, then take
+        // the bar off screen. hide() does not persist, so the user's own
+        // open/pinned choice survives and is restored by the show() that
+        // showLaunchpad() and showTerminal() already call on the way back.
+        if (window.SessionSidebar) {
+            window.SessionSidebar.setActiveSession(null, null);
+            window.SessionSidebar.hide();
+        }
         // Leaving session scope, exactly as showLaunchpad() does.
         if (window.Themes && typeof window.Themes.clearSession === 'function') {
             window.Themes.clearSession();
         }
+        // SESSION-IDENTITY-V2 - the archive is not a session. Drop the pin
+        // scope and restore the user's global theme, so a ThemeSelector
+        // swap made while browsing the archive cannot PATCH a pin onto a
+        // session the user is no longer looking at. Same block as
+        // showLaunchpad(), deliberately identical rather than shared: it
+        // is six lines, and the two screens are free to diverge.
+        if (window.Themes) {
+            if (typeof window.Themes.setActiveSession === 'function') {
+                window.Themes.setActiveSession(null);
+            }
+            if (typeof window.Themes.applyTheme === 'function') {
+                var stored = null;
+                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
+                window.Themes.applyTheme(stored || 'claude', { persist: false });
+            }
+        }
+        // Must run AFTER setActiveSession(null) - it reads the active
+        // session to decide whether the audio gate may open at all.
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
+            window.GlobalAudioToggle.syncForSession();
+        }
+        // NO `subheader` HERE, DELIBERATELY. A subheader switches
+        // `.header-row` to the `.header--home` GRID layout and stamps
+        // `home-header-active` on <body>; that is the launchpad's layout
+        // and borrowing it would change the archive's header geometry as
+        // a side effect of wanting a caption. The archive takes the plain
+        // flex header the terminal screen uses.
+        setHeaderIdentity({ icon: 'brand', title: 'Message archive' });
+        // The tab title said the session's name for as long as the user
+        // browsed the archive. It is not that session any more.
+        setPageTitle(null);
         if (window.ArchiveScreen && typeof window.ArchiveScreen.show === 'function') {
             window.ArchiveScreen.show(params || {});
         } else {
