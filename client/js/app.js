@@ -1052,6 +1052,32 @@ class AppController {
         // create leaves them undefined and connectToSession treats
         // that as a normal (non-adopt) path.
         window.TerminalController.connectToSession(session, opts);
+        this.focusTerminal();
+    }
+
+    /**
+     * Description: hand keyboard focus to the terminal's own input. Every
+     *   path that puts a session on screen ends with this, because
+     *   whatever the user clicked to get here - a sidebar row, most often
+     *   - otherwise KEEPS focus, and that element's key handlers then
+     *   swallow what the user believes they are typing at the terminal.
+     *   Doing it in showTerminal() and returnToExistingTerminal() covers
+     *   both arrival paths; the sidebar separately stops being focusable
+     *   once closed (session-sidebar.js), because fixing only the switch
+     *   path would leave every OTHER way of closing the bar stranded the
+     *   same way.
+     * Inputs: none.
+     * Output: void.
+     * Example: this.focusTerminal();
+     */
+    focusTerminal() {
+        // Deferred for the same reason SlashCommandsModal.selectCommand()
+        // defers it: .xterm-helper-textarea is created by xterm during its
+        // own attach, so a synchronous query can find nothing at all.
+        setTimeout(() => {
+            const input = document.querySelector('.xterm-helper-textarea');
+            if (input) input.focus();
+        }, 100);
     }
 
     /**
@@ -1175,6 +1201,7 @@ class AppController {
         }
 
         window.TerminalController.reconnectToExistingSession(session);
+        this.focusTerminal();
     }
 
     /**
