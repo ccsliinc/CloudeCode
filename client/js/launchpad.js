@@ -512,6 +512,16 @@ class Launchpad {
             this._archivedFetchOk = this._archivedVisible ? false : null;
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
+            // RE-RENDER ON FAILURE. Without this the archived notice keeps
+            // whatever the last SUCCESSFUL fetch painted - a confident
+            // "showing archived: N" sitting on screen after the request
+            // that would have told you failed. The count and the failure
+            // render identically then, which is the exact false green the
+            // three-outcome notice exists to remove, so the state has to
+            // reach the DOM on the one path it was built for.
+            // Measured 2026-09-06 in the live browser: state went to
+            // false, the screen kept reading "showing archived: 1".
+            this.renderProjectList();
         }
         // Refresh running sessions in parallel with the projects view.
         // Failure is non-fatal and handled inside loadRunningSessions.
