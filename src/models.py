@@ -672,6 +672,18 @@ class ProjectResponse(BaseModel):
             "Never derived from last_opened_at - opening is not working"
         ),
     )
+    archived_at: Optional[str] = Field(
+        None,
+        description=(
+            "ISO-8601 stamp of when this project was ARCHIVED (retired "
+            "from the default list), or None when it is live. Carried on "
+            "every row so a client rendering an include_archived=true "
+            "list can tell the two apart per row - the flag it sent says "
+            "what it asked for, not what any given row is. Archiving a "
+            "project never touches its sessions: a session of an "
+            "archived project still appears in RUNNING and RECENT"
+        ),
+    )
 
 
 class UpdateProjectRequest(BaseModel):

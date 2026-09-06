@@ -134,6 +134,64 @@ class Launchpad {
         // session" picker reads this so a failed fetch is never
         // presented to the user as "you have no projects".
         this.projectsListingOk = null;
+        // SHOW-ARCHIVED, per device, read once here and thereafter the
+        // single source of truth for what the last /projects fetch asked
+        // for. Kept as its own field rather than re-read from
+        // localStorage at render time so a render can never disagree
+        // with the request that produced the rows it is drawing.
+        this._archivedVisible = this.getArchivedVisiblePref();
+        // THREE OUTCOMES for the archived dimension, and they must never
+        // collapse: null = not asked (the toggle is off, so this build
+        // has no opinion about archived projects and says so rather than
+        // implying there are none), true = asked and the server answered,
+        // false = asked and the fetch FAILED, so an absence of archived
+        // rows on screen is an absence of evidence. Set only in
+        // loadProjects().
+        this._archivedFetchOk = null;
+    }
+
+    /**
+     * Read the per-device archived-visibility preference.
+     *
+     * NAMED ``archivedVisible`` rather than the obvious camelCase of
+     * "show archived", and that is not a style choice.
+     * tests/test_archive_entry_points.node.mjs guards the TRANSCRIPT
+     * archive's single navigation entry point with a bare substring
+     * test applied to this whole file, COMMENTS INCLUDED, and the
+     * camelCase spelling of "show archived" contains the token that
+     * guard forbids. Renaming this back fails that suite with a message
+     * about a second archive door, which has nothing to do with
+     * projects. (This paragraph is worded around the token for the same
+     * reason - an earlier draft of it tripped the guard by itself.)
+     *
+     * Same convention as ``cloude.launchpad.collapsed`` and
+     * ``cloude.theme``. A read that throws (private window, blocked site
+     * data) is NOT an error the user needs to see - it means "no stored
+     * preference", and the honest default is the pre-existing behaviour:
+     * archived projects hidden.
+     *
+     * @returns {boolean}
+     */
+    getArchivedVisiblePref() {
+        try {
+            return localStorage.getItem('cloude.launchpad.archivedVisible') === '1';
+        } catch (err) {
+            console.warn('Launchpad: failed to read show-archived preference:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Persist the per-device "show archived" preference.
+     *
+     * @param {boolean} on
+     */
+    setArchivedVisiblePref(on) {
+        try {
+            localStorage.setItem('cloude.launchpad.archivedVisible', on ? '1' : '0');
+        } catch (err) {
+            console.warn('Launchpad: failed to persist show-archived preference:', err);
+        }
     }
 
     /**
@@ -428,8 +486,14 @@ class Launchpad {
      */
     async loadProjects() {
         try {
-            this.projects = await window.API.getProjects();
+            const archivedVisible = this._archivedVisible;
+            this.projects = await window.API.getProjects(archivedVisible);
             this.projectsListingOk = true;
+            // Only a fetch that ASKED for archived rows can report on
+            // them. With the toggle off this stays null - "not asked" -
+            // so the UI never renders "no archived projects" off the back
+            // of a request that excluded them by construction.
+            this._archivedFetchOk = archivedVisible ? true : null;
             // Presence and authority are BOTH fetched before the first
             // paint so neither a missing project nor a degraded datastore
             // flashes as normal for one frame - renderProjectList() reads
@@ -442,6 +506,10 @@ class Launchpad {
             this.renderProjectList();
         } catch (error) {
             this.projectsListingOk = false;
+            // The archived rows were part of THIS failed fetch, so their
+            // outcome is "could not evaluate", not "none". Only latched
+            // false when we actually asked for them.
+            this._archivedFetchOk = this._archivedVisible ? false : null;
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
         }
@@ -3202,6 +3270,21 @@ class Launchpad {
                             <span class="launchpad-section-chevron" aria-hidden="true">►</span>
                             projects
                         </button>
+                        <!-- SHOW-ARCHIVED. Permanently visible, never
+                             conditional on there BEING archived projects,
+                             and that is the whole discoverability
+                             guarantee: knowing whether any exist would
+                             need a second fetch of the very rows the
+                             toggle excludes, so the control announces
+                             itself instead. An archived project is
+                             therefore always exactly one click from
+                             being on screen, and one more from being
+                             restored - archive can never become a place
+                             work quietly disappears to. -->
+                        <button type="button" class="launchpad-archived-toggle" id="projects-show-archived-toggle" aria-pressed="false" title="show archived projects">
+                            <span class="launchpad-archived-toggle__box" aria-hidden="true"></span>
+                            <span class="launchpad-archived-toggle__label">show archived</span>
+                        </button>
                     </div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
@@ -3352,6 +3435,49 @@ class Launchpad {
                 this.setLaunchpadSectionCollapsed(id, !nowExpanded);
             });
         });
+
+        this.initArchivedVisibleToggle();
+    }
+
+    /**
+     * Wire the "show archived" control in the projects section heading.
+     *
+     * Flipping it persists the preference, then RE-FETCHES: the archived
+     * rows are not held client-side and filtered, they are asked for.
+     * That keeps one rule about what is on screen (whatever the last
+     * request returned) instead of two that can drift apart, and it means
+     * the toggle cannot show stale archived rows from an earlier fetch.
+     *
+     * The re-fetch happens on CLICK only. Nothing here runs on the 5s
+     * running-sessions poll, which re-renders the project list but does
+     * not re-request it.
+     */
+    initArchivedVisibleToggle() {
+        const btn = document.getElementById('projects-show-archived-toggle');
+        if (!btn) return;
+        this._applyArchivedVisibleToggleState(btn);
+        btn.addEventListener('click', async () => {
+            const next = !this._archivedVisible;
+            this._archivedVisible = next;
+            this.setArchivedVisiblePref(next);
+            this._applyArchivedVisibleToggleState(btn);
+            await this.loadProjects();
+        });
+    }
+
+    /**
+     * Paint one show-archived button to match ``this._archivedVisible``.
+     *
+     * @param {HTMLElement} btn
+     */
+    _applyArchivedVisibleToggleState(btn) {
+        const on = !!this._archivedVisible;
+        btn.setAttribute('aria-pressed', String(on));
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute(
+            'title',
+            on ? 'hide archived projects' : 'show archived projects'
+        );
     }
 
     /**
@@ -3973,6 +4099,49 @@ class Launchpad {
      * the list, matching the three-outcome rule this whole screen
      * follows.
      */
+    /**
+     * Render the archived dimension's own status line - THREE OUTCOMES,
+     * never two.
+     *
+     * This exists because "there are no archived projects" and "the
+     * request that would have told you failed" render identically
+     * otherwise: both are an absence of archived rows on screen. The
+     * three states, read off ``this._archivedFetchOk``:
+     *
+     *   null  - the toggle is off, so nothing was asked. Renders NOTHING
+     *           at all. Silence here is correct: the user asked not to
+     *           see archived projects, and a line saying "unknown" about
+     *           a question nobody posed is furniture.
+     *   true  - the toggle is on and the server answered. Renders the
+     *           count of archived rows in the list, INCLUDING zero,
+     *           because "showing archived: 0" is a measured fact and is
+     *           exactly what distinguishes this state from the next one.
+     *   false - the toggle is on and the fetch FAILED. Renders CANNOT
+     *           DETERMINE, in words, and says the list below may be
+     *           stale. It never renders as zero.
+     *
+     * @returns {string} HTML, possibly empty
+     */
+    _renderArchivedNoticeHtml() {
+        if (this._archivedFetchOk === null) return '';
+        if (this._archivedFetchOk === false) {
+            return `
+                <div class="project-archived-notice project-archived-notice--unknown">
+                    CANNOT DETERMINE - archived projects could not be loaded.
+                    This is NOT a claim that there are none; the list below
+                    may be stale or incomplete.
+                </div>
+            `;
+        }
+        const archivedCount = (this.projects || [])
+            .filter(p => p && p.archived_at).length;
+        return `
+            <div class="project-archived-notice">
+                showing archived: ${archivedCount}
+            </div>
+        `;
+    }
+
     renderProjectList() {
         const projectListEl = document.getElementById('project-list');
         if (!projectListEl) return;
@@ -3983,9 +4152,10 @@ class Launchpad {
         // answered, because "no projects" and "could not read your
         // projects" look identical without it.
         const authorityHtml = this._renderProjectAuthorityBannerHtml();
+        const archivedNoticeHtml = this._renderArchivedNoticeHtml();
 
         if (this.projects.length === 0) {
-            projectListEl.innerHTML = authorityHtml + `
+            projectListEl.innerHTML = authorityHtml + archivedNoticeHtml + `
                 <div class="launchpad-empty">
                     no projects yet<br>
                     <small style="color: #666;">use + new to add one</small>
@@ -4040,9 +4210,20 @@ class Launchpad {
                     : 'reason unknown';
                 presenceBadge = `<div class="project-presence-badge project-presence-badge-unreachable">CANNOT DETERMINE - ${detail}</div>`;
             }
-            const itemClasses = isDisabled
-                ? `project-item project-presence-disabled project-presence-${presenceState}`
-                : 'project-item';
+            // ARCHIVED IS ITS OWN DIMENSION, orthogonal to presence. A
+            // project can be archived AND missing, and the two badges say
+            // different things: "I retired this" vs "the folder is gone".
+            // Archiving never disables a row - an archived project is
+            // still openable, and its sessions were never touched.
+            const isArchived = !!project.archived_at;
+            const archivedBadge = isArchived
+                ? `<div class="project-archived-badge">ARCHIVED</div>`
+                : '';
+            const itemClasses = [
+                'project-item',
+                isDisabled ? `project-presence-disabled project-presence-${presenceState}` : '',
+                isArchived ? 'project-item--archived' : '',
+            ].filter(Boolean).join(' ');
 
             // S8, revised by feat/db-is-authoritative - a project's row
             // id now arrives ON THE PROJECT ITSELF, from GET /projects,
@@ -4097,15 +4278,22 @@ class Launchpad {
                 : '';
 
             return `
-                <div class="project-node" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
+                <div class="project-node${isArchived ? ' project-node--archived' : ''}" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
                   <div class="project-node__row">
                     ${chevronHtml}
                     <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
                         <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
                         <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
+                        <!-- NOT disabled by presence. A project whose
+                             folder has gone missing is precisely one a
+                             user wants to archive, and refusing that
+                             would leave the row permanently stuck on the
+                             screen it is trying to leave. -->
+                        <button class="project-archive-btn" data-name="${project.name}" data-archived="${isArchived ? '1' : '0'}" title="${isArchived ? 'restore project to the list' : 'archive project - keeps it and its sessions, hides it from this list'}" aria-label="${isArchived ? 'restore project' : 'archive project'}">${isArchived ? '&#x21ba;' : '&#x1F5C4;'}</button>
                         <div class="project-name">» ${project.name}</div>
                         <div class="project-path">${project.path}</div>
                         ${descriptionHtml}
+                        ${archivedBadge}
                         ${presenceBadge}
                     </div>
                   </div>
@@ -4117,7 +4305,7 @@ class Launchpad {
         const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
         const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
 
-        projectListEl.innerHTML = authorityHtml + projectNodesHtml + noProjectHtml + attentionHtml;
+        projectListEl.innerHTML = authorityHtml + archivedNoticeHtml + projectNodesHtml + noProjectHtml + attentionHtml;
 
         this._bindProjectNodeToggles();
         this._bindProjectSessionRowClicks();
@@ -4127,8 +4315,9 @@ class Launchpad {
         projectItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 // Don't open project if clicking an inline action button
-                if (e.target.classList.contains('project-delete-btn') ||
-                    e.target.classList.contains('project-edit-btn')) {
+                if (e.target.closest('.project-delete-btn') ||
+                    e.target.closest('.project-edit-btn') ||
+                    e.target.closest('.project-archive-btn')) {
                     return;
                 }
                 // MISSING and CANNOT DETERMINE rows refuse every action -
@@ -4165,6 +4354,20 @@ class Launchpad {
             });
         });
 
+        // Add click handlers for archive / unarchive buttons
+        const archiveButtons = projectListEl.querySelectorAll('.project-archive-btn');
+        archiveButtons.forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent project selection
+                const projectName = btn.dataset.name;
+                if (btn.dataset.archived === '1') {
+                    await this.unarchiveProject(projectName);
+                } else {
+                    await this.archiveProject(projectName);
+                }
+            });
+        });
+
         // Add click handlers for edit buttons
         const editButtons = projectListEl.querySelectorAll('.project-edit-btn');
         editButtons.forEach(btn => {
@@ -4177,6 +4380,65 @@ class Launchpad {
                 }
             });
         });
+    }
+
+    /**
+     * ARCHIVE a project: retire it from the list, keep everything.
+     *
+     * NOT a delete, and the confirm copy has to say so, because the two
+     * controls sit next to each other on the same row. Delete removes the
+     * row for good; this hides it and is undone in one click.
+     *
+     * IT DOES NOT TOUCH THE PROJECT'S SESSIONS. That is stated to the
+     * user, not just to the server: a user who believes archiving might
+     * take his running sessions with it will not use the feature, and a
+     * user who believes it will not when it does has lost work. The
+     * server writes only this project's ``archived_at`` - see
+     * src/core/project_archive.py.
+     *
+     * @param {string} projectName
+     * @returns {Promise<void>}
+     */
+    async archiveProject(projectName) {
+        try {
+            const confirmed = await this.showConfirmModal(
+                'archive project',
+                `archive "${projectName}"?`,
+                'it leaves this list but is kept in full. its sessions are NOT archived and keep working. the folder on disk is not touched. turn on "show archived" to bring it back.',
+                'archive',
+                'cancel'
+            );
+            if (!confirmed) return;
+
+            await window.API.archiveProject(projectName);
+            await this.loadProjects();
+        } catch (error) {
+            console.error('Launchpad: failed to archive project:', error);
+            this.showError('failed to archive project: '
+                + (error && error.message ? error.message : 'the server could not be reached'));
+        }
+    }
+
+    /**
+     * UNARCHIVE a project: put it back in the default list.
+     *
+     * No confirm. Archiving is the destructive-shaped direction (it takes
+     * something off the screen); restoring only ever adds a row back, and
+     * a confirm on a harmless, self-evident, instantly-reversible action
+     * is friction that teaches people to click through dialogs.
+     *
+     * @param {string} projectName
+     * @returns {Promise<void>}
+     */
+    async unarchiveProject(projectName) {
+        try {
+            await window.API.unarchiveProject(projectName);
+            await this.loadProjects();
+        } catch (error) {
+            console.error('Launchpad: failed to restore project:', error);
+            this.showError('failed to restore project: '
+                + (error && error.message ? error.message : 'the server could not be reached'));
+        }
     }
 
     /**

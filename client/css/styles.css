@@ -1364,6 +1364,15 @@ body.home-header-active {
     font-weight: bold;
 }
 
+/* The projects heading carries a second control (show archived), so it
+ * becomes a row. Scoped to #projects-section so no other section's
+ * heading layout moves. */
+#projects-section .launchpad-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 /* Heading row variant: text hugs left, inline action button hugs right.
  * Used by the "running sessions" section so the + speed-dial sits beside
  * the heading instead of floating in the chrome. */
@@ -1504,7 +1513,11 @@ body.home-header-active {
      * list that accumulates). */
     border: 1px solid var(--color-border);
     box-shadow: inset 3px 0 0 var(--color-accent);
-    padding: 14px 40px 14px 16px;
+    /* Right padding clears the inline action buttons. It was 40px for
+     * two of them (delete at right:8, pencil at right:40, which already
+     * sat past it); a third - archive at right:72 - makes 104px the
+     * width actually needed, so row text cannot run under any of them. */
+    padding: 14px 104px 14px 16px;
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.3s ease;
@@ -1680,6 +1693,122 @@ body.home-header-active {
     border: 1px solid var(--color-warning-border);
 }
 
+/* Archive / restore button - sits immediately left of the pencil.
+ * Deliberately the calmest of the three: archiving is reversible and
+ * routine, so it must not read as more consequential than the
+ * destructive delete beside it. */
+.project-archive-btn {
+    position: absolute;
+    top: 8px;
+    right: 72px;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-fg-muted);
+    border: 1px solid transparent;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.project-archive-btn:hover {
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--color-accent, #6cf);
+    border-color: var(--color-accent, #6cf);
+    transform: scale(1.1);
+}
+
+/* AN ARCHIVED ROW MUST NOT LOOK LIKE A LIVE ONE. Three signals, not
+ * one, because any single one of them can be defeated by a theme: a
+ * dimmed card, a dashed (not solid) border, and the literal word
+ * ARCHIVED in the badge below. Colour alone would also fail anyone who
+ * cannot distinguish it. */
+.project-item--archived {
+    opacity: 0.62;
+    border-style: dashed;
+}
+
+.project-item--archived:hover {
+    opacity: 0.85;
+}
+
+.project-archived-badge {
+    margin-top: 8px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.72rem;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    display: inline-block;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.06));
+    border: 1px dashed var(--color-fg-muted);
+}
+
+/* The archived dimension's status line. See
+ * launchpad.js::_renderArchivedNoticeHtml - it has three states and the
+ * "could not determine" one has to be visibly different from the plain
+ * count, or the whole point of separating them is lost on screen. */
+.project-archived-notice {
+    margin: 4px 0 10px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    color: var(--color-fg-muted);
+    border-left: 2px solid var(--color-fg-muted);
+}
+
+.project-archived-notice--unknown {
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border-left: 2px solid var(--color-warning);
+}
+
+/* Show-archived toggle in the projects section heading. */
+.launchpad-archived-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-size: 0.72rem;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.launchpad-archived-toggle:hover {
+    color: var(--color-fg, #ddd);
+    border-color: var(--color-fg-muted);
+}
+
+.launchpad-archived-toggle__box {
+    width: 10px;
+    height: 10px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+.launchpad-archived-toggle.is-on {
+    color: var(--color-accent, #6cf);
+    border-color: var(--color-accent, #6cf);
+}
+
+.launchpad-archived-toggle.is-on .launchpad-archived-toggle__box {
+    background: currentColor;
+}
+
 /* Touch hit-area bump. `pointer: coarse` covers phones/tablets - no
  * `:hover` involved, since a coarse pointer generally can't hover at
  * all. 44px is the standard minimum touch target (Apple HIG / WCAG
@@ -1687,11 +1816,12 @@ body.home-header-active {
  * buttons never overlap the description text. */
 @media (pointer: coarse) {
     .project-item {
-        padding-right: 96px;
+        padding-right: 140px;
     }
 
     .project-delete-btn,
-    .project-edit-btn {
+    .project-edit-btn,
+    .project-archive-btn {
         width: 40px;
         height: 40px;
     }
@@ -1702,6 +1832,10 @@ body.home-header-active {
 
     .project-edit-btn {
         right: 48px;
+    }
+
+    .project-archive-btn {
+        right: 92px;
     }
 }
 

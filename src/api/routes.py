@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Request, Depends, UploadFile, File
 from typing import List, Optional
 import structlog
 
@@ -3084,11 +3084,27 @@ async def delete_session_record(request: Request, session_uuid: str):
     response_model=RecentSessionsResponse,
     dependencies=[Depends(require_auth)],
 )
-async def list_recent_sessions(request: Request):
+async def list_recent_sessions(
+    request: Request,
+    include_archived: bool = Query(
+        False,
+        description=(
+            "Include DELETED (archived) session records alongside the "
+            "live ones. Defaults false, which is the pre-existing "
+            "behaviour exactly. Archived rows arrive mixed in, each "
+            "carrying its own archived_at, so the client distinguishes "
+            "them per row. NOTE the vocabulary difference from projects: "
+            "a session's archive is a soft DELETE ('take this off my "
+            "screen'), a project's archive is a SHELF ('done with this "
+            "for now'). Same column shape, different meaning."
+        ),
+    ),
+):
     """RECENT (S9): stored ``stopped`` sessions, datastore-backed.
 
     Description: the query is exactly ``lifecycle='stopped' AND
-      archived_at IS NULL`` via ``session_store.list_sessions`` - no
+      archived_at IS NULL`` (unless ``include_archived`` drops the
+      second clause) via ``session_store.list_sessions`` - no
       timer, no retention window, the first launcher surface backed by
       the datastore rather than a live probe.
 
@@ -3149,13 +3165,14 @@ async def list_recent_sessions(request: Request):
 
         Inputs: none (closes over db_path).
         Output: list[dict] - raw session rows already filtered to
-          ``lifecycle='stopped', archived_at IS NULL``.
+          ``lifecycle='stopped'``, and to ``archived_at IS NULL`` unless
+          the caller asked for archived rows too.
         """
         with closing(connect(db_path, create=False)) as conn:
             rows = session_store.list_sessions(
                 conn,
                 lifecycle=SESSION_LIFECYCLE_STOPPED,
-                include_archived=False,
+                include_archived=include_archived,
             )
             # A SESSION APPEARS IN EXACTLY ONE LIST, and this is the half
             # the client cannot do for itself.

@@ -378,8 +378,44 @@ class API {
      * Projects: Get project list
      * @returns {Promise<Array>}
      */
-    async getProjects() {
-        return await this.call('/projects');
+    async getProjects(includeArchived = false) {
+        return await this.call(
+            includeArchived ? '/projects?include_archived=true' : '/projects'
+        );
+    }
+
+    /**
+     * Projects: ARCHIVE a project - retire it from the default list
+     * without deleting it and WITHOUT touching any of its sessions.
+     *
+     * Distinct from deleteProject(), which removes the row for good and
+     * writes a tombstone. This one is reversible with unarchiveProject().
+     * Idempotent server-side: archiving an already-archived project is a
+     * 200 carrying the ORIGINAL archived_at, not a 409.
+     *
+     * @param {string} name - project display name
+     * @returns {Promise<object>} the project post-mutation, with
+     *   ``archived_at`` set - read the state off the row, never assume it
+     */
+    async archiveProject(name) {
+        return await this.call(
+            `/projects/${encodeURIComponent(name)}/archive`,
+            { method: 'POST' }
+        );
+    }
+
+    /**
+     * Projects: UNARCHIVE a project - put it back in the default list.
+     *
+     * @param {string} name - project display name
+     * @returns {Promise<object>} the project post-mutation, with
+     *   ``archived_at`` null
+     */
+    async unarchiveProject(name) {
+        return await this.call(
+            `/projects/${encodeURIComponent(name)}/unarchive`,
+            { method: 'POST' }
+        );
     }
 
     /**
@@ -1065,8 +1101,12 @@ class API {
      * @returns {Promise<{state: string, sessions: Array<object>,
      *   notice: string|null}>}
      */
-    async listRecentSessions() {
-        return await this.call('/sessions/recent');
+    async listRecentSessions(includeArchived = false) {
+        return await this.call(
+            includeArchived
+                ? '/sessions/recent?include_archived=true'
+                : '/sessions/recent'
+        );
     }
 
     /**
