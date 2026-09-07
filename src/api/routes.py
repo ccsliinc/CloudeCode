@@ -1126,11 +1126,26 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
     ``#{session_created}`` is unchanged, so there is no new instance for a
     row to key on - and it never writes either column.
 
-    NO COMMAND CROSSES THIS BOUNDARY. The body carries only a session
-    name. What gets run is decided server-side by the ladder in
-    ``src.core.session_respawn``, gated on tmux's own
+    NO COMMAND CROSSES THIS BOUNDARY. The body carries a session name and
+    optionally an ``agent_type``. What gets run is decided server-side by
+    the ladder in ``src.core.session_respawn``, gated on tmux's own
     ``#{pane_start_command}``. Accepting a command from the client would
     make this a create wearing a restart's clothes.
+
+    AN ``agent_type`` IS NOT A COMMAND, which is why it is safe here. It
+    is an id that must match a launch wrapper the user has already
+    configured on this machine; the server resolves it to a command
+    itself, and an id that is not in that list is a 400 rather than a
+    silent fall back to the default wrapper - see
+    ``src/core/session_agent_choice.py``. It exists because moving a
+    session onto another wrapper used to require hand-editing
+    ``sessions.agent_type`` in cloude.db.
+
+    ASK BEFORE YOU ACT. ``GET /sessions/restart/preview``
+    (``src/api/restart_routes.py``) reports which rung this session would
+    land on, for every configured wrapper, without spawning anything.
+    That is what lets a client warn that an empty ``pane_start_command``
+    means a plain restart returns a LOGIN SHELL.
 
     WHY A REFUSAL IS STILL A 200. ``ok=false`` with
     ``kind='cannot_determine'`` means the SERVER worked perfectly and the
@@ -1145,10 +1160,16 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
     """
     session_manager = request.app.state.session_manager
 
-    logger.info("api_respawn_session_request", name=body.session_name)
+    logger.info(
+        "api_respawn_session_request",
+        name=body.session_name,
+        agent_type=body.agent_type,
+    )
 
     try:
-        result = await session_manager.respawn_session(body.session_name)
+        result = await session_manager.respawn_session(
+            body.session_name, agent_type=body.agent_type
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

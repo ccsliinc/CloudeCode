@@ -5964,7 +5964,11 @@ class SessionManager:
             return None
 
     async def respawn_session(
-        self, name: str, *, socket_name: Optional[str] = None
+        self,
+        name: str,
+        *,
+        socket_name: Optional[str] = None,
+        agent_type: Optional[str] = None,
     ) -> dict:
         """Restart the agent inside a dead session, keeping the session.
 
@@ -5989,6 +5993,17 @@ class SessionManager:
             A respawn cannot mint one, because there is no new instance for
             a row to key on, and it never touches either column.
 
+            IT NOW WRITES EXACTLY ONE COLUMN, AND ONLY WHEN ASKED TO.
+            When ``agent_type`` names a wrapper the user picked in the
+            restart picker, and the restart came back with a process
+            VERIFIED alive, ``sessions.agent_type`` is updated so the
+            next restart remembers the choice. Nothing else is written -
+            no lineage, no origin, no identity column - so a restart is
+            still not a fork. With no ``agent_type`` this method issues
+            no database write at all, exactly as before. The rules for
+            validating and persisting the choice live in
+            ``src/core/session_agent_choice.py``, not here.
+
             AN ALREADY-BOUND BACKEND IS REUSED, not rebuilt. When the user
             has the session open in the app there is a live ``TmuxBackend``
             with a running tail loop; respawning through it means the
@@ -6002,19 +6017,38 @@ class SessionManager:
             socket_name: tmux socket override. Internal/test use only -
                 the HTTP route never passes it, so a client cannot aim
                 this at another socket. Defaults to the configured one.
+            agent_type: id of a configured launch wrapper to restart
+                THIS session with, replacing whatever it was launched
+                with. None (the default) keeps the existing behaviour
+                exactly. An id that is not configured is REFUSED with a
+                ValueError rather than resolved to the default wrapper -
+                a picker that silently substitutes a different agent is
+                worse than no picker.
 
         Output:
-            dict: ``{"name", "kind", "ok", "detail", "command"}``.
+            dict: ``{"name", "kind", "ok", "detail", "command",
+                "chosen", "agent_type", "agent_type_persisted",
+                "session_id", "session_uuid"}``. The last two are read
+                back AFTER the restart and are what lets the client
+                reopen the SAME session rather than hunt for it.
                 ``ok`` False with a ``kind`` of ``cannot_determine`` is a
                 normal, successful API call reporting that the pane could
                 not be read - it is not an error.
 
         Raises:
-            ValueError: ``name`` contains a tmux target separator.
+            ValueError: ``name`` contains a tmux target separator, or
+                ``agent_type`` is not a configured wrapper, or the
+                wrapper list could not be read so the id could not be
+                checked. The last two are separate sentences - "that is
+                not a wrapper" and "I could not tell whether it is" are
+                different answers and the user is told which.
 
         Example:
             >>> await mgr.respawn_session("cloude_api")
             {'name': 'cloude_api', 'kind': 'agent', 'ok': True, ...}
+            >>> await mgr.respawn_session("cloude_api",
+            ...                           agent_type="claude-chrome")
+            {'name': 'cloude_api', 'kind': 'agent', 'chosen': True, ...}
         """
         from src.core.tmux_backend import (
             DEFAULT_SOCKET_NAME,
@@ -6033,6 +6067,29 @@ class SessionManager:
                 socket_name = DEFAULT_SOCKET_NAME
 
         agent_command = self._agent_command_for_tmux_name(name)
+
+        # THE CHOICE IS CHECKED BEFORE ANYTHING IS TOUCHED. An unknown id
+        # must never reach ``get_agent_command``, which would resolve it
+        # to the default wrapper and launch something the user did not
+        # pick. See src/core/session_agent_choice.py.
+        chosen_command: Optional[str] = None
+        chosen_type: Optional[str] = None
+        if agent_type and str(agent_type).strip():
+            from src.core.session_agent_choice import validate_agent_choice
+
+            choice = validate_agent_choice(
+                settings, agent_type, model=self._model_for_tmux_name(name)
+            )
+            if not choice.accepted:
+                logger.info(
+                    "respawn_agent_choice_refused",
+                    name=name,
+                    agent_type=choice.agent_type,
+                    verdict=choice.verdict,
+                )
+                raise ValueError(choice.detail)
+            chosen_command = choice.command
+            chosen_type = choice.agent_type
 
         backend = None
         for candidate in self.backends.values():
@@ -6058,7 +6115,19 @@ class SessionManager:
             has_agent_record=agent_command is not None,
         )
 
-        result = await backend.respawn(agent_command=agent_command)
+        result = await backend.respawn(
+            agent_command=agent_command,
+            chosen_agent_command=chosen_command,
+            chosen_agent_type=chosen_type,
+        )
+
+        persisted = False
+        if result.ok and result.chosen and chosen_type:
+            persisted = self._persist_respawn_agent_type(
+                name=name, socket_name=socket_name, agent_type=chosen_type
+            )
+
+        identity = self._row_identity_for_tmux_name(name, socket_name)
 
         return {
             "name": name,
@@ -6066,7 +6135,353 @@ class SessionManager:
             "ok": result.ok,
             "detail": result.detail,
             "command": result.command,
+            "chosen": result.chosen,
+            "agent_type": chosen_type,
+            "agent_type_persisted": persisted,
+            "session_id": identity.get("session_id"),
+            "session_uuid": identity.get("session_uuid"),
         }
+
+    async def restart_preview(
+        self, name: str, *, socket_name: Optional[str] = None
+    ) -> "RestartPreview":
+        """What restarting this session would do, WITHOUT doing it.
+
+        Description: the read-only half of the restart path, and the one
+            thing that lets the picker warn honestly. It probes the pane
+            once (a ``tmux list-panes``, a read), reads the session's
+            recorded ``agent_type`` from the ROW rather than from memory
+            (an adopted session's in-memory copy carries None while its
+            row records the wrapper exactly), resolves every configured
+            wrapper to a command, and runs the SAME ladder the action
+            runs against all of it.
+
+            NOTHING IS SPAWNED, NOTHING IS WRITTEN, and no backend is
+            adopted: when the session is not open in the app a bare
+            handle is built purely to issue the read and is discarded.
+
+            THE SHELL LANDMINE IS WHAT THIS IS FOR. A pane with an empty
+            ``#{pane_start_command}`` lands on ``shell``, and the
+            preview's ``unchanged`` plan says so in a sentence before the
+            user commits to anything.
+
+        Inputs:
+            name: literal tmux session name as shown in the session list.
+            socket_name: tmux socket override, internal/test use only.
+
+        Output:
+            RestartPreview: the baseline plan plus one predicted outcome
+                per configured wrapper. ``wrappers_status`` is
+                ``unavailable`` when the wrapper list could not be read,
+                which is NOT the same as an empty list.
+
+        Raises:
+            ValueError: ``name`` contains a tmux target separator.
+
+        Example:
+            >>> (await mgr.restart_preview("cloude_api")).unchanged.kind
+            'shell'
+        """
+        from src.core.session_agent_choice import resolve_wrapper_offers
+        from src.core.session_respawn import resume_uuid_in
+        from src.core.session_restart_preview import build_restart_preview
+        from src.core.tmux_backend import (
+            DEFAULT_SOCKET_NAME,
+            TmuxBackend,
+            _safe_target,
+        )
+
+        _safe_target(name)
+
+        if socket_name is None:
+            try:
+                socket_name = settings.load_auth_config().session.tmux_socket_name
+            except (OSError, ValueError, AttributeError):
+                socket_name = DEFAULT_SOCKET_NAME
+
+        backend = None
+        for candidate in self.backends.values():
+            if getattr(candidate, "tmux_session", None) == name:
+                backend = candidate
+                break
+        if backend is None or not hasattr(backend, "probe_respawn"):
+            backend = TmuxBackend.for_external(
+                session_name=name,
+                working_dir=Path(settings.default_working_dir).expanduser(),
+                on_output=None,
+                socket_name=socket_name,
+            )
+
+        probe_ok, pane_dead, start_command = await backend.probe_respawn()
+
+        stored_type = self._stored_agent_type_for_tmux_name(name, socket_name)
+        model = self._model_for_tmux_name(name)
+
+        stored_command: Optional[str] = None
+        if stored_type:
+            try:
+                stored_command = settings.get_agent_command(stored_type, model=model)
+            except (ValueError, OSError, AttributeError) as exc:
+                # A stored type we cannot render is "no record", exactly
+                # as it is on the action path. The ladder then reports
+                # replay, which is the honest weaker answer.
+                logger.info(
+                    "restart_preview_stored_command_unresolved",
+                    name=name,
+                    agent_type=stored_type,
+                    error=str(exc),
+                )
+
+        offers = resolve_wrapper_offers(settings, model=model)
+
+        # THE SAME TRANSCRIPT GUARD THE ACTION APPLIES. TmuxBackend.respawn
+        # refuses a replay whose recorded command resumes a conversation
+        # that is not on disk; a preview that skipped the check would
+        # promise a replay the restart then declines. The lookup is done
+        # once, here, because only the RECORDED start command can carry a
+        # --resume - a chosen wrapper's command never does.
+        presence_outcome = None
+        presence_detail = ""
+        replay_uuid = resume_uuid_in(start_command)
+        if replay_uuid:
+            from src.core.session_transcript_presence import (
+                conversation_presence,
+            )
+
+            presence = conversation_presence(
+                replay_uuid,
+                working_dir=str(Path(settings.default_working_dir).expanduser()),
+            )
+            presence_outcome = presence.outcome
+            presence_detail = presence.detail
+
+        logger.info(
+            "restart_preview",
+            name=name,
+            probe_ok=probe_ok,
+            pane_dead=pane_dead,
+            stored_agent_type=stored_type,
+            offers=len(offers) if offers is not None else None,
+        )
+
+        return build_restart_preview(
+            name=name,
+            probe_ok=probe_ok,
+            pane_dead=pane_dead,
+            pane_start_command=start_command,
+            stored_agent_type=stored_type,
+            stored_agent_command=stored_command,
+            offers=offers,
+            presence_outcome=presence_outcome,
+            presence_detail=presence_detail,
+        )
+
+    def _stored_agent_type_for_tmux_name(
+        self, name: str, socket_name: str
+    ) -> Optional[str]:
+        """``sessions.agent_type`` for this tmux name, from the ROW.
+
+        Description: the DB row is AUTHORITATIVE for what launched a
+            session. An ADOPTED session's in-memory ``Session`` comes
+            back with ``agent_type`` None while the row it was adopted
+            from still records the wrapper id exactly, so reading memory
+            first would mark the picker's current entry as "none" for
+            precisely the sessions a user is most likely to be
+            restarting. Memory is the fallback, not the source.
+
+        Inputs:
+            name: literal tmux session name.
+            socket_name: tmux socket the session lives on.
+
+        Output:
+            Optional[str]: the recorded wrapper id, or None. None is
+                ambiguous by nature - it means both "launched as a bare
+                shell" and "never recorded" - and callers must not render
+                it as the name of an agent.
+
+        Example:
+            >>> mgr._stored_agent_type_for_tmux_name("cloude_api", "cloude")
+            'claude-chrome'
+        """
+        conn = self._datastore_connection()
+        if conn is not None:
+            try:
+                from src.core.session_store import (
+                    identity_for_live_name,
+                    sessions_table_ready,
+                )
+
+                if sessions_table_ready(conn):
+                    row = identity_for_live_name(
+                        conn, socket=socket_name, name=name
+                    )
+                    if row is not None and row.get("agent_type"):
+                        return str(row["agent_type"])
+            except sqlite3.Error as exc:
+                logger.debug(
+                    "restart_preview_agent_type_read_failed",
+                    name=name,
+                    error=str(exc),
+                )
+            finally:
+                try:
+                    conn.close()
+                except sqlite3.Error:  # noqa: BLE001 - not a verdict
+                    pass
+        for session in self.sessions.values():
+            if getattr(session, "tmux_session", None) == name:
+                return getattr(session, "agent_type", None)
+        return None
+
+    def _model_for_tmux_name(self, name: str) -> Optional[str]:
+        """The model recorded for the session carrying this tmux name.
+
+        Description: a wrapper that takes a model (``cldl``) needs one to
+            render a command at all, so the restart picker has to resolve
+            choices against the model this session already carries rather
+            than against nothing. Returning None is a real answer, and
+            the wrapper's own ``needs_model`` rule then refuses - which
+            is the honest outcome, not a bare launch.
+
+        Inputs:
+            name: literal tmux session name.
+
+        Output:
+            Optional[str]: the model id, or None when this app has no
+                in-memory record for that name.
+
+        Example:
+            >>> mgr._model_for_tmux_name("cloude_api")
+            None
+        """
+        for session in self.sessions.values():
+            if getattr(session, "tmux_session", None) == name:
+                return getattr(session, "model", None)
+        return None
+
+    def _persist_respawn_agent_type(
+        self, *, name: str, socket_name: str, agent_type: str
+    ) -> bool:
+        """Write the picked wrapper onto this session's row.
+
+        Description: the ONLY database write on the respawn path, and it
+            is best effort by design. The restart has already happened
+            and is visible to the user; a datastore that cannot be opened
+            must not turn that into an error, so this reports False and
+            the response says the choice was not remembered rather than
+            claiming a restart failed that plainly did not.
+
+        Inputs:
+            name: literal tmux session name.
+            socket_name: tmux socket the session lives on.
+            agent_type: validated wrapper id.
+
+        Output:
+            bool: True when a row was updated.
+
+        Example:
+            >>> mgr._persist_respawn_agent_type(name="cloude_api",
+            ...     socket_name="cloude", agent_type="claude-chrome")
+            True
+        """
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            logger.warning(
+                "respawn_agent_type_not_persisted_no_datastore",
+                name=name,
+                agent_type=agent_type,
+            )
+            return False
+        try:
+            from src.core.session_agent_choice import persist_agent_type
+
+            return persist_agent_type(
+                conn, socket=socket_name, tmux_name=name, agent_type=agent_type
+            )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "respawn_agent_type_persist_failed",
+                name=name,
+                agent_type=agent_type,
+                error=str(exc),
+            )
+            return False
+        finally:
+            try:
+                conn.close()
+            except sqlite3.Error:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
+    def _row_identity_for_tmux_name(
+        self, name: str, socket_name: str
+    ) -> dict:
+        """The durable row identity of the session carrying this name.
+
+        Description: read AFTER a respawn so the client can reopen the
+            SAME session instead of hunting the list for a name. The row
+            is what identity means here: a respawn preserves the instance
+            triple ``(tmux_socket, tmux_name, tmux_created_epoch)``, so
+            the row that matched before the restart is the row that
+            matches after it, and its ``session_uuid`` is the durable
+            handle a client can compare.
+
+            Both fields come back None when there is no row (an external
+            session the app never recorded). The client treats that as
+            "reopen by name through the adopt path", never as failure.
+
+        Inputs:
+            name: literal tmux session name.
+            socket_name: tmux socket the session lives on.
+
+        Output:
+            dict: ``{"session_id": str | None, "session_uuid": str | None}``.
+
+        Example:
+            >>> mgr._row_identity_for_tmux_name("cloude_api", "cloude")
+            {'session_id': 'a1b2', 'session_uuid': '...'}
+        """
+        out = {"session_id": None, "session_uuid": None}
+        for sid, session in self.sessions.items():
+            if getattr(session, "tmux_session", None) == name:
+                out["session_id"] = sid
+                break
+        conn = self._datastore_connection()
+        if conn is None:
+            return out
+        try:
+            from src.core.session_store import (
+                identity_for_live_name,
+                sessions_table_ready,
+            )
+
+            if not sessions_table_ready(conn):
+                return out
+            # ROUTED THROUGH THE ONE REVIEWED NAME-KEYED ACCESSOR, then
+            # read by PRIMARY KEY. Writing the newest-row-for-name SELECT
+            # inline here would be a brand new instance of the class
+            # tests/test_no_name_keyed_session_identity.py exists to
+            # stop; every entry in its exemption list is a grandfathered
+            # bug, not a licence to add another.
+            identity = identity_for_live_name(
+                conn, socket=socket_name, name=name
+            )
+            if identity is None:
+                return out
+            row = conn.execute(
+                "SELECT session_uuid FROM sessions WHERE id = ?",
+                (int(identity["id"]),),
+            ).fetchone()
+            if row is not None:
+                out["session_uuid"] = row["session_uuid"]
+            return out
+        except sqlite3.Error as exc:
+            logger.debug("respawn_identity_read_failed", name=name, error=str(exc))
+            return out
+        finally:
+            try:
+                conn.close()
+            except sqlite3.Error:  # noqa: BLE001 - close failure is not a verdict
+                pass
 
     async def _resolve_external_cwd(self, name: str) -> Path:
         """Best-effort cwd probe for an adopted tmux pane.

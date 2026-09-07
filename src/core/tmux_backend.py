@@ -73,6 +73,7 @@ from src.core.session_respawn import (
     RESPAWN_PANE_FORMAT,
     RespawnResult,
     parse_respawn_probe,
+    refuse_if_transcript_missing,
     resolve_respawn_plan,
 )
 
@@ -1344,8 +1345,51 @@ class TmuxBackend(SessionBackend):
 
         return TmuxListing.answered(results, refused_rows=refused_rows)
 
+    async def probe_respawn(self) -> tuple:
+        """Read the three pane facts the respawn ladder decides from.
+
+        Description: ONE ``tmux list-panes``, which is a read. Split out
+            of :meth:`respawn` so the read-only restart preview
+            (``GET /sessions/restart/preview``) can ask what a restart
+            would do without a second, differently-written probe drifting
+            from the one the action uses. Both callers get their answer
+            from this method and hand it to the same ladder.
+
+        Inputs:
+            none.
+
+        Output:
+            tuple[bool, str | None, str | None]: ``(probe_ok, pane_dead,
+                pane_start_command)``. ``probe_ok`` False means the other
+                two carry no information at all and are None - which the
+                ladder renders as ``cannot_determine``, never as "there
+                is nothing to run".
+
+        Example:
+            >>> await backend.probe_respawn()
+            (True, '1', '"cld"')
+        """
+        rc, out, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            RESPAWN_PANE_FORMAT,
+            check=False,
+        )
+        decoded = out.decode("utf-8", errors="replace") if out else ""
+        first_line = decoded.splitlines()[0] if decoded.strip() else ""
+        if rc != 0 or not first_line:
+            return False, None, None
+        pane_dead, _dead_status, start_command = parse_respawn_probe(first_line)
+        return True, pane_dead, start_command
+
     async def respawn(
-        self, agent_command: Optional[str] = None
+        self,
+        agent_command: Optional[str] = None,
+        *,
+        chosen_agent_command: Optional[str] = None,
+        chosen_agent_type: Optional[str] = None,
     ) -> RespawnResult:
         """Put a process back into this session's dead pane, in place.
 
@@ -1386,6 +1430,14 @@ class TmuxBackend(SessionBackend):
                 Only CONSULTED when tmux confirms the pane had a start
                 command at all - see the ladder's docstring for why
                 ``agent_type`` alone is not admissible evidence.
+            chosen_agent_command: Command for a wrapper the user picked
+                in THIS request, having been shown the preview of what
+                each choice would do. Unlike ``agent_command`` it is
+                CONSULTED FIRST and outranks the ``pane_start_command``
+                gate, because an explicit choice is not a stale record.
+                It still cannot revive a live pane; see the ladder.
+            chosen_agent_type: the picked wrapper's id, used only to name
+                it in the sentence shown to the user.
 
         Output:
             RespawnResult: ``kind`` is the ladder verdict, ``ok`` says
@@ -1399,29 +1451,43 @@ class TmuxBackend(SessionBackend):
         """
         target = _safe_target(self.tmux_session)
 
-        rc, out, _ = await self._run_tmux(
-            "list-panes",
-            "-t",
-            self.tmux_session,
-            "-F",
-            RESPAWN_PANE_FORMAT,
-            check=False,
-        )
-        decoded = out.decode("utf-8", errors="replace") if out else ""
-        first_line = decoded.splitlines()[0] if decoded.strip() else ""
-        probe_ok = rc == 0 and bool(first_line)
-
-        pane_dead: Optional[str] = None
-        start_command: Optional[str] = None
-        if probe_ok:
-            pane_dead, _dead_status, start_command = parse_respawn_probe(first_line)
+        probe_ok, pane_dead, start_command = await self.probe_respawn()
 
         plan = resolve_respawn_plan(
             probe_ok=probe_ok,
             pane_dead=pane_dead,
             pane_start_command=start_command,
             agent_command=agent_command,
+            chosen_agent_command=chosen_agent_command,
+            chosen_agent_type=chosen_agent_type,
         )
+
+        # THE TRANSCRIPT THIS WOULD RESUME MUST STILL EXIST. The REPLAY
+        # rung hands tmux back its own recorded start command, and on
+        # this machine those frequently carry ``--resume <uuid>``. A
+        # resume against a deleted transcript exits instantly, leaving a
+        # dead pane that the row still calls running - the exact false
+        # green this codebase is built against. Checked BEFORE spawning,
+        # never inferred afterwards. UNCHECKED does not refuse.
+        if plan.resume_uuid:
+            from src.core.session_transcript_presence import (
+                conversation_presence,
+            )
+
+            presence = conversation_presence(
+                plan.resume_uuid, working_dir=str(self.working_dir)
+            )
+            guarded = refuse_if_transcript_missing(
+                plan, presence.outcome, presence.detail
+            )
+            if guarded is not plan:
+                logger.warning(
+                    "respawn_transcript_missing",
+                    session=self.tmux_session,
+                    claude_session_uuid=plan.resume_uuid,
+                    was_kind=plan.kind,
+                )
+            plan = guarded
 
         if not plan.actionable:
             logger.info(
@@ -1454,6 +1520,7 @@ class TmuxBackend(SessionBackend):
                     f"{stderr or 'no error text'}"
                 ),
                 command=plan.command,
+                chosen=plan.chosen,
             )
 
         # Same 250ms dead-on-arrival window ``start()`` uses. A binary that
@@ -1487,6 +1554,7 @@ class TmuxBackend(SessionBackend):
                     "running cannot be determined"
                 ),
                 command=plan.command,
+                chosen=plan.chosen,
             )
 
         dead_after, status_after, _ = parse_respawn_probe(
@@ -1507,6 +1575,7 @@ class TmuxBackend(SessionBackend):
                 ok=False,
                 detail=f"it started and exited again: {reason}",
                 command=plan.command,
+                chosen=plan.chosen,
             )
 
         logger.info(
@@ -1515,7 +1584,11 @@ class TmuxBackend(SessionBackend):
             kind=plan.kind,
         )
         return RespawnResult(
-            kind=plan.kind, ok=True, detail=plan.detail, command=plan.command
+            kind=plan.kind,
+            ok=True,
+            detail=plan.detail,
+            command=plan.command,
+            chosen=plan.chosen,
         )
 
     async def _first_meaningful_pane_line(self, target: str) -> str:

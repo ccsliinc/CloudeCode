@@ -237,13 +237,17 @@ console.log('[SessionRowActions Module] Loading...');
      *   controls. Close and remove both destroy something the user cannot
      *   get back (a running process, an uploads bucket), so both confirm.
      *
-     *   RESTART DOES NOT, and that is a decision rather than an omission.
-     *   It kills nothing, deletes nothing, and writes no database row; it
-     *   puts a process into a pane that is already empty, and the close
-     *   button sitting beside it undoes the result. A dialog here would
-     *   put a second click back into precisely the flow the user reported
-     *   as broken - and a confirmation that guards a harmless action is
-     *   how users learn to click through the ones that matter.
+     *   RESTART RETURNS FALSE, and that no longer means "no
+     *   confirmation". It means "not THIS confirmation". Restart now
+     *   opens the restart picker
+     *   (client/js/session-restart-picker.js), whose own restart button
+     *   is the explicit act, and which can state two things this generic
+     *   dialog cannot: which rung the respawn ladder would land on - an
+     *   empty `pane_start_command` silently returns a LOGIN SHELL - and
+     *   which launch wrapper the session will come back on. Routing it
+     *   through the shared modal as well would ask the user to agree
+     *   twice to a decision the picker already spelled out in full, and
+     *   the second dialog would say less than the first.
      * Inputs:
      *   action (string) - an ACTION_* id.
      * Output:

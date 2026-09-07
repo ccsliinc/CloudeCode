@@ -232,6 +232,40 @@ stored `agent_type` to reach `RESPAWN_AGENT`. Row 40
 (`Agent - Infrastructure`) was staged deliberately with both, and is the first
 session on the box that will restart correctly.
 
+**UPDATE: the gate is no longer silent, and an explicit choice now beats it.**
+Two things changed together.
+
+`GET /sessions/restart/preview` (`src/api/restart_routes.py`) answers which rung
+a session would land on WITHOUT acting. It reports the rung twice, because they
+are two different questions: `unchanged` is what a restart does right now (for a
+live pane, `not_dead`), and `projected` is what the session would come back AS
+with liveness ignored (`project_restart_rung`, never `not_dead`). `pane_state`
+carries liveness as its own fact. **A projected rung is a PREDICTION, NEVER A
+PERMISSION** - it exists so the picker can say "this one would come back a plain
+shell" about a session that is still running, which on this box is the whole
+interesting population.
+
+`POST /sessions/respawn` now takes an optional `agent_type`. It is an ID, never
+a command: it is checked against `agents.wrappers` and an unconfigured id is a
+400 rather than a silent fall back to the default wrapper
+(`src/core/session_agent_choice.py`). An explicit choice OUTRANKS the
+`pane_start_command` gate - the gate exists because a STORED `agent_type` is not
+evidence of intent, and a wrapper the user just picked in a panel is. It does
+NOT outrank `not_dead` or an unanswered probe. On a verified-alive restart the
+choice is written to `sessions.agent_type`, which is the hand edit this replaces.
+
+A sixth rung exists now: `RESPAWN_TRANSCRIPT_MISSING`. A REPLAY hands tmux back
+its own start command, and 3 of the 19 live sessions on the box carry an
+explicit `--resume <uuid>` in theirs, so a replay CAN re-run a resume against a
+transcript that has since been deleted. `resume_uuid_in` extracts it and the
+caller checks it through `session_transcript_presence`; a DEFINITE absence
+refuses, `unchecked` never does. The preview applies the same guard, so the
+picker cannot promise a replay the restart then declines.
+
+The picker is `client/js/session-restart-picker.js`; the reopen is
+`client/js/session-restart-return.js`. Restarting a LIVE session is still not
+built (TODO item 22's close-and-recreate half).
+
 Related, and open as backlog item 3: every session created via
 `auto_start_claude:false` plus a hand-sent claude command lands with
 `sessions.agent_type` NULL, because the agent_type wrapper only applies on

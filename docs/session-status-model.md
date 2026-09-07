@@ -319,20 +319,42 @@ session (`:588`) and on adopt (`:875`). It is the reason `dead` is reachable at
 all: without it the session would simply vanish and the user would only ever
 see `stopped`.
 
-**Respawn's five outcomes** (`src/core/session_respawn.py:78-92`), gated on
+**Respawn's six outcomes** (`src/core/session_respawn.py`), gated on
 `pane_start_command` rather than on `sessions.agent_type` - that column is
 written on every create whether an agent was started or not, so trusting it
 would launch an agent into a console the user believes is his own shell:
 
 ```mermaid
 flowchart TD
-    RP["resolve_respawn_plan(probe, agent_type)"]
+    RP["resolve_respawn_plan(probe, agent_type, chosen_agent_command)"]
     RP -->|"pane is alive"| ND["not_dead<br/>tmux itself refuses respawn-pane without -k,<br/>and this module never passes -k"]
     RP -->|"probe did not answer"| CD["cannot_determine<br/>refuses rather than guessing"]
+    RP -->|"a wrapper was PICKED in this request"| AG
     RP -->|"start command recorded AND agent_type known"| AG["agent<br/>re-derive via Settings.get_agent_command"]
     RP -->|"start command recorded, no agent_type"| RL["replay<br/>no argument, tmux replays its own record"]
+    RL -->|"that record carries --resume and<br/>the transcript is DEFINITELY absent"| TM["transcript_missing<br/>refuse_if_transcript_missing;<br/>'unchecked' never refuses"]
     RP -->|"probe SUCCEEDED and start command empty"| SH["shell<br/>positive evidence of a bare login shell"]
 ```
+
+`transcript_missing` is applied AFTER the ladder, by the caller, once
+`session_transcript_presence` has come back with a definite absence. It exists
+because a replay hands tmux back its own start command and 3 of the 19 live
+sessions on the owner's box carry an explicit `--resume <uuid>` in theirs; a
+resume against a deleted transcript exits at once and leaves a dead pane the row
+still calls running.
+
+**A PICKED WRAPPER OUTRANKS THE GATE.** An `agent_type` supplied in the restart
+request (the picker, `client/js/session-restart-picker.js`) is consulted BEFORE
+`pane_start_command` and reaches `agent` even from an empty one. The gate exists
+because a STORED `agent_type` is not evidence of intent; a wrapper the user just
+picked is. It does not outrank `not_dead` or an unanswered probe.
+
+**The rung can also be PREDICTED without acting.** `project_restart_rung` is the
+same ladder tail reached without the liveness gate, so
+`GET /sessions/restart/preview` can say what a LIVE session would come back AS.
+It never returns `not_dead`, and it is a prediction, never a permission -
+`pane_state_from_probe` (`dead` / `alive` / `unknown`) carries liveness as its
+own fact and is what a button must obey.
 
 `shell` and `cannot_determine` are kept apart on purpose. A respawn matches the
 SAME row and never writes a new one - the tmux `session_created` value is a property of the
@@ -381,6 +403,7 @@ replay | respawn | src/core/session_respawn.py::RESPAWN_REPLAY
 shell | respawn | src/core/session_respawn.py::RESPAWN_SHELL
 not_dead | respawn | src/core/session_respawn.py::RESPAWN_NOT_DEAD
 cannot_determine | respawn | src/core/session_respawn.py::RESPAWN_CANNOT_DETERMINE
+transcript_missing | respawn | src/core/session_respawn.py::RESPAWN_TRANSCRIPT_MISSING
 crashed | tray | macOS/tray-status.js::TRAY_STATES
 attention | tray | macOS/tray-status.js::TRAY_STATES
 unknown | tray | macOS/tray-status.js::TRAY_STATES

@@ -968,7 +968,31 @@ class API {
      *   detail: string, command: (string|null)}>}
      * @throws on 400 (name tmux would misread as a target), 500.
      */
-    async respawnSession(sessionName) {
+    async restartPreview(sessionName) {
+        /**
+         * Sessions: ask what a restart WOULD do, without doing it.
+         *
+         * GET /api/v1/sessions/restart/preview. READ ONLY - it probes the
+         * pane and runs the respawn ladder, and spawns nothing. This is
+         * the only way to learn which rung a session lands on before
+         * committing, and it exists because the shell rung is silent:
+         * a pane with an empty `#{pane_start_command}` comes back as a
+         * LOGIN SHELL, not as the agent.
+         *
+         * Read `wrappers_status` before reading `options`. 'unavailable'
+         * means the wrapper list could not be read; rendering that as
+         * "no wrappers configured" states something nobody measured.
+         *
+         * @param {string} sessionName - literal tmux session name.
+         * @returns {Promise<{name: string, current_agent_type: ?string,
+         *   unchanged: {kind: string, detail: string, actionable: boolean},
+         *   options: Array<object>, wrappers_status: string}>}
+         */
+        const qs = encodeURIComponent(sessionName);
+        return await this.call(`/sessions/restart/preview?session_name=${qs}`);
+    }
+
+    async respawnSession(sessionName, agentType) {
         // A PLAIN OBJECT, not JSON.stringify. `call()` sets
         // `Content-Type: application/json` only when `body` is an object,
         // and stringifies it itself. Handing it a pre-stringified string
@@ -976,9 +1000,17 @@ class API {
         // parse the body and the request comes back 400 - which reads as
         // "the server rejected this session name" and is nothing of the
         // kind. Every other POST here passes an object; match them.
+        // `agent_type` is an ID, never a command. The server checks it
+        // against the wrappers this machine actually has configured and
+        // returns 400 for one it does not know, rather than quietly
+        // launching the default wrapper under the name the user picked.
+        // Omitted entirely when absent, so the request is byte-identical
+        // to the old one when nobody picked anything.
+        const body = { session_name: sessionName };
+        if (agentType) body.agent_type = agentType;
         return await this.call('/sessions/respawn', {
             method: 'POST',
-            body: { session_name: sessionName },
+            body,
         });
     }
 

@@ -52,13 +52,17 @@ One line each, newest measurement wins. Detail follows below in full.
   30.5 -> 5.2 ms, the 20.0s / 14.5s stall cadence GONE, 86.5% of the window
   stalled -> 0.0%. Corpus ingester verified still ingesting with a positive
   control (row counts rose). Commit `3c23309`. See the DONE entry for the full
-- **22.** Restart a LIVE session (owner request). NOT BUILT and the existing
-  restart CANNOT do it: `resolve_respawn_plan` returns `RESPAWN_NOT_DEAD` while
-  the pane is alive, and tmux refuses `respawn-pane` on a live pane without
-  `-k`. Respawn revives a corpse, it does not replace a running session. Needs a
-  dry-run rung preview (no read-only route exists) plus close-and-recreate that
-  re-carries attribution, theme, unread, filing and position onto a new row.
-  Landmine: empty `#{pane_start_command}` silently returns a LOGIN SHELL.
+- **22. HALF DONE 2026-09-07.** The DRY-RUN RUNG PREVIEW is built and the shell
+  landmine is no longer silent: `GET /sessions/restart/preview` reports the rung
+  a session would land on without acting, twice - `unchanged` (what a restart
+  does now) and `projected` (what it would come back AS, liveness ignored) -
+  plus `pane_state` as its own fact. A projected rung is a PREDICTION, NEVER A
+  PERMISSION. Also landed: an optional `agent_type` on `POST /sessions/respawn`
+  so a session can be moved onto another launch wrapper without hand-editing
+  `sessions.agent_type`, and a return-to-session step after a successful
+  restart. STILL OPEN: close-and-recreate for a LIVE session, which needs a new
+  row re-carrying attribution, theme, unread, filing and position. A live pane
+  still answers `not_dead` and the picker refuses it.
 - **23.** The deploy copies with `ditto`, which MERGES. The first commit that
   DELETES a file will leave the stale copy on BOTH targets and still report
   success, because verification only hashes files that should be present.
@@ -1340,6 +1344,88 @@ from the user's side, so it must confirm. Do NOT build a hard block on
 `activity_status`: `HANDOFF.md` section 6 records `activity_state` reading
 `working` for about four minutes after a resume before self-correcting. Use it
 to inform the confirmation, never to silently refuse.
+
+---
+
+### 2026-09-07 - pick a wrapper at restart, and land back in the session - DONE (item 22's first half)
+
+**24.** Owner, verbatim: "when resuming/restarting a session can we pick a new
+wrapper" then "yes, and then fix so i can go right back into it." The workflow
+behind it: he wanted a session on the `claude-chrome` wrapper and had to have
+the database edited by hand to do it.
+
+**WHAT LANDED.**
+
+1. **A read-only rung preview.** `GET /sessions/restart/preview`
+   (`src/api/restart_routes.py`) probes the pane once and runs the SAME ladder
+   the action runs, so it cannot drift from it. It answers TWO questions rather
+   than one, because they are different questions:
+   - `unchanged` - what a restart does RIGHT NOW. On a live pane, `not_dead`.
+     This is the safety answer and the one a button obeys.
+   - `projected` - the rung it would come back AS, liveness ignored
+     (`project_restart_rung` in `src/core/session_respawn.py`). Never
+     `not_dead`. **A PREDICTION, NEVER A PERMISSION.**
+   - `pane_state` - `dead` / `alive` / `unknown`, liveness as its own fact.
+   Plus one predicted outcome per configured wrapper, each carrying `resolvable`
+   (a fact about the wrapper) and `actionable_now` (a fact about the pane), kept
+   apart so a client can say WHY a row is greyed out.
+   `wrappers_status` is `ok` / `unavailable`, so an unreadable wrapper list can
+   never render as "you have none configured".
+
+2. **An `agent_type` override on `POST /sessions/respawn`.** An ID, never a
+   command. Validated against `agents.wrappers` in
+   `src/core/session_agent_choice.py`, which REFUSES an unknown id rather than
+   letting `Settings.get_agent_command` fall back to the default wrapper - that
+   forgiveness is right for a launch and catastrophic for a picker. Three
+   verdicts: `accepted`, `unknown`, `cannot_determine`.
+
+3. **The explicit choice outranks the `pane_start_command` gate.** The judgment
+   call worth reviewing. The gate exists because a STORED `agent_type` is
+   written on every create and so is not evidence of intent; a wrapper the user
+   picked in a panel, having been shown what it would do, is different evidence,
+   and the failure the gate prevents (an agent in a pane the user believes is
+   his shell) cannot occur. It does NOT outrank `not_dead` or an unanswered
+   probe. Verdict stays `RESPAWN_AGENT`; `RespawnPlan.chosen` and a different
+   sentence carry the distinction, so the kind vocabulary did not fork.
+
+4. **Persistence.** On a restart VERIFIED alive with a picked wrapper,
+   `sessions.agent_type` is updated on the row keyed by the instance triple.
+   Only one column; no lineage, no origin, no identity. A restart that FAILED
+   does not record the choice - recording it would make the next restart
+   re-derive a command already observed to fail. `agent_type_persisted` is
+   reported so a restart that worked and a choice that did not stick are told
+   apart.
+
+5. **Return to session.** `POST /sessions/respawn` now reads the row back AFTER
+   the restart and returns `session_id` and `session_uuid`.
+   `client/js/session-restart-return.js` reopens by that id and refuses to
+   navigate if a different session comes back. Identity is the SERVER's
+   measurement, not a client name match.
+
+6. **The picker.** `client/js/session-restart-picker.js`, opened from the
+   kebab's existing restart item and from the launchpad row. It shows the
+   baseline first (the row that exposes the shell landmine), marks the current
+   wrapper, shows the predicted outcome for every choice, and its own restart
+   button is the confirmation. `activity_status` is shown and never used to
+   refuse - HANDOFF section 6 records `working` lagging four minutes after a
+   resume.
+
+**NOT BUILT, deliberately: close-and-recreate for a LIVE session.** A running
+pane still answers `not_dead` and the picker renders that refusal. The wrapper
+switch is complete for a dead or exited session, which is the case the hand edit
+was for. Recreating a live one needs a new row that re-carries attribution,
+theme, unread, group filing and position, and walks straight into the
+`session_group_members` primary-key defect. That stays item 22.
+
+**Tests.** `tests/test_session_restart_wrapper_choice.py` (pure ladder + real
+tmux: the picked wrapper is what ends up in a pane born as a bare shell; an
+unknown id refuses and spawns nothing; the choice persists and `session_uuid`
+does not move; a failed restart records nothing; the preview spawns nothing).
+`tests/test_restart_picker_renders.py` (Playwright, phone width: the shell
+warning is a different colour from the agent one, a live session is told what it
+would come back as and every radio stays disabled, a failed preview paints no
+panel). `tests/test_restart_picker.node.mjs` + its
+`tests/test_restart_picker_runs.py` wrapper pin the prediction/permission split.
 
 ---
 

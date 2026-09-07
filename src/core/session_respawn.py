@@ -61,16 +61,89 @@ an absence of evidence that refuses. Collapsing them would either refuse a
 console the user can plainly see, or launch a shell into a pane we failed
 to read.
 
+A REPLAY CAN RESUME A CONVERSATION, AND THAT HAD TO BE GUARDED.
+
+``RESPAWN_REPLAY`` hands tmux back its own ``#{pane_start_command}``, and
+nothing in this app used to look inside that string. Measured on the
+owner's box 2026-09-07: of 19 live sessions, 3 carry an explicit
+``--resume <uuid>`` in their recorded start command. So a replay CAN
+re-run a resume, and a resume against a transcript that has since been
+deleted is precisely the incident this project already paid for once -
+``claude --resume <unknown-uuid>`` exits immediately, the pane dies, and
+the row still reads ``lifecycle='running'``.
+
+:func:`resume_uuid_in` extracts that uuid onto ``RespawnPlan.resume_uuid``
+for every rung whose command carries one, and
+:func:`refuse_if_transcript_missing` converts a DEFINITE absence into
+``RESPAWN_TRANSCRIPT_MISSING``. The filesystem check itself lives in
+``src/core/session_transcript_presence.py`` and is performed by the
+caller, so this module stays pure. ``unchecked`` never refuses, for the
+reason that module documents: not having looked is not evidence of
+absence.
+
+PREDICTING A RUNG WITHOUT ACTING, AND WHY IT NEEDED ITS OWN ENTRY POINT.
+
+The ladder above answers "what should we run NOW", and for a live pane it
+correctly stops at ``RESPAWN_NOT_DEAD`` before it ever reads
+``#{pane_start_command}``. That makes it useless for the question the
+restart picker actually has to answer: "if I restart this session, what
+will it come back AS?" On this machine that question is the whole point -
+18 live sessions, most idle for days, and the ones with a NULL
+``agent_type`` are exactly the ones that would come back a bare shell.
+
+So the tail of the ladder is factored into ``_rung_from_start_command``
+and reached two ways. :func:`resolve_respawn_plan` reaches it through the
+probe gate AND the liveness gate; :func:`project_restart_rung` reaches it
+through the probe gate only. There is still ONE ladder, and the entire
+difference between the action and the prediction is the liveness gate.
+
+A projected rung is a PREDICTION, NEVER A PERMISSION. Liveness is
+reported alongside it as its own fact by :func:`pane_state_from_probe`,
+so a caller can say "this would come back as claude-chrome" and "you
+cannot restart it while it is running" in the same breath, which is the
+honest pair. Nothing here passes ``-k``, so a live agent cannot be killed
+by any of it.
+
 NOT DEAD IS ITS OWN OUTCOME. ``RESPAWN_NOT_DEAD`` is returned for a pane
 that is alive. Callers never need to enforce it defensively: tmux itself
 refuses ``respawn-pane`` without ``-k`` on a live pane (measured: rc=1,
 "pane ... still active"), and this module never passes ``-k``. So a click
 on a row that came back to life between paint and click cannot kill a
 running agent - that is a guarantee from tmux, not a check we wrote.
+
+AN EXPLICIT CHOICE OUTRANKS THE GATE, AND ONLY AN EXPLICIT CHOICE.
+
+``chosen_agent_command`` is the command for a wrapper THE USER PICKED IN
+THIS REQUEST, in the restart picker, having been shown what each choice
+would do. It is not the same kind of evidence as
+``sessions.agent_type`` and must not be treated as such.
+
+Re-read why the gate exists: ``agent_type`` is written on EVERY create,
+``auto_start_claude`` or not, so a session the user deliberately opened
+as a bare console still carries one. The failure that guards against is
+an agent appearing in a pane the USER BELIEVES IS HIS OWN SHELL. That
+failure cannot occur when the user has just named the agent, so the gate
+has nothing left to protect and the choice wins.
+
+It wins over ``RESPAWN_SHELL`` and over the "no start command recorded"
+``RESPAWN_CANNOT_DETERMINE``, because in both of those the missing
+information is exactly the information the user supplied. It does NOT
+win over ``RESPAWN_NOT_DEAD`` or over a probe that did not answer: those
+are facts about whether the pane can be respawned at all, and no choice
+of wrapper changes them. Replacing a LIVE session's agent is a different
+operation this module does not perform (TODO item 22).
+
+The verdict is still ``RESPAWN_AGENT`` - the outcome really is "an agent
+gets launched", and inventing a sixth kind would fork the vocabulary
+every consumer validates against. What is added is ``RespawnPlan.chosen``
+and a DIFFERENT ``detail`` sentence per case, so the preview can say out
+loud that the pane was a bare shell and the choice is about to change
+what it runs.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -89,6 +162,12 @@ RESPAWN_NOT_DEAD: str = "not_dead"
 #: The third outcome. We could not read the pane, so we will not guess.
 RESPAWN_CANNOT_DETERMINE: str = "cannot_determine"
 
+#: The command to re-run carries ``--resume <uuid>`` and that transcript
+#: is NOT on disk. Running it spawns a pane that exits immediately, which
+#: this app then paints as a running, resumed session. A REFUSAL, never
+#: actionable - see the transcript section of the module docstring.
+RESPAWN_TRANSCRIPT_MISSING: str = "transcript_missing"
+
 #: Every value :func:`resolve_respawn_plan` can return, for validation.
 ALL_RESPAWN_KINDS: frozenset[str] = frozenset(
     {
@@ -97,6 +176,7 @@ ALL_RESPAWN_KINDS: frozenset[str] = frozenset(
         RESPAWN_SHELL,
         RESPAWN_NOT_DEAD,
         RESPAWN_CANNOT_DETERMINE,
+        RESPAWN_TRANSCRIPT_MISSING,
     }
 )
 
@@ -119,11 +199,26 @@ class RespawnPlan:
         detail: One short human sentence. Rendered to the user verbatim on
             a refusal, so it must say what could not be determined rather
             than merely that something failed.
+        chosen: True when ``command`` came from a wrapper the user picked
+            in THIS request rather than from the app's stored record for
+            this session. Read by the caller to decide whether the choice
+            is worth persisting, and by the preview so the UI can say
+            which of the two answers it is showing. False on every
+            non-actionable kind.
+        resume_uuid: the conversation this plan would resume, when the
+            command it will run carries ``--resume <uuid>``. Set for the
+            REPLAY rung from the pane's OWN recorded command, which is
+            the case that matters most: tmux replays that string verbatim
+            and nothing in this app ever inspected it. A caller holding a
+            non-None value here MUST prove the transcript exists before
+            acting - see :func:`refuse_if_transcript_missing`.
     """
 
     kind: str
     command: Optional[str] = None
     detail: str = ""
+    chosen: bool = False
+    resume_uuid: Optional[str] = None
 
     @property
     def actionable(self) -> bool:
@@ -141,6 +236,8 @@ def resolve_respawn_plan(
     pane_dead: Optional[str],
     pane_start_command: Optional[str],
     agent_command: Optional[str],
+    chosen_agent_command: Optional[str] = None,
+    chosen_agent_type: Optional[str] = None,
 ) -> RespawnPlan:
     """Decide what restarting this pane should run.
 
@@ -161,6 +258,15 @@ def resolve_respawn_plan(
             recorded ``agent_type``, or None when the app has no record.
             The caller resolves this through ``Settings.get_agent_command``;
             passing None is how an adopted session says "not mine".
+        chosen_agent_command: Command for a wrapper the user PICKED IN
+            THIS REQUEST. None (the default) means no choice was made and
+            the ladder behaves exactly as it always has. A non-empty value
+            outranks the ``pane_start_command`` gate - see the module
+            docstring for why an explicit choice is admissible evidence
+            where a stored ``agent_type`` is not.
+        chosen_agent_type: The picked wrapper's id, used ONLY to name it
+            in the sentence shown to the user. Never used to decide
+            anything; the command above is what runs.
 
     Output:
         RespawnPlan: verdict, command to run (or None for "reuse"), and a
@@ -173,6 +279,11 @@ def resolve_respawn_plan(
         >>> resolve_respawn_plan(probe_ok=False, pane_dead=None,
         ...     pane_start_command=None, agent_command="cld").kind
         'cannot_determine'
+        >>> plan = resolve_respawn_plan(probe_ok=True, pane_dead="1",
+        ...     pane_start_command='', agent_command=None,
+        ...     chosen_agent_command="cldc", chosen_agent_type="claude-chrome")
+        >>> plan.kind, plan.chosen
+        ('agent', True)
     """
     if not probe_ok or pane_dead is None:
         return RespawnPlan(
@@ -187,6 +298,86 @@ def resolve_respawn_plan(
         return RespawnPlan(
             kind=RESPAWN_NOT_DEAD,
             detail="this session is still running; there is nothing to restart",
+        )
+
+    return _rung_from_start_command(
+        pane_start_command=pane_start_command,
+        agent_command=agent_command,
+        chosen_agent_command=chosen_agent_command,
+        chosen_agent_type=chosen_agent_type,
+    )
+
+
+def _rung_from_start_command(
+    *,
+    pane_start_command: Optional[str],
+    agent_command: Optional[str],
+    chosen_agent_command: Optional[str],
+    chosen_agent_type: Optional[str],
+) -> RespawnPlan:
+    """Classify a pane by its start command alone, liveness NOT considered.
+
+    Description: the shared tail of the ladder - the explicit-choice
+        branch plus the three rungs. Both entry points end here, which is
+        what makes the preview structurally incapable of drifting from
+        the action: :func:`resolve_respawn_plan` reaches it through the
+        probe gate AND the liveness gate, and
+        :func:`project_restart_rung` reaches it through the probe gate
+        only. Those four lines are the entire difference between them.
+
+        Private on purpose. Calling it directly skips BOTH gates, which
+        would classify a pane nobody has established is readable or dead.
+
+    Inputs:
+        pane_start_command: raw ``#{pane_start_command}``. Empty string
+            means tmux positively recorded none; None means the field was
+            not returned at all.
+        agent_command: what the app's stored ``agent_type`` resolves to
+            now, or None when it has no record.
+        chosen_agent_command: command for a wrapper the user picked in
+            this request, or None.
+        chosen_agent_type: that wrapper's id, used only to name it in the
+            sentence shown to the user.
+
+    Output:
+        RespawnPlan: one of AGENT / REPLAY / SHELL / CANNOT_DETERMINE.
+            Never NOT_DEAD - liveness is not visible from here.
+
+    Example:
+        >>> _rung_from_start_command(pane_start_command='',
+        ...     agent_command=None, chosen_agent_command=None,
+        ...     chosen_agent_type=None).kind
+        'shell'
+    """
+    # THE EXPLICIT CHOICE, placed BEFORE the three rungs it supplies the
+    # missing half of. The two facts no choice can change (the pane could
+    # not be read; the pane is alive) are handled by the callers' gates,
+    # above this function, precisely so a choice can never reach past
+    # them.
+    picked = (chosen_agent_command or "").strip()
+    if picked:
+        named = (chosen_agent_type or "").strip() or "the agent"
+        if pane_start_command is None:
+            why = (
+                f"tmux did not report a start command for this pane, but "
+                f"{named} is what you picked and is what will be started"
+            )
+        elif not pane_start_command.strip():
+            why = (
+                f"this pane was opened as a plain shell; {named} is what "
+                f"you picked and will be started in it instead"
+            )
+        else:
+            why = (
+                f"starting {named}, which you picked, instead of what this "
+                f"session was launched with"
+            )
+        return RespawnPlan(
+            kind=RESPAWN_AGENT,
+            command=picked,
+            detail=why,
+            chosen=True,
+            resume_uuid=resume_uuid_in(picked),
         )
 
     if pane_start_command is None:
@@ -212,13 +403,211 @@ def resolve_respawn_plan(
             kind=RESPAWN_AGENT,
             command=resolved_agent,
             detail="restarting the agent this session was launched with",
+            resume_uuid=resume_uuid_in(resolved_agent),
         )
 
     return RespawnPlan(
         kind=RESPAWN_REPLAY,
         command=None,
+        # THE COMMAND IS NOT ``None`` FROM TMUX'S POINT OF VIEW. It
+        # replays ``pane_start_command`` verbatim, so the resume this
+        # rung would re-run is whatever that recorded string carries -
+        # which is why the uuid is read from it and not from ``command``.
+        resume_uuid=resume_uuid_in(pane_start_command),
         detail="restarting the command tmux recorded for this pane",
     )
+
+
+def project_restart_rung(
+    *,
+    probe_ok: bool,
+    pane_start_command: Optional[str],
+    agent_command: Optional[str],
+    chosen_agent_command: Optional[str] = None,
+    chosen_agent_type: Optional[str] = None,
+) -> RespawnPlan:
+    """Which rung a restart WOULD land on, ignoring whether the pane is alive.
+
+    Description: the branch TODO item 22 asks for, and the reason the
+        preview is worth having at all. :func:`resolve_respawn_plan`
+        short-circuits on ``RESPAWN_NOT_DEAD`` BEFORE it ever reads
+        ``#{pane_start_command}``, so for a LIVE session it can only ever
+        say "still running" - it cannot say what that session would come
+        back AS. On this machine that is the entire interesting
+        population: 18 live sessions, most idle for days, and the ones
+        carrying a NULL ``agent_type`` are exactly the ones that would
+        return a bare login shell.
+
+        THIS IS A PREDICTION, NEVER A PERMISSION. It deliberately answers
+        a hypothetical - "if this pane were restartable, what would run"
+        - so callers MUST NOT treat an actionable kind from here as
+        licence to respawn. Whether the pane may be acted on right now is
+        :func:`pane_state_from_probe`, kept as a separate fact so the two
+        can never be read as one. ``tmux respawn-pane`` still refuses a
+        live pane without ``-k``, and nothing in this module passes it.
+
+    Inputs:
+        probe_ok: True iff the tmux pane query actually answered. False
+            means the start command carries no information and the rung
+            is ``cannot_determine``.
+        pane_start_command: raw ``#{pane_start_command}``.
+        agent_command: what the stored ``agent_type`` resolves to, or None.
+        chosen_agent_command: command for a wrapper picked in this
+            request, or None for the baseline projection.
+        chosen_agent_type: that wrapper's id, for the sentence only.
+
+    Output:
+        RespawnPlan: AGENT / REPLAY / SHELL / CANNOT_DETERMINE. Never
+            NOT_DEAD, because liveness is not what this answers.
+
+    Example:
+        >>> project_restart_rung(probe_ok=True, pane_start_command='',
+        ...     agent_command='cld').kind
+        'shell'
+    """
+    if not probe_ok:
+        return RespawnPlan(
+            kind=RESPAWN_CANNOT_DETERMINE,
+            detail=(
+                "tmux did not answer when asked about this pane, so what "
+                "a restart would run cannot be determined"
+            ),
+        )
+    return _rung_from_start_command(
+        pane_start_command=pane_start_command,
+        agent_command=agent_command,
+        chosen_agent_command=chosen_agent_command,
+        chosen_agent_type=chosen_agent_type,
+    )
+
+
+#: ``--resume <uuid>`` as it survives into a recorded pane start command,
+#: where it is wrapped in the app's zsh -c quoting. The uuid is matched
+#: loosely and validated by the presence checker, which owns that rule.
+_RESUME_RE = re.compile(
+    r"--resume[=\s]+['\"]?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def resume_uuid_in(command: Optional[str]) -> Optional[str]:
+    """The conversation id a command would resume, if any.
+
+    Description: pure text extraction, no filesystem access. Exists
+        because the REPLAY rung hands tmux back its OWN recorded
+        ``#{pane_start_command}``, and on this machine that string
+        frequently contains ``--resume <uuid>`` - measured 2026-09-07,
+        3 of the 19 live sessions carry one. Nothing used to look inside
+        it, so a replay could resurrect a resume against a transcript
+        that had since been deleted.
+
+    Inputs:
+        command: a shell command string, or None.
+
+    Output:
+        Optional[str]: the uuid, or None when the command resumes
+            nothing. ``--continue`` names no uuid and so cannot be
+            checked; it is deliberately not matched.
+
+    Example:
+        >>> resume_uuid_in("claude --resume 82aabe7b-c0be-4430-b127-bbf8aad17a57")
+        '82aabe7b-c0be-4430-b127-bbf8aad17a57'
+    """
+    if not command:
+        return None
+    found = _RESUME_RE.search(command)
+    return found.group(1) if found else None
+
+
+def refuse_if_transcript_missing(
+    plan: RespawnPlan, presence_outcome: Optional[str], detail: str = ""
+) -> RespawnPlan:
+    """Turn an actionable plan into a refusal when its transcript is gone.
+
+    Description: the pure half of the transcript guard. The caller does
+        the filesystem check (``session_transcript_presence``) and hands
+        the OUTCOME here, which keeps this module free of I/O exactly as
+        the rest of the ladder is.
+
+        ONLY A DEFINITE ABSENCE REFUSES. ``present`` and ``unchecked``
+        both pass through untouched, because not having been able to look
+        is not evidence that a file is gone - refusing on it would break
+        restart on every machine whose corpus lives somewhere the checker
+        was not told about. That is the same direction
+        ``session_transcript_presence`` documents at length.
+
+    Inputs:
+        plan: the plan the ladder produced.
+        presence_outcome: ``'present'`` / ``'absent'`` / ``'unchecked'``,
+            or None when no check was performed.
+        detail: the checker's own sentence, shown to the user verbatim.
+
+    Output:
+        RespawnPlan: the SAME plan, or a RESPAWN_TRANSCRIPT_MISSING
+            refusal carrying the uuid that could not be found.
+
+    Example:
+        >>> p = RespawnPlan(kind=RESPAWN_REPLAY, resume_uuid='u')
+        >>> refuse_if_transcript_missing(p, 'absent').kind
+        'transcript_missing'
+    """
+    if presence_outcome != "absent" or not plan.resume_uuid:
+        return plan
+    return RespawnPlan(
+        kind=RESPAWN_TRANSCRIPT_MISSING,
+        command=None,
+        detail=(
+            detail
+            or (
+                f"the conversation this session would resume "
+                f"({plan.resume_uuid}) has no transcript on this machine, "
+                f"so restarting it would open a pane that exits at once"
+            )
+        ),
+        resume_uuid=plan.resume_uuid,
+    )
+
+
+#: The pane is dead. A respawn can act on it.
+PANE_DEAD: str = "dead"
+
+#: The pane has a live process. A respawn REFUSES it; tmux enforces that.
+PANE_ALIVE: str = "alive"
+
+#: The third outcome. The probe did not answer, so liveness is unknown -
+#: which is not the same as either of the other two and must never be
+#: rendered as one.
+PANE_UNKNOWN: str = "unknown"
+
+#: Every value :func:`pane_state_from_probe` can return.
+ALL_PANE_STATES: frozenset[str] = frozenset({PANE_DEAD, PANE_ALIVE, PANE_UNKNOWN})
+
+
+def pane_state_from_probe(probe_ok: bool, pane_dead: Optional[str]) -> str:
+    """Whether the pane is dead, alive, or could not be read.
+
+    Description: liveness as its OWN fact, separate from the rung. The
+        preview reports both because they answer different questions -
+        "what would it come back as" and "can it be restarted right now"
+        - and collapsing them is how a picker ends up offering a button
+        that silently does nothing on a live session.
+
+    Inputs:
+        probe_ok: True iff the tmux pane query answered.
+        pane_dead: raw ``#{pane_dead}`` ("0" / "1"), or None.
+
+    Output:
+        str: PANE_DEAD, PANE_ALIVE or PANE_UNKNOWN.
+
+    Example:
+        >>> pane_state_from_probe(True, "0")
+        'alive'
+        >>> pane_state_from_probe(False, None)
+        'unknown'
+    """
+    if not probe_ok or pane_dead is None:
+        return PANE_UNKNOWN
+    return PANE_DEAD if pane_dead.strip() == "1" else PANE_ALIVE
 
 
 #: tmux format the respawn probe asks for. ``pane_start_command`` is LAST
@@ -276,9 +665,14 @@ class RespawnResult:
         command: The command actually handed to ``respawn-pane``, or None
             when tmux reused its own record. Reported so a failure names
             what was tried.
+        chosen: True when that command came from a wrapper the user
+            picked in this request. The caller persists the choice only
+            when this is True AND ``ok`` is True - see
+            ``src/core/session_agent_choice.py`` for why both.
     """
 
     kind: str
     ok: bool
     detail: str = ""
     command: Optional[str] = None
+    chosen: bool = False

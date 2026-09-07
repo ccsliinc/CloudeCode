@@ -907,15 +907,31 @@ class AttachableListingStatus(BaseModel):
 class RespawnSessionRequest(BaseModel):
     """Request body for ``POST /sessions/respawn``.
 
-    Only the tmux name. There is deliberately no command, agent_type or
-    wrapper field: a restart re-runs what the session was already running,
-    and letting a client name the command would turn this into a create
-    with none of a create's checks. Choosing a DIFFERENT agent is the New
-    Session flow, not this one.
+    STILL NO COMMAND CROSSES THIS BOUNDARY, and that distinction is the
+    whole reason ``agent_type`` is safe to accept where a command is not.
+    A command would let a client run anything - a create wearing a
+    restart's clothes. An ``agent_type`` is an ID that must match a
+    wrapper the user has already configured on this machine; the server
+    resolves it to a command itself, and refuses an id it does not
+    recognise rather than falling back to the default wrapper.
+
+    Why it is accepted at all: moving a session onto another wrapper
+    (``claude-chrome``, say) previously required hand-editing
+    ``sessions.agent_type`` in cloude.db. See
+    ``src/core/session_agent_choice.py``.
     """
 
     session_name: str = Field(
         ..., description="Literal tmux session name to restart in place"
+    )
+    agent_type: Optional[str] = Field(
+        None,
+        description=(
+            "Id of a configured launch wrapper to restart this session "
+            "with, replacing what it was launched with. Omit to keep the "
+            "existing behaviour exactly. An unconfigured id returns 400; "
+            "it is never resolved to the default wrapper"
+        ),
     )
 
 
@@ -954,6 +970,197 @@ class RespawnSessionResponse(BaseModel):
             "Command handed to respawn-pane, or null when tmux reused its "
             "own recorded start command"
         ),
+    )
+    chosen: bool = Field(
+        False,
+        description=(
+            "True when that command came from a wrapper the caller picked "
+            "in this request rather than from the session's stored record"
+        ),
+    )
+    agent_type: Optional[str] = Field(
+        None,
+        description="The wrapper id that was picked, or null when none was",
+    )
+    agent_type_persisted: bool = Field(
+        False,
+        description=(
+            "True when the picked wrapper was written to sessions.agent_type "
+            "so the next restart remembers it. False alongside ok=true means "
+            "the restart happened and the choice was NOT remembered - which "
+            "is reported rather than hidden, because the next restart will "
+            "then not repeat it"
+        ),
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description=(
+            "In-app id of the session that was restarted, read back AFTER "
+            "the restart so a client can reopen THIS session rather than "
+            "search the list by name. Null for a session the app has no "
+            "live backend for; the client then reopens through adopt"
+        ),
+    )
+    session_uuid: Optional[str] = Field(
+        None,
+        description=(
+            "Durable sessions.session_uuid of the row that was restarted. "
+            "A respawn preserves the instance triple, so this is the same "
+            "value the row carried before - which is what makes it usable "
+            "as proof the reopened terminal is the SAME session"
+        ),
+    )
+
+
+class RestartPreviewOption(BaseModel):
+    """One wrapper, and what restarting with it would do.
+
+    ``kind`` is the respawn ladder's own verdict, produced by the SAME
+    function the action runs (``src/core/session_respawn.py``), so a
+    preview cannot promise an agent and then deliver a shell.
+    """
+
+    agent_type: str = Field(..., description="Configured wrapper id")
+    label: str = Field(..., description="Display name, falls back to the id")
+    is_current: bool = Field(
+        ..., description="True when the session's row already records this id"
+    )
+    resolvable: bool = Field(
+        ...,
+        description=(
+            "True when this wrapper turned into a command. A fact about "
+            "the WRAPPER. False ones stay in the list with a reason in "
+            "detail - a choice that vanishes reads as one never configured"
+        ),
+    )
+    actionable_now: bool = Field(
+        ...,
+        description=(
+            "True when a respawn would act on this option right now. A "
+            "fact about the PANE: false for every option on a live "
+            "session however well configured the wrapper is. Kept apart "
+            "from resolvable so a client can say WHY it greyed a row out"
+        ),
+    )
+    kind: str = Field(
+        ...,
+        description=(
+            "Ladder verdict for picking this RIGHT NOW: 'agent' | "
+            "'replay' | 'shell' | 'not_dead' | 'cannot_determine'"
+        ),
+    )
+    detail: str = Field(..., description="One sentence fit to show verbatim")
+    projected_kind: str = Field(
+        "",
+        description=(
+            "The rung this option WOULD land on if the pane were "
+            "restartable, liveness ignored. Never 'not_dead'. This is "
+            "what answers 'what would this session come back as' for a "
+            "session that is still running - a prediction, not a permission"
+        ),
+    )
+    projected_detail: str = Field(
+        "", description="One sentence about projected_kind, fit to show verbatim"
+    )
+    command: Optional[str] = Field(
+        None, description="What would be run, or null when nothing could be"
+    )
+
+
+class RestartPlanPreview(BaseModel):
+    """The predicted outcome of a restart, with nothing picked.
+
+    READ ``actionable`` IN CONTEXT. It means "this verdict is one of the
+    three real rungs (agent/replay/shell)" rather than one of the two
+    that are answers (not_dead/cannot_determine). On the ``unchanged``
+    plan that coincides with "you may restart now". On the ``projected``
+    plan it does NOT: a live session can project an actionable rung while
+    being entirely un-restartable, which is the normal case this endpoint
+    exists to describe. Whether anything may actually be done is
+    ``pane_state`` plus ``unchanged.actionable``, never this field on
+    ``projected``.
+    """
+
+    kind: str = Field(
+        ...,
+        description=(
+            "'agent' | 'replay' | 'shell' | 'not_dead' | 'cannot_determine'"
+        ),
+    )
+    detail: str = Field(..., description="One sentence fit to show verbatim")
+    command: Optional[str] = Field(None, description="What would be run, or null")
+    actionable: bool = Field(
+        ...,
+        description=(
+            "True only for agent/replay/shell. 'not_dead' and "
+            "'cannot_determine' are answers, not instructions"
+        ),
+    )
+
+
+class RestartPreviewResponse(BaseModel):
+    """Result of ``GET /sessions/restart/preview``. Read-only, always 200.
+
+    THE POINT OF THIS ENDPOINT is that ``POST /sessions/respawn`` mutates,
+    so before it there was no way to ask which rung a session would land
+    on. Without that answer the UI cannot warn honestly, and the rung
+    that needs warning about is ``shell``: a pane whose
+    ``#{pane_start_command}`` is empty silently comes back as a login
+    shell instead of the agent.
+
+    ``wrappers_status`` carries the third outcome for the LIST itself.
+    'ok' with an empty ``options`` means this install configures no
+    wrappers; 'unavailable' means the list could not be read. A client
+    that renders the second as the first is stating something nobody
+    measured.
+    """
+
+    name: str = Field(..., description="tmux session name previewed")
+    current_agent_type: Optional[str] = Field(
+        None,
+        description=(
+            "sessions.agent_type for this session, or null. Null is "
+            "ambiguous by nature - it means both 'launched as a bare "
+            "shell' and 'never recorded' - and must not be rendered as "
+            "the name of an agent"
+        ),
+    )
+    pane_state: str = Field(
+        ...,
+        description=(
+            "'dead' | 'alive' | 'unknown'. Whether the pane can be "
+            "respawned AT ALL, reported separately from every rung "
+            "because they answer different questions. 'unknown' means "
+            "the probe did not answer and must never render as either "
+            "of the other two"
+        ),
+    )
+    unchanged: RestartPlanPreview = Field(
+        ...,
+        description=(
+            "What restarting WITHOUT picking anything would do RIGHT "
+            "NOW. On a live pane this is 'not_dead' and not actionable, "
+            "which is the answer a restart button must obey"
+        ),
+    )
+    projected: RestartPlanPreview = Field(
+        ...,
+        description=(
+            "The rung a restart WOULD land on with nothing picked, "
+            "liveness ignored. Never 'not_dead'. For a LIVE session this "
+            "is the only field that says anything useful, and it is what "
+            "exposes the shell landmine on a session still running. A "
+            "PREDICTION, NEVER A PERMISSION: acting is gated by "
+            "pane_state and by unchanged, never by this"
+        ),
+    )
+    options: List[RestartPreviewOption] = Field(
+        default_factory=list,
+        description="One predicted outcome per configured wrapper, config order",
+    )
+    wrappers_status: str = Field(
+        ...,
+        description="'ok' (options reflect the config) or 'unavailable'",
     )
 
 

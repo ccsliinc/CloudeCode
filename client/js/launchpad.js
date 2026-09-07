@@ -2929,39 +2929,85 @@ class Launchpad {
     /**
      * Restart the agent in a session whose process exited, in place.
      *
-     * Description: one POST, then a list refresh. The row keeps its
-     *   identity, so the refreshed list shows the SAME row alive again
-     *   rather than a new one appearing beside a corpse.
+     * Description: ASK FIRST. The picker
+     *   (client/js/session-restart-picker.js) fetches the read-only
+     *   preview, shows which rung this session would land on and lets the
+     *   user move it onto a different launch wrapper, and its own restart
+     *   button is the confirmation. Only then does the POST run.
+     *
+     *   THAT IS NOT A COURTESY. A pane with an empty
+     *   `#{pane_start_command}` lands on the `shell` rung and comes back
+     *   as a LOGIN SHELL rather than an agent, silently, and the launcher
+     *   used to fire that on one click with nothing on screen saying so.
      *
      *   THE SERVER'S ``ok`` IS THE VERDICT, NOT THE HTTP STATUS. A 200
      *   carrying ``ok:false`` is the normal shape for "the pane could not
      *   be read" and for "it started and exited again", and both of those
-     *   are things the user needs told. Treating a 200 as success would
-     *   leave him staring at a row that did not come back with no
-     *   explanation - the exact failure this feature exists to end, one
-     *   layer up. The server's ``detail`` sentence is shown verbatim
-     *   rather than replaced with our own wording, because it is the only
-     *   thing that knows WHICH of those happened.
+     *   are things the user needs told. The server's ``detail`` sentence
+     *   is shown verbatim rather than replaced with our own wording,
+     *   because it is the only thing that knows WHICH of those happened.
      *
-     *   The list is reloaded on every path including failure, so a row
-     *   whose real state changed under us repaints either way.
+     *   ON SUCCESS THE USER GOES BACK INTO THE SESSION rather than back
+     *   to a list to hunt for the row he just revived. The list is
+     *   reloaded on every path that did NOT navigate, so a row whose real
+     *   state changed under us repaints either way.
      * Inputs: tmuxName (string) - literal tmux session name.
      *   display (string) - name as shown in the row, for the message.
      * Output: Promise<void>.
      */
     async _handleRestartSession(tmuxName, display) {
-        try {
-            const result = await window.API.respawnSession(tmuxName);
-            if (!result || result.ok !== true) {
-                const why = (result && result.detail) || 'no reason given';
-                this.showError(`could not restart "${display}": ${why}`);
+        const picker = window.SessionRestartPicker;
+        if (!picker) {
+            // FAIL CLOSED, same rule as the destructive actions above: a
+            // restart with no prediction and no choice is the old defect
+            // wearing the new control's clothes.
+            this.showError(
+                `could not restart "${display}": the restart picker did not load.`);
+            return;
+        }
+        const row = (this.runningSessions || []).find(
+            (s) => s && s.name === tmuxName);
+        const choice = await picker.open(
+            tmuxName, display, row ? row.status : null);
+        if (!choice) {
+            const why = picker.lastError();
+            if (why) {
+                this.showError(
+                    `could not work out what restarting "${display}" would do, `
+                    + `so nothing was started: ${why}`
+                );
             }
+            return;
+        }
+
+        let result = null;
+        try {
+            result = await window.API.respawnSession(tmuxName, choice.agentType);
         } catch (error) {
             this.showError(
                 `could not restart "${display}": `
                 + (error && error.message ? error.message : 'unknown error')
             );
+            await this.loadRunningSessions();
+            return;
         }
+        if (!result || result.ok !== true) {
+            const why = (result && result.detail) || 'no reason given';
+            this.showError(`could not restart "${display}": ${why}`);
+            await this.loadRunningSessions();
+            return;
+        }
+        if (choice.agentType && result.agent_type_persisted === false) {
+            this.showError(
+                `restarted "${display}" with ${choice.agentType}, but the choice `
+                + 'could not be saved, so the next restart will not remember it.'
+            );
+        }
+        const back = window.SessionRestartReturn
+            ? await window.SessionRestartReturn.reopen(result)
+            : { status: 'not_reopened', detail: 'the reopen module did not load' };
+        if (back.status === 'reopened') return;
+        if (back.detail) this.showError(back.detail);
         await this.loadRunningSessions();
     }
 
@@ -2994,10 +3040,11 @@ class Launchpad {
             : this._deriveRunningSessionDisplayName(tmuxName);
         const resolved = action || window.SessionRowActions.ACTION_CLOSE;
 
-        // RESTART branches out before the confirm, because it is the one
-        // action here that destroys nothing - see
-        // SessionRowActions.requiresConfirm for the policy and why a
-        // dialog on a harmless action is a cost, not a safeguard.
+        // RESTART branches out before the shared confirm because it
+        // carries its OWN confirmation - the restart picker, which states
+        // the predicted outcome and the chosen wrapper, both of which a
+        // generic dialog could not say. See
+        // SessionRowActions.requiresConfirm.
         //
         // NOT the same thing as _restartRecentSession() further up this
         // file. That one creates a BRAND NEW session for a row whose tmux

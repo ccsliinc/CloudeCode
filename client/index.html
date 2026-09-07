@@ -82,6 +82,10 @@
          row, and this file re-styles those same elements as full-width
          labelled menu items once they are inside the panel. -->
     <link rel="stylesheet" href="/static/css/session-row-menu.css" />
+    <!-- The restart picker's option list. Reuses .modal-overlay /
+         .modal-content from styles.css; this file only styles the three
+         predicted-outcome states, which must NOT look alike. -->
+    <link rel="stylesheet" href="/static/css/session-restart-picker.css" />
     <link rel="stylesheet" href="/static/css/recent-deleted.css" />
     <!-- Session tools button + menu and the per-session theme picker.
          After styles.css so it inherits the theme vars, AND so its
@@ -920,6 +924,18 @@
     <script src="/static/js/session-sidebar-rename.js"></script>
     <script src="/static/js/session-sidebar-rows.js"></script>
     <script src="/static/js/session-sidebar-groups.js"></script>
+    <!-- Restart: ASK, then act, then land back in the session. The
+         picker fetches the read-only preview (GET /sessions/restart/
+         preview) and shows which rung the respawn ladder would land on
+         before anything is spawned - an empty #{pane_start_command}
+         silently returns a LOGIN SHELL - and lets the user move the
+         session onto a different launch wrapper. The return module
+         reopens the SAME session afterwards, by the id the server read
+         back, never by name. Both are called from
+         session-sidebar-clicks.js and launchpad.js, so both load
+         BEFORE them; both use window.API and window.App. -->
+    <script src="/static/js/session-restart-picker.js"></script>
+    <script src="/static/js/session-restart-return.js"></script>
     <!-- Click routing for the list, split out of session-sidebar.js to
          keep that file under the 500-line budget. Must load BEFORE it:
          the controller's handlers delegate straight into this. -->

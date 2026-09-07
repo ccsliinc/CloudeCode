@@ -814,16 +814,41 @@ def test_a_dead_row_offers_restart_and_remove_but_never_close(page):
     )
 
 
-def test_restart_fires_without_a_confirmation(page):
-    """Restart destroys nothing, and a dialog there teaches click-through."""
+def test_restart_asks_the_picker_and_never_the_generic_confirm(page):
+    """Restart now OPENS THE PICKER instead of firing on one click.
+
+    That is a deliberate change from the behaviour this test used to pin.
+    A bare restart cannot warn about the ladder's ``shell`` rung - a pane
+    with an empty ``#{pane_start_command}`` comes back a LOGIN SHELL,
+    silently - and it cannot offer a different launch wrapper. The picker
+    (client/js/session-restart-picker.js) does both, and its own restart
+    button is the confirmation.
+
+    TWO THINGS ARE ASSERTED TOGETHER, because either alone would pass
+    over a broken control. Nothing may be spawned from this click, AND
+    the generic destructive confirm must still not appear - routing
+    restart through that dialog would ask the user to agree twice while
+    saying less than the picker already did.
+    """
     page.evaluate("window.__calls = []")
     _kebab(page, "row-dead").click()
     page.locator('#session-row-menu-panel [data-session-action="restart"]').click()
     page.wait_for_timeout(150)
     calls = page.evaluate("window.__calls")
-    assert ["respawnSession", "row-dead"] in calls, f"restart did not fire: {calls}"
+    assert not any(c[0] == "respawnSession" for c in calls), (
+        f"the menu restarted a session with no preview and no choice: {calls}"
+    )
     assert not any(c[0] == "confirm" for c in calls), (
-        "restart asked for a confirmation it does not need"
+        "restart was routed through the generic destructive confirm"
+    )
+    # The picker module is not loaded in this harness, so the handler
+    # takes its FAIL-CLOSED branch. Asserting that is the point: a
+    # missing picker must stop the flow, never fall back to the silent
+    # one-click restart this change removed.
+    assert page.evaluate("!window.SessionRestartPicker"), (
+        "this harness now loads the picker, so the fail-closed branch "
+        "above is no longer what was measured; add the module to JS_FILES "
+        "and assert the panel instead"
     )
 
 

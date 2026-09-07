@@ -63,6 +63,7 @@ from src.api.auth import (
 )
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
+from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
@@ -844,6 +845,7 @@ if MESSAGE_ARCHIVE.enabled:
     app.include_router(archive_router, prefix="/api/v1")  # Read-only message browser over the archive (auth required)
     app.include_router(archive_overlay_router, prefix="/api/v1")  # Presentation overlay over the archive: rename/group/hide (auth required)
 app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
+app.include_router(restart_router, prefix="/api/v1")  # Read-only restart preview: which respawn rung a session would land on (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes

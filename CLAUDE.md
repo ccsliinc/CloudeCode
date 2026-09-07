@@ -150,6 +150,78 @@ repeated bug in the project. Check the level before you debug the endpoint.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
 
+## Restarting a session, and picking what it comes back as
+
+`POST /sessions/respawn` revives a pane whose PROCESS exited. It does not
+replace a running agent, and it cannot: `resolve_respawn_plan` answers
+`RESPAWN_NOT_DEAD` for a live pane, and tmux itself refuses `respawn-pane`
+without `-k`, which nothing here passes.
+
+**The ladder gates on tmux's `#{pane_start_command}`, and the empty case is
+the trap.** Empty means the pane was born a bare shell, so a restart lands on
+`RESPAWN_SHELL` and hands back a LOGIN SHELL rather than the agent - silently,
+for a real subset of the sessions on a working box, because
+`sessions.agent_type` lands NULL for every session created with
+`auto_start_claude:false` plus a hand-sent claude command.
+
+| Piece | File |
+|---|---|
+| The ladder, the projection, and pane liveness | `src/core/session_respawn.py` |
+| Shape the preview the picker reads | `src/core/session_restart_preview.py` |
+| Validate an `agent_type` choice, and persist it | `src/core/session_agent_choice.py` |
+| `GET /sessions/restart/preview` | `src/api/restart_routes.py` |
+| The panel, and the reopen afterwards | `client/js/session-restart-picker.js`, `client/js/session-restart-return.js` |
+
+**A PREDICTION IS NEVER A PERMISSION, and that is why the preview reports the
+rung twice.** `resolve_respawn_plan` short-circuits on `not_dead` BEFORE it
+reads the start command, so on its own it can only tell you a running session
+is running - not what it would come back AS, which is the only interesting
+question about the idle-but-alive sessions a user actually wants to restart.
+So the tail of the ladder is factored into `_rung_from_start_command` and
+reached two ways: `resolve_respawn_plan` through the probe gate AND the
+liveness gate, `project_restart_rung` through the probe gate only. There is
+still ONE ladder. `unchanged` is what a restart does now, `projected` is what
+it would come back as, `pane_state` (`dead` / `alive` / `unknown`) is liveness
+on its own. A UI badge may read `projected`; only `unchanged` / `actionable_now`
+may enable a button. Wire the badge to the button and every live session
+becomes restartable.
+
+**`agent_type` on the respawn request is an ID, never a command.** It is
+validated against `agents.wrappers` and an unconfigured id is a 400.
+`Settings.get_agent_command` deliberately falls back to the default wrapper for
+an unknown type, which is right for a launch and wrong for a picker - a user
+who asks for `claude-chrome` and silently gets `claude-skip-permissions` has
+been lied to. Validate through `session_agent_choice.validate_agent_choice`
+first; never call `get_agent_command` with a user-supplied id directly.
+
+**An explicit choice outranks the `pane_start_command` gate; nothing else
+does.** The gate exists because a STORED `agent_type` is not evidence of
+intent. A wrapper picked in this request, after the user was shown what it
+would do, is different evidence. It does NOT outrank `not_dead` or a probe that
+did not answer. The verdict stays `RESPAWN_AGENT`; `RespawnPlan.chosen` and a
+different sentence carry the distinction rather than a sixth kind.
+
+**A REPLAY CAN RESUME A CONVERSATION, and that is guarded.** `RESPAWN_REPLAY`
+hands tmux back its own `#{pane_start_command}`, and measured on the owner's
+box 2026-09-07, 3 of 19 live sessions carry an explicit `--resume <uuid>` in
+theirs. So a replay can re-run a resume, and a resume against a deleted
+transcript exits instantly, leaving a dead pane the row still calls running -
+the incident this project already paid for. `resume_uuid_in` extracts the uuid,
+`refuse_if_transcript_missing` turns a DEFINITE absence into
+`RESPAWN_TRANSCRIPT_MISSING`, and the filesystem lookup lives in
+`src/core/session_transcript_presence.py` so the ladder stays pure. `unchecked`
+NEVER refuses - not having been able to look is not evidence a file is gone, and
+refusing on it would break restart on every machine whose corpus lives somewhere
+the checker was not told about. The PREVIEW applies the same guard; a preview
+that skipped it would promise a replay the restart then declines.
+
+**Respawn writes exactly one column, and only when asked.** On a restart
+verified alive with a picked wrapper, `sessions.agent_type` is updated on the
+row keyed by the instance triple. Nothing else - a respawn is still not a fork
+and never touches a lineage column. With no `agent_type` it issues no write at
+all. A restart that FAILED records nothing, and `agent_type_persisted` says so
+rather than letting a stuck choice look saved.
+
 ## The transcript archive the app maintains
 
 The app keeps a byte-exact archive of this machine's Claude Code
