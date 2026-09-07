@@ -133,10 +133,18 @@ repeated bug in the project. Check the level before you debug the endpoint.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline is roughly
-  614 passed / 16 failed / 6 errors; those failures and errors are
-  environmental and pre-existing (missing tmux binary, agent-fingerprint
-  fixtures, deep-link dist build). Your job is to add no NEW ones.
+  repo root. System python3 has no fastapi. Current baseline is
+  4647 passed / 3 failed / 0 errors / 13 skipped; the three failures are
+  environmental and pre-existing:
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
+  `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
+  and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+  Your job is to add no NEW ones. Watch for a broken environment
+  manufacturing a fake baseline: a `venv` symlink pointing at a
+  `venv.nosync` directory that no longer exists lets the suite limp
+  along and undercount silently, rather than failing outright. If the
+  numbers you see look nothing like these, check the symlink and rebuild
+  the venv from `requirements.txt` before trusting the count.
 - **`node --check`** every JS file you touch, before you claim it works.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
@@ -146,7 +154,8 @@ repeated bug in the project. Check the level before you debug the endpoint.
 
 The app keeps a byte-exact archive of this machine's Claude Code
 transcript corpus (`~/.claude/projects`) inside its own `cloude.db`. It
-is a background loop, started last in `lifespan()` and stopped first on
+is a background loop, started second-to-last in `lifespan()` (only the
+database integrity scheduler starts after it) and stopped first on
 shutdown, and it is fail-soft in exactly the way `ensure_db_migrated`
 and `claude_hooks.ensure_hook_settings` are: boot never waits on it and
 never fails because of it.
@@ -194,6 +203,49 @@ it holds nothing.
 `CLOUDE_TEST_MODE` so a pytest run never reads the developer's real
 corpus. `CLOUDE_CORPUS_ROOT` relocates the corpus,
 `CLOUDE_CORPUS_INGEST_INTERVAL` the sleep between passes.
+
+## The daily database integrity check
+
+`PRAGMA integrity_check` is a MAINTENANCE OPERATION, NOT A LIVENESS PROBE, and
+that distinction cost the project real time. `GET /api/v1/version` used to run
+it synchronously inside its own coroutine on every request. The Electron tray
+polls that endpoint every 20 seconds (`macOS/main.js`, `INTERVAL_MS = 20000`)
+and the pragma re-verifies every page of every B-tree, so on a 4.5 GB
+`cloude.db` the event loop was blocked for roughly 14 of every 20 seconds on an
+idle machine, and the stall grew with the file. Wrapping it in a thread would
+have freed the loop and still burned those seconds of disk three times a
+minute, forever, which is why it was rejected.
+
+| Piece | File |
+|---|---|
+| Run one check and publish the verdict | `src/core/db_integrity.py` |
+| Read the verdict and decide what may be said | `src/core/db_integrity_status.py` |
+| The background loop | `src/core/db_integrity_task.py` |
+| The cheap per-request probe | `src/core/db_health.py` |
+| Atomic write / tolerant read, shared with the ingester | `src/core/json_artifact.py` |
+
+**The request path is now one connect plus one small SELECT**, plus one read of
+a small JSON file. Measured at 0.46 ms median against a 310 MB database where
+the pragma took 112 ms, a 215x difference that widens with the file. Do not put
+a pragma back on it; `tests/test_db_integrity_verdict.py` booby-traps every
+binding of the helper and fails the build if one appears.
+
+**The cached verdict carries two facts, so it has two fields.** `verdict` is
+`ok` / `failed` / `cannot_determine`; `freshness` is `current` / `stale` /
+`never_ran` / `cannot_determine`, the same four-value vocabulary
+`src/core/corpus_ingest_state.py` uses, reused rather than re-invented.
+`verdict` reads `ok` ONLY when a check actually ran AND its record is inside
+the freshness window, so "never checked" can never render as "checked and
+sound". A recorded `failed` still degrades `data.status` exactly as the live
+pragma did; `cannot_determine` deliberately does not, because not having looked
+is not a fault.
+
+`CLOUDE_DB_INTEGRITY_CHECK=0` switches the loop off; it defaults OFF under
+`CLOUDE_TEST_MODE` so a pytest run never walks the developer's real database.
+`CLOUDE_DB_INTEGRITY_CHECK_INTERVAL` overrides the daily interval, and the
+staleness window is derived from it (two intervals) rather than hardcoded. The
+loop also asks the artifact whether a check is due before its first run, so
+restarting this menubar app all day does not re-walk the file each time.
 
 ## Secret scanning
 

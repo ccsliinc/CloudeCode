@@ -38,6 +38,7 @@ from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
 from src.core.corpus_ingest_task import CorpusIngestScheduler
+from src.core.db_integrity_task import DatabaseIntegrityScheduler
 from src.core.message_archive_flag import (
     ENABLE_ENV as MESSAGE_ARCHIVE_ENV,
     resolve as resolve_message_archive,
@@ -651,6 +652,29 @@ async def lifespan(app: FastAPI):
         )
     app.state.corpus_ingest_scheduler = corpus_ingest_scheduler
 
+    # THE DAILY DATABASE INTEGRITY CHECK. GET /api/v1/version used to run
+    # PRAGMA integrity_check inside its own coroutine on every request,
+    # and the Electron tray polls that endpoint every 20 seconds, so the
+    # event loop spent most of every 20-second window walking every page
+    # of a multi-gigabyte cloude.db. The request path now does a cheap
+    # probe and reads the verdict this loop caches.
+    #
+    # MOUNTED HERE, LAST, for the same reason as the ingester above: it
+    # needs the datastore migrated and nothing else. start() creates a
+    # task and returns, boot never waits on a check, and a failed check
+    # resolves to a named status on a published artifact rather than to
+    # an exception. Set CLOUDE_DB_INTEGRITY_CHECK=0 to switch it off; the
+    # version route then reports cannot_determine with enabled=false
+    # rather than implying the database was verified.
+    db_integrity_scheduler = DatabaseIntegrityScheduler(
+        settings.get_state_dir()
+    )
+    try:
+        db_integrity_scheduler.start()
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning("db_integrity_scheduler_start_failed", error=str(exc))
+    app.state.db_integrity_scheduler = db_integrity_scheduler
+
     logger.info("application_ready")
     logger.info(
         "server_ready_local_only",
@@ -680,6 +704,15 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "corpus_ingest_scheduler_stop_failed", error=str(exc)
             )
+
+    # Stop the integrity checker early for the same reason: its worker
+    # thread cannot be interrupted from outside, only asked to stop
+    # before it opens the database. aclose() sets the cancel event FIRST
+    # and its wait is bounded, so shutdown never hangs on a page scan.
+    try:
+        await db_integrity_scheduler.aclose()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("db_integrity_scheduler_stop_failed", error=str(exc))
 
     # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window

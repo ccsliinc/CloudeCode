@@ -1025,6 +1025,117 @@ into the repo if they are wanted as a record.
   this reproduces the same outage.
 
 ---
+### 2026-09-07 - THE LAG: fix BUILT and validated locally, NOT YET DEPLOYED - OPEN (deploy + confirm)
+
+The diagnosis above is closed. The fix is written, tested and independently
+validated on this checkout. **It is NOT on the mini.** Until it is deployed and
+`/health` is re-polled, the real-world improvement is CANNOT DETERMINE.
+
+**What was built**
+
+| Piece | File |
+|---|---|
+| Run one check off-loop, own the verdict artifact | `src/core/db_integrity.py` (384 lines) |
+| Read the verdict, decide what may honestly be said | `src/core/db_integrity_status.py` (254) |
+| The daily background loop | `src/core/db_integrity_task.py` (237) |
+| Atomic write / tolerant read, shared with the ingester | `src/core/json_artifact.py` (113) |
+| The cheap per-request probe | `src/core/db_health.py` (modified) |
+
+The request path is now one connect plus one small SELECT plus one small JSON
+read. `PRAGMA integrity_check` moved to a daily loop via `asyncio.to_thread`.
+
+**The verdict has TWO fields on purpose.** `verdict` is `ok` / `failed` /
+`cannot_determine`; `freshness` is `current` / `stale` / `never_ran` /
+`cannot_determine`, reusing the vocabulary already in
+`src/core/corpus_ingest_state.py` rather than inventing a second one. `verdict`
+reads `ok` ONLY when a check actually ran AND its record is fresh, so "never
+checked" can never render as "checked and sound". A recorded `failed` still
+degrades `data.status` the way the live pragma did; `cannot_determine`
+deliberately does NOT, because not having looked is not a fault.
+
+`CLOUDE_DB_INTEGRITY_CHECK=0` disables the loop; defaults OFF under
+`CLOUDE_TEST_MODE` so pytest never walks the real database.
+`CLOUDE_DB_INTEGRITY_CHECK_INTERVAL` overrides the daily interval and the
+staleness window is derived from it (2x) rather than hardcoded.
+
+**VALIDATION - what was actually proven, and how**
+
+Independent validator, read-only, not the agent that wrote the code.
+
+- **Pragma is gone from the request path.** Proven WITHOUT grep and WITHOUT the
+  shipped test: `sqlite3.connect` was patched to install a `set_trace_callback`
+  recording every statement a real `GET /api/v1/version` executes. Four artifact
+  states (missing, corrupt, fresh-ok, failed) each executed exactly 5
+  statements: three connection pragmas, `SELECT 1 FROM sqlite_master ...
+  name='meta'`, and `SELECT value FROM meta WHERE key='schema_version'`. No
+  integrity check on any path including exception and fallback paths.
+  **NEGATIVE CONTROL: calling `integrity_check()` directly DID make the tracer
+  print `PRAGMA integrity_check`**, so the instrument was live. Request cost
+  1.4 ms.
+- **The three-outcome guard was attacked in both directions.** 11 adversarial
+  states (no artifact, empty file, truncated JSON, JSON array, `status:ok` with
+  missing `finished_at`, unparseable stamp, future-dated stamp giving a NEGATIVE
+  age, stale stamp, null status, garbage status, empty object). All 11 returned
+  `cannot_determine`, none leaked `ok`. **POSITIVE CONTROL: a fresh `status:ok`
+  record yields `verdict: ok, freshness: current`. FAILURE CONTROL: a
+  `status:failed` record yields `verdict: failed` AND degrades `data.status` to
+  `degraded_db_unreadable`.** The guard can fail and does.
+- **The riskiest edit was the `corpus_ingest_state.py` extraction**, which
+  deleted ~40 lines from a subsystem that was not the target. Verified by
+  AST-unparsing the pre-change function bodies from `git show HEAD` and diffing
+  against the new shared ones: IDENTICAL modulo the log-event call, for both
+  writer and reader. Every primitive survived (`mkdir(parents, exist_ok)`,
+  `NamedTemporaryFile` in the same dir, `flush`, `os.fsync(fileno)`,
+  `os.replace`, `os.unlink` on failure).
+- **Tray contract intact.** Top-level keys still exactly `data`, `update`,
+  `version`; `update` unchanged with all seven keys, which is what
+  `macOS/tray-api.js:267` reads. `integrity` is nested at `data.integrity`,
+  purely additive. Grep found NO consumer of the `data` block anywhere in
+  `client/js` or `macOS`.
+- **Boot safety.** Scheduler started last in `lifespan()` (`src/main.py:673`),
+  wrapped so boot cannot fail on it, `aclose()`d on shutdown.
+
+**Tests: 4615 passed -> 4647 passed. 3 failed before, the SAME 3 after, 0
+errors.** The three are `test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`, all environmental and pre-existing. No new failures.
+
+**CANNOT DETERMINE, stated plainly: the real speedup.** Measured 0.46 ms
+(new probe) vs 112 ms (old pragma) against a 310 MB SYNTHETIC database built
+from the real schema. That is 215x and it widens with file size, but it is NOT
+the 4.5 GB production file and nobody has watched p99 drop on the mini.
+
+**WHAT REMAINS - the deploy, and how to prove it worked**
+
+1. Deploy with `scripts/deploy-mini.sh --target live`. `--target live` is
+   REQUIRED and BOTH targets must be written (server dir AND app bundle
+   Resources) or the next app launch silently reverts it.
+2. Verify the deploy by fetching the asset over HTTP and hashing it against the
+   local file. NOT by `git rev-parse` on either side.
+3. **Prove the fix on the SYMPTOM.** Re-run the `/health` poll at 10Hz and show
+   p99 dropping from ~12,000 ms to double digits, and the 20-second stall
+   cadence gone. Keep the before/after log. A code reading that says "it is in a
+   thread now" is not a measurement.
+4. Note for whoever tests the endpoint: an unauthenticated `curl` to
+   `/api/v1/version` returns 401 WITHOUT reaching the handler. Use a real token
+   or you are timing the auth rejection.
+
+**Deliberately NOT changed:** `src/main.py:755` carries an emoji in the FastAPI
+app title (`title="<emoji> Cloud Code"`), which violates the no-emoji rule. It
+is PRE-EXISTING, not introduced by this change, and it is a user-visible string.
+Left for a deliberate decision rather than changed silently.
+
+**Also fixed in this change, found by the validator:** `CLAUDE.md` claimed the
+corpus ingest loop is "started last in `lifespan()`", which this change made
+false; and the pytest baseline in `CLAUDE.md` was stale by an order of magnitude
+(it said ~614 passed / 16 failed / 6 errors against a real 4647 / 3 / 0). The
+reason the old number was so wrong is worth knowing: **the repo's `venv` symlink
+pointed at a `venv.nosync` directory that no longer existed, so the suite could
+not run properly at all and manufactured a fake low baseline.** The environment
+was rebuilt on Python 3.14 from `requirements.txt`. A warning to that effect is
+now in `CLAUDE.md` beside the existing one about a fresh worktree having no
+`config.json`.
+
+---
 
 ## DONE - kept because they are the evidence for how the open ones should be approached
 

@@ -42,24 +42,11 @@ actually measured.
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-try:
-    import structlog
-
-    logger = structlog.get_logger()
-except ImportError:  # pragma: no cover - matches transcript_archive's guard
-    class _NoOpLogger:
-        def __getattr__(self, _name: str):
-            return lambda *a, **k: None
-
-    logger = _NoOpLogger()
-
+from src.core.json_artifact import atomic_write_json, read_json_object
 
 #: Subdirectory of the state dir holding every artifact this module writes.
 INGEST_DIRNAME = "corpus-ingest"
@@ -138,67 +125,37 @@ def utc_now_iso() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> bool:
-    """Write a JSON payload atomically, never raising.
+    """Write a JSON payload atomically under this module's log event name.
 
-    Description: temp file in the same directory, fsync, os.replace -
-      the pattern Settings.update_settings_config() uses, for the same
-      reason: a half-written artifact is worse than a missing one,
-      because a missing one is a named third outcome and a truncated one
-      parses as garbage. Returns a boolean instead of raising because
-      every caller here is a fail-soft path that must not take the
-      server down over a cache file.
+    Description: a thin binding of :func:`src.core.json_artifact.
+      atomic_write_json` to the ``corpus_ingest_artifact_write_failed``
+      event, so the ingester keeps its own name in the log stream while
+      the write itself has exactly one implementation - see that module
+      for why a half-written artifact is worse than a missing one.
     Inputs: path (Path), payload (dict - must be JSON-serialisable).
     Output: bool - True when the bytes are on disk under ``path``.
     Example: _atomic_write_json(Path("/nonexistent/x.json"), {}) -> False
     """
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=str(path.parent),
-            prefix=path.name + ".", suffix=".tmp", delete=False,
-        )
-        try:
-            with handle:
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(handle.name, str(path))
-        except BaseException:
-            try:
-                os.unlink(handle.name)
-            except OSError:
-                pass
-            raise
-        return True
-    except (OSError, TypeError, ValueError) as exc:
-        logger.warning(
-            "corpus_ingest_artifact_write_failed", path=str(path),
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        return False
+    return atomic_write_json(
+        path, payload, log_event="corpus_ingest_artifact_write_failed",
+    )
 
 
 def _read_json(path: Path) -> Optional[dict]:
     """Read a JSON object from disk, returning None on any failure.
 
-    Description: an unreadable or non-object artifact is treated exactly
-      like an absent one by every caller, because both mean "this file
-      cannot tell me anything" - which the caller then reports as a
-      named third outcome rather than as a healthy zero.
+    Description: a thin binding of :func:`src.core.json_artifact.
+      read_json_object`. An unreadable or non-object artifact is treated
+      exactly like an absent one by every caller, because both mean
+      "this file cannot tell me anything" - which the caller then reports
+      as a named third outcome rather than as a healthy zero.
     Inputs: path (Path).
     Output: dict | None.
     Example: _read_json(Path("/nonexistent.json")) -> None
     """
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError) as exc:
-        logger.debug(
-            "corpus_ingest_artifact_unreadable", path=str(path),
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        return None
-    return data if isinstance(data, dict) else None
+    return read_json_object(
+        path, log_event="corpus_ingest_artifact_unreadable",
+    )
 
 
 def load_scan_cache(state_dir: Path) -> Dict[str, Tuple[int, int, str]]:
