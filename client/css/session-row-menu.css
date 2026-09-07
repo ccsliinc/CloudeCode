@@ -6,9 +6,10 @@
  * want any circles around icons on left menu. squared is ok like close,
  * but no border is probably better." So the kebab has no chip, no ring
  * and no radius of its own - it is a glyph on the row's own background,
- * and hover is expressed as COLOUR only. The same rule is applied to the
- * group chip in client/css/session-sidebar-groups.css, which was the one
- * remaining pill on the row.
+ * and hover is expressed as COLOUR only. The row's group chip used to
+ * carry the same rule in client/css/session-sidebar-groups.css; it is
+ * gone now, folded into this menu, so the kebab is the only thing left
+ * on the row that opens anything.
  *
  * THIN GLYPH, WIDE TARGET. "thin 3 dots" is the mark; a phone still
  * needs something a thumb can hit. The dots render at 16px and the
@@ -69,8 +70,7 @@
  * for. A transparent positioned pseudo-element belongs to its
  * originating element for hit testing, so this gives the kebab a
  * thumb-sized target without adding a single pixel to the layout. It is
- * `left/right: 0`, so it never reaches sideways into the name or the
- * group chip. */
+ * `left/right: 0`, so it never reaches sideways into the name. */
 .session-sidebar-row-kebab::after {
     content: '';
     position: absolute;

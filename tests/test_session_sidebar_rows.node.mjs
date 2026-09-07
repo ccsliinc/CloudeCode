@@ -202,6 +202,9 @@ test('the row itself draws ONE kebab and no loose action icons', () => {
             'the pin toggle must not also be drawn inline');
         assert.equal((html.match(/data-mark-unread=/g) || []).length, 0,
             'the mark-unread toggle must not also be drawn inline');
+        assert.equal((html.match(/data-group-pick=/g) || []).length, 0,
+            'the group chip must not also be drawn inline - it is gone from '
+            + 'the row entirely, folded action and all, into the kebab menu');
         assert.equal(
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 0,
             'the close/remove control must not also be drawn inline');
@@ -211,6 +214,21 @@ test('the row itself draws ONE kebab and no loose action icons', () => {
     assert.ok(pinned.includes('data-row-pinned="1"'));
     assert.ok(pinned.includes('data-row-unread="1"'));
     assert.ok(pinned.includes('data-row-status="dead"'));
+});
+
+test('the group chip is removed, not commented out - no definition left behind', () => {
+    // "no i dont need to see the group name in the item. its in the group
+    // i can see the group on the sidebar." The chip's builder used to
+    // live here; its action moved to session-sidebar-group-actions.js
+    // .rowMenuItemHtml, which client/js/session-row-menu.js pulls into
+    // the kebab. Nothing chip-shaped should remain in THIS module.
+    const src = readClientJs('session-sidebar-rows.js');
+    assert.ok(!src.includes('groupChipHtml'),
+        'session-sidebar-rows.js must not still define the removed chip builder');
+    assert.ok(!src.includes('data-group-pick'),
+        'session-sidebar-rows.js must not still emit the chip\'s action attribute');
+    assert.ok(!src.includes('session-sidebar-row-group'),
+        'session-sidebar-rows.js must not still reference the chip\'s CSS class');
 });
 
 test('every row carries exactly one DESTRUCTIVE control, from the shared module', () => {

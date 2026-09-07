@@ -310,90 +310,16 @@
     word-break: break-word;
 }
 
-/* ---- The group chip on a row, and the "new group" button -------------
+/* ---- The "new group" button -------------------------------------------
  *
- * THE CHIP IS ONE CONTROL DOING TWO JOBS. It names the group a row is
- * filed in - which is the only way a PINNED row can show its filing,
- * since a pinned row is drawn in the pinned band rather than under its
- * group's header - and it is also the button that opens the picker. That
- * makes the non-drag route permanently visible instead of hidden behind
- * a hover, which is what makes it usable on a phone, where hover does
- * not exist.
- *
- * IT PAINTS NO EDGE. scripts/verify_sidebar_row_edges.py asserts that
- * the three pixels in from a row's LEFT edge match the three in from its
- * RIGHT, and it fails on a left bar from any stylesheet. This chip sits
- * inline in the row's main flex line, well inside both edges, with no
- * ::before and no inset box-shadow - so that property is untouched.
+ * The row's own group chip is GONE, this round: "no i dont need to see
+ * the group name in the item. its in the group i can see the group on
+ * the sidebar." Its action half (opening the picker) rides in the row's
+ * kebab menu now - see client/js/session-sidebar-group-actions.js
+ * `rowMenuItemHtml` and client/css/session-row-menu.css, which styles
+ * every folded control including this one. Nothing chip-shaped is left
+ * on the row itself.
  */
-.session-sidebar-row-group {
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 88px;
-    display: inline-flex;
-    align-items: center;
-    margin: 0 2px;
-    padding: 1px 2px;
-    /* NO PILL, NO RING. "just dont want any circles around icons on left
-     * menu. squared is ok like close, but no border is probably better."
-     * This chip was the one rounded ring left on a row, so it is now
-     * plain text in the accent colour: the group is still readable at a
-     * glance, and the row carries no capsule outline. The control is
-     * still a real <button>, still tabbable, still opens the picker. */
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    color: var(--color-accent);
-    font-family: inherit;
-    font-size: 0.66em;
-    line-height: 1.5;
-    cursor: pointer;
-    box-sizing: border-box;
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
-}
-
-/* An UNGROUPED row still shows the control, muted, reading "+ group".
- * A control that only appears once you have used it cannot be
- * discovered - and discovery is the entire job of the non-drag route. */
-.session-sidebar-row-group--none {
-    background: transparent;
-    color: var(--color-fg-subtle);
-}
-
-.session-sidebar-row-group__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* Hover is COLOUR ONLY, for the same reason: a background chip that
- * appears under the pointer is a circle the owner asked not to have,
- * just a conditional one. */
-.session-sidebar-row-group:hover,
-.session-sidebar-row-group:focus-visible {
-    background: transparent;
-    color: var(--color-fg-strong);
-    outline: none;
-}
-
-.session-sidebar-row-group:focus-visible {
-    outline: 1px solid var(--color-accent-border);
-    outline-offset: 1px;
-}
-
-/* The compact density drops the chip's TEXT but keeps its box, so the
- * row still carries the control and still lines up with its neighbours.
- * Dropping the control entirely at compact would make the non-drag route
- * disappear at exactly the density a small screen defaults to. */
-.session-sidebar-list[data-density="compact"] .session-sidebar-row-group {
-    max-width: 20px;
-    padding: 1px 4px;
-}
-
-.session-sidebar-list[data-density="compact"] .session-sidebar-row-group__label {
-    max-width: 12px;
-}
-
 .session-sidebar-group-add {
     display: inline-flex;
     align-items: center;

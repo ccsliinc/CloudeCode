@@ -211,6 +211,54 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     }
 
     /**
+     * Description: the row's kebab-menu entry for filing a conversation
+     *   into a group - the moved twin of the row's old group CHIP.
+     *
+     *   THE CHIP USED TO DO TWO JOBS: name the group on the row, and open
+     *   this same picker. "no i dont need to see the group name in the
+     *   item. its in the group i can see the group on the sidebar" killed
+     *   the first job outright; this function is what is left of the
+     *   second. It is built here rather than in
+     *   client/js/session-sidebar-rows.js because this module is what
+     *   already owns the group-picking domain - openPickerFor,
+     *   commitAssignment, the store lookups - and
+     *   client/js/session-row-menu.js pulls it into the panel exactly the
+     *   way it pulls pin from SessionSidebarRows and mark-unread from
+     *   SessionStatusUI: one control, built by the module that owns it.
+     *
+     *   An UNGROUPED row still gets the control, same as the chip did -
+     *   a control that only appears once you have used it cannot be
+     *   discovered.
+     *
+     *   Emits NOTHING when the group model is unknown or unreadable.
+     *   Offering to file a conversation into a table we could not read
+     *   is offering an action that cannot work.
+     * Inputs: name (string) - tmux name.
+     * Output: string - HTML, possibly empty.
+     */
+    function rowMenuItemHtml(name) {
+        const G = store();
+        if (!G) return '';
+        const uuid = G.groupOf(name);
+        const group = uuid ? G.groupByUuid(uuid) : null;
+        const title = group ? 'move to another group' : 'add to a group';
+        const label = group ? `Move ${name} to another group` : `Add ${name} to a group`;
+        return (
+            '<button type="button" class="session-row-menu-group" '
+            + `data-group-pick="${esc(name)}" `
+            + `title="${esc(title)}" aria-label="${esc(label)}" `
+            + 'aria-haspopup="menu">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" '
+            + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            + 'stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 '
+            + '2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
+            + '</svg>'
+            + '</button>'
+        );
+    }
+
+    /**
      * Description: the group picker for one session row - the NON-DRAG
      *   way to file a conversation. Lists every group, plus "other", plus
      *   "new group", with the row's current group marked.
@@ -438,7 +486,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     window.SessionSidebarGroupActions = {
         init, refresh, commitAssignment, openPickerFor, openGroupMenu,
         renameGroup, deleteGroup, moveGroup, createGroupThenAssign,
-        closeMenu,
+        closeMenu, rowMenuItemHtml,
     };
     console.log('[SessionSidebarGroupActions Module] Exported as window.SessionSidebarGroupActions');
 })();

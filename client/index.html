@@ -941,7 +941,8 @@
     <!-- The row's overflow menu, and the three gestures that open it.
          session-row-menu.js composes the row's own control builders
          (session-sidebar-rows.js, session-status-ui.js,
-         session-row-actions.js), places itself with anchor-popover.js and
+         session-row-actions.js, session-sidebar-group-actions.js for the
+         group picker item), places itself with anchor-popover.js and
          routes its clicks into session-sidebar-clicks.js, so it must load
          after all of them. The gesture module must load after the menu
          AND after session-sidebar.js, whose #session-sidebar-list it

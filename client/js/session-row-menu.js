@@ -25,11 +25,16 @@
  * the identical data attribute, aria state and glyph, and its LABEL is
  * that control's own `title` - no string is written twice.
  *
+ * THE GROUP CHIP FOLDED IN TOO, A ROUND LATER. "no i dont need to see the
+ * group name in the item. its in the group i can see the group on the
+ * sidebar" - so the chip's DISPLAY half is simply gone, and its ACTION
+ * half (opening the group picker) rides in here as one more menu item,
+ * built by SessionSidebarGroupActions.rowMenuItemHtml, the module that
+ * already owns the group-picking domain.
+ *
  * WHAT STAYED ON THE ROW: the drag grip (a handle, not an action), the
- * status dot, the name, the theme swatch, the tmux/external badge and
- * the group chip. The chip DISPLAYS which group the conversation is
- * filed in, so folding it would remove information rather than fold an
- * action.
+ * status dot, the name, the theme swatch and the tmux/external badge -
+ * none of them are actions, and none of them name a group any more.
  *
  * WHY THE PANEL IS MOUNTED ON document.body AND NOT IN THE ROW. This is
  * a measured constraint, not a preference: `.session-sidebar-panel`
@@ -157,6 +162,9 @@ console.log('[SessionRowMenu Module] Loading...');
         if (window.SessionStatusUI) {
             out.push(window.SessionStatusUI.markUnreadHtml(name, unread));
         }
+        if (window.SessionSidebarGroupActions) {
+            out.push(window.SessionSidebarGroupActions.rowMenuItemHtml(name));
+        }
         if (window.SessionRowActions) {
             out.push(window.SessionRowActions.html(
                 status, name, 'session-sidebar-row-delete'));
@@ -183,9 +191,10 @@ console.log('[SessionRowMenu Module] Loading...');
         // stop in the list. A menu item must be reachable on its own.
         el.setAttribute('tabindex', '0');
         var label = el.getAttribute('title') || el.getAttribute('aria-label') || '';
-        // A control that already renders its own text (the group chip
-        // shape) is not given a second label. Only the icon-only controls
-        // need one, which is exactly the set that was folded.
+        // A control that already renders its own text is not given a
+        // second label. Nothing folded in today has that shape - every
+        // one of them is icon-only - but the guard costs nothing to keep
+        // and protects whatever the next folded control turns out to be.
         if (label && !el.textContent.trim()) {
             var span = document.createElement('span');
             span.className = 'session-row-menu__label';
@@ -350,6 +359,20 @@ console.log('[SessionRowMenu Module] Loading...');
             // event rather than a name.
             window.SessionSidebarReorder.onPinClick(e);
             close();
+            return;
+        }
+        var groupEl = target.closest('[data-group-pick]');
+        if (groupEl && window.SessionSidebarGroupActions) {
+            e.preventDefault();
+            // The anchor for the picker has to be captured BEFORE close(),
+            // which nulls triggerEl and detaches groupEl along with the
+            // rest of this panel - an anchor with no box would open the
+            // picker at the viewport's top-left corner instead of near
+            // the row it belongs to.
+            var anchor = triggerEl || groupEl;
+            var pickName = groupEl.getAttribute('data-group-pick');
+            close();
+            window.SessionSidebarGroupActions.openPickerFor(anchor, pickName);
             return;
         }
         // A click on the panel's own padding is not an action. Swallow it

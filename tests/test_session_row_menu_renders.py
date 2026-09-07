@@ -373,7 +373,8 @@ def test_the_row_shows_one_kebab_and_no_loose_action_icons(page):
     for row in ("row-a", "row-b", "row-dead"):
         sel = f'.session-sidebar-row[data-name="{row}"]'
         assert page.locator(f"{sel} [data-row-menu]").count() == 1
-        for gone in ("[data-pin-session]", "[data-mark-unread]", "[data-session-action]"):
+        for gone in ("[data-pin-session]", "[data-mark-unread]", "[data-session-action]",
+                     "[data-group-pick]"):
             assert page.locator(f"{sel} {gone}").count() == 0, (
                 f"{gone} is still drawn inline on {row}; the fold did not happen"
             )
@@ -459,29 +460,59 @@ def test_the_kebab_wears_no_circle_and_no_border(page):
     )
 
 
-def test_the_group_chip_lost_its_pill(page):
-    """The one rounded ring left on a row is gone too."""
-    style = page.evaluate(
+def test_the_group_chip_is_gone_and_the_row_does_not_gap(page):
+    """The chip is REMOVED, not merely restyled - and the row closed over it.
+
+    "no i dont need to see the group name in the item. its in the group i
+    can see the group on the sidebar." The chip's action moved into the
+    kebab menu (a floating panel on document.body, never a descendant of
+    the row - see test_the_row_shows_one_kebab_and_no_loose_action_icons),
+    so nothing chip-shaped should be left painted on the row at all, and
+    the row's declared min-height plus the kebab's own margin-left:auto
+    should mean removing it left no hole for a pointer to land in.
+    """
+    metrics = page.evaluate(
         """() => {
             const row = document.querySelector(
                 '.session-sidebar-row[data-name="row-a"]');
-            const b = document.createElement('button');
-            b.className = 'session-sidebar-row-group';
-            b.innerHTML = '<span class="session-sidebar-row-group__label">work</span>';
-            row.querySelector('.session-sidebar-row-main').appendChild(b);
-            const s = getComputedStyle(b);
-            const out = {
-                radius: s.borderTopLeftRadius,
-                width: s.borderTopWidth,
-                bg: s.backgroundColor,
+            const main = row.querySelector('.session-sidebar-row-main');
+            const kebab = row.querySelector('[data-row-menu]');
+            const mainBox = main.getBoundingClientRect();
+            const mainStyle = getComputedStyle(main);
+            return {
+                hasChipClass: !!row.querySelector('.session-sidebar-row-group'),
+                hasChipAttr: !!row.querySelector('[data-group-pick]'),
+                rowHeight: row.getBoundingClientRect().height,
+                kebabRight: kebab.getBoundingClientRect().right,
+                mainRight: mainBox.right,
+                mainPaddingRight: parseFloat(mainStyle.paddingRight) || 0,
             };
-            b.remove();
-            return out;
         }"""
     )
-    assert style["radius"] == "0px", f"the group chip is still a pill: {style['radius']}"
-    assert style["width"] == "0px", f"the group chip still has a ring: {style['width']}"
-    assert style["bg"] in ("rgba(0, 0, 0, 0)", "transparent")
+    assert not metrics["hasChipClass"], (
+        "a .session-sidebar-row-group element is still on the row"
+    )
+    assert not metrics["hasChipAttr"], (
+        "a [data-group-pick] element is still on the row"
+    )
+    # DECLARED, NOT EMERGENT: client/css/session-sidebar-density.css pins a
+    # min-height per density, specifically so removing a control cannot
+    # shrink the row it used to sit on.
+    assert metrics["rowHeight"] >= 46, (
+        f"the cozy row is {metrics['rowHeight']}px tall, under its declared "
+        "46px floor - removing the chip must not collapse the row"
+    )
+    # THE KEBAB IS THE LAST THING ON THE LINE, via its own margin-left:auto.
+    # The only space between it and the row's own right edge should be
+    # `.session-sidebar-row-main`'s own right padding - a bigger gap would
+    # mean the chip left a hole instead of the layout closing over it.
+    gap = metrics["mainRight"] - metrics["kebabRight"]
+    slack = gap - metrics["mainPaddingRight"]
+    assert abs(slack) <= 1, (
+        f"the kebab sits {gap:.1f}px from the row's right edge, "
+        f"{slack:.1f}px more than its {metrics['mainPaddingRight']:.1f}px "
+        "own padding accounts for; the chip's old space was not reclaimed"
+    )
 
 
 def test_the_kebab_actually_has_ink_on_it(page):

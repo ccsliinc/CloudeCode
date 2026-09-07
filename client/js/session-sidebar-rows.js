@@ -16,9 +16,20 @@
  * session-row-menu.js rather than rowHtml(). `pinButtonHtml` is exported
  * for it and must stay exported.
  *
+ * NO GROUP CHIP EITHER, AS OF THIS ROUND. "no i dont need to see the
+ * group name in the item. its in the group i can see the group on the
+ * sidebar." The chip used to name the group a row was filed in AND open
+ * the group picker; the display half is simply gone, and the action half
+ * moved into the kebab menu the same way pin/mark-unread/close did -
+ * see `rowMenuItemHtml` in client/js/session-sidebar-group-actions.js,
+ * pulled in by client/js/session-row-menu.js. Group membership itself is
+ * untouched: it is still DB-backed and it is still how the sidebar's
+ * OWN group headers file each row, which is the only place the filing
+ * is shown now.
+ *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, group chip, kebab
+ *   compact   grip, dot, name, kebab
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
  *   detailed  the above, with the badge moved DOWN to a second line that
  *             also carries the session's age
@@ -348,53 +359,10 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: the group affordance on a row - a CHIP naming the
-     *   group this conversation is filed in, doubling as the button that
-     *   opens the group picker.
-     *
-     *   IT IS ONE CONTROL, NOT TWO, and that is the point. The chip has
-     *   to exist anyway for a PINNED row, because a pinned row is drawn
-     *   in the pinned band rather than under its group's header, so
-     *   without it the filing is invisible for exactly the rows the user
-     *   cares most about. Making that same chip the picker means the
-     *   non-drag route is always visible rather than hidden behind a
-     *   hover, which matters on a phone where there is no hover.
-     *
-     *   An UNGROUPED row still gets the control, rendered as a muted
-     *   "+ group" rather than as nothing: a control that only appears
-     *   once you have used it cannot be discovered.
-     *
-     *   Emits NOTHING when the group model is unknown or unreadable.
-     *   Offering to file a conversation into a table we could not read
-     *   is offering an action that cannot work.
-     * Inputs: name (string) - tmux name.
-     * Output: string - HTML, possibly empty.
-     */
-    function groupChipHtml(name) {
-        const G = window.SessionSidebarGroupStore;
-        if (!G || !G.isUsable()) return '';
-        const uuid = G.groupOf(name);
-        const group = uuid ? G.groupByUuid(uuid) : null;
-        const label = group ? group.name : '+ group';
-        const title = group
-            ? `In the ${group.name} group - click to move it`
-            : 'Not in a group - click to file it';
-        return (
-            '<button type="button" class="session-sidebar-row-group'
-            + `${group ? '' : ' session-sidebar-row-group--none'}" `
-            + `data-group-pick="${esc(name)}" `
-            + `title="${esc(title)}" aria-label="${esc(title)}" `
-            + 'aria-haspopup="menu">'
-            + `<span class="session-sidebar-row-group__label">${esc(label)}</span>`
-            + '</button>'
-        );
-    }
-
-    /**
      * Description: build one row at the given density. The dot, the theme
-     *   swatch, the group chip and the kebab all come from shared
-     *   modules, so this row and the launcher's running-session row are
-     *   the same controls with the same tooltips and confirm copy.
+     *   swatch and the kebab all come from shared modules, so this row
+     *   and the launcher's running-session row are the same controls
+     *   with the same tooltips and confirm copy.
      *
      *   `is_pinned`, `unread` and `status` are stamped on the KEBAB even
      *   though nothing on the row draws them any more - the menu is built
@@ -408,8 +376,8 @@ console.log('[SessionSidebarRows Module] Loading...');
         const mode = density || 'cozy';
         const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
         // TWO STRINGS, NOT INTERCHANGEABLE. `name` is the tmux handle,
-        // for the ATTRIBUTES - grip, pin, group chip, delete and reorder
-        // all key on it, so it must never be a label. `display` is what
+        // for the ATTRIBUTES - grip, pin, group filing, delete and
+        // reorder all key on it, so it must never be a label. `display` is what
         // a HUMAN reads, from the one resolver in session-label.js. This
         // row rendered the handle over a `label` its payload has carried
         // since the feature landed, so "Media Compression" showed as
@@ -480,7 +448,6 @@ console.log('[SessionSidebarRows Module] Loading...');
             // the other coloured mark on the row.
             themeSwatch +
             inlineBadge +
-            groupChipHtml(r.name) +
             kebab +
             '</div>' +
             secondLine +

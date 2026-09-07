@@ -81,10 +81,18 @@ function makeSandbox() {
     };
     const fakeWindow = { App: { showConfirmModal: () => Promise.resolve(true) } };
     fakeWindow.window = fakeWindow;
+    // A minimal, always-usable group store: 'grouped-row' is filed into
+    // 'g1', every other name is ungrouped. Good enough for the menu-item
+    // builder under test, which only ever calls groupOf/groupByUuid.
+    fakeWindow.SessionSidebarGroupStore = {
+        isUsable: () => true,
+        groupOf: (name) => (name === 'grouped-row' ? 'g1' : null),
+        groupByUuid: (uuid) => (uuid === 'g1' ? { group_uuid: 'g1', name: 'Foo' } : null),
+    };
     const context = { window: fakeWindow, document: fakeDocument, console: { log() {} } };
     vm.createContext(context);
     for (const f of ['kebab-icon.js', 'session-status-ui.js', 'session-row-actions.js',
-        'session-sidebar-rows.js', 'session-row-menu.js']) {
+        'session-sidebar-rows.js', 'session-sidebar-group-actions.js', 'session-row-menu.js']) {
         vm.runInContext(clientJs(f), context);
     }
     return {
@@ -92,10 +100,12 @@ function makeSandbox() {
         Rows: fakeWindow.SessionSidebarRows,
         StatusUI: fakeWindow.SessionStatusUI,
         RowActions: fakeWindow.SessionRowActions,
+        GroupActions: fakeWindow.SessionSidebarGroupActions,
+        setGroupStore(store) { fakeWindow.SessionSidebarGroupStore = store; },
     };
 }
 
-const { RowMenu, Rows, StatusUI, RowActions } = makeSandbox();
+const { RowMenu, Rows, StatusUI, RowActions, GroupActions, setGroupStore } = makeSandbox();
 
 /**
  * Description: a stand-in for a rendered kebab, built by parsing the
@@ -169,6 +179,8 @@ test('the menu is built from the row s OWN builders, not a second copy', () => {
         'the unread item must BE SessionStatusUI.markUnreadHtml output');
     assert.ok(menu.includes(RowActions.html(r.status, r.name, 'session-sidebar-row-delete')),
         'the destructive item must BE SessionRowActions.html output');
+    assert.ok(menu.includes(GroupActions.rowMenuItemHtml(r.name)),
+        'the group item must BE SessionSidebarGroupActions.rowMenuItemHtml output');
 });
 
 test('every action the row used to offer inline survives in the menu', () => {
@@ -178,12 +190,66 @@ test('every action the row used to offer inline survives in the menu', () => {
     assert.ok(running.includes('data-pin-session='), 'pin survived');
     assert.ok(running.includes('data-mark-unread='), 'mark-unread survived');
     assert.ok(running.includes(`${RowActions.ATTR_ACTION}="close"`), 'close survived');
+    // The group chip's DISPLAY half is gone on purpose - see
+    // test_session_sidebar_rows.node.mjs - but its ACTION half (opening
+    // the group picker) must still be reachable, now from here.
+    assert.ok(running.includes('data-group-pick='), 'the group picker action survived');
 
     const dead = RowMenu.controlHtmlFor(kebabStub(row({ status: 'dead' }))).join('');
     assert.ok(dead.includes(`${RowActions.ATTR_ACTION}="restart"`), 'restart survived');
     assert.ok(dead.includes(`${RowActions.ATTR_ACTION}="remove"`), 'remove survived');
     assert.ok(!dead.includes(`${RowActions.ATTR_ACTION}="close"`),
         'close and remove make opposite promises; a row offers one');
+});
+
+// ---------------------------------------------------------------------
+// The group picker item - the moved half of the old row chip
+// ---------------------------------------------------------------------
+
+test('an ungrouped row still offers the picker item, same as the chip did', () => {
+    const html = RowMenu.controlHtmlFor(kebabStub(row({ name: 'lonely-row' }))).join('');
+    assert.ok(html.includes('data-group-pick="lonely-row"'),
+        'a control that only appears once you have used it cannot be discovered');
+    assert.ok(html.includes('title="add to a group"'));
+});
+
+test('a grouped row s picker item says so without naming the group', () => {
+    // "no i dont need to see the group name in the item" ruled out
+    // showing it here too, even though the control now lives in an
+    // opened-on-purpose menu rather than on the always-visible row.
+    const html = RowMenu.controlHtmlFor(kebabStub(row({ name: 'grouped-row' }))).join('');
+    assert.ok(html.includes('data-group-pick="grouped-row"'));
+    assert.ok(html.includes('title="move to another group"'));
+    assert.ok(!html.includes('Foo'), 'the group name must not appear in the row menu item');
+});
+
+test('the picker item vanishes with the chip s own rule: no usable store, no control', () => {
+    setGroupStore(null);
+    try {
+        const html = RowMenu.controlHtmlFor(kebabStub(row())).join('');
+        assert.ok(!html.includes('data-group-pick='),
+            'offering to file a conversation into a table that cannot be read '
+            + 'is offering an action that cannot work');
+    } finally {
+        setGroupStore({
+            isUsable: () => true,
+            groupOf: (name) => (name === 'grouped-row' ? 'g1' : null),
+            groupByUuid: (uuid) => (uuid === 'g1' ? { group_uuid: 'g1', name: 'Foo' } : null),
+        });
+    }
+});
+
+test('picking a group closes this menu before handing off, like pin does', () => {
+    const src = clientJs('session-row-menu.js');
+    assert.ok(src.includes("target.closest('[data-group-pick]')"),
+        'dispatch must recognise the item it now offers');
+    assert.ok(src.includes('SessionSidebarGroupActions.openPickerFor'),
+        'the item must hand off to the module that already owns the picker, '
+        + 'not reimplement it inline');
+    const start = src.indexOf("var groupEl = target.closest('[data-group-pick]');");
+    const branch = src.slice(start, src.indexOf('\n        }', start));
+    assert.ok(/close\(\);[\s\S]*openPickerFor/.test(branch),
+        'the kebab panel must close BEFORE the picker opens, or two menus stack');
 });
 
 test('the pinned and unread STATES ride into the menu, not just the actions', () => {
