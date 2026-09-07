@@ -867,6 +867,12 @@
          screen-transition methods. -->
     <script src="/static/js/globalAudioToggle.js"></script>
 
+    <!-- The ONE decision point for which theme a navigation target paints.
+         Must load AFTER themes/registry.js (it calls window.Themes) and
+         AFTER globalAudioToggle.js (it re-syncs the audio gate), and BEFORE
+         app.js RUNS - every show*() method calls into it. -->
+    <script src="/static/js/theme-navigation.js"></script>
+
     <!-- Per-session theme picker, mounted on the terminal screen. Must
          load AFTER themes/registry.js (window.Themes.getActiveSession /
          applyGlobal / listAll). The per-session music opt-in that used to

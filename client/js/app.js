@@ -718,30 +718,12 @@ class AppController {
         this.currentScreen = 'auth';
         this._placeStatusLight('auth');
         if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('auth');
-        // Leaving the terminal: drop any session-scoped theme so xterm
-        // and the terminal screen revert to the global theme on next entry.
-        if (window.Themes && typeof window.Themes.clearSession === 'function') {
-            window.Themes.clearSession();
-        }
-        // SESSION-IDENTITY-V2 - clear active-session pin scope and restore
-        // the user's global localStorage theme + brand identity.
-        if (window.Themes) {
-            if (typeof window.Themes.setActiveSession === 'function') {
-                window.Themes.setActiveSession(null);
-            }
-            if (typeof window.Themes.applyTheme === 'function') {
-                var stored = null;
-                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
-                window.Themes.applyTheme(stored || 'claude', { persist: false });
-            }
-        }
-        // Leaving session scope closes the audio gate: with no session in
-        // scope ThemeAudio's sessionName is null and the gate cannot open
-        // whatever the global on/off says. Must run AFTER
-        // setActiveSession(null) - it reads the active session.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // The auth screen is not a session: drop the session theme scope and
+        // paint the user's own global theme. Same one call every navigation
+        // makes - see client/js/theme-navigation.js for why the three
+        // hand-copied versions of this block became one function. It also
+        // re-syncs the audio gate, which must happen after the scope clears.
+        window.ThemeNavigation.applyForGlobal();
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 - auth screen has no session context; reset tab title.
         setPageTitle(null);
@@ -873,31 +855,14 @@ class AppController {
             window.SessionSidebar.setActiveSession(null, null);
             window.SessionSidebar.hide();
         }
-        // Leaving session scope, exactly as showLaunchpad() does.
-        if (window.Themes && typeof window.Themes.clearSession === 'function') {
-            window.Themes.clearSession();
-        }
-        // SESSION-IDENTITY-V2 - the archive is not a session. Drop the pin
-        // scope and restore the user's global theme, so a ThemeSelector
-        // swap made while browsing the archive cannot PATCH a pin onto a
-        // session the user is no longer looking at. Same block as
-        // showLaunchpad(), deliberately identical rather than shared: it
-        // is six lines, and the two screens are free to diverge.
-        if (window.Themes) {
-            if (typeof window.Themes.setActiveSession === 'function') {
-                window.Themes.setActiveSession(null);
-            }
-            if (typeof window.Themes.applyTheme === 'function') {
-                var stored = null;
-                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
-                window.Themes.applyTheme(stored || 'claude', { persist: false });
-            }
-        }
-        // Must run AFTER setActiveSession(null) - it reads the active
-        // session to decide whether the audio gate may open at all.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // THE ARCHIVE IS NOT A SESSION. Drop the pin scope and restore the
+        // user's global theme, so a ThemeSelector swap made while browsing
+        // the archive cannot PATCH a pin onto a session the user is no
+        // longer looking at. This used to be a six-line block copy-pasted
+        // from showLaunchpad() under a comment declaring the duplication
+        // deliberate; that decision is what let the session-to-session
+        // switch ship with no restore at all. One function now.
+        window.ThemeNavigation.applyForGlobal();
         // NO `subheader` HERE, DELIBERATELY. A subheader switches
         // `.header-row` to the `.header--home` GRID layout and stamps
         // `home-header-active` on <body>; that is the launchpad's layout
@@ -949,31 +914,13 @@ class AppController {
         }
         this.currentScreen = 'launchpad';
         window.ScreenChrome.apply('launchpad');
-        // Leaving the terminal: drop the session theme so the launchpad
-        // chrome renders under pure global-theme rules and so the next
-        // session entry re-applies cleanly from a known baseline.
-        if (window.Themes && typeof window.Themes.clearSession === 'function') {
-            window.Themes.clearSession();
-        }
-        // SESSION-IDENTITY-V2 - leave per-session pin scope and restore
-        // the global localStorage theme + brand identity on the launchpad.
-        if (window.Themes) {
-            if (typeof window.Themes.setActiveSession === 'function') {
-                window.Themes.setActiveSession(null);
-            }
-            if (typeof window.Themes.applyTheme === 'function') {
-                var stored = null;
-                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
-                window.Themes.applyTheme(stored || 'claude', { persist: false });
-            }
-        }
-        // Leaving session scope closes the audio gate: with no session in
-        // scope ThemeAudio's sessionName is null and the gate cannot open
-        // whatever the global on/off says. Must run AFTER
-        // setActiveSession(null) - it reads the active session.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // The launchpad is not a session: drop the session theme scope so
+        // the home chrome renders under pure global-theme rules, and paint
+        // the user's own theme. This is the restore the owner could see
+        // working - clicking the title DID change the theme back - while
+        // the session-to-session switch had no equivalent. Both go through
+        // the same function now.
+        window.ThemeNavigation.applyForGlobal();
         // HOME-HEADER-CONSOLIDATION: the launchpad title + prompt used to be
         // a standalone block at the top of .launchpad-container (see
         // launchpad.js renderLaunchpadUI). It now lives in the header
@@ -1068,9 +1015,14 @@ class AppController {
         // "adopted:<name>" for adopted sessions, which the backend rejects
         // and causes the PATCH to 404, silently breaking pin persistence.
         var sessionName = (session && (session.tmux_session || session.name)) || null;
-        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
-            window.Themes.setActiveSession(sessionName);
-        }
+        // Enter this session's theme: its pin if it has one, the user's own
+        // global theme if it does not. The "if it does not" half is the fix
+        // for 2026-09-07 - this used to be a bare
+        // `if (session.pinned_theme) applyTheme(...)` further down with no
+        // else, so switching from a pinned session straight into an unpinned
+        // one left the previous session's theme painted. Also sets the pin
+        // scope and re-syncs the audio gate in the required order.
+        window.ThemeNavigation.applyForSession(session, sessionName);
         // Outbound URL sync: reuses Router's SAME slug/encoding scheme
         // build_deep_link() (server) and parseCurrentPath() (inbound
         // router) already use - see Router.enterSession()'s doc comment
@@ -1082,23 +1034,6 @@ class AppController {
         if (window.SessionSidebar) {
             window.SessionSidebar.show();
             window.SessionSidebar.setActiveSession(session && session.id, sessionName);
-        }
-        // If a pinned theme came back on the session payload, paint it WITHOUT
-        // persisting (server is already authoritative on the pin). forXterm:true
-        // forces the xterm repaint regardless of activeSessionAgent ordering -
-        // the freshly-attached session must immediately have its terminal
-        // palette styled (not just the page chrome).
-        if (session && session.pinned_theme && window.Themes
-            && typeof window.Themes.applyTheme === 'function') {
-            window.Themes.applyTheme(session.pinned_theme, { persist: false, forXterm: true });
-        }
-        // Global audio: apply the stored on/off to THIS session's gate so
-        // music never carries over from the session we just left (the
-        // engine's sessionOn half is per session-name in memory even
-        // though the on/off itself is one global choice now). Must run
-        // after setActiveSession above - it keys off the tmux session name.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
         }
         // Header identity: brand icon + the session's LABEL as title.
         // NOT sessionName - that is the tmux handle, which identity is
@@ -1229,23 +1164,18 @@ class AppController {
         var sessionName = (session && (session.tmux_session || session.name))
             || (inner && (inner.tmux_session || inner.name))
             || null;
-        var pinnedTheme = (session && session.pinned_theme)
-            || (inner && inner.pinned_theme)
-            || null;
-        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
-            window.Themes.setActiveSession(sessionName);
-        }
-        // Global audio: re-apply the stored on/off to THIS session's gate.
-        // FIXED 2026-08-19: this path used to skip the sync entirely, so
-        // re-attaching to a running session (from the launchpad's
-        // active-session banner or the sidebar) left ThemeAudio's gate
-        // pointed at whatever session was last synced through
-        // showTerminal() - global audio could go silent on a plain
-        // re-attach with no toggle touched. Must run after
-        // setActiveSession above - it keys off the tmux session name.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // THIS IS THE PATH THE SIDEBAR'S SESSION-TO-SESSION SWITCH TAKES
+        // (session-sidebar-clicks.js calls straight into here, never via the
+        // home screen). It used to read the pin, then paint it only
+        // `if (pinnedTheme)`, so switching into an UNPINNED session painted
+        // nothing and inherited the previous session's theme - the defect
+        // the owner reported on 2026-09-07. applyForSession() is total: an
+        // unpinned target restores the user's own global theme. It also
+        // resolves the pin off both payload levels (`pinned_theme` rides on
+        // the SessionInfo wrapper, not the nested `.session`), sets the pin
+        // scope, and re-syncs the audio gate afterwards - the gate keys off
+        // the active session name, so that ordering is not optional.
+        window.ThemeNavigation.applyForSession(session, sessionName);
         // Outbound URL sync: same encoding Router.enterSession() shares
         // with build_deep_link() (server) and the inbound router parser.
         this._syncSessionUrl(sessionName, cameFromTerminal);
@@ -1254,12 +1184,6 @@ class AppController {
             var activeSid = (inner && inner.id) || (session && session.id) || null;
             window.SessionSidebar.show();
             window.SessionSidebar.setActiveSession(activeSid, sessionName);
-        }
-        if (pinnedTheme && window.Themes && typeof window.Themes.applyTheme === 'function') {
-            // forXterm:true - see showTerminal() for rationale. Re-entry to an
-            // already-running session must immediately repaint the xterm pane,
-            // not just page chrome.
-            window.Themes.applyTheme(pinnedTheme, { persist: false, forXterm: true });
         }
         // Same rule as showTerminal(): the header says the LABEL. The
         // outer SessionInfo carries it; an older caller handing us the
