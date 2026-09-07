@@ -47,6 +47,16 @@ Set 2026-09-06, and nothing since has changed it:
 
 One line each, newest measurement wins. Detail follows below in full.
 
+- **2. FIXED AND DEPLOYED 2026-09-07.** `PRAGMA integrity_check` is off the
+  request path. Measured on live: p99 **14,505.7 ms -> 13.3 ms** (1,090x), p50
+  30.5 -> 5.2 ms, the 20.0s / 14.5s stall cadence GONE, 86.5% of the window
+  stalled -> 0.0%. Corpus ingester verified still ingesting with a positive
+  control (row counts rose). Commit `3c23309`. See the DONE entry for the full
+  measurement and how the deploy was verified.
+- **21. NEW, HIGH.** `scripts/deploy-mini.sh` is BROKEN on current macOS: both
+  machines ship Apple openrsync, which rejects `--files-from=- --relative`
+  with `server receiver mode requires two argument`. It fails safe (copies
+  nothing) but every future deploy needs a hand tar-over-ssh until fixed.
 ### The lag and the render path
 - **2.** Tab switching and keyboard extremely laggy. Root cause found and
   measured 2026-09-05: synchronous SQLite on the asyncio event loop, 71.4
@@ -1134,6 +1144,115 @@ not run properly at all and manufactured a fake low baseline.** The environment
 was rebuilt on Python 3.14 from `requirements.txt`. A warning to that effect is
 now in `CLAUDE.md` beside the existing one about a fresh worktree having no
 `config.json`.
+
+---
+### 2026-09-07 - THE LAG IS FIXED ON LIVE. Measured, not inferred - DONE
+
+Commit `3c23309` deployed to live on both targets 2026-09-07. No rollback
+needed. **This closes item 2 / PRIORITY 1, open since 2026-09-05.**
+
+**THE MEASUREMENT**
+
+| metric | BEFORE | AFTER | during a 29s background ingest |
+|---|---|---|---|
+| p50 | 30.5 ms | 5.2 ms | 5.1 ms |
+| p99 | 14,505.7 ms | **13.3 ms** | 8.9 ms |
+| max | 14,774.7 ms | 78.3 ms | 40.4 ms |
+| stalls over 1s | 4 | **0** | 0 |
+| stall cadence | every 20.0s, ~14.5s each | **GONE** | none |
+| share of window stalled | 86.5% | **0.0%** | 0.0% |
+| samples in window | 120 | 539 | 996 |
+
+**p99 fell 1,090x.** The sample count TRIPLED in the same 60 seconds at the same
+poll rate, which is its own independent evidence: the loop is genuinely free now
+and can answer three times as many requests in the same wall clock.
+
+Both runs used the same script, same host, same 60s, same ~10 Hz, and a 30s
+timeout so a stall is recorded at its TRUE length rather than truncated. Zero
+non-200 responses in either run.
+
+**HOW THE DEPLOY WAS VERIFIED.** sha256 of all 434 deployable files on BOTH
+targets against the local repo. Not `git rev-parse` on either side. Pre-deploy
+drift against HEAD~1 was 0, which PROVES the 8-file deploy was equivalent to
+`--all` rather than assuming it. Post-deploy: 0 mismatches on both targets, all
+four new modules present. Then **re-hashed AGAIN after the kickstart**, because
+the packaged app copies its bundle Resources over the server dir on start, and
+all 8 files survived that copy. That is the trap in section 2 of `HANDOFF.md`
+being actively checked rather than trusted.
+
+**BOOT SURVIVED, which was the highest risk in this change.** Electron
+48016 -> 50860, server 48024 -> 50872, `runs=5`, last exit 0, HTTP 200 in 4 ms.
+ZERO error-level lines and zero tracebacks since restart. Both schedulers logged
+themselves started: `corpus_ingest_scheduler_started` (900s) and
+`db_integrity_scheduler_started` (86400s, stale window 172800s). The
+`ProjectsView has no attribute read_only` warning in the log is PRE-EXISTING
+since 2026-08-29 (38 occurrences before this deploy) and is not a regression.
+
+**THE CORPUS INGESTER SURVIVED THE REFACTOR.** This mattered because the change
+pulled the atomic-write helpers out of `corpus_ingest_state.py`. The liveness
+artifact refreshed at 14:49:03Z, 15:00:25Z and 15:15:54Z. Two full passes
+observed after the restart, both `status: ok` with `rooting.status: ran`.
+**Verified with a POSITIVE CONTROL, not a null result:** `transcript_archives`
+21,991 -> 21,997 (+6, matching the reported `ingested: 6`),
+`transcript_records` 6,682,469 -> 6,685,974 (+3,505),
+`transcript_root_decisions` +6, while `projects` and `sessions` were unchanged.
+Corpus discovered 19,186 against 19,184 `.jsonl` on disk, consistent. Row counts
+GOING UP is what proves ingestion, where an unchanged count would have been a
+CANNOT DETERMINE.
+
+**THE NEW INTEGRITY LOOP RAN AND PUBLISHED.** `db-integrity/latest.json`
+appeared, `status: ok`, `duration_seconds: 26.395`, finished 15:00:11Z. The file
+was ABSENT before the deploy, so its appearance is attributable to this change
+(negative control held).
+
+**CANNOT DETERMINE, stated rather than softened: the daily integrity check was
+never observed while the lag was being measured.** It ran 14:59:45-15:00:11Z,
+entirely BEFORE the 15:00:27-15:01:27Z measurement window, so the after-numbers
+do not evidence its off-loop behaviour either way. The gap was closed
+INDIRECTLY instead, and this is the more interesting result: a **29 second
+background ingest pass ran INSIDE a 110 second measurement window and produced
+ZERO stalls with p99 8.9 ms**, which proves the `asyncio.to_thread` mechanism
+holds under real background database load. Confirming the daily check
+specifically would need a forced run, which means mutating config, and that was
+correctly not done on a live box.
+
+**Rollback is still staged on the mini** at
+`/tmp/cc-rollback-20260907T145443Z/{server-src.tgz,bundle-src.tgz}`, verified
+listable and containing `src/main.py`. Delete when satisfied.
+
+**Raw before/after health logs** are on the mini at `/tmp/cc-health-*.log` and
+in this session's scratchpad (`cc-health-before.log`, `cc-health-after.log`,
+`cc-health-during-ingest.log`, plus `upgrade-baseline-pre.json` and
+`upgrade-baseline-post.json`). Copy them into the repo if they are wanted as a
+permanent record; the scratchpad is session-scoped.
+
+**Note for future read-only DB access:** `mode=ro` now FAILS once the ingester
+holds a WAL, because it cannot create the `-shm` file. Use the project's own
+`PRAGMA query_only=ON` path instead.
+
+---
+
+### 2026-09-07 - `scripts/deploy-mini.sh` is BROKEN on current macOS - OPEN, HIGH
+
+**21.** Found during the `3c23309` deploy. Both machines now ship Apple's
+**openrsync** ("protocol version 29, rsync 2.6.9 compatible") rather than
+GNU rsync 3.x. openrsync REJECTS the combination the script relies on,
+`--files-from=- --relative`, with:
+
+    server receiver mode requires two argument
+
+The deploy **aborted cleanly having copied nothing**, so it fails safe rather
+than half-deploying, which is the one good thing about it. The `3c23309` deploy
+was completed by hand via tar-over-ssh to both targets instead.
+
+**This affects EVERY future deploy** and should be fixed before the next one.
+Options: install GNU rsync on both ends and pin the path, or rewrite the file
+transfer to use tar-over-ssh the way the manual recovery did. Whichever is
+chosen, the script must still write BOTH targets and must keep failing safe.
+
+Related and still open from `HANDOFF.md` section 2: a clean tree makes the
+script print `nothing to deploy`, which reads like a pass. Worth fixing in the
+same pass.
 
 ---
 
