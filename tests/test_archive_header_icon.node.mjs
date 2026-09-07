@@ -96,7 +96,7 @@ function mountHeader(feature) {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
-    for (const file of ['archive-entry.js', 'dismiss-guard.js', 'header-menu.js']) {
+    for (const file of ['kebab-icon.js', 'archive-entry.js', 'dismiss-guard.js', 'header-menu.js']) {
         vm.runInContext(read('client', 'js', file), sandbox, { filename: file });
     }
     sandbox.window.HeaderMenu.init();

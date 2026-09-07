@@ -113,7 +113,7 @@ function load(options = {}) {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
-    for (const file of ['dismiss-guard.js', 'header-menu.js']) {
+    for (const file of ['kebab-icon.js', 'dismiss-guard.js', 'header-menu.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(__dirname, '..', 'client', 'js', file), 'utf8'),
             sandbox);

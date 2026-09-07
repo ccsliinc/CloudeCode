@@ -379,6 +379,11 @@ function makeRenderSandbox(moduleFile, containerId) {
     // now delegates to it, so it has to be in the sandbox too. Harmless
     // for the launchpad case, which does not use it.
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
+    // The row's kebab, and the menu it builds. rowHtml() calls into this
+    // for its one remaining control, and the sidebar assertion below
+    // reads the folded actions back out of it.
+    vm.runInContext(readClientJs('kebab-icon.js'), context);
+    vm.runInContext(readClientJs('session-row-menu.js'), context);
     vm.runInContext(readClientJs(moduleFile), context, { filename: moduleFile });
     return { win, container };
 }
@@ -400,13 +405,35 @@ test('launchpad running-session rows paint the right control per state', () => {
 });
 
 test('sidebar rows paint the same control with the same wording', () => {
+    // THE CONTROL MOVED, THE WORDING DID NOT. The sidebar row folded its
+    // action icons into a per-row overflow menu
+    // (client/js/session-row-menu.js), so the buttons are no longer in
+    // the row's own markup - they are in the panel that row's kebab
+    // opens. The parity this test exists to protect is between the two
+    // SURFACES, launcher and sidebar, not between two strings in one
+    // element, so what is compared is what each surface OFFERS.
+    //
+    // Narrowing this to the row's inline markup would have quietly turned
+    // it into an assertion about nothing: every needle below would be
+    // absent, and the test would have to be deleted rather than moved.
     const { win, container } = makeRenderSandbox('session-sidebar.js', 'session-sidebar-list');
     win.SessionSidebar.listEl = container;
     win.SessionSidebar.render([
         { name: 'cloude_alive', created_by_cloude: true, status: 'idle', is_active: true },
         { name: 'cloude_gone', created_by_cloude: true, status: 'dead', is_active: false },
     ]);
-    const html = container.innerHTML;
+    const menus = ['cloude_alive', 'cloude_gone'].map((name) => {
+        const kebab = { getAttribute: (attr) => ({
+            'data-row-menu': name,
+            'data-row-status': name === 'cloude_gone' ? 'dead' : 'idle',
+            'data-row-pinned': '0',
+            'data-row-unread': '0',
+        }[attr] || null) };
+        return win.SessionRowMenu.controlHtmlFor(kebab).join('');
+    }).join('');
+    const html = container.innerHTML + menus;
+    assert.ok(container.innerHTML.includes('data-row-menu='),
+        'the row must paint a kebab to hang its actions off');
     assert.ok(html.includes('title="close session"'), 'same tooltip wording as the launcher');
     assert.ok(html.includes('title="remove from the list"'));
     // 3, not 2: the live row draws close, the dead row draws restart

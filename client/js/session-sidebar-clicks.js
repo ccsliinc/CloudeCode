@@ -206,7 +206,19 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
         const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        const rowEl = btnEl.closest('.session-sidebar-row');
+        // THE BUTTON IS NOT ALWAYS INSIDE THE ROW ANY MORE. These controls
+        // now also render inside the row's overflow menu, which is mounted
+        // on document.body (client/js/session-row-menu.js explains why: the
+        // sidebar panel is `transform`ed, so it would become the containing
+        // block for a fixed panel rendered inside it). From there the walk
+        // up to `.session-sidebar-row` finds nothing, and both `data-active`
+        // and `data-session-id` would read as absent - which looks exactly
+        // like "this is not the open tab and has no backend" and would send
+        // an own-tab close down the wrong path. Falling back to the live row
+        // by NAME keeps one handler for both mount points.
+        const rowEl = btnEl.closest('.session-sidebar-row')
+            || document.querySelector(
+                `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
         const isThisTab = !!rowEl && rowEl.dataset.active === '1';
 
         // RESTART is handled before the own-tab branch and before the

@@ -81,18 +81,52 @@ function makeSandbox() {
 
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
+    vm.runInContext(readClientJs('kebab-icon.js'), context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
+    // The row's action controls MOVED into the overflow menu. The module
+    // that builds them from a row's kebab is loaded here so the
+    // invariants below can still be asserted over what a row OFFERS,
+    // rather than quietly narrowing to what a row happens to draw inline.
+    vm.runInContext(readClientJs('session-row-menu.js'), context);
 
     return {
         Rows: fakeWindow.SessionSidebarRows,
         StatusUI: fakeWindow.SessionStatusUI,
         RowActions: fakeWindow.SessionRowActions,
+        RowMenu: fakeWindow.SessionRowMenu,
     };
 }
 
-const { Rows, RowActions } = makeSandbox();
+const { Rows, RowActions, RowMenu } = makeSandbox();
+
+/**
+ * Description: everything a row OFFERS the user - its own markup PLUS
+ *   the markup of the menu its kebab opens. Pin, mark-unread and
+ *   close/restart/remove are behind that kebab now, so an invariant
+ *   about what a row offers has to read both halves or it silently
+ *   becomes an invariant about nothing.
+ *
+ *   The kebab's attributes are parsed back OUT of the rendered row
+ *   rather than rebuilt from the fixture, so this exercises the real
+ *   chain: rowHtml -> kebab attributes -> menu contents. A kebab that
+ *   stopped carrying the row's state would fail here.
+ * Inputs: r (object) - one row fixture.
+ * Output: string - row HTML concatenated with its menu's HTML.
+ */
+function offeredHtml(r) {
+    const html = Rows.rowHtml(r);
+    const tag = (html.match(/<button[^>]*class="session-sidebar-row-kebab"[^>]*>/) || [])[0];
+    assert.ok(tag, 'the row must paint a kebab to hang its actions off');
+    const stub = {
+        getAttribute(name) {
+            const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
+            return m ? m[1] : null;
+        },
+    };
+    return html + RowMenu.controlHtmlFor(stub).join('');
+}
 
 /** One ordinary row fixture. Inputs: overrides (object). Output: object. */
 function row(overrides = {}) {
@@ -141,13 +175,42 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     // attribute. That sink lives in client/js/session-status-ui.js and is
     // reached identically from the launchpad, so it is not this module's
     // to fix and is reported separately rather than patched here.
+    //
+    // The slice used to stop at 'mark-unread-toggle', the first thing on
+    // the row this module did not write. That control moved into the
+    // overflow menu, so the boundary moved with it: the kebab is now the
+    // last thing rowHtml() emits from another module's builder, and
+    // client/js/session-row-menu.js escapes its own attributes.
     const html = Rows.rowHtml(row({ name: 'evil" onclick="x', session_id: 'a" onload="y' }));
-    const own = html.slice(0, html.indexOf('mark-unread-toggle'));
-    assert.ok(!own.includes('onclick="'), 'attribute injection must not survive escaping');
-    assert.ok(!own.includes('onload="'));
-    assert.ok(own.includes('evil&quot; onclick=&quot;x'), 'quotes must be entity-escaped');
+    assert.ok(!html.includes('onclick="'), 'attribute injection must not survive escaping');
+    assert.ok(!html.includes('onload="'));
+    assert.ok(html.includes('evil&quot; onclick=&quot;x'), 'quotes must be entity-escaped');
     const scripted = Rows.rowHtml(row({ name: '<script>x</script>' }));
-    assert.ok(!/<script/i.test(scripted.slice(0, scripted.indexOf('mark-unread-toggle'))));
+    assert.ok(!/<script/i.test(scripted));
+});
+
+test('the row itself draws ONE kebab and no loose action icons', () => {
+    // The fold, asserted as a fact rather than as an absence: exactly one
+    // trigger, and none of the three controls it swallowed still sitting
+    // on the line beside it.
+    for (const status of ['working', 'dead', 'idle', 'question', 'unknown']) {
+        const html = Rows.rowHtml(row({ status, is_pinned: true, unread: true }));
+        assert.equal(
+            (html.match(/data-row-menu=/g) || []).length, 1,
+            `status ${status} must paint exactly one kebab`);
+        assert.equal((html.match(/data-pin-session=/g) || []).length, 0,
+            'the pin toggle must not also be drawn inline');
+        assert.equal((html.match(/data-mark-unread=/g) || []).length, 0,
+            'the mark-unread toggle must not also be drawn inline');
+        assert.equal(
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 0,
+            'the close/remove control must not also be drawn inline');
+    }
+    // The kebab must carry the row's state, or the menu opens stale.
+    const pinned = Rows.rowHtml(row({ is_pinned: true, unread: true, status: 'dead' }));
+    assert.ok(pinned.includes('data-row-pinned="1"'));
+    assert.ok(pinned.includes('data-row-unread="1"'));
+    assert.ok(pinned.includes('data-row-status="dead"'));
 });
 
 test('every row carries exactly one DESTRUCTIVE control, from the shared module', () => {
@@ -158,7 +221,7 @@ test('every row carries exactly one DESTRUCTIVE control, from the shared module'
     // the one non-destructive control in the family - so the count is
     // taken per-action rather than over every action attribute.
     for (const status of ['working', 'dead', 'idle', 'question']) {
-        const html = Rows.rowHtml(row({ status }));
+        const html = offeredHtml(row({ status }));
         const buttons = (html.match(new RegExp(RowActions.BASE_CLASS, 'g')) || []).length;
         assert.ok(buttons >= 1, `status ${status} must paint the shared row control`);
         const destructive =
@@ -194,7 +257,7 @@ test('an UNDETERMINED row is still offered no restart - the original rule, kept'
     // `unknown`, and offering to restart a session whose state we could
     // not read is exactly the guess this app refuses to make.
     for (const status of ['unknown', undefined, null, '']) {
-        const html = Rows.rowHtml(row({ status }));
+        const html = offeredHtml(row({ status }));
         assert.equal(
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length,
             0,
