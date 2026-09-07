@@ -52,6 +52,15 @@ One line each, newest measurement wins. Detail follows below in full.
   measured 2026-09-05: synchronous SQLite on the asyncio event loop, 71.4
   percent of main-thread samples inside `sqlite3_step`, a 12.05s stall every
   20.0s, loop unavailable ~60 percent of wall clock on an IDLE box. WHICH query
+- **2a. ANSWERED 2026-09-07.** The query is `PRAGMA integrity_check` at
+  `src/core/db.py:177`, reached from the async `GET /api/v1/version` handler
+  (`version_routes.py:207` -> `:178` -> `db_health.py:94`), run synchronously on
+  the loop against 4.5 GB, polled every 20s by the ELECTRON TRAY
+  (`macOS/main.js:1588` `INTERVAL_MS = 20000`). Confirmed twice independently:
+  py-spy 17/17 stalled dumps byte-identical, plus static analysis. It is a
+  REQUEST HANDLER on a timer, not a background task. Stall has grown 12.05s ->
+  14.3s and scales with the file. FIX NOT BUILT: threadpool alone is
+  insufficient, the pragma does not belong on a status endpoint.
   is CANNOT DETERMINE. `py-spy dump` mid-stall is the next step. PRIORITY 1.
 - **13.** Home screen polls every 5s and `renderProjectList()` repaints from it
   with NO guard: 385 elements + 409 text nodes destroyed and recreated per tick
@@ -87,6 +96,11 @@ One line each, newest measurement wins. Detail follows below in full.
   it as `Connected` with a PID and no signal. Neither probe string exists in
   this repo, so the scrollback is almost certainly replayed. UNVERIFIED, owner
   says it may be obsolete. Reproduce before spending time.
+- **20.** A pinned theme bleeds across a session switch: session A pinned to
+  Darcula left Darcula applied to session B, which pins nothing. Likely a
+  missing else-branch (theme applied on open, never reset on leave). The home
+  screen case is UNTESTED and the owner flagged it. UNVERIFIED, reported from
+  live use 2026-09-07. Verify on the pixel, not the API value.
 
 ### Session and agent identity
 - **1.** Sleep and resume: EXPOSE full-vs-summary as a deliberate option on wake.
@@ -850,6 +864,165 @@ Claude Code has not trusted yet and see whether the app surfaces the prompt or
 hides it. If it cannot be reproduced, close this as scrollback and keep only the
 "a session parked on a prompt is indistinguishable from a working one"
 observation, which stands on its own.
+
+---
+### 2026-09-07 - a pinned theme bleeds across a session switch - OPEN, UNVERIFIED
+
+**20.** Reported by the owner 2026-09-07 from live use, not yet reproduced in
+code. One session is pinned to Darcula. Switching to a DIFFERENT session in the
+browser left Darcula applied to that other session, which does not have it
+pinned. The owner also flagged, without testing it, that he does not know what
+happens on returning to the HOME SCREEN.
+
+Shape of the likely defect: `pinned_theme` rides on the `SessionInfo` WRAPPER,
+not on `.session` (see the two-levels section of the root `CLAUDE.md`). If the
+theme is APPLIED on session open but never RESET when the session is left, then
+a session with no pinned theme of its own simply inherits whatever the previous
+one set. That is a missing else-branch, not a wrong value: the code has a path
+for "this session pins a theme" and no path for "this one does not, put it
+back".
+
+Reproduction to run before touching code, three steps and the third is the one
+people skip:
+1. Pin Darcula on session A. Open session B, which pins nothing. Does B render
+   Darcula?
+2. From B, go to the HOME SCREEN / launchpad. Does the launchpad render Darcula?
+   The owner explicitly does not know this one.
+3. Hard-reload on B. If B renders correctly after a reload but wrongly after a
+   switch, the bug is in the switch path and not in what the server sends.
+
+Verify on the PIXEL. `getComputedStyle` on a themed element, or a screenshot a
+human looks at. Reading the `pinned_theme` VALUE off the API proves the server
+is right and proves nothing about what rendered - the archived-notice defect
+(`5c88fdd`) was exactly this: the state existed in the MODEL and never reached
+the SCREEN.
+
+Note the device-scope rule while testing so a wrong result is not manufactured:
+group membership is DB-backed and travels between devices, but PINNING and
+within-group order are `localStorage` and are per-device.
+
+**Do not cycle themes to test this on the live app without recording the owner's
+current theme first and restoring it after.** An earlier session cycled all 23
+themes against live and left him on whichever one it stopped at, with no prior
+value on record.
+
+---
+### 2026-09-07 - THE LAG: the query is NAMED. Confirmed twice, independently - OPEN (fix), CLOSED (diagnosis)
+
+Item 2 / PRIORITY 1 was blocked on "WHICH query is CANNOT DETERMINE". It is no
+longer cannot-determine. Two independent methods, run without knowledge of each
+other's result, returned the same call site.
+
+**THE CALL SITE**
+
+    src/core/db.py:177        integrity_check
+      conn.execute("PRAGMA integrity_check").fetchall()
+    <- src/core/db_health.py:94      live_state
+    <- src/api/version_routes.py:178 _datastore_block
+    <- src/api/version_routes.py:207 get_version   (async GET /api/v1/version)
+
+`GET /api/v1/version` runs `PRAGMA integrity_check` SYNCHRONOUSLY, inside the
+coroutine, against the 4.5 GB `cloude.db`, on EVERY request. No
+`run_in_threadpool`, no cache, no TTL, no guard.
+
+**WHAT POLLS IT.** `macOS/main.js:1588` `const INTERVAL_MS = 20000`, fired by
+`setInterval(tick, INTERVAL_MS)` at `:1604` -> `pollTraySignals()`
+(`macOS/main.js:668`) -> `trayApi.fetchUpdateStatus()`
+(`macOS/tray-api.js:267`), which calls `getAuthed('/api/v1/version')` with a
+Bearer token, so it DOES reach the handler.
+
+**It is a REQUEST HANDLER on a timer, not a background task.** Everything in
+the earlier analysis that went looking for a periodic server-side loop was
+looking on the wrong side of the wire. The timer is in the ELECTRON SHELL.
+
+**EVIDENCE, method 1 - py-spy against the live process.** PID 48024, Python
+3.14.7, `-m src.main`, ppid 48016 (the Electron shell under launchd
+`com.cloudecode.menubar`). 25 dumps taken. **17 of 17 dumps that landed inside a
+stall showed this stack byte-identical, zero variation.** 22 of 25 total were
+`integrity_check`; the other 3 landed in the quiet window and showed an idle
+`selectors.select`, which is what a healthy loop looks like. Timestamp
+correlation is exact: a `/health` request starting `1788789574.36` took 14.52s,
+and dumps 17-21 all fall inside that window and all show `integrity_check`;
+dumps 14, 15, 22, 23 fall in fast windows (`/health` 0.02-0.04s) and all show
+the idle loop. NO dump contradicts the pattern.
+
+**EVIDENCE, method 2 - static analysis of the checkout.** Independently walked
+`/api/v1/version` -> `_datastore_block` -> `live_state` -> `integrity_check` and
+independently found the 20000 ms `setInterval` in `macOS/main.js`. Reasoned that
+`PRAGMA integrity_check` re-verifies every page of every B-tree, which on 4.5 GB
+is seconds of pure `sqlite3_step` - matching both the 12.05s duration and the
+71.4% main-thread share.
+
+**Why the period is EXACTLY 20.0s and not 20 + 12.05.** `setInterval` fires on a
+fixed wall-clock cadence regardless of how long the fetch takes. A chained
+`setTimeout` would have drifted. The fixed period was itself a clue and it
+pointed at a timer, correctly.
+
+**IT IS GETTING WORSE ON ITS OWN.** The stall measured 12.05s on 2026-09-05 and
+14.1-14.4s on 2026-09-07, re-confirmed live with slow `/health` at `...835.34`,
+`...855.52`, `...875.82` (deltas 20.18s and 20.30s). `integrity_check` scales
+with file size and the database grows. This does not plateau.
+
+**WHY NOBODY SAW IT.** `/tmp/cloudecode-menubar-error.log` contains ZERO
+`Executing <Handle` lines: asyncio debug mode is off, so the loop never warned
+about a 14-second callback. `/tmp/cloudecode-menubar.log` is meanwhile full of
+`GET /api/v1/version HTTP/1.1 200 OK` from `127.0.0.1` - the evidence was
+sitting in the access log the whole time, looking like normal traffic.
+
+**A 401 DOES NOT TEST THIS.** An unauthenticated `curl` to `/api/v1/version`
+returns 401 WITHOUT reaching the handler, so it cannot measure the pragma. One
+such 401 did take 4.76s, which independently proves the loop was blocked at that
+moment but says nothing about the cause. If you test this endpoint, use a real
+token or you are measuring the auth rejection.
+
+**THE FIX - NOT YET BUILT. Three parts, and part 1 alone is not enough.**
+
+1. `run_in_threadpool` / `asyncio.to_thread` ALONE IS INSUFFICIENT. It unblocks
+   the loop but still burns 14 seconds of disk and CPU every 20 seconds,
+   forever, growing. The loop would be free and the machine would still be
+   grinding.
+2. **`PRAGMA integrity_check` does not belong on a status endpoint at all.** It
+   is a maintenance operation, not a liveness probe. A version/status handler
+   wants "can I open and query this database", not a full-file page walk.
+3. If a periodic integrity check is genuinely wanted, it belongs on a SLOW
+   background schedule (daily, not 3x/minute), in a thread, with the result
+   CACHED and the endpoint reading the cache.
+
+**Verify the fix on the SYMPTOM, not the code.** Re-run the `/health` poll and
+show p99 dropping from ~12,000ms to double digits, and confirm the 20s stall
+cadence is gone. A code-reading that says "it is in a thread now" is not a
+measurement. Keep a before/after latency log.
+
+**Cleanup owed:** py-spy 0.4.2 was installed into a throwaway venv at
+`/tmp/pyspy-diag/venv` ON THE MINI to take these dumps. Nothing in the server
+tree, database or config was touched, and nothing was restarted or deployed.
+Remove that venv when convenient. Also recorded: py-spy CANNOT attach on macOS
+without root (`This program requires root on OSX`), and passwordless sudo IS
+available on the mini (`sudo -n true` succeeds), which is what made the live
+dump possible at all.
+
+**Raw dumps and the correlation logs** are in this session's scratchpad under
+`pyspy/` (`dump_01.txt` .. `dump_24.txt`, `dump_stall_final.txt`, `health.log`,
+`dumptimes.log`). Scratchpad is session-scoped and will not survive; copy them
+into the repo if they are wanted as a record.
+
+**TWO CORRECTIONS TO THE RECORD, both found on the way.**
+
+- **`/sessions/list` does NOT use `run_in_threadpool`.** This file and
+  `HANDOFF.md` both say it does, and both are WRONG. `src/api/routes.py:772`
+  awaits a plain `async def` (`session_manager.py:2496 list_session_infos`),
+  which calls sync `_session_info_for` -> `_owned_instances_from_db` ->
+  `_datastore_connection` (`:2573`), opening cloude.db ON THE LOOP. The queries
+  are small so it is not the 14s stall, but it is real blocking and the
+  "correctly uses run_in_threadpool" claim must not be repeated.
+- **`GET /corpus/status` is a dormant second bomb.** `src/api/corpus_routes.py:75`
+  -> `corpus_status.py:99` runs a full-scan aggregate over `transcript_archives`
+  plus `COUNT(*) FROM message_transcripts` at `:157`, on the loop. And
+  `transcript_archives` (`src/core/db_models.py:1083`) has six indexes but NONE
+  on `source_path` (one was deliberately dropped, see the comment at `:1340`),
+  so `COUNT(DISTINCT source_path)` at `corpus_status.py:100` is a guaranteed
+  full scan of the biggest table. Nothing polls it today. The day something does,
+  this reproduces the same outage.
 
 ---
 
