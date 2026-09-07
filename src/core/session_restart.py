@@ -95,6 +95,15 @@ RESTART_RESUMABLE = "resumable"
 #: and the user is told so. NEVER reported as :data:`RESTART_RESUMABLE`.
 RESTART_NO_CONVERSATION = "no-conversation"
 
+#: DEFINITE NEGATIVE. The row names a Claude conversation and that
+#: conversation is NOT in the transcript corpus, so ``--resume`` would
+#: exit immediately and leave a dead pane behind. Distinct from
+#: :data:`RESTART_NO_CONVERSATION` - that row never had a conversation,
+#: this row's conversation is GONE - and the difference is the whole
+#: reason a restart may refuse instead of starting a blank session under
+#: the name of one the user still believes is being continued.
+RESTART_CONVERSATION_MISSING = "conversation-missing"
+
 #: COULD NOT EVALUATE. No datastore, no row with this ``session_uuid``, or
 #: the sessions table predates this schema. We cannot say whether there is
 #: a conversation to resume, so we do not say. Never folded into either
@@ -125,6 +134,13 @@ class RestartSource:
     outcome: str
     parent_id: Optional[int] = None
     claude_session_uuid: Optional[str] = None
+    #: WHICH ROW THE CONVERSATION CAME OFF, when it is not the row that
+    #: was clicked. A tmux instance hosts many Claude conversations in
+    #: sequence and each one after the first gets its OWN lineage row
+    #: (session_lineage), so the clicked anchor keeps the FIRST uuid it
+    #: ever saw forever. Reported so a caller can log which conversation
+    #: it actually resumed rather than assuming it was the row's own.
+    conversation_row_id: Optional[int] = None
     title: Optional[str] = None
     working_dir: Optional[str] = None
     agent_type: Optional[str] = None
@@ -184,7 +200,37 @@ def resolve_restart_source(
     # the same derivation the fork path uses, for the same reason: an
     # internal prefix leaking into the one string a human reads.
     title = data.get("title") or label_from_tmux_name(data.get("tmux_name"))
-    uuid = data.get("claude_session_uuid")
+
+    # RESUME THE CONVERSATION THE PANE WAS LAST HAVING, NOT THE FIRST ONE
+    # IT EVER HAD. This is the defect that lost the owner's session on
+    # 2026-09-07 and it is worth stating exactly.
+    #
+    # One tmux instance hosts a SEQUENCE of Claude conversations - the
+    # user clears, forks, or the agent exits and a new `claude` starts in
+    # the same pane. session_lineage.record_claude_session handles that by
+    # INSERTING a new row for each new uuid and hanging it off the row
+    # before it; the ANCHOR row (the one holding the tmux identity triple,
+    # the one this app lists, the one this function is handed) keeps the
+    # FIRST uuid it ever learned and never advances.
+    #
+    # So reading `claude_session_uuid` straight off the clicked row
+    # resumes a conversation that has been superseded - and on the owner's
+    # box that first uuid, c33e4ce2, had no transcript left on disk at
+    # all, so the restart spawned a pane that died on its first tick while
+    # the row read `running`. The conversation he wanted, 2629dba5, was on
+    # the lineage row below it the whole time.
+    #
+    # lineage_head is the existing walk to the CURRENT conversation and
+    # already skips background forks, which are the one child that is not
+    # what the pane is running. Imported inside the function because
+    # session_lineage imports session_store and a module-level edge here
+    # would add a second path through that graph for one call.
+    from src.core.session_lineage import lineage_head
+
+    head = lineage_head(conn, int(data["id"]))
+    head_id = int(head.get("id") or data["id"])
+    uuid = head.get("claude_session_uuid") or data.get("claude_session_uuid")
+    conversation_row_id = head_id if head_id != int(data["id"]) else None
     if not uuid:
         return RestartSource(
             RESTART_NO_CONVERSATION,
@@ -200,10 +246,46 @@ def resolve_restart_source(
                 "name, directory and agent, and starts a NEW conversation."
             ),
         )
+    # THE CONVERSATION IS NAMED. IS IT STILL THERE? A uuid stored months
+    # ago is a claim about the filesystem, and `claude --resume` on a
+    # transcript that has been removed exits at once - which this app then
+    # painted as a running, resumed session. Measured before spawning, not
+    # inferred afterwards. UNCHECKED never refuses: see
+    # session_transcript_presence for why that direction is the safe one.
+    from src.core.session_transcript_presence import conversation_presence
+
+    presence = conversation_presence(
+        uuid, working_dir=data.get("working_dir")
+    )
+    if presence.missing:
+        logger.warning(
+            "restart_conversation_transcript_missing",
+            session_id=int(data["id"]),
+            conversation_row_id=conversation_row_id,
+            claude_session_uuid=uuid,
+            note=(
+                "the row names a conversation with no transcript on disk; "
+                "resuming it would spawn a pane that exits immediately"
+            ),
+        )
+        return RestartSource(
+            RESTART_CONVERSATION_MISSING,
+            parent_id=data["id"],
+            claude_session_uuid=uuid,
+            conversation_row_id=conversation_row_id,
+            title=title,
+            working_dir=data.get("working_dir"),
+            agent_type=data.get("agent_type"),
+            model=data.get("model"),
+            project_id=data.get("project_id"),
+            detail=presence.detail,
+        )
+
     return RestartSource(
         RESTART_RESUMABLE,
         parent_id=data["id"],
         claude_session_uuid=uuid,
+        conversation_row_id=conversation_row_id,
         title=title,
         working_dir=data.get("working_dir"),
         agent_type=data.get("agent_type"),

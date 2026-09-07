@@ -425,8 +425,14 @@ async def restart_session(request: Request, session_uuid: str):
       reusable and this app re-mints them; resolving a stopped session by
       name could match a LIVE session that took the name afterwards.
 
-      THREE OUTCOMES, and the middle one is why this is not a bare create:
+      FOUR OUTCOMES, and the two middle ones are why this is not a bare
+      create:
         404  no row with this ``session_uuid`` - could not evaluate.
+        409  the row NAMES a conversation and that conversation is not in
+             the transcript corpus. Nothing is spawned. Resuming it would
+             produce a pane that exits immediately while the row read
+             ``running``, which is how the owner lost a session on
+             2026-09-07.
         201, ``conversation='resumed'`` - the old conversation continues.
         201, ``conversation='none_recorded'`` - the row never learned a
              Claude session uuid. The session still comes back, carrying
@@ -469,6 +475,35 @@ async def restart_session(request: Request, session_uuid: str):
             status_code=404, detail=source.detail or "session not found"
         )
 
+    if source.outcome == session_restart.RESTART_CONVERSATION_MISSING:
+        # REFUSE, LOUDLY, AND SPAWN NOTHING. The row names a conversation
+        # whose transcript is gone, so `claude --resume` would exit on its
+        # first tick and hand tmux a corpse - which this route used to
+        # answer 201 conversation='resumed' over, and rebind_instance had
+        # already stamped `lifecycle='running'` on the row. The owner then
+        # had a session that read running, showed nothing, and could not
+        # be found anywhere (2026-09-07).
+        #
+        # 409, not 500: nothing failed. The server looked, and the thing
+        # being asked for is not there. Starting a BLANK session under the
+        # name of the conversation the user believes is being continued is
+        # the one outcome that must never happen here - it is silent data
+        # loss wearing a familiar title.
+        logger.warning(
+            "restart_refused_conversation_missing",
+            replaced_session_uuid=session_uuid,
+            replaced_session_id=source.parent_id,
+            conversation_row_id=source.conversation_row_id,
+            claude_session_uuid=source.claude_session_uuid,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                source.detail
+                or "the conversation this session names is not on disk"
+            ),
+        )
+
     resumable = source.outcome == session_restart.RESTART_RESUMABLE
     label = (source.title or "").strip() or None
     # THE LABEL AND THE TMUX NAME ARE NOT THE SAME STRING - see the same
@@ -483,6 +518,7 @@ async def restart_session(request: Request, session_uuid: str):
         replaced_session_uuid=session_uuid,
         replaced_session_id=source.parent_id,
         conversation="resumed" if resumable else "none_recorded",
+        conversation_row_id=source.conversation_row_id,
         label=label,
     )
 
@@ -785,6 +821,60 @@ async def list_sessions(request: Request):
     return [one] if one else []
 
 
+async def _mark_closed_in_datastore(
+    socket: Optional[str], name: Optional[str]
+) -> int:
+    """Write the just-closed tmux instance's row to ``stopped``.
+
+    Description: the datastore half of ``DELETE /sessions``. Runs on one
+      pooled thread (connections are thread-affine) and swallows only the
+      two datastore conditions that are not this request's business - an
+      install with no database yet, and one whose database cannot be read
+      - because the session is already destroyed by the time this runs
+      and a bookkeeping failure must not be reported as a failed
+      teardown. Both are logged; neither is silent.
+    Inputs: socket (str | None) - the tmux socket that was torn down.
+      name (str | None) - the tmux session name that was killed. Either
+      being None means the backend could not name what it closed, and
+      nothing is written.
+    Output: int - rows moved to ``stopped``; 0 when nothing was written.
+    Example: await _mark_closed_in_datastore('cloude', 'cloude_api')
+    """
+    from contextlib import closing
+
+    from src.core import session_close_lifecycle
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    if not socket or not name:
+        return 0
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return 0
+
+    def _write() -> int:
+        with closing(connect(db_path, create=False)) as conn:
+            moved = session_close_lifecycle.mark_closed(
+                conn, socket=socket, name=name
+            )
+            conn.commit()
+            return moved
+
+    try:
+        return await run_in_threadpool(_write)
+    except DatastoreUnreadableError as exc:
+        logger.warning(
+            "close_lifecycle_not_recorded",
+            tmux_socket=socket,
+            tmux_name=name,
+            error=str(exc),
+            note=(
+                "the session WAS destroyed; only the row's lifecycle "
+                "write did not land, and the reconciler still covers it"
+            ),
+        )
+        return 0
+
+
 @router.delete("/sessions", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def destroy_session(request: Request, session_id: Optional[str] = None):
     """
@@ -813,11 +903,29 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
         active_name = (
             getattr(backend, "tmux_session", None) if backend else None
         )
+        active_socket = (
+            getattr(backend, "socket_name", None) if backend else None
+        )
         if active_name:
             await local_servers.clear_session(active_name)
 
         # Destroy session
         await session_manager.destroy_session(session_id=session_id)
+
+        # RECORD THE CLOSE ON THE ROW, NOW. destroy_session writes nothing
+        # to sessions.lifecycle - only the background reconciler ever moved
+        # a row to 'stopped' - so a closed session read 'running' for up to
+        # a whole poll interval and appeared in NO group the user could
+        # see: gone from running (its tmux is dead) and not yet in RECENT
+        # (which is lifecycle='stopped' AND archived_at IS NULL). That gap
+        # is "I closed it and it did not go to Recents", measured on the
+        # owner's box 2026-09-07.
+        #
+        # Best-effort and non-fatal: the session IS destroyed by this
+        # point, and failing the request over a bookkeeping write would
+        # tell the user a teardown failed that did not. The reconciler
+        # still covers the row on its own schedule.
+        await _mark_closed_in_datastore(active_socket, active_name)
 
         return SuccessResponse(message="Session destroyed successfully")
 

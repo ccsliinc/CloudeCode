@@ -148,6 +148,63 @@ class Launchpad {
         // rows on screen is an absence of evidence. Set only in
         // loadProjects().
         this._archivedFetchOk = null;
+        // DELETED SESSIONS, which are a different column on a different
+        // table from the one above and must not be confused with it. A
+        // session's archive is a soft DELETE ("take this off my screen");
+        // a project's is a shelf. Same field name, different verb.
+        //
+        // THE DEFECT THIS FIELD EXISTS FOR, 2026-09-07. The server had
+        // supported `GET /sessions/recent?include_archived=true` since
+        // a89c919 and `API.listRecentSessions()` took the flag - and the
+        // one call site in this file passed NOTHING, so the flag was
+        // never once set by any client. Six deleted rows sat in the
+        // database with no path to the screen at all, and one of them
+        // held the owner's live conversation. State existing in the model
+        // is not the same as state reaching the screen; that is 5c88fdd's
+        // lesson repeating on a different surface.
+        this._deletedSessionsVisible = this.getDeletedSessionsVisiblePref();
+    }
+
+    /**
+     * Read the per-device "show deleted sessions" preference.
+     *
+     * Description: per-device like every other launcher preference, and
+     *   defaulting OFF so the pre-existing RECENT list is unchanged for
+     *   anyone who never touches the control.
+     * Inputs: none.
+     * Output: boolean - true when deleted session records should be
+     *   requested and drawn.
+     * Example: lp.getDeletedSessionsVisiblePref()  // false
+     */
+    getDeletedSessionsVisiblePref() {
+        try {
+            return localStorage.getItem(
+                'cloude.launchpad.deletedSessionsVisible') === '1';
+        } catch (err) {
+            console.warn(
+                'Launchpad: failed to read show-deleted preference:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Persist the per-device "show deleted sessions" preference.
+     *
+     * Description: a throwing write (private window, blocked site data)
+     *   is not an error the user needs to see - the toggle still works
+     *   for this page load, it simply will not be remembered.
+     * Inputs: on (boolean) - the new state.
+     * Output: undefined.
+     * Example: lp.setDeletedSessionsVisiblePref(true)
+     */
+    setDeletedSessionsVisiblePref(on) {
+        try {
+            localStorage.setItem(
+                'cloude.launchpad.deletedSessionsVisible', on ? '1' : '0');
+        } catch (err) {
+            console.warn(
+                'Launchpad: failed to persist show-deleted preference:', err);
+        }
     }
 
     /**
@@ -1683,7 +1740,13 @@ class Launchpad {
      */
     async loadRecentSessions() {
         try {
-            const payload = await window.API.listRecentSessions();
+            // THE FLAG IS PASSED. It was not, and that was the whole
+            // defect: the endpoint, the query parameter and this API
+            // wrapper's argument all existed, and no caller ever set it,
+            // so deleted session records were unreachable from every
+            // screen in the app. See this._deletedSessionsVisible.
+            const payload = await window.API.listRecentSessions(
+                !!this._deletedSessionsVisible);
             this.recentSessionsState = payload && payload.state || 'probe_unavailable';
             this.recentSessions = (payload && payload.sessions) || [];
             this.recentSessionsNotice = (payload && payload.notice) || null;
@@ -1745,13 +1808,30 @@ class Launchpad {
         // lifecycle is unknown: hiding a row from your own list is safe
         // whatever state it is in, unlike restart, which is gated above.
         const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>`;
+        // A ROW THE USER ALREADY DELETED IS MARKED, NOT BLENDED IN. It is
+        // only on screen because "show deleted" is on, and a deleted row
+        // drawn identically to a live one would make the toggle look like
+        // it did nothing. It keeps RESTART, which is what recovers it:
+        // session_restart.rebind_instance clears ``archived_at``, so
+        // restarting a deleted row is also how it comes back. It loses
+        // DELETE, because deleting an already-deleted row is a no-op the
+        // server answers "already deleted" to, and a control that cannot
+        // change anything is furniture.
+        const deletedRow = !!row.archived_at;
+        const deletedClass = deletedRow ? ' recent-session-row--deleted' : '';
+        const deletedAttr = deletedRow ? ' data-deleted="1"' : '';
+        const deletedBadge = deletedRow
+            ? '<span class="recent-session-deleted" title="you deleted this '
+              + 'from your lists; restart brings it back">DELETED</span>'
+            : '';
         return `
-                <div class="recent-session-row" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}">
+                <div class="recent-session-row${deletedClass}" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}"${deletedAttr}>
                   ${statusDot}
                   <span class="recent-session-name">${displayName}</span>
                   <span class="recent-session-lifecycle">${lifecycleLabel}</span>
+                  ${deletedBadge}
                   ${restartBtn}
-                  ${deleteBtn}
+                  ${deletedRow ? '' : deleteBtn}
                 </div>
             `;
     }
@@ -1822,6 +1902,21 @@ class Launchpad {
             countEl.setAttribute('data-state', 'ok');
         }
         if (rows.length === 0) {
+            // THE SECTION STAYS UP WHILE "show deleted" IS ON, and that
+            // is not cosmetic: the toggle lives in this heading, so
+            // hiding the section on an empty result would take away the
+            // only control that can turn it back off, and the user would
+            // be looking at a screen with no way to say what it is
+            // showing. An empty result with the toggle on is also a real
+            // answer - "asked for deleted rows, there are none" - and it
+            // has to be sayable.
+            if (this._deletedSessionsVisible) {
+                if (section) section.style.display = '';
+                container.innerHTML =
+                    '<div class="launchpad-empty">no recent or deleted '
+                    + 'sessions</div>';
+                return;
+            }
             if (section) section.style.display = 'none';
             container.innerHTML = '';
             return;
@@ -3267,6 +3362,19 @@ class Launchpad {
                             <span class="launchpad-section-title__text">recent</span>
                             <span class="launchpad-section-count" id="recent-sessions-count" data-state="ok"></span>
                         </button>
+                        <!-- SHOW-DELETED. The only route to a session
+                             record the user deleted. Without it those
+                             rows exist in the database and on the wire
+                             and are reachable from nowhere, which is how
+                             a deleted row took a live conversation with
+                             it on 2026-09-07. Same shape and same
+                             styling as the projects control beside it,
+                             different verb: a session's archive is a
+                             soft DELETE, not a shelf. -->
+                        <button type="button" class="launchpad-archived-toggle" id="recent-show-deleted-toggle" aria-pressed="false" title="show deleted sessions">
+                            <span class="launchpad-archived-toggle__box" aria-hidden="true"></span>
+                            <span class="launchpad-archived-toggle__label">show deleted</span>
+                        </button>
                     </div>
                     <div id="recent-sessions-list"></div>
                 </div>
@@ -3447,6 +3555,7 @@ class Launchpad {
         });
 
         this.initArchivedVisibleToggle();
+        this.initDeletedSessionsToggle();
     }
 
     /**
@@ -3473,6 +3582,47 @@ class Launchpad {
             this._applyArchivedVisibleToggleState(btn);
             await this.loadProjects();
         });
+    }
+
+    /**
+     * Wire the "show deleted" control in the RECENT section heading.
+     *
+     * Description: same shape as ``initArchivedVisibleToggle`` - persist,
+     *   repaint the control, then RE-FETCH, because deleted rows are
+     *   asked for rather than held client-side and filtered. One rule
+     *   about what is on screen: whatever the last request returned.
+     * Inputs: none.
+     * Output: undefined. No-op when the control is not mounted.
+     * Example: lp.initDeletedSessionsToggle()
+     */
+    initDeletedSessionsToggle() {
+        const btn = document.getElementById('recent-show-deleted-toggle');
+        if (!btn) return;
+        this._applyDeletedSessionsToggleState(btn);
+        btn.addEventListener('click', async () => {
+            const next = !this._deletedSessionsVisible;
+            this._deletedSessionsVisible = next;
+            this.setDeletedSessionsVisiblePref(next);
+            this._applyDeletedSessionsToggleState(btn);
+            await this.loadRecentSessions();
+        });
+    }
+
+    /**
+     * Paint the show-deleted button to match ``_deletedSessionsVisible``.
+     *
+     * Inputs: btn (HTMLElement) - the toggle.
+     * Output: undefined.
+     * Example: lp._applyDeletedSessionsToggleState(btn)
+     */
+    _applyDeletedSessionsToggleState(btn) {
+        const on = !!this._deletedSessionsVisible;
+        btn.setAttribute('aria-pressed', String(on));
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute(
+            'title',
+            on ? 'hide deleted sessions' : 'show deleted sessions'
+        );
     }
 
     /**
