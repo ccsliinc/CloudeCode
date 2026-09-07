@@ -2982,7 +2982,9 @@ class Launchpad {
 
         let result = null;
         try {
-            result = await window.API.respawnSession(tmuxName, choice.agentType);
+            result = await window.API.respawnSession(
+                tmuxName, choice.agentType,
+                choice.confirmRestartLive === true);
         } catch (error) {
             this.showError(
                 `could not restart "${display}": `

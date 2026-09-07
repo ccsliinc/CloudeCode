@@ -329,7 +329,8 @@ console.log('[SessionSidebarClicks Module] Loading...');
 
         let result = null;
         try {
-            result = await window.API.respawnSession(name, choice.agentType);
+            result = await window.API.respawnSession(
+                name, choice.agentType, choice.confirmRestartLive === true);
         } catch (err) {
             console.error('SessionSidebar: restart failed:', err);
             alert(`could not restart "${name}": ${err.message || err}`);

@@ -121,3 +121,33 @@
     opacity: 0.45;
     cursor: not-allowed;
 }
+
+/*
+ * The live-restart arming control.
+ *
+ * IT IS STYLED AS A WARNING, NOT AS A SETTING. Ticking it unlocks an
+ * operation that kills a process the user is running, so it carries the
+ * same danger treatment the shell badge does rather than reading as one
+ * more preference. The 44px minimum keeps it a real target on a phone,
+ * where this panel is mostly used.
+ */
+.restart-picker__arm {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 10px;
+    min-height: 44px;
+    border: 1px solid var(--danger-color, #e06c75);
+    border-radius: 4px;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.restart-picker__arm input {
+    flex: 0 0 auto;
+    /* A checkbox at the browser default is a small target next to a
+       44px row; this keeps the box itself tappable. */
+    width: 18px;
+    height: 18px;
+}

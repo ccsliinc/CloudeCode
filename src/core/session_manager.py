@@ -5969,6 +5969,7 @@ class SessionManager:
         *,
         socket_name: Optional[str] = None,
         agent_type: Optional[str] = None,
+        live_restart_confirmed: bool = False,
     ) -> dict:
         """Restart the agent inside a dead session, keeping the session.
 
@@ -6024,6 +6025,17 @@ class SessionManager:
                 ValueError rather than resolved to the default wrapper -
                 a picker that silently substitutes a different agent is
                 worse than no picker.
+            live_restart_confirmed: True ONLY when the user deliberately
+                asked to replace what is running in a pane that is
+                ALIVE, having been shown the confirmation that says the
+                process in it is killed. False (the default) leaves the
+                behaviour of every existing caller untouched: a live pane
+                still answers ``not_dead`` and nothing is destroyed.
+
+                IT IS A PERMISSION, SO IT ONLY EVER TRAVELS FORWARD. No
+                prediction produces it, no preview returns it, and
+                nothing derives it from ``pane_state`` - the request
+                carries it or the restart does not kill.
 
         Output:
             dict: ``{"name", "kind", "ok", "detail", "command",
@@ -6119,6 +6131,16 @@ class SessionManager:
             agent_command=agent_command,
             chosen_agent_command=chosen_command,
             chosen_agent_type=chosen_type,
+            live_restart_confirmed=bool(live_restart_confirmed),
+        )
+
+        # IDENTITY BEFORE ANYTHING ELSE IS READ BACK. A live restart
+        # killed the pane, so the row's instance triple is reconciled
+        # against what tmux says NOW before the agent_type write or the
+        # session_uuid read go looking for that row. Doing it after would
+        # read through a key that had not been repaired yet.
+        identity_status = self._reconcile_restart_identity(
+            name=name, socket_name=socket_name, result=result
         )
 
         persisted = False
@@ -6140,7 +6162,62 @@ class SessionManager:
             "agent_type_persisted": persisted,
             "session_id": identity.get("session_id"),
             "session_uuid": identity.get("session_uuid"),
+            "killed_live_pane": bool(result.killed_live_pane),
+            "identity_status": identity_status,
         }
+
+    def _reconcile_restart_identity(
+        self, *, name: str, socket_name: str, result
+    ) -> str:
+        """Keep the row keyed on the instance the restart left behind.
+
+        Description: the database half of the live-restart identity
+            check. Does nothing at all unless the restart actually killed
+            a pane; on tmux 3.7c the epoch does not move even then, so
+            the expected answer is ``unchanged`` with no write. See
+            ``src/core/session_instance_rekey.py`` for why it is measured
+            rather than assumed, and for why the third outcome is not the
+            first.
+
+        Inputs:
+            name: literal tmux session name, unchanged by the restart.
+            socket_name: tmux socket the session lives on.
+            result: the ``RespawnResult`` the backend returned, carrying
+                both ``#{session_created}`` readings.
+
+        Output:
+            str: one of the ``IDENTITY_*`` constants in
+                ``src.core.session_instance_rekey``.
+
+        Example:
+            >>> mgr._reconcile_restart_identity(name='cloude_api',
+            ...     socket_name='cloude', result=res)
+            'unchanged'
+        """
+        from src.core.session_instance_rekey import (
+            IDENTITY_UNCHECKED,
+            reconcile_instance_epoch,
+        )
+
+        if not getattr(result, "killed_live_pane", False):
+            return IDENTITY_UNCHECKED
+
+        conn = self._writable_datastore_connection()
+        try:
+            status, _rows = reconcile_instance_epoch(
+                conn,
+                socket=socket_name,
+                tmux_name=name,
+                epoch_before=getattr(result, "epoch_before", None),
+                epoch_after=getattr(result, "epoch_after", None),
+            )
+            return status
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:  # noqa: BLE001 - close is not a verdict
+                    pass
 
     async def restart_preview(
         self, name: str, *, socket_name: Optional[str] = None

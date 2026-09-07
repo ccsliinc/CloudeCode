@@ -255,17 +255,18 @@ test('every row carries exactly one DESTRUCTIVE control, from the shared module'
         );
         const restarts =
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length;
-        if (status === 'dead') {
-            assert.equal(restarts, 1, 'a dead row must offer a restart');
-        } else {
-            // SUPERSEDES the old blanket "never a restart" rule here. The
-            // reason it existed - that this module could not tell stopped
-            // from undetermined - still applies to `unknown`, which is
-            // covered below and is what actionsFor() actually refuses. A
-            // MEASURED `dead` is a different fact; see the module
-            // docstring in session-sidebar-rows.js for the evidence.
-            assert.equal(restarts, 0, `status ${status} must offer no restart control`);
-        }
+        // EXACTLY ONE, on every row whose state was MEASURED - dead or
+        // live. The reason the old blanket "never a restart" rule existed
+        // is that this module could not tell stopped from undetermined,
+        // and that reason still applies to `unknown`, which is covered
+        // below and is what actionsFor() actually refuses. A measured
+        // status is a different fact.
+        //
+        // A live row's restart opens the picker; it does not restart
+        // anything. The arm box, the confirm modal and the server's
+        // `confirm_restart_live` are the three gates in front of the
+        // kill - see tests/test_restart_live_gate.node.mjs.
+        assert.equal(restarts, 1, `status ${status} must offer exactly one restart`);
     }
 });
 

@@ -263,8 +263,28 @@ refuses, `unchecked` never does. The preview applies the same guard, so the
 picker cannot promise a replay the restart then declines.
 
 The picker is `client/js/session-restart-picker.js`; the reopen is
-`client/js/session-restart-return.js`. Restarting a LIVE session is still not
-built (TODO item 22's close-and-recreate half).
+`client/js/session-restart-return.js`.
+
+**UPDATE 2026-09-07: restarting a LIVE session IS built (item 22 part 2).**
+The owner's two calls collapsed it - "same tmux should be fine" and "yes
+resume the same session" - so it is `respawn-pane -k` in place, not
+close-and-recreate. No row is minted, so nothing is re-carried and the
+`session_group_members` primary-key defect is sidestepped rather than hit.
+
+Four gates, and none of them is derivable from the projection: the row only
+offers restart on a status positively known live (`unknown` gets close alone);
+the picker's arm checkbox arrives unchecked and takes no argument; the confirm
+modal names the bare-shell outcome (measured: 15 of 19 live sessions come back
+a login shell); and the request must carry `confirm_restart_live`.
+`RespawnPlan.kills_live_pane` is the single field that makes anything pass
+`-k`, and `project_restart_rung` has no liveness input so it can never set it.
+
+**Identity across the kill is MEASURED.** tmux 3.7c, scratch socket: same
+`#{session_created}`, same `#{pane_id}`, new `#{pane_pid}`. The triple does not
+move, so the fourteen triple-keyed queries keep matching.
+`src/core/session_instance_rekey.py` takes the epoch either side anyway and
+answers `unchanged` / `rekeyed` / `cannot_determine` - a measurement that can
+stop being true is not a thing to assume.
 
 Related, and open as backlog item 3: every session created via
 `auto_start_claude:false` plus a hand-sent claude command lands with

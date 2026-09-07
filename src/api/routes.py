@@ -1141,6 +1141,19 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
     session onto another wrapper used to require hand-editing
     ``sessions.agent_type`` in cloude.db.
 
+    REPLACING WHAT IS RUNNING IS A SEPARATE, EXPLICIT REQUEST.
+    ``confirm_restart_live`` is what turns this into ``respawn-pane -k``:
+    the pane's process is killed and a new one started in the same pane,
+    keeping the tmux name, the ``sessions`` row and therefore the project
+    attribution, pinned theme, unread state, group filing and sidebar
+    position - nothing is re-carried because nothing moves.
+
+    IT IS A PERMISSION AND ONLY THE CLIENT CAN GRANT IT. The preview's
+    ``projected`` rung says what a live session would come back AS, and
+    that is a PREDICTION: it cannot be echoed back as this flag, and the
+    server derives the flag from nothing. Without it a live pane still
+    answers ``kind='not_dead'`` and tmux itself refuses the respawn.
+
     ASK BEFORE YOU ACT. ``GET /sessions/restart/preview``
     (``src/api/restart_routes.py``) reports which rung this session would
     land on, for every configured wrapper, without spawning anything.
@@ -1164,11 +1177,14 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
         "api_respawn_session_request",
         name=body.session_name,
         agent_type=body.agent_type,
+        confirm_restart_live=bool(body.confirm_restart_live),
     )
 
     try:
         result = await session_manager.respawn_session(
-            body.session_name, agent_type=body.agent_type
+            body.session_name,
+            agent_type=body.agent_type,
+            live_restart_confirmed=bool(body.confirm_restart_live),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

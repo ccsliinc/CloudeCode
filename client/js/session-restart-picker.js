@@ -47,11 +47,28 @@
  * the only useful thing there is to say about one. The second, and only
  * the second, enables the radio. A PREDICTION IS NEVER A PERMISSION.
  *
- * WHAT IT DOES NOT DO: replace a LIVE session's agent. Restart revives a
- * pane whose process has exited; it does not close and recreate a running
- * one. That is a different operation with its own unsolved problems (a
- * new row that has to re-carry attribution, theme, unread, group filing
- * and position) and is tracked separately.
+ * REPLACING WHAT IS RUNNING IS A SECOND, DELIBERATE ACT. On a pane that
+ * is ALIVE this panel now offers one, and it is deliberately awkward to
+ * reach: an unchecked box at the top of the list arms the choices, and
+ * the button then routes through the app's confirm modal, which names
+ * what is about to be killed. Nothing arrives armed and nothing in the
+ * server's payload can arm it - `armLive` starts false on every render
+ * whatever the preview says, so a live restart is always at least two
+ * user acts away.
+ *
+ * THAT IS WHERE THE PREDICTION/PERMISSION LINE IS DRAWN, and it is drawn
+ * with a value the server never sends. `projected_kind` is what a live
+ * session would come back AS and it drives the badge, the sentence and
+ * the warning; it does NOT enable anything. What enables a live choice is
+ * `armLive && isActionable(projected_kind)`, and `armLive` is a checkbox
+ * state. So there is no field in the response a client could echo into a
+ * permission, which is the failure the ladder's docstring warns about.
+ *
+ * IT IS NOT CLOSE-AND-RECREATE. The owner's two calls (2026-09-07) were
+ * "same tmux should be fine" and "yes resume the same session", which
+ * make this `respawn-pane -k` against the same session name: no new row
+ * is minted, so project attribution, pinned theme, unread state, group
+ * filing and sidebar position stay put because nothing moves.
  *
  * Load AFTER api.js and app.js; BEFORE session-sidebar-clicks.js.
  */
@@ -146,6 +163,12 @@ console.log('[SessionRestartPicker Module] Loading...');
         // server-side cannot be offered by an old client that has no idea
         // what it means.
         var canPick = spec.actionableNow === true && isActionable(spec.kind);
+        // WHETHER THIS COULD BE PICKED IF THE USER ARMS A LIVE RESTART.
+        // Carried as data, never as `disabled`: the initial render is
+        // derived from `actionable_now` ALONE, so a live session paints
+        // every radio disabled however good its projection is. Only
+        // `sync()` may relax that, and only from a checkbox.
+        var liveEligible = isActionable(spec.projectedKind || spec.kind);
         var disabled = canPick ? '' : ' disabled';
         var checked = spec.checked ? ' checked' : '';
         var current = spec.current
@@ -156,7 +179,9 @@ console.log('[SessionRestartPicker Module] Loading...');
             + '" for="' + esc(id) + '">'
             + '<input type="radio" name="restart-picker-choice" id="' + esc(id) + '" '
             + 'value="' + esc(value) + '" data-kind="' + esc(kind) + '" '
-            + 'data-now-kind="' + esc(spec.kind || '') + '"'
+            + 'data-now-kind="' + esc(spec.kind || '') + '" '
+            + 'data-actionable-now="' + (canPick ? '1' : '0') + '" '
+            + 'data-live-eligible="' + (liveEligible ? '1' : '0') + '"'
             + disabled + checked + '>'
             + '<span class="restart-picker__body">'
             + '<span class="restart-picker__title">' + esc(title) + current + '</span>'
@@ -226,12 +251,15 @@ console.log('[SessionRestartPicker Module] Loading...');
         var out = '';
         if (preview.pane_state === 'alive') {
             // SAID BEFORE THE LIST, not discovered by clicking a dead
-            // button. The options below still show what each one WOULD
-            // come back as, which is the useful half, so this sentence
-            // has to draw the line between the two out loud.
+            // button. The options below show what each choice would come
+            // back as either way; this sentence draws the line between
+            // "what it would be" and "what it costs to get there".
             out += '<div class="restart-picker__notice">this session is still '
-                + 'running, so nothing here can be restarted yet. what each '
-                + 'choice would come back as is shown anyway.</div>';
+                + 'running. restarting it kills what is in the pane first, so '
+                + 'the choices below are locked until you say so.</div>'
+                + (window.SessionRestartLive
+                    ? window.SessionRestartLive.armHtml()
+                    : '');
         } else if (preview.pane_state === 'unknown') {
             out += '<div class="restart-picker__notice">tmux did not answer '
                 + 'about this pane, so whether it can be restarted could not '
@@ -298,9 +326,13 @@ console.log('[SessionRestartPicker Module] Loading...');
      *   displayName (string) - the session name as the user sees it.
      *   preview (object) - the RestartPreviewResponse body.
      *   status (string|null) - the row's activity status.
-     * Output: Promise<{agentType: string|null}|null> - null on every
-     *   dismissal path (cancel, Escape, backdrop), so a restart can only
-     *   ever fire from an explicit click on the restart button.
+     * Output: Promise<{agentType: string|null,
+     *   confirmRestartLive: boolean}|null> - null on every dismissal
+     *   path (cancel, Escape, backdrop), so a restart can only ever fire
+     *   from an explicit click on the restart button.
+     *   `confirmRestartLive` is true ONLY when the user ticked the arm
+     *   box AND then agreed in the confirm modal. Two acts, and neither
+     *   of them is anything the server sent.
      */
     function present(displayName, preview, status) {
         return new Promise(function (resolve) {
@@ -335,6 +367,21 @@ console.log('[SessionRestartPicker Module] Loading...');
 
             var go = overlay.querySelector('#restart-picker-go');
             var why = overlay.querySelector('#restart-picker-why');
+            // Present ONLY on a live pane (noticeHtml renders it there).
+            // Absent means there is nothing to arm, and `armed()` then
+            // answers false forever, which is the dead-pane behaviour
+            // this panel has always had.
+            var arm = overlay.querySelector('#restart-picker-live');
+
+            /**
+             * Description: has the user armed a live restart? Reads the
+             *   CHECKBOX, never the payload. There is deliberately no
+             *   path from the server's response to this value.
+             * Inputs: none. Output: boolean.
+             */
+            function armed() {
+                return !!(arm && arm.checked);
+            }
 
             /**
              * Description: keep the button and its explanation in step
@@ -354,22 +401,50 @@ console.log('[SessionRestartPicker Module] Loading...');
                 // 'agent' and must still not be restartable. Reading the
                 // prediction here would hand out exactly the permission
                 // the server withheld.
+                var live = armed();
+                // RE-DERIVE EVERY RADIO'S DISABLED STATE FROM TWO FACTS,
+                // one of which the server sent and one of which only the
+                // user can set. `data-actionable-now` is the server's
+                // permission for a DEAD pane; `data-live-eligible` is
+                // only ever consulted alongside `live`, so the projected
+                // rung can never enable anything on its own.
+                var radios = overlay.querySelectorAll(
+                    'input[name="restart-picker-choice"]');
+                Array.prototype.forEach.call(radios, function (r) {
+                    var now = r.getAttribute('data-actionable-now') === '1';
+                    var eligible = r.getAttribute('data-live-eligible') === '1';
+                    r.disabled = !(now || (live && eligible));
+                    var label = r.parentNode;
+                    if (label && label.classList) {
+                        label.classList.toggle('is-unavailable', r.disabled);
+                    }
+                });
                 var ok = !!picked && !picked.disabled;
                 go.disabled = !ok;
+                // THE BUTTON SAYS WHAT IT DOES. A live restart destroys
+                // a running process, so it must not wear the same word as
+                // reviving an empty pane.
+                go.textContent = live ? 'kill and restart' : 'restart';
                 var nowKind = picked
                     ? picked.getAttribute('data-now-kind')
                     : '';
                 var projected = picked ? picked.getAttribute('data-kind') : '';
                 if (ok) {
-                    why.textContent = projected === 'shell'
-                        ? 'this will not start an agent. it opens a plain shell.'
-                        : '';
+                    if (projected === 'shell') {
+                        why.textContent = 'this will not start an agent. it '
+                            + 'opens a plain shell.';
+                    } else if (live) {
+                        why.textContent = 'this kills what is running in the '
+                            + 'pane first. you will be asked to confirm.';
+                    } else {
+                        why.textContent = '';
+                    }
                     return;
                 }
                 if (nowKind === 'not_dead') {
-                    why.textContent = 'this session is still running, so there '
-                        + 'is nothing to restart. close it first, or leave it '
-                        + 'alone.';
+                    why.textContent = 'this session is still running. tick the '
+                        + 'box above to kill what is in the pane and restart it '
+                        + 'in place, or leave it alone.';
                     return;
                 }
                 if (nowKind === 'transcript_missing'
@@ -409,7 +484,31 @@ console.log('[SessionRestartPicker Module] Loading...');
                 var picked = overlay.querySelector(
                     'input[name="restart-picker-choice"]:checked');
                 var value = picked ? picked.value : '';
-                dismiss(resolve, { agentType: value || null });
+                if (!armed()) {
+                    dismiss(resolve, {
+                        agentType: value || null,
+                        confirmRestartLive: false,
+                    });
+                    return;
+                }
+                // THE SECOND ACT. The checkbox armed the choices; this
+                // names what is about to be killed, and the flag that
+                // reaches the server is produced HERE and nowhere else.
+                // A cancel leaves the panel standing so the tick can be
+                // undone rather than the whole decision restarted.
+                var copy = window.SessionRestartLive.liveConfirmCopy(
+                    preview, value || null, status, displayName);
+                var ask = window.App && window.App.showConfirmModal
+                    ? window.App.showConfirmModal(copy.title, copy.message,
+                        copy.details, copy.primaryLabel, 'cancel')
+                    : Promise.resolve(false);
+                Promise.resolve(ask).then(function (agreed) {
+                    if (!agreed) return;
+                    dismiss(resolve, {
+                        agentType: value || null,
+                        confirmRestartLive: true,
+                    });
+                });
             });
 
             var first = overlay.querySelector(
@@ -431,10 +530,13 @@ console.log('[SessionRestartPicker Module] Loading...');
      *   tmuxName (string) - literal tmux session name.
      *   displayName (string) - what the row calls it.
      *   status (string|null) - the row's activity status, shown not acted on.
-     * Output: Promise<{agentType: string|null}|null> - null when the user
+     * Output: Promise<{agentType: string|null,
+     *   confirmRestartLive: boolean}|null> - null when the user
      *   cancelled OR the preview could not be fetched. `error` is set on
      *   the returned object shape only in the latter case, via
-     *   `lastError()`.
+     *   `lastError()`. Callers MUST forward `confirmRestartLive` to
+     *   `API.respawnSession`; dropping it turns a live restart into a
+     *   silent no-op the server answers `not_dead`.
      */
     var lastErrorText = '';
 

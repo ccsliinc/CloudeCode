@@ -104,12 +104,45 @@ cannot restart it while it is running" in the same breath, which is the
 honest pair. Nothing here passes ``-k``, so a live agent cannot be killed
 by any of it.
 
-NOT DEAD IS ITS OWN OUTCOME. ``RESPAWN_NOT_DEAD`` is returned for a pane
-that is alive. Callers never need to enforce it defensively: tmux itself
-refuses ``respawn-pane`` without ``-k`` on a live pane (measured: rc=1,
-"pane ... still active"), and this module never passes ``-k``. So a click
-on a row that came back to life between paint and click cannot kill a
-running agent - that is a guarantee from tmux, not a check we wrote.
+NOT DEAD IS ITS OWN OUTCOME, AND IT IS THE DEFAULT. ``RESPAWN_NOT_DEAD``
+is returned for a pane that is alive unless the caller passed
+``live_restart_confirmed=True``. With the default, tmux itself is the
+second guarantee: it refuses ``respawn-pane`` without ``-k`` on a live
+pane (measured on tmux 3.7c: rc=1, "pane ... still active"), and
+``RespawnPlan.kills_live_pane`` - the ONLY thing that makes a caller pass
+``-k`` - can never be True on that path. So a click on a row that came
+back to life between paint and click still cannot kill a running agent.
+
+REPLACING WHAT IS RUNNING, AND WHY IT IS A PARAMETER RATHER THAN A FORK
+OF THE LADDER.
+
+TODO item 22 part 2 asks for the other operation: restart a session whose
+pane is ALIVE, keeping the same tmux name and the same conversation. That
+is ``respawn-pane -k`` - kill the pane's process and put a new one in the
+same pane - and it is DESTRUCTIVE and irreversible from the user's side.
+
+It could have been a second entry point. It is not, for the same reason
+:func:`project_restart_rung` shares ``_rung_from_start_command``: a
+second ladder is how the projection and the action drift apart. Instead
+:func:`resolve_respawn_plan` takes ``live_restart_confirmed``, which
+changes exactly one thing - whether the liveness gate returns
+``RESPAWN_NOT_DEAD`` or falls through to the SAME tail every other rung
+comes out of. Four lines, one ladder, and the dead-pane path is
+byte-identical to what it was.
+
+``RespawnPlan.kills_live_pane`` carries the consequence. It is True only
+when the pane was MEASURED alive AND the caller confirmed AND the tail
+produced an actionable rung, and it is the single fact a backend reads to
+decide whether ``-k`` is passed. A PREDICTION CANNOT SET IT:
+:func:`project_restart_rung` takes no liveness input at all, so every
+plan it returns carries False, and a UI that wires ``projected`` to a
+button therefore still cannot produce a kill. That is enforced by
+construction rather than by a rule someone has to remember.
+
+The verdict vocabulary does NOT fork here either. A confirmed live
+restart of a bare-shell pane is still ``RESPAWN_SHELL``, of an agent pane
+still ``RESPAWN_AGENT``. What changed is which pane it may act on, not
+what it runs, so a sixth kind would say nothing a consumer could use.
 
 AN EXPLICIT CHOICE OUTRANKS THE GATE, AND ONLY AN EXPLICIT CHOICE.
 
@@ -144,7 +177,7 @@ what it runs.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 #: Re-derive the command from the app's own agent config. See module docs.
@@ -212,6 +245,18 @@ class RespawnPlan:
             and nothing in this app ever inspected it. A caller holding a
             non-None value here MUST prove the transcript exists before
             acting - see :func:`refuse_if_transcript_missing`.
+        kills_live_pane: True when acting on this plan will KILL a
+            process the user is currently running, which is the whole of
+            what separates ``respawn-pane -k`` from ``respawn-pane``. The
+            single fact a backend reads to decide whether to pass ``-k``,
+            and the only route to that flag anywhere in this codebase.
+
+            True only when ALL THREE hold: the pane was measured ALIVE,
+            the caller passed ``live_restart_confirmed=True``, and the
+            rung is actionable. False everywhere else, including on every
+            plan :func:`project_restart_rung` returns - A PREDICTION
+            CANNOT SET IT, because that function is never told whether
+            the pane is alive.
     """
 
     kind: str
@@ -219,6 +264,7 @@ class RespawnPlan:
     detail: str = ""
     chosen: bool = False
     resume_uuid: Optional[str] = None
+    kills_live_pane: bool = False
 
     @property
     def actionable(self) -> bool:
@@ -238,6 +284,7 @@ def resolve_respawn_plan(
     agent_command: Optional[str],
     chosen_agent_command: Optional[str] = None,
     chosen_agent_type: Optional[str] = None,
+    live_restart_confirmed: bool = False,
 ) -> RespawnPlan:
     """Decide what restarting this pane should run.
 
@@ -267,10 +314,20 @@ def resolve_respawn_plan(
         chosen_agent_type: The picked wrapper's id, used ONLY to name it
             in the sentence shown to the user. Never used to decide
             anything; the command above is what runs.
+        live_restart_confirmed: True ONLY when the user has deliberately
+            asked to replace what is running in a pane that is alive,
+            having been told that the process in it is killed. The
+            DEFAULT IS FALSE and with it a live pane still answers
+            ``RESPAWN_NOT_DEAD``, so no existing caller changes
+            behaviour. It is not derivable from any prediction: nothing
+            in this module or in the preview can produce it, only an
+            explicit request can. See the module docstring.
 
     Output:
         RespawnPlan: verdict, command to run (or None for "reuse"), and a
-            sentence fit to show the user.
+            sentence fit to show the user. ``kills_live_pane`` is True
+            only on a confirmed, actionable plan against a pane measured
+            alive, and is what makes a backend pass ``-k``.
 
     Example:
         >>> resolve_respawn_plan(probe_ok=True, pane_dead="1",
@@ -284,6 +341,14 @@ def resolve_respawn_plan(
         ...     chosen_agent_command="cldc", chosen_agent_type="claude-chrome")
         >>> plan.kind, plan.chosen
         ('agent', True)
+        >>> resolve_respawn_plan(probe_ok=True, pane_dead="0",
+        ...     pane_start_command='"cld"', agent_command="cld").kind
+        'not_dead'
+        >>> live = resolve_respawn_plan(probe_ok=True, pane_dead="0",
+        ...     pane_start_command='"cld"', agent_command="cld",
+        ...     live_restart_confirmed=True)
+        >>> live.kind, live.kills_live_pane
+        ('agent', True)
     """
     if not probe_ok or pane_dead is None:
         return RespawnPlan(
@@ -294,18 +359,32 @@ def resolve_respawn_plan(
             ),
         )
 
-    if pane_dead.strip() != "1":
+    # THE LIVENESS GATE, AND THE ONE DELIBERATE WAY THROUGH IT. Without
+    # ``live_restart_confirmed`` this is exactly the refusal it has
+    # always been. With it, the pane being alive is no longer a reason to
+    # stop - it is the thing the user asked to replace - so the SAME tail
+    # every other rung comes out of decides what goes back in the pane.
+    alive = pane_dead.strip() != "1"
+    if alive and not live_restart_confirmed:
         return RespawnPlan(
             kind=RESPAWN_NOT_DEAD,
             detail="this session is still running; there is nothing to restart",
         )
 
-    return _rung_from_start_command(
+    plan = _rung_from_start_command(
         pane_start_command=pane_start_command,
         agent_command=agent_command,
         chosen_agent_command=chosen_agent_command,
         chosen_agent_type=chosen_agent_type,
     )
+    if not alive:
+        return plan
+    # MEASURED ALIVE AND CONFIRMED. Acting on this kills a process the
+    # user is running, so the plan says so out loud and a backend reads
+    # THIS - never the liveness or the confirmation separately - to
+    # decide whether ``-k`` is passed. A rung that is not actionable is
+    # not acted on at all, so it never carries the flag.
+    return replace(plan, kills_live_pane=plan.actionable)
 
 
 def _rung_from_start_command(
@@ -458,12 +537,20 @@ def project_restart_rung(
 
     Output:
         RespawnPlan: AGENT / REPLAY / SHELL / CANNOT_DETERMINE. Never
-            NOT_DEAD, because liveness is not what this answers.
+            NOT_DEAD, because liveness is not what this answers, and
+            ``kills_live_pane`` is ALWAYS False for the same reason -
+            this function is never told whether the pane is alive, so it
+            structurally cannot hand out the permission to kill one. That
+            is what stops a UI wiring a projected rung to a button from
+            turning a prediction into a kill.
 
     Example:
         >>> project_restart_rung(probe_ok=True, pane_start_command='',
         ...     agent_command='cld').kind
         'shell'
+        >>> project_restart_rung(probe_ok=True, pane_start_command='"cld"',
+        ...     agent_command='cld').kills_live_pane
+        False
     """
     if not probe_ok:
         return RespawnPlan(
@@ -544,7 +631,14 @@ def refuse_if_transcript_missing(
 
     Output:
         RespawnPlan: the SAME plan, or a RESPAWN_TRANSCRIPT_MISSING
-            refusal carrying the uuid that could not be found.
+            refusal carrying the uuid that could not be found. THE
+            REFUSAL NEVER CARRIES ``kills_live_pane``: it is built fresh
+            rather than copied, so a confirmed live restart whose
+            transcript has gone cannot reach ``-k``. That is the whole
+            point of routing the live path through this guard - the
+            incident it exists for is a resume against a deleted
+            transcript, and on the live path the pane it would kill was
+            working.
 
     Example:
         >>> p = RespawnPlan(kind=RESPAWN_REPLAY, resume_uuid='u')
@@ -669,6 +763,15 @@ class RespawnResult:
             picked in this request. The caller persists the choice only
             when this is True AND ``ok`` is True - see
             ``src/core/session_agent_choice.py`` for why both.
+        killed_live_pane: True when this restart KILLED a process that
+            was running, rather than reviving a pane that was already
+            empty. Reported rather than inferred, so a caller never has
+            to reconstruct from ``kind`` whether anything was destroyed.
+        epoch_before: ``#{session_created}`` read BEFORE the kill, or
+            None when that read did not answer. Only populated on a live
+            restart; see ``src/core/session_instance_rekey.py`` for what
+            the pair is for.
+        epoch_after: the same reading taken after it, or None.
     """
 
     kind: str
@@ -676,3 +779,6 @@ class RespawnResult:
     detail: str = ""
     command: Optional[str] = None
     chosen: bool = False
+    killed_live_pane: bool = False
+    epoch_before: Optional[int] = None
+    epoch_after: Optional[int] = None

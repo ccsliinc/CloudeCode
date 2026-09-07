@@ -152,10 +152,11 @@ repeated bug in the project. Check the level before you debug the endpoint.
 
 ## Restarting a session, and picking what it comes back as
 
-`POST /sessions/respawn` revives a pane whose PROCESS exited. It does not
-replace a running agent, and it cannot: `resolve_respawn_plan` answers
-`RESPAWN_NOT_DEAD` for a live pane, and tmux itself refuses `respawn-pane`
-without `-k`, which nothing here passes.
+`POST /sessions/respawn` revives a pane whose PROCESS exited. It can ALSO
+replace a running one, but only when the request says so:
+`resolve_respawn_plan` answers `RESPAWN_NOT_DEAD` for a live pane unless
+`live_restart_confirmed=True`, and tmux itself refuses `respawn-pane`
+without `-k`. See "Replacing what is running" below.
 
 **The ladder gates on tmux's `#{pane_start_command}`, and the empty case is
 the trap.** Empty means the pane was born a bare shell, so a restart lands on
@@ -171,6 +172,8 @@ for a real subset of the sessions on a working box, because
 | Validate an `agent_type` choice, and persist it | `src/core/session_agent_choice.py` |
 | `GET /sessions/restart/preview` | `src/api/restart_routes.py` |
 | The panel, and the reopen afterwards | `client/js/session-restart-picker.js`, `client/js/session-restart-return.js` |
+| Keep the row keyed on its instance after a kill | `src/core/session_instance_rekey.py` |
+| The arm control and the kill confirmation | `client/js/session-restart-live.js` |
 
 **A PREDICTION IS NEVER A PERMISSION, and that is why the preview reports the
 rung twice.** `resolve_respawn_plan` short-circuits on `not_dead` BEFORE it
@@ -214,6 +217,52 @@ NEVER refuses - not having been able to look is not evidence a file is gone, and
 refusing on it would break restart on every machine whose corpus lives somewhere
 the checker was not told about. The PREVIEW applies the same guard; a preview
 that skipped it would promise a replay the restart then declines.
+
+**Replacing what is running: `respawn-pane -k`, and the four gates in
+front of it.** The owner's two calls (2026-09-07) were "same tmux should
+be fine" and "yes resume the same session", so this is not
+close-and-recreate. It kills the pane's process and respawns it in the
+same pane, same tmux name, same row - and because no row is minted,
+project attribution, pinned theme, unread state, group filing and
+sidebar position all stay put without anything re-carrying them. It also
+sidesteps rather than fixes the `session_group_members` primary-key
+defect, which keys on `tmux_name`.
+
+It is DESTRUCTIVE and irreversible, so it is gated four times and no
+gate is derivable from a prediction:
+
+1. `actionsFor` offers restart on a row whose status we POSITIVELY know
+   is live. `unknown` still gets close alone.
+2. The picker's arm checkbox (`SessionRestartLive.armHtml`, always
+   emitted unchecked, takes no argument) is what unlocks the choices. `optionsHtml` derives
+   `disabled` from `actionable_now` ALONE, so a live pane paints every
+   radio locked whatever it projects.
+3. `App.showConfirmModal` with `SessionRestartLive.liveConfirmCopy`,
+   which names the
+   bare-shell outcome. Measured 2026-09-07: 15 of 19 live sessions have
+   BOTH an empty `pane_start_command` and a NULL `agent_type`, so 79
+   percent come back a login shell. That warning is what makes this safe
+   to ship.
+4. `confirm_restart_live` on the request. `RespawnPlan.kills_live_pane`
+   is the ONLY thing that makes anything pass `-k`, and it is set only
+   when the pane was measured alive AND the caller confirmed AND the
+   rung is actionable. `project_restart_rung` has no liveness input, so
+   a projection cannot set it. `refuse_if_transcript_missing` BUILDS its
+   refusal rather than copying, so a missing transcript cannot kill.
+
+`activity_status` informs all of this and refuses none of it - it reads
+`working` for about four minutes after a resume.
+
+**Identity is MEASURED across the kill, not assumed.** `#{session_created}`
+belongs to the SESSION and `-k` replaces the pane's PROCESS, so on tmux
+3.7c the instance triple does not move (measured 2026-09-07: same epoch,
+same `pane_id`, new `pane_pid`). Fourteen queries in `src/core` key on
+that triple exactly and all read the same column, so they break or hold
+together. `TmuxBackend.respawn` therefore reads the epoch either side and
+`session_instance_rekey.reconcile_instance_epoch` answers `unchanged` /
+`rekeyed` / `cannot_determine`, re-keying the row on the OLD triple if it
+ever does move. `cannot_determine` is not `unchanged`; a reading that did
+not answer is not evidence nothing moved.
 
 **Respawn writes exactly one column, and only when asked.** On a restart
 verified alive with a picked wrapper, `sessions.agent_type` is updated on the

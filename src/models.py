@@ -933,6 +933,18 @@ class RespawnSessionRequest(BaseModel):
             "it is never resolved to the default wrapper"
         ),
     )
+    confirm_restart_live: bool = Field(
+        False,
+        description=(
+            "Replace what is RUNNING. True kills the pane's process and "
+            "restarts it in place (tmux respawn-pane -k), keeping the "
+            "same tmux name, the same row and the same conversation. "
+            "DESTRUCTIVE and irreversible, so it must be an explicit act "
+            "by the user: no prediction produces it and the server never "
+            "infers it. Left false (the default) a live session still "
+            "answers kind='not_dead' and nothing is destroyed"
+        ),
+    )
 
 
 class RespawnSessionResponse(BaseModel):
@@ -1008,6 +1020,28 @@ class RespawnSessionResponse(BaseModel):
             "A respawn preserves the instance triple, so this is the same "
             "value the row carried before - which is what makes it usable "
             "as proof the reopened terminal is the SAME session"
+        ),
+    )
+    killed_live_pane: bool = Field(
+        False,
+        description=(
+            "True when this restart killed a process that was RUNNING "
+            "rather than reviving a pane that was already empty. Stated "
+            "rather than left to be inferred from kind, because 'we "
+            "destroyed something' is not recoverable from a rung name"
+        ),
+    )
+    identity_status: str = Field(
+        "unchecked",
+        description=(
+            "Whether the row is still keyed on the tmux instance it "
+            "belongs to: 'unchecked' (no live pane was killed, so the "
+            "question was not asked) | 'unchanged' (both #{session_created} "
+            "readings agreed, which is what tmux 3.7c does) | 'rekeyed' "
+            "(the epoch moved and sessions.tmux_created_epoch was moved "
+            "with it) | 'cannot_determine' (a reading did not answer). "
+            "cannot_determine is NOT unchanged - see "
+            "src/core/session_instance_rekey.py"
         ),
     )
 

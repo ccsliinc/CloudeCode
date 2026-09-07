@@ -1384,12 +1384,50 @@ class TmuxBackend(SessionBackend):
         pane_dead, _dead_status, start_command = parse_respawn_probe(first_line)
         return True, pane_dead, start_command
 
+    async def session_created_epoch(self) -> Optional[int]:
+        """``#{session_created}`` for this tmux session, or None.
+
+        Description: the second half of the instance triple
+            ``(tmux_socket, tmux_name, tmux_created_epoch)`` that the
+            ``sessions`` row is keyed on, read straight from tmux. Split
+            out so :meth:`respawn` can take it either side of a kill and
+            PROVE the row still points at the instance it belongs to,
+            rather than assuming it - see
+            ``src/core/session_instance_rekey.py``.
+
+        Inputs:
+            none.
+
+        Output:
+            Optional[int]: the unix epoch tmux recorded when this session
+                was created, or None when the read did not answer.
+                None is cannot-determine and never zero.
+
+        Example:
+            >>> await backend.session_created_epoch()
+            1788821572
+        """
+        from src.core.session_instance_rekey import parse_epoch
+
+        rc, out, _ = await self._run_tmux(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{session_created}",
+            check=False,
+        )
+        if rc != 0 or not out:
+            return None
+        return parse_epoch(out.decode("utf-8", errors="replace"))
+
     async def respawn(
         self,
         agent_command: Optional[str] = None,
         *,
         chosen_agent_command: Optional[str] = None,
         chosen_agent_type: Optional[str] = None,
+        live_restart_confirmed: bool = False,
     ) -> RespawnResult:
         """Put a process back into this session's dead pane, in place.
 
@@ -1406,11 +1444,29 @@ class TmuxBackend(SessionBackend):
             instance triple this row is keyed on does not change, so no new
             row can be minted and no lineage/fork column is ever touched.
 
-            ``-k`` IS DELIBERATELY NEVER PASSED. tmux refuses
-            ``respawn-pane`` on a live pane without it, so a click on a row
-            painted 'dead' that has since come back to life cannot kill a
-            running agent. The ``not_dead`` branch below is the friendly
-            message; tmux is the actual guarantee.
+            ``-k`` IS PASSED ON EXACTLY ONE PATH AND IT IS DERIVED, NOT
+            DECIDED HERE. tmux refuses ``respawn-pane`` on a live pane
+            without it (measured, rc=1 "pane ... still active"), which is
+            what makes the default path safe: a click on a row painted
+            'dead' that has since come back to life cannot kill a running
+            agent, whatever this method believes.
+
+            The one path that DOES kill is ``live_restart_confirmed``,
+            and even then the flag comes from ``plan.kills_live_pane``
+            rather than from the argument. That field is set by the
+            ladder only when the pane was MEASURED alive, the caller
+            confirmed, AND the rung is actionable, so a refusal - a
+            missing transcript above all - can never reach ``-k``. The
+            liveness gate is still in one place; this method reads its
+            verdict.
+
+            A LIVE RESTART MEASURES IDENTITY EITHER SIDE OF THE KILL.
+            ``#{session_created}`` is a property of the SESSION and
+            ``respawn-pane -k`` replaces the pane's PROCESS, so on tmux
+            3.7c the instance triple does not move (measured). That is a
+            measurement rather than a law, so it is taken rather than
+            assumed, and both readings ride back on the result for
+            ``src/core/session_instance_rekey.py`` to reconcile.
 
             IT ALSO NEVER KILLS THE SESSION ON FAILURE, which is where it
             departs from ``start()``. On create, tearing down a
@@ -1438,6 +1494,11 @@ class TmuxBackend(SessionBackend):
                 It still cannot revive a live pane; see the ladder.
             chosen_agent_type: the picked wrapper's id, used only to name
                 it in the sentence shown to the user.
+            live_restart_confirmed: True ONLY when the user deliberately
+                asked to replace what is running in a pane that is
+                ALIVE, having been told the process in it is killed.
+                Default False keeps every existing caller's behaviour
+                exactly, including tmux's own refusal as the backstop.
 
         Output:
             RespawnResult: ``kind`` is the ladder verdict, ``ok`` says
@@ -1460,6 +1521,7 @@ class TmuxBackend(SessionBackend):
             agent_command=agent_command,
             chosen_agent_command=chosen_agent_command,
             chosen_agent_type=chosen_agent_type,
+            live_restart_confirmed=live_restart_confirmed,
         )
 
         # THE TRANSCRIPT THIS WOULD RESUME MUST STILL EXIST. The REPLAY
@@ -1469,6 +1531,16 @@ class TmuxBackend(SessionBackend):
         # dead pane that the row still calls running - the exact false
         # green this codebase is built against. Checked BEFORE spawning,
         # never inferred afterwards. UNCHECKED does not refuse.
+        #
+        # ON THE LIVE PATH THIS IS THE GUARD THAT MATTERS MOST, and it
+        # sits here rather than at the caller for that reason. The owner
+        # asked that a restart resume the same conversation, so a live
+        # restart can carry a --resume the pane is currently serving; a
+        # missing transcript there does not merely fail to start, it
+        # kills a working session to replace it with one that exits at
+        # once. The refusal is built fresh by
+        # ``refuse_if_transcript_missing`` and so carries
+        # ``kills_live_pane=False``, which is what stops ``-k`` below.
         if plan.resume_uuid:
             from src.core.session_transcript_presence import (
                 conversation_presence,
@@ -1498,9 +1570,34 @@ class TmuxBackend(SessionBackend):
             )
             return RespawnResult(kind=plan.kind, ok=False, detail=plan.detail)
 
-        args: List[str] = ["respawn-pane", "-t", target]
+        # THE ONE PLACE ``-k`` CAN APPEAR, AND IT READS THE PLAN. Not the
+        # ``live_restart_confirmed`` argument, not ``pane_dead``, not a
+        # second liveness read - one field, set by one ladder, only when
+        # the pane was measured alive AND the caller confirmed AND the
+        # rung is actionable. Every refusal, the missing transcript
+        # included, arrives here with it False and so cannot kill
+        # anything: tmux then refuses the live pane itself.
+        killing = bool(plan.kills_live_pane)
+
+        # BOTH SIDES OF THE KILL, taken only when there is a kill. See
+        # src/core/session_instance_rekey.py for why a measurement and
+        # not an assumption.
+        epoch_before = await self.session_created_epoch() if killing else None
+
+        args: List[str] = ["respawn-pane"]
+        if killing:
+            args.append("-k")
+        args += ["-t", target]
         if plan.command:
             args.append(plan.command)
+
+        if killing:
+            logger.warning(
+                "tmux_respawn_killing_live_pane",
+                session=self.tmux_session,
+                kind=plan.kind,
+                chosen=plan.chosen,
+            )
 
         rc_spawn, _, err_spawn = await self._run_tmux(*args, check=False)
         if rc_spawn != 0:
@@ -1521,6 +1618,8 @@ class TmuxBackend(SessionBackend):
                 ),
                 command=plan.command,
                 chosen=plan.chosen,
+                killed_live_pane=False,
+                epoch_before=epoch_before,
             )
 
         # Same 250ms dead-on-arrival window ``start()`` uses. A binary that
@@ -1528,6 +1627,12 @@ class TmuxBackend(SessionBackend):
         # reporting THAT is what stops a one-click restart from looking like
         # a success that did nothing.
         await asyncio.sleep(0.25)
+
+        # READ AFTER THE KILL SUCCEEDED, before anything else can fail.
+        # Taken on every terminating path from here down, including the
+        # two that report not-ok, because the pane was destroyed on all
+        # three and the row has to be reconciled either way.
+        epoch_after = await self.session_created_epoch() if killing else None
 
         rc_after, out_after, _ = await self._run_tmux(
             "list-panes",
@@ -1555,6 +1660,14 @@ class TmuxBackend(SessionBackend):
                 ),
                 command=plan.command,
                 chosen=plan.chosen,
+                # THE KILL ALREADY HAPPENED. tmux accepted the command, so
+                # whatever was running is gone whether or not we can see
+                # what replaced it, and saying otherwise here would let a
+                # caller skip the identity reconciliation on exactly the
+                # path where it is least certain.
+                killed_live_pane=killing,
+                epoch_before=epoch_before,
+                epoch_after=epoch_after,
             )
 
         dead_after, status_after, _ = parse_respawn_probe(
@@ -1576,6 +1689,9 @@ class TmuxBackend(SessionBackend):
                 detail=f"it started and exited again: {reason}",
                 command=plan.command,
                 chosen=plan.chosen,
+                killed_live_pane=killing,
+                epoch_before=epoch_before,
+                epoch_after=epoch_after,
             )
 
         logger.info(
@@ -1589,6 +1705,9 @@ class TmuxBackend(SessionBackend):
             detail=plan.detail,
             command=plan.command,
             chosen=plan.chosen,
+            killed_live_pane=killing,
+            epoch_before=epoch_before,
+            epoch_after=epoch_after,
         )
 
     async def _first_meaningful_pane_line(self, target: str) -> str:

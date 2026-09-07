@@ -992,7 +992,23 @@ class API {
         return await this.call(`/sessions/restart/preview?session_name=${qs}`);
     }
 
-    async respawnSession(sessionName, agentType) {
+    /**
+     * Sessions: restart one in place.
+     *
+     * POST /api/v1/sessions/respawn. `confirmRestartLive` is the ONLY
+     * way to restart a session whose pane is still ALIVE: it kills the
+     * pane's process and starts a new one in the same pane, keeping the
+     * tmux name, the row and therefore attribution, theme, unread state,
+     * group filing and position. DESTRUCTIVE, so it is never inferred -
+     * pass it only after the user has explicitly confirmed. Omitted, a
+     * live session answers `kind: 'not_dead'` and nothing is destroyed.
+     *
+     * @param {string} sessionName - literal tmux session name.
+     * @param {?string} agentType - configured wrapper id, or null.
+     * @param {boolean} [confirmRestartLive] - replace what is running.
+     * @returns {Promise<object>} the RespawnSessionResponse body.
+     */
+    async respawnSession(sessionName, agentType, confirmRestartLive) {
         // A PLAIN OBJECT, not JSON.stringify. `call()` sets
         // `Content-Type: application/json` only when `body` is an object,
         // and stringifies it itself. Handing it a pre-stringified string
@@ -1008,6 +1024,11 @@ class API {
         // to the old one when nobody picked anything.
         const body = { session_name: sessionName };
         if (agentType) body.agent_type = agentType;
+        // Sent only when TRUE, so a request that does not mean to kill
+        // anything is byte-identical to the one this method has always
+        // made. A falsy value is not a weaker yes; it is the absence of
+        // a request, and the server's default is the refusal.
+        if (confirmRestartLive === true) body.confirm_restart_live = true;
         return await this.call('/sessions/respawn', {
             method: 'POST',
             body,

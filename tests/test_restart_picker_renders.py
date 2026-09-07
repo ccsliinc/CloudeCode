@@ -77,6 +77,7 @@ CSS_FILES = [
 JS_FILES = [
     "js/session-status-ui.js",
     "js/session-sidebar-rows.js",
+    "js/session-restart-live.js",
     "js/session-restart-picker.js",
 ]
 
@@ -207,9 +208,24 @@ window.API = {
     return Promise.resolve(window.__preview);
   },
 };
+window.__confirms = [];
+window.__confirmAnswer = true;
+window.App = {
+  // The app's ONE confirmation implementation, stubbed. Recorded rather
+  // than merely answered, so a test can assert on the copy the user is
+  // actually shown before a live pane is killed.
+  showConfirmModal: function (title, message, details, primary, secondary) {
+    window.__confirms.push({
+      title: title, message: message, details: details,
+      primary: primary, secondary: secondary,
+    });
+    return Promise.resolve(window.__confirmAnswer);
+  },
+};
 window.__open = function (preview, status) {
   window.__preview = preview;
   window.__result = 'pending';
+  window.__confirms = [];
   window.SessionRestartPicker.open('row-dead', 'the session', status || null)
     .then(function (r) { window.__result = r; });
 };
@@ -508,7 +524,16 @@ def test_picking_a_wrapper_returns_that_wrapper_and_nothing_else(page):
     ) is False, "a valid choice left the restart button disabled"
     page.evaluate("() => document.getElementById('restart-picker-go').click()")
     page.wait_for_function("window.__result !== 'pending'")
-    assert page.evaluate("window.__result") == {"agentType": "claude-chrome"}
+    assert page.evaluate("window.__result") == {
+        "agentType": "claude-chrome",
+        # A DEAD pane can never return true here. The flag exists so a
+        # caller can forward one permission; a path that produced it
+        # without the arm box would hand out a kill nobody asked for.
+        "confirmRestartLive": False,
+    }
+    assert page.evaluate("window.__confirms.length") == 0, (
+        "a dead pane's restart asked the user to confirm killing something"
+    )
     assert page.evaluate("document.querySelector('.restart-picker')") is None, (
         "the panel did not close after the user committed"
     )
@@ -618,3 +643,122 @@ def test_the_wrapper_list_being_unreadable_is_not_an_empty_list(page):
         f"an unreadable wrapper list rendered as having none: {text!r}"
     )
     assert "not the same as having none" in text
+
+
+# ---------------------------------------------------------------------------
+# Restarting a LIVE session - TODO item 22 part 2, measured in the browser
+# ---------------------------------------------------------------------------
+
+
+def test_a_live_session_paints_an_unticked_arm_box_and_no_pickable_option(page):
+    """THE PREDICTION/PERMISSION LINE, asserted on the DOM.
+
+    HANDOFF section 6's reusable lesson is that a three-outcome state
+    existing in the MODEL is not the same as it reaching the SCREEN, so
+    this reads the real inputs' real `disabled` property rather than the
+    payload the panel was handed. Every option projects an actionable
+    rung; none of them may be pickable until a human ticks a box.
+    """
+    _open(page, PREVIEW_LIVE)
+    arm = page.evaluate(
+        """() => {
+            const el = document.getElementById('restart-picker-live');
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {checked: el.checked, w: r.width, h: r.height};
+        }"""
+    )
+    assert arm is not None, "a live session was given no way to restart at all"
+    assert arm["checked"] is False, "the panel opened already armed to kill"
+    assert arm["w"] > 0 and arm["h"] > 0, "the arm control has no box on screen"
+
+    locked = page.evaluate(
+        """() => Array.from(document.querySelectorAll(
+            'input[name="restart-picker-choice"]')).map(el => el.disabled)"""
+    )
+    assert locked and all(locked), (
+        f"a live session offered a pickable option before arming: {locked}"
+    )
+    assert page.evaluate(
+        "document.getElementById('restart-picker-go').disabled"
+    ) is True, "the restart button was live before anything was armed"
+
+
+def test_ticking_the_arm_box_unlocks_the_choices_and_renames_the_button(page):
+    """The arm is the gate, and the button stops saying the wrong word."""
+    _open(page, PREVIEW_LIVE)
+    page.evaluate(
+        "() => document.getElementById('restart-picker-live').click()"
+    )
+    unlocked = page.evaluate(
+        """() => Array.from(document.querySelectorAll(
+            'input[name="restart-picker-choice"]')).map(el => el.disabled)"""
+    )
+    assert not any(unlocked), (
+        f"arming the panel did not unlock the choices: {unlocked}"
+    )
+    assert page.evaluate(
+        "document.getElementById('restart-picker-go').textContent.trim()"
+    ) == "kill and restart", (
+        "the button still says 'restart' for an operation that kills a "
+        "running process"
+    )
+    # Untick and it locks again. A gate that only opens is not a gate.
+    page.evaluate("() => document.getElementById('restart-picker-live').click()")
+    relocked = page.evaluate(
+        """() => Array.from(document.querySelectorAll(
+            'input[name="restart-picker-choice"]')).map(el => el.disabled)"""
+    )
+    assert all(relocked), f"unticking the box left the choices open: {relocked}"
+
+
+def test_a_live_restart_confirms_and_names_the_bare_shell_outcome(page):
+    """The confirmation is the second act, and it says what happens.
+
+    PREVIEW_LIVE projects a plain shell for the baseline choice, which is
+    the shape 15 of the owner's 19 live sessions are in. The dialog has
+    to say so, or it teaches the user that this dialog can be clicked
+    through.
+    """
+    _open(page, PREVIEW_LIVE)
+    page.evaluate("() => document.getElementById('restart-picker-live').click()")
+    page.evaluate("() => document.getElementById('restart-picker-go').click()")
+    page.wait_for_function("window.__result !== 'pending'")
+
+    asked = page.evaluate("window.__confirms")
+    assert len(asked) == 1, f"the live restart did not confirm exactly once: {asked}"
+    assert asked[0]["title"] == "replace what is running"
+    assert "the session" in asked[0]["message"]
+    assert "cannot be undone" in asked[0]["details"]
+    assert "plain login shell" in asked[0]["details"], (
+        "the bare-shell warning never reached the user: "
+        f"{asked[0]['details']!r}"
+    )
+    assert asked[0]["primary"] == "kill and restart"
+
+    assert page.evaluate("window.__result") == {
+        "agentType": None,
+        "confirmRestartLive": True,
+    }
+
+
+def test_declining_the_confirmation_kills_nothing_and_keeps_the_panel(page):
+    """A cancel is a cancel, and the tick is left to be undone.
+
+    Tearing the whole panel down on a declined confirmation would make
+    the user rebuild a decision they only wanted to back out of the last
+    step of.
+    """
+    _open(page, PREVIEW_LIVE)
+    page.evaluate("() => { window.__confirmAnswer = false; }")
+    page.evaluate("() => document.getElementById('restart-picker-live').click()")
+    page.evaluate("() => document.getElementById('restart-picker-go').click()")
+    page.wait_for_function("window.__confirms.length === 1")
+
+    assert page.evaluate("window.__result") == "pending", (
+        "a declined confirmation still committed to a restart"
+    )
+    assert page.evaluate("document.querySelector('.restart-picker')") is not None, (
+        "declining the confirmation tore the whole panel down"
+    )
+    page.evaluate("() => { window.__confirmAnswer = true; }")

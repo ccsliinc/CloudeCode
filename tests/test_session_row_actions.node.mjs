@@ -167,18 +167,27 @@ test('the X and the trash are still never both on one row', () => {
     // was written to prevent.
     const running = SessionRowActions.html('working', 'cloude_api', 'running-session-kill');
     const stopped = SessionRowActions.html('dead', 'cloude_api', 'running-session-kill');
-    assert.equal((running.match(/<button/g) || []).length, 1, 'running row grew a control');
+    const unread = SessionRowActions.html('unknown', 'cloude_api', 'running-session-kill');
+    // Two apiece on a MEASURED row, since TODO item 22 part 2 - the live
+    // row draws close plus restart, the stopped row restart plus trash.
+    // A row whose status could not be read keeps the single X.
+    assert.equal((running.match(/<button/g) || []).length, 2, 'running row lost a control');
     assert.equal((stopped.match(/<button/g) || []).length, 2, 'stopped row must offer restart + remove');
+    assert.equal((unread.match(/<button/g) || []).length, 1, 'an unreadable row grew a control');
 
     const closeGlyph = SessionStatusUI.closeIconSvg();
     const trashGlyph = SessionStatusUI.trashIconSvg();
     const restartGlyph = SessionStatusUI.restartIconSvg();
     assert.ok(running.includes(closeGlyph), 'running row must draw the X');
     assert.ok(!running.includes(trashGlyph), 'running row must not draw the trash');
-    assert.ok(!running.includes(restartGlyph), 'a live agent must not be offered a restart');
+    // THE PAIR IS WHAT THIS TEST GUARDS. A live row may draw the restart
+    // arrow now; it may still never draw the trash, because close and
+    // remove make opposite promises about whether anything is running.
+    assert.ok(running.includes(restartGlyph), 'running row lost its restart arrow');
     assert.ok(stopped.includes(trashGlyph), 'stopped row must draw the trash');
     assert.ok(stopped.includes(restartGlyph), 'stopped row must draw the restart arrow');
     assert.ok(!stopped.includes(closeGlyph), 'stopped row must not draw the X');
+    assert.ok(!unread.includes(restartGlyph), 'an unreadable row was offered a restart');
 });
 
 test('the control always has BOTH a title and an aria-label (the original bug)', () => {
@@ -436,11 +445,19 @@ test('sidebar rows paint the same control with the same wording', () => {
         'the row must paint a kebab to hang its actions off');
     assert.ok(html.includes('title="close session"'), 'same tooltip wording as the launcher');
     assert.ok(html.includes('title="remove from the list"'));
-    // 3, not 2: the live row draws close, the dead row draws restart
-    // AND remove. Updated by feat/session-respawn - see the launcher
-    // assertion above for why the dead row now carries two.
-    assert.ok(html.includes('title="restart the agent"'), 'dead row lost its restart');
-    assert.equal((html.match(/data-session-action=/g) || []).length, 3);
+    // 4, not 3: BOTH rows now draw two. The dead row draws restart and
+    // remove; the live row draws close and, since TODO item 22 part 2,
+    // restart as well - restarting a running session is a supported
+    // operation now (respawn-pane -k in place). Offering the control is
+    // not permitting the kill: it opens the picker, which needs an arm
+    // box and a confirm modal, and the server needs
+    // `confirm_restart_live` after that.
+    assert.ok(html.includes('title="restart the agent"'), 'a row lost its restart');
+    assert.equal((html.match(/data-session-action=/g) || []).length, 4);
+    assert.equal(
+        (html.match(/data-session-action="restart"/g) || []).length, 2,
+        'both the live row and the dead row must offer restart',
+    );
 });
 
 await runQueue();
