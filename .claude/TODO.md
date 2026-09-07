@@ -1453,6 +1453,87 @@ and swap. Whichever is chosen, the verification must then also assert that
 files which should be ABSENT are absent, otherwise it still cannot fail.
 
 ---
+### 2026-09-07 - restart preview and wrapper picker DEPLOYED, and the owner's two design calls - DONE (deploy), OPEN (part 2)
+
+`83b6377` deployed to live on both targets 2026-09-07, second clean run of the
+rewritten deploy script. No rollback needed.
+
+**What is live now.** The restart rung preview
+(`GET /api/v1/sessions/restart/preview`), the wrapper picker, the transcript
+presence guard, the close-lifecycle fix from `c9271da`, the group chip removal
+and the dvh fix. Nine new files, all confirmed present on BOTH targets.
+
+**Verified, with controls that were proven able to fail.** sha256 of 14 files
+matched on both destinations before AND after the restart re-hash (the app
+copies bundle Resources over the server dir on start, which is how a deploy
+silently reverts). The MISSING branch of the check was fired deliberately with a
+bogus filename. All five new static assets served 200 with body hashes matching
+local, and a bogus asset URL returned 404 so the check can fail. The new route
+returned **401, not 404** - and a bogus sibling route under the same prefix
+returned 404, which is what makes the 401 evidence of registration rather than a
+blanket auth wall.
+
+**No regression.** /health at 10 Hz on-box, 30s each side. Before p50 29.7 /
+p99 74.6 / max 84.4 ms. After p50 29.9 / p99 66.0 / max 73.0 ms. Zero errors
+either side. The lag fix holds. Corpus ingest artifact mtime MOVED during the
+window (18:39:42 -> 18:44:48, age 213s -> 44s), so it is live rather than merely
+present. DB integrity `status: ok`.
+
+Rollback tars on the mini, both listable and content-checked:
+`/tmp/rollback-server-20260907-184229.tgz`,
+`/tmp/rollback-bundle-20260907-184229.tgz`.
+
+**CANNOT DETERMINE: whether the picker behaves correctly in the browser.** The
+bytes are on disk, the assets are served with matching hashes, the tags are in
+the served HTML and the route is registered. Nobody has clicked it. A tab open
+across the deploy keeps serving cached assets until a hard reload.
+
+---
+
+**OWNER DECISIONS on item 22 part 2, given 2026-09-07. Do not relitigate.**
+
+- **Same tmux name.** His words: "same tmux should be fine."
+- **Resume the same conversation.** His words: "yes resume the same session."
+
+**These two answers collapse most of part 2.** It is no longer close-and-recreate.
+It becomes kill the pane and respawn it IN PLACE with the same start command,
+which is `respawn-pane -k` against a live pane - a small delta on the existing
+ladder, not a new subsystem. No new database row is minted, so NONE of the
+re-carrying work previously scoped is needed: project attribution, pinned theme,
+unread state, group filing and sidebar position all stay put because the row
+never moves.
+
+**It also sidesteps the `session_group_members` landmine** rather than fixing it.
+That table's primary key is `tmux_name` rather than `session_uuid`, so a recreate
+that CHANGED the name would have collided. Keeping the name means the membership
+row keeps pointing at the right thing. The defect is still real and still open;
+this feature simply no longer walks into it.
+
+**The one consequence to keep in mind.** Killing and respawning gives the pane a
+NEW `tmux_created_epoch`, so the instance triple
+`(tmux_socket, tmux_name, tmux_created_epoch)` changes and anything keyed on the
+epoch sees a different instance. That is the same mechanism that makes tmux
+resurrect/continuum a design problem (INFRA-115), so it is a known shape here,
+not a surprise.
+
+**And this is exactly why the transcript-presence guard matters.** Resuming the
+same conversation routes every restart through `refuse_if_transcript_missing`,
+which turns a deleted transcript into a named `RESPAWN_TRANSCRIPT_MISSING` state
+instead of the dead-pane-reported-running failure that cost the owner a session
+on 2026-09-07.
+
+---
+
+### 2026-09-07 - `ProjectsView` has no attribute `read_only` - OPEN, low
+
+**24.** `src/core/upload_sweeper.py:155` logs `project_list_unreadable` with
+`'ProjectsView' object has no attribute 'read_only'`. **52 occurrences going back
+to 2026-08-29.** Confirmed PRE-EXISTING and not introduced by any of the
+2026-09-07 work: neither `read_only` nor `ProjectsView` is touched anywhere in
+`cddc823..83b6377`. Noise today, but it means the upload sweeper's project list
+read is failing every pass and nobody has looked at what it was supposed to do.
+
+---
 
 ## DONE - kept because they are the evidence for how the open ones should be approached
 
