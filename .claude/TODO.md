@@ -52,6 +52,24 @@ One line each, newest measurement wins. Detail follows below in full.
   30.5 -> 5.2 ms, the 20.0s / 14.5s stall cadence GONE, 86.5% of the window
   stalled -> 0.0%. Corpus ingester verified still ingesting with a positive
   control (row counts rose). Commit `3c23309`. See the DONE entry for the full
+- **22.** Restart a LIVE session (owner request). NOT BUILT and the existing
+  restart CANNOT do it: `resolve_respawn_plan` returns `RESPAWN_NOT_DEAD` while
+  the pane is alive, and tmux refuses `respawn-pane` on a live pane without
+  `-k`. Respawn revives a corpse, it does not replace a running session. Needs a
+  dry-run rung preview (no read-only route exists) plus close-and-recreate that
+  re-carries attribution, theme, unread, filing and position onto a new row.
+  Landmine: empty `#{pane_start_command}` silently returns a LOGIN SHELL.
+- **23.** The deploy copies with `ditto`, which MERGES. The first commit that
+  DELETES a file will leave the stale copy on BOTH targets and still report
+  success, because verification only hashes files that should be present.
+  Latent until something is removed. LOW effort, do it before a deletion ships.
+- **2b. MEASUREMENT NOTE 2026-09-07.** A later 30s poll after the `cddc823`
+  deploy read p99 **64-72 ms** across two runs, not the 13.3 ms recorded right
+  after the fix. Stable, no stall pattern, still 3 orders of magnitude better
+  than the 14,505 ms broken state, but ~5x the earlier figure and NOT
+  attributable. The corpus ingester was active during both later runs, which is
+  a hypothesis and was not tested. Re-measure on a quiet box before treating
+  13.3 ms as the number.
   measurement and how the deploy was verified.
 - **21. NEW, HIGH.** `scripts/deploy-mini.sh` is BROKEN on current macOS: both
   machines ship Apple openrsync, which rejects `--files-from=- --relative`
@@ -1253,6 +1271,100 @@ chosen, the script must still write BOTH targets and must keep failing safe.
 Related and still open from `HANDOFF.md` section 2: a clean tree makes the
 script print `nothing to deploy`, which reads like a pass. Worth fixing in the
 same pass.
+
+---
+### 2026-09-07 - restarting a LIVE session: what the owner asked for, and why it is not built - OPEN
+
+**22.** Owner request, verbatim: "we will also need a restart menu item added. like
+there is an update available, the session is quiet, i hit restart and it closes
+and then runs a new session to update."
+
+Deliberately NOT built alongside the kebab menu (`cddc823`). The reasons are in
+the SOURCE, not just inherited from `HANDOFF.md` section 5, and they are the
+whole point of this entry.
+
+**THE EXISTING RESTART CANNOT DO THIS.** The path is
+`SessionRowActions.ACTION_RESTART` -> `API.respawnSession` ->
+`POST /sessions/respawn` (`src/api/routes.py:1000`) ->
+`SessionManager.respawn_session` (`src/core/session_manager.py:5966`) ->
+`resolve_respawn_plan` (`src/core/session_respawn.py`, called at
+`src/core/tmux_backend.py:1419`).
+
+`resolve_respawn_plan` returns `RESPAWN_NOT_DEAD` the moment `pane_dead != "1"`,
+and tmux itself refuses `respawn-pane` on a live pane without `-k`, which that
+module never passes. **Respawn revives a corpse. It does not replace a running
+session.** The owner described a session that is quiet but ALIVE, so the
+existing control is the wrong mechanism, not a mechanism that needs a new
+button. It remains in the kebab, unchanged and tested, for a DEAD row.
+
+**THE LANDMINE, confirmed in source.** An empty `#{pane_start_command}` lands on
+`RESPAWN_SHELL`, which silently hands back a LOGIN SHELL. A non-empty command
+with no stored `agent_type` lands on `RESPAWN_REPLAY`. Only both together reach
+`RESPAWN_AGENT`. Since `sessions.agent_type` lands NULL for every session
+created via `auto_start_claude:false` plus a hand-sent claude command (backlog
+item 3), a naive restart would destroy a working claude session and return a
+bare zsh prompt for a REAL SUBSET of the sessions on this box. As of 2026-09-07
+there are 18 live tmux sessions, most idle for days, which is exactly that
+population.
+
+**TWO THINGS MUST BE BUILT, neither small.**
+
+1. **A dry-run rung preview.** There is no way to ask which rung a session would
+   land on without acting: `POST /sessions/respawn` is the only entry point and
+   it MUTATES. Worse, the ladder short-circuits on not-dead BEFORE it ever reads
+   `#{pane_start_command}`, so predicting the rung for a LIVE session needs a new
+   pure-function branch plus a new read-only route. Without this the UI cannot
+   honestly warn the user, and per the three-outcome rule an unknown rung must
+   render as cannot-determine, never as a yes.
+2. **Close-and-recreate.** Respawn deliberately PRESERVES the instance triple
+   `(tmux_socket, tmux_name, tmux_created_epoch)` and writes NO database row.
+   Destroy-and-create mints a NEW row and must re-carry project attribution,
+   pinned theme, unread state, group filing and sidebar position, all of which
+   are keyed on the tmux name. Note the latent defect already recorded: the
+   primary key of `session_group_members` is `tmux_name` rather than
+   `session_uuid`, so two sessions sharing a tmux name share one membership row.
+   A recreate that reuses the name walks straight into it.
+
+**Design questions to settle BEFORE writing code:**
+- Does restart keep the same tmux name (simpler, collides with the
+  `session_group_members` key defect) or take a new one (clean, orphans every
+  localStorage per-device key that is name-scoped, including pinning and
+  within-group order)?
+- Does the transcript continue via `--resume`, or is a fresh transcript correct
+  when the point is to pick up a new agent version?
+- What is shown when the rung preview says `RESPAWN_SHELL`? The answer must be a
+  choice offered to the user, not a silent proceed and not a silent refusal.
+
+**Guard requirement.** Restart destroys a running session and is irreversible
+from the user's side, so it must confirm. Do NOT build a hard block on
+`activity_status`: `HANDOFF.md` section 6 records `activity_state` reading
+`working` for about four minutes after a resume before self-correcting. Use it
+to inform the confirmation, never to silently refuse.
+
+---
+
+### 2026-09-07 - the deploy copies with `ditto`, which MERGES - OPEN, latent
+
+**23.** Found during the `cddc823` deploy. `dl_commit` in
+`scripts/deploy-lib.sh` copies the staged tree into each destination with
+`ditto`, which MERGES into the target rather than replacing it.
+
+Consequence: **the first commit that DELETES a client or server file will leave
+the stale copy on BOTH targets, and the deploy will still report success.**
+Verification cannot catch it, because verification hashes the files that SHOULD
+be present and a leftover file is not in that list. An orphaned `.js` still
+referenced by a cached `index.html`, or a removed module that something still
+imports, would keep working on the mini and nowhere else.
+
+Not urgent: every deploy so far has only added or modified. It becomes a live
+defect the moment a file is removed, and the group-chip removal in progress may
+be exactly that moment. **Check whether that change deletes any file before
+deploying it.**
+
+Fix options: have the deploy compute the deletion set from git and remove those
+paths on both targets explicitly, or replace-not-merge into a fresh directory
+and swap. Whichever is chosen, the verification must then also assert that
+files which should be ABSENT are absent, otherwise it still cannot fail.
 
 ---
 
