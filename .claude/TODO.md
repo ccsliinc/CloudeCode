@@ -72,6 +72,22 @@ One line each, newest measurement wins. Detail follows below in full.
   "adoptable" rather than "running" until opened. Do NOT fix by making
   `/sessions/list` read the database.
 
+### From owner screenshots 2026-09-07
+- **18.** The folder path overruns its box in the project modals and cannot be
+  read to the end. `div.folder-picker-path` has `width: 100%` and no
+  `word-break` / `overflow-wrap` / `overflow` (`styles.css:2641`); the sibling
+  `.folder-picker-status` already carries the fix. Its `:focus` and
+  `::placeholder` rules are DEAD on a div. VERIFIED in code.
+- **18a.** Same screenshot shows the SHORT cwd spelling
+  `/Users/jsugamele/Development/...`, the exact symlink trap that manufactured
+  the two `(old path)` project rows. UNVERIFIED whether the modal resolves it on
+  submit; it definitely displays the short form. More serious than 18.
+- **19.** A session parked on an unanswered folder-trust prompt over stale
+  diagnostic scrollback (`CLAUDE-NOT-FOUND` / `PATHIS`), and the sidebar showed
+  it as `Connected` with a PID and no signal. Neither probe string exists in
+  this repo, so the scrollback is almost certainly replayed. UNVERIFIED, owner
+  says it may be obsolete. Reproduce before spending time.
+
 ### Session and agent identity
 - **1.** Sleep and resume: EXPOSE full-vs-summary as a deliberate option on wake.
   Do not ship the suppression as the fix.
@@ -741,6 +757,99 @@ silently. But that first one is whichever session you happen to open first, and
 it does system updates and blocks on a sudo prompt during that session's own
 startup. **Worth suspecting as a contributor to a slow or hung first session
 launch of the day.**
+
+### 2026-09-07 - two items from owner screenshots - OPEN
+
+Both raised by the owner from screenshots on 2026-09-07. What follows separates
+what is VISIBLE in the images from what was VERIFIED in the code, because only
+the first item was reproducible from the tree.
+
+**18. The folder path overruns its box in the project modals. VERIFIED in code.**
+
+Screenshot: the add-project modal with folder
+`/Users/jsugamele/Development/Assistants/FantasyHockey2026`, the tail of the
+string running past the right edge of the box with no wrap, no scroll and no
+ellipsis. The user cannot read the end of their own path.
+
+Mechanism, read 2026-09-07 on the `v1.1` tip. The path is NOT an input. It is
+a `div.folder-picker-path`, rendered in two places in `client/js/launchpad.js`:
+the edit-project modal at :4562 and the shared `pathHintHtml` at :5167. Its CSS
+is `client/css/styles.css:2641` and it sets `width: 100%` with NO
+`word-break`, NO `overflow-wrap` and NO `overflow`, so a long single-token path
+simply spills.
+
+The fix already exists eleven lines below it: `.folder-picker-status`
+(`styles.css:2666`) carries `word-break: break-all` for exactly this reason.
+
+Two things to fix in the same pass, because they are the same defect:
+- The div is styled to impersonate an input (`cursor: text`, plus
+  `.folder-picker-path:focus` at :2655 and `.folder-picker-path::placeholder`
+  at :2661). Both of those rules are DEAD on a div and can never match. Either
+  make it a real readonly input or drop the two rules; do not leave CSS that
+  claims a behaviour the element cannot have.
+- There is no `title` attribute on it, so hover reveals nothing either. A
+  wrapped path is the fix; a tooltip is not a substitute on a phone.
+
+Verify on the PIXEL, not the DOM. `textContent` will read the full path whether
+or not it rendered inside the box. Assert the element's `scrollWidth` is not
+greater than its `clientWidth`, or measure the bounding rect against the modal,
+or take a screenshot someone looks at.
+
+**18a. The same screenshot carries a more serious finding the owner did not
+ask about: the SHORT cwd spelling.** The folder reads
+`/Users/jsugamele/Development/Assistants/FantasyHockey2026`. `~/Development` is
+a symlink into iCloud, and Claude Code derives its transcript directory from
+the LITERAL cwd string, so that spelling produces a SECOND transcript directory
+for a directory that already has one. This is the exact mechanism that
+manufactured projects 3 and 4, `Mac (old path)` and `Hirschfeld (old path)`,
+retired 2026-09-03. Any path the modal accepts or auto-derives must be resolved
+to the long iCloud spelling
+(`/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/...`)
+before it is stored. UNVERIFIED whether the modal resolves it on submit; the
+screenshot only proves it DISPLAYS the short form. Check
+`launchpad.js` around the create path (`working_dir: project.path`, spot-checked
+at :5871) before assuming either way.
+
+**19. Session `ses_2b41d99f` parked on an unanswered trust prompt, over stale
+diagnostic scrollback. UNVERIFIED, owner says it may be obsolete.**
+
+Screenshot: session `ses_2b41d99f`, header `ses 2b41d99f`, sidebar group OTHER,
+status `Connected`, PID 47672. The pane shows two commands as plain text,
+
+    command -v claude || echo CLAUDE-NOT-FOUND
+    echo PATHIS:$PATH
+
+and then Claude Code's own first-run folder-trust prompt for
+`/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/Assistants/Media`,
+sitting on `No, exit` and never answered.
+
+**Neither probe string exists anywhere in this repo.** Grepped 2026-09-07
+across `*.py`, `*.js`, `*.sh` and `*.zsh` excluding `node_modules`: zero hits
+for `CLAUDE-NOT-FOUND` and zero for `PATHIS`. So they were typed by a human or
+an agent during a past debugging session, which makes this most likely REPLAYED
+SCROLLBACK rather than anything the app emits today. That is the same shape as
+the "three missing hook scripts" false alarm: on-screen text from an old
+transcript being repainted by `--resume`, mistaken for a live error.
+
+What is NOT resolved by that explanation, and is the part worth reproducing:
+- The `CLAUDE-NOT-FOUND` probe means somebody was chasing `claude` missing from
+  PATH in a spawned tmux shell. Related to the `agent_type` NULL / respawn
+  ladder family (backlog item 3, and the `RESPAWN_SHELL` gate on an empty
+  `#{pane_start_command}`), but not the same bug and not shown to be current.
+- A session that opens onto an unanswered trust prompt looks IDENTICAL in the
+  sidebar to one that is working: `Connected`, a PID, no signal. Same family as
+  the other false greens in this file, an absence of bad news rendered as good
+  news.
+- The session is titled `ses 2b41d99f` and sits under OTHER, not under a project
+  name. Consistent with item 15 (`POST /api/v1/sessions` cannot set a title,
+  every UI-created session lands `title = NULL`) and item 16 (attribution races
+  project creation). Not new evidence, but a live instance of both.
+
+Before spending time here: reproduce it. Open a NEW session against a folder
+Claude Code has not trusted yet and see whether the app surfaces the prompt or
+hides it. If it cannot be reproduced, close this as scrollback and keep only the
+"a session parked on a prompt is indistinguishable from a working one"
+observation, which stands on its own.
 
 ---
 
