@@ -44,16 +44,42 @@ this project.
 
 Each of these has cost real time, and each fails by looking like success.
 
-**A clean tree deploys NOTHING and says so in words that read like a pass.**
-`deploy-mini.sh` deploys CHANGED files, so against a clean tree it prints
-`nothing to deploy`. Use `--all`, or scp the specific files to BOTH targets.
-Fixing this behaviour is itself an open item.
+**FIXED 2026-09-07: a clean tree now deploys the committed state.**
+`deploy-mini.sh` used to deploy only CHANGED files, so against a clean tree it
+printed `nothing to deploy` and exited, which was repeatedly read as a
+successful deploy. It now falls back to the committed file set and says
+`working tree is CLEAN, so deploying the committed state`. The three outcomes
+are separate banners and separate exit codes: `== DEPLOYED ==` (0),
+`== NOTHING DEPLOYED ==` (2, and it spells out that the target was NOT
+updated), `== DEPLOY FAILED ==` (1, or 3 for could-not-evaluate, 4 for a hash
+mismatch). `--all` still forces the full set explicitly.
 
-**Verify a deploy by fetching the asset over HTTP and hashing it against the
-local file.** Never by `git rev-parse` on either side - that only reads back the
-same claim the deploy already believes, it is not an independent measurement.
-The 2026-09-06 `5c88fdd` deploy was verified by `GET /static/js/launchpad.js`
-and hashing, and that is the pattern to copy.
+**The transfer is tar over ssh, NOT rsync, and this is deliberate.** Both this
+Mac and the mini ship Apple openrsync (protocol 29, "rsync 2.6.9 compatible"),
+not GNU rsync 3.x. openrsync handles `--files-from=- --relative` fine; what
+breaks it is a remote destination containing SPACES, which the remote shell
+word-splits, giving `server receiver mode requires two argument`. BOTH live
+destinations contain spaces, so `--target live` could never work while
+`--target v11` always did. That is the real cause of the 2026-09-07 failure,
+not `--files-from`. tar over ssh has no such edge because the remote command is
+one quoted string the script controls.
+
+**Verification is now automatic and nobody has to remember it.**
+`deploy-mini.sh` stages the files in one dir on the mini, sha256s the staging
+area against this Mac BEFORE production is touched, copies into each
+destination, then sha256s EVERY file on EVERY destination against this Mac, and
+after a live restart re-hashes the server dir to catch the bundle revert. A
+mismatch names the offending file and exits non-zero. A file the target cannot
+hash becomes an explicit MISSING line rather than dropping out of the
+comparison, because absent on both sides compares equal and that is how a check
+silently verifies nothing. `deploy-mini.sh --verify-only` re-runs exactly that
+check against a target without copying anything.
+
+Never verify with `git rev-parse` on either side - that only reads back the same
+claim the deploy already believes, it is not an independent measurement. For a
+by-hand check outside the script, fetch the asset over HTTP and hash it against
+the local file; the 2026-09-06 `5c88fdd` deploy was verified by
+`GET /static/js/launchpad.js` and hashing, and that is the pattern to copy.
 
 **A browser tab open across a deploy does not re-fetch static assets.** It can
 run arbitrarily many releases behind while its API calls and its WebSocket keep
