@@ -395,9 +395,10 @@ claude - a resolver that always finds something is worse than useless.
   without a code change behind it is not a new regression; re-run before
   chasing it. Node: 185 tracked files (re-counted 2026-09-08; the earlier
   "169" figure undercounted and predates this round), only the pre-existing
-  `test_archive_full_page_mode.node.mjs` fails. `tests/led_state_for.node.mjs`
-  is a piped-stdin CLI helper for that harness, not a standalone test, and
-  exits non-zero when run with no input; that is expected, not a failure.
+  `test_archive_full_page_mode.node.mjs` fails. The piped-stdin CLI helper for
+  the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
+  the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
+  exits non-zero when run with no input.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real
