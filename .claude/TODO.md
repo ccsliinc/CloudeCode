@@ -2539,3 +2539,8 @@ commit-by-commit table in `HANDOFF.md` section 8.
 ### 2026-09-08 owner report: "we lost some of our conversation"
 
 - [ ] Display-side loss, not data loss. After the app restarts and re-attaches to a running pane, the client fetches `include_scrollback=1` and repaints the terminal from tmux capture-pane. Claude Code TUI draws in place, so the pane has `history_size=0` and the capture is one screen; the browser replaces the buffer it had built over the websocket with that screen. Transcript verified intact (7.6 MB, one compaction marker from the morning /compact, last write 13:29). Fix direction: keep the existing client buffer when the incoming capture is shorter than what the client holds, or replay the tail of the server pipe stream on attach. Explorer report pending; then build.
+
+### 2026-09-08 restart procedure finding
+
+- [x] Restarting the menubar app with osascript quit plus `open -a` relaunches it under an ad hoc launchd job (`application.com.cloudecode.menubar.*`) with stdout to /dev/null, so `/tmp/cloudecode-menubar.log` stops growing and the app runs outside its LaunchAgent. Correct restart: `launchctl kickstart -k gui/$(id -u)/com.cloudecode.menubar`. The server also writes its own log to `~/Library/Application Support/cloude-code-menubar/logs/server.log` regardless. Being added to docs/deploy-mini.md by the reconnect agent.
+- [ ] Reconnect buffer keep (d70e4ab): keep path verified firing in the browser console; the resize nudge that follows made the TUI repaint the viewport, so on-screen rows were lost while scrollback is expected to survive. Measurement of the exact resize escape sequences and the nudge decision in progress.
