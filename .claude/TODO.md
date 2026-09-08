@@ -3992,3 +3992,74 @@ failures.
 `src/core/session_status_seed_read.py`,
 `src/core/session_status_seed_store.py`, `tests/test_boot_readopt.py`,
 `tests/test_session_status_seed.py`, `CLAUDE.md`.
+
+---
+
+## 2026-09-08 DEPLOY RECORD - c360cfc to live (mac-mini-m4, port 8000)
+
+Deployed `c360cfc` (boot epoch for a session the legacy reconcile
+registered first) and `c39dd14` (unread one flag), branch `v1.1`, tree
+clean, HEAD equal to `origin/v1.1` at deploy time. `./scripts/deploy-mini.sh
+--target live` wrote both destinations (app bundle Resources, then the
+server dir), 518 files, verified both directions before and after the
+restart.
+
+**Regression gate before the deploy.** `tests/test_unread_one_flag.py`,
+`tests/test_boot_readopt.py`, `tests/test_session_status_seed.py`,
+`tests/test_led_real_hooks.py`: 70 passed / 9 skipped (the real-hook file
+skips without `CLOUDE_REAL_HOOK_TESTS=1`, as designed). Node
+`tests/test_unread_led_one_field.node.mjs` and
+`tests/test_status_summary.node.mjs`: 2 passed / 0 failed.
+
+**Before.** 19 live tmux sessions on `-L cloude`; `GET
+/api/v1/sessions/list` returned 19 rows, idle 15 / working 1 /
+finished_unread 3 / unknown 0, 4 rows unread.
+`cloude_Fantasy_Hockey_2026` was unread by hand from the home page,
+`activity_status=finished_unread`.
+
+**After.** Boot at 2026-09-08T23:52:12Z.
+
+- `boot_readopt_complete`: held 18, skipped 1, failed 0, live_count 19.
+  held + skipped = 19 = the live tmux count. `id_sources` all
+  `hook_token` (18), no `legacy_row`, no `derived`, `no_row` 0 - so no id
+  was minted and no hook token was rotated.
+- `boot_readopt_epoch_recorded_for_registered` fired once, for
+  `cloude_BHPP` / `ses_8f7ea3db`, epoch 1788559250. That is the c360cfc
+  fix doing exactly the thing it was written for: the one session the
+  legacy reconcile had already registered without an epoch got its epoch
+  recorded rather than being skipped empty.
+- `status_seed_warm`: seeded 19 = examined 19. PT-IMC, the one miss
+  before this round, is gone.
+- `GET /api/v1/sessions/list` after the deploy: 19 rows for 19 live tmux
+  sessions, idle 15 / working 1 / finished_unread 3, and **zero**
+  `unknown`.
+- Unread survived the restart: 4 rows unread
+  (`cloude_Agent_-_Cloude_Code`, `cloude_Hirschfeld`,
+  `cloude_Fantasy_Hockey_2026`, `cloude_daily-briefing`), and
+  `cloude_Fantasy_Hockey_2026` came back `unread=true`,
+  `activity_status=finished_unread` - the flag in `unread_state.json` is
+  keyed on the instance and the instance did not move.
+- Hooks over the first 2m20s after boot: 30 POSTs to
+  `/api/v1/hooks/claude-event`, all 200. Zero non-200, zero
+  `hook_post_rejected_invalid_token`, zero
+  `hook_post_rejected_non_loopback`.
+- Served bytes, not the file on disk: `GET
+  /static/js/session-sidebar-rows.js` hashes
+  `8de50029561df1d427325a21ec327d573da6f64684da39b56e537befc7aafdea` and
+  `GET /static/js/session-status-ui.js` hashes
+  `5a001c143afe31509825373115edef22465ce781dd398f98fb92d8509763ec8e`,
+  both equal to the repo copies.
+- `./scripts/deploy-mini.sh --target live --verify-only` re-run after the
+  restart: exit 0, 518/518 on both destinations, mirror-clean.
+
+**Method note worth keeping.** `/sessions/list` is under `/api/v1`, not
+at the bare path this file and `CLAUDE.md` quote, and it requires auth. A
+token is obtained on the mini itself from `TOTP_SECRET` in the live
+install's `.env` via `pyotp` against `POST /api/v1/auth/verify`; the
+secret never leaves that box. The negative control was run in the same
+pass: a bogus bearer token returns 401, so a 200 on the real one is
+evidence of the credential and not of an open endpoint. Accepted and
+rejected hook counts were read off uvicorn's own access lines rather than
+off a success-only application event, because the accepted path logs
+nothing of its own and a grep for rejections alone can never tell "none
+rejected" from "none received".
