@@ -784,6 +784,20 @@ is `waiting-input`, shared with the startup gate - both mean "come and
 look", neither means "approve this". Summary priority is
 **permission > input > working > unread > done > dead > unknown**.
 
+**A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
+punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
+2.1.265: on a turn with NO SUBAGENT IN IT, `SubagentStop` arrives about
+1.5s AFTER `Stop`. `Stop` had just cleared `last_tool_event_ts` to say the
+turn was over, `record_event` stamped it again, and a finished session
+painted `working` for the full 120s - `finished_unread` lasted a second
+and a half and `idle` was UNREACHABLE. The rule now: an event that CLOSES
+something stamps only when something was open for it to close.
+`SubagentStop` needs `subagent_depth > 0` (at zero it moves nothing and
+logs `subagent_stop_without_start` at debug); `PostToolUse` keys on a
+`turn_open` boolean that every OPENING event sets and `Stop` clears, and
+is refused ONLY when a `Stop` was POSITIVELY seen and nothing has opened
+since - never having seen a `Stop` is not evidence the turn ended.
+
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an
 agent mid-tool-call and one at an empty prompt, and the fallback carries no

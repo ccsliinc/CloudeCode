@@ -84,6 +84,39 @@ event kind is a documented no-op rather than an error. Applying the same
 event twice, or two events in the wrong order, converges on the same state
 a correctly-ordered stream would reach.
 
+**A CLOSING EVENT IS NOT A HEARTBEAT ON ITS OWN**, and that was punchlist
+item 4. Measured on claude 2.1.265 by `tests/test_led_real_hooks.py`,
+twice: on a turn with **no subagent anywhere in it**, `SubagentStop`
+arrives about 1.5s AFTER `Stop` (Stop+38.96s, SubagentStop+40.46s).
+`Stop` had just cleared `last_tool_event_ts` to say the turn was over and
+`SubagentStop` stamped it again, so the heartbeat re-armed and a finished
+session painted `working` for the full 120s. `finished_unread` was visible
+for about a second and a half and **`idle` was unreachable in between** -
+the light claiming work nothing can see, this time through the hook
+stream rather than through the tmux fallback that was fixed for the same
+lie. The punchlist recorded it as "activity reads working for minutes
+after a resume".
+
+The rule: an event that CLOSES something stamps the heartbeat only when
+something was open for it to close. `SubagentStop` needs
+`subagent_depth > 0`, which is already the exact record of an unmatched
+`SubagentStart`; at zero it decrements nothing, stamps nothing, moves no
+state and logs `subagent_stop_without_start` at debug. `PostToolUse` has
+no counter (parallel tool calls and a droppable `PreToolUse` would
+desynchronise one), so it keys on a `turn_open` boolean that every
+OPENING event (`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and
+`Stop` clears. Opening events still stamp unconditionally - there is
+nothing they could be late for.
+
+**The refusal is narrow, which is what makes it a measurement.**
+`PostToolUse` is refused ONLY when a `Stop` has POSITIVELY been seen for
+this session and no opening event has landed since. Never having seen a
+`Stop` - a fresh session, a server restarted mid-turn - is not evidence
+the turn ended, so that case still stamps. The remaining hole is a turn
+whose `UserPromptSubmit` AND `PreToolUse` were both dropped, leaving only
+a `PostToolUse`: it costs one under-claimed `working`, corrected by the
+next opening event. Under-claiming is the safe direction.
+
 **A missing `Stop` is handled by a timeout, not by detection.** A
 tool-use heartbeat is trusted for `WORKING_HEARTBEAT_TIMEOUT_SECONDS`
 (120s). Past that, no `working` is claimed. 120s is longer than a

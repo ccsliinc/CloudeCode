@@ -2905,8 +2905,9 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   every live claude read-modify-writes it; binary ws frames sent before
   the resize handshake are dropped by design.
 
-- [ ] **New defect found by the real-hook test: `SubagentStop` re-arms
-  `working` after `Stop` on a turn with no subagent.** Measured in the
+- [x] **New defect found by the real-hook test: `SubagentStop` re-arms
+  `working` after `Stop` on a turn with no subagent.** DONE - see the
+  closing entry at the end of this file. Measured in the
   9-pass run above: `SubagentStop` lands about 1.5s after `Stop` even
   when no subagent ran, and `session_activity.record_event` stamps
   `last_tool_event_ts` on it - the same timestamp `Stop` had just
@@ -2928,3 +2929,60 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   state has something to render against, or accept that in this app
   dead means gone and drop `dead` from what the live endpoints are
   expected to ever show.
+
+
+## 2026-09-08 - punchlist item 4 closed: a closing hook event is not a heartbeat
+
+- [x] **Punchlist 4 ("activity lights: `activity_state` reads `working`
+  for about four minutes after a resume, then self-corrects") is CLOSED,
+  with its root cause found rather than guessed.** It was not a resume
+  and it was not four minutes: it was
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` (120s) being re-armed after the
+  turn ended. `tests/test_led_real_hooks.py` measured it twice on claude
+  2.1.265 - on a turn with NO SUBAGENT ANYWHERE IN IT, `SubagentStop`
+  arrives about 1.5s AFTER `Stop`, and `record_event` stamped
+  `last_tool_event_ts` on it, the field `Stop` had just cleared to say
+  the turn was over. `finished_unread` was visible for about a second and
+  a half and `idle` was UNREACHABLE for the rest of the window.
+
+- [x] **The rule shipped: a CLOSING event stamps the heartbeat only when
+  something was open for it to close.** `SubagentStop` needs
+  `subagent_depth > 0`, which is already the exact record of an unmatched
+  `SubagentStart`; at zero it decrements nothing, stamps nothing, moves
+  no state, and logs `subagent_stop_without_start` at debug. A
+  `SubagentStop` that closes a real subagent still decrements (floored)
+  and stamps exactly as before - that negative control is the
+  load-bearing test, because a guard that refused every `SubagentStop`
+  would pass the defect tests perfectly and delete `working_subagent`'s
+  exit heartbeat.
+
+- [x] **The same trap was closed for `PostToolUse`, narrowly.** A tool
+  result from a turn that already ended is not evidence of work now, but
+  there is no counter to key on (parallel tool calls, and a droppable
+  `PreToolUse`, would desynchronise one), so it keys on a `turn_open`
+  boolean that every OPENING event sets and `Stop` clears. It is refused
+  ONLY when a `Stop` has POSITIVELY been seen for the session and nothing
+  has opened since: never having seen a `Stop` - a fresh session, a
+  server restarted mid-turn - is not evidence the turn is over, so that
+  case still stamps. Hook payloads carry no timestamp of their own, so
+  the ordering measured is arrival order at the server; the narrowing is
+  what makes that safe.
+
+- [x] **`tests/test_led_real_hooks.py` test 5 INVERTED, not loosened**,
+  as its own docstring instructed. It now waits for the stray
+  `SubagentStop` to LAND and re-reads after it, which is the only
+  ordering that can tell the fix from the 1.5s gap. Test 6 additionally
+  asserts the dot reaches `idle` once the halo clears - the state
+  punchlist 4 made unreachable, so that is the live proof.
+
+- [x] **Measured on a live run, 2026-09-08** (`CLOUDE_REAL_HOOK_TESTS=1`,
+  claude 2.1.265, 8 of 9 passed): Stop+38.30s -> `finished_unread`
+  (`done`/`unread`), SubagentStop+39.71s -> STILL `finished_unread`, and
+  binding a terminal -> `idle` (`done`/`steady`). The hook ledger for
+  that run contains no `SubagentStart` at all, so the depth was 0 and the
+  refusal is the branch that was exercised. The one failure is the
+  dead-pane test, which belongs to the concurrent liveness work.
+
+- [ ] STILL OPEN, unchanged by this: the dead-pane entry above
+  (`_session_info_for` drops a dead pane on `LIVENESS_GONE`, so the LED's
+  `dead` state is unreachable from live data). Being worked separately.
