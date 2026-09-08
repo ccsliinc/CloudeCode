@@ -168,12 +168,14 @@ for a real subset of the sessions on a working box, because
 | Piece | File |
 |---|---|
 | The ladder, the projection, and pane liveness | `src/core/session_respawn.py` |
+| Which conversation it comes back on | `src/core/session_resume_target.py` |
 | Shape the preview the picker reads | `src/core/session_restart_preview.py` |
 | Validate an `agent_type` choice, and persist it | `src/core/session_agent_choice.py` |
 | `GET /sessions/restart/preview` | `src/api/restart_routes.py` |
 | The panel, and the reopen afterwards | `client/js/session-restart-picker.js`, `client/js/session-restart-return.js` |
 | Keep the row keyed on its instance after a kill | `src/core/session_instance_rekey.py` |
 | The arm control and the kill confirmation | `client/js/session-restart-live.js` |
+| What the user is told about the conversation | `client/js/session-restart-continuity.js` |
 
 **A PREDICTION IS NEVER A PERMISSION, and that is why the preview reports the
 rung twice.** `resolve_respawn_plan` short-circuits on `not_dead` BEFORE it
@@ -204,6 +206,48 @@ would do, is different evidence. It does NOT outrank `not_dead` or a probe that
 did not answer. The verdict stays `RESPAWN_AGENT`; `RespawnPlan.chosen` and a
 different sentence carry the distinction rather than a sixth kind.
 
+**A RESTART MEANS A RESUME, ON EVERY RUNG THAT CAN.** The owner's
+definition, 2026-09-07, verbatim: "restart on recent is really just
+resume. restart on open is close and resume session so it loads a new
+wrapper or new claude binary." ONE semantic, two mechanics: a dead row has
+no process to kill so its restart IS a resume, and a live row has its pane
+killed first, the kill existing only so the pane picks up a new wrapper or
+a new claude binary. Both come back on the SAME conversation.
+
+`f95a9ed` made that true only on the REPLAY rung, by accident of what tmux
+had written down. The AGENT rung re-derives its command through
+`Settings.get_agent_command`, which carries no `--resume`, so a restart
+there started a FRESH conversation wearing the old session's name.
+`sessions.claude_session_uuid` now reaches that command as
+`extra_args=['--resume', <uuid>]`, built once by
+`session_resume_target.resume_extra_args` and passed to all FOUR command
+resolutions in a restart request - the stored agent's and every wrapper
+offer's, on the action side and on the preview side. Building it in one
+place is what makes the preview's predicted command and the action's
+actual command the same string by construction. NEVER concatenate the flag
+onto a resolved command: `get_agent_command` returns
+`zsh -c 'source ~/.zshrc ...; cld'` and an appended argument lands outside
+that quoting, handed to zsh instead of to claude.
+
+**A MISSING uuid IS A NAMED OUTCOME, NOT A SILENT FRESH START.**
+`RespawnPlan.conversation` and the preview's `conversation` field carry
+`resumed` / `none_recorded` / `unknown`, the SAME three words
+`RestartSessionResponse.conversation` has used since the restart route
+shipped, reused rather than re-invented. `none_recorded` means the row was
+READ and holds no conversation, so the session comes back WITHOUT its
+history - a legitimate restart, said out loud rather than performed
+quietly. `unknown` means the row could not be read: no `--resume` is
+injected and nothing claims a resume, because an unknown is never a yes.
+The value is DERIVED FROM THE ARGV - a command carrying a `--resume` reads
+`resumed` whatever the caller believed - so the claim can never outrun the
+command. The rung sentence the picker renders verbatim carries the clause,
+and `SessionRestartLive.liveConfirmCopy` names it before anything dies.
+
+Note the asymmetry, it is deliberate: an unreadable ROW degrades the claim
+and never refuses, while a MEASURED missing TRANSCRIPT refuses outright.
+Not having looked is not evidence of absence; having looked and found
+nothing is.
+
 **A REPLAY CAN RESUME A CONVERSATION, and that is guarded.** `RESPAWN_REPLAY`
 hands tmux back its own `#{pane_start_command}`, and measured on the owner's
 box 2026-09-07, 3 of 19 live sessions carry an explicit `--resume <uuid>` in
@@ -212,8 +256,15 @@ transcript exits instantly, leaving a dead pane the row still calls running -
 the incident this project already paid for. `resume_uuid_in` extracts the uuid,
 `refuse_if_transcript_missing` turns a DEFINITE absence into
 `RESPAWN_TRANSCRIPT_MISSING`, and the filesystem lookup lives in
-`src/core/session_transcript_presence.py` so the ladder stays pure. `unchecked`
-NEVER refuses - not having been able to look is not evidence a file is gone, and
+`src/core/session_transcript_presence.py` so the ladder stays pure. THE
+GUARD COVERS THE AGENT RUNG TOO now that it resumes, on the dead path as
+well as the live one: the check in `TmuxBackend.respawn` keys on
+`plan.resume_uuid` and is not gated on liveness. TWO CONVERSATIONS CAN BE
+IN PLAY AT ONCE - the replay rung resumes what tmux recorded, the agent
+rung resumes what the ROW says - so the preview passes presence verdicts
+as `presence_by_uuid`, keyed by the uuid each was measured for. One
+verdict applied to both would refuse a restart nobody measured.
+`unchecked` NEVER refuses - not having been able to look is not evidence a file is gone, and
 refusing on it would break restart on every machine whose corpus lives somewhere
 the checker was not told about. The PREVIEW applies the same guard; a preview
 that skipped it would promise a replay the restart then declines.
@@ -239,7 +290,7 @@ gate is derivable from a prediction:
    radio locked whatever it projects.
 3. `App.showConfirmModal` with `SessionRestartLive.liveConfirmCopy`,
    which names the
-   bare-shell outcome. Measured 2026-09-07: 15 of 19 live sessions have
+   bare-shell outcome AND what happens to the conversation. Measured 2026-09-07: 15 of 19 live sessions have
    BOTH an empty `pane_start_command` and a NULL `agent_type`, so 79
    percent come back a login shell. That warning is what makes this safe
    to ship.

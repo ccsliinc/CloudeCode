@@ -107,6 +107,15 @@ console.log('[SessionRestartLive Module] Loading...');
      *   rather than as an agent. A confirmation that did not say so
      *   would be teaching the user to click through it.
      *
+     *   IT ALSO SAYS WHAT HAPPENS TO THE CONVERSATION, because a
+     *   restart MEANS resume - the owner's definition, 2026-09-07 - and
+     *   the one case where that is not true is the one a user must be
+     *   told about before the pane dies. The sentence comes from
+     *   `SessionRestartContinuity.line`, which treats anything it does
+     *   not recognise as 'unknown'. If that module is missing the
+     *   continuity line is omitted rather than guessed: no line at all
+     *   is better than a reassurance nobody measured.
+     *
      *   The busy line INFORMS and never refuses: `activity_state` is
      *   known to read "working" for about four minutes after a resume
      *   before it self-corrects, so blocking on it would refuse a
@@ -127,6 +136,13 @@ console.log('[SessionRestartLive Module] Loading...');
             details += 'this session has no recorded start command, so it does '
                 + 'not come back as an agent. it comes back as a plain login '
                 + 'shell. ';
+        }
+        if (window.SessionRestartContinuity) {
+            details += window.SessionRestartContinuity.line(
+                window.SessionRestartContinuity.conversationFor(
+                    preview, agentType
+                )
+            );
         }
         var key = window.SessionStatusUI
             ? window.SessionStatusUI.normalizeStatus(status)

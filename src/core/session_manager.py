@@ -5905,7 +5905,94 @@ class SessionManager:
             f"tmux kill-session for {name!r} failed (rc={rc}): {stderr_text}"
         )
 
-    def _agent_command_for_tmux_name(self, name: str) -> Optional[str]:
+    def _resume_target_for_tmux_name(self, name: str, socket_name: str):
+        """The conversation a restart of this session must come back on.
+
+        Description: reads ``sessions.claude_session_uuid`` for this
+            session and classifies it through
+            ``src/core/session_resume_target.py``. THE UUID COMES OFF THE
+            STORED ROW AND IS NEVER RE-DERIVED OR GUESSED - correlating a
+            transcript to a pane is a different job with its own module,
+            and inventing one here would be inventing identity.
+
+            CALLED ONCE PER RESTART AND ONCE PER PREVIEW, and the result
+            feeds every command resolution in that request: the stored
+            agent's, and every wrapper offer's. That is what makes the
+            preview's predicted command and the action's actual command
+            the same string by construction rather than by agreement.
+
+            THE THIRD OUTCOME IS REAL HERE. A datastore that cannot be
+            opened or read answers ``unknown``, which injects no
+            ``--resume`` and claims no resume. It does NOT refuse the
+            restart: not having read a row is an absence of information,
+            not evidence that a conversation is gone. That is the
+            opposite call from a MEASURED missing transcript, which does
+            refuse - see ``src/core/session_transcript_presence.py``.
+
+        Inputs:
+            name: literal tmux session name.
+            socket_name: tmux socket the session lives on.
+
+        Output:
+            ResumeTarget: ``outcome`` is 'resumed' / 'none_recorded' /
+                'unknown'; ``claude_session_uuid`` is set only on the
+                first.
+
+        Example:
+            >>> mgr._resume_target_for_tmux_name("cloude_api", "cloude")
+            ResumeTarget(outcome='resumed', claude_session_uuid='...')
+        """
+        from src.core.session_resume_target import resume_target_from_row
+
+        conn = self._datastore_connection()
+        if conn is None:
+            return resume_target_from_row(None, row_read_ok=False)
+        try:
+            from src.core.session_store import (
+                identity_for_live_name,
+                sessions_table_ready,
+            )
+
+            if not sessions_table_ready(conn):
+                return resume_target_from_row(None, row_read_ok=False)
+            # ROUTED THROUGH THE ONE REVIEWED NAME-KEYED ACCESSOR, then
+            # read by PRIMARY KEY, exactly as
+            # ``_row_identity_for_tmux_name`` does. A second inline
+            # name-keyed SELECT is the class
+            # tests/test_no_name_keyed_session_identity.py exists to stop.
+            identity = identity_for_live_name(
+                conn, socket=socket_name, name=name
+            )
+            if identity is None:
+                # THE DATASTORE ANSWERED and holds no row for this
+                # session, which is a real "no conversation recorded" and
+                # not a failure to look.
+                return resume_target_from_row(None, row_read_ok=True)
+            row = conn.execute(
+                "SELECT claude_session_uuid FROM sessions WHERE id = ?",
+                (int(identity["id"]),),
+            ).fetchone()
+            return resume_target_from_row(
+                dict(row) if row is not None else None, row_read_ok=True
+            )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "restart_resume_target_read_failed", name=name, error=str(exc)
+            )
+            return resume_target_from_row(None, row_read_ok=False)
+        finally:
+            try:
+                conn.close()
+            except sqlite3.Error:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
+    def _agent_command_for_tmux_name(
+        self,
+        name: str,
+        *,
+        socket_name: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+    ) -> Optional[str]:
         """Command this app would launch for the session with this tmux name.
 
         Description: looks up the in-memory ``Session`` carrying this tmux
@@ -5924,8 +6011,37 @@ class SessionManager:
             normal state for a session the user started outside CloudeCode.
             The caller's ladder then falls back to tmux's own record.
 
+            IT NOW CARRIES THE CONVERSATION, and that is the whole
+            repair. Re-deriving the command is what lets a restart pick
+            up a new wrapper or a new claude binary; it is ALSO what
+            dropped the ``--resume`` the pane was launched with, so this
+            rung used to start a FRESH conversation and call it a
+            restart. ``extra_args`` puts it back through
+            ``get_agent_command``'s own quoting rather than by
+            concatenation - see ``src/core/session_resume_target.py``.
+
+            THE agent_type COMES FROM THE SAME PLACE THE PREVIEW READS
+            IT. This used to scan ``self.sessions`` only, so an ADOPTED
+            session - whose in-memory ``Session`` carries ``agent_type``
+            None while its ROW records the wrapper exactly - resolved to
+            None here and fell to the REPLAY rung, while
+            ``restart_preview`` read the row and promised AGENT. The
+            picker showed one answer and the button did another, on
+            precisely the sessions the owner restarts most. Both now go
+            through ``_stored_agent_type_for_tmux_name``, which reads the
+            row first and falls back to memory, so there is one accessor
+            and no second answer to drift from.
+
         Inputs:
             name: literal tmux session name.
+            socket_name: tmux socket the session lives on, needed to key
+                the row read. None falls back to memory alone, which is
+                the old behaviour and is only right when the caller
+                genuinely has no socket.
+            extra_args: arguments appended to the wrapped CLI, quoted at
+                every boundary by ``get_agent_command``. The restart path
+                passes ``['--resume', '<uuid>']``; None adds nothing and
+                is what a session with no recorded conversation gets.
 
         Output:
             Optional[str]: shell command string, or None when this app has
@@ -5935,21 +6051,24 @@ class SessionManager:
             >>> mgr._agent_command_for_tmux_name("cloude_api")
             "zsh -c 'source ~/.zshrc ...; cld'"
         """
-        match = None
-        for session in self.sessions.values():
-            if getattr(session, "tmux_session", None) == name:
-                match = session
-                break
-        if match is None:
-            return None
-
-        agent_type = getattr(match, "agent_type", None)
+        if socket_name:
+            agent_type = self._stored_agent_type_for_tmux_name(
+                name, socket_name
+            )
+        else:
+            agent_type = None
+            for session in self.sessions.values():
+                if getattr(session, "tmux_session", None) == name:
+                    agent_type = getattr(session, "agent_type", None)
+                    break
         if not agent_type:
             return None
 
         try:
             return settings.get_agent_command(
-                agent_type, model=getattr(match, "model", None)
+                agent_type,
+                model=self._model_for_tmux_name(name),
+                extra_args=extra_args,
             )
         except Exception as exc:
             # A config we cannot read is "no record", never a guess. The
@@ -6078,7 +6197,21 @@ class SessionManager:
             except Exception:
                 socket_name = DEFAULT_SOCKET_NAME
 
-        agent_command = self._agent_command_for_tmux_name(name)
+        # RESTART MEANS RESUME. The owner's definition, 2026-09-07: a
+        # restart on a dead row IS a resume, and a restart on a live one
+        # is a kill followed by the same resume, the kill existing only
+        # so the pane picks up a new wrapper or a new claude binary. So
+        # the conversation is resolved ONCE here and threaded into every
+        # command this request can build, stored agent and picked wrapper
+        # alike. Resolving it twice is how the two drift.
+        from src.core.session_resume_target import resume_extra_args
+
+        resume_target = self._resume_target_for_tmux_name(name, socket_name)
+        resume_args = resume_extra_args(resume_target)
+
+        agent_command = self._agent_command_for_tmux_name(
+            name, socket_name=socket_name, extra_args=resume_args
+        )
 
         # THE CHOICE IS CHECKED BEFORE ANYTHING IS TOUCHED. An unknown id
         # must never reach ``get_agent_command``, which would resolve it
@@ -6090,7 +6223,10 @@ class SessionManager:
             from src.core.session_agent_choice import validate_agent_choice
 
             choice = validate_agent_choice(
-                settings, agent_type, model=self._model_for_tmux_name(name)
+                settings,
+                agent_type,
+                model=self._model_for_tmux_name(name),
+                extra_args=resume_args,
             )
             if not choice.accepted:
                 logger.info(
@@ -6125,12 +6261,14 @@ class SessionManager:
             name=name,
             socket=socket_name,
             has_agent_record=agent_command is not None,
+            conversation=resume_target.outcome,
         )
 
         result = await backend.respawn(
             agent_command=agent_command,
             chosen_agent_command=chosen_command,
             chosen_agent_type=chosen_type,
+            resume_outcome=resume_target.outcome,
             live_restart_confirmed=bool(live_restart_confirmed),
         )
 
@@ -6164,6 +6302,12 @@ class SessionManager:
             "session_uuid": identity.get("session_uuid"),
             "killed_live_pane": bool(result.killed_live_pane),
             "identity_status": identity_status,
+            # WHAT HAPPENED TO THE CONVERSATION, said rather than
+            # implied. 'resumed' / 'none_recorded' / 'unknown' - a client
+            # that renders the three identically is presenting a blank
+            # session as a continued one, which is the defect this field
+            # exists to make impossible.
+            "conversation": result.conversation,
         }
 
     def _reconcile_restart_identity(
@@ -6294,10 +6438,22 @@ class SessionManager:
         stored_type = self._stored_agent_type_for_tmux_name(name, socket_name)
         model = self._model_for_tmux_name(name)
 
+        # THE SAME ONE LOOKUP THE ACTION DOES, feeding the same four
+        # command resolutions. The preview's job is to predict the action
+        # exactly, and a --resume the preview did not render would make
+        # every command it shows a different string from the one that
+        # runs.
+        from src.core.session_resume_target import resume_extra_args
+
+        resume_target = self._resume_target_for_tmux_name(name, socket_name)
+        resume_args = resume_extra_args(resume_target)
+
         stored_command: Optional[str] = None
         if stored_type:
             try:
-                stored_command = settings.get_agent_command(stored_type, model=model)
+                stored_command = settings.get_agent_command(
+                    stored_type, model=model, extra_args=resume_args
+                )
             except (ValueError, OSError, AttributeError) as exc:
                 # A stored type we cannot render is "no record", exactly
                 # as it is on the action path. The ladder then reports
@@ -6309,7 +6465,9 @@ class SessionManager:
                     error=str(exc),
                 )
 
-        offers = resolve_wrapper_offers(settings, model=model)
+        offers = resolve_wrapper_offers(
+            settings, model=model, extra_args=resume_args
+        )
 
         # THE SAME TRANSCRIPT GUARD THE ACTION APPLIES. TmuxBackend.respawn
         # refuses a replay whose recorded command resumes a conversation
@@ -6317,20 +6475,27 @@ class SessionManager:
         # promise a replay the restart then declines. The lookup is done
         # once, here, because only the RECORDED start command can carry a
         # --resume - a chosen wrapper's command never does.
-        presence_outcome = None
-        presence_detail = ""
-        replay_uuid = resume_uuid_in(start_command)
-        if replay_uuid:
+        #
+        # TWO CONVERSATIONS CAN BE IN PLAY NOW, so the verdicts are keyed
+        # by the uuid they were measured for. The replay rung re-runs
+        # tmux's recorded command and resumes whatever THAT carries; the
+        # agent rung resumes the uuid on the session's ROW. They are
+        # frequently different and either may be absent, so one verdict
+        # applied to both would refuse a restart nobody measured.
+        presence_by_uuid: dict = {}
+        for candidate in (resume_uuid_in(start_command),
+                          resume_target.claude_session_uuid):
+            if not candidate or candidate in presence_by_uuid:
+                continue
             from src.core.session_transcript_presence import (
                 conversation_presence,
             )
 
             presence = conversation_presence(
-                replay_uuid,
+                candidate,
                 working_dir=str(Path(settings.default_working_dir).expanduser()),
             )
-            presence_outcome = presence.outcome
-            presence_detail = presence.detail
+            presence_by_uuid[candidate] = (presence.outcome, presence.detail)
 
         logger.info(
             "restart_preview",
@@ -6339,6 +6504,7 @@ class SessionManager:
             pane_dead=pane_dead,
             stored_agent_type=stored_type,
             offers=len(offers) if offers is not None else None,
+            conversation=resume_target.outcome,
         )
 
         return build_restart_preview(
@@ -6349,8 +6515,8 @@ class SessionManager:
             stored_agent_type=stored_type,
             stored_agent_command=stored_command,
             offers=offers,
-            presence_outcome=presence_outcome,
-            presence_detail=presence_detail,
+            presence_by_uuid=presence_by_uuid,
+            resume_outcome=resume_target.outcome,
         )
 
     def _stored_agent_type_for_tmux_name(

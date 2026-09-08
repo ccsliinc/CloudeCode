@@ -1928,3 +1928,87 @@ half was extracted to `session-restart-live.js` (157 lines) rather than left
 inline. Getting under 500 would mean also splitting the option-list rendering,
 which is deployed code this change does not otherwise touch. Flagged rather
 than done.
+
+### 2026-09-07 - a restart resumes the same conversation - DONE (item 22, the ditto defect)
+
+**THE OWNER'S DEFINITION, verbatim.** "restart on recent is really just
+resume. restart on open is close and resume session so it loads a new
+wrapper or new claude binary." ONE semantic, two mechanics. A dead row has
+no process to kill so its restart IS a resume; a live row has its pane
+killed first, and the kill exists only so the pane picks up a new wrapper
+or a new claude binary. Both come back on the SAME conversation.
+
+**THE DEFECT.** `f95a9ed` made that true only on the REPLAY rung, where
+tmux replays a recorded `--resume` it wrote down itself (3 of the owner's
+22 live sessions). The AGENT rung re-derives its command through
+`Settings.get_agent_command`, which carries no `--resume`, so a restart
+there started a FRESH conversation wearing the old session's name and
+dropped the user's working context.
+
+**WHAT SHIPPED.**
+
+- `src/core/session_resume_target.py` (new). Classifies
+  `sessions.claude_session_uuid` into `resumed` / `none_recorded` /
+  `unknown` - the same three words `RestartSessionResponse.conversation`
+  already used, reused rather than re-invented - and builds the argv
+  fragment through the existing `session_restart.resume_arguments`.
+- The uuid reaches the command as
+  `get_agent_command(extra_args=['--resume', <uuid>])`, which shlex-quotes
+  at every boundary and routes THROUGH the user's wrapper. Never
+  concatenated: the returned string is `zsh -c '...; cld'` and an appended
+  flag would land outside that quoting.
+- ONE lookup per request feeds all FOUR command resolutions (stored agent
+  and every wrapper offer, on the action side and the preview side), so
+  the preview's predicted command and the action's actual command are the
+  same string by construction. Test asserts byte equality.
+- `RespawnPlan.conversation` / `RespawnResult.conversation` /
+  `RestartPlanPreview.conversation` / `RestartPreviewOption.conversation`.
+  DERIVED FROM THE ARGV: a command carrying a `--resume` reads `resumed`
+  whatever the caller believed, so the claim cannot outrun the command.
+- The transcript guard now covers the AGENT rung on the dead path as well
+  as the live one. It always did structurally (`TmuxBackend.respawn` keys
+  on `plan.resume_uuid`, not on liveness); it was vacuous there until the
+  rung began carrying a uuid. `unchecked` still never refuses.
+- The preview passes presence verdicts as `presence_by_uuid` because TWO
+  conversations can be in play: the replay rung resumes what tmux
+  recorded, the agent rung resumes what the row says. One verdict applied
+  to both would refuse a restart nobody measured.
+- `client/js/session-restart-continuity.js` (new, 115 lines). The picker
+  was NOT grown; it already renders the server's `detail` verbatim and
+  that sentence now carries the clause.
+- `liveConfirmCopy` keeps the bare-shell warning and adds the continuity
+  line. Anything unrecognised, a missing field included, reads `unknown`.
+
+**A DRIFT FOUND AND FIXED WHILE PROVING THE PREVIEW.**
+`_agent_command_for_tmux_name` read `agent_type` from `self.sessions`
+while `restart_preview` read it from the ROW. An ADOPTED session carries
+`agent_type` None in memory and the wrapper id on its row, so it PREVIEWED
+as AGENT and RESTARTED as REPLAY. Both now go through
+`_stored_agent_type_for_tmux_name`. This is a behaviour change beyond the
+brief and is called out deliberately: the alternative was to align the
+preview DOWN to the action, which would have removed the whole point of
+the picker.
+
+**A GUARD REWRITTEN, NOT DELETED.**
+`test_the_wrapper_chooser_never_resumes_a_transcript` asserted the chooser
+never resumes anything, which the owner's definition makes wrong. Its own
+docstring said what to do instead, and that is what was done: it is now
+`test_no_module_on_the_restart_path_spells_its_own_resume`, an AST-based
+check that `session_restart.resume_arguments` stays the single builder, so
+every restart resume still reaches the presence check.
+
+**The four gates from `f95a9ed` all still hold**, re-pinned by tests:
+`kills_live_pane` needs measured-alive AND confirmed AND actionable;
+`project_restart_rung` takes no liveness input (swept over every value of
+the new `resume_outcome` argument); `armHtml()` takes zero arguments;
+`optionsHtml` derives `disabled` from `actionable_now` alone, proven
+against a preview whose every projection is actionable and whose every
+continuity reads `resumed`.
+
+**Baseline held.** pytest 3 failed / 4823 passed / 12 skipped (was 3 /
+4803 / 12; the same three environmental failures). Node: 169 files, only
+the pre-existing `test_archive_full_page_mode.node.mjs` fails.
+
+**NOT committed. Nothing on the mini was touched** - no writes to the
+production database, no deploy, no restart, no tmux pane created or killed
+outside a scratch socket.

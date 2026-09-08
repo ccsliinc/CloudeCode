@@ -96,12 +96,14 @@ async def restart_preview(
             detail=preview.unchanged.detail,
             command=preview.unchanged.command,
             actionable=preview.unchanged.actionable,
+            conversation=preview.unchanged.conversation,
         ),
         projected=RestartPlanPreview(
             kind=preview.projected.kind,
             detail=preview.projected.detail,
             command=preview.projected.command,
             actionable=preview.projected.actionable,
+            conversation=preview.projected.conversation,
         ),
         options=[
             RestartPreviewOption(
@@ -115,6 +117,7 @@ async def restart_preview(
                 projected_kind=o.projected_kind,
                 projected_detail=o.projected_detail,
                 command=o.command,
+                conversation=o.conversation,
             )
             for o in preview.options
         ],

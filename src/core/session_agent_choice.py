@@ -141,7 +141,11 @@ def configured_wrapper_ids(settings_obj) -> Optional[List[str]]:
 
 
 def validate_agent_choice(
-    settings_obj, agent_type: Optional[str], *, model: Optional[str] = None
+    settings_obj,
+    agent_type: Optional[str],
+    *,
+    model: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> AgentChoice:
     """Check a requested wrapper id and resolve what it would run.
 
@@ -156,6 +160,13 @@ def validate_agent_choice(
             programming error here; callers must not call this when no
             choice was made.
         model: model id to render into the wrapper, when it takes one.
+        extra_args: further arguments appended to the wrapped CLI, each
+            shlex-quoted at every boundary by ``get_agent_command``. The
+            restart path passes ``['--resume', '<uuid>']`` here so a
+            picked wrapper comes back on the SAME conversation - see
+            ``src/core/session_resume_target.py``. It must be the value
+            ``resolve_wrapper_offers`` was given for the same session, or
+            the preview and the action render different commands.
 
     Output:
         AgentChoice: verdict, the id as asked, the resolved command on
@@ -195,7 +206,9 @@ def validate_agent_choice(
         )
 
     try:
-        command = settings_obj.get_agent_command(asked, model=model)
+        command = settings_obj.get_agent_command(
+            asked, model=model, extra_args=extra_args
+        )
     except (ValueError, OSError, AttributeError) as exc:
         # A wrapper that needs a model and was given none raises here.
         # That is a real refusal with a usable sentence, but it is not
@@ -228,7 +241,12 @@ def validate_agent_choice(
     )
 
 
-def resolve_wrapper_offers(settings_obj, *, model: Optional[str] = None):
+def resolve_wrapper_offers(
+    settings_obj,
+    *,
+    model: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
+):
     """Every configured wrapper, resolved to the command it would run.
 
     Description: the picker's menu, built ONCE here so the preview and
@@ -242,6 +260,13 @@ def resolve_wrapper_offers(settings_obj, *, model: Optional[str] = None):
     Inputs:
         settings_obj: the app ``Settings`` instance.
         model: model id to render into wrappers that take one.
+        extra_args: further arguments appended to every offer's CLI,
+            shlex-quoted by ``get_agent_command``. The restart preview
+            passes the session's ``['--resume', '<uuid>']`` so each
+            offer's command is byte-identical to what
+            :func:`validate_agent_choice` will build when that offer is
+            picked. Passing it to one and not the other is exactly how a
+            badge and a button drift apart.
 
     Output:
         Optional[list[WrapperOffer]]: offers in config order, or None
@@ -270,7 +295,9 @@ def resolve_wrapper_offers(settings_obj, *, model: Optional[str] = None):
         command = None
         reason = ""
         try:
-            command = settings_obj.get_agent_command(wrapper.id, model=model)
+            command = settings_obj.get_agent_command(
+                wrapper.id, model=model, extra_args=extra_args
+            )
         except (ValueError, OSError, AttributeError) as exc:
             reason = str(exc)
         offers.append(

@@ -279,6 +279,34 @@ a login shell); and the request must carry `confirm_restart_live`.
 `RespawnPlan.kills_live_pane` is the single field that makes anything pass
 `-k`, and `project_restart_rung` has no liveness input so it can never set it.
 
+**UPDATE 2026-09-07 (later): A RESTART NOW RESUMES, ON EVERY RUNG THAT
+CAN.** The owner defined it: "restart on recent is really just resume.
+restart on open is close and resume session so it loads a new wrapper or
+new claude binary." `f95a9ed` delivered that only on the REPLAY rung, by
+accident of what tmux had recorded; the AGENT rung re-derives through
+`get_agent_command` and carried no `--resume`, so it started a FRESH
+conversation wearing the old name. `sessions.claude_session_uuid` now
+reaches the command via `extra_args`, built once in
+`src/core/session_resume_target.py` and threaded into all four command
+resolutions (stored agent and every wrapper offer, action side and
+preview side) so the two cannot render different strings.
+
+`RespawnPlan.conversation` and the preview's `conversation` field carry
+`resumed` / `none_recorded` / `unknown` - the same vocabulary
+`RestartSessionResponse.conversation` already used. A NULL uuid is
+`none_recorded` and is SAID, never a quiet fresh start; an unreadable row
+is `unknown`, injects nothing and claims nothing. The value is derived
+from the argv, so the claim cannot outrun the command. The transcript
+guard now covers the agent rung on both paths, and the preview keys
+presence verdicts by uuid because two rungs can resume two different
+conversations.
+
+ONE DRIFT FIXED ALONG THE WAY: `_agent_command_for_tmux_name` read
+`agent_type` from `self.sessions` while `restart_preview` read it from the
+ROW, so an ADOPTED session (in-memory `agent_type` None, row records the
+wrapper) previewed as AGENT and restarted as REPLAY. Both now go through
+`_stored_agent_type_for_tmux_name`.
+
 **Identity across the kill is MEASURED.** tmux 3.7c, scratch socket: same
 `#{session_created}`, same `#{pane_id}`, new `#{pane_pid}`. The triple does not
 move, so the fourteen triple-keyed queries keep matching.

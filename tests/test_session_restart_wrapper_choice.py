@@ -410,7 +410,11 @@ class _FakeSettings:
             raise OSError("config.json is unreadable")
         return _FakeAuth([_FakeWrapper(i) for i in self._ids])
 
-    def get_agent_command(self, agent_type, model=None):
+    def get_agent_command(self, agent_type, model=None, extra_args=None):
+        # MIRRORS THE REAL SIGNATURE, extra_args included. The restart
+        # path passes the session's ['--resume', '<uuid>'] through here,
+        # so a fake that refused the kwarg would pass while the real call
+        # raised.
         return self._command
 
 

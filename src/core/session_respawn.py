@@ -180,6 +180,14 @@ import re
 from dataclasses import dataclass, replace
 from typing import Optional
 
+from src.core.session_resume_target import (
+    CONVERSATION_NONE_RECORDED,
+    CONVERSATION_RESUMED,
+    CONVERSATION_UNKNOWN,
+    continuity_from_command,
+    continuity_phrase,
+)
+
 #: Re-derive the command from the app's own agent config. See module docs.
 RESPAWN_AGENT: str = "agent"
 
@@ -245,6 +253,20 @@ class RespawnPlan:
             and nothing in this app ever inspected it. A caller holding a
             non-None value here MUST prove the transcript exists before
             acting - see :func:`refuse_if_transcript_missing`.
+        conversation: what happens to the session's CONVERSATION when
+            this plan runs, as one of the ``CONVERSATION_*`` constants in
+            ``src/core/session_resume_target.py``: ``'resumed'``,
+            ``'none_recorded'`` or ``'unknown'``. The owner's definition
+            of restart is "resume the same conversation", so this is the
+            field that says whether that actually happened, and a client
+            that renders all three identically has reintroduced the
+            defect - a blank session presented as a continued one.
+
+            It is DERIVED, not asserted: whenever ``command`` carries a
+            ``--resume <uuid>`` the answer is ``'resumed'`` whatever the
+            caller believed, so the claim and the command cannot
+            disagree. Only when there is no uuid on the command does the
+            caller's own lookup decide between the other two.
         kills_live_pane: True when acting on this plan will KILL a
             process the user is currently running, which is the whole of
             what separates ``respawn-pane -k`` from ``respawn-pane``. The
@@ -264,6 +286,7 @@ class RespawnPlan:
     detail: str = ""
     chosen: bool = False
     resume_uuid: Optional[str] = None
+    conversation: str = CONVERSATION_UNKNOWN
     kills_live_pane: bool = False
 
     @property
@@ -284,6 +307,7 @@ def resolve_respawn_plan(
     agent_command: Optional[str],
     chosen_agent_command: Optional[str] = None,
     chosen_agent_type: Optional[str] = None,
+    resume_outcome: Optional[str] = None,
     live_restart_confirmed: bool = False,
 ) -> RespawnPlan:
     """Decide what restarting this pane should run.
@@ -314,6 +338,15 @@ def resolve_respawn_plan(
         chosen_agent_type: The picked wrapper's id, used ONLY to name it
             in the sentence shown to the user. Never used to decide
             anything; the command above is what runs.
+        resume_outcome: what the caller's lookup of
+            ``sessions.claude_session_uuid`` concluded - one of the
+            ``CONVERSATION_*`` constants in
+            ``src/core/session_resume_target.py``, or None when no lookup
+            was made. It only ever decides between ``'none_recorded'``
+            and ``'unknown'``: a command that CARRIES a ``--resume``
+            reads ``'resumed'`` from the command itself, so this can
+            never overstate what will happen. It is not a permission and
+            changes no rung.
         live_restart_confirmed: True ONLY when the user has deliberately
             asked to replace what is running in a pane that is alive,
             having been told that the process in it is killed. The
@@ -376,6 +409,7 @@ def resolve_respawn_plan(
         agent_command=agent_command,
         chosen_agent_command=chosen_agent_command,
         chosen_agent_type=chosen_agent_type,
+        resume_outcome=resume_outcome,
     )
     if not alive:
         return plan
@@ -387,12 +421,81 @@ def resolve_respawn_plan(
     return replace(plan, kills_live_pane=plan.actionable)
 
 
+def _conversation_for(
+    command_uuid: Optional[str], resume_outcome: Optional[str]
+) -> str:
+    """What happens to the conversation, given the command and the lookup.
+
+    Description: THE COMMAND WINS. If the string that is about to run
+        carries a ``--resume <uuid>``, the conversation IS resumed, and no
+        caller's belief can contradict the argv. Only when there is no
+        uuid on the command does the caller's own lookup of
+        ``sessions.claude_session_uuid`` decide between "the row records
+        none" and "the row could not be read".
+
+        An unrecognised or missing lookup answers
+        :data:`CONVERSATION_UNKNOWN`, never
+        :data:`CONVERSATION_NONE_RECORDED`: "nobody told me" is not
+        "nothing is there".
+
+    Inputs:
+        command_uuid: the uuid found on the command that will run, or
+            None.
+        resume_outcome: one of the ``CONVERSATION_*`` constants, or None.
+
+    Output:
+        str: one of the ``CONVERSATION_*`` constants.
+
+    Example:
+        >>> _conversation_for('abc', None)
+        'resumed'
+        >>> _conversation_for(None, CONVERSATION_NONE_RECORDED)
+        'none_recorded'
+        >>> _conversation_for(None, None)
+        'unknown'
+    """
+    if command_uuid:
+        return CONVERSATION_RESUMED
+    if resume_outcome in (CONVERSATION_NONE_RECORDED, CONVERSATION_RESUMED):
+        # A caller claiming ``resumed`` with no uuid on the command has
+        # nothing to resume WITH, so the honest downgrade is
+        # none_recorded rather than repeating the claim.
+        return CONVERSATION_NONE_RECORDED
+    return CONVERSATION_UNKNOWN
+
+
+def _with_continuity(base: str, conversation: str) -> str:
+    """Append the conversation clause to a rung's sentence.
+
+    Description: the rung sentence and the continuity clause are joined
+        in ONE place so every rung says the same thing about the same
+        outcome. The wording of the clause itself lives in
+        ``session_resume_target.continuity_phrase`` - this only decides
+        the punctuation, because "and it resumes" reads as a
+        continuation while the other two read as a caveat.
+
+    Inputs:
+        base: the rung's own sentence, no trailing punctuation.
+        conversation: one of the ``CONVERSATION_*`` constants.
+
+    Output:
+        str: one sentence fit to show the user verbatim.
+
+    Example:
+        >>> _with_continuity('restarting it', CONVERSATION_RESUMED)
+        'restarting it, resuming the same conversation'
+    """
+    joiner = ", " if conversation == CONVERSATION_RESUMED else "; "
+    return f"{base}{joiner}{continuity_phrase(conversation)}"
+
+
 def _rung_from_start_command(
     *,
     pane_start_command: Optional[str],
     agent_command: Optional[str],
     chosen_agent_command: Optional[str],
     chosen_agent_type: Optional[str],
+    resume_outcome: Optional[str] = None,
 ) -> RespawnPlan:
     """Classify a pane by its start command alone, liveness NOT considered.
 
@@ -417,6 +520,9 @@ def _rung_from_start_command(
             this request, or None.
         chosen_agent_type: that wrapper's id, used only to name it in the
             sentence shown to the user.
+        resume_outcome: the caller's conversation lookup, used for the
+            SENTENCE and the ``conversation`` field only. It selects no
+            rung, so the ladder is the same ladder it was.
 
     Output:
         RespawnPlan: one of AGENT / REPLAY / SHELL / CANNOT_DETERMINE.
@@ -451,12 +557,15 @@ def _rung_from_start_command(
                 f"starting {named}, which you picked, instead of what this "
                 f"session was launched with"
             )
+        picked_uuid = resume_uuid_in(picked)
+        picked_conversation = _conversation_for(picked_uuid, resume_outcome)
         return RespawnPlan(
             kind=RESPAWN_AGENT,
             command=picked,
-            detail=why,
+            detail=_with_continuity(why, picked_conversation),
             chosen=True,
-            resume_uuid=resume_uuid_in(picked),
+            resume_uuid=picked_uuid,
+            conversation=picked_conversation,
         )
 
     if pane_start_command is None:
@@ -470,21 +579,49 @@ def _rung_from_start_command(
 
     started = pane_start_command.strip()
     if not started:
+        # A LOGIN SHELL CARRIES NO CONVERSATION, and that is a measured
+        # fact about the rung rather than a failure to look one up, so it
+        # is none_recorded and never unknown - whatever the row says.
         return RespawnPlan(
             kind=RESPAWN_SHELL,
             command=None,
-            detail="this pane was opened as a plain shell; restarting opens one again",
+            detail=_with_continuity(
+                "this pane was opened as a plain shell; restarting opens "
+                "one again",
+                CONVERSATION_NONE_RECORDED,
+            ),
+            conversation=CONVERSATION_NONE_RECORDED,
         )
 
     resolved_agent = (agent_command or "").strip()
     if resolved_agent:
+        # THE RUNG THE OWNER'S DEFINITION BROKE ON. This command is
+        # RE-DERIVED through ``Settings.get_agent_command`` so a restart
+        # picks up a new wrapper or a new claude binary, and until the
+        # caller began passing ``--resume`` through ``extra_args`` it
+        # carried no conversation at all - a "restart" that silently
+        # opened a fresh one. The uuid is read back off the command that
+        # will actually run, so the claim below cannot outrun the argv.
+        agent_uuid = resume_uuid_in(resolved_agent)
+        agent_conversation = _conversation_for(agent_uuid, resume_outcome)
         return RespawnPlan(
             kind=RESPAWN_AGENT,
             command=resolved_agent,
-            detail="restarting the agent this session was launched with",
-            resume_uuid=resume_uuid_in(resolved_agent),
+            detail=_with_continuity(
+                "restarting the agent this session was launched with",
+                agent_conversation,
+            ),
+            resume_uuid=agent_uuid,
+            conversation=agent_conversation,
         )
 
+    # REPLAY READS THE RECORDED STRING, NOT THE ROW. tmux re-runs
+    # ``pane_start_command`` verbatim and this app supplies nothing, so
+    # the only evidence about the conversation is that string. A
+    # ``--continue`` in it resumes something this app cannot name, which
+    # is a genuine unknown rather than a resume - see
+    # ``session_resume_target.continuity_from_command``.
+    replay_conversation = continuity_from_command(pane_start_command)
     return RespawnPlan(
         kind=RESPAWN_REPLAY,
         command=None,
@@ -493,7 +630,11 @@ def _rung_from_start_command(
         # rung would re-run is whatever that recorded string carries -
         # which is why the uuid is read from it and not from ``command``.
         resume_uuid=resume_uuid_in(pane_start_command),
-        detail="restarting the command tmux recorded for this pane",
+        conversation=replay_conversation,
+        detail=_with_continuity(
+            "restarting the command tmux recorded for this pane",
+            replay_conversation,
+        ),
     )
 
 
@@ -504,6 +645,7 @@ def project_restart_rung(
     agent_command: Optional[str],
     chosen_agent_command: Optional[str] = None,
     chosen_agent_type: Optional[str] = None,
+    resume_outcome: Optional[str] = None,
 ) -> RespawnPlan:
     """Which rung a restart WOULD land on, ignoring whether the pane is alive.
 
@@ -534,6 +676,12 @@ def project_restart_rung(
         chosen_agent_command: command for a wrapper picked in this
             request, or None for the baseline projection.
         chosen_agent_type: that wrapper's id, for the sentence only.
+        resume_outcome: the caller's conversation lookup, exactly as
+            :func:`resolve_respawn_plan` takes it. IT IS NOT A LIVENESS
+            INPUT and cannot become one: it distinguishes
+            ``'none_recorded'`` from ``'unknown'`` in a SENTENCE and
+            touches no rung, so this function stays structurally
+            incapable of setting ``kills_live_pane``.
 
     Output:
         RespawnPlan: AGENT / REPLAY / SHELL / CANNOT_DETERMINE. Never
@@ -565,6 +713,7 @@ def project_restart_rung(
         agent_command=agent_command,
         chosen_agent_command=chosen_agent_command,
         chosen_agent_type=chosen_agent_type,
+        resume_outcome=resume_outcome,
     )
 
 
@@ -650,6 +799,9 @@ def refuse_if_transcript_missing(
     return RespawnPlan(
         kind=RESPAWN_TRANSCRIPT_MISSING,
         command=None,
+        # NOTHING RUNS, SO NOTHING RESUMES. Reporting ``resumed`` on a
+        # refusal would be the false green this rung exists to prevent.
+        conversation=CONVERSATION_UNKNOWN,
         detail=(
             detail
             or (
@@ -772,6 +924,12 @@ class RespawnResult:
             restart; see ``src/core/session_instance_rekey.py`` for what
             the pair is for.
         epoch_after: the same reading taken after it, or None.
+        conversation: what happened to the session's CONVERSATION -
+            ``'resumed'`` / ``'none_recorded'`` / ``'unknown'``, carried
+            straight from the plan that ran. Reported rather than
+            inferred, because "it came back" and "it came back with its
+            history" are different claims and a caller cannot derive the
+            second from ``kind``.
     """
 
     kind: str
@@ -782,3 +940,4 @@ class RespawnResult:
     killed_live_pane: bool = False
     epoch_before: Optional[int] = None
     epoch_after: Optional[int] = None
+    conversation: str = CONVERSATION_UNKNOWN

@@ -76,8 +76,9 @@ reason - it makes every outcome testable without a tmux binary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Mapping, Optional, Sequence, Tuple
 
+from src.core.session_resume_target import CONVERSATION_UNKNOWN
 from src.core.session_respawn import (
     RESPAWN_CANNOT_DETERMINE,
     RespawnPlan,
@@ -139,6 +140,12 @@ class PreviewOption:
         detail: one sentence fit to show verbatim, about ``kind``.
         projected_detail: the same, about ``projected_kind``.
         command: what would be run, or None when nothing could be.
+        conversation: what picking this option does to the session's
+            CONVERSATION - ``'resumed'`` / ``'none_recorded'`` /
+            ``'unknown'``, from the PROJECTED plan, because that is the
+            one that says anything about a live pane. A client that
+            renders the three identically has turned "this comes back
+            blank" into "this comes back".
     """
 
     agent_type: str
@@ -151,6 +158,7 @@ class PreviewOption:
     projected_kind: str = ""
     projected_detail: str = ""
     command: Optional[str] = None
+    conversation: str = ""
 
 
 @dataclass(frozen=True)
@@ -197,6 +205,8 @@ def build_restart_preview(
     offers: Optional[Sequence[WrapperOffer]],
     presence_outcome: Optional[str] = None,
     presence_detail: str = "",
+    presence_by_uuid: Optional[Mapping[str, Tuple[Optional[str], str]]] = None,
+    resume_outcome: Optional[str] = None,
 ) -> RestartPreview:
     """Predict every restart outcome for one pane, changing nothing.
 
@@ -230,7 +240,21 @@ def build_restart_preview(
             Only a DEFINITE absence changes anything - ``unchecked``
             never refuses, here or there.
         presence_detail: the checker's sentence, shown to the user
-            verbatim on a refusal.
+            verbatim on a refusal. Used only when ``presence_by_uuid`` is
+            None.
+        presence_by_uuid: presence keyed by the uuid it was measured for,
+            as ``{uuid: (outcome, detail)}``. REQUIRED ONCE MORE THAN ONE
+            CONVERSATION IS IN PLAY: the agent rung now resumes the uuid
+            on the session's ROW, which need not be the uuid in the
+            recorded start command the replay rung would re-run, and
+            applying one verdict to the other would refuse a restart
+            nobody measured. A uuid absent from the mapping is UNCHECKED
+            and never refuses. None keeps the single-verdict behaviour
+            above.
+        resume_outcome: the caller's lookup of
+            ``sessions.claude_session_uuid``, forwarded verbatim to both
+            ladder entry points so the preview's ``conversation`` is the
+            same fact the action will report.
 
     Output:
         RestartPreview.
@@ -250,18 +274,30 @@ def build_restart_preview(
     def _guard(plan: RespawnPlan) -> RespawnPlan:
         """Apply the transcript guard, exactly as the action does.
 
+        Description: looks the verdict up BY THE UUID THIS PLAN WOULD
+          RESUME when the caller supplied a mapping, because two rungs
+          can now resume two different conversations and a verdict about
+          one says nothing about the other. A uuid the caller did not
+          measure is unchecked, and unchecked never refuses.
+
         Inputs: plan (RespawnPlan). Output: RespawnPlan - the same object
           unless the conversation it would resume is definitely absent.
         """
-        return refuse_if_transcript_missing(
-            plan, presence_outcome, presence_detail
-        )
+        if presence_by_uuid is None:
+            return refuse_if_transcript_missing(
+                plan, presence_outcome, presence_detail
+            )
+        found = presence_by_uuid.get(plan.resume_uuid or "")
+        if found is None:
+            return plan
+        return refuse_if_transcript_missing(plan, found[0], found[1])
 
     unchanged = _guard(resolve_respawn_plan(
         probe_ok=probe_ok,
         pane_dead=pane_dead,
         pane_start_command=pane_start_command,
         agent_command=stored_agent_command,
+        resume_outcome=resume_outcome,
     ))
     # THE SAME QUESTION ASKED WITHOUT THE LIVENESS GATE. For a dead pane
     # this is identical to ``unchanged``; for a LIVE one it is the only
@@ -271,6 +307,7 @@ def build_restart_preview(
         probe_ok=probe_ok,
         pane_start_command=pane_start_command,
         agent_command=stored_agent_command,
+        resume_outcome=resume_outcome,
     ))
     pane_state = pane_state_from_probe(probe_ok, pane_dead)
 
@@ -312,6 +349,11 @@ def build_restart_preview(
                     projected_kind=RESPAWN_CANNOT_DETERMINE,
                     projected_detail=reason,
                     command=None,
+                    # NOTHING CAN BE RUN, so nothing can be said about
+                    # the conversation. Not none_recorded - that would
+                    # assert an absence out of a failure to resolve a
+                    # wrapper.
+                    conversation=CONVERSATION_UNKNOWN,
                 )
             )
             continue
@@ -327,6 +369,7 @@ def build_restart_preview(
             agent_command=stored_agent_command,
             chosen_agent_command=offer.command,
             chosen_agent_type=offer.agent_type,
+            resume_outcome=resume_outcome,
         ))
         option_projected = _guard(project_restart_rung(
             probe_ok=probe_ok,
@@ -334,6 +377,7 @@ def build_restart_preview(
             agent_command=stored_agent_command,
             chosen_agent_command=offer.command,
             chosen_agent_type=offer.agent_type,
+            resume_outcome=resume_outcome,
         ))
         options.append(
             PreviewOption(
@@ -354,6 +398,7 @@ def build_restart_preview(
                 # because the ladder refused, but the question the picker
                 # is asking is what this choice would start.
                 command=option_projected.command,
+                conversation=option_projected.conversation,
             )
         )
 

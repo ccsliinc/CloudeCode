@@ -1084,6 +1084,18 @@ class RestartPreviewOption(BaseModel):
         ),
     )
     detail: str = Field(..., description="One sentence fit to show verbatim")
+    conversation: str = Field(
+        "unknown",
+        description=(
+            "'resumed' | 'none_recorded' | 'unknown' - what this does to the "
+            "session's CONVERSATION. A restart means resume, so this says "
+            "whether it actually will. 'none_recorded' means the row names "
+            "no conversation and the session comes back WITHOUT its "
+            "history; 'unknown' means the row could not be read. Rendering "
+            "the three identically presents a blank session as a continued "
+            "one, which is the defect this field exists to prevent"
+        ),
+    )
     projected_kind: str = Field(
         "",
         description=(
@@ -1128,6 +1140,18 @@ class RestartPlanPreview(BaseModel):
         description=(
             "True only for agent/replay/shell. 'not_dead' and "
             "'cannot_determine' are answers, not instructions"
+        ),
+    )
+    conversation: str = Field(
+        "unknown",
+        description=(
+            "'resumed' | 'none_recorded' | 'unknown' - what this does to the "
+            "session's CONVERSATION. A restart means resume, so this says "
+            "whether it actually will. 'none_recorded' means the row names "
+            "no conversation and the session comes back WITHOUT its "
+            "history; 'unknown' means the row could not be read. Rendering "
+            "the three identically presents a blank session as a continued "
+            "one, which is the defect this field exists to prevent"
         ),
     )
 

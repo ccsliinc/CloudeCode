@@ -1427,6 +1427,7 @@ class TmuxBackend(SessionBackend):
         *,
         chosen_agent_command: Optional[str] = None,
         chosen_agent_type: Optional[str] = None,
+        resume_outcome: Optional[str] = None,
         live_restart_confirmed: bool = False,
     ) -> RespawnResult:
         """Put a process back into this session's dead pane, in place.
@@ -1494,6 +1495,14 @@ class TmuxBackend(SessionBackend):
                 It still cannot revive a live pane; see the ladder.
             chosen_agent_type: the picked wrapper's id, used only to name
                 it in the sentence shown to the user.
+            resume_outcome: what the caller's lookup of
+                ``sessions.claude_session_uuid`` concluded, one of the
+                ``CONVERSATION_*`` constants. It does NOT put the
+                ``--resume`` on the command - the caller already did that
+                through ``get_agent_command(extra_args=...)`` - it only
+                lets the ladder tell ``'none_recorded'`` from
+                ``'unknown'`` when there is no uuid on the command at
+                all. Selects no rung and arms nothing.
             live_restart_confirmed: True ONLY when the user deliberately
                 asked to replace what is running in a pane that is
                 ALIVE, having been told the process in it is killed.
@@ -1521,6 +1530,7 @@ class TmuxBackend(SessionBackend):
             agent_command=agent_command,
             chosen_agent_command=chosen_agent_command,
             chosen_agent_type=chosen_agent_type,
+            resume_outcome=resume_outcome,
             live_restart_confirmed=live_restart_confirmed,
         )
 
@@ -1568,7 +1578,12 @@ class TmuxBackend(SessionBackend):
                 kind=plan.kind,
                 detail=plan.detail,
             )
-            return RespawnResult(kind=plan.kind, ok=False, detail=plan.detail)
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=plan.detail,
+                conversation=plan.conversation,
+            )
 
         # THE ONE PLACE ``-k`` CAN APPEAR, AND IT READS THE PLAN. Not the
         # ``live_restart_confirmed`` argument, not ``pane_dead``, not a
@@ -1597,6 +1612,7 @@ class TmuxBackend(SessionBackend):
                 session=self.tmux_session,
                 kind=plan.kind,
                 chosen=plan.chosen,
+                conversation=plan.conversation,
             )
 
         rc_spawn, _, err_spawn = await self._run_tmux(*args, check=False)
@@ -1618,6 +1634,7 @@ class TmuxBackend(SessionBackend):
                 ),
                 command=plan.command,
                 chosen=plan.chosen,
+                conversation=plan.conversation,
                 killed_live_pane=False,
                 epoch_before=epoch_before,
             )
@@ -1660,6 +1677,7 @@ class TmuxBackend(SessionBackend):
                 ),
                 command=plan.command,
                 chosen=plan.chosen,
+                conversation=plan.conversation,
                 # THE KILL ALREADY HAPPENED. tmux accepted the command, so
                 # whatever was running is gone whether or not we can see
                 # what replaced it, and saying otherwise here would let a
@@ -1689,6 +1707,7 @@ class TmuxBackend(SessionBackend):
                 detail=f"it started and exited again: {reason}",
                 command=plan.command,
                 chosen=plan.chosen,
+                conversation=plan.conversation,
                 killed_live_pane=killing,
                 epoch_before=epoch_before,
                 epoch_after=epoch_after,
@@ -1705,6 +1724,7 @@ class TmuxBackend(SessionBackend):
             detail=plan.detail,
             command=plan.command,
             chosen=plan.chosen,
+            conversation=plan.conversation,
             killed_live_pane=killing,
             epoch_before=epoch_before,
             epoch_after=epoch_after,

@@ -46,6 +46,7 @@ looked is not evidence of absence.
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 from pathlib import Path
@@ -325,61 +326,86 @@ def test_a_dead_pane_preview_reports_the_same_rung_twice():
 # ---------------------------------------------------------------------------
 
 
-#: Modules that decide what a restart RE-RUNS and must NEVER learn to
-#: resume a conversation. These build a command out of a wrapper id or
-#: hand tmux back its own record; neither has any business naming a
-#: transcript. ``session_respawn.py`` is deliberately NOT in this list -
-#: see the test below for what replaced its blanket ban.
-RESTART_COMMAND_MODULES = (
+#: The ONE function allowed to build a restart's ``--resume`` argv, and
+#: the one allowed to EXTRACT a uuid from a command that already carries
+#: one. Everything else on the restart path must go through them.
+RESUME_BUILDER = "core/session_restart.py"
+RESUME_EXTRACTOR = "core/session_respawn.py"
+
+#: Modules on the restart path, scanned for a hand-rolled resume.
+RESTART_PATH_MODULES = (
     "core/session_restart_preview.py",
     "core/session_agent_choice.py",
+    "core/session_resume_target.py",
+    "core/session_manager.py",
+    "core/tmux_backend.py",
 )
 
-#: Spellings of "resume a stored conversation". ``--resume`` and
-#: ``--continue`` are the CLI flags; the uuid columns are the values that
-#: were resumed in the incident.
-RESUME_MARKERS = ("--resume", "--continue", "claude_session_uuid", "conversation_uuid")
 
+def test_no_module_on_the_restart_path_spells_its_own_resume():
+    """One builder for ``--resume``, so one place can be audited.
 
-def test_the_wrapper_chooser_never_resumes_a_transcript():
-    """A missing transcript cannot produce a dead pane reported as running.
+    THE HISTORY. This test used to assert the opposite - that the wrapper
+    chooser NEVER resumed anything - because at the time nothing on that
+    path did, and a resume bolted on later would have skipped the
+    transcript check. The owner then defined restart, 2026-09-07: "restart
+    on recent is really just resume. restart on open is close and resume
+    session so it loads a new wrapper or new claude binary." So the
+    chooser DOES resume now, deliberately, and the old ban would forbid
+    the correct behaviour.
 
-    THE INCIDENT: a restart resumed a ``claude_session_uuid`` pointing at
-    a transcript that did not exist, so the pane died instantly with
-    status 127 while the row still read ``lifecycle=running``.
-
-    THESE TWO MODULES ARE SAFE BY CONSTRUCTION. Their command comes only
-    from ``Settings.get_agent_command`` (a wrapper id rendered to a
-    command) or from None, meaning "let tmux replay its own
-    ``pane_start_command``". Neither carries a transcript uuid, so there
-    is no transcript to be missing - and the wrapper chooser is exactly
-    where a ``--resume`` would one day get bolted on.
+    THE UNDERLYING GUARANTEE IS UNCHANGED and this is what carries it:
+    every restart resume is built by
+    ``session_restart.resume_arguments`` out of a uuid classified by
+    ``session_resume_target``, and is checked against the filesystem by
+    ``session_transcript_presence`` before anything spawns. A module that
+    spells its own ``--resume`` string has stepped outside both, which is
+    exactly how the incident happened - a resume against a transcript
+    that did not exist, a pane dead on the first tick, and a row still
+    reading ``lifecycle=running``.
 
     If this fails, do not delete it: route the new resume through
-    ``session_transcript_presence.conversation_presence`` and fail loudly
-    with a named state when the file is absent, the way
-    ``session_respawn.py`` now does.
+    ``session_resume_target.resume_extra_args``.
     """
+    # PARSED, NOT GREPPED. A docstring that MENTIONS --resume (this
+    # repo documents heavily, and doctests print argv lists verbatim) is
+    # prose; only a string constant in executable code can become argv.
+    # A line-based scan cannot tell those apart and would either miss a
+    # real one or fail on the documentation.
     offenders = []
-    for rel in RESTART_COMMAND_MODULES:
-        text = (SRC / rel).read_text(encoding="utf-8")
-        # Strip docstrings/comments crudely: only CODE lines can resume.
-        for lineno, line in enumerate(text.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith('"'):
-                continue
-            for marker in RESUME_MARKERS:
-                if marker in line:
-                    offenders.append(f"src/{rel}:{lineno} {marker}")
+    for rel in RESTART_PATH_MODULES:
+        tree = ast.parse((SRC / rel).read_text(encoding="utf-8"))
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(
+                node,
+                (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                body = getattr(node, "body", None)
+                if (
+                    body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    docstrings.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in docstrings
+                and "--resume" in node.value
+            ):
+                offenders.append(f"src/{rel}:{node.lineno}")
 
     assert not offenders, (
-        "the wrapper chooser now references a conversation resume:\n  "
+        "a module on the restart path builds its own --resume:\n  "
         + "\n  ".join(offenders)
-        + "\n\nA restart that resumes a transcript MUST prove the file "
-        "exists on disk first - see src/core/session_transcript_presence.py "
-        "and the incident recorded in .claude/TODO.md. Resuming a "
-        "transcript that is not there kills the pane with status 127 while "
-        "the row still reads lifecycle=running."
+        + f"\n\nBuild it in src/{RESUME_BUILDER} via resume_arguments and "
+        f"read it back in src/{RESUME_EXTRACTOR} via resume_uuid_in, so "
+        "src/core/session_transcript_presence.py can prove the file is "
+        "there first. Resuming a transcript that is not there kills the "
+        "pane while the row still reads lifecycle=running."
     )
 
 
