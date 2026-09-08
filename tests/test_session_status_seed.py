@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from contextlib import closing
@@ -51,6 +52,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import structlog
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -93,8 +95,10 @@ from src.core.session_status_seed import (
 )
 from src.core.session_status_seed_read import (
     derive_seed,
+    read_instance_row,
     read_transcript_rest,
     seed_live_sessions,
+    seeded_status,
     seeds_for,
 )
 from src.core.session_status_seed_store import SessionStatusSeeds
@@ -487,6 +491,30 @@ def test_a_clock_that_ran_backwards_still_reads_due():
     assert store.due("s1", now=NOW - timedelta(hours=1)) is True
 
 
+def test_a_refusal_cached_with_no_epoch_is_due_the_instant_one_is_known():
+    """A CACHED REFUSAL IS NOT PERMANENT.
+
+    MEASURED on live boot 2026-09-08 (the PT-IMC finding): a session's
+    epoch was unset when its seed was first attempted, so the refusal
+    was cached correctly at the time. Waiting out a full refresh
+    interval on those grounds would be wrong the moment an epoch became
+    known - the reason for the refusal is gone, not merely old.
+    """
+    store = SessionStatusSeeds()
+    store.remember("s1", StatusSeed(), now=NOW, epoch=None)
+    assert store.due("s1", now=NOW) is False, (
+        "no epoch offered yet - the ordinary clock still applies"
+    )
+    assert store.due("s1", now=NOW, epoch=42) is True
+
+
+def test_a_seed_cached_with_a_known_epoch_is_not_forced_due_by_the_same_epoch():
+    """The epoch-known rule fires once, not on every call with an epoch."""
+    store = SessionStatusSeeds()
+    store.remember("s1", StatusSeed(STATUS_IDLE), now=NOW, epoch=42)
+    assert store.due("s1", now=NOW, epoch=42) is False
+
+
 def test_prune_drops_only_the_sessions_that_are_gone():
     """The cache stays bounded by the LIVE population."""
     store = SessionStatusSeeds()
@@ -774,3 +802,98 @@ async def test_an_unidentifiable_instance_seeds_nothing(tmp_path, monkeypatch):
     assert seed.state is None
     assert seed.rung == SEED_RUNG_NONE
     assert "could not be identified" in (seed.detail or "")
+
+
+# --------------------------------------------------------------------- #
+# 7. THE PT-IMC FINDING - a refusal must not be permanent, and a
+#    swallowed error must not be invisible.
+# --------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_seeded_status_retries_a_refusal_once_the_epoch_is_known(
+    tmp_path, monkeypatch
+):
+    """The listing seam must heal the instant, not wait out the clock.
+
+    Mirrors the PT-IMC boot race exactly: the first call to the seam has
+    no epoch to offer (a boot pass raced the legacy reconcile and lost),
+    so it caches "instance could not be identified". The epoch then
+    becomes known - what ``session_boot_readopt.
+    _record_epoch_for_already_registered`` now does for a session
+    registered ahead of it - and the very next call, at the SAME
+    instant, must re-derive rather than serve the stale refusal for a
+    full ``SEED_REFRESH_INTERVAL_SECONDS``.
+    """
+    from tests.test_boot_readopt import EPOCH_A, seed_row
+    from src.config import settings
+    from src.core.session_manager import SessionManager
+    from tests.s7_helpers import migrated_connection
+
+    log_dir = tmp_path / "logs"
+    state = tmp_path / "state"
+    log_dir.mkdir()
+    state.mkdir()
+    monkeypatch.setattr(settings, "log_directory", str(log_dir))
+    monkeypatch.setattr(settings, "state_dir_override", str(state))
+    with closing(migrated_connection(state)):
+        pass
+
+    mgr = SessionManager()
+    seed_row(state, mgr, name="cloude_PT-IMC", epoch=EPOCH_A,
+              working_dir=str(tmp_path), agent_type="claude")
+    with closing(connect(db_path_for(state))) as conn:
+        write_state(conn, "cloude_PT-IMC", STATUS_IDLE, EPOCH_A,
+                    tmux_socket=mgr._tmux_socket_name())
+        conn.commit()
+
+    # First call: no explicit epoch, and none recorded on the manager
+    # yet - exactly the boot-race shape.
+    refused = seeded_status(mgr, "ses_pt_imc", "cloude_PT-IMC", now=NOW)
+    assert refused is None
+    assert seeds_for(mgr).get("ses_pt_imc").rung == SEED_RUNG_NONE
+
+    # The epoch becomes known.
+    mgr._instance_epochs["ses_pt_imc"] = EPOCH_A
+
+    # Same instant: an age-based clock alone would still say "not due"
+    # for the next ~60 seconds.
+    healed = seeded_status(mgr, "ses_pt_imc", "cloude_PT-IMC", now=NOW)
+    assert healed == STATUS_IDLE
+
+
+def test_a_broken_datastore_read_logs_at_warning_not_debug():
+    """Debug-only visibility is exactly how the PT-IMC refusal went
+    unnoticed - this server emits no debug lines. A read that fails must
+    say so loudly enough to be seen, naming the session and the error.
+    """
+
+    class _BrokenConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("no such table: sessions")
+
+        def close(self):
+            pass
+
+    class _FakeManager:
+        def _writable_datastore_connection(self):
+            return _BrokenConn()
+
+        def _tmux_socket_name(self):
+            return "cloudetest"
+
+    with structlog.testing.capture_logs() as logs:
+        row = read_instance_row(
+            _FakeManager(), "cloude_x", 123, session_id="ses_broken"
+        )
+
+    assert row is None
+    failures = [
+        entry for entry in logs
+        if entry.get("event") == "status_seed_row_read_failed"
+    ]
+    assert len(failures) == 1, f"expected exactly one failure log, got {logs}"
+    entry = failures[0]
+    assert entry["log_level"] == "warning"
+    assert entry["session_id"] == "ses_broken"
+    assert entry["error_type"] == "OperationalError"

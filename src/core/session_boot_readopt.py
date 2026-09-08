@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 
@@ -88,6 +88,78 @@ __all__ = [
     "schedule_boot_readopt",
     "session_for",
 ]
+
+
+def _record_epoch_for_already_registered(
+    manager: Any, plan: "ReadoptPlan", listing: Any
+) -> None:
+    """Fill a missing epoch for a session another path registered first.
+
+    Description: closes the race between this pass and
+      ``SessionManager._lifespan_tmux_reconcile`` (the legacy,
+      metadata-driven reconcile). MEASURED on live boot 2026-09-08:
+      the legacy path registered ``ses_fb4b2825`` under tmux name
+      ``cloude_PT-IMC`` a fraction of a second before this pass built
+      its plan, so ``plan_readopt`` skipped the name as
+      ``SKIP_ALREADY_HELD`` before it ever resolved an epoch for it -
+      that skip happens by NAME, ahead of the epoch parse, in
+      ``plan_readopt``. Nothing in the legacy path writes
+      ``manager._instance_epochs``; only the attach in this module does
+      (see the assignment beside ``ID_SOURCE_DERIVED`` above). Left
+      unset, every reader keyed on the instance triple - the status seed
+      ladder among them - treats the session as unidentifiable for the
+      life of the process, never re-attempting once a hook or a poll
+      could have supplied the answer.
+
+      This pass already paid for an epoch-bearing listing to build its
+      own targets; the same listing answers for a name it skipped, so
+      recovering the epoch here costs no extra tmux round trip.
+    Inputs: manager (SessionManager). plan (ReadoptPlan) - already
+      built, read only. listing (TmuxListing) - the same epoch-bearing
+      listing the plan was built from.
+    Output: None. Logs once per session actually filled.
+    Example: _record_epoch_for_already_registered(mgr, plan, listing)
+    """
+    already_held = plan.skipped_for(SKIP_ALREADY_HELD)
+    if not already_held:
+        return
+
+    epoch_by_name: Dict[str, int] = {}
+    for row in listing.sessions:
+        name = row.get("name")
+        raw_epoch = row.get("created_at_epoch")
+        if not name or raw_epoch is None:
+            continue
+        try:
+            epoch_by_name[name] = int(raw_epoch)
+        except (TypeError, ValueError):
+            continue
+
+    name_to_session_id = {
+        getattr(backend, "tmux_session", None): sid
+        for sid, backend in manager.backends.items()
+    }
+
+    for name in already_held:
+        session_id = name_to_session_id.get(name)
+        if session_id is None:
+            # Held by a race we cannot resolve to an id from here (for
+            # example a second live name colliding on a resolved id
+            # rather than on the tmux name itself) - nothing safe to
+            # record.
+            continue
+        if manager._instance_epochs.get(session_id) is not None:
+            continue
+        epoch = epoch_by_name.get(name)
+        if epoch is None:
+            continue
+        manager._instance_epochs[session_id] = epoch
+        logger.info(
+            "boot_readopt_epoch_recorded_for_registered",
+            session_id=session_id,
+            tmux_name=name,
+            epoch=epoch,
+        )
 
 
 def probe_instances(manager: Any) -> Any:
@@ -247,6 +319,12 @@ async def readopt_surviving_sessions(
                 conn.close()
             except Exception:  # noqa: BLE001 - a close failure is not a verdict
                 pass
+
+    # THE RACE CLOSES HERE, before either branch below returns or
+    # proceeds. A name skipped as SKIP_ALREADY_HELD never reaches
+    # ``resolve_session_id`` inside ``plan_readopt``, so nothing upstream
+    # of this line has had a chance to record its epoch.
+    _record_epoch_for_already_registered(manager, plan, listing)
 
     if not plan.targets:
         logger.info(

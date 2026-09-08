@@ -37,10 +37,27 @@ guideline and is under concurrent edit. A weak key means the store dies
 with the manager rather than pinning one alive, which a module-level
 dict keyed by id would not, and a fresh manager in a test starts with a
 genuinely empty store rather than inheriting another test's.
+
+A CACHED REFUSAL IS NOT PERMANENT. MEASURED on live boot 2026-09-08: a
+boot race left one session's epoch unset (see
+``session_boot_readopt._record_epoch_for_already_registered``), so its
+first seed attempt read "this session's exact tmux instance could not be
+identified" and ``seed_live_sessions`` cached that refusal - correctly,
+at the time. ``SessionStatusSeeds.due`` now keys its cache on the epoch
+each reading was taken against, not only on age: a refusal cached with no
+epoch is due again the instant a caller supplies one, rather than waiting
+out a full ``SEED_REFRESH_INTERVAL_SECONDS`` on grounds that were never
+the reason it failed. And every swallow in this module that used to log
+at ``debug`` now logs at ``warning`` with the session id and the
+exception's type name - this server emits no debug lines in production,
+so a debug-only failure here was invisible by construction, which is
+exactly how the boot-race refusal above went unnoticed until it was
+traced by hand.
 """
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from weakref import WeakKeyDictionary
@@ -64,6 +81,16 @@ logger = structlog.get_logger(__name__)
 #: One seed store per SessionManager. See the module docstring for why it
 #: is keyed weakly here rather than assigned in that class's ``__init__``.
 _STORES: "WeakKeyDictionary[Any, SessionStatusSeeds]" = WeakKeyDictionary()
+
+#: Every error this module's reads and its two callers can raise, named
+#: rather than caught blanket - see code-standards.md's ban on bare
+#: ``except Exception``. ``sqlite3.Error`` and ``OSError`` cover the two
+#: I/O boundaries (the instance row query, the transcript scan and tail
+#: read); ``ValueError``/``KeyError`` cover a malformed row or tail record
+#: surfacing while it is turned into a seed. Anything outside this set is
+#: a real defect and must be allowed to propagate, not be swallowed
+#: alongside the reads this module is actually built to tolerate.
+_SEED_READ_ERRORS: Tuple[type, ...] = (sqlite3.Error, OSError, ValueError, KeyError)
 
 
 def seeds_for(manager: Any) -> SessionStatusSeeds:
@@ -91,7 +118,10 @@ def seeds_for(manager: Any) -> SessionStatusSeeds:
 
 
 def read_transcript_rest(
-    uuid: Optional[str], working_dir: Optional[str]
+    uuid: Optional[str],
+    working_dir: Optional[str],
+    *,
+    session_id: Optional[str] = None,
 ) -> TranscriptRest:
     """What the tail of a conversation's transcript says about rest.
 
@@ -103,6 +133,8 @@ def read_transcript_rest(
       middle one is evidence of anything.
     Inputs: uuid (str | None) - ``sessions.claude_session_uuid``.
       working_dir (str | None) - used only for the fast-path slug.
+      session_id (str | None) - for the failure log only; this function
+      never uses it to look anything up.
     Output: TranscriptRest.
     Example: read_transcript_rest(uuid, '/Users/x/proj').verdict
     """
@@ -119,8 +151,16 @@ def read_transcript_rest(
         from src.core.session_transcript_presence import conversation_presence
 
         presence = conversation_presence(str(uuid), working_dir=working_dir)
-    except Exception as exc:  # noqa: BLE001 - a probe must not break a listing
-        logger.debug("status_seed_presence_failed", error=str(exc))
+    except _SEED_READ_ERRORS as exc:
+        # A probe must not break a listing, but a repeated failure here
+        # was previously invisible (debug-only, and this server emits no
+        # debug lines) - see the module docstring's cache section.
+        logger.warning(
+            "status_seed_presence_failed",
+            session_id=session_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return TranscriptRest(
             TAIL_UNREADABLE,
             detail=f"the transcript could not be located: {exc}",
@@ -141,7 +181,11 @@ def read_transcript_rest(
 
 
 def read_instance_row(
-    manager: Any, tmux_name: Optional[str], epoch: Optional[int]
+    manager: Any,
+    tmux_name: Optional[str],
+    epoch: Optional[int],
+    *,
+    session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """The four columns the ladder needs, off ONE instance's row.
 
@@ -149,9 +193,13 @@ def read_instance_row(
       the module docstring. Returns None for every cannot-determine: no
       name, no epoch, no datastore, no matching row, or a failed query.
       A None is not an empty row; the caller seeds nothing either way,
-      but the reason is logged rather than invented.
+      but the reason is logged rather than invented. A ``None`` returned
+      because ``epoch`` was ``None`` is NOT logged - that is the normal,
+      frequent shape of "this session's instance is not known yet", not a
+      failure, and it would drown the warning below in noise.
     Inputs: manager (SessionManager). tmux_name (str | None). epoch
       (int | None) - ``#{session_created}`` for the exact instance.
+      session_id (str | None) - for the failure log only.
     Output: dict | None - ``activity_state``, ``activity_state_at``,
       ``claude_session_uuid``, ``working_dir``.
     Example: read_instance_row(mgr, 'cloude_Mac', 1788463220)
@@ -177,8 +225,17 @@ def read_instance_row(
             "claude_session_uuid": row[2],
             "working_dir": row[3],
         }
-    except Exception as exc:  # noqa: BLE001 - a read must not break a listing
-        logger.debug("status_seed_row_read_failed", error=str(exc))
+    except _SEED_READ_ERRORS as exc:
+        # A read must not break a listing, but a repeated failure here
+        # was previously invisible (debug-only, and this server emits no
+        # debug lines) - see the module docstring's cache section.
+        logger.warning(
+            "status_seed_row_read_failed",
+            session_id=session_id,
+            tmux_name=tmux_name,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
     finally:
         if conn is not None:
@@ -186,6 +243,28 @@ def read_instance_row(
                 conn.close()
             except Exception:  # noqa: BLE001 - closing a read handle
                 pass
+
+
+def _resolve_epoch(
+    manager: Any, session_id: str, epoch: Optional[int]
+) -> Optional[int]:
+    """The epoch to key one session's instance reads on.
+
+    Description: shared by every function in this module that needs an
+      epoch, so an explicit caller-supplied value and the manager's own
+      cache can never be resolved two different ways in two different
+      places. An explicit value always wins - it was measured at the
+      moment of this call (typically a fresh tmux listing) - and
+      ``_instance_epochs`` is consulted only when the caller has none to
+      offer.
+    Inputs: manager (SessionManager). session_id (str). epoch
+      (int | None) - an already-known epoch, or None to look one up.
+    Output: int | None.
+    Example: _resolve_epoch(mgr, 'ses_1', None)
+    """
+    if epoch is not None:
+        return epoch
+    return (getattr(manager, "_instance_epochs", None) or {}).get(session_id)
 
 
 def derive_seed(
@@ -208,10 +287,9 @@ def derive_seed(
     Output: StatusSeed - ``seeds`` is False whenever no rung answered.
     Example: derive_seed(mgr, 'ses_5a756046', 'cloude_Punchlist').state
     """
-    if epoch is None:
-        epoch = (getattr(manager, "_instance_epochs", None) or {}).get(session_id)
+    epoch = _resolve_epoch(manager, session_id, epoch)
 
-    row = read_instance_row(manager, tmux_name, epoch)
+    row = read_instance_row(manager, tmux_name, epoch, session_id=session_id)
     if row is None:
         return StatusSeed(
             rung=SEED_RUNG_NONE,
@@ -222,7 +300,9 @@ def derive_seed(
         )
 
     tail = read_transcript_rest(
-        row.get("claude_session_uuid"), row.get("working_dir")
+        row.get("claude_session_uuid"),
+        row.get("working_dir"),
+        session_id=session_id,
     )
     return resolve_status_seed(
         row_state=row.get("activity_state"),
@@ -264,16 +344,25 @@ def seeded_status(
     try:
         store = seeds_for(manager)
         stamp = now or datetime.now(timezone.utc)
-        if store.due(session_id, now=stamp):
+        resolved_epoch = _resolve_epoch(manager, session_id, epoch)
+        if store.due(session_id, now=stamp, epoch=resolved_epoch):
             seed = derive_seed(
-                manager, session_id, tmux_name, epoch=epoch, now=stamp
+                manager, session_id, tmux_name, epoch=resolved_epoch, now=stamp
             )
-            store.remember(session_id, seed, now=stamp)
+            store.remember(session_id, seed, now=stamp, epoch=resolved_epoch)
         else:
             seed = store.get(session_id) or StatusSeed()
         return display_state(seed, unread=unread)
-    except Exception as exc:  # noqa: BLE001 - a status must not break a listing
-        logger.debug("status_seed_failed", session_id=session_id, error=str(exc))
+    except _SEED_READ_ERRORS as exc:
+        # A status must not break a listing, but a repeated failure here
+        # was previously invisible (debug-only, and this server emits no
+        # debug lines) - see the module docstring's cache section.
+        logger.warning(
+            "status_seed_failed",
+            session_id=session_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -302,18 +391,41 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
         store.prune(sessions.keys())
         tracker = getattr(manager, "_activity_tracker", None)
         now = datetime.now(timezone.utc)
-        for session_id, session in sessions.items():
+    except _SEED_READ_ERRORS as exc:
+        logger.warning(
+            "status_seed_warm_setup_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return (0, 0)
+
+    # ONE BAD SESSION MUST NOT COST THE WHOLE FLEET ITS WARM-UP. The
+    # try/except above guards setup; this one is per session, so a read
+    # that fails for session 3 of 19 still lets 4 through 19 seed.
+    for session_id, session in sessions.items():
+        try:
             if tracker is not None and tracker.hooks_seen(session_id):
                 continue
             examined += 1
             tmux_name = getattr(session, "tmux_session", None) or (
                 getattr(manager, "_hook_tmux_names", None) or {}
             ).get(session_id)
-            seed = derive_seed(manager, session_id, tmux_name, now=now)
-            store.remember(session_id, seed, now=now)
+            resolved_epoch = _resolve_epoch(manager, session_id, None)
+            seed = derive_seed(
+                manager, session_id, tmux_name, epoch=resolved_epoch, now=now
+            )
+            store.remember(session_id, seed, now=now, epoch=resolved_epoch)
             if seed.seeds:
                 seeded += 1
-    except Exception as exc:  # noqa: BLE001 - a warm-up must not break boot
-        logger.debug("status_seed_warm_failed", error=str(exc))
+        except _SEED_READ_ERRORS as exc:
+            # Debug-only visibility was the whole reason the PT-IMC
+            # refusal went unnoticed - see the module docstring.
+            logger.warning(
+                "status_seed_warm_one_failed",
+                session_id=session_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
     logger.info("status_seed_warm", seeded=seeded, examined=examined)
     return (seeded, examined)

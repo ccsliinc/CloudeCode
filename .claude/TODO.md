@@ -3928,3 +3928,67 @@ aimed at a different tmux name must not reach this row.
 `src/api/routes.py` (docstring), `client/js/session-sidebar-rows.js`,
 `client/js/launchpad.js` (net 0 lines), `docs/session-status.md`,
 `CLAUDE.md`, plus the two new test files.
+
+## 2026-09-08 - boot race closed: PT-IMC's epoch never recorded [DONE]
+
+**Reported, from a read-only trace against a live boot at 23:14:25Z.**
+`session_re_registered_from_backend session_id=ses_fb4b2825
+backend_session=cloude_PT-IMC` landed at 23:14:44.109Z from the LEGACY
+metadata-driven reconcile (`SessionManager._lifespan_tmux_reconcile` /
+`_register_session`), a fraction of a second ahead of the triple-keyed
+boot re-adopt (`boot_readopt_complete held=18 failed=0 skipped=1` at
+23:14:44.407Z; the one skip was PT-IMC, already registered).
+
+**Root cause.** Only `session_boot_readopt.py`'s attach step writes
+`manager._instance_epochs[session_id] = epoch`; the legacy reconcile
+never does. `plan_readopt` skips a name already registered
+(`SKIP_ALREADY_HELD`) BY NAME, before it ever resolves an epoch for it -
+so the race left PT-IMC's epoch permanently unset. Every reader keyed on
+the instance triple, including `session_status_seed_read.derive_seed`,
+then read "this session's exact tmux instance could not be identified"
+and cached that refusal, silently, because the swallow around it was
+`except Exception: logger.debug(...)` and this server emits no debug
+lines.
+
+**Fix.** `session_boot_readopt._record_epoch_for_already_registered` now
+runs right after the plan is built: for every name skipped as
+`SKIP_ALREADY_HELD`, it resolves the epoch from the SAME epoch-bearing
+listing this pass already paid for, maps the name back to whichever
+session id already holds it (`manager.backends`), and fills
+`_instance_epochs` if it is still unset - logging
+`boot_readopt_epoch_recorded_for_registered` once per session healed.
+Costs no extra tmux round trip.
+
+Separately, `session_status_seed_read.py`'s swallows are narrowed from
+bare `except Exception` to a named tuple (`sqlite3.Error`, `OSError`,
+`ValueError`, `KeyError`) and now log at `warning` with the session id
+and the exception's type name, in `read_instance_row`,
+`read_transcript_rest`, `seeded_status`, and `seed_live_sessions` (which
+is now per-session inside its loop, so one bad session's read failure no
+longer aborts the whole boot warm-up). And a cached "instance could not
+be identified" refusal is no longer permanent:
+`SessionStatusSeeds.due`/`remember` now carry the epoch a reading was
+taken against, and a refusal cached with no epoch is due again the
+instant a caller supplies one, rather than waiting out a full
+`SEED_REFRESH_INTERVAL_SECONDS` on grounds that no longer apply.
+
+**Verified.** New hermetic tests: `test_boot_readopt.py::
+test_a_session_registered_ahead_of_this_pass_still_gets_its_epoch`
+(pre-registers a session the way the legacy path does, with no epoch,
+and asserts the pass fills it in); `test_session_status_seed.py::
+test_a_refusal_cached_with_no_epoch_is_due_the_instant_one_is_known` and
+`test_a_seed_cached_with_a_known_epoch_is_not_forced_due_by_the_same_epoch`
+(store-level); `test_seeded_status_retries_a_refusal_once_the_epoch_is_known`
+(the PT-IMC shape end to end, through `seeded_status`); and
+`test_a_broken_datastore_read_logs_at_warning_not_debug` (a
+`sqlite3.OperationalError` from a broken connection double is caught,
+logged at `warning` with the session id and `error_type`, and never
+raises past `read_instance_row`). Full pytest: 5478 passed / 3 failed
+(the same known environmental three: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped - no new
+failures.
+
+**Files.** `src/core/session_boot_readopt.py`,
+`src/core/session_status_seed_read.py`,
+`src/core/session_status_seed_store.py`, `tests/test_boot_readopt.py`,
+`tests/test_session_status_seed.py`, `CLAUDE.md`.

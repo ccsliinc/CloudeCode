@@ -134,6 +134,11 @@ adoptable, an unreadable table yields `cannot_determine` and holds nothing, and 
 pass is SCHEDULED, never awaited - uvicorn binds at the lifespan `yield`, so an
 awaited pass is dead port (measured: 1.2 ms to bind, versus 49 ms awaited and 945 ms
 serial). It takes its own listing because `discover_existing` carries no epoch.
+A session the legacy metadata-driven reconcile registers first (PT-IMC, measured
+2026-09-08) is skipped here as `SKIP_ALREADY_HELD` by NAME before an epoch is ever
+resolved for it; `_record_epoch_for_already_registered` fills `_instance_epochs`
+from this pass's own listing anyway, because that gap is what left the status seed
+ladder unable to identify the instance for the life of the process.
 
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
