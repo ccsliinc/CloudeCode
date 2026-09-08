@@ -238,6 +238,62 @@ One line each, newest measurement wins. Detail follows below in full.
   Chrome is not installed on the mini (only Brave); the extension IS installed
   under Brave `Profile 1`.
 
+### Added and updated 2026-09-08 - newest measurement wins
+
+Nothing above is removed. These lines are the current reading where they
+disagree with an older line.
+
+- **DEPLOY STATE.** Live on mac-mini-m4 runs **`0b12edf`**. Committed AND
+  PUSHED but **NOT DEPLOYED**: `0793eb1` (picker layout) and `8dd54a8` (lineage
+  recovery plus backfill). **Nothing is unpushed**, which supersedes the "8
+  commits unpushed" lines below and in `HANDOFF.md` section 8.
+- **25. NEW, HIGH. The conversation id is missing on 16 of 39 session rows.**
+  Two independent defects, both traced: `SessionStart` is the ONLY writer on
+  the create path and never retries (25 failures across 20 sessions in the live
+  log), and `slugify_project_dir` mapped only `/` and `.` when the real rule
+  maps everything outside `[A-Za-z0-9-]`, so the fallback ladder had NEVER ONCE
+  fired on this machine. Fix committed `8dd54a8`, NOT deployed. `agent_type`
+  does NOT share this cause, so item 3 stays separate.
+- **26. NEW. Five rows carry a uuid whose transcript does not exist, and all
+  five COLLIDE** with a sibling row split off by the cwd spelling trap. Pairs
+  7 to 4, 9 to 11, 10 to 12, 38 to 39. Over 39 rows: 16 absent, 18 sound, 5
+  phantom. Merging them is the already-authorised item 5 family and still needs
+  a VERIFIED backup first.
+- **27. NEW. Deploy `0793eb1` and `8dd54a8`**, and authorise the 8 confident
+  backfill FILLs (rows 14, 15, 16, 17, 19, 23, 24, 25). Dry run only so far,
+  nothing written.
+- **2. DONE AND DEPLOYED.** The lag is fixed. p99 14,505.7 ms to 13.3 ms.
+  Caveat 2b stands and has grown: later polls read 64-72 ms and most recently
+  66-73 ms, so **13.3 ms should not be treated as settled.**
+- **20. DONE 2026-09-07, deployed.** The theme bleed. `a6b6b91`.
+- **21. DONE 2026-09-07, deployed.** `c779afb`. **The openrsync diagnosis in
+  the line above was WRONG**: the failure was a remote destination containing
+  SPACES, not `--files-from`. See the 2026-09-08 corrections entry.
+- **22. DONE 2026-09-07, deployed.** Part 2 shipped: `f95a9ed` restarts a live
+  pane in place, `0b12edf` makes every rung that can resume the same
+  conversation. The picker layout fix `0793eb1` is committed and NOT deployed.
+- **CORRECTION to the respawn-ladder line above.** 18 of 22 live sessions have
+  an empty `pane_start_command` (was 15 of 19 on 2026-09-07), BUT an explicit
+  wrapper choice OVERRIDES that gate (`session_respawn.py:542`). Only an
+  UNPICKED restart lands on the shell rung.
+- **CORRECTION.** The tmux identity premise was wrong: `respawn-pane -k` does
+  NOT move the instance triple. Measured on tmux 3.7c, `session_created` held
+  at 1788821572 and `pane_id` at `%0`; only `pane_pid` changed.
+- **CORRECTION.** "Media Compression's conversation is gone" was wrong. The
+  transcript is 73,190,422 bytes and present.
+- **CORRECTION.** The `CLAUDE.md` pytest baseline was stale by an order of
+  magnitude because the `venv` symlink pointed at a deleted `venv.nosync`. Real
+  numbers: **3 failed / 4874 passed / 12 skipped.**
+- **24. UPDATED.** `'ProjectsView' object has no attribute 'read_only'` is now
+  56 occurrences since 2026-08-29 and fires twice per boot. Pre-existing.
+- **`--chrome` browser control: the route is the wrapper picker.** The
+  extension is paired and installed but `claudeInChromeDefaultEnabled = false`,
+  and tools bind at session start, so the only way in is to restart a session
+  and choose the `claude-chrome` wrapper.
+- **HAZARD.** A second Claude Code session was editing branch `v1.1`
+  concurrently on 2026-09-07 and committed `32052d1`. It has exited. Two agents
+  on one branch is how work gets clobbered.
+
 ---
 
 ## 2026-09-04 - CloudeCode backlog, after the session migration completes - OPEN
@@ -2012,3 +2068,294 @@ the pre-existing `test_archive_full_page_mode.node.mjs` fails.
 **NOT committed. Nothing on the mini was touched** - no writes to the
 production database, no deploy, no restart, no tmux pane created or killed
 outside a scratch socket.
+
+---
+
+### 2026-09-08 - DEPLOYMENT STATE, read this before believing anything about live
+
+**Live on mac-mini-m4 runs `0b12edf`.** Committed, pushed, and NOT DEPLOYED:
+
+| commit | what it is | on live? |
+|---|---|---|
+| `0b12edf` | restart means resume | YES, this is what live runs |
+| `0793eb1` | restart picker layout fix | NO |
+| `8dd54a8` | lineage recovery plus the backfill tool | NO |
+
+**Nothing is unpushed.** `git log --oneline @{u}..HEAD` returns empty as of
+2026-09-08, and `origin/v1.1` is at `8dd54a8`. This SUPERSEDES the "8 commits
+unpushed" line in the DONE section and in `HANDOFF.md` section 8, both of which
+were true on 2026-09-07 and are not true now.
+
+Anything you observe on live is `0b12edf` behaviour. The picker layout defect
+and the lineage recovery are both still live-visible as defects because the
+fixes are sitting in git.
+
+---
+
+### 2026-09-07 - the session that vanished, and the two rows repaired by hand - DONE (fix deployed), DONE (recovery)
+
+The owner closed a session, hit restart, and it disappeared from every view.
+Two independent root causes, both fixed in `c9271da`, which IS deployed.
+
+1. **Restart resumed a `claude_session_uuid` whose transcript did not exist.**
+   The pane died instantly with **status 127** while the row still read
+   `lifecycle=running`. This is the incident that motivated
+   `RESPAWN_TRANSCRIPT_MISSING` and `refuse_if_transcript_missing`.
+2. **Close set `archived_at`.** The Recent group is
+   `lifecycle='stopped' AND archived_at IS NULL`, so a closed session missed
+   Recents entirely and was in no list at all.
+
+**The hand recovery, recorded because it changed live data.** The pane was
+respawned onto the correct transcript, and two rows were repaired in the live
+database:
+
+- **Row 42** was emptied and retired: `claude_session_uuid = NULL`, archived.
+- **Row 43** took the live tmux linkage: `archived_at = NULL`,
+  `lifecycle = running`, `tmux_name = cloude_Agent_-_Cloude_Code`,
+  `tmux_created_epoch = 1788813811`.
+
+The repair had to CONSOLIDATE rather than copy, because `claude_session_uuid`
+is UNIQUE and both rows cannot hold the same value. Rollback SQL is on the mini
+at `/tmp/cc_row_rollback.sql`. `/tmp` is not durable across a reboot; treat
+that file as expiring, not as an archive.
+
+---
+
+### 2026-09-08 - the conversation id: two defects, a third group nobody had counted, and a backfill nobody has run - DONE (code, `8dd54a8`), OPEN (deploy and authorisation)
+
+**25.** A session row with no `claude_session_uuid` comes back from a restart
+with no history. **16 of the owner's 39 rows were in that state.** Both causes
+traced to file and line, not guessed.
+
+**DEFECT ONE: the create path has exactly one writer and it never retries.**
+`sessions.claude_session_uuid` is written on create only by Claude Code's
+`SessionStart` hook. An empty POST body becomes `{}` at `routes.py:2108`,
+`session_manager.py:4341` then returns `LINEAGE_UNRESOLVED` and writes nothing.
+The live server log holds **25 such failures across 20 distinct sessions**, and
+their ids map onto the missing rows. The structural problem is the shape of the
+channel: `SessionStart` fires ONCE per conversation with no retry, while every
+other hook event repeats and self-heals. That is exactly why `last_work_at`
+recovers on the next event and the uuid never does.
+`src/core/session_lineage_recovery.py` (171 lines) now runs the existing
+correlation ladder at that failure point, giving the create path the second
+chance the adopt path already had.
+
+**DEFECT TWO, worse in practice: the fallback ladder had never once fired on
+this machine.** `slugify_project_dir` (`claude_transcript_correlate.py:191`)
+mapped only `/` and `.`. The real rule maps EVERYTHING outside `[A-Za-z0-9-]`
+to a single `-`, verified against **908 of 919** live transcripts. Every one of
+the owner's paths contains a space and two tildes, so every slug the ladder
+built was wrong and no fallback had ever succeeded here. **A ladder that cannot
+fire is not a fallback**, and the failure was invisible because a fallback that
+never matches looks exactly like a fallback that was never needed.
+`src/core/claude_project_dirs.py` (260 lines) is the corrected rule.
+
+**`agent_type` does NOT share this cause.** A crosstab over all 39 rows finds
+**14 with `agent_type` NULL and a hook-written uuid**, so the two failures are
+independent and **backlog item 3 stays its own job.**
+
+**26. A THIRD GROUP NOBODY HAD COUNTED: rows whose recorded uuid has NO
+transcript on disk.** Over 39 rows: **16 absent, 18 sound, 5 phantom.** All 5
+phantoms COLLIDE, because the correct uuid is already held by a sibling row
+split off by the cwd spelling trap. The pairs are **7 to 4, 9 to 11, 10 to 12,
+38 to 39.**
+
+Worked example, because the mechanism is the point. Row 7 is LIVE, its
+`working_dir` is the SHORT symlink spelling, and its uuid
+`db81f6bf-85f9-448b-a7f6-bc83f62659d9` exists nowhere on disk. Row 4 is
+ARCHIVED, carries the long iCloud spelling, and its uuid `82854c0e-...` has a
+transcript that very much exists. The live pane is literally running
+`--resume 82854c0e-... --fork-session`. **`--fork-session` MINTS A NEW uuid**,
+the hook recorded that new one, and the forked transcript never materialised.
+So the picker truthfully said "no transcript for db81f6bf" about a uuid that
+has nothing to do with the conversation the user is in, while the real
+conversation sat on the archived twin. The message was correct and the
+conclusion a reader draws from it is wrong.
+
+**THE BACKFILL, DRY RUN ONLY, NOTHING WRITTEN.**
+`scripts/backfill_claude_session_uuid.py` (392 lines) proposes a uuid for a row
+that lacks one. It is dry run by default. Results over the live corpus:
+
+| outcome | rows |
+|---|---|
+| confident FILL | 8: rows 14, 15, 16, 17, 19, 23, 24, 25 |
+| confident REPLACE | 0 |
+| ambiguous | 8: rows 26, 27, 30, 31, 33, 35, 40, 42, at 45 to 78 candidates each |
+| no candidate | 1: row 41 |
+| collision pair | 4 pairs, listed above |
+
+Row 41's `working_dir` is literally `/Users/jsugamele/Development/ses_ee8d919b`,
+which is not a project directory, so no candidate is the right answer there.
+
+Both cwd spellings are resolved FORWARD, by slugifying each spelling found in a
+HOME symlink scan, AND BACKWARD, from the transcript's own recorded cwd
+canonicalised. The backward direction is not optional: **754 of 919 transcripts
+sit in a directory that disagrees with their own recorded cwd.**
+
+**TWO MATCHER DEFECTS WERE CAUGHT BY CONTROLS, NOT BY READING.** Worth keeping
+because both would have shipped a matcher that looked right.
+
+- Directory agreement was clearing a two-signal bar as ONE FACT CORROBORATING
+  ITSELF. Evidence is now counted in independent FAMILIES.
+- The negative control, a row pointed at a project that does not exist while
+  real transcripts are present, initially returned `ambiguous` rather than
+  `no_candidate`, because timing alone was counting as evidence. An ANCHOR GATE
+  now lets timing and title CORROBORATE a candidate and never CREATE one.
+  **A matcher that always finds something is worse than useless.**
+
+New modules from `8dd54a8`: `src/core/session_uuid_backfill.py` (358),
+`src/core/session_uuid_backfill_rules.py` (371),
+`src/core/session_uuid_backfill_report.py` (312),
+`src/core/claude_project_dirs.py` (260),
+`src/core/session_lineage_recovery.py` (171), plus the script. Tests:
+`tests/test_claude_project_dirs.py`, `tests/test_session_lineage_recovery.py`,
+`tests/test_session_uuid_backfill.py`. 33 tests added, each fix proven by
+REVERTING it. pytest went 4823 to 4874 passed with the same 3 pre-existing
+environmental failures.
+
+**STILL OPEN on this item:** the code is not deployed, and no write has been
+authorised. See the decisions entry below.
+
+---
+
+### 2026-09-07 - the restart picker painted its option text over the next row - DONE (code, `0793eb1`), OPEN (deploy)
+
+Option rows inherited `flex-shrink: 1` inside a `max-height: 46dvh` flex
+column, so the flex algorithm SQUASHED THE ROWS instead of scrolling the list.
+Measured: **113px of content in a 62px box on desktop, 145px in a 58px box on a
+phone.** The fix is `flex-shrink: 0`.
+
+**Verified by GEOMETRY, not by DOM text.** `tests/test_restart_picker_geometry.py`
+(649 lines) asserts that no row's text intersects another row's title, and it
+was PROVEN TO FAIL on the old code with **19px of text sitting on text**. A
+test that has not been shown failing on the broken version is not evidence.
+Screenshots are committed alongside it.
+
+`client/js/session-restart-options.js` (350 lines) was extracted from
+`session-restart-picker.js` in the same change, which takes the picker from 578
+lines back down under the 500-line rule.
+
+---
+
+### 2026-09-08 - CORRECTIONS: four earlier conclusions were WRONG
+
+Recorded per the convention at the top of this file. The wrong entry plus its
+correction beats a clean lie.
+
+**CORRECTION to item 21, the openrsync diagnosis.** `deploy-mini.sh` did NOT
+fail because openrsync rejects `--files-from=- --relative`. It handles that
+combination fine, proven by a successful copy. It fails on **a remote
+destination containing SPACES**, which the remote shell word-splits. Both live
+destinations contain spaces and the v11 staging path does not, so **`--target
+live` could never work while `--target v11` always did.** That asymmetry is the
+whole reason the bug hid for as long as it did: every test anyone ran by habit
+went to v11. Fixed in `c779afb` by moving the transfer to tar over ssh, where
+the remote command is one quoted string the script controls.
+
+**CORRECTION to the tmux identity premise.** Killing and respawning does NOT
+move the instance triple. Measured on tmux 3.7c: `session_created` held at
+**1788821572** and `pane_id` at **`%0`** across `respawn-pane -k`, and only
+`pane_pid` changed. The reason is structural, not luck: `session_created`
+belongs to the SESSION and `-k` replaces the PANE'S PROCESS.
+`src/core/session_instance_rekey.py` still measures the epoch either side and
+answers `unchanged` / `rekeyed` / `cannot_determine`, because a measurement that
+can stop being true is not a thing to assume.
+
+**CORRECTION: "Media Compression's conversation is gone" was WRONG, and the app
+said it too.** The transcript `82854c0e-a423-4591-a34f-a14cb92fbf41.jsonl`
+exists and is **73,190,422 bytes**. See the phantom-uuid entry above for why
+the app's message was locally truthful and globally misleading.
+
+**CORRECTION: the `CLAUDE.md` pytest baseline was stale by an order of
+magnitude.** The repo `venv` symlink pointed at a deleted `venv.nosync`
+directory, exactly the failure mode `CLAUDE.md` warns about, and the suite
+limped along undercounting rather than failing outright. Real numbers after
+rebuilding: **3 failed / 4874 passed / 12 skipped.** The three are the same
+environmental ones: `test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`. Node: 169 files, only `test_archive_full_page_mode.node.mjs`
+fails, also pre-existing.
+
+---
+
+### 2026-09-08 - the bare-shell exposure, restated correctly
+
+This was MISSTATED ONCE ALREADY, so the correct form in full:
+
+- **18 of 22 live sessions have an empty `#{pane_start_command}`.** Measured
+  2026-09-08. Earlier entries say 15 of 19; that was 2026-09-07 and the
+  population moved.
+- An UNPICKED restart on such a session lands on the `RESPAWN_SHELL` rung and
+  hands back a login shell.
+- **BUT an explicit wrapper choice OVERRIDES that gate**
+  (`src/core/session_respawn.py:542`). Picking a wrapper in the picker starts
+  the agent properly.
+
+So the exposure is real and it is NOT unavoidable: only an unpicked restart
+lands on the shell rung. Do not record this as "the restart button gives you a
+shell" without the second half.
+
+---
+
+### 2026-09-08 - item 24 recount
+
+**24.** `'ProjectsView' object has no attribute 'read_only'` at
+`src/core/upload_sweeper.py:155`. Now **56 occurrences since 2026-08-29**, and
+it fires TWICE PER BOOT. Still pre-existing, still not introduced by any
+2026-09-07 or 2026-09-08 work. Unchanged in substance from the entry above,
+recounted so the number is current.
+
+---
+
+### 2026-09-08 - item 23 is still latent
+
+**23.** The deploy copies with `ditto`, which MERGES. The first commit that
+DELETES a file will leave the stale copy on BOTH targets and still report
+success, because verification only hashes files that SHOULD be present. **No
+deletions have shipped yet**, so this has not bitten. Both undeployed commits
+(`0793eb1`, `8dd54a8`) are additions and edits, no removals, so deploying them
+does not trip it either. Do it before a deletion ships.
+
+---
+
+### 2026-09-08 - HAZARD: two Claude Code sessions were editing branch `v1.1` at once
+
+A SECOND Claude Code session was working this same branch concurrently for part
+of 2026-09-07. It committed `32052d1`. It has since exited. Nothing was
+clobbered that anyone found, but **two agents on one branch is how work gets
+clobbered**, and the second agent's commits are indistinguishable from the
+first's in the log. If a commit in this range does something you did not expect,
+that is the likely explanation. Recorded as a process hazard, not as a defect.
+
+---
+
+### 2026-09-08 - browser control, and the only route to it
+
+Claude in Chrome is PAIRED and INSTALLED: `pairedDeviceName = Browser 2`,
+`hasCompletedClaudeInChromeOnboarding = true`. But
+`claudeInChromeDefaultEnabled = false`, so **browser tools exist ONLY in a
+session launched with `--chrome`**, which is the `claude-chrome` wrapper. Tools
+BIND AT SESSION START, so browser control cannot be added to a conversation
+already running.
+
+**The wrapper picker is the intended route**: restart a session and choose
+`claude-chrome`. That is what the picker was built for, and it is now the
+supported answer to "can this session drive the browser". Note this is also why
+the picker layout fix (`0793eb1`) matters more than it looks: it is the control
+surface for this.
+
+---
+
+### 2026-09-08 - OPEN DECISIONS AWAITING THE OWNER
+
+Three, none of them started, all of them blocked on a human answer.
+
+1. **Authorise writing the 8 confident FILLs** from the backfill dry run (rows
+   14, 15, 16, 17, 19, 23, 24, 25). Nothing has been written. The tool is dry
+   run by default and stays that way until told otherwise.
+2. **Merge the 4 duplicate row pairs** (7 to 4, 9 to 11, 10 to 12, 38 to 39).
+   This is the ALREADY-AUTHORISED `(old path)` merge family, item 5, and it
+   still carries its condition: **take a VERIFIED backup first. Every
+   pre-existing backup in that directory is 65 to 115 KB against a 4.5 GB
+   database and would be useless as a rollback.** A backup that cannot restore
+   is not a backup.
+3. **Deploy `0793eb1` and `8dd54a8`.** Live is on `0b12edf`.

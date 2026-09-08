@@ -133,8 +133,8 @@ repeated bug in the project. Check the level before you debug the endpoint.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline is
-  4647 passed / 3 failed / 0 errors / 13 skipped; the three failures are
+  repo root. System python3 has no fastapi. Current baseline, measured
+  2026-09-08, is 4874 passed / 3 failed / 12 skipped; the three failures are
   environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
@@ -144,7 +144,11 @@ repeated bug in the project. Check the level before you debug the endpoint.
   `venv.nosync` directory that no longer exists lets the suite limp
   along and undercount silently, rather than failing outright. If the
   numbers you see look nothing like these, check the symlink and rebuild
-  the venv from `requirements.txt` before trusting the count.
+  the venv from `requirements.txt` before trusting the count. **That is not
+  hypothetical: it happened.** The baseline this file carried before
+  2026-09-08 read 4647 passed / 13 skipped and was stale by an order of
+  magnitude for exactly that reason. Node: 169 files, only the pre-existing
+  `test_archive_full_page_mode.node.mjs` fails.
 - **`node --check`** every JS file you touch, before you claim it works.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
@@ -173,6 +177,7 @@ for a real subset of the sessions on a working box, because
 | Validate an `agent_type` choice, and persist it | `src/core/session_agent_choice.py` |
 | `GET /sessions/restart/preview` | `src/api/restart_routes.py` |
 | The panel, and the reopen afterwards | `client/js/session-restart-picker.js`, `client/js/session-restart-return.js` |
+| The option list, extracted so the picker stays under 500 lines | `client/js/session-restart-options.js` |
 | Keep the row keyed on its instance after a kill | `src/core/session_instance_rekey.py` |
 | The arm control and the kill confirmation | `client/js/session-restart-live.js` |
 | What the user is told about the conversation | `client/js/session-restart-continuity.js` |
@@ -290,10 +295,14 @@ gate is derivable from a prediction:
    radio locked whatever it projects.
 3. `App.showConfirmModal` with `SessionRestartLive.liveConfirmCopy`,
    which names the
-   bare-shell outcome AND what happens to the conversation. Measured 2026-09-07: 15 of 19 live sessions have
-   BOTH an empty `pane_start_command` and a NULL `agent_type`, so 79
-   percent come back a login shell. That warning is what makes this safe
-   to ship.
+   bare-shell outcome AND what happens to the conversation. Measured
+   2026-09-08: 18 of 22 live sessions have an empty `pane_start_command`,
+   so an UNPICKED restart comes back a login shell for 82 percent of them
+   (it read 15 of 19 on 2026-09-07; the population moves, re-measure
+   rather than quoting either). That warning is what makes this safe to
+   ship. Note the whole sentence: an explicit wrapper choice OVERRIDES
+   the gate (`session_respawn.py:542`), so only an unpicked restart lands
+   on the shell rung.
 4. `confirm_restart_live` on the request. `RespawnPlan.kills_live_pane`
    is the ONLY thing that makes anything pass `-k`, and it is set only
    when the pane was measured alive AND the caller confirmed AND the
@@ -321,6 +330,76 @@ row keyed by the instance triple. Nothing else - a respawn is still not a fork
 and never touches a lineage column. With no `agent_type` it issues no write at
 all. A restart that FAILED records nothing, and `agent_type_persisted` says so
 rather than letting a stuck choice look saved.
+
+## The conversation id, and how a row loses it
+
+`sessions.claude_session_uuid` is the id a restart resumes: the row's copy of a
+transcript uuid. Do not conflate it with the instance triple, a pin id or a
+project name. Everything in this section was traced to file and line on 2026-09-08 and
+shipped in `8dd54a8`. **Note that `8dd54a8` is committed but not deployed at
+the time of writing**, so a live install may still be showing the old
+behaviour.
+
+| Piece | File |
+|---|---|
+| Second chance at correlation when the hook writes nothing | `src/core/session_lineage_recovery.py` |
+| How Claude Code actually slugifies a working directory | `src/core/claude_project_dirs.py` |
+| The correlation ladder itself | `src/core/claude_transcript_correlate.py` |
+| Propose a uuid for a row that lacks one | `src/core/session_uuid_backfill.py` |
+| What counts as evidence, and what only corroborates | `src/core/session_uuid_backfill_rules.py` |
+| Render the proposal for a human | `src/core/session_uuid_backfill_report.py` |
+| The operator entry point, DRY RUN BY DEFAULT | `scripts/backfill_claude_session_uuid.py` |
+
+**A ONE-SHOT CHANNEL WITH NO RETRY IS THE WHOLE PROBLEM.** On the create path
+the uuid had exactly ONE writer, Claude Code's `SessionStart` hook. An empty
+POST body becomes `{}` at `routes.py:2108`, `session_manager.py:4341` returns
+`LINEAGE_UNRESOLVED`, and nothing is written. The live log holds 25 such
+failures across 20 distinct sessions, and 16 of 39 rows carried no uuid at all.
+Contrast the other hook events, which repeat: that is precisely why
+`last_work_at` self-heals on the next event and the uuid never did. If you add
+a field fed by a hook, ask which of the two kinds of event feeds it, and give
+the one-shot kind a recovery path rather than a log line.
+
+**A FALLBACK THAT CANNOT FIRE IS NOT A FALLBACK, AND IT IS INVISIBLE.**
+`slugify_project_dir` mapped only `/` and `.`. The real rule replaces
+EVERYTHING outside `[A-Za-z0-9-]` with a single `-`, verified against 908 of
+919 live transcripts. Every path on the developer's machine contains a space
+and two tildes, so every slug the ladder built was wrong and the fallback had
+NEVER ONCE SUCCEEDED there. It looked exactly like a fallback that was never
+needed. A ladder rung that has never been observed to fire is unmeasured, not
+proven.
+
+**A RECORDED uuid IS NOT EVIDENCE A TRANSCRIPT EXISTS.** Rows fall into three
+groups, not two: over 39 rows, 16 absent, 18 sound, and 5 PHANTOM, holding a
+uuid with no file behind it. All 5 phantoms collide with a sibling row, because
+the correct uuid is already held by the twin that the cwd spelling trap split
+off. The mechanism is `--fork-session`: it MINTS A NEW uuid, `SessionStart`
+records the new one, and the forked transcript may never materialise. So the
+picker can say "no transcript for <uuid>" perfectly truthfully about a uuid
+that has nothing to do with the conversation the user is in, while the real
+73 MB transcript sits on the archived twin. A message can be locally correct
+and lead every reader to the wrong conclusion.
+
+**Both cwd spellings must be resolved in BOTH directions.** Forward, by
+slugifying every spelling found in a HOME symlink scan; and backward, from each
+transcript's own recorded cwd, canonicalised. Backward is not optional: 754 of
+919 transcripts sit in a directory that disagrees with their own recorded cwd.
+
+**Evidence is counted in independent FAMILIES, and weak signals corroborate
+rather than create.** Two matcher defects were caught by CONTROLS, not by
+reading the code, and both would have shipped looking right. Directory
+agreement was clearing a two-signal bar as one fact corroborating itself. And
+the negative control, a row pointed at a project that does not exist while real
+transcripts are present, returned `ambiguous` instead of `no_candidate` because
+timing alone counted as evidence; an anchor gate now lets timing and title
+corroborate a candidate and never create one. **A matcher that always finds
+something is worse than useless**, so a negative control is mandatory for
+anything in this family.
+
+**`agent_type` is a SEPARATE failure, do not fold them together.** A crosstab
+over all 39 rows finds 14 with `agent_type` NULL and a hook-written uuid. The
+two are independent, and the `agent_type` persistence gap is still its own open
+item.
 
 ## The transcript archive the app maintains
 
@@ -402,6 +481,26 @@ the pragma took 112 ms, a 215x difference that widens with the file. Do not put
 a pragma back on it; `tests/test_db_integrity_verdict.py` booby-traps every
 binding of the helper and fails the build if one appears.
 
+**Measured on live after the deploy, 2026-09-07**, against the real 4.5 GB
+file: p99 **14,505.7 ms to 13.3 ms**, p50 30.5 to 5.2 ms, the 20.0s cadence of
+14.5s stalls GONE, and the share of the window stalled 86.5 percent to 0.0
+percent. The measurement to trust is that the SAMPLE COUNT TRIPLED at an
+unchanged poll rate, because that is independent of the timings: more samples
+come back only if the loop is free to answer them. **13.3 ms is NOT settled.**
+Later polls read p99 64-72 ms and most recently 66-73 ms. Still three orders of
+magnitude better than the broken state and with no stall pattern, but about
+five times that figure and NOT attributable; the corpus ingester was active
+during the later runs, which is a hypothesis that was not tested. Re-measure on
+a quiet box before quoting a number.
+
+**The diagnosis is worth keeping for its shape: it was a REQUEST HANDLER ON A
+TIMER, not a background task.** Several passes looking for a periodic
+server-side loop found nothing, because nothing looped; the Electron tray
+polled. When you are chasing a periodic stall, read what POLLS as well as what
+loops. It was confirmed twice independently before any fix was written: py-spy
+returned 17 of 17 stalled dumps byte-identical, and the static call chain
+agreed.
+
 **The cached verdict carries two facts, so it has two fields.** `verdict` is
 `ok` / `failed` / `cannot_determine`; `freshness` is `current` / `stale` /
 `never_ran` / `cannot_determine`, the same four-value vocabulary
@@ -459,7 +558,24 @@ could not be evaluated; 2 is not 0.
 4. **The tmux socket is load-bearing.** Anything that shells out to `tmux`
    without `-L cloude` is talking to the user's personal tmux server. That is how
    you kill someone else's work.
-5. **A stale doc is worse than no doc.** A missing doc sends the next agent to
+5. **A uuid on the row is not evidence a transcript exists, and a missing
+   transcript is not evidence the conversation is gone.** Five rows on the
+   developer's box hold a phantom uuid minted by `--fork-session` while the
+   real conversation lives on an archived twin row. Check the twin before
+   telling anyone their history is lost.
+6. **cwd spelling splits a session in two.** `~/Development` is a symlink into
+   iCloud and Claude Code derives its transcript directory from the LITERAL cwd
+   string, so two spellings of one directory make two transcript directories,
+   two project rows and, as above, two session rows. Always write the long
+   iCloud spelling, in code and in documents.
+7. **`if (pinned) apply()` with no else leaves the last session's theme on
+   screen.** A pinned theme bled across session switches because three
+   copy-pasted restores in `app.js` and two session-entry paths each applied a
+   theme and never reset one. A missing else is not a missing feature, it is
+   state left over from the previous thing. There is now ONE total function,
+   `applyForTarget()` in `client/js/theme-navigation.js`, and every navigation
+   goes through it. Fixed in `a6b6b91`.
+8. **A stale doc is worse than no doc.** A missing doc sends the next agent to
    read the code; a confidently wrong one sends it to write a bug. If you change
    behavior this file describes, update this file in the same change. If you find
    a claim here that reality contradicts, fix it and say so in the commit.

@@ -1,6 +1,6 @@
 # HANDOFF - CloudeCode app development
 
-Written 2026-09-07. Re-scoped from
+Written 2026-09-07, UPDATED 2026-09-08. Re-scoped from
 `Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
 was written for someone continuing the MacBook-to-mini MIGRATION. This one is
 written for someone continuing APP DEVELOPMENT.
@@ -37,6 +37,20 @@ hand `scp` must do both explicitly.
 
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
+
+**WHAT LIVE ACTUALLY RUNS, as of 2026-09-08: `0b12edf`.** Two commits are
+finished, committed AND pushed, and NOT on live:
+
+| commit | what it is | on live? |
+|---|---|---|
+| `0b12edf` | restart means resume | YES, this is live |
+| `0793eb1` | restart picker layout fix | NO |
+| `8dd54a8` | lineage recovery plus the backfill tool | NO |
+
+So anything you observe on live is `0b12edf` behaviour, and both of those
+defects are still live-visible while their fixes sit in git. Deploying them is
+an open item. Neither commit deletes a file, so neither trips the `ditto` merge
+defect in section 2.
 
 ---
 
@@ -107,46 +121,61 @@ be entered. Verify on live, or by API.
 
 ---
 
-## 3. THE LAG - root cause, measured, and the first thing to fix
+## 3. THE LAG - FIXED 2026-09-07, and what is still open behind it
 
-```
-main-thread samples: 19,484 | inside sqlite3_step: 13,913 = 71.4%
-/health polled at 10Hz:  p50 = 30ms   p99 = 11,966ms   max = 12,767ms
-STALLS every 20.0s, each lasting 12.05s
-```
+**The root cause was not where anyone was looking.** `PRAGMA integrity_check`
+at `src/core/db.py:177` ran SYNCHRONOUSLY on the asyncio event loop inside the
+`GET /api/v1/version` handler (`version_routes.py:207` -> `:178` ->
+`db_health.py:94`), against a 4.5 GB `cloude.db`. The Electron tray polls that
+endpoint every 20 seconds (`macOS/main.js`, `INTERVAL_MS = 20000`), and the
+pragma re-verifies every page of every B-tree, so the loop was unavailable for
+roughly 14 of every 20 seconds on an IDLE box, and the stall grew with the file.
 
-The server runs SQLite SYNCHRONOUSLY on its asyncio event loop, so a query
-blocks every other request, including websocket frames. The loop is unavailable
-roughly 60 percent of wall clock on an IDLE box.
+**It was a REQUEST HANDLER ON A TIMER, not a background task.** That is exactly
+why it survived several hunts: everyone was grepping for a loop. When you are
+chasing a periodic stall, read what POLLS as well as what loops.
 
-There is no local echo in the terminal (`terminal.js:312 term.onData -> ws.send`,
-characters appear only via `term.write()` fed by PTY output over the same
-socket), so every keystroke round-trips through the blocked loop in BOTH
-directions: 8 seconds working, 12 seconds dead, then a catch-up burst. That is
-exactly the owner's "typing stops appearing then in a little bit it appears
-again".
+Confirmed twice, independently, BEFORE a line of fix was written: `py-spy dump`
+mid-stall returned **17 of 17 stalled dumps byte-identical**, and the static
+call chain says the same thing.
 
-RULED OUT, each measured: multi-session streaming (singleton websocket, 2 TCP
-connections not 17), the network (measured from 127.0.0.1), machine load
-(min 9ms proves the server is fast when the loop is free), poll volume
-(`/sessions/list`, `/sessions/attachable` and `/sessions/records` all correctly
-use `run_in_threadpool` and are VICTIMS of the stall).
+**Measured on live, before and after the deploy:**
 
-**CANNOT DETERMINE: which query.** `sample` renders CPython frames as
-`_PyEval_EvalFrameDefault`, so the Python call site is invisible. Close it with
-`py-spy dump --pid <server>` against the live process DURING a stall - a
-30-second read-only step. Do that BEFORE writing a fix.
-`corpus_ingest_task.py:223` already shows the correct shape
-(`asyncio.to_thread`); the blocking path does not.
+| measurement | before | after |
+|---|---|---|
+| p99 | 14,505.7 ms | 13.3 ms |
+| p50 | 30.5 ms | 5.2 ms |
+| stall cadence | every 20.0s, lasting 14.5s | GONE |
+| share of the window stalled | 86.5 percent | 0.0 percent |
+| samples at the same poll rate | baseline | TRIPLED |
 
-Second, independent performance defect: `renderProjectList()` does a wholesale
-`innerHTML =` with NO signature guard, rebuilding 794 DOM nodes (385 elements +
-409 text nodes) plus ~45 event listeners on every 5-second tick, including while
-the launchpad is hidden behind a terminal. There is no `clearInterval` anywhere
-in `launchpad.js` and the poller never pauses on tab hide. Verify a fix by
-asserting the MUTATION COUNT, not that the signature stopped changing - a
-signature that never changes and a renderer that ignores it look identical from
-outside.
+The tripled sample count is the measurement to trust, because it is
+independent of the timing numbers: at an unchanged poll rate, more samples come
+back only if the loop is free to answer them.
+
+**13.3 ms IS NOT SETTLED, do not quote it as the number.** Later polls read p99
+**64-72 ms** across two runs, and most recently **66-73 ms**. That is still
+three orders of magnitude better than the 14,505 ms broken state and carries no
+stall pattern, but it is about five times the figure recorded immediately after
+the fix and it is NOT attributable. The corpus ingester was active during the
+later runs; that is a hypothesis and it was NOT tested. Re-measure on a quiet
+box before treating any single figure as the baseline.
+
+The replacement design is in `CLAUDE.md` under "The daily database integrity
+check": the pragma moved to a daily background loop that publishes a verdict
+artifact, and the request path became one connect plus one small SELECT plus
+one small JSON read. `tests/test_db_integrity_verdict.py` booby-traps every
+binding of the helper, so a pragma cannot come back onto the request path
+without failing the build.
+
+**Still open behind it: the render path.** `renderProjectList()` does a
+wholesale `innerHTML =` with NO signature guard, rebuilding 794 DOM nodes (385
+elements + 409 text nodes) plus about 45 event listeners on every 5-second
+tick, including while the launchpad is hidden behind a terminal. There is no
+`clearInterval` anywhere in `launchpad.js` and the poller never pauses on tab
+hide. Verify a fix by asserting the MUTATION COUNT, not that the signature
+stopped changing - a signature that never changes and a renderer that ignores
+it look identical from outside.
 
 **Line numbers recorded for these have DRIFTED.** The TODO records
 `renderProjectList()` at launchpad.js:3976 with the `innerHTML =` at :4120, and
@@ -155,16 +184,16 @@ tip: `renderProjectList()` is at :4155, the wholesale `innerHTML =` at :4318,
 the `setInterval` at :454, in a 6,069-line file, and `grep -c clearInterval`
 returns 0. The facts hold; re-derive any line number before quoting it.
 
-**Agreed priority order:** (1) unblock the event loop, `py-spy dump` FIRST to
-name the query; (2) the project-tree render guard; (3) push updates over the
-existing websocket instead of polling. Note for (3) that `src/api/websocket.py`
-carries NO project or session-list message type at all - the websocket is
-per-session terminal I/O only, so there is no push channel for state today and
-adding one is real work, not a config change.
-
+**Priority order now:** (1) the event loop is DONE. (2) the project-tree render
+guard. (3) push updates over the existing websocket instead of polling. Note
+for (3) that `src/api/websocket.py` carries NO project or session-list message
+type at all - the websocket is per-session terminal I/O only, so there is no
+push channel for state today and adding one is real work, not a config change.
+Re-measure before designing it: the poll may not be the real cost now that the
+loop is free.
 ---
 
-## 4. IDENTITY - the model, and the three things that are not the same
+## 4. IDENTITY - the model, and the identifiers that are not the same
 
 **Three different identifiers, do not conflate them:** pin IDs, `cliSessionId`,
 and transcript UUIDs. A pin ID can COINCIDENTALLY also exist as a real
@@ -200,6 +229,70 @@ produce two separate transcript dirs. Projects 3 and 4, `Mac (old path)` and
 auto-derived path must use the resolved iCloud spelling. Always write the long
 spelling in documents and in code.
 
+**`sessions.claude_session_uuid` IS THE ROW'S COPY OF THE TRANSCRIPT UUID, AND
+IT IS THE ONE THAT GOES MISSING.** It is what a restart resumes. Diagnosed
+2026-09-08; the fix is committed as `8dd54a8` and NOT DEPLOYED, so on live all
+of this is still true.
+
+- **16 of 39 rows carry no uuid at all.** On the create path it has exactly ONE
+  writer, Claude Code's `SessionStart` hook. An empty POST body becomes `{}` at
+  `routes.py:2108`, `session_manager.py:4341` returns `LINEAGE_UNRESOLVED` and
+  writes nothing. The live server log holds **25 such failures across 20
+  distinct sessions**. The structural reason it never heals: `SessionStart`
+  fires ONCE per conversation with no retry, while every other hook event
+  repeats. That is why `last_work_at` recovers on the next event and the uuid
+  never does.
+- **The fallback ladder had never once fired on this machine.**
+  `slugify_project_dir` (`claude_transcript_correlate.py:191`) mapped only `/`
+  and `.`; the real rule maps EVERYTHING outside `[A-Za-z0-9-]` to a single
+  `-`, verified against **908 of 919** live transcripts. Every one of the
+  owner's paths contains a space and two tildes, so every slug it built was
+  wrong. **A ladder that cannot fire is not a fallback**, and it is invisible,
+  because a fallback that never matches looks exactly like one that was never
+  needed.
+- **`agent_type` does NOT share this cause.** 14 of 39 rows have `agent_type`
+  NULL and a hook-written uuid, so backlog item 3 is a separate job.
+
+**A uuid ON THE ROW IS NOT EVIDENCE A TRANSCRIPT EXISTS, and this is the trap
+that will lie to you.** Over 39 rows: 16 absent, 18 sound, and **5 PHANTOM** -
+a recorded uuid with no transcript on disk. All 5 collide, because the correct
+uuid is already held by a sibling row split off by the cwd spelling trap above.
+The pairs are **7 to 4, 9 to 11, 10 to 12, 38 to 39**.
+
+Worked example, because the mechanism is the whole point. Row 7 is LIVE, its
+`working_dir` is the SHORT symlink spelling, and its uuid
+`db81f6bf-85f9-448b-a7f6-bc83f62659d9` exists nowhere. Row 4 is ARCHIVED,
+carries the long iCloud spelling, and its uuid `82854c0e-...` has a transcript
+that is **73,190,422 bytes**. The live pane is literally running
+`--resume 82854c0e-... --fork-session`. **`--fork-session` MINTS A NEW uuid**,
+the hook recorded that new one, and the forked transcript never materialised.
+So the picker truthfully said "no transcript for db81f6bf" about a uuid with
+nothing to do with the conversation the user was in, while the real
+conversation sat on the archived twin. **The message was locally correct and
+the conclusion a reader draws from it is wrong.** "Media Compression's
+conversation is gone" was that wrong conclusion, and it was wrong.
+
+**The backfill tool exists and has NEVER WRITTEN ANYTHING.**
+`scripts/backfill_claude_session_uuid.py` is dry run by default. Its run over
+the live corpus: **8 confident FILLs** (rows 14, 15, 16, 17, 19, 23, 24, 25),
+**0 confident REPLACEs**, **8 ambiguous** (rows 26, 27, 30, 31, 33, 35, 40, 42,
+at 45 to 78 candidates each), **1 no-candidate** (row 41, whose `working_dir` is
+literally `/Users/jsugamele/Development/ses_ee8d919b`), and the 4 collision
+pairs. It resolves both cwd spellings FORWARD, by slugifying every spelling
+found in a HOME symlink scan, AND BACKWARD, from each transcript's own recorded
+cwd canonicalised. The backward direction is not optional: **754 of 919
+transcripts sit in a directory that disagrees with their own recorded cwd.**
+
+Two matcher defects were caught by CONTROLS rather than by reading, and both
+would otherwise have shipped looking correct. Directory agreement was clearing
+a two-signal bar as ONE FACT CORROBORATING ITSELF, so evidence is now counted
+in independent FAMILIES. And the negative control (a row pointed at a project
+that does not exist, with real transcripts present) initially returned
+`ambiguous` instead of `no_candidate`, because timing alone was counting as
+evidence; an ANCHOR GATE now lets timing and title CORROBORATE a candidate and
+never CREATE one. **A matcher that always finds something is worse than
+useless.**
+
 **CloudeCode only manages tmux sockets it owns.** A session resumed by hand on
 the `default` socket is invisible to it, and tmux cannot move a pane between
 servers. The only route back is to let the foreign copy exit and resume the same
@@ -225,12 +318,24 @@ untouched so only that one project changed. Revert SQL is on the mini at
 `~/football_chrome_revert.sql`.
 
 **The respawn ladder gates on tmux's `#{pane_start_command}`.** A pane born as a
-bare shell has that field EMPTY, so the ladder lands on `RESPAWN_SHELL` and the
-restart button silently hands you a LOGIN SHELL instead of claude - with or
-without a wrapper. A session needs BOTH a non-empty `pane_start_command` AND a
-stored `agent_type` to reach `RESPAWN_AGENT`. Row 40
-(`Agent - Infrastructure`) was staged deliberately with both, and is the first
-session on the box that will restart correctly.
+bare shell has that field EMPTY, so the ladder lands on `RESPAWN_SHELL` and an
+UNPICKED restart hands back a LOGIN SHELL instead of claude. A session needs
+BOTH a non-empty `pane_start_command` AND a stored `agent_type` to reach
+`RESPAWN_AGENT` on its own. Row 40 (`Agent - Infrastructure`) was staged
+deliberately with both, and was the first session on the box that would restart
+correctly unaided.
+
+**RESTATED 2026-09-08, because this was misstated once already.** Two facts,
+and quoting only the first is what caused the confusion:
+
+- **18 of 22 live sessions have an empty `#{pane_start_command}`** (measured
+  2026-09-08; it read 15 of 19 on 2026-09-07, the population moved).
+- **An explicit wrapper choice OVERRIDES that gate**
+  (`src/core/session_respawn.py:542`). Picking a wrapper in the picker starts
+  the agent properly.
+
+So only an UNPICKED restart lands on the shell rung. Do not write "the restart
+button gives you a shell" without the second half.
 
 **UPDATE: the gate is no longer silent, and an explicit choice now beats it.**
 Two things changed together.
@@ -263,7 +368,20 @@ refuses, `unchecked` never does. The preview applies the same guard, so the
 picker cannot promise a replay the restart then declines.
 
 The picker is `client/js/session-restart-picker.js`; the reopen is
-`client/js/session-restart-return.js`.
+`client/js/session-restart-return.js`; the option list was extracted to
+`client/js/session-restart-options.js` (350 lines) in `0793eb1`, which also
+takes the picker back under the 500-line rule.
+
+**The picker's option text painted over the next row, and that fix is NOT
+deployed (`0793eb1`).** Option rows inherited `flex-shrink: 1` inside a
+`max-height: 46dvh` flex column, so the flex algorithm SQUASHED THE ROWS
+instead of scrolling the list. Measured: 113px of content in a 62px box on
+desktop, 145px in a 58px box on a phone. The fix is `flex-shrink: 0`. It is
+verified by GEOMETRY, not by DOM text: `tests/test_restart_picker_geometry.py`
+asserts no row's text intersects another row's title, and it was PROVEN TO FAIL
+on the old code with 19px of text sitting on text. This matters more than a
+cosmetic fix looks, because the picker is the only route to `--chrome` browser
+control (section 9).
 
 **UPDATE 2026-09-07: restarting a LIVE session IS built (item 22 part 2).**
 The owner's two calls collapsed it - "same tmux should be fine" and "yes
@@ -347,6 +465,29 @@ building read/unread state or alert lights on top of it.
 **The UI gives NO signal when the server dies.** Covered in section 2. It is the
 same family as the two above: an absence of bad news rendered as good news.
 
+**THE 2026-09-07 INCIDENT: a session the owner closed and restarted vanished
+from every view.** Fixed in `c9271da`, which IS deployed. Two independent
+causes, and both are the shape this section is about:
+
+1. **The restart resumed a `claude_session_uuid` whose transcript did not
+   exist**, so the pane died instantly with **status 127** while the row still
+   read `lifecycle=running`. This is the incident that bought
+   `RESPAWN_TRANSCRIPT_MISSING` and `refuse_if_transcript_missing`.
+2. **Close set `archived_at`.** Recents is
+   `lifecycle='stopped' AND archived_at IS NULL`, so a closed session missed
+   Recents and was then in no list at all.
+
+**The hand recovery is recorded because it changed live data.** The pane was
+respawned onto the correct transcript, and two rows were repaired in the live
+database: **row 42** was emptied and retired (`claude_session_uuid = NULL`,
+archived), and **row 43** took the live tmux linkage (`archived_at = NULL`,
+`lifecycle = running`, `tmux_name = cloude_Agent_-_Cloude_Code`,
+`tmux_created_epoch = 1788813811`). The repair had to CONSOLIDATE rather than
+copy, because `claude_session_uuid` is UNIQUE and two rows cannot hold the same
+value. Rollback SQL is on the mini at `/tmp/cc_row_rollback.sql`; `/tmp` is not
+durable across a reboot, so treat that file as expiring rather than as an
+archive.
+
 **The archived-projects notice used to be one of these and no longer is.**
 `loadProjects()` latched `_archivedFetchOk = false` on the error path and
 returned WITHOUT re-rendering, so the screen kept the last successful paint and
@@ -424,7 +565,15 @@ owner's theme on whichever one it stopped at, with no prior value on record to
 restore.
 
 **Tests and syntax.** `venv/bin/python3 -m pytest -q` from the repo root; system
-python3 has no fastapi. `node --check` every JS file you touch. A fresh git
+python3 has no fastapi. **Baseline as of 2026-09-08: 3 failed / 4874 passed /
+12 skipped**, the three being `test_home_write_guard`,
+`test_state_dir_resolution` and `test_version_probe`, all environmental and all
+pre-existing. Node: 169 files, only `test_archive_full_page_mode.node.mjs`
+fails. **The number in `CLAUDE.md` was stale by an order of magnitude** because
+the repo `venv` symlink pointed at a deleted `venv.nosync`, which is the exact
+failure `CLAUDE.md` warns about: the suite limps along undercounting instead of
+failing outright. Check the symlink before trusting any count that looks
+nothing like the above. `node --check` every JS file you touch. A fresh git
 worktree has NO `config.json` (it is gitignored), and its absence manufactures
 collection errors that look exactly like pre-existing code bugs - seed it from
 `config.example.json` before trusting any baseline measured in a worktree.
@@ -433,25 +582,47 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ## 8. CURRENT GIT STATE
 
-Branch `v1.1`. **8 commits unpushed as of 2026-09-07**, confirmed with
-`git log --oneline @{u}..HEAD`. Newest first:
+Branch `v1.1`. **NOTHING IS UNPUSHED as of 2026-09-08.**
+`git log --oneline @{u}..HEAD` returns empty and `origin/v1.1` is at `8dd54a8`.
+This SUPERSEDES the "8 commits unpushed as of 2026-09-07" state this section
+used to record, which was true on that date and is not true now.
 
-| commit | what it fixed |
-|---|---|
-| `5c88fdd` | the archived-projects notice now renders when the fetch FAILS, instead of leaving the last successful count on screen |
-| `a89c919` | project archiving: archive/unarchive endpoints, `include_archived`, `src/core/project_archive.py`, and the show-archived toggle. No migration needed, `projects.archived_at` was already in the DDL |
-| `63c8439` | the archive became a full-page mode that releases the current session via `pauseForHome()` instead of sitting on top of it |
-| `7bf95e5` | a closed sidebar no longer strands keyboard focus off screen: `inert` plus `visibility:hidden` on the closed state, focus released on close |
-| `a945771` | toasts: answering a session ACKS its toasts (not merely hides them), plus Dismiss all |
-| `dc91524` | test: pins which hook events reach the work stamp |
-| `e57a7f2` | ordering: sessions and projects sort by WORK, never by opening. The `is_this_tab` and `is_active` sort terms were removed |
-| `f7bea60` | the project list refreshes after a session creates a project |
+HEAD is `8dd54a8`. Live is `0b12edf` (section 1). Newest first, the work since
+the last handoff:
 
-Pushing them is an open item. Do not rebase or amend them.
+| commit | what it did | deployed? |
+|---|---|---|
+| `8dd54a8` | lineage recovery for the conversation id the `SessionStart` hook failed to record, plus the dry-run backfill tool | NO |
+| `0793eb1` | the restart picker's option text no longer paints over the next row | NO |
+| `0b12edf` | a restart RESUMES the same conversation, on every rung that can | yes |
+| `f95a9ed` | restart a session whose pane is still ALIVE, `respawn-pane -k` in place | yes |
+| `83b6377` | the picker's `max-height` got its `dvh` twin | yes |
+| `32052d1` | pick the wrapper at restart, and land back in the session. **Committed by a SECOND agent, see the hazard below** | yes |
+| `c9271da` | restart resumed a transcript that does not exist, and close left the row nowhere (section 6) | yes |
+| `8212e30` | the group chip left the sidebar row, its action moved into the kebab | yes |
+| `cddc823` | the row icons folded into one borderless kebab, three ways to open it | yes |
+| `c779afb` | the deploy script repaired: tar over ssh, a clean tree that deploys, self-verifying bytes (section 2) | yes |
+| `a6b6b91` | the theme bleed: every navigation now owns the theme | yes |
 
+**HAZARD: two Claude Code sessions were editing this branch at once.** A second
+session worked `v1.1` concurrently for part of 2026-09-07 and committed
+`32052d1`. It has since exited. Nothing was found clobbered, but two agents on
+one branch is how work gets clobbered, and the second agent's commits are
+indistinguishable from the first's in the log. If something in this range does
+what you did not expect, that is the likely explanation. Before starting work
+here, check that no other session is live on the branch.
+
+**`a6b6b91`, the theme bleed, is worth one line of mechanism** because the
+shape recurs: three copy-pasted theme restores in `app.js`, plus two
+session-entry paths written as `if (pinned) apply()` with NO else. A missing
+else is not a missing feature, it is state left over from the last thing. There
+is now ONE total function, `applyForTarget()`, in
+`client/js/theme-navigation.js`, and every navigation goes through it.
 ---
 
-## 9. OWNER DECISIONS ALREADY MADE - do not relitigate
+## 9. OWNER DECISIONS - the settled ones, then the ones still open
+
+The settled ones are not to be relitigated.
 
 - Sync stays iCloud. His words: "i want icloud" / "stay with icloud".
 - He will not work the same session on two computers.
@@ -468,6 +639,28 @@ Pushing them is an open item. Do not rebase or amend them.
   4.5 GB database and would be useless as a rollback.**
 - Installing the browser extension for `--chrome` is his call.
 - CloudeCode DB copies in the NAS archive: "no i dont need them."
+
+**Browser control, and the only route to it.** Claude in Chrome is PAIRED and
+INSTALLED (`pairedDeviceName = Browser 2`,
+`hasCompletedClaudeInChromeOnboarding = true`), but
+`claudeInChromeDefaultEnabled = false`, so browser tools exist ONLY in a session
+launched with `--chrome`, which is the `claude-chrome` wrapper. Tools BIND AT
+SESSION START, so browser control cannot be added to a conversation already
+running. **The wrapper picker is the intended route: restart a session and
+choose `claude-chrome`.** That is what the picker was built for.
+
+### DECISIONS STILL WAITING ON HIM, as of 2026-09-08
+
+Three, none started, all blocked on a human answer.
+
+1. **Authorise writing the 8 confident backfill FILLs** (rows 14, 15, 16, 17,
+   19, 23, 24, 25). Nothing has been written; the tool is dry run by default
+   and stays that way until told otherwise.
+2. **Merge the 4 duplicate row pairs** (7 to 4, 9 to 11, 10 to 12, 38 to 39).
+   This is the already-authorised `(old path)` merge family above, and it still
+   carries its condition: take a VERIFIED backup first. A backup that cannot
+   restore is not a backup.
+3. **Deploy `0793eb1` and `8dd54a8`.** Live is on `0b12edf`.
 
 ---
 
@@ -490,7 +683,30 @@ its correction beats a clean lie.
   `/api/v1/hooks/claude-event`, which is live and firing.
 - **The re-measured lag figure superseded the first one.** An early sample said
   a stall every ~20s lasting ~9.5s. The clean-baseline measurement on the quiet
-  box gives 12.05s every 20.0s.
+  box gives 12.05s every 20.0s, and by the time it was fixed the stall had
+  grown to 14.5s. It scaled with the file, which is itself the evidence it was
+  the pragma.
+- **The openrsync diagnosis was WRONG**, and the corrected version is in
+  section 2. `deploy-mini.sh` did not fail because openrsync rejects
+  `--files-from=- --relative`; it handles that fine, proven by a successful
+  copy. It failed on a remote destination containing SPACES. Both live
+  destinations contain spaces and the v11 staging path does not, so
+  **`--target live` could never work while `--target v11` always did**, which
+  is the asymmetry that let it hide.
+- **The tmux identity premise was WRONG.** Killing and respawning does NOT move
+  the instance triple. Measured on tmux 3.7c: `session_created` held at
+  **1788821572** and `pane_id` at **`%0`** across `respawn-pane -k`, and only
+  `pane_pid` changed. The reason is structural rather than lucky:
+  `session_created` belongs to the SESSION and `-k` replaces the PANE'S
+  PROCESS. `session_instance_rekey.py` measures it either side anyway, because
+  a measurement that can stop being true is not a thing to assume.
+- **"Media Compression's conversation is gone" was WRONG, and the app said it
+  too.** The transcript `82854c0e-a423-4591-a34f-a14cb92fbf41.jsonl` exists and
+  is 73,190,422 bytes. The mechanism is the phantom-uuid trap in section 4: the
+  app's message was locally truthful about a uuid that had nothing to do with
+  the session.
+- **The `CLAUDE.md` pytest baseline was stale by an order of magnitude**, and a
+  broken `venv` symlink is why. Corrected numbers in section 7.
 - **`com.imc.cloude-code` is the wrong agent name** for this app, in
   Infrastructure `CLAUDE.md` hazard 40. The live one is
   `com.cloudecode.menubar`.
