@@ -142,6 +142,16 @@
     /* Gap between two adjacent FABs. */
     --fab-gap: 12px;
 
+    /* The project tree's left gutter (`.project-node__row`,
+     * `.project-node__sessions`): wide enough for the collapse chevron
+     * plus a right-aligned three-digit session count, so every project
+     * card's left edge lines up whether it shows "1" session or "999",
+     * and every child session row indents to the same edge. ONE number -
+     * see the `.project-node__row` grid and `.project-node__sessions`
+     * margin below, both of which read this instead of restating a
+     * pixel value that would drift out of sync with the other. */
+    --project-gutter: 52px;
+
     /* THE BOTTOM ROW hovers over the command line. One slot is one
      * button plus one gap, so the slot tokens are the only place a
      * horizontal offset is ever written.
@@ -4683,25 +4693,46 @@ body.home-header-active {
     flex-direction: column;
 }
 
+/* Two fixed columns, not a flex row: `--project-gutter` first, the card
+ * second. A flex row sized the gutter to its own content (chevron plus
+ * whatever width the count digits happened to need), so "1" and "100"
+ * produced two different gutter widths and every card after them
+ * started at a different x. Grid makes the first column's width a
+ * constant instead of a measurement. */
 .project-node__row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--project-gutter) 1fr;
     align-items: flex-start;
-    gap: 6px;
 }
 
 .project-node__row .project-item {
-    flex: 1;
+    min-width: 0;
+}
+
+/* Always rendered, even when the project has nothing to fold
+ * (renderProjectList() then leaves it empty). A grid row with only ONE
+ * child auto-places that child into the FIRST column, not the second -
+ * so a foldless project's card would land under the gutter instead of
+ * beside it. This element is what keeps the grid at two children, and
+ * therefore the card at column two, whether or not a toggle is inside
+ * it. */
+.project-node__gutter {
     min-width: 0;
 }
 
 /* Chevron toggle for a project's child sessions. A project with zero
  * matched running sessions never renders this button at all - there is
- * nothing to expand, so no control is drawn (see renderProjectList()). */
+ * nothing to expand, so no control is drawn (see renderProjectList()).
+ * `width: 100%` fills its fixed-width `.project-node__gutter` column so
+ * the count (see `.project-node__count` below) has a constant right
+ * edge to align against, whether the chevron stands alone or the count
+ * chip sits beside it. */
 .project-node__toggle {
     display: flex;
     align-items: center;
     gap: 4px;
-    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
     margin-top: 14px;
     padding: 4px 6px;
     background: transparent;
@@ -4720,11 +4751,24 @@ body.home-header-active {
     transform: rotate(90deg);
 }
 
+/* Pushed to the toggle's right edge rather than sitting beside the
+ * chevron, and set in tabular figures so a digit swap (1 session going
+ * to 10) never nudges its own right edge, let alone anything after it.
+ * `.project-node--virtual` overrides size/opacity only - this rule is
+ * still the one making that count's digits line up. */
+.project-node__count {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Indented by the SAME token the row above uses for its gutter column,
+ * so a child session row starts under its card's content edge, not
+ * under the chevron/count gutter. */
 .project-node__sessions {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin: 4px 0 4px 28px;
+    margin: 4px 0 4px var(--project-gutter);
 }
 
 .project-session-row {
@@ -5105,15 +5149,13 @@ body.home-header-active {
     font-style: normal;
 }
 
-/* ITEM 43 - a project node with a description but no running sessions is
- * foldable too, and its toggle carries no count chip. Without a chip the
- * button is chevron-only, so it needs its own minimum width to stay a
- * real hit target and to keep the project cards left-aligned with each
- * other whether or not they have children. */
-.project-node__toggle {
-    min-width: 24px;
-    justify-content: center;
-}
+/* ITEM 43 used to give a chevron-only toggle (a project with a
+ * description but no running sessions) its own min-width here, because
+ * a flex-sized gutter made every foldless-of-a-count toggle a different
+ * width. `.project-node__row` is a grid now (see the S8 block above) -
+ * the gutter column is `--project-gutter` regardless of what the toggle
+ * contains, so a chevron-only toggle already lines up with one that
+ * carries a count and this override has nothing left to do. */
 
 /* ---------------------------------------------------------------------
  * feat/settings-gui - the workspace tab's environment list.

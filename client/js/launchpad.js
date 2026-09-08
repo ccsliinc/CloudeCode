@@ -4653,7 +4653,7 @@ class Launchpad {
             return `
                 <div class="project-node${isArchived ? ' project-node--archived' : ''}" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
                   <div class="project-node__row">
-                    ${chevronHtml}
+                    <div class="project-node__gutter">${chevronHtml}</div>
                     <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
                         <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
                         <!-- THE ONLY DESTRUCTIVE-SHAPED CONTROL ON THIS ROW.
