@@ -1006,6 +1006,12 @@ class Launchpad {
                     // instead of keeping a stale guess.
                     existing.agent_family = live.agent_family !== undefined ? live.agent_family : null;
                     existing.agent_family_source = live.agent_family_source !== undefined ? live.agent_family_source : null;
+                    // The wrapper pill's text, overwritten unconditionally
+                    // for the same reason the family is: a wrapper deleted
+                    // or renamed mid-session must stop being named, not
+                    // keep the label it had when the row was first built.
+                    existing.agent_wrapper_label = live.agent_wrapper_label !== undefined
+                        ? live.agent_wrapper_label : null;
                     if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
                     // The durable row id, so an OPEN session shows the same
                     // "#7" a detached one does. Without this the id appeared
@@ -1057,6 +1063,9 @@ class Launchpad {
                         // to a guessed string.
                         agent_family: live.agent_family !== undefined ? live.agent_family : null,
                         agent_family_source: live.agent_family_source !== undefined ? live.agent_family_source : null,
+                        // See the `existing` branch above.
+                        agent_wrapper_label: live.agent_wrapper_label !== undefined
+                            ? live.agent_wrapper_label : null,
                         // See the `existing` branch above.
                         session_row_id: live.session_row_id !== undefined ? live.session_row_id : null,
                         parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
@@ -1641,6 +1650,12 @@ class Launchpad {
                 unread: !!s.unread,
                 fam: s.agent_family || null,
                 famSrc: s.agent_family_source || null,
+                // In the signature or the pill never repaints: this list
+                // skips the innerHTML rewrite whenever the signature is
+                // unchanged, so a field it does not fingerprint stays on
+                // screen stale forever. Same trap the sidebar's theme
+                // field hit - see test_session_theme_tint.node.mjs.
+                wrapper: s.agent_wrapper_label || null,
             })),
         });
         if (sig === this._lastRunningSig) {
@@ -1699,6 +1714,15 @@ class Launchpad {
             const themeSwatch = window.SessionThemeTint
                 ? window.SessionThemeTint.swatchHtml(s.pinned_theme)
                 : '';
+            // Which configured wrapper started this session, named for the
+            // user - "claude (chrome)", not the internal id. Empty string
+            // whenever the server could name none, which is a legitimate
+            // answer rather than a gap: a bare shell was launched through
+            // no wrapper at all. The family pill beside it is what says
+            // whether we KNOW. See client/js/launchpad-wrapper-pill.js.
+            const wrapperPill = window.LaunchpadWrapperPill
+                ? window.LaunchpadWrapperPill.html(s.agent_wrapper_label)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}${themeAttrs}>
                   <div class="running-session-top">
@@ -1713,6 +1737,7 @@ class Launchpad {
                   <div class="running-session-badges">
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                     ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
+                    ${wrapperPill}
                     ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
                     ${this._renderSessionIdHtml(s)}
                   </div>
@@ -1871,12 +1896,20 @@ class Launchpad {
         // the project tree are two surfaces over the same records, and
         // when they carry different ideas of what to show the app reads
         // as contradicting itself.
+        // THE RULE IS KEYED ON IDENTITY, NOT ON THE TMUX NAME, and it
+        // lives in client/js/session-recent-visibility.js - see that
+        // file's header for the six-deleted-rows-one-shown measurement
+        // that moved it out of here. A name key hid a row the user
+        // deleted whenever an unrelated live session had reused its name,
+        // which made "show deleted" look like it did nothing.
         const recentAll = this.recentSessions || [];
-        const liveNames = new Set(
-            (this.runningSessions || []).map(s => s && s.name).filter(Boolean)
-        );
-        const rows = liveNames.size
-            ? recentAll.filter(r => !(r && r.tmux_name && liveNames.has(r.tmux_name)))
+        const rows = (window.SessionRecentVisibility
+            && typeof window.SessionRecentVisibility.visibleRecentRows === 'function')
+            ? window.SessionRecentVisibility.visibleRecentRows(
+                recentAll, this.runningSessions || [])
+            // FAIL OPEN. The module is a plain script tag in index.html;
+            // if it did not load, showing a duplicate is the lesser of
+            // the two failures. See its FAIL OPEN note.
             : recentAll;
 
         if (state !== 'ok') {

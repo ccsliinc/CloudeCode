@@ -82,6 +82,10 @@
          row, and this file re-styles those same elements as full-width
          labelled menu items once they are inside the panel. -->
     <link rel="stylesheet" href="/static/css/session-row-menu.css" />
+    <!-- The launch-wrapper pill on a running-session row. After
+         styles.css so it inherits --color-border / --color-fg-faint and
+         sits on the same baseline as .badge and .family-pill next to it. -->
+    <link rel="stylesheet" href="/static/css/launchpad-wrapper-pill.css" />
     <!-- The restart picker's option list. Reuses .modal-overlay /
          .modal-content from styles.css; this file only styles the three
          predicted-outcome states, which must NOT look alike. -->
@@ -748,6 +752,12 @@
          the escaper is passed in - so it has no ordering constraint on
          anything else. -->
     <script src="/static/js/folder-picker-modal.js"></script>
+    <!-- Which stored RECENT rows survive the "already running" guard.
+         Must load BEFORE launchpad.js, whose renderRecentSessions() calls
+         window.SessionRecentVisibility.visibleRecentRows while painting.
+         Pure - two arrays in, one array out, no state and no events - so
+         this is its only ordering constraint. -->
+    <script src="/static/js/session-recent-visibility.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

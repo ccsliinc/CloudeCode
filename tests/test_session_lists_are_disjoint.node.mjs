@@ -150,11 +150,17 @@ async function loadBoth({ attachable, recent }) {
         alert() {},
     };
     vm.createContext(context);
-    vm.runInContext(
-        fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8'),
-        context,
-        { filename: 'launchpad.js' }
-    );
+    // SAME ORDER AS index.html. The exclusion rule lives in
+    // session-recent-visibility.js and launchpad.js delegates to it, so a
+    // sandbox that loaded only launchpad.js would exercise that file's
+    // fail-open branch and prove nothing about the rule.
+    for (const script of ['session-recent-visibility.js', 'launchpad.js']) {
+        vm.runInContext(
+            fs.readFileSync(path.join(ROOT, 'client', 'js', script), 'utf8'),
+            context,
+            { filename: script }
+        );
+    }
     const lp = context.window.Launchpad;
     await lp.loadRunningSessions();
     await lp.loadRecentSessions();
@@ -162,9 +168,29 @@ async function loadBoth({ attachable, recent }) {
 }
 
 /** One live tmux session as GET /sessions/attachable reports it. */
+/**
+ * A stable stored-row id for a fixture name.
+ *
+ * Description: `live('x')` and `stored('x')` mean "the same session" in
+ *   every fixture in this file, and the exclusion rule is keyed on the
+ *   stored row id rather than on the tmux name (tmux reuses names - see
+ *   client/js/session-recent-visibility.js). Deriving both ids from the
+ *   name keeps that pairing without hand-numbering every fixture.
+ * @param {string} name  tmux session name.
+ * @returns {number} a positive, deterministic row id.
+ */
+function idFor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i += 1) {
+        h = (h * 31 + name.charCodeAt(i)) % 100000;
+    }
+    return h + 1;
+}
+
 function live(name, overrides = {}) {
     return {
         name,
+        session_row_id: idFor(name),
         label: null,
         status: 'running',
         is_active: false,
@@ -179,6 +205,7 @@ function live(name, overrides = {}) {
 /** One stored stopped row as GET /sessions/recent reports it. */
 function stored(tmuxName, overrides = {}) {
     return {
+        id: idFor(tmuxName),
         session_uuid: `uuid-${tmuxName}`,
         origin: 'created',
         owned: true,
@@ -367,19 +394,55 @@ await test('no "earlier session" disclosure exists anywhere in the client', asyn
         'client/js/session-supersede.js still exists');
 });
 
-await test('the recent filter excludes by LIVE NAME, not by stored lifecycle', async () => {
+await test('the recent filter excludes by LIVE IDENTITY, not by stored lifecycle', async () => {
     // Pins the mechanism, not just the outcome. Reading `lifecycle` here
     // instead of the live probe is the exact bug: every row in RECENT
     // already says 'stopped', so a lifecycle test can never exclude
     // anything and the duplicate comes straight back.
+    //
+    // THE KEY IS THE STORED ROW ID, NOT THE TMUX NAME. It used to be the
+    // name, and that hid rows the user had DELETED whenever an unrelated
+    // live session later reused their name - measured on the owner's box
+    // 2026-09-08, five of six deleted rows unreachable. See
+    // client/js/session-recent-visibility.js and
+    // tests/test_recent_deleted_visibility.node.mjs.
     const body = fs.readFileSync(
         path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
     const fn = body.slice(body.indexOf('renderRecentSessions()'));
     const head = fn.slice(0, fn.indexOf("if (state !== 'ok')"));
     assert.ok(/runningSessions/.test(head),
         'renderRecentSessions no longer consults the live running set');
-    assert.ok(/liveNames/.test(head),
-        'renderRecentSessions no longer builds a live-name exclusion set');
+    assert.ok(/SessionRecentVisibility\.visibleRecentRows/.test(head),
+        'renderRecentSessions no longer applies the exclusion rule');
+
+    const rule = fs.readFileSync(
+        path.join(ROOT, 'client', 'js', 'session-recent-visibility.js'), 'utf8');
+    assert.ok(/session_row_id/.test(rule),
+        'the exclusion rule no longer keys on the stored row id');
+});
+
+await test('a DELETED row survives a live session that reused its name', async () => {
+    // The launcher-level statement of the toggle bug. `cloude_Mac` is
+    // live; the deleted row of the same name is an OLDER session with a
+    // different stored id, so it is not the row on screen under RUNNING
+    // and must still be reachable through "show deleted".
+    const { recentList } = await loadBoth({
+        attachable: [live('cloude_Mac')],
+        recent: {
+            state: 'ok',
+            sessions: [
+                stored('cloude_Mac', {
+                    id: 9,
+                    session_uuid: 'uuid-deleted-mac',
+                    archived_at: '2026-09-03T19:20:11.638508Z',
+                }),
+            ],
+            notice: null,
+        },
+    });
+    assert.ok(
+        occurrences(recentList, 'uuid-deleted-mac') >= 1,
+        `the deleted row was hidden by a live name collision: ${recentList.innerHTML}`);
 });
 
 // =====================================================================
