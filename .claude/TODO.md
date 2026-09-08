@@ -2591,3 +2591,121 @@ commit-by-commit table in `HANDOFF.md` section 8.
 - [ ] Git worktree workspaces grouped with the parent repo; one more project kind.
 - [ ] Other agents via screen-scrape manifests; only Claude gives us hooks.
 - [ ] Real-hook LED integration test: launch a real claude on a throwaway tmux socket with the hook URL pointed at the app in test mode, drive prompts, assert the LED after each real event; skip when the binary is absent. Owner asked whether possible: yes, not yet built.
+
+---
+
+### 2026-09-08 late round closed out, 455d692..8ee40d1 (12 commits), deployed live
+
+DEPLOY STATE: live on mac-mini-m4 runs HEAD as of the `8ee40d1` deploy. Boot
+held 19 sessions (18 plus 1 benign skip). Every running session carries a
+project. Session lists show interactive conversations only: 645 archived
+rows visible, 270 automated excluded by default, 305 unknown kept (kind is
+unknown, not evidence of automation).
+
+- [x] **Deep link fork-label rejection.** A session named `<title>(fork)`
+  bounced the deep link home with "Invalid project name in URL" while its
+  card click worked. Fixed with a permissive validator that rejects only
+  what is actually hostile in a URL segment, and a title-fallback resolver
+  so a link built from a display title resolves the same session a
+  tmux-slug link does. Commit `ee3133c`.
+- [x] **Attribution invariant, half-write.** `claim_instance`'s "only when
+  not None" column policy let a derived `(None, 'none')` write the
+  attribution alone, leaving a row with a real `project_id` rendering as
+  "no project" because the tree checks `attribution === 'none'` first. The
+  id and the attribution now move together or neither moves. Also closed:
+  the lexical matcher couldn't cross a symlink spelling, so a project
+  declared at an iCloud path never matched sessions probed at the `~`
+  symlink; canonicalising is now a fallback rung. Commit `7bd55fd`.
+- [x] **Attribution invariant, archived catch-all.** An archived project
+  rooted at the owner's home directory contained every session on the
+  machine and won the as-written match rung before the canonical rung
+  (the one that finds the real project) ever ran, so two live rows were
+  attributed to a project the user cannot see. Archived roots now take no
+  part in matching. Commit `e73c1a7`. Live, verified: 19 running sessions,
+  0 without a project.
+- [x] **Wording purge: archive, not delete.** Owner's instruction verbatim:
+  "remove the deleted wording, its archived." The project row's hard-delete
+  trash button is gone (archive/unarchive was already correct and stays);
+  every other user-facing delete/deleted/deletion string in `client/js` and
+  `client/index.html` is renamed to archive/archived (recoverable actions)
+  or remove/removed (genuinely irrecoverable ones, matching this app's
+  existing verb for that class). New node test tokenizes every JS string
+  literal and HTML text node and asserts none read delete/deleted/deletion.
+  Commit `026c7ac`.
+- [x] **Session kind: interactive / automated / unknown.** Owner's rule
+  verbatim: "lists should always just be mine. the rest can be found in the
+  archive explorer." `sessions.kind` (schema v25) is nullable with no SQL
+  default, stamped only by evidence the machinery itself wrote (a
+  `<scheduled-task>` tag, or `entrypoint='sdk-cli'`) so a title can never
+  create an `automated` verdict. `/sessions/records` and `/sessions/recent`
+  exclude `kind='automated'` by default; `/archive` is untouched and still
+  shows everything, asserted structurally. Measured over the 895 imported
+  rows: 320 interactive, 270 automated, 305 unknown (an era before the
+  `entrypoint` field existed, not a gap). Commit `2b0ed7d`.
+- [x] **LED: two independent rings, and its accidental revert.** `0fc23a5`
+  shipped the two-ring LED (inner = chat status, outer = activity/attention)
+  replacing the old single-dot model that could not say "working, and also
+  unread" at the same time; stopped a tmux `running` pane from reporting a
+  permanent unmeasured `working` (measured: 15 of 19 live sessions report a
+  claude version string as `pane_current_command`, so this was the common
+  case, not the rare one). `3732bdf`, landed seconds later from a stale
+  tree, reverted all fifteen of those files (2,132 deletions) as a side
+  effect of an unrelated launchpad fix; nothing in its message flagged it.
+  `4215ad0` restored all fifteen byte-for-byte and touched none of the
+  three files `3732bdf` legitimately owned. Commits `0fc23a5`, `3732bdf`,
+  `4215ad0`. **Rule for every future agent on a shared branch: build your
+  commit from HEAD plus your own hunks via a private index, verify
+  `git diff origin/v1.1 --stat` shows only your paths, and never run
+  `git reset --hard`.**
+- [x] **LED halo, sized down.** The sidebar row and the launchpad card both
+  render the LED at the 9px default with no per-call override anywhere in
+  the codebase, so the old `--led-halo-scale` (2.6) / `--led-glow-spread`
+  (0.62) put the whole lit object at ~35px across at the breathing peak -
+  bigger than the row text, overlapping neighbours. Dropped to 1.7 / 0.3
+  (~21px peak) and the breathing keyframe's peak scale from 1.06 to 1, so
+  the animation no longer grows the halo past its resting size. Commit
+  `8ee40d1`. Reference gallery (all LED states enumerated, pending the
+  owner's sign-off on the resized version):
+  https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627
+- [x] **Recent section collapse toggle.** `#recent-sessions-toggle` has
+  rendered as a real disclosure button since `b1365a2` but was never wired
+  into `initSectionDisclosures()`, so clicking it did nothing - no click
+  handler existed to clobber. Wired up with the same persistence and
+  re-apply-on-load as its two siblings; the recent section's header now
+  matches the projects header's layout (show-archived control right-aligned
+  in the same row). Commit `3732bdf`.
+- [x] **Project gutter alignment.** Styling fix bringing the project tree's
+  left gutter into alignment across rows, landed alongside the day's LED
+  TODO notes. Commit `d6e4883`; test `test_project_gutter_alignment.node.mjs`.
+- [x] **Documentation only, no code.** `4ae9965` (import noise counts, the
+  dead epoch fallback, attribution invariant closed), `e8cbc79` (herdr
+  teardown candidates, the real-hook LED test idea).
+
+**Verified in the browser today, end to end:** fork and rename; new project
+flow (name to folder step, long-spelling root, session launched with
+`--name`, wrapper and conversation id recorded); the archived toggle;
+recent-section collapse and its toggle placement; project gutter alignment.
+
+**Test artifacts.** All prior test sessions and scratch folders created
+during this work were archived through the app. The two empty test folders
+and `~/Desktop/Backups` are gone - the owner deleted them himself.
+
+**Carried forward, still open (unchanged by today's round, listed here so
+this closing section doesn't bury them):**
+- `waiting-permission` LED state is in the vocabulary and unreachable from
+  live data until the server splits `PermissionRequest` from `Notification`
+  (both fold into `question` today). See `docs/session-status.md`.
+- Stale hook tokens: this orchestrator session and `ses_68c185ce`
+  (2,757 rejected POSTs) both need a self-heal - a rejected hook for a pane
+  that still has a row should re-issue the token into the pane env and log
+  once, rather than degrading silently into the tmux fallback tier.
+- The real-hook LED integration test (launch a real claude on a throwaway
+  socket, drive prompts, assert the LED after each event) is offered, not
+  built.
+- `SessionInfo` carries no `created_at_epoch`; the instance-exact join in
+  `launchpad.js` degrades to a name match for every open session. Cosmetic
+  today, a fallback that cannot fire.
+- The herdr teardown candidates (see the 2026-09-08 herdr section above).
+- **Owner action needed:** confirm the LED states rendered in the gallery
+  artifact above (particularly the resized halo from `8ee40d1`) before
+  treating the visual design as settled.

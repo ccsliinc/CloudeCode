@@ -701,11 +701,15 @@ directory since it shipped (`launchpad.js`, `modal-clone-parent`).
 
 ## The status lights, and what they are allowed to claim
 
-Full model in `docs/session-status.md`. The five states are `working`,
-`waiting` (a permission or a question), `done`/idle, `dead` and `unknown`.
-`UserPromptSubmit`/`PreToolUse` move to working, `PermissionRequest`/
-`Notification` to waiting, `Stop` to done, tmux's `#{pane_dead}` to dead;
-everything else is `unknown`, which is a real answer and never `done`.
+Full model in `docs/session-status.md`. The seven states are `working`,
+`working_subagent`, `question` (a permission prompt or a plain
+notification - not yet split from each other), `finished_unread`, `idle`,
+`dead` and `unknown`. `UserPromptSubmit`/`PreToolUse`/`PostToolUse` move to
+`working`; `SubagentStart` with no matching `SubagentStop` to
+`working_subagent`; `PermissionRequest`/`Notification` to `question`;
+`Stop` to `finished_unread` while unread, `idle` once seen; tmux's
+`#{pane_dead}` to `dead`; everything else is `unknown`, which is a real
+answer and never `idle`.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an

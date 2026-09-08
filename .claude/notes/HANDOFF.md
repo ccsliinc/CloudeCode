@@ -38,12 +38,12 @@ hand `scp` must do both explicitly.
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
 
-**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 evening: `c9cd9ab`.** This moved
-during the day - see section 8 for the full commit-by-commit state, which is
-the current source of truth for what is live versus committed. Twenty more
-commits landed after `c9cd9ab` (HEAD is now `1a28b23`) and a deploy of them
-is IN PROGRESS as a separate concurrent task at the time of this update; do
-not read this line as "deployed" until section 8's verification step is done.
+**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 late evening: `8ee40d1`, and the
+deploy IS confirmed, not in progress.** Boot held 19 sessions (18 plus 1
+benign skip), every running session carries a project, and session lists show
+interactive conversations only (645 archived visible, 270 automated excluded
+by default, 305 unknown kept). See section 8 for the full commit-by-commit
+state of the late round that got it there and the branch's push status.
 
 ---
 
@@ -575,28 +575,74 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ## 8. CURRENT GIT STATE
 
-Branch `v1.1`. **NOT PUSHED as of 2026-09-08 evening** - `git status` reads
-"ahead of origin/v1.1 by 20 commits". This is a deliberate hold for this
-session, not an oversight; it supersedes the "nothing unpushed" line this
-section carried earlier today.
+Branch `v1.1`, pushed to `origin/v1.1` as of this session (git-workflow protocol
+followed: `git pull --rebase` then push, no force). HEAD is `8ee40d1`. **The
+deploy IS CONFIRMED live, not in progress** - boot held 19 sessions (18 plus 1
+benign skip), every running session carries a project, and the session lists
+show interactive conversations only. Do not read a future "deploy in progress"
+claim in this file as still true; re-check the live commit directly.
 
-HEAD is `1a28b23`, twenty commits past this morning's `018f2a7` baseline.
-Live is `c9cd9ab` (three commits behind HEAD: `0793eb1`, `8dd54a8`, then
-today's twenty). **A deploy of HEAD is IN PROGRESS as a separate concurrent
-task at the time of this update - say "in progress," not "done," until it is
-checked directly on the mini.** The deploy will run the v24 schema migration
-and the app's first real boot re-adopt against current tmux state.
+**WHAT TO DO FIRST NEXT SESSION, in this order:**
 
-**The next session's first job, once the deploy is confirmed finished:**
-verify the v24 migration applied clean and the boot re-adopt picked up every
-live pane, then work down the browser re-test list - re-confirm the three
-sessions proven restartable onto `claude-chrome` today (Media Compression,
-Agent Cloude Code, Fantasy Football 2026) actually drive the browser post-
-deploy, since tools bind at session start and a deploy restarts the server,
-not the panes.
+1. **Get the owner's sign-off on the LED gallery states.** Reference artifact:
+   https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627 -
+   it enumerates every inner/outer LED combination, including the halo size
+   `8ee40d1` shrank (2.6/0.62 down to 1.7/0.3 scale/spread). Nothing past this
+   point should be treated as a finished visual design until he has looked.
+2. **Split `PermissionRequest` from `Notification` server-side.** They fold
+   into one `question` state today (`src/core/session_activity.py`), which is
+   why `waiting-permission` is in the LED vocabulary
+   (`client/js/status-led.js`) but unreachable from live data. See
+   `docs/session-status.md`'s mapping table for where the new signal needs to
+   land.
+3. **Build the stale-hook-token self-heal.** Two sessions are affected today:
+   this orchestrator session and `ses_68c185ce` (2,757 rejected hook POSTs in
+   the live log, same class of failure). A rejected hook for a pane that still
+   has a row should re-issue the token into the pane env and log once, instead
+   of silently degrading into the tmux fallback tier where the light "looks
+   calm" for the wrong reason (see `docs/session-status.md`'s closing section).
+4. **Build the real-hook LED integration test**, offered but not yet built:
+   launch a real `claude` on a throwaway tmux socket with the hook URL pointed
+   at the app in test mode, drive prompts, assert the LED after each real
+   event, skip when the binary is absent.
+5. **Then work the remaining punchlist**, oldest-numbered first since they are
+   independent of each other: item 3 (`sessions.agent_type` persistence for a
+   session started via `auto_start_claude:false` plus a hand-sent claude
+   command), item 4 (alert lights - narrowed to the self-clearing
+   `activity_state` staying `working` for ~4 minutes after a resume, revisit
+   whether that narrower defect still needs a fix), item 7 (toasts must be
+   visible ACROSS sessions - raise global, dismiss per-session), item 11
+   (read/unread state per session - shares its state model with 4 and 7, fix
+   them together or they will disagree). Full definitions in `TODO.md`'s
+   "Session and agent identity" / "Attention, toasts and sidebar" sections.
+6. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the live
+   `cloude` socket are now measured FLAKY, not just risky - raise its
+   priority), gitleaks not installed on the mini (the pre-commit hook's second
+   gate silently never runs), the `~/.config/restic/mini-m4.pw` plaintext
+   password awaiting the owner's rotation decision, and
+   `FALLBACK_PROJECTS_ROOT` hardcoding `/Users/jsugamele`
+   (`src/core/project_directory.py:85`).
 
-Full commit-by-commit list and item mapping for today's twenty is in
-`TODO.md`'s dated 2026-09-08 section. The consequential ones, newest first:
+Full commit-by-commit list and item mapping for the late round (12 commits,
+`455d692..8ee40d1`) is in `TODO.md`'s dated 2026-09-08 "late round closed out"
+section. The consequential ones, newest first:
+
+| commit | what it did | deployed? |
+|---|---|---|
+| `8ee40d1` | LED halo shrunk to match its actual 9px render size (~35px peak down to ~21px) | yes |
+| `e8cbc79` | docs: herdr teardown candidates, the real-hook LED test idea | n/a, docs |
+| `d6e4883` | docs: status light findings, plus a project-tree gutter alignment fix | yes |
+| `4215ad0` | restored the two-ring LED, byte-for-byte, after `3732bdf` reverted it in passing | yes |
+| `3732bdf` | wired the recent section's collapse toggle; ALSO reverted 15 LED files as a side effect (see the hazard below) | yes |
+| `0fc23a5` | a two-ring LED (inner = chat status, outer = activity/attention), and the tmux `running` fallback stops claiming unmeasured `working` | yes (via `4215ad0`'s restore) |
+| `2b0ed7d` | `sessions.kind` (interactive/automated/unknown, schema v25); lists show the owner's work, not the machine's | yes |
+| `026c7ac` | wording purge: archive/remove replaces delete/deleted everywhere a person reads it | yes |
+| `4ae9965` | docs: import noise counts, the dead epoch fallback, attribution invariant closed | n/a, docs |
+| `e73c1a7` | an archived catch-all project must not swallow every session (attribution invariant, part 2) | yes |
+| `7bd55fd` | a session may never hold a project id and say it has none (attribution invariant, part 1) | yes |
+| `ee3133c` | deep links accept fork labels and other free-form names | yes |
+
+Older, from earlier in the day, kept for the record:
 
 | commit | what it did | deployed? |
 |---|---|---|
@@ -645,6 +691,15 @@ one branch is how work gets clobbered, and the second agent's commits are
 indistinguishable from the first's in the log. If something in this range does
 what you did not expect, that is the likely explanation. Before starting work
 here, check that no other session is live on the branch.
+
+**HAZARD, confirmed again 2026-09-08 late round: eight to ten agents committed
+on this one branch in the same day.** Two real incidents, both recovered: a
+stale-tree commit (`3732bdf`) that reverted 15 files of unrelated LED work
+(fixed in `4215ad0`, see the commit table above), and separately a
+`git reset --hard` that dropped a commit outright. **The rule going forward:
+every agent builds its commit from HEAD plus its own hunks via a private git
+index, verifies `git diff origin/v1.1 --stat` shows only the paths it actually
+touched before committing, and never runs `git reset --hard` on this branch.**
 
 **`a6b6b91`, the theme bleed, is worth one line of mechanism** because the
 shape recurs: three copy-pasted theme restores in `app.js`, plus two
@@ -698,24 +753,28 @@ originally planned.
    (no session or transcript behind them) were retired too. Remaining
    phantom-uuid rows: 41 (kept deliberately) and 46 (a newborn session whose
    transcript has not landed yet - re-check it, do not treat it as settled).
-3. **IN PROGRESS, not done.** Deploying today's twenty commits (HEAD is now
-   `1a28b23`, not `8dd54a8`/`0793eb1` as this line read this morning) is
-   running as a separate concurrent task. Do not mark it done until the live
-   box is checked directly - see section 8.
+3. **CLOSED.** Deploying today's commits is done, not in progress. Live runs
+   `8ee40d1` (the late round, `455d692..8ee40d1`); confirmed by boot holding
+   19 sessions and every running session carrying a project. See section 8.
 
-**NEW, opened today, none started:**
+**Opened earlier in the day:**
 
 4. Rotate `~/.config/restic/mini-m4.pw` (a plaintext restic repository
    password, surfaced during the Desktop backup inventory) into 1Password,
    and decide whether restic's scope should widen beyond `ai-setup` and
    `docker-management` to cover the Desktop. Owner's call on both, per the
    standing decision to defer credential rotation until this project is
-   finished.
-5. Delete `~/Desktop/Backups` on this Mac. Its 13 transcripts were the only
-   copies that existed outside the corpus; they are now archived into it,
-   verified against the TrueNAS archive bundle by manifest hash (13/13), and
-   Time Machine on 10.0.1.202 holds all 10,431 files besides. Nothing depends
-   on the folder surviving.
+   finished. Still open.
+5. **CLOSED.** Delete `~/Desktop/Backups` on this Mac - the owner deleted it
+   himself, along with the two empty test folders left over from the day's
+   verification work.
+
+**NEW, opened in the late round, none started:**
+
+6. Confirm the LED states rendered in the reference gallery
+   (https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627),
+   in particular the resized halo shipped in `8ee40d1`. This is the top item
+   on next session's list in section 8.
 
 ---
 
