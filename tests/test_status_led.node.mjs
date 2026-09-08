@@ -332,6 +332,76 @@ test('an unread session that could not be measured still shows the halo', () => 
     });
 });
 
+// ---- concentricity -----------------------------------------------------
+//
+// The owner's report: "the leds are not lined up directly centered so
+// there is a weird offset." Root cause: the halo used to be positioned
+// with `top: 50%; left: 50%` plus a NEGATIVE MARGIN from its own calc(),
+// sized by a THIRD, separate calc() on width/height - three independently
+// evaluated expressions that all had to agree, to the sub-pixel, for the
+// halo to land centred on the dot. At the shipped 9px default,
+// 9 * 1.3 = 11.7px is not an integer, so the two independently-rounded
+// quantities (the resolved position and the resolved size) were not
+// guaranteed to agree on which side absorbed the leftover 0.7px, and the
+// dot's own exactly-integer box never had this problem - only the halo's
+// did. `inset` sets all four edges from ONE shared expression instead, so
+// the box is symmetric by construction rather than by two calc()s
+// happening to produce equal floats.
+
+test('the halo is centred with inset from a single shared offset, not independent top/left/margin/width calcs', () => {
+    const afterBlock = CSS.split('.status-led::after {')[1].split('\n}')[0];
+    assert.ok(
+        /inset:\s*var\(--led-halo-inset\)/.test(afterBlock),
+        'the halo must position itself with inset from the one shared token',
+    );
+    // Regression guard: none of the old three-calc technique's properties
+    // may reappear on the halo. Each one reintroduces a second,
+    // independently-rounded quantity that can disagree with the others.
+    for (const prop of ['top:', 'left:', 'margin-top:', 'margin-left:']) {
+        assert.ok(
+            !afterBlock.includes(prop),
+            `the halo must not carry ${prop} - that is the old off-centre technique`,
+        );
+    }
+});
+
+test('--led-halo-inset is declared exactly once and derives from the halo scale and size alone', () => {
+    const declarations = CSS.split('--led-halo-inset:').length - 1;
+    assert.equal(declarations, 1, '--led-halo-inset must be declared exactly once');
+    assert.ok(
+        CSS.includes(
+            '--led-halo-inset: calc((1 - var(--led-halo-scale)) * var(--led-size) / 2);',
+        ),
+        'the inset formula must reference --led-halo-scale and --led-size directly',
+    );
+});
+
+test('the inset arithmetic reproduces the exact halo geometry at the 9px default', () => {
+    // Same formula as --led-halo-inset, evaluated here in JS: a negative
+    // inset that expands the halo by (scale - 1) * size total, split
+    // evenly across both edges on each axis.
+    const size = 9;
+    const scale = 1.3;
+    const inset = ((1 - scale) * size) / 2;
+    assert.ok(Math.abs(inset - -1.35) < 1e-9, 'inset must be -1.35px at the 9px default');
+    const haloWidth = size - 2 * inset; // inset is negative, so this expands
+    assert.ok(
+        Math.abs(haloWidth - 11.7) < 1e-9,
+        'the resulting halo width must be unchanged from the pre-fix 11.7px',
+    );
+    // The centre of a box defined by symmetric inset X on both sides of a
+    // size-S parent is always S/2, whatever X is - that is the whole
+    // point of deriving both edges from one shared value instead of a
+    // separately-rounded width plus a separately-rounded position.
+    const haloLeftEdge = 0 + inset;
+    const haloCenter = haloLeftEdge + haloWidth / 2;
+    const dotCenter = size / 2;
+    assert.ok(
+        Math.abs(haloCenter - dotCenter) < 1e-9,
+        'the halo center must land exactly on the dot center',
+    );
+});
+
 // ---- the stylesheet ---------------------------------------------------
 
 test('every inner state has a colour rule', () => {
