@@ -38,12 +38,18 @@ hand `scp` must do both explicitly.
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
 
-**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 late evening: `8ee40d1`, and the
-deploy IS confirmed, not in progress.** Boot held 19 sessions (18 plus 1
-benign skip), every running session carries a project, and session lists show
-interactive conversations only (645 archived visible, 270 automated excluded
-by default, 305 unknown kept). See section 8 for the full commit-by-commit
-state of the late round that got it there and the branch's push status.
+**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 night: repo HEAD is
+`6934965`, three commits past the `8ee40d1` this file previously named as
+live (`117823d..6934965`: `e7a212e` halo recalibration, `cc885d6` the
+question/notice split, `6934965` the hook-token recovery self-heal).
+**A deploy of this HEAD was in progress by another agent at the time this
+line was written - treat it as deploy in progress at time of writing,
+not confirmed.** The last CONFIRMED live state is still what `8ee40d1`
+left running: boot held 19 sessions (18 plus 1 benign skip), every
+running session carries a project, session lists show interactive
+conversations only (645 archived visible, 270 automated excluded by
+default, 305 unknown kept). See section 8 for the full commit-by-commit
+state of both rounds and the branch's push status.
 
 ---
 
@@ -575,53 +581,93 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ## 8. CURRENT GIT STATE
 
-Branch `v1.1`, pushed to `origin/v1.1` as of this session (git-workflow protocol
-followed: `git pull --rebase` then push, no force). HEAD is `8ee40d1`. **The
-deploy IS CONFIRMED live, not in progress** - boot held 19 sessions (18 plus 1
-benign skip), every running session carries a project, and the session lists
-show interactive conversations only. Do not read a future "deploy in progress"
-claim in this file as still true; re-check the live commit directly.
+Branch `v1.1`, pushed to `origin/v1.1` as of this session (git-workflow
+protocol followed: `git pull --rebase` then push, no force). HEAD is
+`6934965`, three commits past `8ee40d1` (`117823d..6934965`). **Another
+agent was deploying this HEAD to the mini as this section was written -
+say "deploy in progress at time of writing" rather than confirmed, and
+re-check the live commit directly before trusting either claim.** The
+last state actually CONFIRMED live is still what `8ee40d1` left running:
+boot held 19 sessions (18 plus 1 benign skip), every running session
+carries a project, session lists show interactive conversations only.
+
+**What rides the next deploy** (i.e. is committed but was not yet
+confirmed live as this was written): the LED halo's second, smaller
+recalibration (`e7a212e`), the `question`/`notice` split
+(`cc885d6`), and the hook-token self-heal (`6934965`). None of the three
+needed a database change, so a deploy of this HEAD is a straight code
+push - no migration, no backfill, nothing to run against `cloude.db`.
 
 **WHAT TO DO FIRST NEXT SESSION, in this order:**
 
-1. **Get the owner's sign-off on the LED gallery states.** Reference artifact:
+1. **Confirm the deploy landed.** Check the live commit directly (not a
+   log line that only reports what the deploy script believed) before
+   trusting anything in this file that says "deployed" for `e7a212e`,
+   `cc885d6`, or `6934965`.
+2. **Run the real-hook LED integration test once it is on the branch.**
+   As of `6934965` it is UNTRACKED work in progress by another agent
+   (`tests/test_led_real_hooks.py`, `tests/real_hook_app.py`,
+   `tests/real_hook_harness.py`, `tests/led_state_for.node.mjs`) - find
+   out whether it landed, and if so run it with
+   `CLOUDE_REAL_HOOK_TESTS=1` against a real `claude` binary at least
+   once before trusting its skip-by-default gate in CI going forward.
+3. **Get the owner's sign-off on the LED gallery states**, now against
+   the SECOND recalibration. Reference artifact:
    https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627 -
-   it enumerates every inner/outer LED combination, including the halo size
-   `8ee40d1` shrank (2.6/0.62 down to 1.7/0.3 scale/spread). Nothing past this
-   point should be treated as a finished visual design until he has looked.
-2. **Split `PermissionRequest` from `Notification` server-side.** They fold
-   into one `question` state today (`src/core/session_activity.py`), which is
-   why `waiting-permission` is in the LED vocabulary
-   (`client/js/status-led.js`) but unreachable from live data. See
-   `docs/session-status.md`'s mapping table for where the new signal needs to
-   land.
-3. **Build the stale-hook-token self-heal.** Two sessions are affected today:
-   this orchestrator session and `ses_68c185ce` (2,757 rejected hook POSTs in
-   the live log, same class of failure). A rejected hook for a pane that still
-   has a row should re-issue the token into the pane env and log once, instead
-   of silently degrading into the tmux fallback tier where the light "looks
-   calm" for the wrong reason (see `docs/session-status.md`'s closing section).
-4. **Build the real-hook LED integration test**, offered but not yet built:
-   launch a real `claude` on a throwaway tmux socket with the hook URL pointed
-   at the app in test mode, drive prompts, assert the LED after each real
-   event, skip when the binary is absent.
-5. **Then work the remaining punchlist**, oldest-numbered first since they are
-   independent of each other: item 3 (`sessions.agent_type` persistence for a
-   session started via `auto_start_claude:false` plus a hand-sent claude
-   command), item 4 (alert lights - narrowed to the self-clearing
-   `activity_state` staying `working` for ~4 minutes after a resume, revisit
-   whether that narrower defect still needs a fix), item 7 (toasts must be
-   visible ACROSS sessions - raise global, dismiss per-session), item 11
-   (read/unread state per session - shares its state model with 4 and 7, fix
-   them together or they will disagree). Full definitions in `TODO.md`'s
-   "Session and agent identity" / "Attention, toasts and sidebar" sections.
-6. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the live
-   `cloude` socket are now measured FLAKY, not just risky - raise its
-   priority), gitleaks not installed on the mini (the pre-commit hook's second
-   gate silently never runs), the `~/.config/restic/mini-m4.pw` plaintext
-   password awaiting the owner's rotation decision, and
-   `FALLBACK_PROJECTS_ROOT` hardcoding `/Users/jsugamele`
-   (`src/core/project_directory.py:85`).
+   it enumerates every inner/outer LED combination. The owner already
+   confirmed the shape after two rounds of shrinking (final tokens: 1.3x
+   halo, 1.5px glow, lit object under 15px at the 9px default,
+   `e7a212e`); what remains is his confirmation of the individual STATES
+   rendered in the gallery, which he said he would do when using it.
+4. **Verify and close items 4 and 11, or write down what's still
+   wrong.** Both are BUILT, neither is verified this round. Item 4
+   (alert lights / activity-after-resume): the narrower defect on record
+   - `activity_state` staying `working` for about four minutes after a
+   resume - is now addressed by the 120-second hook-fed expiry plus the
+   fix that stops a raw tmux `running` pane from ever mapping to
+   `working` on no evidence. Reproduce a resume and time it before
+   closing. Item 11 (read/unread per session): the mechanism is built and
+   documented (`CLAUDE.md`, "Unread is keyed on the INSTANCE") - keyed on
+   the tmux instance so a reused name can't inherit a dead session's
+   flag, set on `Stop`, cleared when a WS terminal binds. What's
+   unconfirmed is the owner-facing half - entering a session marks it
+   read, and there is a control to mark it unread again from the sidebar.
+   Click through that by hand before closing.
+5. **Then the remaining punchlist**, oldest-numbered first since they are
+   independent of each other: item 1, item 2b, item 3
+   (`sessions.agent_type` persistence for a session started via
+   `auto_start_claude:false` plus a hand-sent claude command), item 7
+   (toasts must be visible ACROSS sessions - raise global, dismiss
+   per-session), item 8 (a toast history page), item 9 (group everything
+   including pinned - owner decision still outstanding), item 22
+   (close-and-recreate), and the websocket push (last, deliberately -
+   re-measure whether polling is still the real cost once the event loop
+   and render-guard work is further along). Full definitions in
+   `TODO.md`'s "Session and agent identity" / "Attention, toasts and
+   sidebar" sections and this final round's closing entry.
+6. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the
+   live `cloude` socket are measured FLAKY, not just risky - one test in
+   this final round's own baseline run flaked this way, see `TODO.md`'s
+   closing entry), gitleaks not installed on the mini, the
+   `~/.config/restic/mini-m4.pw` plaintext password awaiting the owner's
+   rotation decision, `FALLBACK_PROJECTS_ROOT` hardcoding
+   `/Users/jsugamele` (`src/core/project_directory.py:85`), the deferred
+   rename-push retry (a push deferred on a measured-missing transcript is
+   never retried), 48 test files over the 500-line guideline, `--name`
+   dropped on a restart's resume, `SessionInfo` carrying no
+   `created_at_epoch`, and the database backups needing deletion (six
+   4.6GB `cloude.db.bak-*` copies as of the last count - four are named
+   in `TODO.md`'s closing entry for this round, two more ("the
+   sessionkind and projectbind ones") are known to exist but have no
+   filename recorded anywhere in this repo's docs; list the actual state
+   dir before deleting anything).
+
+Full commit-by-commit list and item mapping for THIS final round (3
+commits, `117823d..6934965`) is in `TODO.md`'s dated 2026-09-08 "final
+round closed out" section, including the re-measured test baseline
+(5274 passed / 3 failed / 12 skipped, matching `6934965`'s own commit
+message) and a correction to the node test file count (185 tracked
+files, not the 190 `cc885d6`'s commit message claimed).
 
 Full commit-by-commit list and item mapping for the late round (12 commits,
 `455d692..8ee40d1`) is in `TODO.md`'s dated 2026-09-08 "late round closed out"
@@ -629,6 +675,9 @@ section. The consequential ones, newest first:
 
 | commit | what it did | deployed? |
 |---|---|---|
+| `6934965` | a superseded hook token is recovered once, never re-minted (self-heal for the 4,325-rejection storm) | in progress at time of writing |
+| `cc885d6` | `question` split into `question` (blocked, PermissionRequest) and `notice` (not blocked, Notification) | in progress at time of writing |
+| `e7a212e` | LED halo recalibrated a second time per owner feedback: 1.7/0.3 down to 1.3 scale / 1.5px fixed glow | in progress at time of writing |
 | `8ee40d1` | LED halo shrunk to match its actual 9px render size (~35px peak down to ~21px) | yes |
 | `e8cbc79` | docs: herdr teardown candidates, the real-hook LED test idea | n/a, docs |
 | `d6e4883` | docs: status light findings, plus a project-tree gutter alignment fix | yes |

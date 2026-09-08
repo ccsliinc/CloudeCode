@@ -370,9 +370,10 @@ claude - a resolver that always finds something is worse than useless.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline, measured
-  2026-09-08, is 4874 passed / 3 failed / 12 skipped; the three failures are
-  environmental and pre-existing:
+  repo root. System python3 has no fastapi. Current baseline, re-measured
+  2026-09-08 after the status-split and hook-token-recovery round
+  (`117823d..6934965`), is 5274 passed / 3 failed / 12 skipped; the three
+  failures are the same ones as before, environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
@@ -384,8 +385,19 @@ claude - a resolver that always finds something is worse than useless.
   the venv from `requirements.txt` before trusting the count. **That is not
   hypothetical: it happened.** The baseline this file carried before
   2026-09-08 read 4647 passed / 13 skipped and was stale by an order of
-  magnitude for exactly that reason. Node: 169 files, only the pre-existing
-  `test_archive_full_page_mode.node.mjs` fails.
+  magnitude for exactly that reason. **One test in this suite is measured
+  FLAKY under a full run** (`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`
+  failed once alongside 3 passes in isolation, both runs on the same tree
+  minutes apart) - it drives the real `cloude` tmux socket, which is the
+  same class of flakiness INFRA-49 already names. A lone failure there
+  without a code change behind it is not a new regression; re-run before
+  chasing it. Node: 185 tracked files (re-counted 2026-09-08; the earlier
+  "169" figure undercounted and predates this round), only the pre-existing
+  `test_archive_full_page_mode.node.mjs` fails. `tests/led_state_for.node.mjs`
+  and `tests/test_led_real_hooks.py` are untracked work in progress as of
+  this commit (a real-hook LED integration harness) - `led_state_for.node.mjs`
+  is a piped-stdin CLI helper, not a standalone test, and exits non-zero when
+  run with no input; that is expected, not a failure.
 - **`node --check`** every JS file you touch, before you claim it works.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit

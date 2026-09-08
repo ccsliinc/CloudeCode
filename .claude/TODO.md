@@ -2709,3 +2709,157 @@ this closing section doesn't bury them):**
 - **Owner action needed:** confirm the LED states rendered in the gallery
   artifact above (particularly the resized halo from `8ee40d1`) before
   treating the visual design as settled.
+
+### 2026-09-08 final round closed out, 117823d..6934965 (3 commits)
+
+Picks up right where the late round above left off. Deploy state for this
+round: another agent was deploying HEAD as this section was written, so
+treat it as **deploy in progress at time of writing** - do not read
+"live" anywhere below as confirmed for these three commits until the next
+session checks the running commit directly.
+
+- [x] **LED halo, sized down again, per owner calibration.** The owner
+  looked at the gallery artifact from the late round and called it: the
+  halo should be 1 to 2px larger than the dot, not a wide bloom.
+  `--led-halo-scale` 1.7 -> 1.3, `--led-glow-spread` from a scale-relative
+  0.3x to a fixed 1.5px. At the 9px default the lit object goes from ~21px
+  to ~14.7px across. Breathing amplitude tightened 0.9 -> 0.92 so the
+  animation stays inside that new size. Pinned numbers updated in
+  `tests/test_status_led.node.mjs` and `docs/session-status.md`. Commit
+  `e7a212e`.
+- [x] **`question` split into `question` (blocked) and `notice` (not
+  blocked).** A `PermissionRequest` halts claude mid-turn until a human
+  answers yes or no; a `Notification` is claude asking to be looked at
+  while nothing is blocked. One state named `question` carried both, so a
+  chatty session painted identically to a parked one - the false-urgency
+  twin of this project's recurring false-green problem. Two independent
+  booleans, `permission_open` and `notice_open`, not one field with three
+  values, because hook events arrive unordered and duplicated and a
+  `Notification` on either side of its `PermissionRequest` must not move
+  the blocking claim. `permission_open` reads first, so holding both
+  answers `question`. Both clear on `UserPromptSubmit`, `PreToolUse`, and
+  `Stop` - the events that mean a human showed up. LED: `question` ->
+  inner `waiting-permission` (new hue, `--led-color-permission`, resolves
+  to the existing `--color-status-pending`), `notice` -> inner
+  `waiting-input` (shared with the startup gate). Summary priority is now
+  permission > input > working > unread > done > dead > unknown. Toast
+  copy: "needs your permission" vs "wants your attention". Commit
+  `cc885d6`.
+- [x] **A superseded hook token is recovered once, never re-minted.**
+  Traced to the millisecond on live 2026-09-08: a derived-id adopt minted
+  a new token for `cloude_Agent_-_Cloude_Code` at 16:16:40.633984Z while
+  the pane's own process still held the old one baked into its env at
+  spawn time, and the first `hook_post_rejected_invalid_token` landed
+  130ms later. 4,325 rejections followed over 4h24m, ending only when the
+  owner restarted the pane by hand at 20:40:23Z. `hook_token_recovery.py`
+  keeps a bounded in-memory ring of tokens this process minted and then
+  superseded; a rejected hook is checked against that ring and, on a
+  match for that id and that pane, the store is re-bound to the value the
+  running process actually holds - logged once as
+  `hook_token_rebound_from_superseded`, and nothing is minted. The
+  negative control is the point of the test: a recovery that accepted
+  broadly would be a credential bypass wearing a passing test. The
+  respawn path and boot re-adopt now also push the current session env
+  onto the pane before the next process starts, since tmux only copies
+  session env at spawn time and a live process can never receive a
+  post-hoc push. Live state needed no repair - the owner's 16:40 restart
+  had already left the process, the pane env and the store agreeing,
+  confirmed by 26 hook 200s in 45 seconds with no new 403s afterward.
+  `ses_68c185ce` (2,757 rejected POSTs, carried forward from the late
+  round above as needing a self-heal) last fired 2026-08-28 and its pane
+  no longer exists - nothing to recover there, it is simply dead. Commit
+  `6934965`.
+
+**Test baseline, re-measured directly this round, not copied from a
+commit message:** full `venv/bin/python3 -m pytest -q` from repo root,
+**5274 passed / 3 failed / 12 skipped**, the three failures the same
+pre-existing environmental ones CLAUDE.md already names
+(`test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`). This matches what `6934965`'s own commit message
+claims, so that number is confirmed rather than merely quoted. **One test
+is flaky under a full run, not from this round's code:**
+`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`
+failed once in a full-suite run and passed 3-for-3 seconds later in
+isolation on the same tree - it drives the real `cloude` tmux socket,
+same class as INFRA-49. A lone failure there without a matching code
+change is not a new regression. **Node: `git ls-files` counts 185
+tracked `*.node.mjs` files, not 190 as `cc885d6`'s own commit message
+claimed** - running all 185 directly gives 184 pass / 1 fail, the
+pre-existing `test_archive_full_page_mode.node.mjs`. The "190" figure was
+wrong when it was written; CLAUDE.md is corrected to 185 rather than
+carrying the inflated count forward. Two untracked files sat alongside
+this work throughout - `tests/led_state_for.node.mjs` and
+`tests/test_led_real_hooks.py`, a real-hook LED integration harness
+another agent was building in parallel (see the next bullet). Neither is
+committed as of `6934965`, so neither is counted in the 185/1 line above.
+
+- [ ] **The real-hook LED integration test is IN PROGRESS, not built,
+  as of this section.** `tests/test_led_real_hooks.py`,
+  `tests/real_hook_app.py`, `tests/real_hook_harness.py` and
+  `tests/led_state_for.node.mjs` exist on disk (confirmed present) but are
+  UNTRACKED - `git status` shows no commit behind them. Running the
+  python file directly gives 8 skipped (opt-in via
+  `CLOUDE_REAL_HOOK_TESTS=1`, correctly gated off by default), so the
+  gating logic works; whether the tests pass WITH the env var set against
+  a real claude binary has not been checked here, out of scope for a
+  docs-only pass. `led_state_for.node.mjs` is not itself a test - it is a
+  piped-stdin CLI helper the python harness shells out to
+  (`echo '{"activity_status":...}' | node tests/led_state_for.node.mjs`)
+  so that the python test can assert against the SHIPPED
+  `client/js/status-led.js` mapping instead of re-implementing it; running
+  it standalone with no stdin fails on a JSON parse error, which is
+  expected, not a defect. Next session: find out who owns this work
+  before committing it yourself, then verify token 4 of HANDOFF.md's
+  first-session list.
+
+- [ ] **Item 4 (alert lights / activity-after-resume) - BUILT, verify
+  then close, not yet verified this round.** The narrower defect on
+  record (`activity_state` reads `working` for about four minutes after a
+  resume, then self-corrects) is now addressed two ways already shipped
+  in this branch's history: the 120-second expiry on hook-fed `working`
+  (`CLAUDE.md`, "The status lights, and what they are allowed to claim")
+  and the fix stopping a raw tmux `running` pane from mapping to
+  `working` on no evidence (it maps to `unknown` instead, landed in
+  `0fc23a5`/`4215ad0` from the late round). Nobody has re-run the
+  original four-minute measurement against current code to confirm the
+  combination actually closes the gap rather than narrowing it further.
+  Next session: reproduce a resume, time how long `activity_state` claims
+  `working` past it, then close this item or write down what is still
+  wrong.
+- [ ] **Item 11 (read/unread state per session) - BUILT, verify then
+  close, not yet verified this round.** CLAUDE.md's "Unread is keyed on
+  the INSTANCE" section and the LED's outer-ring `unread` state (marked
+  DONE earlier in this file at the `0fc23a5`/`4215ad0` entry) describe a
+  finished mechanism: unread is keyed on `<tmux_name>@<#{session_created}>`
+  so a reused name cannot inherit a dead session's flag, set on `Stop`,
+  cleared when a WS terminal binds, with a legacy-name fallback when the
+  epoch cannot be measured. What is NOT confirmed this round is the
+  owner-facing half from the original ask (entering a session marks it
+  read; a control lets the owner mark it unread again from the sidebar).
+  Next session: click through that flow by hand against a real session
+  before marking this closed.
+
+**Backups to delete, filenames confirmed from this repo's own written
+record (`.claude/notes/troubleshooting.md`) - do NOT delete from here,
+this is a list for whoever next has mini access and database
+permission:**
+- `cloude.db.bak-uuidrepair-20260908T141621Z`
+- `cloude.db.bak-agenttype-20260908T144337Z` (4,966,510,592 bytes,
+  confirmed `ok` integrity, 40/40 tables at time of writing)
+- `cloude.db.bak-uuidfill-20260908T144757Z` (4,966,510,592 bytes,
+  confirmed `ok` integrity, 41/41 tables at time of writing)
+- `cloude.db.bak-v23-20260908T161615Z` (written by the v24 migration)
+
+Troubleshooting.md separately records "six 4.6GB `cloude.db.bak-*`
+copies (~24GB)" in the state dir as of that pass, so **two more exist
+beyond the four named above.** The owner's next-session intent names them
+as "the sessionkind and projectbind ones" (from the `sessions.kind`
+schema-v25 migration, `2b0ed7d`, and the project-attribution invariant
+fixes, `7bd55fd`/`e73c1a7`) - but **no filename for either one appears
+anywhere in this repo's tracked docs**, so do not invent one. List the
+actual state dir on the mini before deleting anything; go by what is on
+disk, not by this guess at what its name should be. Per the standing
+owner note at "2026-09-08 owner note: clean up database backups when the
+row repairs are done" earlier in this file: keep exactly one verified
+full backup until a restart has proven the repaired rows work, then
+delete the rest.
