@@ -2635,9 +2635,13 @@ body.home-header-active {
     max-width: 640px;
 }
 
-/* Editable path / address bar. Behaves like a browser address field:
-   single line, monospace, accent glow on focus, mkdir-on-Enter feedback
-   surfaced just below in .folder-picker-status. */
+/* Editable path / address bar (folder-picker-modal.js) AND the
+   read-only path display reused for project modals (launchpad.js). The
+   input carries `.modal-input` alongside this class, which already
+   supplies identical :focus and ::placeholder treatment, so this rule
+   only needs the wrap fix - a long iCloud path has no spaces for the
+   browser to break on, so without word-break it ran past the edge of
+   the box instead of wrapping. Mirrors .folder-picker-status below. */
 .folder-picker-path {
     width: 100%;
     background: var(--color-bg-elevated);
@@ -2649,17 +2653,9 @@ body.home-header-active {
     padding: 10px 12px;
     margin-bottom: 10px;
     cursor: text;
+    overflow-wrap: break-word;
+    word-break: break-all;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.folder-picker-path:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: 0 0 8px var(--color-accent-glow);
-}
-
-.folder-picker-path::placeholder {
-    color: var(--color-fg-subtle);
 }
 
 /* Inline feedback under the path bar (mkdir success / browse errors). */
