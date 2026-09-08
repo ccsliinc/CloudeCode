@@ -2548,3 +2548,8 @@ commit-by-commit table in `HANDOFF.md` section 8.
 ### 2026-09-08 the eraser is a geometry flap, not the reconnect
 
 - [ ] Console evidence on the Punchlist Two tab: terminal rows flap 41 -> 45 -> 41 around websocket connect/reconnect (`source=ResizeObserver`), and claude answers any geometry change with `ESC[2J` (measured: a same-size resize emits zero bytes, a different size emits a viewport clear plus redraw). The reconnect keep path (f5156aa) works and is not the eraser; an in-flow page element changing the terminal container height by four rows is. Culprit hunt and overlay fix in progress; also a transient-resize guard in the ResizeObserver path.
+
+### 2026-09-08 eraser hunt, instrumented
+
+- [x] Ruled out by measurement: the reconnect (keep path fires, no reset), the resize nudge (removed in f5156aa), the local-servers panel (overlaid in 3ef5624), the renderer and the font (cell 8x16 webgl on every resize line, 2361b33 instrumentation).
+- [ ] Arithmetic on the instrumented lines: 45 rows x 16 px = 720 px at reconnect, 41 x 16 = 656 px ten seconds later; `#terminal` measures 668 px after the flap; the only in-flow sibling is the 43 px `.info` status bar under the terminal. It is absent or collapsed at reconnect and appears once session info lands, stealing four rows and triggering claude ESC[2J. Fix in progress: reserve its height permanently or take it out of flow.
