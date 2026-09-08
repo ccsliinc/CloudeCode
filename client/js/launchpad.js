@@ -5263,11 +5263,38 @@ class Launchpad {
             const modalTitle = agentType
                 ? `name this ${agentType} project`
                 : 'name this project';
-            const projectDetails = await this.showProjectNameModal({ title: modalTitle });
 
-            if (!projectDetails) {
-                console.log('Launchpad: Project creation cancelled');
-                return; // User cancelled
+            // The name has to be usable as a folder name, because it now
+            // IS one. An illegal name is refused and re-asked with what
+            // was typed still in the field - never silently rewritten,
+            // which would make a folder the user did not ask for.
+            let projectDetails = null;
+            let prefillName = '';
+            for (;;) {
+                projectDetails = await this.showProjectNameModal({
+                    title: modalTitle,
+                    defaultName: prefillName,
+                });
+                if (!projectDetails) {
+                    console.log('Launchpad: Project creation cancelled');
+                    return; // User cancelled
+                }
+                const nameVerdict = window.ProjectCreateFolder.validateName(projectDetails.name);
+                if (nameVerdict.ok) break;
+                this.showError(nameVerdict.message);
+                prefillName = projectDetails.name;
+            }
+
+            // The folder step. Until this shipped nothing asked where the
+            // project should live, so the server fell back to naming the
+            // directory after a random session id (".../ses_5a756046").
+            // Cancelling here cancels the launch: no session, no folder.
+            const folderChoice = await window.ProjectCreateFolder.choose({
+                name: projectDetails.name,
+            });
+            if (!folderChoice) {
+                console.log('Launchpad: Project folder selection cancelled');
+                return;
             }
 
             // Show loading state
@@ -5286,6 +5313,13 @@ class Launchpad {
                 auto_start_claude: true,
                 copy_templates: true,
                 project_name: projectDetails.name,
+                // The chosen PARENT, not the composed path. The server
+                // joins it to project_name itself and canonicalises with
+                // realpath, so the directory it creates and the row's
+                // working_dir carry the long spelling of a symlinked
+                // parent rather than whatever the client happened to
+                // display. See src/core/project_directory.py.
+                project_parent_dir: folderChoice.parent,
                 ..._dims
             };
             // Only include agent_type when explicitly set, so the server's

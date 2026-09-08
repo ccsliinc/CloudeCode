@@ -752,6 +752,12 @@
          the escaper is passed in - so it has no ordering constraint on
          anything else. -->
     <script src="/static/js/folder-picker-modal.js"></script>
+    <!-- The folder step for a NEW project ("start empty"), which had none
+         and so let every project land at ".../ses_<hex>". Must load AFTER
+         folder-picker-modal.js, whose picker its browse button opens, and
+         BEFORE launchpad.js, which calls window.ProjectCreateFolder
+         .validateName / .choose during the create flow. -->
+    <script src="/static/js/project-create-folder.js"></script>
     <!-- Which stored RECENT rows survive the "already running" guard.
          Must load BEFORE launchpad.js, whose renderRecentSessions() calls
          window.SessionRecentVisibility.visibleRecentRows while painting.

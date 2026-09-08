@@ -401,6 +401,69 @@ over all 39 rows finds 14 with `agent_type` NULL and a hook-written uuid. The
 two are independent, and the `agent_type` persistence gap is still its own open
 item.
 
+## Where a new project's folder comes from
+
+A project's directory is `sessions.working_dir`, and it is permanent: the
+row carries it, the launcher lists it, and the archive derives a
+transcript directory from it. So the create path is the one place that can
+poison every downstream reader, and until 2026-09-08 it did.
+
+| Piece | File |
+|---|---|
+| Compose, validate and create the directory | `src/core/project_directory.py` |
+| The folder step, and the pure rules behind it | `client/js/project-create-folder.js` |
+| Where it is wired in | `src/api/routes.py` (`create_session`), `client/js/launchpad.js` (`_createNewSessionInner`) |
+
+**"START EMPTY" HAD NO FOLDER STEP AT ALL.** The chain was "+" > new
+claude project > start empty > provider > name this project > create
+session, and nothing in it ever asked where the project should live. The
+client posted a name and no `working_dir`, so `SessionManager.create_session`
+fell through to `work_path = settings.get_working_dir() / session_id` and a
+project the user named `Punchlist Test` was created at
+`.../ses_5a756046`. That is not a folder anyone chose, recognises, or can
+find later, and it was written into the row as the project's home. The
+fallback is still there for an old client, but it now logs at warning
+level: it went unnoticed for as long as it did precisely because it was
+silent.
+
+**THE SECOND DEFECT WAS IN THE SAME LINE, AND IT IS GOTCHA 6.** That path
+was built with `Path.expanduser()`, which expands `~` and stops. It does
+NOT resolve symlinks, so `~/Development` stayed the SHORT spelling of a
+directory that really lives in iCloud, and a short spelling is how one
+directory becomes two projects. `project_directory` canonicalises with
+`os.path.realpath` instead, so the LONG spelling is what reaches the row.
+`tests/test_project_directory.py` asserts that against a real symlink
+rather than trusting the reading.
+
+**THE NEW FIELD IS `project_parent_dir`, NEVER `working_dir`.** Three
+shipped flows already post `working_dir` with a folder from anywhere on
+disk: "open an existing folder", the new-console FAB (it posts `~`), and
+clone. Attaching a root restriction to that field would start refusing
+folders they have always accepted, which is a worse bug than the one being
+fixed. A restriction on a field nothing used to send cannot regress
+anything. The server joins the parent to `project_name` itself, so the
+client cannot compose a path the server did not check.
+
+**Traversal and symlink escape are ONE check.** The parent goes through
+`realpath` BEFORE any comparison, so `..` cannot survive and a symlink
+bridge resolves to where it really points. Containment is component-wise,
+never `str.startswith`, or `/Users/jsugamelevil` reads as living under
+`/Users/jsugamele`. The allowed roots are the projects root plus HOME, and
+home is deliberately generous: the owner's projects live under the iCloud
+Sync path rather than under `DEFAULT_WORKING_DIR`, so a root set of only
+the projects root would refuse the exact folders the folder step exists to
+offer. That is a silent way of not shipping the feature.
+
+**A name is REFUSED, never rewritten.** Spaces are legal and stay verbatim
+(the owner's own projects have them). `/`, `\`, NUL, control characters, a
+leading dot, `.` and `..`, and anything over 255 bytes come back as an
+inline sentence. A sanitiser that turned `a/b` into `a-b` would make a
+folder the user did not ask for and cannot find. An existing EMPTY target
+directory is fine; a non-empty one refuses.
+
+"clone from github" does NOT have this defect: it has collected a parent
+directory since it shipped (`launchpad.js`, `modal-clone-parent`).
+
 ## The transcript archive the app maintains
 
 The app keeps a byte-exact archive of this machine's Claude Code

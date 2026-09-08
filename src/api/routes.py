@@ -641,6 +641,38 @@ async def create_session(request: Request, body: CreateSessionRequest):
         if body.working_dir:
             body.working_dir = os.path.expanduser(body.working_dir)
 
+        # A NEW project with a chosen parent folder. This is the only path
+        # that composes a directory from a name, and it exists because the
+        # "start empty" flow had no folder step: it posted a name and
+        # nothing else, so session_manager fell through to
+        # ``settings.get_working_dir() / session_id`` and the project
+        # landed at ``.../ses_5a756046`` - a random session id, recorded
+        # in the SHORT symlink spelling. resolve_project_directory returns
+        # the realpath'd (long) parent joined to the name, or refuses with
+        # a sentence the modal shows inline; a refusal is a 400 and
+        # creates nothing.
+        if body.project_parent_dir:
+            from src.core.project_directory import (
+                ensure_project_directory,
+                resolve_project_directory,
+            )
+
+            verdict = ensure_project_directory(
+                resolve_project_directory(
+                    body.project_parent_dir,
+                    body.project_name or "",
+                    settings=settings,
+                )
+            )
+            if not verdict.ok:
+                logger.warning(
+                    "project_directory_refused",
+                    parent_dir=body.project_parent_dir,
+                    code=verdict.code,
+                )
+                raise HTTPException(status_code=400, detail=verdict.message)
+            body.working_dir = verdict.path
+
         logger.info(
             "api_create_session_request",
             session_id=session_id,
@@ -683,6 +715,13 @@ async def create_session(request: Request, body: CreateSessionRequest):
 
         return session
 
+    except HTTPException:
+        # An HTTPException we raised ourselves (the project-directory
+        # refusal above) is already the answer. Without this clause the
+        # blanket handler below would catch it - HTTPException IS an
+        # Exception - and re-wrap a deliberate 400 with a clear message as
+        # a generic 500, hiding the reason from the user entirely.
+        raise
     except ValueError as e:
         logger.error("session_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))

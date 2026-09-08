@@ -407,6 +407,22 @@ class CreateSessionRequest(BaseModel):
         None,
         description="Optional human-readable project display name"
     )
+    # The PARENT folder a brand-new project is created inside. Sent only
+    # by the "start empty" flow, which had no folder step at all and so
+    # let every project land at ``<projects root>/ses_<hex>``. When set,
+    # the server composes ``<realpath(parent)>/<project_name>``, validates
+    # it (src/core/project_directory.py) and uses it as working_dir.
+    #
+    # DELIBERATELY NOT ``working_dir``. Three shipped flows already post
+    # that field with folders from anywhere on disk - "open an existing
+    # folder", the new-console FAB (it posts "~") and clone - so putting a
+    # root restriction on it would refuse folders they have always
+    # accepted. A restriction on a field nothing used to send cannot
+    # regress any of them.
+    project_parent_dir: Optional[str] = Field(
+        None,
+        description="Parent folder for a new project; composed with project_name"
+    )
     # Optional client-measured terminal dims. When supplied, the backend
     # births the pane at these dims instead of the INITIAL_COLS/INITIAL_ROWS
     # defaults - closing the "80x24 or 132x40 birth" gap before the first

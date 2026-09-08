@@ -2758,7 +2758,23 @@ class SessionManager:
         if working_dir:
             work_path = Path(working_dir).expanduser()
         else:
+            # LAST RESORT, and now a loud one. A project created here is
+            # named after a random session id (".../ses_5a756046"), which
+            # is not a folder any user chose or can recognise later. Since
+            # the "start empty" flow gained its folder step every new
+            # project arrives with an explicit directory, so reaching this
+            # branch means an OLD CLIENT posted no working_dir and no
+            # project_parent_dir. It still works - refusing would break
+            # that client outright - but it is recorded at warning level
+            # rather than happening silently, which is how it went
+            # unnoticed in the first place.
             work_path = settings.get_working_dir() / session_id
+            logger.warning(
+                "session_working_dir_fallback_generated",
+                session_id=session_id,
+                working_dir=str(work_path),
+                reason="no working_dir or project_parent_dir supplied",
+            )
 
         work_path.mkdir(parents=True, exist_ok=True)
 
