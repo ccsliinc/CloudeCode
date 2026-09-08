@@ -2975,20 +2975,9 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   asserts the dot reaches `idle` once the halo clears - the state
   punchlist 4 made unreachable, so that is the live proof.
 
-- [x] **Measured on a live run, 2026-09-08** (`CLOUDE_REAL_HOOK_TESTS=1`,
-  claude 2.1.265, 8 of 9 passed): Stop+38.30s -> `finished_unread`
-  (`done`/`unread`), SubagentStop+39.71s -> STILL `finished_unread`, and
-  binding a terminal -> `idle` (`done`/`steady`). The hook ledger for
-  that run contains no `SubagentStart` at all, so the depth was 0 and the
-  refusal is the branch that was exercised. The one failure is the
-  dead-pane test, which belongs to the concurrent liveness work.
-
 - [ ] STILL OPEN, unchanged by this: the dead-pane entry above
   (`_session_info_for` drops a dead pane on `LIVENESS_GONE`, so the LED's
   `dead` state is unreachable from live data). Being worked separately.
-
-
-## 2026-09-08 - a dead session keeps its row
 
 - [x] **A DEAD SESSION NOW KEEPS ITS ROW** (closes the dead-pane entry
   left open above). `resolve_listing_liveness` answered ONE verdict,
@@ -3033,3 +3022,51 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   deliberate - the owner's model is that it stays until the user restarts
   or removes it - but it means a box left alone accumulates dead rows,
   and no one has measured what that looks like after a week.
+
+## 2026-09-08 late: owner decisions on items 9 and the dead-pane finding
+
+- Item 9 DECIDED (owner, verbatim: "yes, its something that floats to top row
+  can still be ungroupped"): a pin is a flag that floats the row to the top,
+  not a bucket of its own; an ungrouped session stays a legal state, so the
+  six ungrouped Infrastructure sessions are NOT forced into a group. No
+  migration needed. Only work left: confirm a pinned row floats to the top
+  whether or not it is in a group, then close.
+- Dead-pane finding DECIDED (owner: "they go into recent, they can
+  disappear"): a killed session drops out of the live list and shows under
+  Recent. The LED dead/off state stays gallery-only. Closed as by design.
+
+## 2026-09-08: archived one-off verify scripts whose fixes shipped
+
+- [x] Reviewed all 31 `verify_*`/`verify-*` scripts at the top of `scripts/`
+  (about 11,342 lines). For each one read its docstring, found the git
+  commit that shipped the fix it was proving, and grepped the repo for a
+  permanent automated test covering the same assertion, and for any other
+  script or CI file that still calls or imports it.
+- Moved 21 scripts (7,649 lines) into `scripts/archive/verify/` via
+  `git mv`, each one a closed single-bug pixel/behaviour proof now
+  covered by a test under `tests/`. Table of script, closing commit and
+  covering test is in `scripts/archive/verify/README.md`.
+- Kept 4 in place because they are load-bearing: `verify_header_icons_and_menu.py`,
+  `verify_sidebar_groups.py` and `verify_sidebar_sessions.py` are actively
+  invoked by `scripts/ci/mutate-*.sh` mutation-testing scripts;
+  `verify_sidebar_rename.py` is not called directly but is imported by
+  `verify_sidebar_groups.py` (`from verify_sidebar_rename import
+  measure_inline_rename`), so moving it would break that CI-invoked
+  script.
+- Kept 4 more as reusable parameterised operator tools, not one-off
+  proofs: `verify_lifecycle_reconcile.py` (`--db`/`--listing` against a
+  real `cloude.db`) and the `verify_selection_apps.py` /
+  `verify_selection_regressions.py` / `verify_selection_scrolled.py` trio
+  (argparse, live server plus TOTP, cross-import each other), all still
+  named as release-time harnesses in `RELEASE-NOTES.md`.
+- Kept 2 as unsure: `verify_home_mechanics.py` is a multi-item regression
+  harness (items into the 50s) referenced by a comment in
+  `scripts/ci/mutate-home-screen-mechanics.sh`, with at least one item
+  still open across past releases per `RELEASE-NOTES.md`, so it is not a
+  single closed bug; `verify_sidebar_group_drag.py` is a companion to the
+  actively-called `verify_sidebar_groups.py`, last touched 2026-09-07, in
+  a part of the codebase under active edit during this same session.
+- Full suite after the move: 5302 passed / 3 failed / 22 skipped, same
+  three pre-existing environmental failures named in `CLAUDE.md`
+  (`test_home_write_guard`, `test_state_dir_resolution`,
+  `test_version_probe`). Nothing newly broken by the archive move.
