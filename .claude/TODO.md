@@ -2580,3 +2580,14 @@ commit-by-commit table in `HANDOFF.md` section 8.
 - [ ] A second session, `ses_68c185ce`, has 2,757 hook POSTs rejected for a stale token (same class as this orchestrator session). Find how its token went stale and add a self-heal: a rejected hook for a pane that has a row should re-issue the token into the pane env and log once.
 - [ ] `waiting-permission` is in the LED vocabulary but unreachable: the server folds `PermissionRequest` and `Notification` into one `question` state. Split them server-side so a permission prompt can read differently from a plain notification.
 - [x] Concurrency incident: the recent roll-up agent committed from a stale tree (3732bdf) and reverted 15 files of the LED work; restored byte for byte in 4215ad0. Rule for future agents: build commits from HEAD plus own hunks only.
+
+### 2026-09-08 herdr teardown (github.com/herdrdev/herdr), candidates only
+
+- [ ] Automation primitives: `agent wait --until blocked`, `agent prompt --wait`, JSON socket API. Fits our hook state; needs a wait endpoint and a control API.
+- [ ] Status "explain": a verdict that reports its source, matched rule, evidence and a named fallback reason. Add on top of the LED state machine; today `unknown` cannot say why.
+- [ ] Sequence-numbered seen/done per source (`state_change_seq`), stale reports accepted and ignored. Stricter than our last-write-wins unread; consider for the unordered-hook problem.
+- [ ] OS-level notification when an agent blocks (web push or APNs); today only an open tab toasts.
+- [ ] Multi-machine in one client (saved SSH machines); our model assumes one tmux socket on one box.
+- [ ] Git worktree workspaces grouped with the parent repo; one more project kind.
+- [ ] Other agents via screen-scrape manifests; only Claude gives us hooks.
+- [ ] Real-hook LED integration test: launch a real claude on a throwaway tmux socket with the hook URL pointed at the app in test mode, drive prompts, assert the LED after each real event; skip when the binary is absent. Owner asked whether possible: yes, not yet built.
