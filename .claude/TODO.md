@@ -2359,3 +2359,7 @@ Three, none of them started, all of them blocked on a human answer.
    database and would be useless as a rollback.** A backup that cannot restore
    is not a backup.
 3. **Deploy `0793eb1` and `8dd54a8`.** Live is on `0b12edf`.
+
+### 2026-09-08 owner note: clean up database backups when the row repairs are done
+
+- [ ] When the Media Compression row repair and the duplicate-row merges are finished and verified, delete the extraneous cloude.db backups: every pre-existing 65-115 KB backup in the backup directory (useless as rollbacks against a 4.5 GB file) and any full-size dated backups taken for the repairs, once a restart has proven the repaired rows work. Keep exactly one verified full backup until then. Owner request, 2026-09-08.
