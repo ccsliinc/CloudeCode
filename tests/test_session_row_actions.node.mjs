@@ -255,8 +255,8 @@ test('neither copy may claim disk is left untouched', async () => {
             !/nothing (?:on disk is touched|is deleted)|no files are deleted|disk is untouched|leaves? (?:disk|files) (?:alone|untouched)/i.test(details),
             `${action}: copy must not claim disk is untouched`,
         );
-        // Stating the deletion is the positive half of the same guarantee.
-        assert.ok(/deleted/.test(details), `${action}: must say files are deleted`);
+        // Stating the removal is the positive half of the same guarantee.
+        assert.ok(/removed/.test(details), `${action}: must say files are removed`);
         assert.ok(/\.cloude_uploads/.test(details), `${action}: must name the directory that is removed`);
     }
 });
@@ -265,8 +265,8 @@ test('both copies state that the transcript survives', async () => {
     for (const action of [SessionRowActions.ACTION_CLOSE, SessionRowActions.ACTION_REMOVE]) {
         const { details } = await confirmCopyFor(action, 'api-work');
         assert.ok(
-            /transcript is not\s+deleted/.test(details),
-            `${action}: must say the transcript is not deleted`,
+            /transcript is kept/.test(details),
+            `${action}: must say the transcript is kept`,
         );
         assert.ok(/~\/\.claude\/projects/.test(details), `${action}: must say where it stays`);
     }
@@ -306,10 +306,10 @@ test('remove copy still reads exactly as written', async () => {
     assert.equal(
         details,
         'this cannot be undone. this session already exited, so no running ' +
-            "process is stopped, but files uploaded to it are deleted from the " +
+            "process is stopped, but files uploaded to it are removed from the " +
             "project's .cloude_uploads folder. the leftover tmux shell is " +
-            'cleared and cloudecode forgets the entry. the transcript is not ' +
-            'deleted and stays under ~/.claude/projects.',
+            'cleared and cloudecode forgets the entry. the transcript is kept ' +
+            'and stays under ~/.claude/projects.',
     );
 });
 

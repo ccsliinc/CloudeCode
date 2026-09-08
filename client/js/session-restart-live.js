@@ -131,7 +131,7 @@ console.log('[SessionRestartLive Module] Loading...');
         var details = 'this cannot be undone. the process running in this pane '
             + 'is killed and a new one is started in the same pane. the session '
             + 'keeps its tmux name, its row and its place in the list, and the '
-            + 'transcript is not deleted. ';
+            + 'transcript is kept. ';
         if (outcome.kind === 'shell') {
             details += 'this session has no recorded start command, so it does '
                 + 'not come back as an agent. it comes back as a plain login '

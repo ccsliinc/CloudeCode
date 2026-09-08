@@ -4646,8 +4646,16 @@ class Launchpad {
                     ${chevronHtml}
                     <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
                         <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                        <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
-                        <!-- NOT disabled by presence. A project whose
+                        <!-- THE ONLY DESTRUCTIVE-SHAPED CONTROL ON THIS ROW.
+                             A hard-delete trash button used to sit here
+                             too (DELETE /projects/{name}, a real row
+                             removal with a tombstone) - it is gone from
+                             the UI on the owner's instruction, 2026-09-08:
+                             "sessions and projects can be archived not
+                             deleted". The server route is untouched and
+                             still reachable directly; nothing in the
+                             client calls it any more. NOT disabled by
+                             presence. A project whose
                              folder has gone missing is precisely one a
                              user wants to archive, and refusing that
                              would leave the row permanently stuck on the
@@ -4691,8 +4699,7 @@ class Launchpad {
         projectItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 // Don't open project if clicking an inline action button
-                if (e.target.closest('.project-delete-btn') ||
-                    e.target.closest('.project-edit-btn') ||
+                if (e.target.closest('.project-edit-btn') ||
                     e.target.closest('.project-archive-btn')) {
                     return;
                 }
@@ -4717,16 +4724,6 @@ class Launchpad {
                 }
                 const index = parseInt(item.dataset.index);
                 this.selectProject(this.projects[index]);
-            });
-        });
-
-        // Add click handlers for delete buttons
-        const deleteButtons = projectListEl.querySelectorAll('.project-delete-btn');
-        deleteButtons.forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation(); // Prevent project selection
-                const projectName = btn.dataset.name;
-                await this.deleteProject(projectName);
             });
         });
 
@@ -4761,9 +4758,11 @@ class Launchpad {
     /**
      * ARCHIVE a project: retire it from the list, keep everything.
      *
-     * NOT a delete, and the confirm copy has to say so, because the two
-     * controls sit next to each other on the same row. Delete removes the
-     * row for good; this hides it and is undone in one click.
+     * THE ONLY DESTRUCTIVE-SHAPED CONTROL ON A PROJECT ROW. There used
+     * to be a hard-delete trash button beside this one; it is gone from
+     * the UI (owner's instruction, 2026-09-08: "sessions and projects
+     * can be archived not deleted"). This hides the row and is undone in
+     * one click, never removes it.
      *
      * IT DOES NOT TOUCH THE PROJECT'S SESSIONS. That is stated to the
      * user, not just to the server: a user who believes archiving might
@@ -4814,47 +4813,6 @@ class Launchpad {
             console.error('Launchpad: failed to restore project:', error);
             this.showError('failed to restore project: '
                 + (error && error.message ? error.message : 'the server could not be reached'));
-        }
-    }
-
-    /**
-     * Delete a project
-     */
-    async deleteProject(projectName) {
-        try {
-            // Show confirmation modal
-            // Trash means the same thing on a project row as on a session
-            // row: forget the entry, touch nothing on disk. The copy says
-            // so plainly rather than borrowing a "cannot be undone"
-            // warning this action does not earn.
-            const confirmed = await this.showConfirmModal(
-                'remove project',
-                `remove "${projectName}" from the launcher?`,
-                'this only removes it from the launcher. the folder and its files on disk are not touched.',
-                'remove',
-                'cancel'
-            );
-
-            if (!confirmed) {
-                return;
-            }
-
-            // Show loading state
-            this.updateStatus(`deleting ${projectName}...`);
-
-            // Delete project via API
-            await window.API.deleteProject(projectName);
-
-            console.log('Launchpad: Project deleted:', projectName);
-
-            // Reload projects list
-            await this.loadProjects();
-
-            this.updateStatus('project deleted');
-
-        } catch (error) {
-            console.error('Launchpad: Failed to delete project:', error);
-            this.showError('failed to delete project: ' + error.message);
         }
     }
 
@@ -6408,7 +6366,7 @@ class Launchpad {
                 `was not opened: its folder does not exist at ${path}.\n\n` +
                 `Nothing was started and nothing was changed. Either restore ` +
                 `the folder at that path, edit the project to point at where ` +
-                `it lives now, or delete the project.`
+                `it lives now, or archive the project.`
             );
             return;
         }

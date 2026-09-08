@@ -3187,7 +3187,23 @@ def _session_record_payload(row: dict) -> SessionRecord:
     response_model=List[SessionRecord],
     dependencies=[Depends(require_auth)],
 )
-async def list_session_records(request: Request):
+async def list_session_records(
+    request: Request,
+    include_automated: bool = Query(
+        False,
+        description=(
+            "Include rows classified kind='automated' - a scheduler run "
+            "or a headless `claude -p` probe. DEFAULTS FALSE, because "
+            "the owner's rule is 'lists should always just be mine. the "
+            "rest can be found in the archive explorer.' There is no UI "
+            "for this flag; it exists so a caller that wants the "
+            "complete set can ask for it. Rows with kind NULL or "
+            "'unknown' are returned EITHER WAY - not having looked is "
+            "not evidence of automation. Nothing here affects /archive, "
+            "which reads the transcript archive and never this table."
+        ),
+    ),
+):
     """Every stored session row, newest first, archived rows included.
 
     Description: archived rows are INCLUDED and the caller filters,
@@ -3217,10 +3233,13 @@ async def list_session_records(request: Request):
         thread-affine).
 
         Inputs: none (closes over db_path).
-        Output: list[dict] - raw session rows.
+        Output: list[dict] - raw session rows, minus the automated ones
+          unless the caller asked for them.
         """
         with closing(connect(db_path, create=False)) as conn:
-            return session_store.list_sessions(conn)
+            return session_store.list_sessions(
+                conn, include_automated=include_automated
+            )
 
     try:
         rows = await run_in_threadpool(_read)
@@ -3273,7 +3292,7 @@ async def delete_session_record(request: Request, session_uuid: str):
     if not db_path.exists():
         raise HTTPException(
             status_code=503,
-            detail="no datastore: sessions cannot be deleted on this install",
+            detail="no datastore: sessions cannot be archived on this install",
         )
 
     def _write() -> bool:
@@ -3394,6 +3413,17 @@ async def list_recent_sessions(
             "for now'). Same column shape, different meaning."
         ),
     ),
+    include_automated: bool = Query(
+        False,
+        description=(
+            "Include rows classified kind='automated' - a scheduler run "
+            "or a headless `claude -p` probe. DEFAULTS FALSE, and it is "
+            "ORTHOGONAL to include_archived: both filters apply, so "
+            "include_archived=true still hides automated rows unless "
+            "this is set too. Rows with kind NULL or 'unknown' are "
+            "returned EITHER WAY. No UI sets this."
+        ),
+    ),
 ):
     """RECENT (S9): stored ``stopped`` sessions, datastore-backed.
 
@@ -3468,6 +3498,7 @@ async def list_recent_sessions(
                 conn,
                 lifecycle=SESSION_LIFECYCLE_STOPPED,
                 include_archived=include_archived,
+                include_automated=include_automated,
             )
             # A SESSION APPEARS IN EXACTLY ONE LIST, and this is the half
             # the client cannot do for itself.

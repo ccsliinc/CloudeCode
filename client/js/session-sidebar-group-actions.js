@@ -339,7 +339,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
                 onPick: () => moveGroup(groupUuid, 1),
             },
             {
-                label: `delete (${group.members.length} `
+                label: `remove (${group.members.length} `
                     + `${group.members.length === 1 ? 'conversation' : 'conversations'} `
                     + 'move to other)',
                 onPick: () => deleteGroup(groupUuid),
@@ -382,17 +382,17 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
         const count = group.members.length;
         const noun = count === 1 ? 'conversation' : 'conversations';
         const ok = window.confirm(
-            `Delete the group "${group.name}"?\n\n`
+            `Remove the group "${group.name}"?\n\n`
             + `${count} ${noun} will move to "other". `
-            + 'No conversation is deleted.',
+            + 'No conversation is removed.',
         );
         if (!ok) return;
         try {
             const body = await window.API.deleteSessionGroup(groupUuid);
             applyAndRepaint(body);
-            announce(`group ${group.name} deleted, ${body.freed} ${noun} moved to other`);
+            announce(`group ${group.name} removed, ${body.freed} ${noun} moved to other`);
         } catch (err) {
-            announce(`could not delete: ${err && err.message ? err.message : err}`);
+            announce(`could not remove: ${err && err.message ? err.message : err}`);
         }
     }
 

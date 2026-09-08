@@ -388,8 +388,11 @@ class API {
      * Projects: ARCHIVE a project - retire it from the default list
      * without deleting it and WITHOUT touching any of its sessions.
      *
-     * Distinct from deleteProject(), which removes the row for good and
-     * writes a tombstone. This one is reversible with unarchiveProject().
+     * Distinct from the server's `DELETE /projects/{name}` route, which
+     * removes the row for good and writes a tombstone - the client no
+     * longer calls it (owner's instruction, 2026-09-08: "sessions and
+     * projects can be archived not deleted"). This one is reversible
+     * with unarchiveProject().
      * Idempotent server-side: archiving an already-archived project is a
      * 200 carrying the ORIGINAL archived_at, not a 409.
      *
@@ -498,17 +501,6 @@ class API {
         return await this.call('/projects', {
             method: 'POST',
             body: params
-        });
-    }
-
-    /**
-     * Projects: Delete project
-     * @param {string} projectName - Name of the project to delete
-     * @returns {Promise<object>}
-     */
-    async deleteProject(projectName) {
-        return await this.call(`/projects/${encodeURIComponent(projectName)}`, {
-            method: 'DELETE'
         });
     }
 

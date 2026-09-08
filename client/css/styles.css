@@ -1579,11 +1579,11 @@ body.home-header-active {
      * list that accumulates). */
     border: 1px solid var(--color-border);
     box-shadow: inset 3px 0 0 var(--color-accent);
-    /* Right padding clears the inline action buttons. It was 40px for
-     * two of them (delete at right:8, pencil at right:40, which already
-     * sat past it); a third - archive at right:72 - makes 104px the
-     * width actually needed, so row text cannot run under any of them. */
-    padding: 14px 104px 14px 16px;
+    /* Right padding clears the inline action buttons: pencil at right:8,
+     * archive at right:40 - the hard-delete trash button that used to
+     * sit at right:8 (pushing these two out to 40/72) is gone from the
+     * UI, so 72px is the width actually needed, not 104px. */
+    padding: 14px 72px 14px 16px;
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.3s ease;
@@ -1619,46 +1619,18 @@ body.home-header-active {
     line-height: 1.4;
 }
 
-/* Edit + delete are ALWAYS rendered and ALWAYS visible (no `:hover`-only
+/* Edit + archive are ALWAYS rendered and ALWAYS visible (no `:hover`-only
  * reveal anywhere in this file) so they are reachable on touch devices
  * with no hover state at all - the user drives this from a phone. See
  * the `@media (pointer: coarse)` block below for the touch-specific
- * hit-area bump. */
-.project-delete-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-fg-muted);
-    border: 1px solid transparent;
-    font-size: 24px;
-    line-height: 1;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
-
-.project-delete-btn:hover {
-    background: var(--color-danger-bg-hover);
-    color: var(--color-danger);
-    border-color: var(--color-danger);
-    box-shadow: 0 0 8px var(--color-danger-glow);
-    transform: scale(1.1);
-}
-
-/* Edit (pencil) button - sits immediately left of the delete ×. Calm
- * neutral default, amber on hover so it never competes with the
- * destructive red of delete. */
+ * hit-area bump. A hard-delete trash button used to sit at right:8; it
+ * is gone from the UI, and this rule's neighbours shifted in to fill
+ * its slot (owner's instruction, 2026-09-08: "sessions and projects can
+ * be archived not deleted"). */
 .project-edit-btn {
     position: absolute;
     top: 8px;
-    right: 40px;
+    right: 8px;
     width: 28px;
     height: 28px;
     border-radius: var(--radius-md);
@@ -1729,8 +1701,11 @@ body.home-header-active {
     box-shadow: inset 3px 0 0 var(--color-warning);
 }
 
-.project-presence-disabled .project-edit-btn,
-.project-presence-disabled .project-delete-btn {
+/* NOT `.project-archive-btn` - deliberately excluded, same reasoning as
+ * the JS comment above its markup (launchpad.js _projectListHtml()): a
+ * project whose folder has gone missing is precisely one a user wants
+ * to archive. */
+.project-presence-disabled .project-edit-btn {
     opacity: 0.35;
     cursor: not-allowed;
     pointer-events: none;
@@ -1759,14 +1734,15 @@ body.home-header-active {
     border: 1px solid var(--color-warning-border);
 }
 
-/* Archive / restore button - sits immediately left of the pencil.
- * Deliberately the calmest of the three: archiving is reversible and
- * routine, so it must not read as more consequential than the
- * destructive delete beside it. */
+/* Archive / restore button - sits immediately left of the pencil, and is
+ * the only destructive-shaped control on the row now that the hard-
+ * delete trash button is gone (owner's instruction, 2026-09-08:
+ * "sessions and projects can be archived not deleted"). Deliberately
+ * calm: archiving is reversible and routine. */
 .project-archive-btn {
     position: absolute;
     top: 8px;
-    right: 72px;
+    right: 40px;
     width: 28px;
     height: 28px;
     border-radius: var(--radius-md);
@@ -1882,26 +1858,21 @@ body.home-header-active {
  * buttons never overlap the description text. */
 @media (pointer: coarse) {
     .project-item {
-        padding-right: 140px;
+        padding-right: 92px;
     }
 
-    .project-delete-btn,
     .project-edit-btn,
     .project-archive-btn {
         width: 40px;
         height: 40px;
     }
 
-    .project-delete-btn {
+    .project-edit-btn {
         right: 4px;
     }
 
-    .project-edit-btn {
-        right: 48px;
-    }
-
     .project-archive-btn {
-        right: 92px;
+        right: 48px;
     }
 }
 

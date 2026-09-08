@@ -122,8 +122,8 @@ console.log('[SessionSidebarGroups Module] Loading...');
         const menu = uuid
             ? (`<button type="button" class="session-sidebar-group__menu" `
                 + `data-group-menu="${esc(uuid)}" `
-                + `title="${esc(`Rename, reorder or delete the ${label} group`)}" `
-                + `aria-label="${esc(`Rename, reorder or delete the ${label} group`)}" `
+                + `title="${esc(`Rename, reorder or remove the ${label} group`)}" `
+                + `aria-label="${esc(`Rename, reorder or remove the ${label} group`)}" `
                 + `aria-haspopup="menu">`
                 + '<span aria-hidden="true">&#8943;</span></button>')
             : '';

@@ -336,7 +336,7 @@ test('the confirmation warns when the session comes back a bare shell', () => {
         `the bare-shell warning is missing: ${copy.details}`,
     );
     assert.ok(copy.details.includes('cannot be undone'));
-    assert.ok(copy.details.includes('the transcript is not deleted'));
+    assert.ok(copy.details.includes('the transcript is kept'));
     // Lowercase, plain, no dashes of any kind - the project's UI voice.
     assert.ok(!/[–—]/.test(copy.details + copy.title));
 });

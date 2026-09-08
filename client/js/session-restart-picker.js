@@ -218,8 +218,8 @@ console.log('[SessionRestartPicker Module] Loading...');
                 + '<div class="modal-body">'
                 + '<div class="modal-message">restart "' + esc(displayName) + '"</div>'
                 + '<div class="modal-description">this stops what is in the pane '
-                + 'and starts the choice below in it. the transcript is not '
-                + 'deleted.</div>'
+                + 'and starts the choice below in it. the transcript is '
+                + 'kept.</div>'
                 + noticeHtml(preview)
                 + busyHtml(status)
                 // WHAT IS TRUE OF THE SESSION, SAID ONCE, DIRECTLY ABOVE

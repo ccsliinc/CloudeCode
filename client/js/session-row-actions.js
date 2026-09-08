@@ -179,9 +179,9 @@ console.log('[SessionRowActions Module] Loading...');
             primaryLabel: 'close',
             details:
                 'this cannot be undone. the running process is terminated, ' +
-                'and files uploaded to this session are deleted from the ' +
-                "project's .cloude_uploads folder. the transcript is not " +
-                'deleted and stays under ~/.claude/projects.',
+                'and files uploaded to this session are removed from the ' +
+                "project's .cloude_uploads folder. the transcript is kept " +
+                'and stays under ~/.claude/projects.',
         },
         [ACTION_REMOVE]: {
             title: 'remove session',
@@ -189,9 +189,9 @@ console.log('[SessionRowActions Module] Loading...');
             details:
                 'this cannot be undone. this session already exited, so no ' +
                 'running process is stopped, but files uploaded to it are ' +
-                "deleted from the project's .cloude_uploads folder. the " +
+                "removed from the project's .cloude_uploads folder. the " +
                 'leftover tmux shell is cleared and cloudecode forgets the ' +
-                'entry. the transcript is not deleted and stays under ' +
+                'entry. the transcript is kept and stays under ' +
                 '~/.claude/projects.',
         },
     };
