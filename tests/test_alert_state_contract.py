@@ -15,6 +15,7 @@ from src.core.session_status import (
     STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
+    STATUS_NOTICE,
     STATUS_QUESTION,
     STATUS_UNKNOWN,
     STATUS_WORKING,
@@ -50,12 +51,13 @@ def test_session_own_states_is_the_activity_vocabulary_minus_working_subagent():
     assert set(SESSION_OWN_STATES) == {
         STATUS_DEAD,
         STATUS_QUESTION,
+        STATUS_NOTICE,
         STATUS_WORKING,
         STATUS_FINISHED_UNREAD,
         STATUS_IDLE,
         STATUS_UNKNOWN,
     }
-    assert len(SESSION_OWN_STATES) == 6
+    assert len(SESSION_OWN_STATES) == 7
 
 
 def test_child_own_states_and_descendant_axis_share_the_same_vocabulary():
@@ -84,10 +86,10 @@ def test_only_two_animations_exist():
 # ---- table totality (the property the correction asked for) -----------
 
 def test_light_table_has_exactly_the_full_cross_product():
-    assert len(LIGHT_TABLE) == 18 + 9
+    assert len(LIGHT_TABLE) == 21 + 9
     session_rows = [r for r in LIGHT_TABLE if r.node_kind == NODE_KIND_SESSION]
     child_rows = [r for r in LIGHT_TABLE if r.node_kind == NODE_KIND_CHILD]
-    assert len(session_rows) == 18
+    assert len(session_rows) == 21
     assert len(child_rows) == 9
 
 

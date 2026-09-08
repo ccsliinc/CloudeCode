@@ -234,11 +234,48 @@ test('a startup gate that could not be measured does not claim anything', () => 
     );
 });
 
-test('question maps to waiting-input', () => {
+test('question maps to waiting-permission - the agent is stopped', () => {
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'question' })), {
+        inner: 'waiting-permission',
+        outer: 'active',
+    });
+});
+
+test('notice maps to waiting-input - it wants you but is not blocked', () => {
+    assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'notice' })), {
         inner: 'waiting-input',
         outer: 'active',
     });
+});
+
+test('question and notice do not paint the same inner dot', () => {
+    // The whole point of the 2026-09-08 split. If these ever converge,
+    // the server distinction stops reaching the only surface that
+    // matters - the light.
+    assert.notEqual(
+        Led.ledStateFor({ activity_status: 'question' }).inner,
+        Led.ledStateFor({ activity_status: 'notice' }).inner,
+    );
+});
+
+test('a startup prompt and a notice share waiting-input', () => {
+    // Both mean "come and look"; neither means "approve this".
+    assert.equal(
+        Led.ledStateFor({
+            activity_status: 'idle',
+            startup_gate: 'awaiting_startup_prompt',
+        }).inner,
+        Led.ledStateFor({ activity_status: 'notice' }).inner,
+    );
+});
+
+test('an unread flag never downgrades a blocking permission prompt', () => {
+    // The halo is where unread lives; it may not overwrite the dot that
+    // says the agent is stopped.
+    assert.deepEqual(
+        plain(Led.ledStateFor({ activity_status: 'question', unread: true })),
+        { inner: 'waiting-permission', outer: 'active' },
+    );
 });
 
 test('working and working_subagent share the inner dot', () => {

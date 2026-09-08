@@ -171,7 +171,7 @@ console.log('[SessionRestartPicker Module] Loading...');
         var key = window.SessionStatusUI
             ? window.SessionStatusUI.normalizeStatus(status)
             : 'unknown';
-        if (key === 'working' || key === 'question') {
+        if (key === 'working' || key === 'question' || key === 'notice') {
             return '<div class="restart-picker__notice">this row currently reads '
                 + '"' + esc(key) + '". that signal can lag a few minutes behind '
                 + 'what the session is really doing, so it is shown rather than '

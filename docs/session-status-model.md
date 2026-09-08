@@ -76,7 +76,8 @@ flowchart TD
 
     R -->|"tmux_status == STATUS_DEAD"| dead
     R -->|"no signal, or hook_seen False"| FB["map_tmux_fallback<br/>(chart 3)"]
-    R -->|"hook_seen, question_open"| question
+    R -->|"hook_seen, permission_open"| question
+    R -->|"hook_seen, notice_open"| notice
     R -->|"hook_seen, heartbeat fresh, subagent_depth > 0"| wsub
     R -->|"hook_seen, heartbeat fresh, depth 0"| working
     R -->|"heartbeat stale, unread"| fin
@@ -85,6 +86,7 @@ flowchart TD
 
     dead["dead"]
     question["question"]
+    notice["notice"]
     wsub["working_subagent"]
     working["working"]
     fin["finished_unread"]
@@ -95,9 +97,15 @@ flowchart TD
 "Heartbeat fresh" is `now - last_tool_event_ts <=
 WORKING_HEARTBEAT_TIMEOUT_SECONDS` (120s, `session_activity.py:100`).
 
-These seven are `ALL_ACTIVITY_STATUSES` (`session_status.py:103`).
-`ACTIVITY_STATUS_PRIORITY` (`session_status.py:120`) lists the same seven in
-urgency order and is documented as consulted by no resolver in this codebase.
+These eight are `ALL_ACTIVITY_STATUSES`. `ACTIVITY_STATUS_PRIORITY` lists the
+same eight in urgency order and is documented as consulted by no resolver in
+this codebase.
+
+`question` and `notice` were ONE state until 2026-09-08. `question` is now a
+`PermissionRequest` alone - the agent is STOPPED until a human answers a
+yes/no - and `notice` is a `Notification` - claude wants attention and is not
+blocked. `permission_open` is read before `notice_open`, so a session holding
+both resolves to `question`. See `docs/session-status.md`.
 
 **`running` is in `ALL_STATUSES` and NOT in `ALL_ACTIVITY_STATUSES`.** That is
 deliberate and documented at `session_status.py:98-102`: a raw tmux `running`
@@ -110,13 +118,14 @@ event constants `session_activity.py:60-67`, membership `KNOWN_EVENTS:73`.
 
 ```mermaid
 flowchart LR
-    N["Notification /<br/>PermissionRequest"] -->|"question_open = True"| S(("signal"))
-    U["UserPromptSubmit"] -->|"question_open = False"| S
-    PRE["PreToolUse"] -->|"question_open = False<br/>last_tool_event_ts = now"| S
+    P["PermissionRequest"] -->|"permission_open = True"| S(("signal"))
+    N["Notification"] -->|"notice_open = True"| S
+    U["UserPromptSubmit"] -->|"permission_open = False<br/>notice_open = False"| S
+    PRE["PreToolUse"] -->|"permission_open = False<br/>notice_open = False<br/>last_tool_event_ts = now"| S
     POST["PostToolUse"] -->|"last_tool_event_ts = now"| S
     SS["SubagentStart"] -->|"depth += 1, ts = now"| S
     SE["SubagentStop"] -->|"depth = max(0, depth-1), ts = now"| S
-    ST["Stop"] -->|"question False, depth 0,<br/>ts = None, last_stop_ts = now"| S
+    ST["Stop"] -->|"permission False, notice False,<br/>depth 0, ts = None, last_stop_ts = now"| S
     X["any unknown kind"] -->|"ignored, no-op"| S
 ```
 
@@ -135,14 +144,14 @@ has never fired a hook.
 ```mermaid
 flowchart LR
     d["tmux dead"] --> D["dead"]
-    r["tmux running"] --> W["working"]
+    r["tmux running"] --> U2["unknown"]
     i1["tmux idle + unread"] --> F["finished_unread"]
     i2["tmux idle, not unread"] --> I["idle"]
     u["tmux unknown"] --> U["unknown"]
 ```
 
-This function never fabricates `question` or `working_subagent` - there is no
-signal to base them on (`session_activity.py:110-113`).
+This function never fabricates `question`, `notice` or `working_subagent` -
+there is no signal to base them on.
 
 ---
 
@@ -396,6 +405,7 @@ idle | activity | src/core/session_status.py::STATUS_IDLE
 dead | activity | src/core/session_status.py::STATUS_DEAD
 unknown | activity | src/core/session_status.py::STATUS_UNKNOWN
 question | activity | src/core/session_status.py::STATUS_QUESTION
+notice | activity | src/core/session_status.py::STATUS_NOTICE
 working | activity | src/core/session_status.py::STATUS_WORKING
 working_subagent | activity | src/core/session_status.py::STATUS_WORKING_SUBAGENT
 finished_unread | activity | src/core/session_status.py::STATUS_FINISHED_UNREAD

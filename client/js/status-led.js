@@ -40,11 +40,11 @@ console.log('[StatusLed Module] Loading...');
      * `waiting-permission` and `waiting-input` are separate because they
      * ask different things of the user - one is "approve this tool call",
      * the other is "answer a question / press a key to get past a startup
-     * prompt". The server currently reports a single `question` state for
-     * the first two hook events that raise either, so `waiting-permission`
-     * is in the vocabulary and is NOT yet reachable from live data; see
-     * docs/session-status.md. It is listed here rather than added later
-     * so the gallery shows the full intended set.
+     * prompt". BOTH ARE REACHABLE FROM LIVE DATA as of 2026-09-08: the
+     * server split its single `question` state into `question` (a
+     * PermissionRequest - the agent is stopped) and `notice` (a
+     * Notification - it wants attention and is not stopped), and the
+     * startup gate feeds `waiting-input` too. See docs/session-status.md.
      *
      * @type {string[]}
      */
@@ -270,7 +270,19 @@ console.log('[StatusLed Module] Loading...');
             return { inner: 'waiting-input', outer: 'active' };
         }
 
+        // THE AGENT IS STOPPED. `question` is a PermissionRequest and
+        // nothing else since the 2026-09-08 split - it gets the louder
+        // inner hue, because a yes/no nobody has answered is the one
+        // state on this screen that will not resolve itself.
         if (status === 'question') {
+            return { inner: 'waiting-permission', outer: 'active' };
+        }
+
+        // Claude asked to be looked at and is NOT blocked. Same halo as a
+        // permission prompt - both want the user - and the calmer of the
+        // two inner hues, shared with the startup gate above because both
+        // are "come and look", not "approve this".
+        if (status === 'notice') {
             return { inner: 'waiting-input', outer: 'active' };
         }
 

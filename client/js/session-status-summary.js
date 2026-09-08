@@ -10,16 +10,24 @@
  * THE PRIORITY IS THE PRODUCT DECISION, so it is written down once, as
  * data, in SUMMARY_PRIORITY:
  *
- *   waiting > working > unread > done > dead > unknown
+ *   permission > input > working > unread > done > dead > unknown
  *
- * Read it as "what is the most interesting thing in this group". Waiting
- * outranks working because it is blocked ON THE USER and will stay that
- * way until they act; working will resolve on its own. Unread outranks
- * done for the same reason. Dead sits BELOW done deliberately: a dead
- * pane in a group of live ones is not the headline, and hoisting it would
- * make a group with one corpse and nine busy sessions read as dead.
- * Unknown is last because it is the absence of a measurement, and any
- * measured state is more informative than no measurement.
+ * Read it as "what is the most interesting thing in this group".
+ * `permission` is a session STOPPED on a yes/no; `input` is one that
+ * wants the user's eyes (a Notification, or a startup prompt nobody has
+ * answered) without being stopped. They were one `waiting` bucket until
+ * the 2026-09-08 split; permission leads because it is the only state in
+ * the list that is guaranteed to make no progress at all until a human
+ * acts, and a group header that hoisted a chatty notification over a
+ * parked one would point the user at the wrong session.
+ *
+ * Both outrank working because they are about the USER and will stay
+ * that way until they act; working will resolve on its own. Unread
+ * outranks done for the same reason. Dead sits BELOW done deliberately:
+ * a dead pane in a group of live ones is not the headline, and hoisting
+ * it would make a group with one corpse and nine busy sessions read as
+ * dead. Unknown is last because it is the absence of a measurement, and
+ * any measured state is more informative than no measurement.
  *
  * Depends on client/js/status-led.js (for the vocabularies) and nothing
  * else. No DOM, no globals beyond that one.
@@ -34,7 +42,8 @@ console.log('[SessionStatusSummary Module] Loading...');
      * @type {Array<{key: string, inner: string, outer: string}>}
      */
     const SUMMARY_PRIORITY = [
-        { key: 'waiting', inner: 'waiting-input', outer: 'active' },
+        { key: 'permission', inner: 'waiting-permission', outer: 'active' },
+        { key: 'input', inner: 'waiting-input', outer: 'active' },
         { key: 'working', inner: 'working', outer: 'active' },
         { key: 'unread', inner: 'done', outer: 'unread' },
         { key: 'done', inner: 'done', outer: 'steady' },
@@ -48,10 +57,12 @@ console.log('[SessionStatusSummary Module] Loading...');
      * Description: The bucket is derived from the LED state the child
      *   ALREADY resolved to, not from its raw `activity_status`. That is
      *   deliberate: the header then cannot disagree with the rows under
-     *   it, because both are reading the same value. Note the halo is
-     *   checked before the dot for `unread` - a working session with an
-     *   unread Stop counts as working (it is moving), but a resting one
-     *   with the same flag counts as unread.
+     *   it, because both are reading the same value - and it is why the
+     *   startup gate lands in `input` for free, without this function
+     *   knowing the gate exists. Note the halo is checked before the dot
+     *   for `unread` - a working session with an unread Stop counts as
+     *   working (it is moving), but a resting one with the same flag
+     *   counts as unread.
      * Inputs:
      *   led (Object|null) - `{inner, outer}` from StatusLed.ledStateFor.
      * Output:
@@ -61,9 +72,8 @@ console.log('[SessionStatusSummary Module] Loading...');
      */
     function bucketFor(led) {
         const l = led || {};
-        if (l.inner === 'waiting-input' || l.inner === 'waiting-permission') {
-            return 'waiting';
-        }
+        if (l.inner === 'waiting-permission') return 'permission';
+        if (l.inner === 'waiting-input') return 'input';
         if (l.inner === 'working') return 'working';
         if (l.outer === 'unread') return 'unread';
         if (l.inner === 'done') return 'done';

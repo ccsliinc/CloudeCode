@@ -16,10 +16,14 @@
  *                       the corpse open. Loudest treatment on purpose
  *                       (see CLAUDE.md hazard: a dead pane that "looked"
  *                       fine).
- *   question         - Claude is waiting on YOU (a Notification or
- *                       PermissionRequest hook fired and nothing has
- *                       resolved it yet). The state this whole feature
- *                       exists to surface alongside finished_unread.
+ *   question         - Claude is BLOCKED on you: a PermissionRequest
+ *                       hook fired and nothing has resolved it yet. It
+ *                       will not proceed until you answer.
+ *   notice           - Claude WANTS you: a Notification hook fired and
+ *                       nothing has resolved it yet. Not blocked. Split
+ *                       out of `question` on 2026-09-08 - see
+ *                       docs/session-status.md for why one state could
+ *                       not honestly carry both.
  *   working_subagent - the agent is actively working INSIDE a spawned
  *                       subagent (SubagentStart/Stop heartbeat).
  *   working          - the agent is actively doing tool work at the top
@@ -51,7 +55,8 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     const STATUS_LABELS = {
         dead: 'dead - process exited',
-        question: 'your turn - claude is waiting on you',
+        question: 'your turn - claude needs your permission',
+        notice: 'your turn - claude wants your attention',
         working_subagent: 'working - a subagent is active',
         working: 'working - agent active',
         finished_unread: 'finished - unread',
@@ -83,6 +88,7 @@ console.log('[SessionStatusUI Module] Loading...');
     const STATUS_DOT_CLASS = {
         dead: 'dead',
         question: 'question',
+        notice: 'notice',
         working_subagent: 'working-subagent',
         working: 'working',
         finished_unread: 'finished-unread',

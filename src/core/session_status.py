@@ -47,10 +47,10 @@ fallback when a session has no hook signal at all.)
 
 Unified activity vocabulary (feat/hook-driven-status): the four states
 below are the pure tmux-introspection ones. ``src.core.session_activity``
-defines three MORE states (``question``, ``working`` / ``working_subagent``,
-``finished_unread``) that are driven by Claude Code's lifecycle hooks
-instead of tmux, and combines all seven into one vocabulary surfaced to the
-client. Both modules import their string constants from here so there is
+defines four MORE states (``question``, ``notice``, ``working`` /
+``working_subagent``, ``finished_unread``) that are driven by Claude
+Code's lifecycle hooks instead of tmux, and combines all eight into one
+vocabulary surfaced to the client. Both modules import their string constants from here so there is
 exactly one place a display-state string is spelled - this file is the
 single source of truth for every status string this app ever shows a user.
 """
@@ -79,12 +79,32 @@ ALL_STATUSES: frozenset[str] = frozenset(
 # string literals of its own.
 # ---------------------------------------------------------------------------
 
-#: Claude is waiting on the user - a ``Notification``/``PermissionRequest``
-#: hook fired and nothing has resolved it yet (a ``UserPromptSubmit``, or
-#: tool activity resuming, clears it). Honest because it is driven by an
-#: event Claude Code itself emits for exactly this condition - unlike the
-#: old tmux-only model, this is never guessed.
+#: THE AGENT IS BLOCKED ON A YES/NO. A ``PermissionRequest`` hook fired
+#: and nothing has resolved it yet (a ``UserPromptSubmit``, or tool
+#: activity resuming, clears it). Honest because it is driven by an event
+#: Claude Code itself emits for exactly this condition - unlike the old
+#: tmux-only model, this is never guessed.
+#:
+#: SPLIT FROM ``STATUS_NOTICE`` 2026-09-08. Until then this one state
+#: carried BOTH ``PermissionRequest`` and ``Notification``, and the two
+#: are not the same claim: a permission prompt STOPS the agent until the
+#: user answers, while a notification is claude asking to be looked at
+#: while it carries on (or sits at an empty prompt). Collapsing them made
+#: a chatty notification light identical to a turn that is actually
+#: parked, which is the false-urgency twin of this project's recurring
+#: false-green problem. See ``docs/session-status.md``.
 STATUS_QUESTION: str = "question"
+
+#: CLAUDE WANTS ATTENTION AND IS NOT BLOCKED. A ``Notification`` hook
+#: fired and nothing has resolved it yet. Cleared by exactly the same
+#: events as ``STATUS_QUESTION`` (``UserPromptSubmit``, ``PreToolUse``,
+#: ``Stop``), because the thing that resolves "look at me" is the user
+#: showing up, and that is what those three events measure.
+#:
+#: It ranks BELOW ``STATUS_QUESTION`` and ABOVE ``STATUS_WORKING``: it is
+#: about the user, so it outranks work that proceeds without them, but it
+#: does not stop the agent, so it must never outrank one that is stopped.
+STATUS_NOTICE: str = "notice"
 
 #: The agent is actively doing tool work at the top level (PreToolUse /
 #: PostToolUse activity within the heartbeat window). Also the graceful-
@@ -111,12 +131,13 @@ STATUS_FINISHED_UNREAD: str = "finished_unread"
 #: All values the unified (tmux + hook) status can take. Superset of
 #: ALL_STATUSES with STATUS_RUNNING dropped (it never appears in the
 #: unified vocabulary - see ``session_activity.map_tmux_fallback``, which
-#: maps a raw tmux "running" onto STATUS_WORKING) and the three hook-driven
+#: maps a raw tmux "running" onto STATUS_UNKNOWN) and the four hook-driven
 #: states added.
 ALL_ACTIVITY_STATUSES: frozenset[str] = frozenset(
     {
         STATUS_DEAD,
         STATUS_QUESTION,
+        STATUS_NOTICE,
         STATUS_WORKING,
         STATUS_WORKING_SUBAGENT,
         STATUS_FINISHED_UNREAD,
@@ -133,6 +154,7 @@ ALL_ACTIVITY_STATUSES: frozenset[str] = frozenset(
 ACTIVITY_STATUS_PRIORITY: tuple[str, ...] = (
     STATUS_DEAD,
     STATUS_QUESTION,
+    STATUS_NOTICE,
     STATUS_WORKING_SUBAGENT,
     STATUS_WORKING,
     STATUS_FINISHED_UNREAD,

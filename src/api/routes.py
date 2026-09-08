@@ -2052,7 +2052,11 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
                 body = f"stop_reason: {stop_reason.strip()[:180]}"
 
     elif kind == "PermissionRequest":
-        title = "Permission needed"
+        # Lowercase plain copy, and it names WHICH kind of waiting this
+        # is - the split that gave PermissionRequest and Notification
+        # their own status states (``question`` vs ``notice``) is only
+        # useful if the toast the user actually reads says it too.
+        title = "needs your permission"
         # Prefer the tool-shape (tool_name + tool_input) since that's the
         # most useful single line for the user. Fall back to a `prompt`
         # field if Claude Code's payload uses that shape instead.
@@ -2076,7 +2080,9 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
         if not body:
             body = "Claude is asking for permission to act."
     elif kind == "Notification":
-        title = "Claude is waiting"
+        # Deliberately NOT "is waiting": a Notification does not stop the
+        # agent. See the PermissionRequest branch above.
+        title = "wants your attention"
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             body = message.strip()[:200]

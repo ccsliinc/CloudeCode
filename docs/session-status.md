@@ -17,7 +17,8 @@ client mirrors the same set in `client/js/session-status-ui.js`.
 |---|---|---|
 | `working` | the agent is doing tool work | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
 | `working_subagent` | the same, inside a spawned subagent | `SubagentStart` with no matching `SubagentStop` |
-| `question` | blocked ON THE USER | `Notification`, `PermissionRequest` |
+| `question` | BLOCKED on the user: a yes/no nobody has answered | `PermissionRequest` |
+| `notice` | claude wants attention and is NOT blocked | `Notification` |
 | `finished_unread` | a turn ended and nobody has looked | `Stop`, plus the unread flag |
 | `idle` | alive, at rest, already seen | `Stop`, or a bare-shell pane |
 | `dead` | the pane's process exited | tmux `#{pane_dead}` = 1 |
@@ -26,6 +27,49 @@ client mirrors the same set in `client/js/session-status-ui.js`.
 `unknown` is a first-class answer, not a failure mode. "I did not look"
 and "I looked and found rest" are different claims and must never render
 the same way.
+
+### Why `question` and `notice` are two states, not one
+
+They were one state until 2026-09-08, and that state was named `question`
+because it carried both `PermissionRequest` and `Notification`.
+
+**A permission prompt stops the agent. A notification does not.** A
+`PermissionRequest` means claude has halted mid-turn and will make no
+further progress until a human answers a yes/no. A `Notification` means
+claude is asking to be looked at - it is idle at a prompt, or it has
+something to say - and nothing is blocked by the user not looking. Those
+are different amounts of urgency and different actions, and the single
+`question` state asserted the louder of the two for both.
+
+The cost of collapsing them is a light that cries wolf: a chatty session
+firing notifications painted exactly like one genuinely parked on a
+permission dialog, so the state that most needs acting on stopped being
+the state that stands out. That is the false-urgency twin of this
+project's recurring false-green problem, and the fix is the same shape -
+say only what was measured.
+
+**Both are cleared by the same three events** (`UserPromptSubmit`,
+`PreToolUse`, `Stop`), because what resolves either one is the user
+showing up, and those are the events that measure it.
+
+**They are two independent booleans**, `permission_open` and
+`notice_open`, not one field with three values. Hooks arrive unordered
+and duplicated: a `Notification` landing after the `PermissionRequest` it
+accompanies must not be able to downgrade the blocking claim, and one
+landing before it must not be resurrected when the permission clears.
+Two flags read in a fixed order converge on the same answer whatever
+order the events arrive in, and applying either event twice is a no-op.
+
+**Precedence:** `question` outranks `notice` in the same window;
+`notice` outranks `working`. A stopped session is the most actionable
+thing on the screen, and work that proceeds without the user is the least
+of the three.
+
+**The toasts say it too.** `_hook_event_presentation` in
+`src/api/routes.py` titles a `PermissionRequest` **needs your permission**
+and a `Notification` **wants your attention**. The split is only worth
+having if it reaches the surface the user actually reads, and the toast is
+that surface on a phone.
 
 ## The rules that keep it honest
 
@@ -151,7 +195,8 @@ ONE place the server vocabulary becomes a pair of rings.
 |---|---|---|---|---|
 | `dead` / `stopped` | any | any | `dead` | `off` |
 | any | `awaiting_startup_prompt` | any | `waiting-input` | `active` |
-| `question` | any | any | `waiting-input` | `active` |
+| `question` | any | any | `waiting-permission` | `active` |
+| `notice` | any | any | `waiting-input` | `active` |
 | `working` / `working_subagent` / `running` | any | no | `working` | `active` |
 | `working` / `working_subagent` / `running` | any | yes | `working` | `unread` |
 | `finished_unread` | any | any | `done` | `unread` |
@@ -164,11 +209,19 @@ Order matters: `dead` outranks everything (an unread flag must not paint a
 corpse as something to go and read), then anything blocking on the user,
 then activity. `unread` rides the halo independently of all of it.
 
-`waiting-permission` is in the vocabulary and is NOT reachable from live
-data today: the server collapses `Notification` and `PermissionRequest`
-into one `question` state, so both render `waiting-input`. Separating them
-needs a new server-side signal. It is listed rather than omitted so the
-component's full intended set is visible and a gallery can enumerate it.
+Both inner waiting states are reachable from live data as of 2026-09-08.
+`waiting-permission` is `question` and nothing else - the agent is
+stopped. `waiting-input` is `notice` OR the startup gate, which is the
+right pairing: both mean "come and look", neither means "approve this".
+
+`waiting-permission` has its own hue, `--led-color-permission`, resolving
+to the existing `--color-status-pending` (`#ffa500`). It sits between the
+terracotta `--color-accent` that `waiting-input` takes (`#d77757`) and
+the red `--color-danger` that `dead` takes (`#ff4444`): hotter than "come
+and look", and deliberately NOT a red, because a blocked session is not a
+dead one and the two lights must never be confusable at a glance. An
+existing palette token was chosen over a new value so no theme has to
+learn one.
 
 ### Motion
 
@@ -179,7 +232,7 @@ and still. `off` has no halo. Under
 `prefers-reduced-motion: reduce` the glow stays and the pulse stops; the
 active/resting distinction moves entirely into opacity.
 
-The five state colours plus the unread hue are named tokens declared
+The six state colours plus the unread hue are named tokens declared
 exactly once, at the top of `status-led.css`. A theme that wants a
 different palette redefines `--led-color-*`, never these rules.
 
@@ -219,11 +272,16 @@ if a surface ships at a different base size.
 ### Rolling a group up
 
 `client/js/session-status-summary.js` folds a set of sessions into one LED
-plus an unread count. Priority: **waiting > working > unread > done > dead
-> unknown**.
+plus an unread count. Priority: **permission > input > working > unread >
+done > dead > unknown**.
 
-Waiting outranks working because it is blocked on the user and will stay
-that way; working resolves on its own. Dead sits BELOW done deliberately -
+`permission` is a session stopped on a yes/no; `input` is one that wants
+the user's eyes (a `notice`, or a startup prompt nobody has answered)
+without being stopped. Permission leads because it is the only bucket
+guaranteed to make no progress at all until a human acts - a header that
+hoisted a chatty notification over a parked session would point the user
+at the wrong row. Both outrank working because they are about the user
+and will stay that way; working resolves on its own. Dead sits BELOW done deliberately -
 a group with one corpse and nine busy sessions must not read as dead. An
 EMPTY group is `unknown`, not `done`: nothing to measure is not the same
 as measured-and-quiet.

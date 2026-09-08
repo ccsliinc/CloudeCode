@@ -101,6 +101,7 @@ console.log('[SessionRowActions Module] Loading...');
         'working',
         'working_subagent',
         'question',
+        'notice',
         'finished_unread',
         'idle',
         'running',

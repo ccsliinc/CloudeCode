@@ -112,29 +112,52 @@ test('one malformed row cannot blank a whole header', () => {
 test('the documented priority order is the one in the table', () => {
     assert.deepEqual(
         plain(Summary.SUMMARY_PRIORITY).map((e) => e.key),
-        ['waiting', 'working', 'unread', 'done', 'dead', 'unknown'],
+        ['permission', 'input', 'working', 'unread', 'done', 'dead', 'unknown'],
     );
 });
 
-test('waiting beats working - it is blocked on the user and will not resolve', () => {
+test('permission beats working - it is blocked on the user and will not resolve', () => {
     const s = plain(
         Summary.summarizeStates([
             { activity_status: 'working' },
             { activity_status: 'question' },
         ]),
     );
-    assert.equal(s.bucket, 'waiting');
-    assert.equal(s.inner, 'waiting-input');
+    assert.equal(s.bucket, 'permission');
+    assert.equal(s.inner, 'waiting-permission');
 });
 
-test('a startup prompt anywhere in the group hoists it to waiting', () => {
+test('a notice beats working but loses to a permission prompt', () => {
+    const withWork = plain(
+        Summary.summarizeStates([
+            { activity_status: 'working' },
+            { activity_status: 'notice' },
+        ]),
+    );
+    assert.equal(withWork.bucket, 'input');
+    assert.equal(withWork.inner, 'waiting-input');
+
+    // THE HEADLINE IS THE PARKED SESSION, not the chatty one. A group
+    // holding both must point the user at the row that will not move
+    // until they act.
+    const withPermission = plain(
+        Summary.summarizeStates([
+            { activity_status: 'notice' },
+            { activity_status: 'question' },
+        ]),
+    );
+    assert.equal(withPermission.bucket, 'permission');
+    assert.equal(withPermission.inner, 'waiting-permission');
+});
+
+test('a startup prompt anywhere in the group hoists it to input', () => {
     const s = plain(
         Summary.summarizeStates([
             { activity_status: 'idle' },
             { activity_status: 'idle', startup_gate: 'awaiting_startup_prompt' },
         ]),
     );
-    assert.equal(s.bucket, 'waiting');
+    assert.equal(s.bucket, 'input');
 });
 
 test('working beats unread - one is moving, the other is only waiting', () => {
@@ -243,6 +266,7 @@ test('a single-child group renders the same LED state as that child', () => {
     const rows = [
         { activity_status: 'working' },
         { activity_status: 'question' },
+        { activity_status: 'notice' },
         { activity_status: 'dead' },
         { activity_status: 'idle', unread: true },
         { activity_status: 'unknown' },

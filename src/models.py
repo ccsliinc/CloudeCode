@@ -347,14 +347,17 @@ class SessionInfo(BaseModel):
     # client never has to dig into ``.session`` to paint the dot.
     # feat/hook-driven-status - activity_status now carries the UNIFIED
     # hook + tmux vocabulary (src.core.session_status.ALL_ACTIVITY_STATUSES):
-    # 'dead' | 'question' | 'working' | 'working_subagent' |
-    # 'finished_unread' | 'idle' | 'unknown'. Resolved by
+    # 'dead' | 'question' | 'notice' | 'working' | 'working_subagent' |
+    # 'finished_unread' | 'idle' | 'unknown'. 'question' is a
+    # PermissionRequest (the agent is blocked); 'notice' is a
+    # Notification (it wants attention and is not). Resolved by
     # SessionManager._session_info_for() via SessionActivityTracker.resolve().
     activity_status: str = Field(
         default="unknown",
         description=(
-            "Unified activity status: 'dead' | 'question' | 'working' | "
-            "'working_subagent' | 'finished_unread' | 'idle' | 'unknown'"
+            "Unified activity status: 'dead' | 'question' | 'notice' | "
+            "'working' | 'working_subagent' | 'finished_unread' | 'idle' | "
+            "'unknown'"
         ),
     )
     # feat/hook-driven-status - raw unread flag (auto-from-Stop OR manual
@@ -898,8 +901,8 @@ class AttachableSession(BaseModel):
     # no hook signal is ever possible for them (see
     # SessionManager.list_attachable_sessions); this is the tmux-fallback
     # subset of the unified vocabulary: 'dead' | 'working' |
-    # 'finished_unread' | 'idle' | 'unknown' (never 'question' or
-    # 'working_subagent' - those require a live hook stream).
+    # 'finished_unread' | 'idle' | 'unknown' (never 'question', 'notice'
+    # or 'working_subagent' - those require a live hook stream).
     # THE DURABLE ROW ID, shown bottom-right on the home screen so a
     # human can point at a session and follow a fork tree. Declared HERE
     # and not only produced by the enricher: this is a response_model,

@@ -24,7 +24,7 @@
  * derived from it, so one custom property scales the whole component.
  * ledHtml() may set it per instance; nothing else should.
  *
- * NO THEME MAY NEED TO OVERRIDE THIS FILE. The five state colours are
+ * NO THEME MAY NEED TO OVERRIDE THIS FILE. The six state colours are
  * tokens declared once in the block below, each falling back to a theme
  * token where one exists and to a literal only when it does not. A theme
  * that wants a different LED palette redefines --led-color-*, not these
@@ -32,7 +32,7 @@
  */
 
 .status-led {
-    /* ---- the one place the five state colours are named -------------
+    /* ---- the one place the six state colours are named --------------
      * Each is the hue for BOTH rings of that state - the halo is the
      * same colour as the dot, only larger and blurred, which is what
      * makes it read as one lit object rather than two shapes.
@@ -43,6 +43,24 @@
      * app ships, because there is no existing token that means them. */
     --led-color-working: var(--color-info, #4a9eff);
     --led-color-waiting: var(--color-accent, #ffb020);
+    /* BLOCKED ON A YES/NO gets its own hue, added with the 2026-09-08
+     * split of `question` (a PermissionRequest, the agent is stopped)
+     * from `notice` (a Notification, it is not). Two states that ask
+     * different things of the user may not paint the same colour, or the
+     * split buys nothing at the only place it matters - the light.
+     *
+     * WHY --color-status-pending (#ffa500) AND NOT A NEW VALUE. It is an
+     * existing palette token, so no theme has to learn a new one. It is a
+     * saturated orange sitting between the terracotta `--color-accent`
+     * that `waiting` resolves to (#d77757, muted) and the red
+     * `--color-danger` that `dead` takes (#ff4444), which is exactly
+     * where this state belongs: hotter than "come and look", and NOT a
+     * red, because a blocked session is not a dead one and the two lights
+     * must never be confusable at a glance. The danger-adjacent
+     * --color-danger-strong (#ff6b6b) was rejected for that last reason
+     * alone. It is also clear of --color-unread's amber (#fbbf24), which
+     * rides the halo and could otherwise sit behind it. */
+    --led-color-permission: var(--color-status-pending, #ffa500);
     --led-color-done: var(--color-success, #3fb950);
     --led-color-dead: var(--color-danger, #ff4444);
     --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
@@ -127,7 +145,10 @@
     --led-ink: var(--led-color-working);
 }
 
-.status-led[data-inner='waiting-permission'],
+.status-led[data-inner='waiting-permission'] {
+    --led-ink: var(--led-color-permission);
+}
+
 .status-led[data-inner='waiting-input'] {
     --led-ink: var(--led-color-waiting);
 }

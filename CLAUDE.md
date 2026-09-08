@@ -701,15 +701,34 @@ directory since it shipped (`launchpad.js`, `modal-clone-parent`).
 
 ## The status lights, and what they are allowed to claim
 
-Full model in `docs/session-status.md`. The seven states are `working`,
-`working_subagent`, `question` (a permission prompt or a plain
-notification - not yet split from each other), `finished_unread`, `idle`,
+Full model in `docs/session-status.md`. The eight states are `working`,
+`working_subagent`, `question`, `notice`, `finished_unread`, `idle`,
 `dead` and `unknown`. `UserPromptSubmit`/`PreToolUse`/`PostToolUse` move to
 `working`; `SubagentStart` with no matching `SubagentStop` to
-`working_subagent`; `PermissionRequest`/`Notification` to `question`;
-`Stop` to `finished_unread` while unread, `idle` once seen; tmux's
-`#{pane_dead}` to `dead`; everything else is `unknown`, which is a real
-answer and never `idle`.
+`working_subagent`; `PermissionRequest` to `question` and `Notification`
+to `notice`; `Stop` to `finished_unread` while unread, `idle` once seen;
+tmux's `#{pane_dead}` to `dead`; everything else is `unknown`, which is a
+real answer and never `idle`.
+
+**`question` AND `notice` ARE TWO STATES BECAUSE A PERMISSION PROMPT
+STOPS THE AGENT AND A NOTIFICATION DOES NOT.** They were one state named
+`question` until 2026-09-08. A `PermissionRequest` halts claude mid-turn
+until a human answers a yes/no; a `Notification` is claude asking to be
+looked at while nothing is blocked. Collapsed, a chatty session painted
+exactly like a parked one, so the state that most needed acting on
+stopped standing out - the false-urgency twin of this project's
+false-green problem. They are TWO INDEPENDENT BOOLEANS,
+`permission_open` and `notice_open`, not one field with three values:
+hooks arrive unordered and duplicated, so a `Notification` landing either
+side of the `PermissionRequest` it accompanies must not be able to move
+the blocking claim. `permission_open` is read first, so a session holding
+both answers `question`. Both are cleared by the same three events
+(`UserPromptSubmit`, `PreToolUse`, `Stop`) because what resolves either
+is the user showing up. On the LED, `question` is inner
+`waiting-permission` (its own hue, `--led-color-permission`) and `notice`
+is `waiting-input`, shared with the startup gate - both mean "come and
+look", neither means "approve this". Summary priority is
+**permission > input > working > unread > done > dead > unknown**.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an

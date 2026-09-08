@@ -84,14 +84,14 @@ writes and whether that state decays:
 
 | Event | Carries state? | Axis | Decays? | Why |
 |---|---|---|---|---|
-| `UserPromptSubmit` | yes | activity | no (edge, not a level) | clears `question_open`, stamps a fresh heartbeat - it is the event that STARTS a perishable state, not one itself |
+| `UserPromptSubmit` | yes | activity | no (edge, not a level) | clears `permission_open` and `notice_open`, stamps a fresh heartbeat - it is the event that STARTS a perishable state, not one itself |
 | `PreToolUse` | yes | activity | yes, 120s heartbeat | refreshes `last_tool_event_ts`; the state it feeds (`working`) is perishable |
 | `PostToolUse` | yes | activity | yes, 120s heartbeat | same as `PreToolUse` |
 | `SubagentStart` | yes | activity | yes, 120s heartbeat | increments the session's own `subagent_depth`; feeds `working_subagent` today. Section 3 proposes this becomes an edge into a CHILD node's own state rather than a same-node counter |
 | `SubagentStop` | yes | activity | n/a (terminal) | floors `subagent_depth` at 0. Does **not** touch `unread` - see the gap in section 4 |
-| `Notification` | yes | activity | yes, 120s heartbeat (same clock as working) | sets `question_open = True` |
-| `PermissionRequest` | yes | activity | yes, 120s heartbeat | same as `Notification` |
-| `Stop` | yes | activity + a side effect on the durable `unread` flag | n/a (terminal) | clears `question`, floors depth, stamps `last_stop_ts`, and is the ONLY event in this table that sets the durable auto-unread flag |
+| `Notification` | yes | activity | yes, 120s heartbeat (same clock as working) | sets `notice_open = True` - claude wants attention and is NOT blocked |
+| `PermissionRequest` | yes | activity | yes, 120s heartbeat | sets `permission_open = True` - the agent is STOPPED until the user answers. Read BEFORE `notice_open`, so a session holding both resolves to `question` |
+| `Stop` | yes | activity + a side effect on the durable `unread` flag | n/a (terminal) | clears `permission_open` and `notice_open`, floors depth, stamps `last_stop_ts`, and is the ONLY event in this table that sets the durable auto-unread flag |
 | `SessionStart` | yes | lifecycle (durable column) | no - lifecycle is not perishable, it is corrected by the reaper, not by a clock | binds `claude_session_uuid`, lineage, `claude_title` |
 | `SessionEnd` | yes | lifecycle (durable column) | no | marks the conversation ended |
 
@@ -164,12 +164,12 @@ it.
 
 | Level | Vocabulary | Source | Decays like |
 |---|---|---|---|
-| 0 (session) | `dead`, `question`, `working`, `finished_unread`, `idle`, `unknown` (`ALL_ACTIVITY_STATUSES` minus `working_subagent` - see 2.3) | `src/core/session_status.py` | as in section 1 |
+| 0 (session) | `dead`, `question`, `notice`, `working`, `finished_unread`, `idle`, `unknown` (`ALL_ACTIVITY_STATUSES` minus `working_subagent` - see 2.3) | `src/core/session_status.py` | as in section 1 |
 | ≥1 (child, grandchild, ...) | `working`, `idle`, `unknown` | PROPOSED, `alert_state_contract.py::ALL_CHILD_STATES` | same 120s heartbeat clock, reused not reinvented |
 
 This is where "the states on each level will be slightly different"
 gets a concrete, testable answer, and it is a **deliberate, narrower**
-choice, not an oversight: `question` and `finished_unread` are dropped
+choice, not an oversight: `question`, `notice` and `finished_unread` are dropped
 at every level `>= 1` because nothing in the measured hook contract
 shows a subagent independently blocking on a user permission prompt or
 carrying its own read/unread flag (see the gap list, section 6, item 1
@@ -431,7 +431,7 @@ both node kinds:
 
 | Node kind | own_state values | descendant_axis values | rows |
 |---|---|---|---|
-| session (level 0) | `dead`, `question`, `working`, `finished_unread`, `idle`, `unknown` (6) | `working`, `unknown`, `idle` (3) | 18 |
+| session (level 0) | `dead`, `question`, `notice`, `working`, `finished_unread`, `idle`, `unknown` (7) | `working`, `unknown`, `idle` (3) | 21 |
 | child (level ≥1) | `working`, `idle`, `unknown` (3) | `working`, `unknown`, `idle` (3) | 9 |
 
 **Every row today follows two simple invariants, and the table is built
@@ -613,7 +613,7 @@ drift test this repo already relies on (`test_status_model_chart_drift.py`,
   (the fact 3.3 requires stay inspectable) and `contradiction` (the flag
   3.5 requires stay visible) are never dropped between the table and the
   caller.
-- `LIGHT_TABLE: Tuple[LightRow, ...]` - the full 18 + 9 = 27 rows from
+- `LIGHT_TABLE: Tuple[LightRow, ...]` - the full 21 + 9 = 30 rows from
   section 3.4, written out literally, one row per line, so a diff on
   this file shows exactly which combination changed. Exactly one row -
   `(session, dead, working)` - carries `contradiction=True` (section
@@ -668,7 +668,7 @@ drift test this repo already relies on (`test_status_model_chart_drift.py`,
    already uses for the CLI-fork section.
 
 2. **Whether subagents can independently block on the user.** The child
-   vocabulary in 2.2 deliberately excludes `question`. Whether a
+   vocabulary in 2.2 deliberately excludes `question` and `notice`. Whether a
    sub-agent tool call can itself trigger a `Notification` or
    `PermissionRequest` targeted at that child (rather than always
    surfacing through the parent) was not verified against a live Claude

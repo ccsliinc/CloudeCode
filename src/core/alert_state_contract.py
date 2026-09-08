@@ -56,6 +56,7 @@ from src.core.session_status import (
     STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
+    STATUS_NOTICE,
     STATUS_QUESTION,
     STATUS_UNKNOWN,
     STATUS_WORKING,
@@ -83,10 +84,11 @@ ALL_NODE_KINDS: Tuple[str, ...] = (NODE_KIND_SESSION, NODE_KIND_CHILD)
 
 #: The session's own-axis vocabulary: everything ``session_status.py``
 #: defines EXCEPT ``STATUS_WORKING_SUBAGENT`` (see module docstring).
-#: Six values, matching ``ALL_ACTIVITY_STATUSES`` minus one.
+#: Seven values, matching ``ALL_ACTIVITY_STATUSES`` minus one.
 SESSION_OWN_STATES: Tuple[str, ...] = (
     STATUS_DEAD,
     STATUS_QUESTION,
+    STATUS_NOTICE,
     STATUS_WORKING,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
@@ -97,8 +99,9 @@ SESSION_OWN_STATES: Tuple[str, ...] = (
 #: on purpose - ``stopped`` already means something different and durable
 #: on the LIFECYCLE axis (a tmux instance that is GONE). See design doc
 #: section 2.2, "Naming note". Deliberately narrower than
-#: ``SESSION_OWN_STATES``: no ``question`` (unverified whether a subagent
-#: can independently block on the user - design doc gap 2) and no
+#: ``SESSION_OWN_STATES``: no ``question`` and no ``notice`` (unverified
+#: whether a subagent can independently block on, or call out to, the
+#: user - design doc gap 2) and no
 #: ``finished_unread`` (no per-child unread flag exists - design doc gap
 #: 3). Reuses the exact same three string constants as
 #: ``DESCENDANT_AXIS_STATES`` below - not a coincidence, see there.
@@ -228,8 +231,8 @@ class LightRow:
 
 def _row(node_kind: str, own_state: str, descendant_axis: str) -> LightRow:
     """Build one literal row. Not exported - a construction helper only,
-    so the 27 rows below read as one fact per line without retyping the
-    animation lookup 27 times. ``status_light`` never calls this; it
+    so the 30 rows below read as one fact per line without retyping the
+    animation lookup 30 times. ``status_light`` never calls this; it
     reads the already-built ``LIGHT_TABLE``.
     """
     key = (node_kind, own_state, descendant_axis)
@@ -243,8 +246,13 @@ def _row(node_kind: str, own_state: str, descendant_axis: str) -> LightRow:
     )
 
 
-#: The full cross product, both node kinds, spelled out. 6 own states x 3
-#: descendant states = 18 session rows; 3 x 3 = 9 child rows; 27 total.
+#: The full cross product, both node kinds, spelled out. 7 own states x 3
+#: descendant states = 21 session rows; 3 x 3 = 9 child rows; 30 total.
+#: It was 6 x 3 = 18 until 2026-09-08, when ``question`` split into
+#: ``question`` (a PermissionRequest - the agent is stopped) and
+#: ``notice`` (a Notification - it is not). Nothing here needed a new
+#: rule for it: ``color`` IS ``own_state``, so a new own state is three
+#: new rows and no new decision.
 #: Totality of ``status_light`` over its documented domain rests entirely
 #: on this list actually covering the whole cross product - proven by
 #: ``missing_light_rows`` returning empty for both node kinds, asserted
@@ -469,7 +477,8 @@ _SUBSCRIBED_STATE_INFO: Dict[str, Tuple[str, bool, "int | None"]] = {
 
 _SUBSCRIBED_WHY: Dict[str, str] = {
     "UserPromptSubmit": (
-        "an edge, not a level: clears question_open and stamps a fresh "
+        "an edge, not a level: clears permission_open and notice_open, "
+        "and stamps a fresh "
         "heartbeat that PreToolUse/PostToolUse then refresh"
     ),
     "PreToolUse": "working heartbeat",
@@ -483,8 +492,15 @@ _SUBSCRIBED_WHY: Dict[str, str] = {
         "terminal - floors subagent_depth at 0. Does NOT set the "
         "durable unread flag - design doc section 4, gap 3"
     ),
-    "Notification": "sets question_open = True",
-    "PermissionRequest": "sets question_open = True",
+    "Notification": (
+        "sets notice_open = True - claude wants attention and is NOT "
+        "blocked, which is why it is a different flag and a different "
+        "state from PermissionRequest"
+    ),
+    "PermissionRequest": (
+        "sets permission_open = True - the agent is STOPPED until the "
+        "user answers"
+    ),
     "Stop": (
         "terminal, and the ONLY subscribed event that also sets the "
         "durable auto-unread flag (session_manager.py, EVENT_STOP branch)"
