@@ -5406,6 +5406,13 @@ class Launchpad {
                 // parent rather than whatever the client happened to
                 // display. See src/core/project_directory.py.
                 project_parent_dir: folderChoice.parent,
+                // ONE NAME, SET AT BIRTH. The server turns a non-empty
+                // label into `--name <label>` on the launch command, so
+                // the row title and the name claude calls itself are the
+                // same string from the first frame. Without it this flow
+                // launched claude with no name at all and the TUI status
+                // line showed the directory instead.
+                label: projectDetails.name,
                 ..._dims
             };
             // Only include agent_type when explicitly set, so the server's
@@ -6224,6 +6231,11 @@ class Launchpad {
                 auto_start_claude: true,
                 copy_templates: false,
                 project_name: project.name,
+                // See _createNewSessionInner's identical comment: the
+                // label becomes claude's `--name` as well as the row
+                // title, so opening an existing project names the
+                // session on both sides at once.
+                label: project.name,
                 ..._dims
             };
             // Omit for claude (server default); set for an OpenRouter model.
