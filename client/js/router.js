@@ -15,11 +15,17 @@
  *   silently strip - silent stripping turns a bad link into a working
  *   one pointing at an unintended project, which is worse than failing
  *   loudly.
- * - Allowed chars are deliberately narrow: `[A-Za-z0-9_\- ]`. This
- *   excludes `.`, `/`, `..`, `?`, `#`, and all control bytes. The
- *   server-side slugify (src/core/tmux_backend._slugify) maps `.` to
- *   `_` before the slug becomes a tmux session name, so a deep link
- *   produced by a push notification will already be in our allowed set.
+ * - The allow-list used to be `[A-Za-z0-9_\- ]` only, which rejected a
+ *   name the app itself produces: a fork label is `<parent title>(fork)`
+ *   (src/core/session_fork.py `fork_label`), and both project names and
+ *   session titles are free-form - unicode, punctuation, digits - per
+ *   the two server-side sources of truth: `validate_project_dir_name()`
+ *   (src/core/project_directory.py) for a project name and
+ *   `name_is_pushable()` (src/core/claude_rename.py) for a session
+ *   title. Between them, the only things either one refuses are `/`,
+ *   `\`, a null byte, other control characters, and the bare `.` / `..`
+ *   segments - so that is exactly what `isLegalDeepLinkName()` below
+ *   refuses too. Everything else either side can produce is accepted.
  *
  * Flow:
  * 1. `initRouter()` is called on page load from index.html.
@@ -36,10 +42,46 @@
 (function () {
     'use strict';
 
-    // Strict client-side slug regex. Mirror the tmux-legal charset
-    // (letters, digits, underscore, dash) plus space for human-typed
-    // project names. NO dots, NO slashes, NO path traversal.
-    var SLUG_RX = /^[A-Za-z0-9_\- ]+$/;
+    // Control characters (C0, DEL, C1) - never legal in a project name
+    // or a session title (`name_is_pushable()` requires
+    // `ch.isprintable()` or space) and never legal in a URL path
+    // segment either.
+    var CONTROL_CHAR_RX = /[\x00-\x1F\x7F-\x9F]/;
+
+    /**
+     * Whether a decoded `/session/<name>` segment is legal to resolve.
+     *
+     * Description: rejects exactly what is hostile in a URL path
+     *   segment - empty, `/`, `\`, a control character, or the reserved
+     *   relative segments `.` / `..` - and nothing else. This is the
+     *   UNION of what the server accepts for the two kinds of name a
+     *   deep link can name: a project name
+     *   (`project_directory.validate_project_dir_name`) or a session
+     *   title / fork label (`claude_rename.name_is_pushable`). Neither
+     *   of those refuses unicode, spaces, parentheses, hyphens or
+     *   digits, so this does not either - a regex allow-list narrower
+     *   than what the app can actually create rejects names the app
+     *   itself produces (see the header comment above).
+     * Inputs: decoded (string) - already `decodeURIComponent`-ed.
+     * Output: boolean.
+     * Example: isLegalDeepLinkName('Punchlist Browser Rename(fork)') -> true
+     * Example: isLegalDeepLinkName('..') -> false
+     */
+    function isLegalDeepLinkName(decoded) {
+        if (typeof decoded !== 'string' || decoded.length === 0) {
+            return false;
+        }
+        if (decoded === '.' || decoded === '..') {
+            return false;
+        }
+        if (decoded.indexOf('/') !== -1 || decoded.indexOf('\\') !== -1) {
+            return false;
+        }
+        if (CONTROL_CHAR_RX.test(decoded)) {
+            return false;
+        }
+        return true;
+    }
 
     // Path segment: exactly one `/session/<raw>` - we do NOT match
     // deeper paths like `/session/foo/bar` (FastAPI wouldn't route
@@ -290,7 +332,7 @@
             // Malformed %-encoding is a reject condition, not a recoverable one.
             return { match: true, project: null, bad: raw };
         }
-        if (!SLUG_RX.test(decoded)) {
+        if (!isLegalDeepLinkName(decoded)) {
             return { match: true, project: null, bad: decoded };
         }
         return { match: true, project: decoded };
@@ -486,6 +528,6 @@
         ARCHIVE_PREFIX: ARCHIVE_PREFIX,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
-        _SLUG_RX: SLUG_RX,
+        _isLegalDeepLinkName: isLegalDeepLinkName,
     };
 })();

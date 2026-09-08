@@ -5979,15 +5979,32 @@ class Launchpad {
      *   the duplicate-session regression (see openProjectByName()'s
      *   docstring) - but keeping the comparison here, in one function,
      *   means that stays true by construction instead of by coincidence.
+     * SYMMETRIC WITH THE DISPLAY TITLE TOO, not only the slug. The
+     * outbound URL this app builds (`App._syncSessionUrl`) always uses
+     * the tmux-derived slug, never the title - but a deep link built
+     * some other way (a pasted title, a fork label copied from the
+     * header: `<parent title>(fork)`, `src/core/session_fork.py`
+     * `fork_label`) names the SAME session and must resolve to it. Both
+     * `/sessions/attachable` and `/sessions/list` rows carry `label`
+     * (`AttachableSession.label` / `SessionInfo.session` - the row's
+     * `sessions.title`), so once the slug match misses, the title is
+     * checked against that field before giving up.
      * Inputs:
-     *   slug (string) - decoded, regex-validated name from the URL.
+     *   slug (string) - decoded, validated name from the URL. Despite
+     *     the parameter name this may be a slug OR a display title.
      * Output: the matching row from `this.runningSessions`, or
      *   `undefined` if none matches.
      */
     _findRunningSessionBySlug(slug) {
         const rows = this.runningSessions || [];
-        return rows.find(s => this._deriveRunningSessionDisplayName(s.name) === slug)
+        const bySlug = rows.find(s => this._deriveRunningSessionDisplayName(s.name) === slug)
             || rows.find(s => (this._deriveRunningSessionDisplayName(s.name) || '').toLowerCase() === String(slug).toLowerCase());
+        if (bySlug) return bySlug;
+
+        const wanted = String(slug).trim();
+        if (!wanted) return undefined;
+        return rows.find(s => typeof s.label === 'string' && s.label.trim() === wanted)
+            || rows.find(s => typeof s.label === 'string' && s.label.trim().toLowerCase() === wanted.toLowerCase());
     }
 
     /**
