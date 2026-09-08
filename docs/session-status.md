@@ -77,6 +77,54 @@ that surface on a phone.
 first and outranks every hook signal. Hooks cannot observe a dead process,
 so nothing else may report `dead`.
 
+**A DEAD SESSION KEEPS ITS ROW, and until 2026-09-08 it did not.** `dead`
+is only worth having if the user can see it, and they could not: the
+listing pass resolved one verdict, `gone`, from two different facts - "the
+backend says there is no such tmux session" and "the session is there and
+its pane is a corpse" - and dropped the row for both.
+`GET /sessions/attachable` cannot catch either, because the route filters
+out every tmux name bound to a live backend so the UI never offers
+self-adopt. So a session whose process died VANISHED off the sidebar and
+the running list, while `dead`/`off` sat in the LED table below and
+`actionsFor('dead')` sat ready with restart and remove. Measured against a
+real agent by `tests/test_led_real_hooks.py`, which pinned the vanishing
+as the behaviour that existed.
+
+`src/core/session_liveness.py` splits it into four named outcomes, and the
+pane words are borrowed from `session_respawn.py` rather than spelled a
+second time:
+
+| verdict | what was measured | what happens to the row |
+|---|---|---|
+| `alive` | the session exists and its pane is live | listed, normal status |
+| `pane_dead` | the session exists, `#{pane_dead}` = 1 | **listed, says `dead`** |
+| `session_gone` | the backend says there is no such session | dropped; the reaper files the stored row as ended and it appears in the recent list |
+| `unknown` | could not ask | listed, says `unknown` |
+
+`pane_dead` keeps the row because `remain-on-exit` holding the corpse open
+is the same fact that lets `respawn-pane` revive it - restart and remove
+are both real actions on that row, and neither is reachable on a row that
+is not drawn. `session_gone` has no pane to paint and nothing a respawn
+could land in, so it moves to the recent list, where a restart is a
+resume. Existence is read BEFORE the pane, so a stale `dead` in the bulk
+status map can never keep a row alive for a session tmux no longer has.
+
+The startup gate reads a `pane_dead` session as `ready` - the narrow claim
+"not blocked on a startup prompt", which is true of a corpse - raises no
+toast for it, and captures no scrollback, so a dead row costs nothing per
+poll.
+
+THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
+than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
+pipe-pane a corpse, so it raises and the pass (which gathers with
+`return_exceptions=True`) simply does not hold that session. The row does
+not disappear: with no live backend bound to the name,
+`/sessions/attachable` lists it and decorates it with
+`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
+surfaced a husk. The two are complementary - bound to a backend, the
+session says `dead` on `/sessions/list`; unbound, it says `dead` on
+`/sessions/attachable` - and after this change they finally agree.
+
 **Hook events are unordered, duplicated and droppable.** Every consumer in
 `session_activity.py` is idempotent: last-write-wins booleans, counters
 floored at zero (`subagent_depth = max(0, depth - 1)`), and an unknown

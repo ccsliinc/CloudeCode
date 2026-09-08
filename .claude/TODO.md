@@ -2986,3 +2986,50 @@ PROGRESS, not built" - it is now built, committed, and run for real.
 - [ ] STILL OPEN, unchanged by this: the dead-pane entry above
   (`_session_info_for` drops a dead pane on `LIVENESS_GONE`, so the LED's
   `dead` state is unreachable from live data). Being worked separately.
+
+
+## 2026-09-08 - a dead session keeps its row
+
+- [x] **A DEAD SESSION NOW KEEPS ITS ROW** (closes the dead-pane entry
+  left open above). `resolve_listing_liveness` answered ONE verdict,
+  `LIVENESS_GONE`, for two different facts - the tmux session is gone
+  (`exists` False) and the tmux session is there with a corpse in its
+  pane (`#{pane_dead}` = 1, `remain-on-exit`) - and `_session_info_for`
+  dropped the row for both. `/sessions/attachable` cannot catch either,
+  because the route filters out every name bound to a live backend. So a
+  killed pane vanished off the sidebar and the running list while
+  `dead`/`off` and `actionsFor('dead')` waited for a row that never came.
+
+- [x] **The split lives in `src/core/session_liveness.py`**, moved out of
+  `session_status.py` rather than duplicated there: `alive` /
+  `pane_dead` / `session_gone` / `unknown`, with the pane words imported
+  from `session_respawn.py` so a listing verdict and a restart preview
+  cannot disagree about one measurement. `pane_dead` keeps the row and
+  forces `activity_status` to `dead`; `session_gone` drops it exactly as
+  before and the reaper files the stored row into the recent list.
+  Existence is read BEFORE the pane, so a stale `dead` cannot keep a
+  session tmux no longer has on screen. `keeps_row` is an allow-list of
+  what SURVIVES, not a deny-list of what drops.
+
+- [x] **Two guards stopped being freebies and are now exercised.** The
+  restore branch's `liveness == LIVENESS_ALIVE` used to be unreachable
+  for a dead pane (the row returned first); it is now the only thing
+  keeping a persisted `idle` from overwriting a measured `dead`. And
+  `_startup_gate_for` gets its first `pane_alive=False` caller: it
+  answers `ready`, raises no toast, and captures no scrollback, so a dead
+  row costs nothing per poll.
+
+- [x] **`tests/test_led_real_hooks.py` test 8 INVERTED**, as its own
+  docstring instructed, and a ninth added. `RealHookApp` grew a second
+  kill mode: `kill_agent` SIGKILLs the process (the `pane_dead` case, row
+  survives saying `dead`), `kill_session` removes the tmux session (the
+  `session_gone` case, row correctly leaves). New:
+  `tests/test_session_liveness_split.py` (vocabulary shape, the
+  disagreeing-probes negative control, the reaper's half) and
+  `tests/test_dead_row_renders_dead.node.mjs` (the shipped sidebar merge
+  into the shipped LED and action builder).
+
+- [ ] STILL OPEN: nothing prunes a `pane_dead` row on its own. That is
+  deliberate - the owner's model is that it stays until the user restarts
+  or removes it - but it means a box left alone accumulates dead rows,
+  and no one has measured what that looks like after a week.

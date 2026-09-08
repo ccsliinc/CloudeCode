@@ -798,6 +798,36 @@ logs `subagent_stop_without_start` at debug); `PostToolUse` keys on a
 is refused ONLY when a `Stop` was POSITIVELY seen and nothing has opened
 since - never having seen a `Stop` is not evidence the turn ended.
 
+**A DEAD SESSION KEEPS ITS ROW.** `dead` was unreachable from live data
+until 2026-09-08: `resolve_listing_liveness` answered ONE verdict, `gone`,
+for two different facts - "the backend says there is no such tmux session"
+and "the session is there and its pane is a corpse" - and
+`_session_info_for` dropped the row for both, while `/sessions/attachable`
+filters out every name bound to a live backend. So a killed pane VANISHED
+off the sidebar and the running list, with `dead`/`off` sitting in
+`status-led.js` and restart + remove sitting in `actionsFor('dead')`,
+never delivered a row to paint. `src/core/session_liveness.py` splits it
+four ways, borrowing the pane words from `session_respawn.py`:
+`alive` / `pane_dead` / `session_gone` / `unknown`. `pane_dead` KEEPS the
+row and says `dead`, because `remain-on-exit` holding the corpse open is
+the same fact that lets `respawn-pane` revive it; `session_gone` drops it
+exactly as before and the reaper files the stored row into the recent
+list, where a restart is a resume. Existence is read BEFORE the pane, so a
+stale `dead` row cannot keep a session tmux no longer has on screen.
+`keeps_row` is an ALLOW-LIST of what survives, so a verdict added later
+cannot silently inherit "make the row vanish".
+
+THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
+than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
+pipe-pane a corpse, so it raises and the pass (which gathers with
+`return_exceptions=True`) simply does not hold that session. The row does
+not disappear: with no live backend bound to the name,
+`/sessions/attachable` lists it and decorates it with
+`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
+surfaced a husk. The two are complementary - bound to a backend, the
+session says `dead` on `/sessions/list`; unbound, it says `dead` on
+`/sessions/attachable` - and after this change they finally agree.
+
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an
 agent mid-tool-call and one at an empty prompt, and the fallback carries no

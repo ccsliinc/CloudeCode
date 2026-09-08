@@ -410,28 +410,28 @@ def test_a_bogus_token_is_refused_and_moves_nothing(live: RealHookApp) -> None:
 # =========================================================================== #
 
 
-def test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead(
+def test_a_killed_pane_paints_dead_rather_than_leaving_the_live_list(
     live: RealHookApp,
 ) -> None:
-    """MEASURED, and it is not what the LED vocabulary implies.
+    """MEASURED, and it is now what the LED vocabulary always implied.
 
-    ``ledStateFor`` has a ``dead``/``off`` state and
-    ``SessionActivityTracker.resolve`` returns ``dead`` for a pane tmux
-    reports as ``#{pane_dead}``. Both are real. What this run measured is
-    that NO LIVE ENDPOINT EVER CARRIES THAT ROW to the client, so the
-    state is not reachable from live data by this path:
+    THIS TEST USED TO ASSERT THE OPPOSITE, and the docstring it carried
+    said so out loud: ``_session_info_for`` ran ``resolve_listing_liveness``
+    and DROPPED the row on ``LIVENESS_GONE``, ``/sessions/attachable``
+    filters out every name bound to a live backend, and so a killed pane
+    VANISHED off both live surfaces. ``ledStateFor``'s ``dead``/``off``
+    and ``actionsFor('dead')``'s restart + remove existed the whole time
+    and were unreachable from live data.
 
-    ``_session_info_for`` runs ``resolve_listing_liveness`` and DROPS the
-    row on ``LIVENESS_GONE`` - deliberately, with a comment saying so
-    ("EXISTENCE IS NOT LIVENESS"), because a dead husk held open by
-    ``remain-on-exit`` used to sit in the running list forever.
-    ``/sessions/attachable`` does not pick it up either. So a killed
-    session VANISHES from the sidebar; it does not turn into a dead light.
+    ``src/core/session_liveness.py`` split that one verdict into
+    ``pane_dead`` and ``session_gone``. THIS IS THE ``pane_dead`` CASE:
+    ``kill_agent`` SIGKILLs the pane's PROCESS, and ``remain-on-exit``
+    keeps the pane - which is also what makes ``respawn-pane`` able to
+    revive it. So the row stays where the user left it, saying ``dead``,
+    offering restart and remove, until the user acts.
+    ``kill_session`` is the other mode and the other case.
 
-    This test asserts the behaviour that exists rather than the one the
-    vocabulary suggests, and it is written to FAIL if that ever changes -
-    at which point the honest fix is to assert ``dead``/``off`` here and
-    delete this docstring, not to loosen the assertion.
+    A ROW THAT DISAPPEARS IS WORSE THAN A ROW THAT SAYS DEAD.
     """
     assert live.row() is not None, (
         "the session had already left /sessions/list before it was killed, "
@@ -439,20 +439,59 @@ def test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead(
     )
     live.kill_agent()
 
-    gone, last = poll_until(live.row, lambda row: row is None, timeout=30.0)
-    assert gone, (
-        "a pane whose process was SIGKILLed is still being listed as live "
-        f"after 30s: {last}\npane tail:\n{live.pane_tail(6)}"
+    signals = await_state(
+        live,
+        "pane killed",
+        want_status=("dead",),
+        want_inner=("dead",),
+        want_outer=("off",),
+        timeout=30.0,
     )
-    record("pane killed", live.signals(), led_state_for(live.signals()))
+    assert signals["activity_status"] == "dead"
 
+    # STILL NOT ON /sessions/attachable, and that is correct rather than
+    # a leftover: the session has a live backend registration, so the
+    # route filters it out of the adopt list on purpose. The row reaches
+    # the user through /sessions/list, which is where the sidebar merge
+    # and the launchpad running list both read it from.
     attachable = live._httpx.get("/api/v1/sessions/attachable")
     assert attachable.status_code == 200, attachable.text
     names = {
         row.get("tmux_session") or row.get("name") for row in attachable.json()
     }
     assert live.tmux_name not in names, (
-        "the dead pane reappeared on /sessions/attachable, which would make "
-        "`dead` reachable after all - assert it here instead of asserting "
-        f"its absence. rows: {names}"
+        "a session with a live backend must not be offered for self-adopt; "
+        f"rows: {names}"
     )
+
+
+# =========================================================================== #
+# 9. the tmux session itself going away                                        #
+# =========================================================================== #
+
+
+def test_a_killed_tmux_session_does_leave_the_live_list(
+    live: RealHookApp,
+) -> None:
+    """THE OTHER HALF OF THE SPLIT, and the reason it is a split.
+
+    ``kill_session`` removes the tmux session itself. There is no pane
+    left to paint dead and nothing a respawn could land in, so the row
+    correctly LEAVES ``/sessions/list`` - the behaviour the previous test
+    used to assert for a case where it was wrong.
+
+    RUNS LAST ON PURPOSE. It destroys the module-scoped session, so
+    nothing after it can measure anything.
+    """
+    assert live.row() is not None, (
+        "the row was already gone before the tmux session was killed, so "
+        "this test measured nothing"
+    )
+    live.kill_session()
+
+    gone, last = poll_until(live.row, lambda row: row is None, timeout=30.0)
+    assert gone, (
+        "a session tmux no longer has is still being listed after 30s: "
+        f"{last}"
+    )
+    record("tmux session killed", {"activity_status": None}, {"inner": None, "outer": None})
