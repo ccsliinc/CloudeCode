@@ -164,49 +164,39 @@ console.log('[SessionStatusSummary Module] Loading...');
     }
 
     /**
-     * The summary LED plus its unread-count badge, as one HTML string.
+     * The summary LED, as one HTML string.
      *
      * Description: What a group header and the launchpad top bar both
-     *   render. The badge is omitted entirely at zero rather than shown
-     *   as "0" - an empty badge is noise, and its absence is already the
-     *   signal. Copy is lowercase and plain, per the project's voice.
+     *   render. The unread count is not shown as a visible badge - the
+     *   LED's outer ring already carries that state (see `bucketFor` and
+     *   SUMMARY_PRIORITY) - but it is still folded into the LED's title
+     *   and aria-label so the count survives for screen readers and
+     *   hover text. Copy is lowercase and plain, per the project's voice.
      * Inputs:
      *   children (Array|null) - as summarizeStates.
      *   opts (Object|null) - `{size}` forwarded to ledHtml.
      * Output:
-     *   string - HTML: one `.status-led` and, when non-zero, one
-     *     `.status-summary-badge`.
+     *   string - HTML: one `.status-led`.
      * Example:
      *   summaryHtml([{activity_status: 'idle', unread: true}])
-     *   // '<span class="status-led" ...></span>
-     *   //  <span class="status-summary-badge" ...>1</span>'
+     *   // '<span class="status-led" title="unread - 1 session, 1 unread" ...></span>'
      */
     function summaryHtml(children, opts) {
         const o = opts || {};
         const s = summarizeStates(children);
-        const label =
+        let label =
             s.total === 0
                 ? 'no sessions'
                 : s.bucket + ' - ' + s.total + ' session' + (s.total === 1 ? '' : 's');
-        let html = globalThis.StatusLed.ledHtml({
+        if (s.unreadCount > 0) {
+            label += ', ' + s.unreadCount + ' unread';
+        }
+        return globalThis.StatusLed.ledHtml({
             inner: s.inner,
             outer: s.outer,
             size: o.size,
             title: label,
         });
-        if (s.unreadCount > 0) {
-            const badgeLabel = s.unreadCount + ' unread';
-            html +=
-                '<span class="status-summary-badge" role="status" ' +
-                'title="' +
-                badgeLabel +
-                '" aria-label="' +
-                badgeLabel +
-                '">' +
-                s.unreadCount +
-                '</span>';
-        }
-        return html;
     }
 
     const api = {

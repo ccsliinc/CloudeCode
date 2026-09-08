@@ -237,20 +237,23 @@ test('the badge counts unread ROWS, not unread-coloured lights', () => {
     assert.equal(s.bucket, 'working');
 });
 
-test('summaryHtml omits the badge entirely at zero', () => {
+test('summaryHtml never renders a badge element at zero unread', () => {
     const html = Summary.summaryHtml([{ activity_status: 'idle' }]);
     assert.ok(html.includes('status-led'), 'the LED is always rendered');
-    assert.ok(!html.includes('status-summary-badge'), 'no empty badge');
+    assert.ok(!html.includes('status-summary-badge'), 'no badge markup at all');
 });
 
-test('summaryHtml renders the badge with its count when non-zero', () => {
+test('summaryHtml renders no badge when unread is non-zero, but the LED carries it', () => {
     const html = Summary.summaryHtml([
         { activity_status: 'idle', unread: true },
         { activity_status: 'idle', unread: true },
     ]);
-    assert.ok(html.includes('status-summary-badge'));
-    assert.ok(html.includes('>2<'), 'carries the count');
-    assert.ok(html.includes('aria-label="2 unread"'), 'and says so in words');
+    assert.ok(!html.includes('status-summary-badge'), 'the badge markup is gone entirely');
+    assert.ok(html.includes('data-outer="unread"'), 'the outer ring still says unread');
+    assert.ok(html.includes('aria-label="unread - 2 sessions, 2 unread"'),
+        'the count survives in words for accessibility');
+    assert.ok(html.includes('title="unread - 2 sessions, 2 unread"'),
+        'and in the hover title');
 });
 
 test('summaryHtml labels the empty case honestly', () => {

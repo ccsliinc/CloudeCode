@@ -151,8 +151,9 @@ console.log('[SessionSidebarGroups Module] Loading...');
      *   section is FOLDED. It is a fold over the section's own rows via
      *   SessionStatusSummary, so it cannot disagree with the lights
      *   underneath it - both resolve through the same mapping rather than
-     *   through two copies of the rules. The unread count rides along as
-     *   a badge, and is omitted entirely at zero.
+     *   through two copies of the rules. The unread count is not shown as
+     *   a separate badge; it rides in the LED's own outer ring plus its
+     *   title/aria-label.
      * Inputs: key (string) - one of KEYS. count (number) - rows in the
      *   section, shown so a folded section still says how much it hides.
      *   collapsed (boolean). rows (Array<object>|undefined) - the
