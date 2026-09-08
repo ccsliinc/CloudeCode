@@ -106,13 +106,49 @@ JSON" shortcut anywhere in this codebase.
 fields sit on **two different levels**:
 
 - On the wrapper: `activity_status`, `unread`, `tmux_session`, `agent_type`,
-  `pinned_theme`, `session_backend`, `recent_logs`, `local_servers`, `stats`
+  `agent_family`, `agent_family_source`, `agent_wrapper_label`, `pinned_theme`,
+  `session_backend`, `recent_logs`, `local_servers`, `stats`
 - On the nested `.session`: `id`, `pty_pid`, `working_dir`, and the rest of the
   `Session` model
 
 Reading `info.id` or `info.session.unread` gives you `undefined` silently, and it
 looks exactly like "the backend didn't send it". This is the single most
 repeated bug in the project. Check the level before you debug the endpoint.
+
+**Three fields describe the agent, and they answer three different questions.**
+`agent_type` is the raw stored value: a wrapper id (`claude-chrome`) or a bare
+family name (`shell`). `agent_family` plus `agent_family_source` are the
+DISPLAY-time resolution of it (`src/core/agent_family_display.py`), and the
+source is what keeps a fingerprinted guess from rendering like a launch fact.
+`agent_wrapper_label` is the wrapper's configured label
+(`src/core/agent_wrapper_display.py`), `null` whenever no configured wrapper can
+be named - a fingerprinted value, a bare family name, or an id config no longer
+carries. `AttachableSession` carries the same three, resolved by the same
+functions, so a launchpad row merged from either endpoint agrees about itself.
+
+**A GUESS MUST NEVER OUTRANK A RECORD, and the ordering lives in one place.** A
+live session has two sources for `agent_type`: the in-memory `Session` and
+`sessions.agent_type` on its row. `_session_info_for` used to read the row only
+when the in-memory value was EMPTY, and that is wrong for an ADOPTED session -
+every live session is re-adopted after a server restart, the adopt path
+fingerprints the pane and stores the bare family token, so a session launched as
+`claude-chrome` came back holding `claude` and painted `~claude` (the dashed
+"guessed" pill) beside a row that recorded the exact wrapper. Measured on the
+owner's box 2026-09-08: row 43, `agent_type='claude-chrome'`,
+`agent_family_source='launched'`. `session_agent_evidence.choose_agent_evidence`
+is now the only thing that picks between the two, as a four-rung ladder:
+in-memory launch, then the row, then the in-memory fingerprint, then nothing.
+The row beats the fingerprint because nothing writes an inference into
+`sessions.agent_type` - `persist_fingerprint_family` writes `agent_family` and
+deliberately leaves that column alone.
+
+**`unknown family` on a row whose record says `not_launched` is DATA, not a bug.**
+27 of 40 rows on the owner's box carry `agent_type` NULL with
+`agent_family_source='not_launched'`, which is the `auto_start_claude:false` plus
+a hand-sent claude command case named under "Restarting a session" above. The
+pane may well be running claude; the record says the app started no agent. Fixing
+that means filling `agent_type` from evidence, not defaulting the resolver to
+claude - a resolver that always finds something is worse than useless.
 
 ## How we work here
 

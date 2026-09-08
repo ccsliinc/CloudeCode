@@ -47,6 +47,8 @@ from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
+from src.core.agent_wrapper_display import resolve_wrapper_for_display
+from src.core.session_agent_evidence import choose_agent_evidence
 from src.core.session_status import (
     LIVENESS_GONE,
     LIVENESS_LIVE,
@@ -4067,32 +4069,39 @@ class SessionManager:
         # provenance that DOES need to survive - see its docstring on
         # ``Session`` for why fingerprint-derived values are otherwise
         # textually indistinguishable from launched ones.
-        # THE DATABASE ROW IS AUTHORITATIVE FOR WHAT LAUNCHED THIS SESSION.
-        # An ADOPTED session's in-memory Session comes back with
-        # agent_type None, while the row it was adopted from still records
-        # the wrapper id exactly - so resolving the family off the
-        # in-memory copy alone reported "unknown family" about a session
-        # whose launch we had written down. The in-memory value still wins
-        # when it has one; the row is a fallback, not an override.
+        # THE DATABASE ROW IS AUTHORITATIVE FOR WHAT LAUNCHED THIS SESSION,
+        # AND IT BEATS A FINGERPRINT. The precedence between the in-memory
+        # value and the row is a four-rung ladder that now lives in
+        # ``session_agent_evidence.choose_agent_evidence`` - see that
+        # module for why a GUESS used to win here and what it cost. The
+        # short version: after a server restart every live session is
+        # re-attached through the ADOPT path, which fingerprints the pane
+        # and stores the bare family token, so a session launched as
+        # claude-chrome came back holding "claude" and painted a dashed
+        # guess pill next to a row that recorded the exact wrapper.
         row_identity = self._identity_for_live_name(tmux_session_name)
-        effective_agent_type = sess.agent_type
-        from_fingerprint = sess.agent_type_via_fingerprint
-        if not effective_agent_type and row_identity:
-            row_agent_type = row_identity.get("agent_type")
-            if row_agent_type:
-                effective_agent_type = row_agent_type
-                # PROVENANCE TRAVELS WITH THE VALUE. The row's agent_type
-                # was written by a LAUNCH - it is the wrapper id we chose -
-                # so a family resolved from it is a fact, not a guess, and
-                # must not render with the tilde that means "fingerprinted".
-                # Carrying the in-memory fingerprint flag onto a value that
-                # did not come from a fingerprint would label a certainty
-                # as a guess, which is the same defect as the reverse and
-                # just as misleading.
-                from_fingerprint = False
+        evidence = choose_agent_evidence(
+            memory_agent_type=sess.agent_type,
+            memory_from_fingerprint=sess.agent_type_via_fingerprint,
+            row_agent_type=(
+                row_identity.get("agent_type") if row_identity else None
+            ),
+        )
+        effective_agent_type = evidence.agent_type
+        from_fingerprint = evidence.from_fingerprint
+        wrappers = _configured_wrappers()
         display_family, display_family_source = resolve_family_for_display(
             effective_agent_type,
-            _configured_wrappers(),
+            wrappers,
+            from_fingerprint=from_fingerprint,
+        )
+        # The WRAPPER behind the family, named for the user. None whenever
+        # nothing can be named honestly - a fingerprinted value, a bare
+        # family name, or a wrapper id config no longer carries - and the
+        # client renders nothing at all for None rather than a placeholder.
+        wrapper_display = resolve_wrapper_for_display(
+            effective_agent_type,
+            wrappers,
             from_fingerprint=from_fingerprint,
         )
 
@@ -4115,6 +4124,7 @@ class SessionManager:
             agent_type=effective_agent_type,
             agent_family=display_family.name if display_family else None,
             agent_family_source=display_family_source,
+            agent_wrapper_label=wrapper_display.label,
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
@@ -5476,6 +5486,11 @@ class SessionManager:
         # first frame; without it, the client would wait until the
         # adopt response to learn the pin and the user would see a
         # one-frame Lovecraft flash before the pin paints.
+        # Read ONCE for the whole listing, not once per row: this is a
+        # config file read, and the answer cannot change part-way through
+        # a single pass. Two rows resolving against two different reads
+        # of config.json would be a listing that disagrees with itself.
+        wrappers = _configured_wrappers()
         for row in rows:
             name = row.get("name")
             if name:
@@ -5556,11 +5571,20 @@ class SessionManager:
                 row["agent_type"] = effective_agent_type
                 display_family, display_family_source = resolve_family_for_display(
                     effective_agent_type,
-                    _configured_wrappers(),
+                    wrappers,
                     from_fingerprint=from_fingerprint,
                 )
                 row["agent_family"] = display_family.name if display_family else None
                 row["agent_family_source"] = display_family_source
+                # The wrapper pill's text, from the SAME resolution inputs
+                # as the family pill so the two can never name different
+                # wrappers for one row. None whenever nothing can be named
+                # honestly - see agent_wrapper_display.
+                row["agent_wrapper_label"] = resolve_wrapper_for_display(
+                    effective_agent_type,
+                    wrappers,
+                    from_fingerprint=from_fingerprint,
+                ).label
         # refused_rows is carried through: this method REWRAPS the
         # backend's listing, and dropping the count here would hand every
         # downstream absence-based caller a partial list that claims to

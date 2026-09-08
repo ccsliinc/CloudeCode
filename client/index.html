@@ -764,6 +764,11 @@
          Pure - two arrays in, one array out, no state and no events - so
          this is its only ordering constraint. -->
     <script src="/static/js/session-recent-visibility.js"></script>
+    <!-- The launch-wrapper pill on a running-session row. Must load
+         BEFORE launchpad.js, which calls window.LaunchpadWrapperPill.html
+         while painting the row. Pure string rendering, no state, no
+         events - it reads nothing else, so this is its only constraint. -->
+    <script src="/static/js/launchpad-wrapper-pill.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

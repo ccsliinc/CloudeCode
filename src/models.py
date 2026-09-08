@@ -305,6 +305,19 @@ class SessionInfo(BaseModel):
             "src.core.agent_families.resolve_family_for_display."
         ),
     )
+    # The WRAPPER pill's text. A family says what KIND of agent is in the
+    # pane; this says which configured script started it ("claude
+    # (chrome)"). None means nothing can be named honestly - the value was
+    # fingerprinted, or is a bare family name, or names a wrapper config
+    # no longer carries - and the client renders NOTHING for None rather
+    # than the raw agent_type, which is an internal id. Computed by
+    # ``src.core.agent_wrapper_display.resolve_wrapper_for_display`` from
+    # the same inputs as agent_family, so the two pills on one row can
+    # never disagree about which wrapper matched.
+    agent_wrapper_label: Optional[str] = Field(
+        default=None,
+        description="Configured label of the launch wrapper, or None if none can be named",
+    )
     # SESSION-IDENTITY-V2 - surface the pinned theme at the top level so
     # the UI can paint identity (header icon + title swap) without diving
     # into ``.session``. Mirrors Session.pinned_theme.
@@ -811,6 +824,13 @@ class AttachableSession(BaseModel):
             "Provenance of agent_family: 'wrapper' | 'reserved_name' | "
             "'fingerprint' | 'derived_deepest' | 'unknown'."
         ),
+    )
+    # See SessionInfo.agent_wrapper_label for the full contract. Same
+    # resolver, so a row merged from either endpoint agrees about which
+    # wrapper started the session.
+    agent_wrapper_label: Optional[str] = Field(
+        default=None,
+        description="Configured label of the launch wrapper, or None if none can be named",
     )
     # SESSION-IDENTITY-V2 - pinned theme for this attachable session. None
     # = no pin. Discovery code populates from the active SessionManager
