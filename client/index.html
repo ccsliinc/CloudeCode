@@ -1034,6 +1034,11 @@
          move a session between them. Loads AFTER reorder because it
          borrows that module's live-region announcer. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
+    <!-- The reserved bands' (pinned/other) kebab menu, split out to keep
+         session-sidebar-group-actions.js under the 500-line budget. Must
+         load AFTER it: reuses its showMenu/announce/repaint rather than
+         a second copy of any of the three. -->
+    <script src="/static/js/session-sidebar-band-menu.js"></script>
     <!-- The row's overflow menu, and the three gestures that open it.
          session-row-menu.js composes the row's own control builders
          (session-sidebar-rows.js, session-status-ui.js,

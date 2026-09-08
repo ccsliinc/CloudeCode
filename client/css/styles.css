@@ -152,6 +152,17 @@
      * pixel value that would drift out of sync with the other. */
     --project-gutter: 52px;
 
+    /* The sidebar group header's own gutter - sibling of
+     * `--project-gutter` above, same convention applied to the
+     * conversations panel's section headers (pinned / other / a user's
+     * own groups): a fixed-width column for the row count so a group
+     * name starts at the same x whether it holds "1" conversation or
+     * "120". Narrower than the project tree's because this gutter holds
+     * only the count (the chevron is a separate element after it, not
+     * sharing the column). See `.session-sidebar-group__gutter` in
+     * client/css/session-sidebar-groups.css. */
+    --sidebar-gutter: 22px;
+
     /* THE BOTTOM ROW hovers over the command line. One slot is one
      * button plus one gap, so the slot tokens are the only place a
      * horizontal offset is ever written.

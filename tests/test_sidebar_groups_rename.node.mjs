@@ -431,6 +431,54 @@ await test('the density contract is DECLARED in the stylesheet, not left to add 
     }
 });
 
+// =====================================================================
+// SIDEBAR HEADER LAYOUT: count gutter first, kebab everywhere.
+// "on side bar, the session count first make a gutter so they all line
+// up. the pinned and the other doest have a kebab. maybe just give it
+// one. and the number make it a colored font and not circle."
+// =====================================================================
+
+await test('every header carries a kebab, pinned and other included', () => {
+    const { G } = loadStack(null);
+    const html = G.bodyHtml(
+        [row({ name: 'p', is_pinned: true }), row({ name: 'a' })], 'cozy', null, {});
+    assert.ok(html.includes('data-group-menu-band="pinned"'),
+        'pinned gets a kebab even though it is not a real group');
+    assert.ok(html.includes('data-group-menu-band="other"'),
+        'other gets one too');
+});
+
+await test('the count sits in a fixed gutter, ahead of the fold toggle', () => {
+    const { G } = loadStack(null);
+    const html = G.headerHtml('pinned', 3, false, undefined);
+    assert.ok(html.includes('session-sidebar-group__gutter'), 'the gutter wraps the count');
+    assert.ok(
+        html.indexOf('session-sidebar-group__gutter') < html.indexOf('data-group-toggle'),
+        'the gutter renders before the fold toggle, not after it');
+    assert.ok(html.includes('<span class="session-sidebar-group__count">3</span>'),
+        'the count is plain text inside its own span');
+});
+
+await test('the group count is coloured text, not a pill badge', () => {
+    const css = repoFile('client', 'css', 'session-sidebar-groups.css');
+    const m = css.match(/\.session-sidebar-group__count\s*\{([^}]*)\}/);
+    assert.ok(m, 'the count rule exists');
+    assert.ok(!/border-radius/.test(m[1]), 'no pill radius left on the count');
+    assert.ok(!/background/.test(m[1]), 'no badge fill left on the count');
+    assert.ok(/color:\s*var\(--color-accent\)/.test(m[1]), 'plain coloured text');
+    assert.ok(/tabular-nums/.test(m[1]), 'digits stay a constant width');
+});
+
+await test('the sidebar gutter is a sibling token of --project-gutter', () => {
+    const tokens = repoFile('client', 'css', 'styles.css');
+    assert.ok(tokens.includes('--sidebar-gutter:'), 'a dedicated token exists in styles.css');
+    const gutterRule = repoFile('client', 'css', 'session-sidebar-groups.css')
+        .match(/\.session-sidebar-group__gutter\s*\{([^}]*)\}/);
+    assert.ok(gutterRule, 'the gutter class has a rule');
+    assert.ok(/var\(--sidebar-gutter\)/.test(gutterRule[1]),
+        'the gutter reads the shared token rather than a hardcoded width');
+});
+
 const { passes, failures } = results();
 console.log(`${passes} passed, ${failures} failed`);
 if (failures) process.exit(1);

@@ -316,10 +316,10 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
 
     /**
      * Description: the menu on a user group's own header - rename,
-     *   reorder and delete. Reserved bands emit no menu button, so this
-     *   is only ever reached for a real group.
-     * Inputs: anchor (Element), groupUuid (string).
-     * Output: void.
+     *   reorder and delete. A reserved band's kebab carries
+     *   `data-group-menu-band` instead (session-sidebar-band-menu.js),
+     *   so this is only ever reached for a real group.
+     * Inputs: anchor (Element), groupUuid (string). Output: void.
      */
     function openGroupMenu(anchor, groupUuid) {
         const G = store();
@@ -438,6 +438,13 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
                 openGroupMenu(groupMenu, groupMenu.getAttribute('data-group-menu'));
                 return;
             }
+            const bandMenu = e.target.closest && e.target.closest('[data-group-menu-band]');
+            if (bandMenu && window.SessionSidebarBandMenu) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.SessionSidebarBandMenu.open(bandMenu, bandMenu.getAttribute('data-group-menu-band'));
+                return;
+            }
             const picker = e.target.closest && e.target.closest('[data-group-pick]');
             if (picker) {
                 e.preventDefault();
@@ -487,6 +494,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
         init, refresh, commitAssignment, openPickerFor, openGroupMenu,
         renameGroup, deleteGroup, moveGroup, createGroupThenAssign,
         closeMenu, rowMenuItemHtml,
+        showMenu, announce, repaint, // reused by session-sidebar-band-menu.js
     };
     console.log('[SessionSidebarGroupActions Module] Exported as window.SessionSidebarGroupActions');
 })();
