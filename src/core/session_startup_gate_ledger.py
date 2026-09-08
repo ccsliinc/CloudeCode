@@ -72,6 +72,15 @@ class StartupGateLedger:
     """
 
     def __init__(self) -> None:
+        """Start with an empty ledger.
+
+        Description: process-local state only, keyed by tmux name. There
+            is nothing to load: a restart of this app has not restarted
+            the panes, and a record re-earns itself on the next hook.
+        Inputs: none.
+        Output: None.
+        Example: ledger = StartupGateLedger()
+        """
         self._records: dict[str, _InstanceRecord] = {}
 
     def record_hook(
