@@ -53,6 +53,10 @@ from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
 from src.core.agent_wrapper_display import resolve_wrapper_for_display
 from src.core.session_agent_evidence import choose_agent_evidence
+from src.core.hook_token_recovery import (
+    RECOVERY_ACCEPTED,
+    SupersededHookTokens,
+)
 from src.core.session_status import (
     LIVENESS_GONE,
     LIVENESS_LIVE,
@@ -404,6 +408,16 @@ class SessionManager:
         # not. Consumed and cleared by the next SessionStart.
         self._last_session_end_uuid: dict[str, str] = {}
         self._hook_tokens_durable: bool = True
+        # Tokens this process minted for an id and then REPLACED. A mint
+        # over a live agent revokes a credential that cannot be re-issued
+        # to it - the value is baked into the pane env at new-session time
+        # and read from there at hook-fire time - so the agent 403s
+        # forever with no retry available from its side. Measured
+        # 2026-09-08: 4,325 rejections over 4h24m from one such mint.
+        # ``recover_hook_token`` recognises our own superseded credential
+        # and corrects the record; NOTHING IS EVER MINTED THERE.
+        # In memory only, on purpose - see src/core/hook_token_recovery.py.
+        self._superseded_hook_tokens = SupersededHookTokens()
         self._load_hook_tokens()
 
         # SESSION-IDENTITY-V2 - durable per-tmux-name pinned-theme map.
@@ -762,6 +776,10 @@ class SessionManager:
         for sid in dead:
             self._hook_tokens.pop(sid, None)
             self._hook_tmux_names.pop(sid, None)
+            # The superseded ring outlives nothing the live token
+            # outlives. Dropping it on the same rule keeps the two from
+            # disagreeing about whether a session still exists.
+            self._superseded_hook_tokens.forget(sid)
             self._instance_epochs.pop(sid, None)
         logger.info("hook_tokens_gc", dropped=len(dead))
         self._persist_hook_tokens()
@@ -792,6 +810,29 @@ class SessionManager:
         session whose backend was wiped). Returns the new token. The value
         is NEVER logged.
         """
+        # WHAT IS BEING REPLACED IS REMEMBERED BEFORE IT IS LOST. A mint
+        # that lands on an id whose agent is already running revokes a
+        # credential that agent cannot be handed a replacement for, and
+        # every hook it sends afterwards is answered 403 with no retry
+        # available to it. Recording the superseded value here is what
+        # lets ``recover_hook_token`` recognise our own mistake when that
+        # agent presents it. Bounded and in memory only; the value is
+        # never logged. See src/core/hook_token_recovery.py.
+        previous = self._hook_tokens.get(session_id)
+        if previous:
+            self._superseded_hook_tokens.record(
+                session_id,
+                previous,
+                # THE NAME THE OLD TOKEN WAS BOUND TO, not the one being
+                # bound now. The scope rule is one pane, one credential,
+                # so a token superseded while the id sat on a different
+                # pane must not be recoverable against this one. The
+                # argument is only a fallback for an id that had a token
+                # and no recorded name (a v1 store entry).
+                tmux_name=(
+                    self._hook_tmux_names.get(session_id) or tmux_name
+                ),
+            )
         token = secrets.token_urlsafe(32)
         self._hook_tokens[session_id] = token
         # THE NAME MUST BE PASSED IN, not looked up. This is called BEFORE
@@ -947,6 +988,71 @@ class SessionManager:
             return hmac.compare_digest(expected, token)
         except (TypeError, ValueError):
             return False
+
+    def recover_hook_token(self, session_id: str, token: str) -> str:
+        """Accept a token this server superseded under a still-running agent.
+
+        Description: the second chance for a hook POST that
+          :meth:`validate_hook_token` has ALREADY rejected. Called only
+          from that rejection path, so a healthy hook never reaches it.
+
+          It answers one question: is the presented value a token THIS
+          PROCESS minted for THIS id, on THIS pane, and then replaced?
+          If so the agent is holding it because a mint revoked its
+          credential mid-flight and there was no way to tell it - see
+          ``_mint_hook_token`` - and the honest correction is to re-bind
+          the store to what the running process actually holds. That is
+          done here, ONCE: the ring entry is consumed, so the next hook
+          from the same agent validates through the ordinary path and
+          this method is not reached again.
+
+          IT NEVER MINTS. Minting is the defect being recovered from, and
+          a recovery that minted would revoke the credential a second
+          time while logging that it had fixed something.
+
+          The pane binding is a REFUSAL and not a relaxation: an id whose
+          tmux name is unknown yields ``unavailable`` and stays rejected.
+          Not having been able to scope the check is never a pass.
+        Inputs: session_id (str) - the id presented on the hook.
+          token (str) - the token presented on the hook.
+        Output: str - one of the ``RECOVERY_*`` outcomes from
+          ``src.core.hook_token_recovery``. Only ``accepted`` authorises
+          the caller to treat the request as authenticated.
+        Example: mgr.recover_hook_token('ses_ab12', presented) ==
+                 'accepted'
+        """
+        decision = self._superseded_hook_tokens.decide(
+            session_id,
+            token,
+            current_tmux_name=self._hook_tmux_names.get(session_id),
+        )
+        if decision.outcome != RECOVERY_ACCEPTED or not decision.token:
+            return decision.outcome
+
+        # CONSUME FIRST. Two duplicate deliveries of the same hook can be
+        # in flight at once (hook events are duplicated by design - see
+        # src/core/session_activity.py), and ``consume`` returning False
+        # is how the second one learns it lost the race. Both are still
+        # ACCEPTED - the token is genuine either way - but only the
+        # winner re-binds and only the winner logs, so a duplicate cannot
+        # produce a second rebind event describing a change that already
+        # happened.
+        first = self._superseded_hook_tokens.consume(session_id, decision.token)
+        if first:
+            self._hook_tokens[session_id] = decision.token
+            self._persist_hook_tokens()
+            logger.warning(
+                "hook_token_rebound_from_superseded",
+                session_id=session_id,
+                tmux_session=decision.tmux_name,
+                note=(
+                    "a mint replaced this pane's token while its agent "
+                    "was running; the store has been re-bound to the "
+                    "token the process actually holds and nothing was "
+                    "minted"
+                ),
+            )
+        return RECOVERY_ACCEPTED
 
     def get_env_for_spawn(self, session_id: str) -> dict[str, str]:
         """Return the env-var trio injected into the spawned agent's tmux env.
@@ -6930,9 +7036,11 @@ class SessionManager:
             chosen_type = choice.agent_type
 
         backend = None
-        for candidate in self.backends.values():
+        env_session_id: Optional[str] = None
+        for candidate_id, candidate in self.backends.items():
             if getattr(candidate, "tmux_session", None) == name:
                 backend = candidate
+                env_session_id = candidate_id
                 break
 
         if backend is None or not hasattr(backend, "respawn"):
@@ -6954,12 +7062,27 @@ class SessionManager:
             conversation=resume_target.outcome,
         )
 
+        # A RESTART IS THE ONE MOMENT THE PANE'S CONTROL VARIABLES CAN BE
+        # CORRECTED. tmux copies the session environment at spawn, so the
+        # process about to start is the first one that can be given a
+        # current ``CLOUDECODE_SESSION_ID`` and ``CLOUDECODE_HOOK_TOKEN``;
+        # the one being replaced has been holding whatever it was born
+        # with, which is how a pane ends up 403ing every hook it sends.
+        # Resolved from the REGISTERED id rather than derived from the
+        # tmux name - deriving one from the other is gotcha 4b. An
+        # unregistered pane yields None and the push is skipped, which is
+        # the pre-existing behaviour rather than an invented id.
+        spawn_env = (
+            self.get_env_for_spawn(env_session_id) if env_session_id else None
+        )
+
         result = await backend.respawn(
             agent_command=agent_command,
             chosen_agent_command=chosen_command,
             chosen_agent_type=chosen_type,
             resume_outcome=resume_target.outcome,
             live_restart_confirmed=bool(live_restart_confirmed),
+            spawn_env=spawn_env,
         )
 
         # IDENTITY BEFORE ANYTHING ELSE IS READ BACK. A live restart

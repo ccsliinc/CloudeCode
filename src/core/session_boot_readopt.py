@@ -287,6 +287,38 @@ async def readopt_surviving_sessions(
         # rung, so a hook that does arrive can be resolved to a session.
         manager._hook_tmux_names.setdefault(target.session_id, target.name)
 
+        # PUSH THE CURRENT CONTROL VARIABLES ONTO THE PANE'S SESSION
+        # ENVIRONMENT. It does NOT reach the agent already running in
+        # there - tmux copies the environment at spawn and a live process
+        # keeps what it was born with - and that is precisely why it is
+        # worth doing: the NEXT process in that pane (a restart, or a
+        # claude the user launches by hand) is the first one that can be
+        # handed a current ``CLOUDECODE_SESSION_ID`` and
+        # ``CLOUDECODE_HOOK_TOKEN``, and without this it would inherit
+        # whatever stale pair the pane has carried since it was born and
+        # 403 on every hook it sends. Nothing is minted: this id was
+        # RECOVERED, so ``get_env_for_spawn`` returns the token already
+        # held for it.
+        #
+        # BEST EFFORT. A boot pass that failed over a set-environment
+        # refusal would hold zero sessions for the sake of an
+        # optimisation, which is the wrong trade in the direction this
+        # module has already paid for once.
+        try:
+            for var, val in manager.get_env_for_spawn(
+                target.session_id
+            ).items():
+                await backend._run_tmux(
+                    "set-environment", "-t", target.name, var, val,
+                    check=False,
+                )
+        except (OSError, AttributeError) as exc:
+            logger.debug(
+                "boot_readopt_set_environment_failed",
+                session=target.name,
+                error=str(exc),
+            )
+
     # WHICH SESSION IS "CURRENT" MUST NOT BE DECIDED BY A RACE.
     # ``_register_session`` moves ``_last_session_id``, and these attaches
     # finish in whatever order tmux answers, so without this the session

@@ -45,7 +45,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import structlog
 
@@ -1465,6 +1465,7 @@ class TmuxBackend(SessionBackend):
         chosen_agent_type: Optional[str] = None,
         resume_outcome: Optional[str] = None,
         live_restart_confirmed: bool = False,
+        spawn_env: Optional[Mapping[str, str]] = None,
     ) -> RespawnResult:
         """Put a process back into this session's dead pane, in place.
 
@@ -1544,6 +1545,14 @@ class TmuxBackend(SessionBackend):
                 ALIVE, having been told the process in it is killed.
                 Default False keeps every existing caller's behaviour
                 exactly, including tmux's own refusal as the backstop.
+            spawn_env: The app's current control variables
+                (``CLOUDECODE_SESSION_ID`` / ``_HOOK_TOKEN`` /
+                ``_HOOK_URL``), pushed onto the tmux SESSION environment
+                BEFORE the respawn so the new process inherits current
+                values rather than whatever the pane was born with. This
+                is the only moment they can be corrected for a running
+                agent. None skips the push and leaves the pane's
+                environment exactly as it was.
 
         Output:
             RespawnResult: ``kind`` is the ladder verdict, ``ok`` says
@@ -1634,6 +1643,37 @@ class TmuxBackend(SessionBackend):
         # src/core/session_instance_rekey.py for why a measurement and
         # not an assumption.
         epoch_before = await self.session_created_epoch() if killing else None
+
+        # THE ENVIRONMENT IS REFRESHED BEFORE THE PROCESS STARTS, and
+        # the ordering is the whole point. tmux copies the SESSION
+        # environment into a pane's process at spawn time, so a value
+        # written after ``respawn-pane`` reaches the next restart and not
+        # this one. A restart is the ONLY moment a running agent can be
+        # handed a current ``CLOUDECODE_SESSION_ID`` and
+        # ``CLOUDECODE_HOOK_TOKEN``, because neither can be pushed into a
+        # process already running - which is exactly how a pane comes
+        # back holding a superseded token and 403s on every hook it
+        # sends. Measured 2026-09-08: one such pane sent 4,325 rejected
+        # hooks over 4h24m and was fixed only by being restarted.
+        #
+        # BEST EFFORT, AND IT NEVER BLOCKS THE RESTART. A refusal here
+        # leaves the pane with the environment it already had, which is
+        # the pre-existing behaviour; failing the respawn over it would
+        # trade a degraded hook path for a session the user cannot
+        # restart at all.
+        if spawn_env:
+            try:
+                for var, val in spawn_env.items():
+                    await self._run_tmux(
+                        "set-environment", "-t", target, var, val,
+                        check=False,
+                    )
+            except OSError as exc:
+                logger.warning(
+                    "respawn_set_environment_failed",
+                    session=self.tmux_session,
+                    error=str(exc),
+                )
 
         args: List[str] = ["respawn-pane"]
         if killing:

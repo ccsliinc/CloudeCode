@@ -298,9 +298,41 @@ Nothing surfaces it to the user. The session then has no hook signal at
 all, falls into the tmux tier above, and its light goes quiet - which
 looks exactly like a session that is genuinely idle.
 
-Measured 2026-09-08 in the live server log: 5,841 such rejections, 3,055
-from `adopted:cloude_Agent_-_Cloude_Code` and 2,757 from a single other
-session, `ses_68c185ce`. This is not fixed here and is worth its own
-punchlist item: the honest treatment is for a session whose hooks are
-being rejected to report `unknown` with a reason, rather than to look
-calm.
+Measured 2026-09-08 in the live server log: 4,325 rejections from
+`adopted:cloude_Agent_-_Cloude_Code` and 364 from `ses_68c185ce`, whose
+run was on 2026-08-28 and whose pane is long gone.
+
+**The cause was a MINT LANDING ON A RUNNING AGENT, and it is now
+recoverable.** `_mint_hook_token` REPLACES the token held for an id. The
+same value was baked into the pane's environment at `new-session` time
+and is read from there at hook-fire time, so it is fixed for the life of
+that process and cannot be re-issued to it: the agent keeps presenting a
+credential the store has moved on from, with no retry and no error
+surface. Traced to the millisecond - an adopt registered the live pane
+under a derived id and minted at 16:16:40.633984Z, and the first
+rejection for that id was logged at 16:16:40.763005Z, 130 ms later. The
+same id had been ACCEPTED minutes earlier (`toast_recorded` 16:11:28Z,
+16:12:56Z), which is what makes this a rotation rather than a
+misconfiguration. It ran for 4h24m and ended only when the owner
+restarted the pane by hand at 20:40:23Z, so a new process inherited the
+current environment.
+
+Two changes close it. `src/core/hook_token_recovery.py` keeps a bounded,
+in-memory ring of tokens this process minted and then superseded; when
+the route's ordinary validation rejects, `recover_hook_token` accepts a
+token ONLY if this server minted it for THAT id on THAT pane and
+replaced it, re-binds the store to the value the running process holds,
+logs `hook_token_rebound_from_superseded` once, and NEVER mints. A token
+matching nothing still rejects, and so does one superseded on a
+different pane. Separately, the respawn path and the boot re-adopt now
+push the current control variables onto the pane's session environment
+BEFORE a new process starts, because tmux copies that environment at
+spawn - a write afterwards reaches the next restart instead of this one.
+
+Two bounds worth stating. The ring is in memory only, so a mint followed
+by a server restart is not recoverable this way (the restart has its own
+answer: the store is reloaded and the boot re-adopt re-keys the pane to
+the id its agent presents). And the SURFACING gap is still open: nothing
+tells the user that a session's hooks are being rejected, so one that
+stays broken still falls to the tmux tier and looks calm. The honest
+treatment there is `unknown` with a reason.

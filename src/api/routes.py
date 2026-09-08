@@ -67,6 +67,10 @@ from src.core.tmux_listing import coerce_listing
 # Imported for its side-effect-free pin: see freeze_startup_version() below.
 from src.core.version import freeze_startup_version, startup_version
 from src.core.agent_family_display import resolve_family_for_display
+from src.core.hook_token_recovery import (
+    RECOVERY_ACCEPTED as HOOK_RECOVERY_ACCEPTED,
+    RECOVERY_UNAVAILABLE as HOOK_RECOVERY_UNAVAILABLE,
+)
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
@@ -2144,14 +2148,38 @@ async def claude_event_hook(request: Request):
 
     # Layer 2 - HMAC token validation, constant time.
     if not session_manager.validate_hook_token(session_id, token):
-        # NEVER log the token value. We log session_id + event_kind so
-        # operators can spot brute-force attempts without leaking the secret.
-        logger.warning(
-            "hook_post_rejected_invalid_token",
-            session_id=session_id,
-            event_kind=event_kind,
+        # SECOND CHANCE FOR OUR OWN MISTAKE, AND ONLY FOR THAT. A mint
+        # that lands on an id whose agent is already running revokes a
+        # credential the agent cannot be handed a replacement for, so it
+        # 403s forever with no retry available from its side - measured
+        # 2026-09-08, 4,325 rejections over 4h24m from a single such
+        # mint. ``recover_hook_token`` accepts ONLY a token this process
+        # itself minted for this id, on this pane, and then superseded;
+        # it re-binds the store to what the running process holds, once,
+        # and NEVER mints. Anything else still rejects.
+        # ``getattr`` because a caller may inject a session-manager
+        # double predating this method, and a missing recovery must
+        # refuse exactly as it always did.
+        recover = getattr(session_manager, "recover_hook_token", None)
+        recovery = (
+            recover(session_id, token)
+            if callable(recover)
+            else HOOK_RECOVERY_UNAVAILABLE
         )
-        raise HTTPException(status_code=403, detail="invalid token")
+        if recovery != HOOK_RECOVERY_ACCEPTED:
+            # NEVER log the token value. We log session_id + event_kind so
+            # operators can spot brute-force attempts without leaking the
+            # secret. ``recovery`` says whether a superseded token was
+            # searched for and not found, or whether there was nothing to
+            # search - a check that could not run must not read as one
+            # that ran and cleared.
+            logger.warning(
+                "hook_post_rejected_invalid_token",
+                session_id=session_id,
+                event_kind=event_kind,
+                recovery=recovery,
+            )
+            raise HTTPException(status_code=403, detail="invalid token")
 
     # Tolerate empty / malformed body - the title/body resolver is
     # defensive and falls through to generic copy when fields are absent.

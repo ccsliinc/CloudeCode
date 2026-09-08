@@ -87,6 +87,42 @@ right. A re-keyed adoption calls `_keep_hook_token` instead, which re-binds the
 tmux name and leaves the secret alone; a derived id still mints exactly as
 before.
 
+**AND WHEN A MINT DOES LAND ON A RUNNING AGENT, IT IS NOW RECOVERABLE
+ONCE.** The rule above is the prevention; this is the net under it,
+because the failure is invisible from inside the pane and cost 4h24m of
+dead hooks on 2026-09-08. Traced to the millisecond: a derived-id adopt
+minted at 16:16:40.633984Z, the first `hook_post_rejected_invalid_token`
+for that id landed 130 ms later at 16:16:40.763005Z, and 4,325 followed
+until the owner restarted the pane by hand at 20:40:23Z. The same id was
+being ACCEPTED minutes before (`toast_recorded` 16:11:28Z), so it was a
+rotation, not a misconfiguration. `src/core/hook_token_recovery.py` keeps
+a bounded IN-MEMORY ring of tokens this process minted and then replaced;
+on a rejection, `SessionManager.recover_hook_token` accepts a value ONLY
+if this server minted it for THAT id on THAT pane and superseded it, then
+re-binds the store to what the running process holds, logs
+`hook_token_rebound_from_superseded` once, and NEVER MINTS - minting is
+the defect, and a recovery that minted would revoke the credential again
+while every log line read correctly. `RECOVERY_NO_MATCH` (searched, not
+found) is kept apart from `RECOVERY_UNAVAILABLE` (nothing to search, or
+the pane binding is unknown); both refuse, but only the first says
+anything about the token. THE NEGATIVE CONTROL IS THE LOAD-BEARING TEST:
+a recovery that accepted broadly would pass the positive test perfectly
+and be a credential bypass. In memory only is deliberate - a mint plus a
+restart is not recoverable this way, and the restart already has its own
+answer.
+
+**AND A RESTART IS THE ONE MOMENT A LIVE PANE'S ENV CAN BE CORRECTED.**
+tmux copies the SESSION environment into a pane's process at spawn, so
+`CLOUDECODE_SESSION_ID` and `CLOUDECODE_HOOK_TOKEN` cannot be pushed into
+a process already running - which is why a hand restart was what ended
+the storm above. `TmuxBackend.respawn` takes `spawn_env` and issues
+`set-environment` BEFORE `respawn-pane`, and the boot re-adopt does the
+same for the next process in each pane. Ordering is the whole claim, so
+`tests/test_respawn_refreshes_pane_env.py` proves it against REAL tmux by
+having the respawned process write its own inherited value: a mock
+asserting two calls happened in order would only be testing its own
+arrangement.
+
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
 sessions and zero held. `src/core/session_boot_readopt{,_plan}.py` now re-adopts
