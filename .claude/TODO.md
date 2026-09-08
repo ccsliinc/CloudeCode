@@ -2544,3 +2544,7 @@ commit-by-commit table in `HANDOFF.md` section 8.
 
 - [x] Restarting the menubar app with osascript quit plus `open -a` relaunches it under an ad hoc launchd job (`application.com.cloudecode.menubar.*`) with stdout to /dev/null, so `/tmp/cloudecode-menubar.log` stops growing and the app runs outside its LaunchAgent. Correct restart: `launchctl kickstart -k gui/$(id -u)/com.cloudecode.menubar`. The server also writes its own log to `~/Library/Application Support/cloude-code-menubar/logs/server.log` regardless. Being added to docs/deploy-mini.md by the reconnect agent.
 - [ ] Reconnect buffer keep (d70e4ab): keep path verified firing in the browser console; the resize nudge that follows made the TUI repaint the viewport, so on-screen rows were lost while scrollback is expected to survive. Measurement of the exact resize escape sequences and the nudge decision in progress.
+
+### 2026-09-08 the eraser is a geometry flap, not the reconnect
+
+- [ ] Console evidence on the Punchlist Two tab: terminal rows flap 41 -> 45 -> 41 around websocket connect/reconnect (`source=ResizeObserver`), and claude answers any geometry change with `ESC[2J` (measured: a same-size resize emits zero bytes, a different size emits a viewport clear plus redraw). The reconnect keep path (f5156aa) works and is not the eraser; an in-flow page element changing the terminal container height by four rows is. Culprit hunt and overlay fix in progress; also a transient-resize guard in the ResizeObserver path.
