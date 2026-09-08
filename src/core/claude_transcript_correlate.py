@@ -73,6 +73,7 @@ pure, easily-fixtured reader.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -188,23 +189,47 @@ def default_projects_dir() -> Path:
     return Path.home() / ".claude" / "projects"
 
 
+#: Every character Claude Code KEEPS when it slugifies a working
+#: directory into a project-directory name. Anything outside this class
+#: becomes a single ``-``.
+#:
+#: THE RULE WAS WRONG UNTIL 2026-09-08 AND THE ERROR WAS INVISIBLE.
+#: It used to map only ``/`` and ``.``, which is right for a plain path
+#: like ``/Users/x/proj`` and wrong for every path this machine actually
+#: uses. Re-measured against the live corpus (919 transcripts carrying a
+#: recorded ``cwd``, 86 project directories): mapping every character
+#: outside ``[A-Za-z0-9-]`` reproduces the real directory name for 908 of
+#: them. The 11 residuals are not a competing rule - they are sessions
+#: whose ``cwd`` MOVED after startup, so the directory records where
+#: Claude began and the record says where it ended up, which is why
+#: :func:`candidate_project_dirs` reads both signals rather than trusting
+#: either alone.
+#:
+#: WHAT THE OLD RULE COST. The owner's directories all live under
+#: ``~/Library/Mobile Documents/com~apple~CloudDocs/`` - a SPACE and two
+#: TILDES, none of which the old rule mapped - so the computed directory
+#: name did not exist on disk, ``correlate_adopted_session`` answered
+#: NO_CANDIDATE for every session on the machine, and the one fallback
+#: that could have filled a missing ``claude_session_uuid`` had never
+#: once succeeded. Underscores (``claude_4`` -> ``claude-4``) were
+#: mismapped for the same reason.
+_PROJECT_DIR_KEEP = re.compile(r"[^A-Za-z0-9-]")
+
+
 def slugify_project_dir(working_dir: str) -> str:
     """Turn a working directory into Claude Code's own project-dir name.
 
-    Description: replicates Claude Code's own slugification exactly -
-      every ``/`` and every ``.`` becomes ``-``, nothing else changes,
-      nothing is lowercased. Verified against this machine's real
-      ``~/.claude/projects`` corpus 2026-08-29, including directories
-      that embed a leading dot (``/Users/x/.claude`` ->
-      ``-Users-x--claude``, the double dash from ``/`` then ``.`` each
-      becoming their own ``-``) and directories with pre-existing
-      hyphens, which pass through unchanged.
+    Description: replicates Claude Code's own slugification - every
+      character outside ``[A-Za-z0-9-]`` becomes a single ``-``, nothing
+      is lowercased, and existing hyphens pass through unchanged. See
+      :data:`_PROJECT_DIR_KEEP` for how the rule was measured and for the
+      narrower rule this replaced.
     Inputs: working_dir (str) - an absolute path.
     Output: str - the directory name Claude Code would use under
       ``~/.claude/projects`` for that path.
     Example: slugify_project_dir('/Users/x/.claude')  # '-Users-x--claude'
     """
-    return "".join("-" if ch in ("/", ".") else ch for ch in working_dir)
+    return _PROJECT_DIR_KEEP.sub("-", working_dir)
 
 
 def _parse_timestamp(value: object) -> Optional[float]:

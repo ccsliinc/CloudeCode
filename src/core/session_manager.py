@@ -4338,10 +4338,34 @@ class SessionManager:
             )
 
         claude_uuid = payload.get("session_id") if isinstance(payload, dict) else None
-        if not isinstance(claude_uuid, str) or not claude_uuid:
+        empty_payload = not isinstance(claude_uuid, str) or not claude_uuid
+        if empty_payload:
+            # THE ONE-SHOT CHANNEL JUST LOST ITS ONLY DELIVERY, and this
+            # is the only moment anything knows it. SessionStart fires
+            # ONCE per conversation; every other hook event repeats
+            # forever, which is why a lost UserPromptSubmit is invisible
+            # and a lost SessionStart is permanent. Measured on the live
+            # server log 2026-09-08: 25 empty SessionStart payloads across
+            # 20 distinct sessions, mapping exactly onto the rows that
+            # carry no claude_session_uuid today - 41 percent of them.
+            #
+            # We used to return UNRESOLVED here and write nothing, which
+            # left the row unable to resume for the rest of its life. The
+            # adopt path has had a second chance since 2026-08-29 (the
+            # correlation ladder in persist_adoption); the create path had
+            # none. It runs here, on the failure path only, so a healthy
+            # hook pays nothing for it. It is allowed to abstain, and
+            # abstaining leaves the row exactly as it was.
+            recovered = self._recover_lineage_without_payload(session_id)
+            if recovered is not None:
+                return recovered
             return LineageResult(
                 outcome=LINEAGE_UNRESOLVED,
-                detail="the SessionStart payload carried no session_id",
+                detail=(
+                    "the SessionStart payload carried no session_id, and the "
+                    "correlation ladder could not identify the conversation "
+                    "from the pane's own evidence either"
+                ),
             )
 
         session = self.get_session(session_id)
@@ -4537,6 +4561,102 @@ class SessionManager:
                 outcome=PERSIST_LISTING_UNAVAILABLE,
                 detail=f"could not record the claim: {exc}",
             )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - close failure is not a verdict
+                pass
+
+    def _recover_lineage_without_payload(self, session_id: str):
+        """Second chance for a SessionStart whose payload arrived empty.
+
+        Description: resolves the pane behind ``session_id`` and runs the
+          SAME correlation ladder the adopt path runs
+          (:mod:`src.core.session_lineage_recovery`), so the create path
+          stops depending on a single hook delivery that cannot be
+          retried. Returns None whenever it could not even attempt the
+          recovery, so the caller reports the original, honest failure
+          rather than a recovery that never ran.
+
+          BEST EFFORT AND SILENT ON FAILURE. This runs inside a live
+          session's hook request; nothing here may raise, and nothing
+          here may turn a telemetry gap into a 500.
+        Inputs: session_id (str) - the cloudecode session id from the
+          hook header.
+        Output: LineageResult | None - a bound result, or None to fall
+          through to the caller's UNRESOLVED.
+        Example: mgr._recover_lineage_without_payload('ses_a')
+        """
+        from src.core.session_lineage import LINEAGE_BOUND, LineageResult
+        from src.core.session_lineage_recovery import (
+            RECOVERY_BOUND,
+            recover_claude_uuid,
+        )
+
+        session = self.get_session(session_id)
+        tmux_name = getattr(session, "tmux_session", None) if session else None
+        if not tmux_name:
+            tmux_name = self._hook_tmux_names.get(session_id)
+        if not tmux_name:
+            return None
+
+        conn = self._writable_datastore_connection()
+        if conn is None:
+            return None
+        try:
+            from src.core.db import transaction
+            from src.core.session_adopt_persist import find_live_instance
+            from src.core.tmux_session_pane_pid import make_pane_pid_probe
+
+            probe_socket, listing = self.list_attachable_sessions_with_socket()
+            socket = probe_socket or self._tmux_socket_name()
+            if not getattr(listing, "ok", False):
+                return None
+            live = find_live_instance(listing, tmux_name)
+            if live is None:
+                return None
+            try:
+                epoch = int(live.get("created_at_epoch"))
+            except (TypeError, ValueError):
+                epoch = None
+
+            working_dir = getattr(session, "working_dir", None) if session else None
+            if not working_dir:
+                working_dir = live.get("working_dir")
+
+            pane_pid = None
+            try:
+                pane_pid = make_pane_pid_probe(socket)(tmux_name)
+            except Exception as exc:  # noqa: BLE001 - a probe is not a verdict
+                logger.debug(
+                    "lineage_recovery_pane_pid_failed",
+                    session=tmux_name,
+                    error=str(exc),
+                )
+
+            with transaction(conn):
+                outcome, uuid = recover_claude_uuid(
+                    conn,
+                    socket=socket,
+                    tmux_name=tmux_name,
+                    tmux_created_epoch=epoch,
+                    working_dir=working_dir,
+                    pane_pid=pane_pid,
+                )
+            if outcome == RECOVERY_BOUND:
+                return LineageResult(
+                    outcome=LINEAGE_BOUND,
+                    detail=(
+                        f"SessionStart delivered no session_id; {uuid} "
+                        "recovered from the pane's own evidence"
+                    ),
+                )
+            return None
+        except Exception as exc:  # noqa: BLE001 - recovery must not crash a hook
+            logger.warning(
+                "lineage_recovery_failed", session=session_id, error=str(exc)
+            )
+            return None
         finally:
             try:
                 conn.close()
