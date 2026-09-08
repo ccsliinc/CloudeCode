@@ -61,6 +61,18 @@ from src.core.session_activity import (
     SessionActivityTracker,
     map_tmux_fallback,
 )
+from src.core.session_startup_gate import (
+    GATE_AWAITING,
+    GATE_UNKNOWN,
+    STARTUP_TOAST_KIND,
+    resolve_startup_gate,
+    should_capture_tail,
+    startup_toast_copy,
+)
+from src.core.session_startup_gate_ledger import (
+    StartupGateLedger,
+    capture_pane_tail,
+)
 from src.core.unread_store import UnreadStore
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
@@ -408,6 +420,17 @@ class SessionManager:
         # for why a restart legitimately forgets this.
         self._activity_tracker = SessionActivityTracker()
 
+        # punchlist 19 - first-hook time and toast-once state per tmux
+        # INSTANCE (epoch + pane pid), which is a different key from the
+        # activity tracker's session_id and has to be: a live respawn
+        # keeps both the session_id and the epoch and only moves the pane
+        # pid. See src/core/session_startup_gate.py's StartupGateLedger.
+        self._startup_gate_ledger = StartupGateLedger()
+        # Toasts raised by the SYNC ``_session_info_for`` and drained by
+        # the ASYNC ``list_session_infos``, which is the only caller able
+        # to await the WS broadcast. Each entry is (session_id, Toast).
+        self._pending_startup_toasts: list[tuple[str, Toast]] = []
+
         # feat/hook-driven-status - durable per-tmux-name read/unread
         # store. Own module (src/core/unread_store.py) rather than more
         # inline dict+I/O here - mirrors pinned_themes' persistence shape
@@ -562,6 +585,16 @@ class SessionManager:
         are cleared (their WS readers will see the queue go quiet and exit
         on disconnect / explicit teardown by the caller).
         """
+        # punchlist 19 - the startup gate is keyed by tmux NAME, so the
+        # name has to be read off the backend BEFORE it is popped below.
+        # Deliberately NOT the same lifetime as the unread flag two blocks
+        # down: unread is a durable fact about a conversation and must
+        # survive detach/re-adopt, while "has this instance fired a hook
+        # yet" describes a PROCESS that this call is dropping.
+        wiped_backend = self.backends.get(session_id)
+        self._startup_gate_ledger.forget(
+            getattr(wiped_backend, "tmux_session", None)
+        )
         self.sessions.pop(session_id, None)
         self.backends.pop(session_id, None)
         self._subscribers.pop(session_id, None)
@@ -2236,6 +2269,16 @@ class SessionManager:
             # lineage path uses, and the reason a surviving agent's status
             # keeps being recorded instead of silently stopping.
             tmux_name = self._hook_tmux_names.get(session_id)
+        # punchlist 19 - EVERY event kind counts here, not just the
+        # lifecycle pair. The gate asks "has this instance produced ANY
+        # sign of life", and a session whose SessionStart POST was dropped
+        # (hooks are droppable - CLAUDE.md) but whose PreToolUse landed is
+        # plainly past its startup prompt. Recording only SessionStart
+        # would rebuild the one-shot-channel-with-no-retry defect that
+        # cost this project sixteen rows with no conversation id.
+        self._startup_gate_ledger.record_hook(
+            tmux_name, epoch=self._instance_epochs.get(session_id)
+        )
         if kind == EVENT_STOP and tmux_name:
             self._unread_store.set_flag(tmux_name, "auto", True)
         self._persist_activity_state(session_id, tmux_name)
@@ -3990,6 +4033,113 @@ class SessionManager:
             logger.warning("tmux_status_map_build_failed", error=str(exc))
             return {}
 
+    def _startup_gate_for(
+        self,
+        *,
+        session_id: str,
+        backend,
+        tmux_name: Optional[str],
+        row: Optional[dict],
+        liveness: str,
+    ) -> str:
+        """Resolve this session's startup-prompt gate, and toast it once.
+
+        Description: the ONE bridge between the listing pass and
+          ``src.core.session_startup_gate``. Everything that needs tmux
+          or mutable state happens here; the ladder itself stays pure and
+          is tested without a tmux server.
+
+          The pane tail - the only expensive input - is captured ONLY
+          when ``should_capture_tail`` says the cheap signals already
+          point at a stuck session (alive, past the grace window, no hook
+          for this instance). On a working box that set is empty, so a
+          steady-state listing poll pays nothing at all for this feature.
+
+          The toast is CLAIMED, not fired: detection keeps answering
+          ``awaiting_startup_prompt`` on every poll for as long as the
+          user leaves the prompt unanswered, so ``claim_toast`` is what
+          makes the same detection twice produce one toast. Recording is
+          synchronous; the WS broadcast is queued for
+          ``list_session_infos`` because this method cannot await.
+        Inputs: session_id (str) - cloudecode id, for the toast record.
+          backend - this session's backend, read for its socket name.
+          tmux_name (str | None) - tmux session name. row (dict | None) -
+          this session's row from the bulk pane query. liveness (str) -
+          one of the ``LIVENESS_*`` verdicts already resolved by the
+          caller.
+        Output: str - one of ``session_startup_gate.ALL_STARTUP_GATES``.
+        Example: self._startup_gate_for(session_id='ses_1',
+            backend=b, tmux_name='cloude_a', row=row,
+            liveness=LIVENESS_LIVE)
+        """
+        if not tmux_name:
+            return GATE_UNKNOWN
+
+        epoch = row.get("created_at_epoch") if row else None
+        pane_pid = row.get("pid") if row else None
+        self._startup_gate_ledger.observe_instance(
+            tmux_name, epoch=epoch, pane_pid=pane_pid
+        )
+        first_hook_at = self._startup_gate_ledger.first_hook_at(tmux_name)
+
+        # LIVENESS_GONE never reaches here (the caller returns before
+        # this point), so the pane is either measured live or unmeasured.
+        # `unknown` must stay None rather than collapsing to False: a
+        # pane we could not read is not a pane we watched die.
+        pane_alive: Optional[bool] = (
+            True if liveness == LIVENESS_LIVE else None
+        )
+
+        age_seconds: Optional[float] = None
+        if epoch is not None:
+            try:
+                age_seconds = max(0.0, time.time() - float(epoch))
+            except (TypeError, ValueError):
+                age_seconds = None
+
+        tail: Optional[str] = None
+        if should_capture_tail(
+            pane_alive=pane_alive,
+            first_hook_at=first_hook_at,
+            instance_age_seconds=age_seconds,
+        ):
+            socket_name = getattr(backend, "socket_name", None)
+            if socket_name:
+                tail = capture_pane_tail(socket=socket_name, name=tmux_name)
+
+        gate = resolve_startup_gate(
+            pane_alive=pane_alive,
+            first_hook_at=first_hook_at,
+            instance_age_seconds=age_seconds,
+            tail=tail,
+        )
+        if gate == GATE_AWAITING and self._startup_gate_ledger.claim_toast(
+            tmux_name
+        ):
+            title, body = startup_toast_copy()
+            try:
+                toast = self.record_toast(
+                    session_id=session_id,
+                    kind=STARTUP_TOAST_KIND,
+                    title=title,
+                    body=body,
+                )
+            except ValueError:
+                # An id the toast store does not know is not a reason to
+                # downgrade a MEASURED gate. The row still says the
+                # session needs a keypress; only the toast is lost.
+                logger.debug(
+                    "startup_gate_toast_unrecordable", session=tmux_name
+                )
+            else:
+                self._pending_startup_toasts.append((session_id, toast))
+                logger.info(
+                    "startup_prompt_detected",
+                    session=tmux_name,
+                    age_seconds=age_seconds,
+                )
+        return gate
+
     def _session_info_for(
         self, session_id: str, status_map: Optional[dict] = None
     ) -> Optional[SessionInfo]:
@@ -4092,6 +4242,19 @@ class SessionManager:
                 row.get("created_at_epoch") if row else None,
             )
 
+        # punchlist 19 - has this session even STARTED, or is it parked on
+        # a folder-trust / login prompt nobody on a phone can see? Every
+        # field above reads healthy for such a session, which is the whole
+        # defect. Resolved after the activity status because it consumes
+        # the same liveness verdict and the same bulk-query row.
+        startup_gate = self._startup_gate_for(
+            session_id=session_id,
+            backend=backend,
+            tmux_name=tmux_session_name,
+            row=row,
+            liveness=liveness,
+        )
+
         # fix/adopted-session-pid - pid is resolved LIVE off the same bulk
         # ``list_pane_status_all()`` row already fetched for status above,
         # instead of trusting ``sess.pty_pid`` (which for an ADOPTED
@@ -4180,6 +4343,7 @@ class SessionManager:
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
             unread=unread,
+            startup_gate=startup_gate,
             # fix/session-ownership-source - ownership is membership in the
             # persisted owned set, NOT the shape of ``session_id``. After a
             # restart the app re-attaches to still-running tmux sessions
@@ -4211,7 +4375,46 @@ class SessionManager:
             info = self._session_info_for(sid, status_map=status_map)
             if info is not None:
                 out.append(info)
+        await self._flush_startup_toasts()
         return out
+
+    async def _flush_startup_toasts(self) -> None:
+        """Broadcast startup-prompt toasts queued by the sync listing pass.
+
+        Description: ``_startup_gate_for`` runs inside the SYNCHRONOUS
+          ``_session_info_for`` and so can record a toast but not fan it
+          out. This drains the queue and sends each one to the sockets
+          bound to its session, exactly as the hook endpoint does for a
+          ``PermissionRequest``.
+
+          The queue is drained BEFORE the send, so a broadcast that
+          raises cannot leave the entry behind to be re-sent on the next
+          poll - the toast is already recorded and the client backfills
+          unacked toasts on attach, which is the recovery path. A failed
+          broadcast must never turn a once-per-instance toast into a
+          once-per-poll one.
+        Inputs: none (drains ``self._pending_startup_toasts``).
+        Output: None.
+        Example: await mgr._flush_startup_toasts()
+        """
+        if not self._pending_startup_toasts:
+            return
+        pending = self._pending_startup_toasts
+        self._pending_startup_toasts = []
+        from src.api.websocket import connection_manager
+        from src.models import ToastNewMessage
+
+        for session_id, toast in pending:
+            try:
+                await connection_manager.broadcast_to_session(
+                    session_id, ToastNewMessage(toast=toast).model_dump_json()
+                )
+            except (RuntimeError, ValueError, ConnectionError) as exc:
+                logger.warning(
+                    "startup_toast_broadcast_failed",
+                    session_id=session_id,
+                    error=str(exc),
+                )
 
     def has_active_session(self) -> bool:
         """True iff at least one session is running AND its backend is alive."""
@@ -5089,25 +5292,18 @@ class SessionManager:
         Output: str | None.
         """
         from src.core.agent_fingerprint import detect_agent_type
-        from src.core.tmux_backend import TmuxBackend
 
-        try:
-            probe_backend = TmuxBackend.for_external(
-                session_name=name,
-                working_dir=Path.home(),
-                socket_name=socket,
-            )
-            scrollback = probe_backend.capture_scrollback(lines=2000)
-            scrollback_text = scrollback.decode("utf-8", errors="replace")
-            return detect_agent_type(scrollback_text)
-        except Exception as exc:  # noqa: BLE001 - a probe must never crash listing
-            logger.debug(
-                "listing_fingerprint_probe_failed",
-                session=name,
-                socket=socket,
-                error=str(exc),
-            )
+        # The capture itself lives in session_startup_gate.capture_pane_tail
+        # - ONE bare-probe capture-pane in the codebase, shared with the
+        # startup-prompt gate, which needs the same bytes for a different
+        # question. It never raises and answers None for "could not read",
+        # which is the same third outcome this method already returns.
+        scrollback_text = capture_pane_tail(
+            socket=socket, name=name, lines=2000
+        )
+        if scrollback_text is None:
             return None
+        return detect_agent_type(scrollback_text)
 
     def _stored_launch_for_listing(self, *, socket, name, epoch):
         """Read this instance's RECORDED launch decision, or NOT KNOWN.

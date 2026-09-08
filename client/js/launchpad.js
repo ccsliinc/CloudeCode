@@ -1019,6 +1019,13 @@ class Launchpad {
                     existing.status = liveStatus;
                     existing.unread = liveUnread;
                     existing.created_by_cloude = !!live.created_by_cloude;
+                    // punchlist 19 - whether this session is parked on an
+                    // unanswered startup prompt. Overwritten
+                    // unconditionally for the same reason the family and
+                    // wrapper above are: a session that has just answered
+                    // its trust prompt must STOP saying it needs a
+                    // keypress, and a `||` would keep the stale value.
+                    existing.startup_gate = live.startup_gate;
                     // feat/agent-family-pills - THREE-OUTCOME family
                     // display. ``agent_family`` is null (not a string)
                     // whenever the server could not determine it -
@@ -1093,6 +1100,11 @@ class Launchpad {
                         parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
                         // See the `existing` branch above.
                         label: live.label !== undefined ? live.label : null,
+                        // See the `existing` branch above. Left undefined
+                        // when the server sent nothing, which the
+                        // renderer normalizes to 'unknown' and paints as
+                        // nothing at all.
+                        startup_gate: live.startup_gate,
                     });
                 }
             }
@@ -1688,6 +1700,14 @@ class Launchpad {
                 // screen stale forever. Same trap the sidebar's theme
                 // field hit - see test_session_theme_tint.node.mjs.
                 wrapper: s.agent_wrapper_label || null,
+                // punchlist 19 - same trap as `wrapper` above, and worse
+                // here: the badge appears and disappears with no other
+                // field on the row changing at all, so without this the
+                // card would keep saying "needs a keypress" after the
+                // prompt was answered.
+                startup: window.SessionStartupGate
+                    ? window.SessionStartupGate.normalize(s.startup_gate)
+                    : 'unknown',
             })),
         });
         if (sig === this._lastRunningSig) {
@@ -1755,11 +1775,22 @@ class Launchpad {
             const wrapperPill = window.LaunchpadWrapperPill
                 ? window.LaunchpadWrapperPill.html(s.agent_wrapper_label)
                 : '';
+            // punchlist 19 - "needs a keypress". Empty string for both
+            // 'ready' and 'unknown'; only a MEASURED block paints. It
+            // sits on the TOP line beside the name rather than down in
+            // the badge row, because it is not a fact about what this
+            // session IS (ownership, family, wrapper, age) - it is the
+            // one thing on the card asking the user to go and do
+            // something. See client/js/session-startup-gate.js.
+            const startupGate = window.SessionStartupGate
+                ? window.SessionStartupGate.indicatorHtml(s.startup_gate)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}${themeAttrs}>
                   <div class="running-session-top">
                     ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>
+                    ${startupGate}
                     ${themeSwatch}
                     ${renamePencil}
                     ${forkBtn}

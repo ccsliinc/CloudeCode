@@ -73,6 +73,13 @@ console.log('[Toast Module] Loading...');
  */
 const TOAST_SEVERITY = {
   PermissionRequest: 3,
+  // punchlist 19 - a session parked on an unanswered startup prompt
+  // (folder trust, login). HIGH for the same reason PermissionRequest is:
+  // it is blocking, and unlike a PermissionRequest the user cannot see it
+  // by glancing at the terminal - the whole defect is that the session
+  // looked connected. Being HIGH also makes it cap-exempt, so it can
+  // never be the thing hidden behind "+3 more".
+  StartupPrompt: 3,
   Notification: 2,
   Stop: 1,
 };
@@ -108,6 +115,13 @@ const COALESCE_KEY = {
   Stop: (t) => `${t.session_id}|Stop|${t.title || ''}`,
   Notification: (t) => `${t.session_id}|Notification|${t.title || ''}|${t.body || ''}`,
   PermissionRequest: () => null,
+  // punchlist 19 - coalesces on the SESSION alone. The server already
+  // claims this toast once per tmux instance, so a second one for the
+  // same session should be impossible; this is the belt to that braces.
+  // A session cannot be blocked at two startup prompts at once, so
+  // collapsing them loses nothing - unlike PermissionRequest, where the
+  // second card carries a different command.
+  StartupPrompt: (t) => `${t.session_id}|StartupPrompt`,
 };
 
 class ToastManager {

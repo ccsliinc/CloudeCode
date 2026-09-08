@@ -146,6 +146,15 @@ console.log('[SessionSidebarFetch Module] Loading...');
             existing.status = status;
             existing.unread = unread;
             existing.created_by_cloude = !!info.created_by_cloude;
+            // punchlist 19 - overwritten UNCONDITIONALLY, never `||`'d
+            // against the previous value. A session that has just
+            // answered its trust prompt flips from
+            // 'awaiting_startup_prompt' to 'ready', and a `||` would
+            // keep the badge on screen after the thing it warns about is
+            // over. A field the server did not send lands on undefined
+            // and the renderer normalizes it to 'unknown', which paints
+            // nothing - the right degradation for an older payload.
+            existing.startup_gate = info.startup_gate;
             // THE LIVE ROW IS THE FRESHER ANSWER ABOUT THE LABEL. It is
             // the payload a rename's own response and the session.renamed
             // repaint come back through, while the attachable probe may
@@ -178,6 +187,7 @@ console.log('[SessionSidebarFetch Module] Loading...');
                 ? info.agent_family_source
                 : null,
             pinned_theme: info.pinned_theme || null,
+            startup_gate: info.startup_gate,
         });
     }
 

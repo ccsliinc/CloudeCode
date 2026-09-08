@@ -86,6 +86,10 @@
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
     <link rel="stylesheet" href="/static/css/launchpad-wrapper-pill.css" />
+    <!-- The "needs a keypress" badge on a session parked at an unanswered
+         startup prompt. After styles.css so it inherits the theme
+         variables; it defines none of its own. -->
+    <link rel="stylesheet" href="/static/css/session-startup-gate.css" />
     <!-- The restart picker's option list. Reuses .modal-overlay /
          .modal-content from styles.css; this file only styles the three
          predicted-outcome states, which must NOT look alike. -->
@@ -746,6 +750,12 @@
          it, and it degrades to today's plain row while the registry is
          still fetching. -->
     <script src="/static/js/session-theme-tint.js"></script>
+    <!-- The "needs a keypress" badge: is this session parked on an
+         unanswered startup prompt (folder trust, login) it has fired no
+         hook past? Must load BEFORE launchpad.js and
+         session-sidebar-rows.js, both of which call
+         window.SessionStartupGate. No dependencies of its own. -->
+    <script src="/static/js/session-startup-gate.js"></script>
     <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
          launchpad.js, whose showFolderPickerModal() is now a delegate to
          window.FolderPickerModal.open(). It reads no controller state -

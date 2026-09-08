@@ -267,6 +267,18 @@ console.log('[SessionSidebarRows Module] Loading...');
                 // row SHOWS, which is why this is conditional.
                 age: (density === 'detailed') ? ageLabel(r.created_at_epoch) : null,
                 theme: r.pinned_theme || null,
+                // punchlist 19 - the "needs a keypress" badge appears and
+                // disappears on its own, without any other field on the
+                // row changing: a session parked on its trust prompt has
+                // the same name, label, status and ownership before and
+                // after somebody answers it. Leaving this out would mean
+                // the badge painted on whichever poll tick happened to
+                // differ for an unrelated reason, and then stayed on
+                // screen after the prompt was answered. Normalized, so an
+                // absent field and an explicit 'unknown' are one value.
+                startup: window.SessionStartupGate
+                    ? window.SessionStartupGate.normalize(r.startup_gate)
+                    : 'unknown',
             })),
         });
     }
@@ -375,6 +387,15 @@ console.log('[SessionSidebarRows Module] Loading...');
     function rowHtml(r, density) {
         const mode = density || 'cozy';
         const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // punchlist 19 - "needs a keypress". Empty string for both 'ready'
+        // and 'unknown', so this adds nothing to a normal row. It rides
+        // at EVERY density including compact, unlike the tmux/external
+        // badge: that badge is redundant with the row's own styling,
+        // while this one is the only thing on screen saying the session
+        // has not started. A density setting must not be able to hide it.
+        const startupGate = window.SessionStartupGate
+            ? window.SessionStartupGate.indicatorHtml(r.startup_gate)
+            : '';
         // TWO STRINGS, NOT INTERCHANGEABLE. `name` is the tmux handle,
         // for the ATTRIBUTES - grip, pin, group filing, delete and
         // reorder all key on it, so it must never be a label. `display` is what
@@ -447,6 +468,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             // full width of the name away from the status dot, which is
             // the other coloured mark on the row.
             themeSwatch +
+            startupGate +
             inlineBadge +
             kebab +
             '</div>' +

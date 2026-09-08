@@ -117,9 +117,9 @@ JSON" shortcut anywhere in this codebase.
 `GET /sessions/list` returns `SessionInfo` objects (`src/models.py`), and the
 fields sit on **two different levels**:
 
-- On the wrapper: `activity_status`, `unread`, `tmux_session`, `agent_type`,
-  `agent_family`, `agent_family_source`, `agent_wrapper_label`, `pinned_theme`,
-  `session_backend`, `recent_logs`, `local_servers`, `stats`
+- On the wrapper: `activity_status`, `unread`, `startup_gate`, `tmux_session`,
+  `agent_type`, `agent_family`, `agent_family_source`, `agent_wrapper_label`,
+  `pinned_theme`, `session_backend`, `recent_logs`, `local_servers`, `stats`
 - On the nested `.session`: `id`, `pty_pid`, `working_dir`, and the rest of the
   `Session` model
 
@@ -153,6 +153,63 @@ in-memory launch, then the row, then the in-memory fingerprint, then nothing.
 The row beats the fingerprint because nothing writes an inference into
 `sessions.agent_type` - `persist_fingerprint_family` writes `agent_family` and
 deliberately leaves that column alone.
+
+**`startup_gate` answers a DIFFERENT question from `activity_status`: has this
+session started at all?** A freshly launched claude parked on its folder-trust
+dialog is a live pane, running a real process, with a pid tmux reports happily -
+and it has fired NO hook, so every field beside it reads healthy and the row
+painted a green `Connected` dot over a session waiting for a keypress. That is
+punchlist 19. `activity_status` describes what a RUNNING agent is doing; this
+says whether it is running. Three values, `ready` / `awaiting_startup_prompt` /
+`unknown`, resolved by `src/core/session_startup_gate.py` (the PURE ladder) with
+its state and its one tmux read next door in
+`src/core/session_startup_gate_ledger.py`, and rendered by
+`client/js/session-startup-gate.js` as `needs a keypress` on the sidebar row and
+the launchpad card, plus a `StartupPrompt` toast claimed ONCE per instance.
+
+**The signal is the ABSENCE of a hook, and it was measured.** Controlled
+experiment, 2026-09-08, claude 2.1.263, throwaway `tmux -L cloude-test` socket
+with the hook POSTs pointed at a local listener: launched in an UNTRUSTED
+directory the pane sat alive on the trust dialog for 35.8s and the listener got
+ZERO POSTs; the dialog was answered at +34s and the first hook, `SessionStart`,
+landed 1.76s later. Launched in the same directory once trusted, three runs,
+`SessionStart` landed 0.49s / 0.50s / 0.41s after pane birth. So a hook is
+positive proof startup finished, and `STARTUP_HOOK_GRACE_SECONDS = 20` is forty
+times the normal cost of getting one.
+
+**A HOOK OUTRANKS THE SCROLLBACK, and the rung order is the whole design.** tmux
+does not erase the trust dialog when it is answered, so a session that answered
+it an hour ago still has the marker text in its tail. Reading the text first
+would pin that session at `awaiting_startup_prompt` forever, which is why
+`resolve_startup_gate` tests the hook before it ever looks at the text. Old
+scrollback is STALE EVIDENCE. Rung 5 (no tail captured) refuses with `unknown`
+while rung 7 (tail read, nothing matched) answers `ready` - the same asymmetry
+the transcript-presence guard uses, for the same reason. `ready` claims only
+"not blocked on a startup prompt", NOT "healthy": a pane measured dead answers
+`ready` here, and `activity_status` is what says it died.
+
+**Steady state costs nothing, because the tail is only read when the cheap
+signals already point at a stuck session.** `should_capture_tail` gates the one
+`capture-pane` on alive + past the grace window + no hook, which on a working
+box is the empty set. Do not move that capture up into the unconditional path.
+
+**The ledger is keyed by the tmux INSTANCE, not by `session_id`, and that is not
+interchangeable with `SessionActivityTracker.hooks_seen`.** A confirmed live
+restart (`respawn-pane -k`) keeps the session_id AND the epoch and moves only the
+pane pid, so `StartupGateLedger` keys on (epoch, pane_pid) and drops the whole
+record - first-hook time and toast claim together - when either is MEASURED to
+move. A null never resets, or the ledger would reset every poll and re-toast
+forever. And every hook kind feeds it, not just `SessionStart`: hooks are
+droppable, and a session whose `SessionStart` was lost but whose `PreToolUse`
+landed is plainly past its prompt. Feeding it one event kind would rebuild the
+one-shot-channel-with-no-retry defect that cost this project sixteen conversation
+ids.
+
+Note for anyone touching `src/core/agent_fingerprint.py`: its
+`^\s*❯\s*1\.\s*Yes, I trust this folder` pattern CANNOT fire on claude 2.1.263.
+The live capture shows no option numbers and the cursor on "No, exit", so the
+options read `❯ No, exit` then `  Yes, I trust this folder`. The startup gate
+matches the sentence text instead, for exactly that reason.
 
 **`unknown family` on a row whose record says `not_launched` is DATA, not a bug.**
 27 of 40 rows on the owner's box carry `agent_type` NULL with
