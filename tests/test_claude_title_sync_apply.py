@@ -306,6 +306,36 @@ def test_a_browser_rename_whose_push_landed_does_not_reannounce(db, transcript):
     assert _read(db, row_id) == ("Browser Name", "Browser Name")
 
 
+def test_a_title_born_from_a_create_label_settles_with_no_spurious_write(
+    db, transcript
+):
+    """A row created with ``title == claude_title`` must stay stable.
+
+    THE SCENARIO THIS PINS. ``create_session`` now writes ``sessions.title``
+    from the launch label at create time (``session_create_persist``), but
+    deliberately leaves ``claude_title`` NULL - the baseline rule is
+    untouched. The FIRST sync pass therefore sees a transcript naming
+    exactly the title already on the row and a NULL ``claude_title``: that
+    is rung 3, BASELINE_RECORDED, not rung 4 (APPLIED as if a TUI
+    ``/rename`` had happened). It must write only ``claude_title`` -
+    never re-write ``title``, and never ask for a broadcast, because
+    nothing about the visible name changed. A SECOND pass, run after the
+    baseline lands, must then be a true no-op.
+    """
+    row_id = _row(db, title="Punchlist Two", claude_title=None)
+    transcript("Punchlist Two")
+    manager = _FakeManager(db)
+
+    first = sync_claude_title(manager, "ses_test")
+    second = sync_claude_title(manager, "ses_test")
+
+    assert first.action == TITLE_BASELINE_RECORDED
+    assert first.broadcast_title is None
+    assert second.action == TITLE_UNCHANGED
+    assert second.broadcast_title is None
+    assert _read(db, row_id) == ("Punchlist Two", "Punchlist Two")
+
+
 def test_a_stale_transcript_never_clobbers_a_newer_browser_label(db, transcript):
     """THE CLOBBER THIS DESIGN EXISTS TO PREVENT.
 

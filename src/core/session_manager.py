@@ -3256,6 +3256,7 @@ class SessionManager:
                     agent_type=resolved_agent_type,
                     agent_launched=bool(auto_start_claude),
                     reuse_session_id=reuse_session_id,
+                    label=label,
                 )
                 create_persist_outcome = persisted.outcome
                 if persisted.epoch is not None:
@@ -5130,6 +5131,7 @@ class SessionManager:
         agent_type: Optional[str] = None,
         agent_launched: Optional[bool] = None,
         reuse_session_id: Optional[int] = None,
+        label: Optional[str] = None,
     ):
         """Write ``origin='created'`` for one tmux session, durably.
 
@@ -5166,6 +5168,11 @@ class SessionManager:
           ``persist_creation`` is the single place that turns them into
           stored provenance. Passing them is what stops a session the
           app itself started from rendering a GUESSED agent type.
+          label (str | None) - the human-chosen name this session was
+          launched with, the same string that became ``--name`` on the
+          command line. Forwarded verbatim; the module-level
+          ``persist_creation`` writes it to ``sessions.title`` only on a
+          fresh insert, never on a row that already exists.
         Output: CreatePersistResult - ``recorded`` is True only when a
           row now carries ``origin='created'``.
         Example: mgr.persist_creation('cloude_a').recorded
@@ -5213,6 +5220,7 @@ class SessionManager:
                     working_dir=working_dir,
                     working_dir_probe=make_working_dir_probe(socket),
                     reuse_session_id=reuse_session_id,
+                    label=label,
                 )
         except Exception as exc:  # noqa: BLE001 - creation must not crash
             logger.warning(

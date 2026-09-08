@@ -151,6 +151,7 @@ def persist_creation(
     agent_type: Optional[str] = None,
     agent_launched: Optional[bool] = None,
     reuse_session_id: Optional[int] = None,
+    label: Optional[str] = None,
     now: Optional[str] = None,
 ) -> CreatePersistResult:
     """Record a just-created tmux instance as ``origin='created'``.
@@ -183,7 +184,17 @@ def persist_creation(
       exists to remove: the launcher KNOWS what it ran, and a row that
       does not say so forces the UI to fall through to a scrollback
       guess for a session the user opened through the interface.
-      now (str | None) - ISO-8601 stamp.
+      label (str | None) - the human-chosen name this session was born
+      with, the same string ``launch_name_args`` turns into ``--name``.
+      Recorded as ``sessions.title`` ONLY on a fresh INSERT (see
+      ``_OPTIONAL_INSERT_COLUMNS`` in ``session_identity.py``, which is
+      applied on INSERT and never on a MERGE) - so a row that already
+      exists, or the reuse/rebind branch below, can never have this
+      overwrite a title the user or a later rename already set. An
+      empty/whitespace label is treated the same as no label, matching
+      the truthiness check ``launch_name_args`` already uses so the row's
+      title and the command's ``--name`` flag agree on what counts as
+      "no label". now (str | None) - ISO-8601 stamp.
     Output: CreatePersistResult.
     Example: persist_creation(conn, socket='cloude', name='cloude_a',
                               listing=listing).recorded
@@ -251,6 +262,15 @@ def persist_creation(
     if resolved_dir is None and working_dir_probe is not None:
         resolved_dir = working_dir_probe(name)
     project_id, attribution = attribute(resolved_dir, _project_roots(conn))
+
+    # THE FIX. A label reaching ``--name`` used to be the only place it
+    # landed - the row itself stayed titleless until the title-sync's
+    # transcript read caught up, which only ever writes ``claude_title``
+    # on its first pass (see claude_title_sync_apply's BASELINE_RECORDED
+    # rung), never the visible ``title``. ``resolved_title`` is INSERT-
+    # only via ``_OPTIONAL_INSERT_COLUMNS``, so this can never clobber a
+    # title on a row that already exists.
+    resolved_title = label if label else None
 
     # PROVENANCE, DECIDED HERE AND NOWHERE ELSE. One place turns the
     # caller's (agent_type, agent_launched) pair into the two stored
@@ -341,6 +361,7 @@ def persist_creation(
         project_attribution=attribution,
         agent_type=recorded_agent_type,
         agent_family_source=family_source,
+        title=resolved_title,
     )
     if result.refused:
         logger.warning(
