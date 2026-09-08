@@ -910,7 +910,25 @@ class TmuxBackend(SessionBackend):
 
             # 2. Ensure pipe-pane is active WITHOUT clobbering a user's
             # existing pipe-pane (e.g. personal logging).
-            await self.ensure_pipe_pane()
+            #
+            # ``attaching=True`` IS THE POINT OF THAT PARAMETER, and
+            # leaving it off is what held ZERO of 21 sessions on the
+            # owner's box after the first boot re-adopt shipped.
+            # ``ensure_pipe_pane`` refuses a backend that is neither
+            # ``_running`` nor ``_is_external``; ``_running`` is not set
+            # until the bottom of this method, so an OWNED backend
+            # attaching to an existing pane failed both halves of that
+            # guard every time, inside a millisecond, before a single
+            # tmux command was issued. We are not weakening the guard to
+            # get past it: its precondition is "this backend has a live
+            # pane", and by this line that has been established TWICE
+            # and more directly than ``_running`` ever establishes it -
+            # ``is_alive()`` at the top of this method and the
+            # ``#{pane_dead}`` probe immediately above. Setting
+            # ``_running`` early instead would have made the backend
+            # claim it was streamable during four tmux round trips, and
+            # leave that claim standing on an object whose setup raised.
+            await self.ensure_pipe_pane(attaching=True)
 
             # 2b. Record the FIFO offset NOW - immediately after
             # pipe-pane is confirmed active. The tail loop will seek
@@ -994,7 +1012,7 @@ class TmuxBackend(SessionBackend):
             external=self._is_external,
         )
 
-    async def ensure_pipe_pane(self) -> None:
+    async def ensure_pipe_pane(self, *, attaching: bool = False) -> None:
         """Start ``pipe-pane`` on pane 0, replacing any pipe already active.
 
         Why query-then-act instead of just calling ``pipe-pane``:
@@ -1015,12 +1033,30 @@ class TmuxBackend(SessionBackend):
         is the toggle form and by this point no pipe is active either way, so
         we want the explicit non-toggle start semantics.
 
-        Inputs: none. Reads ``self.tmux_session`` and ``self._is_external``.
-        Outputs: None. Raises RuntimeError if the backend is not running and
-        not external, if the ``#{pane_pipe}`` probe fails, or if starting the
-        pipe fails.
+        THE THIRD WAY TO SATISFY THE GUARD, and why it is not a hole in
+        it. The guard below means "this backend has a live pane to pipe
+        from". ``_running`` proves that for a backend that CREATED its
+        pane and ``_is_external`` proves it for one built by
+        ``for_external``; neither is true of an OWNED backend attaching
+        to a pane that already exists, which is what the boot re-adopt
+        builds. That caller is not exempted from the precondition - it
+        passes ``attaching=True`` only from inside ``attach_existing``,
+        after ``is_alive()`` and the ``#{pane_dead}`` probe have both
+        answered, so it arrives with a STRONGER and more recent proof of
+        the same fact than either flag carries. Every other caller is
+        unchanged: the default is False, so nothing that is neither
+        running nor external can reach tmux through here by accident.
+
+        Inputs: attaching (bool, keyword-only) - True only from
+        ``attach_existing``, which has just measured the pane alive.
+        Reads ``self.tmux_session``, ``self._running`` and
+        ``self._is_external``.
+        Outputs: None. Raises RuntimeError if the backend is not running,
+        not external and not attaching, if the ``#{pane_pipe}`` probe
+        fails, or if starting the pipe fails.
+        Example: await backend.ensure_pipe_pane(attaching=True)
         """
-        if not self._running and not self._is_external:
+        if not (self._running or self._is_external or attaching):
             raise RuntimeError("backend not running")
 
         target = _safe_target(self.tmux_session)

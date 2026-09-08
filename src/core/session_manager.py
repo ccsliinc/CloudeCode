@@ -27,10 +27,14 @@ import sqlite3
 import time
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from datetime import datetime
 from fastapi import HTTPException
 import structlog
+
+if TYPE_CHECKING:  # annotation only - the real import stays late, see
+    # ``_adopt_identity_for``, which keeps this module's import graph flat.
+    from src.core.session_adopt_identity import AdoptIdentity
 
 from src.config import settings
 from src.models import (
@@ -807,6 +811,81 @@ class SessionManager:
             self._hook_tmux_names[session_id] = tmux_name
         self._persist_hook_tokens()
         return token
+
+    def _keep_hook_token(
+        self, session_id: str, tmux_name: Optional[str] = None
+    ) -> Optional[str]:
+        """Re-bind an EXISTING token's tmux name without rotating the token.
+
+        Description: the counterpart to :meth:`_mint_hook_token` for a
+          session whose id was RECOVERED rather than invented. Minting
+          replaces the stored token, and the agent running inside an
+          adopted pane is holding the old one in its environment with no
+          way to be handed a new one - so minting there revokes a working
+          credential and every subsequent hook POST answers 403. This
+          records the id -> tmux name association (which a restart needs
+          to resolve a hook back to a session) and persists, leaving the
+          secret itself untouched. Idempotent.
+        Inputs: session_id (str) - an id that already holds a token.
+          tmux_name (str | None) - the live tmux session name to bind.
+        Output: str | None - the UNCHANGED stored token, or None when the
+          id holds none (in which case nothing was written and the caller
+          should mint instead).
+        Example: mgr._keep_hook_token('ses_ab12', tmux_name='cloude_x')
+        """
+        existing = self._hook_tokens.get(session_id)
+        if existing is None:
+            return None
+        if tmux_name:
+            self._hook_tmux_names[session_id] = tmux_name
+        self._persist_hook_tokens()
+        return existing
+
+    def _adopt_identity_for(
+        self, name: str, epoch: Optional[int]
+    ) -> "AdoptIdentity":
+        """Resolve the id an adoption of ``name`` should register under.
+
+        Description: the one I/O wrapper around
+          :func:`src.core.session_adopt_identity.resolve_adopt_identity`.
+          The instance-triple read is ``session_store.get_instance`` -
+          the SAME lookup the boot re-adopt plan uses, so the two paths
+          resolve one live pane to one id. A datastore that cannot be
+          opened yields no row and therefore a DERIVED id: not having
+          been able to look is never read as "there is no stored id",
+          it simply means nothing was recovered and the adoption
+          proceeds as it always did.
+        Inputs: name (str) - literal tmux session name. epoch (int|None)
+          - the instance's ``#{session_created}``.
+        Output: AdoptIdentity.
+        Example: self._adopt_identity_for('cloude_x', 1786913001)
+        """
+        from src.core.session_adopt_identity import resolve_adopt_identity
+        from src.core.session_store import get_instance
+
+        conn = self._datastore_connection()
+        socket = self._tmux_socket_name()
+        try:
+            def _lookup(row_name: str, row_epoch: Optional[int]):
+                """Inputs: name, epoch. Output: sessions row dict | None."""
+                if conn is None:
+                    return None
+                return get_instance(
+                    conn, socket=socket, name=row_name, epoch=row_epoch
+                )
+
+            return resolve_adopt_identity(
+                name=name,
+                epoch=epoch,
+                row_lookup=_lookup,
+                hook_names=dict(self._hook_tmux_names or {}),
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error as exc:  # a close failure is not a verdict
+                    logger.debug("adopt_identity_conn_close_failed", error=str(exc))
 
     def get_hook_token(self, session_id: str) -> Optional[str]:
         """Return the active hook token for ``session_id``, or None."""
@@ -5866,11 +5945,22 @@ class SessionManager:
         Multi-session: this NEVER detaches another session and NEVER
         raises 409. ``confirm_detach`` is accepted for API back-compat
         and IGNORED - multiple adopted/owned sessions coexist. If a
-        session with this exact id (``adopted:<name>``) is already
-        registered (re-adopt by another tab), its old backend is wiped
-        first before the fresh attach.
+        session with the RESOLVED id is already registered (re-adopt by
+        another tab, or a session the boot re-adopt is holding), its old
+        backend is wiped first before the fresh attach.
+
+        THE ID IS RESOLVED, NOT MINTED. It used to be the literal
+        ``adopted:<name>``, which is wrong for a session the app already
+        has a row for: that pane's agent carries its create-time id in
+        its environment and a hook token bound to it, so an invented id
+        makes every hook POST it sends answer 403 (94 of them in four
+        minutes, measured 2026-09-08). ``adopted:<name>`` remains the
+        answer for a genuinely external session. See
+        ``src/core/session_adopt_identity.py``.
 
         Ordered sequence (fixes the scrollback/WS race):
+          0. ``persist_adoption`` - the liveness gate and the epoch the
+             id resolution needs, ahead of any teardown.
           1. Build a ``TmuxBackend.for_external(name, ...)`` instance.
           2. ``attach_existing(needs_pipe_setup=True)`` - starts pipe-pane
              BEFORE any scrollback capture so the FIFO is warm.
@@ -5909,13 +5999,72 @@ class SessionManager:
             ValueError: if ``name`` contains tmux target separators.
         """
         _ = confirm_detach  # accepted for API back-compat; intentionally ignored
-        adopted_id = f"adopted:{name}"
+
+        # S7 - PERSIST THE CLAIM BEFORE ATTACHING, so the liveness gate
+        # runs before anything is torn down or built. ``origin`` is
+        # written once and never recomputed, which is what makes an
+        # adopted session stay ours across a restart. A session that
+        # died between the client's listing and this click is caught
+        # here and raised as a NAMED gone error - the route answers
+        # "that session is no longer there" with a refresh, and NO ROW
+        # IS MARKED ADOPTED. Every other persistence failure is logged
+        # and the adoption continues: the user gets his session, and the
+        # badge falls back to the legacy name tier rather than the whole
+        # request failing over a bookkeeping write.
+        #
+        # THIS NOW RUNS FIRST, which is what the paragraph above always
+        # claimed and the code did not do: the stale-backend teardown
+        # used to precede it. Two things follow from the correction. The
+        # id resolved just below needs this step's ``epoch`` and would
+        # otherwise have to re-probe tmux for it. And a session that died
+        # between the listing and the click no longer wipes in-memory
+        # state on its way to raising.
+        from src.core.session_adopt_persist import (
+            PERSIST_SESSION_GONE,
+            AdoptTargetGoneError,
+        )
+
+        adopt_persist = self.persist_adoption(name)
+        if adopt_persist.outcome == PERSIST_SESSION_GONE:
+            raise AdoptTargetGoneError(
+                adopt_persist.detail or "that session is no longer there"
+            )
+
+        # WHICH ID THIS SESSION IS ALREADY KNOWN BY, rather than a fresh
+        # ``adopted:<name>`` minted over the top of it. A live session
+        # with a row for its instance triple is carrying a
+        # ``CLOUDECODE_SESSION_ID`` in its pane environment and a hook
+        # token bound to THAT id; registering it under an invented id
+        # leaves every hook POST it makes answering 403. Measured on the
+        # owner's box 2026-09-08: 94 of them in four minutes, for one
+        # session. See ``src/core/session_adopt_identity.py`` - the
+        # ladder is the boot re-adopt's, imported rather than rebuilt, so
+        # the two paths cannot name one pane two different things. A
+        # session with no row still derives ``adopted:<name>`` exactly as
+        # before.
+        adopt_identity = self._adopt_identity_for(name, adopt_persist.epoch)
+        adopt_session_id = adopt_identity.session_id
+        if adopt_identity.rekeyed:
+            logger.info(
+                "adopt_rekeyed_to_stored_id",
+                session=name,
+                session_id=adopt_session_id,
+                id_source=adopt_identity.id_source,
+                note=(
+                    "this session already had a row, so it is registered "
+                    "under the id its agent presents on hooks rather than "
+                    "a fresh adopted: id"
+                ),
+            )
+
         # Re-adopt of an already-attached session: tear down the stale
         # backend for this exact id first (best-effort) so we don't leak
-        # two pipe-pane tailers on the same FIFO.
-        if adopted_id in self.backends:
-            old_backend = self.backends.get(adopted_id)
-            old_iw = self.idle_watchers.get(adopted_id)
+        # two pipe-pane tailers on the same FIFO. Keyed on the RESOLVED
+        # id, so a session the boot re-adopt is already holding is
+        # replaced rather than duplicated alongside itself.
+        if adopt_session_id in self.backends:
+            old_backend = self.backends.get(adopt_session_id)
+            old_iw = self.idle_watchers.get(adopt_session_id)
             if old_iw is not None:
                 try:
                     await old_iw.stop()
@@ -5932,35 +6081,14 @@ class SessionManager:
                             pass
                     except Exception:
                         pass
-            self._wipe_session_state(adopted_id)
+            self._wipe_session_state(adopt_session_id)
 
-        # S7 - PERSIST THE CLAIM BEFORE ATTACHING, so the liveness gate
-        # runs before anything is torn down or built. ``origin`` is
-        # written once and never recomputed, which is what makes an
-        # adopted session stay ours across a restart. A session that
-        # died between the client's listing and this click is caught
-        # here and raised as a NAMED gone error - the route answers
-        # "that session is no longer there" with a refresh, and NO ROW
-        # IS MARKED ADOPTED. Every other persistence failure is logged
-        # and the adoption continues: the user gets his session, and the
-        # badge falls back to the legacy name tier rather than the whole
-        # request failing over a bookkeeping write.
-        from src.core.session_adopt_persist import (
-            PERSIST_SESSION_GONE,
-            AdoptTargetGoneError,
-        )
-
-        adopt_persist = self.persist_adoption(name)
-        if adopt_persist.outcome == PERSIST_SESSION_GONE:
-            raise AdoptTargetGoneError(
-                adopt_persist.detail or "that session is no longer there"
-            )
         if adopt_persist.epoch is not None:
             # Same cache as the create path - see ``_instance_epochs`` -
-            # keyed on ``adopted_id`` because that is the session_id the
+            # keyed on ``adopt_session_id`` because that is the session_id the
             # hook token (and every hook POST) is minted and looked up
             # under for an adopted session.
-            self._instance_epochs[adopted_id] = adopt_persist.epoch
+            self._instance_epochs[adopt_session_id] = adopt_persist.epoch
         if not adopt_persist.persisted:
             logger.warning(
                 "adopt_not_persisted",
@@ -5985,7 +6113,7 @@ class SessionManager:
         backend = TmuxBackend.for_external(
             session_name=name,
             working_dir=working_dir,
-            on_output=self._make_output_handler(adopted_id),
+            on_output=self._make_output_handler(adopt_session_id),
             socket_name=settings.load_auth_config().session.tmux_socket_name,
             scrollback_lines=settings.load_auth_config().session.scrollback_lines,
         )
@@ -6118,7 +6246,7 @@ class SessionManager:
         # third pid-resolution path - one extra ``display-message``
         # call, paid once per adopt, not on a hot path.
         adopted_session = Session(
-            id=adopted_id,
+            id=adopt_session_id,
             pty_pid=getattr(backend, "pid", None),
             working_dir=str(working_dir),
             status=SessionStatus.RUNNING,
@@ -6159,8 +6287,23 @@ class SessionManager:
         # the token, so a hook arriving after a restart can still be
         # resolved to a session. An adopted session is exactly the case
         # that needs it - its id is minted here and exists nowhere else.
-        self._mint_hook_token(adopted_id, tmux_name=name)
-        spawn_env = self.get_env_for_spawn(adopted_id)
+        #
+        # A RECOVERED ID ALREADY HAS A CREDENTIAL, AND MINTING OVER IT
+        # REVOKES ONE THAT WORKS. ``_mint_hook_token`` replaces any token
+        # held for the id. That is right for an id minted here for the
+        # first time and catastrophic for one we just recovered: the
+        # agent in the pane is holding the OLD token in its environment
+        # and cannot be told about a new one, so a rotation here would
+        # reproduce, under the stored id, the exact 403 storm that
+        # re-keying exists to stop - and it would look like the fix had
+        # landed. So a re-keyed adoption KEEPS the stored token and only
+        # refreshes the id -> tmux name association; a derived id mints
+        # exactly as it always has.
+        if adopt_identity.rekeyed and self.get_hook_token(adopt_session_id):
+            self._keep_hook_token(adopt_session_id, tmux_name=name)
+        else:
+            self._mint_hook_token(adopt_session_id, tmux_name=name)
+        spawn_env = self.get_env_for_spawn(adopt_session_id)
         try:
             for var, val in spawn_env.items():
                 await backend._run_tmux(
@@ -6177,7 +6320,7 @@ class SessionManager:
         self._save_session_metadata(adopted_session)
 
         # Stash the FIFO offset for THIS session's WS tailer to consume.
-        self.adopt_fifo_offsets[adopted_id] = fifo_start_offset
+        self.adopt_fifo_offsets[adopt_session_id] = fifo_start_offset
 
         # Spin up IdleWatcher per the normal create path so notifications
         # fire for adopted sessions too. Router may be None in tests.
@@ -6192,12 +6335,12 @@ class SessionManager:
             except Exception:
                 threshold = 30.0
             iw = IdleWatcher(
-                session_slug=adopted_id,
+                session_slug=adopt_session_id,
                 router=self._notification_router,
                 threshold_s=threshold,
             )
             await iw.start()
-            self.idle_watchers[adopted_id] = iw
+            self.idle_watchers[adopt_session_id] = iw
 
         logger.info(
             "session_adopted_external",
@@ -7202,3 +7345,4 @@ class SessionManager:
         if not sid:
             return None
         return self.adopt_fifo_offsets.pop(sid, None)
+

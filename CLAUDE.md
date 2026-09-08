@@ -40,12 +40,39 @@ create are named `cloude_*`. Constants: `DEFAULT_SOCKET_NAME` (`src/core/tmux_ba
 guessing.
 
 **Created vs adopted is a real distinction, not a detail.** Cloude Code can
-attach to a tmux session it did not create. Those get an id of
-`adopted:<tmux-name>` and are absent from `owned_tmux_sessions`. See the adopt path at
-`src/core/session_manager.py:2596` (`adopted_id = f"adopted:{name}"`).
-Anything that parses, matches, displays or routes on a session id has to handle
-both shapes. Strip the prefix to recover the tmux name; do not assume the id is a
-clean display string.
+attach to a tmux session it did not create. A TRULY external one - no row for
+its instance triple - gets an id of `adopted:<tmux-name>` and is absent from
+`owned_tmux_sessions`. Anything that parses, matches, displays or routes on a
+session id has to handle both shapes. Strip the prefix to recover the tmux name;
+do not assume the id is a clean display string.
+
+**AN ADOPTION RESOLVES THE ID, IT DOES NOT MINT ONE, and the difference is the
+hook path.** `adopt_external_session` opened with the literal
+`adopted_id = f"adopted:{name}"` until 2026-09-08. That is wrong for a session
+the app already has a row for. `get_env_for_spawn` puts `CLOUDECODE_SESSION_ID`
+into the pane at `new-session` time, so the agent inside presents its
+create-time id on every hook POST for life, with a token bound to THAT id;
+registering the same live pane under an invented id makes `validate_hook_token`
+answer False and `routes.py` return **403 - not 410**, so grepping for the
+stale-session code finds nothing and the hook path looks healthy. Measured:
+94 refusals in four minutes for one session. `src/core/session_adopt_identity.py`
+now resolves the id through the boot re-adopt's OWN ladder
+(`session_boot_readopt_plan.resolve_session_id`, imported rather than rebuilt,
+so the two paths cannot name one pane two things), keyed on the instance triple
+via `session_store.get_instance`.
+
+Note it is NOT "a row exists, so reuse its id": `persist_adoption` records the
+sighting BEFORE the id is resolved, so a row exists for every adoption by then.
+The derived rung is reached because a fresh `observed` row carries no
+`legacy_session_id` and no hook-token mapping.
+
+**AND A RECOVERED ID MUST NOT BE RE-MINTED A TOKEN.** `_mint_hook_token`
+REPLACES the token it holds for an id. Called on a re-keyed id it revokes the
+credential the running agent is holding and cannot be handed a replacement for,
+so the 403 storm returns wearing the correct session id and every log line looks
+right. A re-keyed adoption calls `_keep_hook_token` instead, which re-binds the
+tmux name and leaves the secret alone; a derived id still mints exactly as
+before.
 
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
@@ -58,6 +85,27 @@ adoptable, an unreadable table yields `cannot_determine` and holds nothing, and 
 pass is SCHEDULED, never awaited - uvicorn binds at the lifespan `yield`, so an
 awaited pass is dead port (measured: 1.2 ms to bind, versus 49 ms awaited and 945 ms
 serial). It takes its own listing because `discover_existing` carries no epoch.
+
+**IT HELD ZERO ON ITS FIRST REAL BOOT, and the cause is worth keeping.** The
+pass builds an OWNED backend (`build_backend`, not `TmuxBackend.for_external`)
+and calls `attach_existing(needs_pipe_setup=True)`. That reached
+`ensure_pipe_pane`, whose guard was `not self._running and not self._is_external`
+- and `_running` is not set until the BOTTOM of `attach_existing`. So both halves
+were true for every owned session: 20 failures, all `"backend not running"`, all
+inside one millisecond, before a single tmux command was issued.
+
+**A guard whose only exercised caller sets the flag it checks has never been
+tested.** Until the boot re-adopt, the sole caller reaching that branch was the
+external adopt path, where `for_external` sets `_is_external=True` and the guard
+CANNOT fail. 4874 green tests had never observed it raise, because
+`tests/test_boot_readopt.py` is hermetic and its `FakeBackend.attach_existing`
+has no guard to fail. The fix threads intent explicitly -
+`ensure_pipe_pane(attaching=True)`, passed only from inside `attach_existing`,
+after `is_alive()` and the `#{pane_dead}` probe have both answered. It does not
+set `_running` early: that would make the backend claim it was streamable across
+four tmux round trips and leave the claim standing on an object whose setup
+raised. `tests/test_boot_readopt_real_tmux.py` covers it against a REAL backend
+on a real throwaway socket, because a double cannot reproduce a guard.
 
 **Claude Code lifecycle hooks feed the status machine.** `src/core/claude_hooks.py`
 merges a managed hook block into `~/.claude/settings.json` (marked
