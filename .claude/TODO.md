@@ -2522,3 +2522,16 @@ commit-by-commit table in `HANDOFF.md` section 8.
   archived, manifest-verified against the TrueNAS bundle, and also covered
   by Time Machine on 10.0.1.202. Owner's call; nothing depends on the folder
   surviving.
+
+### 2026-09-08 browser re-test on the redeployed build (01ebb85 + 41a89f1)
+
+- [x] Boot re-adopt: 21 of 21 held under stored ids after restart, 0 `adopted:` re-mints (verified on live by the deploy agent).
+- [x] Cards: family pill `claude` on all 21, wrapper pill `claude (chrome)` on the three chrome sessions.
+- [x] Archived toggle: 13 recent -> 912 with the box checked (895 imported visible).
+- [x] New project flow: name -> folder step (parent defaulted to the long-spelling Development root, full path shown) -> session in `.../Development/Punchlist Two`, row working_dir long spelling, claude launched with `--name`, wrapper and conversation id recorded (row 943).
+- [x] Rename TUI -> browser: `/rename` in the pane reached the header on the next hook event; toast carries the new name.
+- [x] Rename browser -> TUI: header rename appended a `custom-title` record to the transcript (`claude_rename_push_landed`); the running TUI status line stays stale until that process restarts (documented limitation).
+- [ ] Row `title` NULL at create despite `--name` landing (row 943): fix in flight.
+- [ ] Test artifacts to archive when the owner says so: sessions `Punchlist Test` (45), `Punchlist Browser Rename(fork)` (46), `Punchlist Two` (943); folders `.../Development/ses_5a756046` and `.../Development/Punchlist Two`.
+- [ ] This orchestrator session (`Agent - Cloude Code`) carries a rotated hook token in its running process (hooks 403 until restarted); a restart through the picker resumes the conversation and fixes it.
+- [ ] Wrapper pill reads `claude` for `claude-skip-permissions`; confirm that is the configured label, not a fallback.
