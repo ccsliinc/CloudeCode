@@ -87,15 +87,22 @@ function fakeTerm(opts = {}) {
         rows: lines.length || 24,
         calls,
         buffer: {
+            // Modelled on the real thing: xterm's `length` counts the
+            // scrolled-off rows too, so it is baseY + rows and the
+            // viewport occupies indices [baseY, length). A fake that set
+            // length to the visible row count alone would make the scan
+            // loop run zero times and every scrollback assertion pass for
+            // the wrong reason.
             active: {
                 baseY: opts.baseY || 0,
                 cursorY: opts.cursorY || 0,
-                length: lines.length,
+                length: (opts.baseY || 0) + lines.length,
                 getLine(i) {
                     if (opts.getLineThrows) {
                         throw new Error('getLine must not be reached here');
                     }
-                    return i < lines.length ? bufferLine(lines[i]) : null;
+                    const v = i - (opts.baseY || 0);
+                    return v >= 0 && v < lines.length ? bufferLine(lines[v]) : null;
                 },
             },
         },
@@ -212,21 +219,32 @@ await test('a full ALTERNATE screen measures non-zero with baseY and cursorY bot
         baseY: 0,
         cursorY: 0,
     });
-    assert.equal(mod.measureBufferLines(term), 4,
-        'last non-blank row is index 3, so 4 lines hold content');
+    assert.equal(mod.measureBufferLines(term), 3, 'three rows carry text');
 });
 
-await test('scrollback (baseY > 0) answers immediately without reading lines', () => {
+await test('scrollback is ADDED to the visible rows, not returned instead of them', () => {
     const mod = loadModule();
-    const term = fakeTerm({ lines: [], baseY: 287, cursorY: 0, getLineThrows: true });
-    assert.equal(mod.measureBufferLines(term), 288,
-        'baseY > 0 cannot happen without content, so the scan must be skipped');
+    const term = fakeTerm({ lines: ['a', '', 'b'], baseY: 287, cursorY: 0 });
+    assert.equal(mod.measureBufferLines(term), 289,
+        '287 scrolled off plus 2 non-blank on screen');
 });
 
-await test('a cursor off the home row answers immediately too', () => {
+await test('the cursor is a FLOOR, not a shortcut - the undercount regression', () => {
     const mod = loadModule();
-    const term = fakeTerm({ lines: [], baseY: 0, cursorY: 9, getLineThrows: true });
-    assert.equal(mod.measureBufferLines(term), 10);
+    // The shipped-then-fixed bug: returning `cursorY + 1` the moment the
+    // cursor left the home row reported bufferLines=2 for a 45-row screen
+    // holding a whole turn, because claude parks its cursor near the top
+    // of the input box. The verdict was still 'keep', so only the LOG was
+    // wrong - which is the kind of wrong that survives review.
+    const lines = new Array(45).fill('');
+    for (let i = 0; i < 30; i++) lines[i] = `conversation row ${i}`;
+    const term = fakeTerm({ lines, baseY: 0, cursorY: 1 });
+    assert.equal(mod.measureBufferLines(term), 30,
+        'a full screen must never report the cursor row as the whole buffer');
+
+    // ...and the floor still covers a screen of pure whitespace.
+    const blank = fakeTerm({ lines: ['', '', ''], baseY: 0, cursorY: 9 });
+    assert.equal(mod.measureBufferLines(blank), 9);
 });
 
 await test('an unreadable buffer measures 0, which routes to the OLD behaviour', () => {
@@ -341,9 +359,32 @@ await test('rejoining the SAME session does NOT reset the terminal', async () =>
     assert.equal(term.calls.reset, 0, 'reset() destroys the conversation');
     assert.equal(term.calls.writes.length, 0,
         'the one-screen capture must not be painted over kept history');
-    assert.equal(tc._needsReconnectRedrawNudge, true,
-        'without the forced resize the kept buffer shows a stale frame until '
-        + 'the agent next writes');
+});
+
+await test('a keep NUDGES NOTHING into repainting', async () => {
+    // Measured against claude 2.1.263 on a throwaway tmux socket,
+    // 2026-09-08: a resize to DIFFERENT dims emits
+    // `ESC[?1000h ESC[?1002h ESC[?1003h ESC[?1006h ESC[?2026h ESC[2J ESC[H`
+    // plus a full 2,440-byte redraw, a resize to the SAME dims emits zero
+    // bytes, and a single 0x0c emits 52 bytes of mode re-assertions with
+    // no erase at all. `ESC[3J` appears in none of them, so scrollback is
+    // never the casualty - but on the alternate screen there IS no
+    // scrollback, so `ESC[2J` clears the entire conversation. A forced
+    // resize was therefore a no-op exactly when it was harmless and an
+    // erase exactly when it was not.
+    const term = fakeTerm({ lines: ['the whole conversation'], cursorY: 40 });
+    const { tc } = loadTerminal(term);
+    tc._currentSession = { session: { id: 'sess-A' } };
+    await tc.reconnectToExistingSession({ session: { id: 'sess-A' } });
+    assert.equal(tc._needsReconnectRedrawNudge, undefined,
+        'the redraw nudge cost the user the very turn it was meant to restore');
+
+    const src = fs.readFileSync(path.join(CLIENT_JS, 'terminal.js'), 'utf8');
+    assert.ok(!/rejoin-keep/.test(src),
+        'no forced resize may be reintroduced on the keep path');
+    assert.ok(/this\.sendResize\('ws\.onopen'\);/.test(src),
+        'the ordinary deduped ws.onopen resize must stay; the request_dims '
+        + 'handshake is what ships the true geometry');
 });
 
 await test('rejoining the same session with an EMPTY buffer resets and paints', async () => {

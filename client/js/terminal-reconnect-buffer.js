@@ -24,12 +24,45 @@
  * THE RULE. Re-attaching to the SAME session id in a terminal whose
  * buffer already holds content means the bytes on screen came from this
  * very pane and are strictly better than the capture, so we keep them.
- * The live stream resumes on the same pane and the TUI repaints its
- * screen on the next output; the reconnect nudge in
- * `Terminal#connectWebSocket` (a FORCED `sendResize`, whose SIGWINCH the
- * server answers with a single 0x0c) guarantees that frame arrives
- * without waiting for the user to type. An empty buffer or a DIFFERENT
- * session has nothing worth keeping and takes the original path.
+ * The live stream resumes on the same pane and the TUI repaints on its
+ * next output. An empty buffer or a DIFFERENT session has nothing worth
+ * keeping and takes the original path.
+ *
+ * NOTHING IS NUDGED INTO REPAINTING, and that is a measurement, not a
+ * preference. The first version of this fix forced a `sendResize` on
+ * the keep path to make the TUI redraw immediately instead of waiting
+ * for the next output. It cost the user the very turn it was meant to
+ * restore. Measured against claude 2.1.263 on a throwaway tmux socket,
+ * 2026-09-08, by piping the pane to a file and reading the bytes:
+ *
+ *   resize 100x30 -> 110x30   ESC[?1000h ESC[?1002h ESC[?1003h
+ *                             ESC[?1006h ESC[?2026h ESC[2J ESC[H
+ *                             + a full 2,440-byte redraw
+ *   resize 110x30 -> 110x30   ZERO bytes (tmux raises no SIGWINCH when
+ *                             the size does not change)
+ *   a single 0x0c             52 bytes, all mode re-assertions
+ *                             (ESC(B, SI, ESC[<u, ESC[>5u, ESC[>4;2m,
+ *                             the mouse modes) - no erase, no redraw
+ *
+ * `ESC[3J` appeared in NONE of them, so a repaint never touches xterm's
+ * normal-buffer scrollback. That is not the danger here. `ESC[2J` is:
+ * on the ALTERNATE screen, which is where every Claude Code session
+ * lives, there is no scrollback at all and `baseY` is pinned at 0, so
+ * the viewport IS the whole conversation and clearing it clears
+ * everything the user could see.
+ *
+ * Put the two measurements together and the nudge could never have been
+ * worth it: at unchanged dims it emitted nothing, and at changed dims
+ * the only thing it emitted was the erase. A no-op when it was harmless
+ * and destructive whenever it was not. The geometry is still shipped -
+ * the server's `request_dims` handshake forces a `sendResize` on every
+ * connect - so dropping this loses no correctness, only the impatience.
+ *
+ * The cost, stated plainly: a kept buffer shows the last frame that
+ * arrived before the socket dropped, so anything the agent printed
+ * while the server was down is not on screen and does not come back.
+ * The client never reads the server's pipe file, so that output was
+ * unrecoverable from here either way. It repaints on the next write.
  *
  * WHY THE CAPTURE SIZE NEVER OVERRIDES A KEEP. A capture bigger than the
  * buffer looks like evidence the server knows more than we do. It is
@@ -45,22 +78,14 @@
  * mechanics without the prose. Both `Terminal#connectToSession` and
  * `Terminal#reconnectToExistingSession` skip THREE things on a keep - the
  * `term.reset()`, the capture paint, and the "[Session created]" banner -
- * and set two flags instead:
+ * and set ONE flag, `_pendingPostConnectScroll`, which pins the viewport
+ * to the bottom once the socket is up, the same as the capture-paint
+ * path, because a rejoin is an explicit "back to live" intent. It is a
+ * local xterm scroll and writes nothing to the wire.
  *
- *   `_needsReconnectRedrawNudge`  read once in `connectWebSocket`'s
- *       `ws.onopen`, where it turns the routine `sendResize('ws.onopen')`
- *       into a FORCED one. It has to be forced: a kept rejoin has the same
- *       cols and rows as before, so `sendResize`'s dedup gate would drop
- *       the frame, tmux would never see a SIGWINCH, and the kept buffer
- *       would sit on the frame from before the drop until the agent next
- *       wrote something. The server answers that SIGWINCH with a single
- *       0x0c, which is the redraw. The client still must NOT write its own
- *       0x0c - two within ~2s is Claude Code's `/clear` chord, and that
- *       wipes the user's context. That is why this reuses the resize path
- *       rather than adding a write.
- *   `_pendingPostConnectScroll`   pins the viewport to the bottom once the
- *       socket is up, same as the capture-paint path, because a rejoin is
- *       an explicit "back to live" intent.
+ * No other write is added on this path. In particular the client must
+ * never send its own 0x0c: two within ~2s is Claude Code's `/clear`
+ * chord and it wipes the user's context.
  *
  * Loaded as a plain script (no build step). Exposes
  * `window.TerminalReconnectBuffer`.
@@ -103,21 +128,29 @@
      *    rows that have scrolled off the top, and it is pinned at 0 on
      *    the alternate screen no matter how much has been drawn.
      *
-     * So this reads all three fields, each for a different reason:
-     * `baseY > 0` is an immediate yes (scrollback cannot exist without
-     * content), `cursorY > 0` is an immediate yes (the cursor only
-     * leaves the home row after something was written), and only when
-     * both are 0 does it scan the viewport - bounded by `rows`, tens of
-     * lines - for a single non-blank row. That last case is the one that
-     * matters for a TUI, which can park its cursor at the home row with
-     * a full screen behind it.
+     * So this is `baseY` PLUS the number of non-blank rows in the
+     * viewport, and it always runs the scan. An earlier version took a
+     * shortcut - return `cursorY + 1` as soon as the cursor was off the
+     * home row, on the reasoning that a moved cursor already proves
+     * content - and it reported `bufferLines=2` on a live 45-row screen
+     * holding a full turn, because claude's cursor sits near the top of
+     * its input box. The verdict was still right (2 is non-zero, so
+     * 'keep'), which is exactly why it survived: a number that is only
+     * ever compared against zero can be wildly wrong and still look
+     * correct. It is logged, so it has to be true. The scan is bounded
+     * by `rows` - tens of lines, not the scrollback - so paying for it
+     * every time costs nothing worth saving.
+     *
+     * `cursorY` remains a FLOOR for the one case the scan cannot see: a
+     * screen of only whitespace with the cursor moved down it.
      *
      * @param {object|null|undefined} term - an xterm.js Terminal, or any
      *   falsy value.
-     * @returns {number} count of leading lines holding content, 0 when
-     *   the buffer is empty or unreadable. Unreadable reads as 0 on
-     *   purpose: it routes to REPLACE, which is the behaviour that
-     *   shipped, so a broken read can never be worse than the old code.
+     * @returns {number} rows of real content: scrolled-off rows plus
+     *   non-blank visible rows. 0 when the buffer is empty or
+     *   unreadable. Unreadable reads as 0 on purpose: it routes to
+     *   REPLACE, which is the behaviour that shipped, so a broken read
+     *   can never be worse than the old code.
      * @example
      *   measureBufferLines(term) // 412 on a live conversation, 0 after reset()
      */
@@ -128,23 +161,20 @@
             if (!buf) return 0;
 
             var baseY = typeof buf.baseY === 'number' ? buf.baseY : 0;
-            if (baseY > 0) return baseY + 1;
-
             var cursorY = typeof buf.cursorY === 'number' ? buf.cursorY : 0;
-            if (cursorY > 0) return cursorY + 1;
-
             var length = typeof buf.length === 'number' ? buf.length : 0;
-            if (!length || typeof buf.getLine !== 'function') return 0;
 
-            var last = -1;
-            for (var i = 0; i < length; i++) {
-                var line = buf.getLine(i);
-                var text = line && typeof line.translateToString === 'function'
-                    ? line.translateToString(true)
-                    : '';
-                if (text && text.trim() !== '') last = i;
+            var visible = 0;
+            if (length && typeof buf.getLine === 'function') {
+                for (var i = baseY; i < length; i++) {
+                    var line = buf.getLine(i);
+                    var text = line && typeof line.translateToString === 'function'
+                        ? line.translateToString(true)
+                        : '';
+                    if (text && text.trim() !== '') visible++;
+                }
             }
-            return last + 1;
+            return Math.max(baseY + visible, baseY + cursorY);
         } catch (err) {
             // Deliberately swallowed: an unreadable buffer is not a
             // reason to refuse the reconnect, and 0 routes to REPLACE,

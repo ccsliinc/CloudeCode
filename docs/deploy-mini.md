@@ -83,3 +83,36 @@ directly:
 It is a plain bash test (same shape as `tests/test_resolve_port.sh`) since
 there is no pytest bridge for shell functions; it prints PASS/FAIL per
 case and exits non-zero if any case fails.
+
+## Restarting the live app: `launchctl kickstart`, not quit-and-reopen
+
+`deploy-mini.sh --target live` does NOT relaunch the Electron app: it kills
+the pid owning port 8000 and lets the menubar app respawn the server. That
+is enough for a code deploy. When you need to restart the APP itself, use:
+
+    launchctl kickstart -k gui/$(id -u)/com.cloudecode.menubar
+
+Do **not** restart it with `osascript` quit plus `open -a`. That path
+starts the app as a fresh GUI launch, which macOS registers under an ad
+hoc launchd job named `application.com.cloudecode.menubar.<hash>` instead
+of the real `com.cloudecode.menubar` label. The app runs and serves
+normally, so nothing looks wrong - but the ad hoc job's stdout goes to
+`/dev/null`, so `/tmp/cloudecode-menubar.log` silently stops growing and
+the next person to debug a boot problem finds a log that ends hours ago
+with no error explaining why. `kickstart -k` stops and restarts the real
+job in place, keeping the label and the log.
+
+Verify after any restart:
+
+    launchctl list | grep cloudecode
+
+The real `com.cloudecode.menubar` label must show a pid, and no
+`application.com.cloudecode.menubar.*` entry may be present. Confirm
+`/tmp/cloudecode-menubar.log` has a current mtime and is growing.
+
+The two logs are different files and answer different questions:
+
+| File | Holds |
+|---|---|
+| `/tmp/cloudecode-menubar.log` | the Electron menubar wrapper's own stdout |
+| `~/Library/Application Support/cloude-code-menubar/logs/server.log` | the Python server, structlog JSON - this is where `boot_readopt_complete` lives |
