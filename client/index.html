@@ -670,11 +670,17 @@
 
         <div class="terminal-container">
             <div id="terminal"></div>
-        </div>
-
-        <div class="local-servers" id="localServersContainer" style="display: none;">
-            <h3>Local Servers</h3>
-            <div id="localServersList"></div>
+            <!-- INSIDE the terminal container, and absolutely positioned
+                 there (see .local-servers), so that showing or hiding it
+                 cannot change #terminal's height. It used to be a sibling
+                 below this container, and every appearance shrank the
+                 terminal by ~4 rows, which tmux answered with a SIGWINCH
+                 and claude with ESC[2J - erasing the conversation a few
+                 seconds after every reconnect. -->
+            <div class="local-servers" id="localServersContainer" style="display: none;">
+                <h3>Local Servers</h3>
+                <div id="localServersList"></div>
+            </div>
         </div>
 
         <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always
@@ -848,6 +854,15 @@
          window.TerminalMetrics.guardedFit so an untrustworthy cell
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
+    <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
+         whose requestFit() asks it how long to wait and whose flush()
+         asks it whether a settled grid is worth a pty_resize at all. A
+         resize costs the user an ESC[2J on the alternate screen, so a
+         layout element that flickers must not reach tmux. Pure - inputs
+         in, one verdict out, no state and no events. If it is missing
+         terminal-layout.js keeps its original debounce and ships every
+         fit, which is the behaviour that shipped. -->
+    <script src="/static/js/terminal-resize-settle.js"></script>
     <script src="/static/js/terminal-layout.js"></script>
     <!-- Must load BEFORE terminal.js: terminal.js's withTerminalBackgroundOpacity
          wrapper reads window.TerminalBackgroundOpacity at call time, but

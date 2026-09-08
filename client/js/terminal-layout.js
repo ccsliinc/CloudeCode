@@ -131,6 +131,31 @@ console.log('[TerminalLayout Module] Loading...');
         }
 
         retries = 0;
+
+        // A pty_resize is not cheap: tmux answers it with SIGWINCH and
+        // claude answers that with ESC[2J + a full redraw, which on the
+        // alternate screen erases the whole visible conversation. So an
+        // UNANNOUNCED change that settled back to the geometry the pane
+        // already has is dropped here rather than costing the user their
+        // screen. Announced changes (window resize, rotation, sidebar
+        // pin, the handshake) are never suppressed.
+        const settle = window.TerminalResizeSettle;
+        if (settle && settle.decideResize({
+            source: reason,
+            cols: controller.term.cols,
+            rows: controller.term.rows,
+            lastCols: controller.lastSentCols,
+            lastRows: controller.lastSentRows,
+        }) === 'skip_transient') {
+            console.log(
+                `[TERM-RESIZE] transient ignored ${controller.term.cols}x`
+                + `${controller.term.rows} source=${reason} `
+                + `shown=${settle.describeCulprit(
+                    document.getElementById('terminal')
+                    && document.getElementById('terminal').parentElement)}`);
+            return;
+        }
+
         // sendResize is the ONLY path to tmux. A client-side fit that is
         // not followed by this leaves xterm and the pty disagreeing about
         // the grid, which is what "tmux does not resize" looks like.
@@ -175,7 +200,15 @@ console.log('[TerminalLayout Module] Loading...');
             return;
         }
         if (timer) clearTimeout(timer);
-        timer = setTimeout(() => flush(reason), DEBOUNCE_MS);
+        // An unannounced (observer) change is measured LATE on purpose:
+        // a show/hide flap that resolves inside the settle window is then
+        // never sampled mid-flap, and the one measurement taken is the
+        // settled geometry. See terminal-resize-settle.js.
+        const settle = window.TerminalResizeSettle;
+        const waitMs = settle
+            ? settle.settleMsFor(reason, DEBOUNCE_MS)
+            : DEBOUNCE_MS;
+        timer = setTimeout(() => flush(reason), waitMs);
     }
 
     /**
