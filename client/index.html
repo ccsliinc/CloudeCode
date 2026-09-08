@@ -769,6 +769,12 @@
          while painting the row. Pure string rendering, no state, no
          events - it reads nothing else, so this is its only constraint. -->
     <script src="/static/js/launchpad-wrapper-pill.js"></script>
+    <!-- Whether a repaint of the project tree is worth doing at all. Must
+         load BEFORE launchpad.js, whose renderProjectList() and
+         renderRunningSessions() both consult it on every 5s poll tick.
+         Pure decision logic - markup and screen state in, a verdict out -
+         so this is its only ordering constraint. -->
+    <script src="/static/js/project-list-render-guard.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

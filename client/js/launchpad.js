@@ -8,6 +8,13 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // The markup `#project-list` is currently showing, kept so the
+        // 5s poller can tell a repaint that would change something from
+        // one that would rebuild ~800 identical nodes. null means nothing
+        // has been painted yet, which always paints. See
+        // client/js/project-list-render-guard.js for why the signature is
+        // the markup itself rather than a hand-listed set of fields.
+        this._lastProjectListSig = null;
         // feat/db-is-authoritative - the provenance report for the list
         // above: which source answered, and whether cloude.db and
         // config.json agree. null means the check has not answered, which
@@ -505,11 +512,26 @@ class Launchpad {
      * Runs forever; does not pause on tab hide - external tmux sessions
      * born while the tab is backgrounded should still surface the moment
      * the user returns.
+     *
+     * IT DOES PAUSE WHEN THE LAUNCHPAD IS NOT THE SCREEN ON DISPLAY, and
+     * that is a different thing from a hidden tab. Nothing this tick
+     * fetches is read anywhere but the launchpad's own two lists, so
+     * while the terminal or the archive is up it was spending four HTTP
+     * requests and two full DOM rebuilds every five seconds to update a
+     * screen nobody could see. Resuming is already wired and needs
+     * nothing here: App.showLaunchpad() ends in loadProjects(), which is
+     * a complete refresh. Only a MEASURED `hidden` pauses - see
+     * ProjectListRenderGuard.shouldPoll for why an unreadable screen
+     * state keeps polling.
      */
     _startRunningSessionsPoller() {
         if (this._runningPollInterval) return;
         this._runningPollInterval = setInterval(() => {
             if (!(window.Auth && typeof window.Auth.isAuthenticated === 'function' && window.Auth.isAuthenticated())) {
+                return;
+            }
+            if (window.ProjectListRenderGuard
+                    && !window.ProjectListRenderGuard.shouldPoll(document)) {
                 return;
             }
             this.loadRunningSessions().catch(err => {
@@ -1600,6 +1622,16 @@ class Launchpad {
     renderRunningSessions() {
         const container = document.getElementById('running-sessions-list');
         if (!container) return;
+        // A REPAINT MID-EDIT DELETES WHAT THE USER IS TYPING. The inline
+        // rename input lives in THIS list, and every branch below ends in
+        // an innerHTML write, so a poll tick that landed while the input
+        // was open destroyed the field, the caret and the typed text with
+        // no error anywhere. The signature diff does not save it: a
+        // status flip on any OTHER row is a real change and paints. The
+        // skip stores nothing, so the next tick paints once the rename
+        // has settled. Same predicate the project list uses.
+        const guard = window.ProjectListRenderGuard;
+        if (guard && guard.isBusy({ container, doc: document })) return;
         const section = document.getElementById('running-sessions-section');
         const listing = this.runningSessionsListing || { ok: true, reason: null };
         const attentionHtml = this._renderListingAttentionHtml();
@@ -4384,10 +4416,52 @@ class Launchpad {
         `;
     }
 
+    /**
+     * Paint the project tree, but only when painting it would change it.
+     *
+     * Description: builds the markup, asks
+     *   ``window.ProjectListRenderGuard`` whether it is worth writing,
+     *   and writes plus re-binds only when the answer is yes. The three
+     *   reasons it says no - identical markup, launchpad not on screen,
+     *   user mid-interaction inside the list - are that module's, not
+     *   this one's, and every one of them leaves the stored signature
+     *   alone so the next tick reconsiders. Without the guard present
+     *   (module missing, load-order regression) it paints
+     *   unconditionally, which is exactly the old behaviour.
+     * Inputs: none; reads this.projects, this.projectPresence,
+     *   this.projectAuthority and the session groups.
+     * Output: void.
+     */
     renderProjectList() {
         const projectListEl = document.getElementById('project-list');
         if (!projectListEl) return;
+        const html = this._projectListHtml();
+        const guard = window.ProjectListRenderGuard;
+        const verdict = guard
+            ? guard.decide({
+                html,
+                lastSignature: this._lastProjectListSig,
+                container: projectListEl,
+            })
+            : { paint: true, signature: html };
+        if (!verdict.paint) return;
+        this._lastProjectListSig = verdict.signature;
+        projectListEl.innerHTML = html;
+        this._bindProjectListHandlers(projectListEl);
+    }
 
+    /**
+     * Build the project tree's markup, writing nothing.
+     *
+     * Description: split out of renderProjectList() so the guard above
+     *   can compare what WOULD be painted against what IS painted. It
+     *   has to stay pure for that comparison to mean anything: no DOM
+     *   writes, no fetches, no state mutation.
+     * Inputs: none.
+     * Output: string - the whole `#project-list` inner HTML.
+     * Example: const same = lp._projectListHtml() === lp._lastProjectListSig;
+     */
+    _projectListHtml() {
         // feat/db-is-authoritative - the provenance banner is drawn in
         // BOTH the empty and populated cases. An empty list is exactly
         // when the user most needs to know whether the datastore
@@ -4397,13 +4471,12 @@ class Launchpad {
         const archivedNoticeHtml = this._renderArchivedNoticeHtml();
 
         if (this.projects.length === 0) {
-            projectListEl.innerHTML = authorityHtml + archivedNoticeHtml + `
+            return authorityHtml + archivedNoticeHtml + `
                 <div class="launchpad-empty">
                     no projects yet<br>
                     <small style="color: #666;">use + new to add one</small>
                 </div>
             `;
-            return;
         }
 
         const groups = this._buildProjectSessionGroups();
@@ -4547,8 +4620,21 @@ class Launchpad {
         const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
         const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
 
-        projectListEl.innerHTML = authorityHtml + archivedNoticeHtml + projectNodesHtml + noProjectHtml + attentionHtml;
+        return authorityHtml + archivedNoticeHtml + projectNodesHtml + noProjectHtml + attentionHtml;
+    }
 
+    /**
+     * Re-bind every handler the project tree's markup needs.
+     *
+     * Description: called ONLY after a real write, because innerHTML
+     *   destroys the nodes these listeners were attached to. The two
+     *   delegated binders below guard themselves against re-binding; the
+     *   per-row loops cannot, which is precisely why a repaint that
+     *   changes nothing is worth skipping.
+     * Inputs: projectListEl (Element) - the container just written to.
+     * Output: void.
+     */
+    _bindProjectListHandlers(projectListEl) {
         this._bindProjectNodeToggles();
         this._bindProjectSessionRowClicks();
 
