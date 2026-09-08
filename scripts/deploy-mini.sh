@@ -33,12 +33,25 @@
 #   ./scripts/deploy-mini.sh --dry-run       # print what would go
 #   ./scripts/deploy-mini.sh --verify-only   # hash the target, copy nothing
 #
+# MIRROR, NOT MERGE (Punchlist #23). Every real destination write goes
+# through ditto, which only ever adds and overwrites - a file removed from
+# git stays behind on the target forever, and the old verification only
+# ever hashed files that SHOULD be present, so it could never see one that
+# should not be. Every deploy now also prunes any file under a
+# destination's src/ or client/ that is not tracked at HEAD (dl_prune_stale
+# in deploy-lib.sh), and verification checks BOTH directions: the tracked
+# files are present and correct (dl_verify) AND nothing untracked remains
+# (dl_verify_no_extra). The prune baseline is EVERY tracked src/client
+# file regardless of extension, not just the EXT_RE set this script
+# copies - a tracked-but-undeployed asset (a doc, a vendor font) must
+# never be mistaken for a leftover.
+#
 # Exit codes:
-#   0  DEPLOYED and verified
-#   1  DEPLOY FAILED (transfer, copy or restart)
+#   0  DEPLOYED and verified (both directions: present+correct, and clean)
+#   1  DEPLOY FAILED (transfer, copy, prune or restart)
 #   2  NOTHING DEPLOYED (no files matched; the target was NOT updated)
 #   3  CANNOT DETERMINE (verification could not be evaluated)
-#   4  VERIFICATION FAILED (bytes on the target do not match this Mac)
+#   4  VERIFICATION FAILED (bytes don't match, OR an untracked file remains)
 #  64  usage error
 set -euo pipefail
 
@@ -114,8 +127,12 @@ say_failed()    { echo; echo "== DEPLOY FAILED ==" >&2; }
 # nothing: `deploy-mini.sh --target live` right after a commit means "put
 # the committed code on the mini", and the old behaviour of printing
 # "nothing to deploy" and exiting was repeatedly read as a successful
-# deploy. Deleted files are excluded; this copies, it does not remove,
-# and a delete needs a human looking at it.
+# deploy. A deleted file is excluded from THIS list (the copy step never
+# needs to touch it) but is not exempt from the deploy: the prune step
+# below mirrors every destination against all_tracked_files(), always the
+# FULL current tracked set regardless of which of these two functions
+# picked $FILES, so a git-level delete is removed from every destination
+# on the very next deploy of anything, incremental or not.
 committed_files() { git ls-files src client | grep -E "$EXT_RE" || true; }
 changed_files() {
     { git diff --name-only --diff-filter=d -- src client
@@ -123,6 +140,14 @@ changed_files() {
       git ls-files --others --exclude-standard -- src client
     } | sort -u | grep -E "$EXT_RE" || true
 }
+# all_tracked_files - the mirror baseline: every tracked src/client path,
+# ANY extension. Broader than committed_files() (EXT_RE only, the set
+# this script actually copies) on purpose - a tracked file this script
+# never deploys (a doc, a vendor font under client/vendor) is still
+# legitimate at HEAD and must never be pruned as if it were a leftover
+# from a git-level delete. Used only to decide what counts as stale, never
+# to decide what to copy.
+all_tracked_files() { git ls-files src client | LC_ALL=C sort; }
 
 SELECTION=""
 if [ "$VERIFY_ONLY" -eq 1 ] || [ "$ALL" -eq 1 ]; then
@@ -164,16 +189,24 @@ fi
 
 LIST=$(mktemp -t cloudedeploy)
 LOCAL_SHA=$(mktemp -t cloudedeploy)
+ALLTRACKED=$(mktemp -t cloudedeploy)
 STAGE="/tmp/cloude-deploy-stage-$$-$(date +%s)"
 # shellcheck disable=SC2329  # invoked indirectly, by the trap below
-cleanup() { rm -f "$LIST" "$LOCAL_SHA"; }
+cleanup() { rm -f "$LIST" "$LOCAL_SHA" "$ALLTRACKED"; }
 trap cleanup EXIT
 printf '%s\n' "$FILES" > "$LIST"
 dl_local_hashes "$LIST" "$LOCAL_SHA"
+all_tracked_files > "$ALLTRACKED"
 
 if [ "$DRY" -eq 1 ]; then
     echo
     echo "(dry run, nothing copied and nothing verified)"
+    echo
+    echo "mirror preview (read-only; nothing below is deleted by --dry-run):"
+    for i in $(seq 0 $(( ${#DESTS[@]} - 1 ))); do
+        echo "checking ${DEST_NAMES[$i]} for files not tracked at HEAD ..."
+        dl_prune_stale "$HOST" "${DESTS[$i]}" "$ALLTRACKED" 1 || true
+    done
     exit 0
 fi
 
@@ -189,17 +222,24 @@ if [ "$VERIFY_ONLY" -eq 1 ]; then
         set +e
         dl_verify "$HOST" "${DESTS[$i]}" "$LIST" "$LOCAL_SHA" "${DEST_NAMES[$i]}"
         V=$?
+        dl_verify_no_extra "$HOST" "${DESTS[$i]}" "$ALLTRACKED" "${DEST_NAMES[$i]}"
+        NX=$?
         set -e
-        if [ "$V" -eq 0 ]; then echo "  OK: $COUNT/$COUNT files match this Mac."
-        else RC=$V; fi
+        if [ "$V" -eq 0 ]; then echo "  OK: $COUNT/$COUNT files match this Mac."; fi
+        if [ "$NX" -eq 0 ]; then echo "  OK: no untracked files under src/ or client/."; fi
+        RC=$(dl_combine_rc "$RC" "$(dl_combine_rc "$V" "$NX")")
     done
     if [ "$RC" -ne 0 ]; then
         say_failed
-        echo "VERIFICATION FAILED: the target does not hold the bytes on this Mac." >&2
+        if [ "$RC" -eq 4 ]; then
+            echo "VERIFICATION FAILED: the target's bytes don't match this Mac, or holds files not tracked at HEAD." >&2
+        else
+            echo "CANNOT DETERMINE: verification could not be evaluated for at least one destination." >&2
+        fi
         exit "$RC"
     fi
     echo
-    echo "== VERIFIED ==" ; echo "all destinations match this Mac. Nothing was copied."
+    echo "== VERIFIED ==" ; echo "all destinations match this Mac, mirror-clean. Nothing was copied."
     exit 0
 fi
 
@@ -249,9 +289,27 @@ for i in $(seq 0 $(( ${#DESTS[@]} - 1 ))); do
 done
 dl_unstage "$HOST" "$STAGE"
 
+# ------------------------------------------------------------------ prune
+# ditto only ever added and overwrote. Mirror each destination against
+# the FULL tracked set now, before anything is verified or restarted, so a
+# file removed from git does not survive this deploy - Punchlist #23.
+for i in $(seq 0 $(( ${#DESTS[@]} - 1 ))); do
+    echo "pruning ${DEST_NAMES[$i]} (files not tracked at HEAD) ..."
+    if ! dl_prune_stale "$HOST" "${DESTS[$i]}" "$ALLTRACKED" 0; then
+        say_failed
+        echo "PRUNE FAILED at ${DEST_NAMES[$i]}:" >&2
+        echo "  ${DESTS[$i]}" >&2
+        echo "The new/changed files were copied but a stale file could not be removed." >&2
+        exit 1
+    fi
+done
+
 # ----------------------------------------------------------------- verify
-# The independent measurement. Every file, every destination, compared by
-# content against this Mac. `git rev-parse` on either side would only
+# The independent measurement, both directions. Every tracked file, every
+# destination, compared by content against this Mac (dl_verify) - AND a
+# check that nothing untracked remains (dl_verify_no_extra), because a
+# verification that only hashes files that should be present can never
+# catch one that should not be. `git rev-parse` on either side would only
 # read back the claim this script already believes.
 echo
 RC=0
@@ -260,13 +318,16 @@ for i in $(seq 0 $(( ${#DESTS[@]} - 1 ))); do
     set +e
     dl_verify "$HOST" "${DESTS[$i]}" "$LIST" "$LOCAL_SHA" "${DEST_NAMES[$i]}"
     V=$?
+    dl_verify_no_extra "$HOST" "${DESTS[$i]}" "$ALLTRACKED" "${DEST_NAMES[$i]}"
+    NX=$?
     set -e
-    if [ "$V" -eq 0 ]; then echo "  OK: $COUNT/$COUNT files match this Mac."
-    else RC=$V; fi
+    if [ "$V" -eq 0 ]; then echo "  OK: $COUNT/$COUNT files match this Mac."; fi
+    if [ "$NX" -eq 0 ]; then echo "  OK: no untracked files under src/ or client/."; fi
+    RC=$(dl_combine_rc "$RC" "$(dl_combine_rc "$V" "$NX")")
 done
 if [ "$RC" -ne 0 ]; then
     say_failed
-    echo "The files were copied but do NOT match this Mac. Nothing was restarted." >&2
+    echo "The files were copied but do NOT match this Mac, or a stale file remains. Nothing was restarted." >&2
     exit "$RC"
 fi
 
@@ -311,18 +372,24 @@ fi
 
 # DID THE DEPLOY SURVIVE THE RESTART? "The port came back" does not
 # answer "the new code is what came back". A packaged install re-copies
-# its bundle over the server dir on start, so re-hash the SERVER DIR,
-# every file, after the restart rather than trusting the check above.
+# its bundle over the server dir on start (bootstrap.js syncBundledAssets,
+# rsync -a --delete for src/ and client/), so re-hash the SERVER DIR,
+# every file, after the restart rather than trusting the check above -
+# and re-run the negative check too, in case that resync ever changes
+# shape and stops mirroring the bundle's own leftovers away.
 echo "re-verifying the server dir after the restart ..."
 set +e
 dl_verify "$HOST" "$DEST_SERVER" "$LIST" "$LOCAL_SHA" "server dir (post restart)"
 V=$?
+dl_verify_no_extra "$HOST" "$DEST_SERVER" "$ALLTRACKED" "server dir (post restart)"
+NX=$?
 set -e
-if [ "$V" -ne 0 ]; then
+RC=$(dl_combine_rc "$V" "$NX")
+if [ "$RC" -ne 0 ]; then
     say_failed
-    echo "REVERTED: the server dir no longer matches what was deployed (code $V)." >&2
+    echo "REVERTED: the server dir no longer matches what was deployed, or holds a stale file again (code $RC)." >&2
     echo "The app restored it from its bundle. Check the bundle destination." >&2
-    exit "$V"
+    exit "$RC"
 fi
 
 say_deployed

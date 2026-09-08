@@ -149,13 +149,19 @@ dl_stage() {
 # dl_commit - copy a verified staging dir into a real destination.
 # Inputs:  $1 host, $2 remote staging dir, $3 destination dir
 # Output:  returns ditto's exit status.
-# Notes:   ditto merges the tree rather than replacing it, creates the
-#          destination and any intermediate directories, and is a single
-#          command with a real exit status (no remote pipeline whose
-#          status would hide the sending half). The destination goes over
-#          stdin so spaces in it cannot be word split. Correctness does
-#          not rest on this call reporting truthfully: every destination
-#          is hashed independently afterwards.
+# Notes:   ditto MERGES the tree rather than replacing it - it adds and
+#          overwrites, it never removes a file the destination has that the
+#          staging dir does not. That is exactly right for adds/updates and
+#          exactly wrong for a git-level delete, which is why this call is
+#          followed by dl_prune_stale below rather than relied on alone to
+#          make a destination match HEAD. ditto creates the destination and
+#          any intermediate directories, and is a single command with a
+#          real exit status (no remote pipeline whose status would hide the
+#          sending half). The destination goes over stdin so spaces in it
+#          cannot be word split. Correctness does not rest on this call
+#          reporting truthfully: every destination is hashed independently
+#          afterwards, and (see below) checked for leftovers ditto would
+#          never have removed.
 dl_commit() {
     local host="$1" stagedir="$2" dest="$3"
     printf '%s\n' "$dest" | ssh "$host" \
@@ -169,4 +175,227 @@ dl_unstage() {
     # shellcheck disable=SC2029  # the staging path is ours and must expand here
     ssh "$1" "rm -rf '$2'" >/dev/null 2>&1 || true
     return 0
+}
+
+# ---------------------------------------------------------------- mirroring
+# MIRROR, NOT MERGE. ditto (dl_commit above) only ever adds and overwrites,
+# so a file removed from git stays on a destination forever - Punchlist #23.
+# The functions below make a destination match the git-tracked set for
+# src/ and client/ exactly: present files hashed equal (dl_verify, above)
+# AND no file present that isn't tracked at HEAD (dl_verify_no_extra,
+# dl_prune_stale, here). Both directions have to hold for "mirror" to be
+# true; checking only the first is the asymmetric blind spot Punchlist #23
+# is about - a check that only enumerates files that SHOULD exist can never
+# see a file that should not.
+#
+# SCOPE IS HARD-LIMITED to the src/ and client/ subtrees of a destination.
+# The server dir also holds .env and a venv that must survive a deploy;
+# the bundle holds Electron's own files. dl_find_tree only ever descends
+# into <dest>/src and <dest>/client, dl_reject_unscoped is a second,
+# independent check on every path before it reaches rm, and dl_prune_stale
+# additionally requires each deleted path to literally start with "src/"
+# or "client/". Three independent reasons a bug anywhere in this chain
+# cannot turn into a delete outside the two subtrees it is allowed to
+# touch.
+#
+# dl_run_on - run a remote-shaped shell command, over ssh, or (when host is
+# the sentinel "__local__") directly via bash against a plain local
+# directory standing in for a target. Every function below that touches a
+# "host" goes through this, which is what lets tests/test_deploy_mirror.sh
+# prove the mirror/prune logic against a throwaway directory without ever
+# opening an ssh connection to a real target.
+# Inputs:  $1 host ("__local__" or a real ssh destination), $2 command
+# Output:  whatever the command prints; stdin passes through unchanged.
+dl_run_on() {
+    local host="$1" cmd="$2"
+    if [ "$host" = "__local__" ]; then
+        bash -c "$cmd"
+    else
+        # shellcheck disable=SC2029  # $cmd is the REMOTE-side script on
+        # purpose - callers build it as a single-quoted literal so its own
+        # $DEST/$f references expand on the far end, never here.
+        ssh "$host" "$cmd"
+    fi
+}
+
+# dl_find_tree - list every file under <dest>/src and <dest>/client, paths
+# relative to dest (e.g. "src/main.py"), sorted.
+# Inputs:  $1 host, $2 dest dir, $3 outfile
+# Output:  writes sorted relative paths to outfile, excluding __pycache__
+#          dirs, *.pyc and .DS_Store (build/OS noise, never deploy state);
+#          or the single token __NO_DEST__ when dest is unreadable.
+# Example: dl_find_tree mac-mini-m4 "/Applications/X.app/Contents/Resources" out.txt
+dl_find_tree() {
+    local host="$1" dest="$2" outfile="$3"
+    # shellcheck disable=SC2016  # deliberately single-quoted: $DEST below
+    # is the REMOTE shell's variable, read from the piped stdin, not this
+    # one's.
+    printf '%s\n' "$dest" | dl_run_on "$host" '
+        IFS= read -r DEST
+        cd "$DEST" 2>/dev/null || { echo "__NO_DEST__"; exit 0; }
+        for d in src client; do
+            [ -d "$d" ] || continue
+            find "$d" -type f \
+                ! -path "*/__pycache__/*" \
+                ! -name "*.pyc" \
+                ! -name ".DS_Store"
+        done | LC_ALL=C sort
+    ' > "$outfile" 2>/dev/null
+}
+
+# dl_stale_paths - pure diff: paths present in "found" but not in "keep".
+# Inputs:  $1 foundfile (sorted relative paths), $2 keepfile (any order),
+#          $3 outfile
+# Output:  writes sorted stale paths to outfile (possibly empty). No I/O
+#          beyond reading its two inputs - this is what a unit test
+#          exercises without touching ssh or a filesystem tree at all.
+dl_stale_paths() {
+    local foundfile="$1" keepfile="$2" outfile="$3"
+    LC_ALL=C comm -23 "$foundfile" <(LC_ALL=C sort "$keepfile") > "$outfile"
+}
+
+# dl_reject_unscoped - refuse a path list unless every line starts with
+# "src/" or "client/". Independent of where the list came from; this is
+# the last gate before a delete, so it is checked even though dl_find_tree
+# already only descends into those two subtrees.
+# Inputs:  $1 file of relative paths
+# Output:  returns 0 if every line is in scope; prints offending lines to
+#          stderr and returns 1 otherwise.
+dl_reject_unscoped() {
+    local file="$1"
+    if grep -qvE '^(src|client)/' "$file" 2>/dev/null; then
+        echo "  REFUSING: path(s) outside src/ or client/:" >&2
+        grep -vE '^(src|client)/' "$file" | sed 's/^/    /' >&2
+        return 1
+    fi
+    return 0
+}
+
+# dl_prune_stale - remove files under <dest>/src or <dest>/client that are
+# not in the tracked-at-HEAD keep list, i.e. leftovers from a git-level
+# delete that dl_commit's ditto merge would never clean up on its own.
+# Inputs:  $1 host, $2 dest dir, $3 keepfile (sorted tracked src/client
+#          paths, ALL extensions - see all_tracked_files() in
+#          deploy-mini.sh, not the EXT_RE-filtered set this script
+#          deploys, so a tracked-but-undeployed file such as a vendor
+#          asset is never mistaken for a leftover), $4 dry (1 = report
+#          only, delete nothing; default 0)
+# Output:  returns 0 (nothing stale, or dry run reported it), 1 (delete
+#          command failed, or a computed path failed dl_reject_unscoped),
+#          3 (cannot determine - dest unreadable). Prints what it removed
+#          or would remove.
+# Example: dl_prune_stale mac-mini-m4 "$DEST_SERVER" "$ALLTRACKED" 0
+dl_prune_stale() {
+    local host="$1" dest="$2" keepfile="$3" dry="${4:-0}"
+    local found stale n rc
+
+    found=$(mktemp -t cloudeprune) || return 3
+    dl_find_tree "$host" "$dest" "$found"
+
+    if [ ! -s "$found" ]; then
+        echo "  CANNOT DETERMINE: no listing came back for $dest" >&2
+        rm -f "$found"; return 3
+    fi
+    if grep -q '__NO_DEST__' "$found"; then
+        echo "  CANNOT DETERMINE: destination does not exist or is unreadable:" >&2
+        echo "    $dest" >&2
+        rm -f "$found"; return 3
+    fi
+
+    stale=$(mktemp -t cloudeprune) || { rm -f "$found"; return 3; }
+    dl_stale_paths "$found" "$keepfile" "$stale"
+    rm -f "$found"
+
+    if [ ! -s "$stale" ]; then
+        rm -f "$stale"
+        return 0
+    fi
+
+    n=$(wc -l < "$stale" | tr -d ' ')
+    if ! dl_reject_unscoped "$stale"; then
+        rm -f "$stale"; return 1
+    fi
+
+    if [ "$dry" -eq 1 ]; then
+        echo "  would remove $n stale file(s) not tracked at HEAD:"
+        sed 's/^/    /' "$stale"
+        rm -f "$stale"
+        return 0
+    fi
+
+    echo "  removing $n stale file(s) not tracked at HEAD:"
+    sed 's/^/    /' "$stale"
+
+    # shellcheck disable=SC2016  # deliberately single-quoted: $DEST and $f
+    # below are the REMOTE shell's variables, read from the piped stdin.
+    { printf '%s\n' "$dest"; cat "$stale"; } | dl_run_on "$host" '
+        IFS= read -r DEST
+        cd "$DEST" 2>/dev/null || exit 1
+        while IFS= read -r f; do
+            case "$f" in
+                src/*|client/*) rm -f -- "$f" ;;
+                *) exit 1 ;;  # belt and suspenders; dl_reject_unscoped already checked
+            esac
+        done
+    '
+    rc=$?
+    rm -f "$stale"
+    return "$rc"
+}
+
+# dl_verify_no_extra - the negative check: confirm nothing untracked
+# remains under <dest>/src or <dest>/client. This is what closes the
+# asymmetric blind spot - dl_verify only ever proves the files that
+# should be present ARE, and by itself cannot see a file that should not
+# be there at all.
+# Inputs:  $1 host, $2 dest dir, $3 keepfile (see dl_prune_stale), $4
+#          human label for messages
+# Output:  returns 0 (clean), 4 (untracked files remain - same failure
+#          family dl_verify uses for a hash mismatch), 3 (cannot
+#          determine). Prints the offending paths on failure.
+dl_verify_no_extra() {
+    local host="$1" dest="$2" keepfile="$3" label="$4"
+    local found extra
+
+    found=$(mktemp -t cloudeprune) || return 3
+    dl_find_tree "$host" "$dest" "$found"
+
+    if [ ! -s "$found" ]; then
+        echo "  CANNOT DETERMINE: no listing came back for $label." >&2
+        rm -f "$found"; return 3
+    fi
+    if grep -q '__NO_DEST__' "$found"; then
+        echo "  CANNOT DETERMINE: $label does not exist or is unreadable:" >&2
+        echo "    $dest" >&2
+        rm -f "$found"; return 3
+    fi
+
+    extra=$(mktemp -t cloudeprune) || { rm -f "$found"; return 3; }
+    dl_stale_paths "$found" "$keepfile" "$extra"
+    rm -f "$found"
+
+    if [ ! -s "$extra" ]; then
+        rm -f "$extra"
+        return 0
+    fi
+
+    echo "  UNTRACKED FILES REMAIN at $label (not tracked at HEAD):" >&2
+    sed 's/^/    /' "$extra" >&2
+    rm -f "$extra"
+    return 4
+}
+
+# dl_combine_rc - fold two outcome codes from the {0, 3, 4} family into
+# one, worst-wins: a definite failure (4) outranks cannot-determine (3),
+# which outranks success (0). Lets a caller run dl_verify and
+# dl_verify_no_extra independently and report ONE outcome without ever
+# letting a "could not tell" mask a "confirmed wrong", or a stale success
+# survive alongside either.
+# Inputs:  $1 code a, $2 code b
+# Output:  prints the combined code (0, 3, or 4).
+dl_combine_rc() {
+    local a="$1" b="$2"
+    if [ "$a" -eq 4 ] || [ "$b" -eq 4 ]; then echo 4; return; fi
+    if [ "$a" -eq 3 ] || [ "$b" -eq 3 ]; then echo 3; return; fi
+    echo 0
 }
