@@ -2535,3 +2535,7 @@ commit-by-commit table in `HANDOFF.md` section 8.
 - [ ] Test artifacts to archive when the owner says so: sessions `Punchlist Test` (45), `Punchlist Browser Rename(fork)` (46), `Punchlist Two` (943); folders `.../Development/ses_5a756046` and `.../Development/Punchlist Two`.
 - [ ] This orchestrator session (`Agent - Cloude Code`) carries a rotated hook token in its running process (hooks 403 until restarted); a restart through the picker resumes the conversation and fixes it.
 - [ ] Wrapper pill reads `claude` for `claude-skip-permissions`; confirm that is the configured label, not a fallback.
+
+### 2026-09-08 owner report: "we lost some of our conversation"
+
+- [ ] Display-side loss, not data loss. After the app restarts and re-attaches to a running pane, the client fetches `include_scrollback=1` and repaints the terminal from tmux capture-pane. Claude Code TUI draws in place, so the pane has `history_size=0` and the capture is one screen; the browser replaces the buffer it had built over the websocket with that screen. Transcript verified intact (7.6 MB, one compaction marker from the morning /compact, last write 13:29). Fix direction: keep the existing client buffer when the incoming capture is shorter than what the client holds, or replay the tail of the server pipe stream on attach. Explorer report pending; then build.
