@@ -38,19 +38,12 @@ hand `scp` must do both explicitly.
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
 
-**WHAT LIVE ACTUALLY RUNS, as of 2026-09-08: `0b12edf`.** Two commits are
-finished, committed AND pushed, and NOT on live:
-
-| commit | what it is | on live? |
-|---|---|---|
-| `0b12edf` | restart means resume | YES, this is live |
-| `0793eb1` | restart picker layout fix | NO |
-| `8dd54a8` | lineage recovery plus the backfill tool | NO |
-
-So anything you observe on live is `0b12edf` behaviour, and both of those
-defects are still live-visible while their fixes sit in git. Deploying them is
-an open item. Neither commit deletes a file, so neither trips the `ditto` merge
-defect in section 2.
+**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 evening: `c9cd9ab`.** This moved
+during the day - see section 8 for the full commit-by-commit state, which is
+the current source of truth for what is live versus committed. Twenty more
+commits landed after `c9cd9ab` (HEAD is now `1a28b23`) and a deploy of them
+is IN PROGRESS as a separate concurrent task at the time of this update; do
+not read this line as "deployed" until section 8's verification step is done.
 
 ---
 
@@ -582,18 +575,49 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ## 8. CURRENT GIT STATE
 
-Branch `v1.1`. **NOTHING IS UNPUSHED as of 2026-09-08.**
-`git log --oneline @{u}..HEAD` returns empty and `origin/v1.1` is at `8dd54a8`.
-This SUPERSEDES the "8 commits unpushed as of 2026-09-07" state this section
-used to record, which was true on that date and is not true now.
+Branch `v1.1`. **NOT PUSHED as of 2026-09-08 evening** - `git status` reads
+"ahead of origin/v1.1 by 20 commits". This is a deliberate hold for this
+session, not an oversight; it supersedes the "nothing unpushed" line this
+section carried earlier today.
 
-HEAD is `8dd54a8`. Live is `0b12edf` (section 1). Newest first, the work since
-the last handoff:
+HEAD is `1a28b23`, twenty commits past this morning's `018f2a7` baseline.
+Live is `c9cd9ab` (three commits behind HEAD: `0793eb1`, `8dd54a8`, then
+today's twenty). **A deploy of HEAD is IN PROGRESS as a separate concurrent
+task at the time of this update - say "in progress," not "done," until it is
+checked directly on the mini.** The deploy will run the v24 schema migration
+and the app's first real boot re-adopt against current tmux state.
+
+**The next session's first job, once the deploy is confirmed finished:**
+verify the v24 migration applied clean and the boot re-adopt picked up every
+live pane, then work down the browser re-test list - re-confirm the three
+sessions proven restartable onto `claude-chrome` today (Media Compression,
+Agent Cloude Code, Fantasy Football 2026) actually drive the browser post-
+deploy, since tools bind at session start and a deploy restarts the server,
+not the panes.
+
+Full commit-by-commit list and item mapping for today's twenty is in
+`TODO.md`'s dated 2026-09-08 section. The consequential ones, newest first:
 
 | commit | what it did | deployed? |
 |---|---|---|
-| `8dd54a8` | lineage recovery for the conversation id the `SessionStart` hook failed to record, plus the dry-run backfill tool | NO |
-| `0793eb1` | the restart picker's option text no longer paints over the next row | NO |
+| `1a28b23` | docs: document the startup-gate ledger constructor | n/a, docs |
+| `fadeb66` | boot: a session entered during re-adopt keeps being current | NO |
+| `2b93428` | restart: an imported row with no tmux session can now be restarted (one gets created) | NO |
+| `dcf8b02` | rename: stop reporting a push as landed when the resumed transcript was not there yet | NO |
+| `9cdcb90` | status: detect a session parked on an unanswered startup prompt (punchlist 19) | NO |
+| `b18f018` | import: bring in every real conversation this app had never accounted for (punchlist "import") | NO, script; the 895-row import it ran is a database change, not a deploy |
+| `bca7069` | boot: hold every surviving session, not just the last one (punchlist 17) | NO |
+| `ee5d547` | perf: stop repainting the whole project tree every 5s (punchlist 13) | NO |
+| `24d25b9` | groups: key group membership on the session, not a recycled tmux name (punchlist 10) | NO |
+| `06bacd6` | naming: one name per session, read the one typed into the pane | NO |
+| `9adaac9` | deploy: mirror src/client instead of merging with ditto (punchlist 23) | NO |
+| `a4eeef1` | projects: a new project can pick its own folder (punchlist 14, 18a) | NO |
+| `2071963` | lineage: a second claude under one pane is not a fork of ours | NO |
+| `bc65ef4` | upload-sweeper: read the real `ProjectsView.writable` attribute (punchlist 24) | NO |
+| `43e8fc2` | sidebar: group menu no longer paints behind the sidebar panel (punchlist 6) | NO |
+| `9009588` | folder-picker: wrap a long path instead of overrunning its box (punchlist 18) | NO |
+| `8dd54a8` | lineage recovery for the conversation id the `SessionStart` hook failed to record, plus the dry-run backfill tool | YES, deployed earlier today |
+| `0793eb1` | the restart picker's option text no longer paints over the next row | YES, deployed earlier today |
 | `0b12edf` | a restart RESUMES the same conversation, on every rung that can | yes |
 | `f95a9ed` | restart a session whose pane is still ALIVE, `respawn-pane -k` in place | yes |
 | `83b6377` | the picker's `max-height` got its `dvh` twin | yes |
@@ -603,6 +627,16 @@ the last handoff:
 | `cddc823` | the row icons folded into one borderless kebab, three ways to open it | yes |
 | `c779afb` | the deploy script repaired: tar over ssh, a clean tree that deploys, self-verifying bytes (section 2) | yes |
 | `a6b6b91` | the theme bleed: every navigation now owns the theme | yes |
+
+Also today, with no commit behind them because they are database operations,
+not code: 895 conversations imported as archived sessions (59 archived
+projects created, 13 scratch conversations excluded, 224 `agent-*.jsonl`
+subagent files correctly identified as non-sessions and skipped, 319 files
+with no recoverable cwd) - dry-run report at
+`.claude/notes/import-dry-run-2026-09-08.md`; `agent_type` filled on 15
+running rows; 8 conversation-id fills applied; the three "phantom pair" rows
+corrected (see section 10's new correction below); two ghost rows retired.
+None of this needed a deploy - it is already true of the live database.
 
 **HAZARD: two Claude Code sessions were editing this branch at once.** A second
 session worked `v1.1` concurrently for part of 2026-09-07 and committed
@@ -649,18 +683,39 @@ SESSION START, so browser control cannot be added to a conversation already
 running. **The wrapper picker is the intended route: restart a session and
 choose `claude-chrome`.** That is what the picker was built for.
 
-### DECISIONS STILL WAITING ON HIM, as of 2026-09-08
+### DECISIONS STILL WAITING ON HIM, updated 2026-09-08 evening
 
-Three, none started, all blocked on a human answer.
+Two of the three that were open this morning are now CLOSED, one not as
+originally planned.
 
-1. **Authorise writing the 8 confident backfill FILLs** (rows 14, 15, 16, 17,
-   19, 23, 24, 25). Nothing has been written; the tool is dry run by default
-   and stays that way until told otherwise.
-2. **Merge the 4 duplicate row pairs** (7 to 4, 9 to 11, 10 to 12, 38 to 39).
-   This is the already-authorised `(old path)` merge family above, and it still
-   carries its condition: take a VERIFIED backup first. A backup that cannot
-   restore is not a backup.
-3. **Deploy `0793eb1` and `8dd54a8`.** Live is on `0b12edf`.
+1. **CLOSED.** The 8 confident backfill FILLs (rows 14, 15, 16, 17, 19, 23,
+   24, 25) were authorised and written.
+2. **CLOSED, but not as a merge.** Re-examination of the 4 "duplicate" pairs
+   (7/4, 9/11, 10/12, 38/39) found the earlier note had it backwards: the
+   LIVE rows in 9/11, 10/12 and 38/39 already held the real conversation ids,
+   and it was their dead twins holding phantom ones. The dead twins were
+   retired (archived), not merged over the live rows. Ghost rows 44 and 47
+   (no session or transcript behind them) were retired too. Remaining
+   phantom-uuid rows: 41 (kept deliberately) and 46 (a newborn session whose
+   transcript has not landed yet - re-check it, do not treat it as settled).
+3. **IN PROGRESS, not done.** Deploying today's twenty commits (HEAD is now
+   `1a28b23`, not `8dd54a8`/`0793eb1` as this line read this morning) is
+   running as a separate concurrent task. Do not mark it done until the live
+   box is checked directly - see section 8.
+
+**NEW, opened today, none started:**
+
+4. Rotate `~/.config/restic/mini-m4.pw` (a plaintext restic repository
+   password, surfaced during the Desktop backup inventory) into 1Password,
+   and decide whether restic's scope should widen beyond `ai-setup` and
+   `docker-management` to cover the Desktop. Owner's call on both, per the
+   standing decision to defer credential rotation until this project is
+   finished.
+5. Delete `~/Desktop/Backups` on this Mac. Its 13 transcripts were the only
+   copies that existed outside the corpus; they are now archived into it,
+   verified against the TrueNAS archive bundle by manifest hash (13/13), and
+   Time Machine on 10.0.1.202 holds all 10,431 files besides. Nothing depends
+   on the folder surviving.
 
 ---
 

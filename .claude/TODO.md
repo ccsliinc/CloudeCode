@@ -2363,3 +2363,162 @@ Three, none of them started, all of them blocked on a human answer.
 ### 2026-09-08 owner note: clean up database backups when the row repairs are done
 
 - [ ] When the Media Compression row repair and the duplicate-row merges are finished and verified, delete the extraneous cloude.db backups: every pre-existing 65-115 KB backup in the backup directory (useless as rollbacks against a 4.5 GB file) and any full-size dated backups taken for the repairs, once a restart has proven the repaired rows work. Keep exactly one verified full backup until then. Owner request, 2026-09-08.
+
+### 2026-09-08 security note from the Desktop inventory
+
+- [ ] `~/.config/restic/mini-m4.pw` is a plaintext restic repository password on disk. It was surfaced into a subagent transcript while reading backup config, and the file also sits inside the Time Machine backup. Owner decision: rotate the restic repo password and move it to `op://Claude/`, per rules/secrets-protocol.md. Deferred to the owner (credential rotation is his call; see the earlier decision to defer rotations until this project is done).
+- [ ] restic on the mini covers only `ai-setup` and `docker-management`; the Desktop is covered by Time Machine to the NAS only. Decide whether the restic scope should widen.
+
+### 2026-09-08 INFRA-49 fresh evidence
+
+- [ ] The boot re-adopt agent measured `test_session_startup_gate.py::test_manager_never_captures_a_tail_for_a_session_with_a_hook` failing because of leaked `keeper` tmux sessions from the respawn/restart suites, and `test_hook_driven_status.py::test_list_attachable_sessions_maps_tmux_status_with_unread` hitting the production socket guard. Order-dependent, both pass in isolation. Live socket checked at 15:40 local: 21 sessions, all real, no leak present now. INFRA-49 (tests on the live `cloude` socket) is now causing flaky failures, not only risk. Raise priority.
+
+### 2026-09-08 evening - punchlist items closed today, twenty commits `018f2a7..1a28b23`
+
+DEPLOY STATE: HEAD is `1a28b23`, 20 commits past this morning's `018f2a7`, NOT
+pushed (deliberate hold, `git status` reads "ahead of origin/v1.1 by 20
+commits"). Live on mac-mini-m4 was `0b12edf` this morning and has since moved
+to `c9cd9ab` (picks up `0793eb1` and `8dd54a8`). A deploy of HEAD is IN
+PROGRESS as a separate concurrent task at the time of this entry - it will run
+the v24 migration and the app's first real boot re-adopt. Treat this as
+"in progress," not "done," until checked directly on the mini. Full
+commit-by-commit table in `HANDOFF.md` section 8.
+
+- [x] **Item 6.** Sidebar group ellipsis popup rendered behind the sidebar
+  panel. Fixed by raising its z-index. Commit `43e8fc2`.
+- [x] **Item 13.** Home screen repainted the whole project tree from a 5s
+  poll with no guard (385 elements + 409 text nodes destroyed and recreated
+  per tick). Fixed by gating the repaint on whether anything actually
+  changed. Commit `ee5d547`.
+- [x] **Item 14.** A new project could not choose its own folder; the typed
+  name was never used for the directory. Fixed. Commit `a4eeef1`.
+- [x] **Item 15.** `POST /api/v1/sessions` could not set a title; every
+  UI-created session landed `title = NULL`. Server-side `label` field
+  shipped in `06bacd6`; both claude-launching create paths (new project,
+  open-existing-project) now send it in `e7ca5ec`.
+- [x] **Item 17.** A server restart unbound every session but one, so they
+  rendered "adoptable" rather than "running" until opened. Fixed by holding
+  every surviving session through boot re-adopt, not just the last one.
+  Commit `bca7069`. A related bug in the same area, a reused tmux name
+  hiding a session the user had deleted from the RECENT list, was fixed
+  alongside it in `986c50e`.
+- [x] **Item 18.** The folder path overran its box in the project modals.
+  Fixed with `word-break` / `overflow-wrap`. Commit `9009588`.
+- [x] **Item 18a.** The project modal displayed and WROTE the short,
+  symlinked cwd spelling (`/Users/jsugamele/Development/...`), the same trap
+  that manufactured the `(old path)` project rows. Fixed as part of the
+  project-folder-picker work. Commit `a4eeef1`. See also the qualification
+  added to `CLAUDE.md` gotcha 6 today: claude 2.1.263 itself now resolves
+  symlinks before slugging, so new splits cannot originate from claude, but
+  this app was still writing the short spelling until this commit.
+- [x] **Item 19.** A session parked on an unanswered folder-trust prompt
+  painted `Connected` with a PID and no signal. Fixed: a hook-absence signal
+  plus a scrollback probe now distinguish `ready` / `awaiting_startup_prompt`
+  / `unknown`, never guessing. Commit `9cdcb90`.
+- [x] **Item 23.** The deploy copied with `ditto`, which merges rather than
+  mirrors, so a deleted file would survive on both targets and still verify
+  as a success. Fixed: deploy now mirrors `src/client` instead of merging.
+  Commit `9adaac9`.
+- [x] **Item 24.** `'ProjectsView' object has no attribute 'read_only'` at
+  `src/core/upload_sweeper.py:155`, firing twice per boot since 2026-08-29.
+  Fixed: reads the real `ProjectsView.writable` attribute. Commit `bc65ef4`.
+- [x] **Items 25/27 (database operation, no commit).** `agent_type` filled on
+  15 running rows from measured argv plus environment disambiguation
+  (`cld` / `cldor` / `claude-skip-permissions` share an identical flag set;
+  separated by presence of `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_BASE_URL`).
+  8 of the confident backfill FILLs (rows 14, 15, 16, 17, 19, 23, 24, 25)
+  authorised and written. `lsof` confirmed claude does NOT hold its
+  transcript file open, a hypothesis that would have blocked safe editing if
+  true (measured negative).
+- [x] **Items 5/26 (database operation, no commit).** The 3 "phantom pair"
+  entries (9/11, 10/12, 38/39) were INVERTED in the earlier note: the live
+  rows already held the real conversation ids, and it was their dead twins
+  holding phantom ones. The dead twins were retired (archived), not merged
+  over the live rows. Ghost rows 44 and 47 (no session or transcript behind
+  them) were retired too. Remaining phantom-uuid rows: 41 (kept
+  deliberately) and 46 (a newborn session, transcript not yet landed -
+  re-check, do not treat as settled).
+- [x] **Item 10.** Durable order within a group needed a `position` column on
+  `session_group_members`, done in the same change as re-keying that table
+  from `tmux_name` to `session_uuid`. Commit `24d25b9`.
+- [x] **The "show archived" toggle rename.** The RECENT list's control used
+  to say "deleted," which told the user their history was gone when it was
+  one checkbox away; it now says "show archived," matching what
+  `archive_session` actually does (stamps `archived_at`, keeps every
+  column). Commit `2b93428`.
+- [x] **Wrapper pills.** A running-session row now shows which launch
+  wrapper it is running, read from the record rather than guessed. Commit
+  `c89ef55`.
+- [x] **Naming.** One name per session, last rename wins from either side;
+  the pane's typed name is read from the transcript tail since no hook
+  event carries a `/rename`. Commit `06bacd6`. A new session's label is now
+  sent from both claude-launching create paths. Commit `e7ca5ec`.
+- [x] **Import.** `~/.claude/projects` held 1,486 top-level transcripts
+  against 43 session rows; everything else was invisible to the app. Script
+  landed in `b18f018`; run today (database operation, no further commit):
+  895 conversations imported as archived sessions, 59 archived projects
+  created, 13 scratch conversations excluded, 224 `agent-*.jsonl` subagent
+  files correctly identified as non-sessions and skipped, 319 files with no
+  recoverable cwd. Dry-run report: `.claude/notes/import-dry-run-2026-09-08.md`.
+- [x] **Lineage guard.** A second claude process started under one pane
+  (for example by `claude` invoked from inside another session's shell) was
+  being treated as a fork of this app's own session. Fixed: no longer
+  misattributed. Commit `2071963`.
+
+### 2026-09-08 evening - additional verification done, no code change
+
+- [x] Restart proven live on three real sessions - Media Compression, Agent
+  Cloude Code, Fantasy Football 2026 - same tmux session, same conversation
+  resumed, wrapper switched to `claude-chrome`, `agent_type` persisted to the
+  row. This is the end-to-end proof behind items 22/27's "restart means
+  resume" claim.
+- [x] Ingester proven live with a positive control: this transcript itself
+  grew during the check and was re-archived, file count moved 19,223 to
+  19,255, 0 missing. INFRA-105 ("`workflows/` is never walked") is REFUTED:
+  457/457 files there are archived.
+- [x] Desktop `~/Desktop/Backups`: 13 transcripts existed ONLY there (not in
+  the corpus). Copied in and archived 13/13; verified against the TrueNAS
+  archive bundle (`05-desktop-backups.tar.zst`,
+  `/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/` on
+  10.0.1.237) by manifest hash, 13/13; Time Machine on 10.0.1.202 separately
+  holds all 10,431 files. The folder itself can now be deleted (owner's
+  call, see the new open item below).
+- [x] Media project's `.claude/settings.json` had five `Write(...)`
+  permission rules where `Edit(...)` was meant, the source of its yellow
+  startup warnings. Rewritten to `Edit(...)`.
+
+### 2026-09-08 evening - new open items
+
+- [ ] **Restart drops claude's own `--name`.** `resume_extra_args` carries
+  only `--resume <uuid>`, so a resumed session comes back without whatever
+  name claude itself had (`--name`, `/rename`). The app's row title
+  (`sessions.title`) is unaffected because it lives outside claude's argv.
+  Fix would reuse `claude_title_sync`'s transcript read to reapply the name
+  on resume. Documented in `CLAUDE.md`'s restart section today.
+- [ ] **A deferred browser-rename push is never retried.** When `/rename`'s
+  push defers because the transcript is not there yet (measured absence),
+  nothing re-attempts it once the file lands. `title != claude_title` is the
+  marker a retry would key on.
+- [ ] **`FALLBACK_PROJECTS_ROOT` hardcodes `/Users/jsugamele`**
+  (`src/core/project_directory.py:85`). Fallback-only path, but a hardcoded
+  home directory in shared code is wrong on any other machine.
+- [ ] **The "four oversized test files" premise was WRONG - there are far
+  more.** `wc -l tests/*.py tests/*.mjs | awk '$1>500'` finds 48 files over
+  500 lines, not four. Worst offenders: `test_session_backend.py` (2125),
+  `test_session_row_menu_renders.py` (1036), `test_sidebar_sessions.node.mjs`
+  (998), `test_theme_audio.node.mjs` (796), `test_session_restart_wrapper_choice.py`
+  (793), `test_session_restart_resumes_the_conversation.py` (770),
+  `test_restart_picker_renders.py` (768), `test_boot_readopt.py` (763),
+  `test_archive_overlay.py` (754). CLAUDE.md's 500-line guideline names five
+  production files as already past it; it says nothing about tests, and this
+  count suggests the guideline has never been enforced there. Re-scope or
+  explicitly exempt tests before quoting a number again.
+- [ ] **gitleaks is not installed on the mini.** The pre-commit hook's
+  second gate (`scripts/install-secret-hook.sh`) silently never runs its
+  gitleaks stage; only the first gate (`message_model_secrets.py`-based
+  scan) is active. Install it or stop documenting a two-gate hook as if both
+  gates run.
+- [ ] Delete `~/Desktop/Backups` on this Mac now that its 13 transcripts are
+  archived, manifest-verified against the TrueNAS bundle, and also covered
+  by Time Machine on 10.0.1.202. Owner's call; nothing depends on the folder
+  surviving.

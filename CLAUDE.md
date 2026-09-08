@@ -339,6 +339,15 @@ onto a resolved command: `get_agent_command` returns
 `zsh -c 'source ~/.zshrc ...; cld'` and an appended argument lands outside
 that quoting, handed to zsh instead of to claude.
 
+**The resume drops claude's own `--name`, and that is a known gap, not a
+bug fix waiting to be noticed.** `resume_extra_args` carries `--resume
+<uuid>` only, so a restarted session comes back without whatever name
+claude itself had been given (`--name`, `/rename`). The app's own row title
+survives regardless, because it lives in `sessions.title`, not in claude's
+argv. Open item: reuse `claude_title_sync`'s read of the transcript's last
+`custom-title` to reapply the name on a resume the same way it already
+detects one.
+
 **A MISSING uuid IS A NAMED OUTCOME, NOT A SILENT FRESH START.**
 `RespawnPlan.conversation` and the preview's `conversation` field carry
 `resumed` / `none_recorded` / `unknown`, the SAME three words
@@ -790,7 +799,13 @@ file only under the slug of the LITERAL cwd; a measured absence refuses,
    iCloud and Claude Code derives its transcript directory from the LITERAL cwd
    string, so two spellings of one directory make two transcript directories,
    two project rows and, as above, two session rows. Always write the long
-   iCloud spelling, in code and in documents.
+   iCloud spelling, in code and in documents. **Qualified 2026-09-08:** the
+   historic split in the data is real, and claude 2.1.263 resolves symlinks
+   before slugging its transcript path, so `--resume` now finds a transcript
+   from either spelling of the cwd and a NEW split cannot originate from
+   claude itself. It is not fully fixed, though - this app's own project
+   creation kept WRITING the short symlinked spelling into `working_dir`
+   until `a4eeef1` closed that path today.
 7. **`if (pinned) apply()` with no else leaves the last session's theme on
    screen.** A pinned theme bled across session switches because three
    copy-pasted restores in `app.js` and two session-entry paths each applied a
