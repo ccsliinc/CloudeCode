@@ -343,6 +343,12 @@ class SessionManager:
         # returns 200, and resolves to nothing - measured, and from the
         # agent's side indistinguishable from success.
         self._hook_tmux_names: dict[str, str] = {}
+        # Boot re-adopt handoff. ``_boot_listing`` is set ONLY past the
+        # ``listing.ok`` gate in ``_lifespan_tmux_reconcile``; None means
+        # the probe never answered and nothing may be claimed. The task
+        # reference is held so it cannot be garbage collected mid-flight.
+        self._boot_listing = None
+        self._boot_readopt_task = None
         # session_id -> tmux_created_epoch, cached the moment a create or
         # adopt persist step resolves it (see ``create_session`` and
         # ``adopt_external_session``). This is what lets the HOOK path
@@ -918,7 +924,33 @@ class SessionManager:
         try:
             await self._lifespan_tmux_reconcile()
         finally:
+            self._schedule_boot_readopt()
             await self._sweep_orphan_uploads()
+
+    def _schedule_boot_readopt(self):
+        """Hold every OTHER surviving session, off the critical path.
+
+        Description: the multi-session half of boot. See
+          ``src/core/session_boot_readopt.py`` for what it claims and
+          what it refuses. Runs AFTER ``_lifespan_tmux_reconcile`` so
+          the single-session rehydrate above is already registered and
+          is seen as held rather than fought over, and is never awaited
+          here so the server binds without waiting on N tmux attaches.
+
+          ``_boot_listing`` is consulted as a GATE TOKEN, not as data:
+          its presence means the boot probe answered. The pass takes its
+          own listing because ``discover_existing`` carries no creation
+          epoch, and without an epoch there is no instance triple to key
+          a row on.
+        Inputs: none (reads the gate token stashed past the ``ok`` gate).
+        Output: asyncio.Task | None - None when the probe never answered
+          (nothing was stashed) or there is no running loop.
+        """
+        from src.core.session_boot_readopt import schedule_boot_readopt
+
+        if self._boot_listing is None:
+            return None
+        return schedule_boot_readopt(self)
 
     def _register_session(
         self, session: Session, backend: Optional[SessionBackend]
@@ -999,6 +1031,13 @@ class SessionManager:
             return
         tmux_alive = set(listing.names)
 
+        # THE ONLY LISTING ANY BOOT PATH MAY ACT ON, stashed past the
+        # gate above rather than re-probed. ``_schedule_boot_readopt``
+        # reads it after this method returns, so the multi-session
+        # re-adopt is structurally unable to run on a probe that never
+        # answered. Left None when we returned early.
+        self._boot_listing = listing
+
         # Reconciler: prune owned-set entries no longer alive on tmux.
         # Persist the pruned set only if we also have an active session
         # on record (otherwise there's nothing else to write and we'd
@@ -1060,6 +1099,19 @@ class SessionManager:
             session_id=persisted.id,
             working_dir=work_path,
             on_output=self._make_output_handler(persisted.id),
+            # THE STORED NAME WINS OVER THE DERIVATION. Without this the
+            # backend rebuilds ``cloude_<slug(session_id)>``, and for an
+            # ADOPTED session whose id is already ``adopted:cloude_Foo``
+            # that yields ``cloude_adopted_cloude_Foo`` - a name that has
+            # never existed on any socket. It then fails the
+            # ``in tmux_alive`` test, logs
+            # ``session_metadata_slug_not_in_backend`` and gets its
+            # pointer thrown away, which is exactly what the live log
+            # recorded. FALLBACK, NOT REPLACEMENT: metadata written
+            # before ``tmux_session`` existed carries None here and must
+            # keep the legacy derivation, or every legacy install loses
+            # its rehydrate to this fix.
+            session_name=persisted.tmux_session or None,
         )
 
         if not tmux_alive:

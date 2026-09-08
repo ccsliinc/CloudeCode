@@ -47,6 +47,18 @@ Anything that parses, matches, displays or routes on a session id has to handle
 both shapes. Strip the prefix to recover the tmux name; do not assume the id is a
 clean display string.
 
+**BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
+rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
+sessions and zero held. `src/core/session_boot_readopt{,_plan}.py` now re-adopts
+every instance whose row says `origin` is `created` or `adopted`, keyed on the
+triple. The ID IS RECOVERED, NOT MINTED: the hook-token store's `tmux_names` map is
+the only durable record of the `CLOUDECODE_SESSION_ID` injected into the pane, so
+reversing it is what stops the hook route answering 410. A name with no row stays
+adoptable, an unreadable table yields `cannot_determine` and holds nothing, and the
+pass is SCHEDULED, never awaited - uvicorn binds at the lifespan `yield`, so an
+awaited pass is dead port (measured: 1.2 ms to bind, versus 49 ms awaited and 945 ms
+serial). It takes its own listing because `discover_existing` carries no epoch.
+
 **Claude Code lifecycle hooks feed the status machine.** `src/core/claude_hooks.py`
 merges a managed hook block into `~/.claude/settings.json` (marked
 `# cloudecode-managed`, idempotent, atomic write, bails rather than clobbering an
@@ -682,6 +694,13 @@ could not be evaluated; 2 is not 0.
 4. **The tmux socket is load-bearing.** Anything that shells out to `tmux`
    without `-L cloude` is talking to the user's personal tmux server. That is how
    you kill someone else's work.
+4b. **A session id is not a tmux name, and deriving one from the other loses
+   sessions.** `build_backend` with no `session_name` rebuilds
+   `cloude_<slug(session_id)>`, which for an adopted id yields
+   `cloude_adopted_cloude_Foo` - a name no socket has ever carried. It then fails
+   the liveness test and `_clear_stale_metadata` throws the pointer away. Pass the
+   STORED `tmux_session`, and keep the derivation as the fallback for pre-field
+   metadata.
 5. **A uuid on the row is not evidence a transcript exists, and a missing
    transcript is not evidence the conversation is gone.** Five rows on the
    developer's box hold a phantom uuid minted by `--fork-session` while the
