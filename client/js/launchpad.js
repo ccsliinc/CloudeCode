@@ -3516,9 +3516,9 @@ class Launchpad {
                              styling as the projects control beside it,
                              different verb: a session's archive is a
                              soft DELETE, not a shelf. -->
-                        <button type="button" class="launchpad-archived-toggle" id="recent-show-deleted-toggle" aria-pressed="false" title="show deleted sessions">
+                        <button type="button" class="launchpad-archived-toggle" id="recent-show-deleted-toggle" aria-pressed="false" title="show archived sessions">
                             <span class="launchpad-archived-toggle__box" aria-hidden="true"></span>
-                            <span class="launchpad-archived-toggle__label">show deleted</span>
+                            <span class="launchpad-archived-toggle__label">show archived</span>
                         </button>
                     </div>
                     <div id="recent-sessions-list"></div>
@@ -3730,7 +3730,20 @@ class Launchpad {
     }
 
     /**
-     * Wire the "show deleted" control in the RECENT section heading.
+     * Wire the "show archived" control in the RECENT section heading.
+     *
+     * THE COPY SAYS ARCHIVED BECAUSE THE OPERATION IS ARCHIVING. Nothing
+     * in this app deletes a session: `session_store.archive_session`
+     * stamps `archived_at` and the row keeps every column it had, which
+     * is why an archived conversation can still be opened, grouped and
+     * restarted. Calling it "deleted" told the user his history was gone
+     * when it was one checkbox away, and it is the same word the
+     * projects control beside it already uses for the same thing.
+     *
+     * The element id, the preference key and the internal names still
+     * say "deleted" ON PURPOSE: changing the localStorage key would
+     * silently reset the preference for everyone who had set it, which
+     * is a real loss to buy a tidier identifier.
      *
      * Description: same shape as ``initArchivedVisibleToggle`` - persist,
      *   repaint the control, then RE-FETCH, because deleted rows are
@@ -3766,7 +3779,7 @@ class Launchpad {
         btn.classList.toggle('is-on', on);
         btn.setAttribute(
             'title',
-            on ? 'hide deleted sessions' : 'show deleted sessions'
+            on ? 'hide archived sessions' : 'show archived sessions'
         );
     }
 

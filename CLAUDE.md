@@ -735,6 +735,29 @@ cannot verify a migration without a record of what the data was, and that is
 the step everyone skips. `./scripts/upgrade-verify.sh` exits 2 when a check
 could not be evaluated; 2 is not 0.
 
+## Imported conversations
+
+`scripts/import_transcript_sessions.py` gives every real Claude Code
+conversation a `sessions` row. DRY RUN BY DEFAULT. Measured 2026-09-08:
+1,486 transcripts against 43 rows; it wrote 895 ARCHIVED rows into 12
+existing and 59 CREATED archived projects, so nothing lands on a screen
+until "show archived" is on. Four things stay out, each a NAMED outcome:
+a cwd under `/private/tmp`, `/tmp` or `/var/folders` (the ONLY exclusion,
+and it is about the path - `fstest` and `llmScratch` work is real and
+imports); 319 files with no `cwd` anywhere (`file-history-snapshot`
+bookkeeping); 224 `agent-<id>.jsonl` SUBAGENT runs, whose records report
+the PARENT's `sessionId` - which is why identity is the FILE STEM; and
+the older of two transcripts for one uuid split by a cwd spelling.
+
+An imported row has no `tmux_name`, epoch, `agent_type` or `model`, none
+of it invented, so `GET /sessions/restart/preview` cannot ADDRESS it.
+`session_imported_restart.py` + `imported_restart_routes.py` are the path
+that can: keyed on `session_uuid`, a restart CREATES a session with
+`--resume <uuid>` and `reuse_session_id` on the imported row. The launch
+directory is MEASURED across every spelling, because `--resume` finds the
+file only under the slug of the LITERAL cwd; a measured absence refuses,
+`unchecked` never does.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,
