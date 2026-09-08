@@ -343,13 +343,79 @@ The live capture shows no option numbers and the cursor on "No, exit", so the
 options read `❯ No, exit` then `  Yes, I trust this folder`. The startup gate
 matches the sentence text instead, for exactly that reason.
 
-**`unknown family` on a row whose record says `not_launched` is DATA, not a bug.**
-27 of 40 rows on the owner's box carry `agent_type` NULL with
-`agent_family_source='not_launched'`, which is the `auto_start_claude:false` plus
-a hand-sent claude command case named under "Restarting a session" above. The
-pane may well be running claude; the record says the app started no agent. Fixing
-that means filling `agent_type` from evidence, not defaulting the resolver to
-claude - a resolver that always finds something is worse than useless.
+**`unknown family` on a row whose record says `not_launched` is DATA, not a bug,
+AND IT IS NOW FILLED FROM THE PANE'S OWN PROCESS.** The shape is
+`agent_type` NULL beside `agent_family_source='not_launched'`: the
+`auto_start_claude:false` plus a hand-sent claude command case named under
+"Restarting a session" above. Both halves of the record are true - the app
+really did open a bare shell and really did start no agent - and neither can
+say what the human then typed into the pane. Re-measured 2026-09-08 on the
+owner's box: 12 rows carry that shape (it read 27 of 40 earlier; the
+population moves, re-measure rather than quoting either), and none of the 19
+live panes does, because every live row already carries a wrapper id.
+
+`src/core/session_agent_infer.py` is the ladder,
+`session_agent_infer_apply.py` the per-session seam and
+`session_agent_infer_sweep.py` the fleet pass. **THE EVIDENCE IS THE PANE'S
+PROCESS**: the claude command line in its process tree (one `ps -A`, walked
+with `claude_resume_argv`'s existing traversal rather than a second one),
+because that is the only thing that can tell `claude-chrome` from
+`claude-skip-permissions` - they fire identical hooks, print identical banners
+and differ only in their flags. `#{pane_current_command}` CORROBORATES and
+never creates: it answers the family when its basename is literally `claude`,
+and the claude VERSION STRING that 15 of 19 live panes report there selects no
+rung at all.
+
+**A HOOK IS NOT THE TRIGGER, AND ASSUMING IT WAS ALMOST SHIPPED A RUNG THAT
+COULD NEVER FIRE.** tmux copies `CLOUDECODE_SESSION_ID` and
+`CLOUDECODE_HOOK_TOKEN` into a pane's process AT SPAWN, so a claude a human
+typed into an already-running pane has neither and never announces itself.
+Measured 2026-09-08: 10 of the hand-started `not_launched` sessions have never
+fired a hook and never will - which is exactly the population this feature
+exists for. So the read is driven three ways: `sweep_live_sessions` at the END
+of the boot re-adopt pass and after an adoption, plus the per-session hook path
+for a session that DOES carry the env. A hook remains the STRONGEST evidence
+where it exists (it proves a claude is running before anything is read); its
+ABSENCE is simply not evidence of absence. The sweep costs TWO subprocesses for
+the whole fleet, and only if a row needs them - the row gate runs first, so a
+box whose sessions all carry an `agent_type` spends no `ps` at all. There is no
+periodic re-sweep yet, which is the known gap.
+
+**THE ANCHOR GATE IS WHY THIS CANNOT ALWAYS FIND SOMETHING.** A wrapper is
+named only when the observed argv carries at least one distinguishing flag AND
+exactly one configured claude-family wrapper passes that same set - equality,
+not subset, or a wrapper passing `--dangerously-skip-permissions` would claim
+a pane running that plus `--chrome`. Empty agreeing with empty is the absence
+of evidence, not two facts agreeing. Measured against the owner's real five
+wrappers: `cld`, `cldl` and `claude-skip-permissions` all reduce to the same
+single flag, so 16 of the 19 live panes tie three ways and get the bare family
+`claude`, and only the 3 running `--chrome` resolve to a wrapper id.
+
+The value is stored with `agent_family_source='inferred_process'`, a SIXTH
+family source that renders as the dashed guess pill, never the solid one. It
+is kept apart from `fingerprint` because the two were measured differently: a
+process read is the stronger guess, which is why it is the one guess allowed
+to name a wrapper, and it is still a guess. Writing it broke the premise
+`session_agent_evidence` was built on ("nothing writes an inference into
+`agent_type`"), so the row's source now travels with its value through
+`identity_for_live_name`, `choose_agent_evidence` and `stored_launch_for` -
+read one without the other and a guess paints solid.
+
+**AN INFERENCE IS NOT INTENT, so `session_agent_infer.restart_agent_type`
+keeps it out of the respawn ladder entirely.** `session_respawn.py` is
+unchanged: `RESPAWN_SHELL` still fires on an empty `#{pane_start_command}`,
+which is this whole population, and it fires BEFORE `agent_command` is
+consulted - so filling `agent_type` could never have changed that rung anyway.
+What it could have changed is an ADOPTED session with a real recorded start
+command, silently moving it off `RESPAWN_REPLAY` on a guess, and that is what
+`restart_agent_type` refuses. The restart picker's explicit choice remains the
+only thing that overrides the gate.
+
+The write happens at most once per pane: the WHERE clause requires
+`agent_type` empty and the source not `launched`, which the first success makes
+false, and an in-process memo keyed on the tmux INSTANCE keeps a `ps` off the
+`PreToolUse` path. Steady state on a healthy box is one indexed SELECT per pane
+per server process and no subprocess at all.
 
 ## How we work here
 
@@ -408,6 +474,7 @@ claude - a resolver that always finds something is worse than useless.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
+- **Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).** Owner's rule, 2026-09-08. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
 
 ## Restarting a session, and picking what it comes back as
 

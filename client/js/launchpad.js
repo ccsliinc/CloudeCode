@@ -2460,7 +2460,8 @@ class Launchpad {
      * name, and never silently as nothing.
      *
      * A GUESS AND A FACT MUST NOT LOOK IDENTICAL. ``agentFamilySource``
-     * of "fingerprint" or "derived_deepest" means the value was reached
+     * of "fingerprint", "inferred_process" or "derived_deepest" means the
+     * value was reached
      * by inference (scrollback heuristic, or an extra hop past a wrapper
      * with no recorded family) rather than read directly off a stored
      * choice ("wrapper" / "reserved_name") - those two render with the
@@ -2472,7 +2473,8 @@ class Launchpad {
      * Inputs:
      *   agentFamily (string|null|undefined) - resolved family name.
      *   agentFamilySource (string|null|undefined) - one of 'wrapper' |
-     *     'reserved_name' | 'fingerprint' | 'derived_deepest' | 'unknown'.
+     *     'reserved_name' | 'fingerprint' | 'inferred_process' |
+     *     'derived_deepest' | 'unknown'.
      * Output: string - one ``<span class="family-pill ...">`` element.
      * Example: this._renderFamilyPillHtml('codex', 'wrapper')
      *   -> '<span class="family-pill family-pill--fact" ...>codex</span>'
@@ -2480,7 +2482,9 @@ class Launchpad {
 
     _renderFamilyPillHtml(agentFamily, agentFamilySource) {
         const source = agentFamilySource || 'unknown';
-        const isGuess = source === 'fingerprint' || source === 'derived_deepest';
+        const isGuess = source === 'fingerprint'
+            || source === 'derived_deepest'
+            || source === 'inferred_process';
         const known = !!agentFamily && source !== 'unknown';
         const label = known ? agentFamily : 'unknown family';
         const kindClass = !known
@@ -2488,7 +2492,9 @@ class Launchpad {
             : (isGuess ? 'family-pill--guess' : 'family-pill--fact');
         const title = known
             ? (isGuess
-                ? `guessed from session output (${source})`
+                ? (source === 'inferred_process'
+                    ? 'read from the process running in this pane, not from a launch'
+                    : `guessed from session output (${source})`)
                 : `agent family: ${agentFamily}`)
             : 'could not determine which agent this session is running';
         return `<span class="family-pill ${kindClass}" data-family-source="${this._escapeHtml(source)}" title="${this._escapeHtml(title)}">${this._escapeHtml(label)}</span>`;

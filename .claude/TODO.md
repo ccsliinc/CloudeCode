@@ -3138,6 +3138,12 @@ the pre-existing environmental ones `CLAUDE.md` names
 `test_version_probe`). Real-hook test opted in once against a real claude
 in a throwaway tmux socket: 9 passed in 51.92s.
 
+2026-09-08: git remote rule
+- Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).
+- The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
+
+2026-09-08: sidebar unread-count badge removed. `client/js/session-status-summary.js` `summaryHtml()` no longer emits `.status-summary-badge`; the count still drives the LED outer ring (`bucketFor`) and rides in the LED title/aria-label. CSS block removed from `client/css/status-led.css`. Only consumer was the sidebar group header (`client/js/session-sidebar-groups.js`); launchpad has no separate numeric badge (its `markUnreadHtml` is an unrelated manual toggle icon). Tests updated in `tests/test_status_summary.node.mjs`, 17/17 pass. Commit 1d03f2835e27d92aa23702dee8de8a5027d1d534 on v1.1, pushed to origin.
+
 ---
 
 ## 2026-09-08 - Punchlist 1: the choice on wake, not a better silent default - SHIPPED
@@ -3225,6 +3231,38 @@ the fourth is
 the documented real-tmux flake, which passes 3/3 in isolation on the same
 tree minutes later. The passed/skipped counts include another session's
 uncommitted work in this tree.
+
+## 2026-09-08 - Local branch/worktree prune + gc (v1.1)
+
+Authorised prune of local branches merged into v1.1, removal of worktrees
+whose branches were merged, and a plain `git gc`. Main tree, shared index,
+and v1.1/main refs were never touched directly (no checkout/reset/stash/
+clean in the main tree).
+
+- Worktrees removed (clean + branch merged): copy-ios-false-success,
+  fix-copy-output, home-bottom-bar, session-editor-top-right,
+  sidebar-toggle-spacing, theme-audio, tools-consolidation (7 total).
+- Worktree skipped (dirty, uncommitted change to
+  client/css/config-editor.css): editor-project-roots
+  (branch fix/editor-project-roots).
+- Branches deleted via `git branch -d`: 184 (all local branches merged
+  into v1.1, excluding v1.1/main/current and the branch still checked out
+  in the surviving worktree).
+- Branch skipped: feat/gui-fork (git refused: not fully merged to its
+  own remote-tracking branch origin/feat/gui-fork, despite being merged
+  to v1.1's HEAD - `-d` correctly declined; left alone, not force-deleted).
+- Branch count: 207 -> 16. `.git` size: 163M -> 135M (count-objects
+  size-pack 140.27 MiB -> 134.43 MiB, prune-packable 1 -> 0).
+- `git gc` (plain, not --prune=now) ran clean, no lock retries needed.
+- v1.1 sha moved 537c10c -> 1d03f28 during this work (another worker's
+  commit landed on it live, confirmed by log - not caused by this prune).
+  main unchanged at fd9e0a8d.
+- Working tree dirty-path count moved 45 -> 65 in the main tree during
+  this work (other workers' concurrent uncommitted edits, per the brief -
+  nothing here touched the working tree or index).
+- Recovery record (sha of every ref before any deletion, so any branch
+  can be recreated): /private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/prune-refs-before.txt
+- Before/after snapshots: same scratchpad dir, prune-before.txt / prune-after.txt.
 
 ### 2026-09-08 - punchlist 7 and 8 closed: toasts raise globally, dismiss per session, and a history page
 
@@ -3363,3 +3401,90 @@ today; (d) nothing bounds the number of DISTINCT SESSIONS stacking at
 once (the client cap and coalescing bound what is drawn, and supersession
 bounds repeated `Stop`s per session) - the owner asked about this for
 20+ sessions and it wants measuring on a real box before a cap is added.
+
+---
+
+## 2026-09-08 - punchlist 3: infer a hand-started session's agent from its process
+
+**DONE.** `sessions.agent_type` NULL beside
+`agent_family_source='not_launched'` rendered "unknown family" for a pane
+plainly running claude. Filled FROM EVIDENCE, never by defaulting the
+resolver.
+
+**The ladder** (`src/core/session_agent_infer.py`, pure): refusals first.
+`unavailable` when `ps` did not answer, so nothing was measured;
+`not_claude` when the tree WAS read and holds no claude - the bare-zsh
+negative control; `wrapper` when the claude argv carries at least one
+distinguishing flag and EXACTLY ONE configured claude-family wrapper
+passes that same set; `family` (bare `claude`) for everything else that
+is proven claude - no distinguishing flag, no match, or several.
+`#{pane_current_command}` CORROBORATES only: it answers the family when
+its basename is literally `claude`, and the claude VERSION STRING that 15
+of 19 live panes report there selects no rung at all.
+
+**The anchor gate is the whole design.** Equality of flag sets, not
+subset, or a `--dangerously-skip-permissions` wrapper would claim a pane
+running that plus `--chrome`. An EMPTY observed set names nothing, even
+when a flagless wrapper is configured: empty agreeing with empty is the
+absence of evidence, not two facts agreeing.
+
+**THE HOOK IS NOT THE TRIGGER, and that was the correction that mattered.**
+The first design ran only on the first hook. Measured on live: 10 of the
+hand-started `not_launched` sessions have NEVER fired a hook and never
+will - `CLOUDECODE_SESSION_ID` / `CLOUDECODE_HOOK_TOKEN` are copied into a
+pane's process at spawn, so a claude a human typed into an
+already-running pane has neither. A hook-only ladder would have been a
+rung that can never fire for exactly the population it was written for.
+Three drivers now: `session_agent_infer_sweep.sweep_live_sessions` at the
+END of the boot re-adopt pass and after an adoption (TWO subprocesses for
+the whole fleet - one `list-panes -a`, one `ps -A` - and only if a row
+needs them, because the row gate runs first), plus the per-session hook
+path in `session_agent_infer_apply` for a session that DOES have the env.
+A hook is still the strongest evidence when it exists; its absence is no
+longer read as an absence of claude.
+
+**The new source is `inferred_process`**, a SIXTH `agent_family_source`,
+rendered as the dashed guess pill. Kept apart from `fingerprint` because
+they were measured differently: a process read is the STRONGER guess -
+what the process was told to do, not what it printed - which is why it is
+the one guess allowed to name a wrapper, and it is still a guess. Writing
+an inference into `agent_type` broke the premise `session_agent_evidence`
+rested on, so the row's source now travels with its value through
+`identity_for_live_name`, `choose_agent_evidence` and `stored_launch_for`.
+
+**An inference is not intent.** `session_respawn.py` is UNCHANGED.
+`RESPAWN_SHELL` still fires on an empty `#{pane_start_command}` and fires
+BEFORE `agent_command` is read, so this could never have moved that rung.
+What it could have moved is an ADOPTED session off `RESPAWN_REPLAY` on a
+guess, which `session_agent_infer.restart_agent_type` refuses at
+`_stored_agent_type_for_tmux_name`. The picker's explicit choice stays
+the only override.
+
+**LIVE READ-ONLY DRY RUN, 2026-09-08 (nothing written).** 19 live panes,
+all with rows, **0 fillable**: every live row already carries an
+`agent_type`, so the row gate ends the pass before any `ps`. 12 rows on
+disk carry the punchlist-3 shape (`not_launched` + NULL `agent_type`) and
+NONE is live, so there is no pane to read for them. Counterfactual, run
+against the owner's five real wrappers: had those 19 rows been empty the
+ladder would have named `claude-chrome` for 3 and written the bare family
+`claude` for 16, because `cld`, `cldl` and `claude-skip-permissions` all
+reduce to the same single flag and tie three ways. That tie is the anchor
+gate working on real config, not a hypothetical.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: see the final run
+recorded in the commit. New: `tests/test_session_agent_infer.py` (25) and
+`tests/test_agent_inferred_source_renders_as_a_guess.py` (20).
+`tests/test_claude_title_sync_apply.py`'s fixture gained
+`agent_family_source` because `identity_for_live_name` now selects it.
+NOT MINE and left alone: `tests/test_no_name_keyed_session_identity.py`
+fails on `src/api/recreate_routes.py`, an UNTRACKED file another session
+holds in this tree.
+
+**STILL OPEN:** (a) no periodic re-sweep - a claude typed into a pane
+after boot with no adoption and no hook waits for the next server start;
+the sweep is cheap enough for a slow timer and that is the obvious next
+step. (b) The one-shot backfill for the 12 dead-row cases is out of scope
+here: those rows have no live pane, so only a transcript/argv archive
+could answer them, and it needs a verified backup first.
+
+2026-09-08: fix(launchpad) a74988a - project row session count moved from margin-left:auto (far from chevron, flush against card) to a fixed 4px gap beside the chevron, coloured to match the sidebar count treatment (2174b0d, accent text no pill). Archive action icon replaced U+1F5C4 file-cabinet emoji with a shared archiveIconSvg() (session-status-ui.js, same stroke family as pencilIconSvg) matching the header archive button shape; project row is the only surface using the new shared function so far. Targeted node tests updated and green: test_project_gutter_alignment, test_project_archive_render, test_project_authority_banner/render, test_project_list_render_guard, test_project_session_tree, test_home_screen_mechanics (via lib-home-mechanics.mjs stub).

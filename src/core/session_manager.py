@@ -53,6 +53,8 @@ from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
 from src.core.agent_wrapper_display import resolve_wrapper_for_display
 from src.core.session_agent_evidence import choose_agent_evidence
+from src.core import session_agent_infer_apply
+from src.core.session_agent_infer import restart_agent_type
 from src.core.hook_token_recovery import (
     RECOVERY_ACCEPTED,
     SupersededHookTokens,
@@ -2558,6 +2560,16 @@ class SessionManager:
         self._startup_gate_ledger.record_hook(
             tmux_name, epoch=self._instance_epochs.get(session_id)
         )
+        # punchlist 3 - A HOOK IS THE TRIGGER, THE PROCESS IS THE
+        # EVIDENCE. Only claude fires these, so a hook is what makes a
+        # process read worth taking for a session whose row records no
+        # agent (launched as a bare shell, then given a hand-typed
+        # claude). The whole ladder, the cost gating and the write live in
+        # session_agent_infer{,_apply}.py; this is one call that runs at
+        # most once per pane per process and never raises.
+        session_agent_infer_apply.apply_agent_inference(
+            self, session_id, tmux_name
+        )
         if kind == EVENT_STOP and tmux_name:
             self._unread_store.set_flag(
                 tmux_name, "auto", True,
@@ -4599,14 +4611,22 @@ class SessionManager:
             row_agent_type=(
                 row_identity.get("agent_type") if row_identity else None
             ),
+            # THE SOURCE TRAVELS WITH THE VALUE. A row agent_type can now
+            # be an inference (punchlist 3), and it is textually
+            # identical to a launched one.
+            row_family_source=(
+                row_identity.get("agent_family_source") if row_identity else None
+            ),
         )
         effective_agent_type = evidence.agent_type
         from_fingerprint = evidence.from_fingerprint
+        from_process = evidence.from_process
         wrappers = _configured_wrappers()
         display_family, display_family_source = resolve_family_for_display(
             effective_agent_type,
             wrappers,
             from_fingerprint=from_fingerprint,
+            from_process=from_process,
         )
         # The WRAPPER behind the family, named for the user. None whenever
         # nothing can be named honestly - a fingerprinted value, a bare
@@ -5118,7 +5138,7 @@ class SessionManager:
             probe_socket, listing = self.list_attachable_sessions_with_socket()
             socket = probe_socket or self._tmux_socket_name()
             with transaction(conn):
-                return persist_adoption(
+                result = persist_adoption(
                     conn,
                     socket=socket,
                     name=name,
@@ -5132,6 +5152,18 @@ class SessionManager:
                     # the listing actually ran against.
                     pane_pid_probe=make_pane_pid_probe(socket),
                 )
+            # punchlist 3 - an adopted pane is frequently one a human
+            # started a claude in by hand, so it has no hook env and will
+            # never announce itself. The sweep reads the pane's process
+            # instead. AFTER the claim's transaction, never inside it:
+            # persist_adoption is what CREATES the row, so a sweep before
+            # it would find nothing to fill for the very session being
+            # adopted. It writes only rows whose agent_type is empty, it
+            # opens its own connection, and it never raises.
+            from src.core.session_agent_infer_sweep import sweep_live_sessions
+
+            sweep_live_sessions(self)
+            return result
         except Exception as exc:  # noqa: BLE001 - adoption must not crash
             logger.warning(
                 "adopt_persist_failed", session=name, error=str(exc)
@@ -6116,9 +6148,15 @@ class SessionManager:
                     name=name,
                     epoch=row.get("created_at_epoch"),
                 )
+                from_process = False
                 if launch.known:
                     effective_agent_type = launch.agent_type
                     from_fingerprint = False
+                    # KNOWN AND STILL A GUESS. A row whose agent_type was
+                    # inferred from the pane's process tree is a
+                    # measurement worth using instead of a fresh
+                    # scrollback scan, and it must not paint solid.
+                    from_process = launch.from_process
                 else:
                     effective_agent_type = self._fingerprint_agent_type_for_listing(
                         socket=probe_socket,
@@ -6131,6 +6169,7 @@ class SessionManager:
                     effective_agent_type,
                     wrappers,
                     from_fingerprint=from_fingerprint,
+                    from_process=from_process,
                 )
                 row["agent_family"] = display_family.name if display_family else None
                 row["agent_family_source"] = display_family_source
@@ -7372,7 +7411,19 @@ class SessionManager:
                         conn, socket=socket_name, name=name
                     )
                     if row is not None and row.get("agent_type"):
-                        return str(row["agent_type"])
+                        # AN INFERENCE IS NOT INTENT. A value written by
+                        # session_agent_infer describes what the pane is
+                        # RUNNING; this accessor feeds the respawn ladder,
+                        # which decides what to START. Letting one reach
+                        # the other would move an adopted session off
+                        # RESPAWN_REPLAY on a guess. The picker's explicit
+                        # choice is the sanctioned override, unchanged.
+                        usable = restart_agent_type(
+                            str(row["agent_type"]),
+                            row.get("agent_family_source"),
+                        )
+                        if usable:
+                            return usable
             except sqlite3.Error as exc:
                 logger.debug(
                     "restart_preview_agent_type_read_failed",

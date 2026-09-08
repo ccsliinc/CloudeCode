@@ -12,6 +12,12 @@ through the interface showed a guessed type.
 THREE OUTCOMES, WHICH IS THE WHOLE POINT.
 
   known, with an agent_type    the app launched that agent. A FACT.
+  known, INFERRED              the app did not launch it, but a hook
+                               proved a claude is in the pane and the
+                               pane's process tree named what it is
+                               running. A measurement, and a GUESS:
+                               ``from_process`` is True and the pill is
+                               dashed. See session_agent_infer.py.
   known, with no agent_type    the app made a bare shell and started no
                                agent. Also a FACT, and a different one
                                from not knowing - "there is nothing
@@ -44,6 +50,7 @@ import structlog
 
 from src.core.db_models import (
     SESSION_FAMILY_SOURCE_FINGERPRINT,
+    SESSION_FAMILY_SOURCE_INFERRED_PROCESS,
     SESSION_FAMILY_SOURCE_LAUNCHED,
     SESSION_FAMILY_SOURCE_NOT_LAUNCHED,
 )
@@ -72,13 +79,18 @@ class StoredLaunch:
       nothing is known, which is why ``known`` must be read first.
       from_fingerprint (bool) - always False here; carried so a caller
       can hand this straight to ``resolve_family_for_display`` without
-      re-deriving it.
+      re-deriving it. from_process (bool) - True for the one KNOWN state
+      that is a guess rather than a launch fact: a row whose
+      ``agent_type`` was inferred from the pane's process tree (see
+      src/core/session_agent_infer.py). Known, because a measurement WAS
+      taken and recorded; a guess, because the app did not launch it.
     Output: a StoredLaunch instance.
     """
 
     known: bool
     agent_type: Optional[str] = None
     from_fingerprint: bool = False
+    from_process: bool = False
 
 
 #: The answer for every could-not-evaluate. One object so no branch can
@@ -129,12 +141,26 @@ def stored_launch_for(
         return NOT_KNOWN
     if row is None:
         return NOT_KNOWN
-    source = dict(row).get("agent_family_source")
+    data = dict(row)
+    source = data.get("agent_family_source")
+    # A PROCESS INFERENCE IS KNOWN AND IS NOT A LAUNCH. Reporting it
+    # NOT_KNOWN would send this caller off to fingerprint the scrollback
+    # instead - throwing away the stronger evidence for the weaker one,
+    # which is the exact defect ``session_agent_evidence`` exists to stop.
+    # It is deliberately NOT added to DEFINITE_LAUNCH_SOURCES: that set
+    # answers "did the app launch this", and the answer here is no.
+    if source == SESSION_FAMILY_SOURCE_INFERRED_PROCESS:
+        return StoredLaunch(
+            known=True,
+            agent_type=data.get("agent_type"),
+            from_fingerprint=False,
+            from_process=True,
+        )
     if source not in DEFINITE_LAUNCH_SOURCES:
         return NOT_KNOWN
     return StoredLaunch(
         known=True,
-        agent_type=dict(row).get("agent_type"),
+        agent_type=data.get("agent_type"),
         from_fingerprint=False,
     )
 

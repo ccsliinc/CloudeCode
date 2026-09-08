@@ -161,7 +161,7 @@ def list_process_table(timeout: float = PS_TIMEOUT_SECONDS) -> Optional[List[Pro
     return rows
 
 
-def _is_claude_command(command: str) -> bool:
+def is_claude_command(command: str) -> bool:
     """Is this command line's own binary literally `claude`?
 
     Description: checked on the BASENAME of argv0 so both
@@ -224,11 +224,51 @@ def find_resume_uuid_in_tree(
     Example: find_resume_uuid_in_tree(99871, table)
       # '82854c0e-a423-4591-a34f-a14cb92fbf41'
     """
+    for command in find_claude_commands_in_tree(
+        root_pid, processes, max_depth=max_depth
+    ):
+        uuid = _extract_resume_uuid(command)
+        if uuid is not None:
+            return uuid
+    return None
+
+
+def find_claude_commands_in_tree(
+    root_pid: int,
+    processes: Sequence[ProcessRow],
+    *,
+    max_depth: int = MAX_TREE_DEPTH,
+) -> List[str]:
+    """Every claude command line in a pane pid's process tree.
+
+    Description: THE walk, breadth-first from `root_pid` INCLUSIVE, so
+      both process topologies a pane can have are covered without a
+      branch - see the module docstring. Factored out so the two readers
+      of a pane's claude process share one traversal:
+      :func:`find_resume_uuid_in_tree` reads a `--resume` uuid out of the
+      lines this returns, and `session_agent_infer_apply` reads the flag
+      set that names a wrapper out of the same lines. A second walk is
+      how the two would drift about which process they are describing.
+
+      Order is BFS-shallowest-first, which is the useful order: the pane
+      pid itself comes before its descendants, so a caller taking the
+      first entry gets the process closest to the pane.
+    Inputs: root_pid (int) - the pane's own foreground pid.
+      processes (Sequence[ProcessRow]) - a snapshot from
+      :func:`list_process_table`. max_depth (int) - BFS generation cap.
+    Output: list[str] - the full command line of every process in the
+      walk whose argv0 basename is `claude`. EMPTY means the tree was
+      walked and holds none, which is a measurement; a caller that could
+      not read the table at all must not call this.
+    Example: find_claude_commands_in_tree(99871, table)
+      # ['claude --dangerously-skip-permissions']
+    """
     by_pid: Dict[int, ProcessRow] = {row.pid: row for row in processes}
     children: Dict[int, List[int]] = {}
     for row in processes:
         children.setdefault(row.ppid, []).append(row.pid)
 
+    found: List[str] = []
     frontier = [root_pid]
     visited: set = set()
     depth = 0
@@ -239,11 +279,9 @@ def find_resume_uuid_in_tree(
                 continue
             visited.add(pid)
             row = by_pid.get(pid)
-            if row is not None and _is_claude_command(row.command):
-                uuid = _extract_resume_uuid(row.command)
-                if uuid is not None:
-                    return uuid
+            if row is not None and is_claude_command(row.command):
+                found.append(row.command)
             next_frontier.extend(children.get(pid, ()))
         frontier = next_frontier
         depth += 1
-    return None
+    return found

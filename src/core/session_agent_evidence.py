@@ -23,15 +23,26 @@ next to it recorded the exact wrapper. Measured on the owner's box
 A GUESS MUST NEVER OUTRANK A RECORD. That is the whole content of this
 module.
 
-WHY A NON-BLANK ROW ``agent_type`` IS TAKEN AS A RECORD. Nothing writes an
-inference into that column. The fingerprint write path is
-``session_agent_provenance.persist_fingerprint_family``, which sets
+WHY A NON-BLANK ROW ``agent_type`` USED TO BE TAKEN AS A RECORD, AND WHY
+THE ROW'S SOURCE IS NOW READ. The original rule was "nothing writes an
+inference into that column": the fingerprint write path
+(``session_agent_provenance.persist_fingerprint_family``) sets
 ``agent_family`` and ``agent_family_source`` and deliberately leaves
-``agent_type`` alone - and it refuses to run at all on a row that already
-carries one. So a value in that column got there from a launch decision.
-The row's ``agent_family_source`` is therefore not consulted here: it
-would add a second gate that can only ever agree with the first, and a
-gate that cannot change an answer is a place for the two to drift.
+``agent_type`` alone, so a value in that column could only have come from
+a launch decision, and consulting the source would have been a second
+gate that could only ever agree with the first.
+
+PUNCHLIST 3 ENDED THAT PREMISE. ``session_agent_infer_apply`` now writes
+a value read out of the pane's own process tree into
+``sessions.agent_type``, for the 27-of-40 population that was launched as
+a bare shell and then had a claude typed into it by hand. That value is a
+GUESS, and it is textually identical to a launched one - exactly the
+condition ``from_fingerprint`` exists for. So the row's
+``agent_family_source`` IS consulted here now, for one purpose only:
+to decide whether the row rung's answer renders as a fact or as a guess.
+It never changes WHICH rung answers. A caller that cannot supply the
+source gets the old behaviour, which is right for every writer that
+predates the inference.
 
 WHAT THIS DOES NOT DO. It does not invent a value. Both sources empty
 answers ``None`` with basis ``none``, which
@@ -45,10 +56,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from src.core.db_models import SESSION_FAMILY_SOURCE_INFERRED_PROCESS
+
 #: This process launched the session and remembers what it ran.
 BASIS_MEMORY_LAUNCH = "memory_launch"
 #: The datastore row records the wrapper a launch chose.
 BASIS_RECORDED_ROW = "recorded_row"
+#: The row carries a value this app INFERRED from the pane's process
+#: tree rather than one it launched. Still the row rung - the same value,
+#: reached the same way - but carried out as a guess.
+BASIS_RECORDED_ROW_INFERRED = "recorded_row_inferred"
 #: Nothing was recorded; a scrollback scan is all there is.
 BASIS_MEMORY_FINGERPRINT = "memory_fingerprint"
 #: Neither source said anything. NOT the same as "no agent is running".
@@ -75,6 +92,7 @@ class AgentEvidence:
     agent_type: Optional[str]
     from_fingerprint: bool
     basis: str
+    from_process: bool = False
 
 
 def choose_agent_evidence(
@@ -82,6 +100,7 @@ def choose_agent_evidence(
     memory_agent_type: Optional[str],
     memory_from_fingerprint: bool,
     row_agent_type: Optional[str],
+    row_family_source: Optional[str] = None,
 ) -> AgentEvidence:
     """Pick the stronger of the two ``agent_type`` sources for a live session.
 
@@ -91,10 +110,15 @@ def choose_agent_evidence(
       1. An in-memory value this process did NOT fingerprint. The launcher
          chose it and ran it in this very process - nothing is closer to
          the truth.
-      2. A non-blank datastore ``agent_type``. A recorded launch decision
-         (see the module docstring for why that column can only hold
-         one), so it BEATS a fingerprint even though the fingerprint is
-         more recent.
+      2. A non-blank datastore ``agent_type``. Usually a recorded launch
+         decision, so it BEATS a fingerprint even though the fingerprint
+         is more recent. When ``row_family_source`` says
+         ``inferred_process`` the SAME rung answers with the SAME value,
+         carried out as a guess (``from_process=True``, basis
+         :data:`BASIS_RECORDED_ROW_INFERRED`) - a process read is a
+         stronger guess than a scrollback scan, which is why it still
+         outranks rung 3, and it is a guess, which is why it does not
+         render like rung 2's usual answer.
       3. The in-memory value, which by elimination was fingerprinted.
          Carried through with ``from_fingerprint=True`` so it renders as
          the guess it is.
@@ -108,6 +132,10 @@ def choose_agent_evidence(
       row_agent_type (str | None) - ``sessions.agent_type`` for this
         session's row, or None when there is no row / it could not be
         read. A blank string is treated as absent.
+      row_family_source (str | None) - ``sessions.agent_family_source``
+        on the SAME row. Optional: a caller that does not read it gets
+        the pre-inference behaviour, in which every row value is a
+        record. Never used to select a rung, only to label one.
     Output: AgentEvidence.
     Example:
       choose_agent_evidence(memory_agent_type="claude",
@@ -122,6 +150,13 @@ def choose_agent_evidence(
         return AgentEvidence(memory_agent_type, False, BASIS_MEMORY_LAUNCH)
 
     if row:
+        if (row_family_source or "").strip() == SESSION_FAMILY_SOURCE_INFERRED_PROCESS:
+            return AgentEvidence(
+                row_agent_type,
+                False,
+                BASIS_RECORDED_ROW_INFERRED,
+                from_process=True,
+            )
         return AgentEvidence(row_agent_type, False, BASIS_RECORDED_ROW)
 
     if memory:

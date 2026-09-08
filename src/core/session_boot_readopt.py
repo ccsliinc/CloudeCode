@@ -380,6 +380,16 @@ async def readopt_surviving_sessions(
         },
         no_row=len(plan.skipped_for(SKIP_NO_ROW)),
     )
+    # punchlist 3 - THE ONE MOMENT THE STANDING POPULATION CAN BE READ.
+    # A claude the user typed into a pane by hand has none of the hook
+    # env, so it never announces itself; this pass is already holding
+    # every surviving session and the sweep costs two subprocesses for
+    # the whole fleet. It writes only rows whose agent_type is empty and
+    # never raises - see session_agent_infer_sweep.
+    from src.core.session_agent_infer_sweep import sweep_live_sessions
+
+    sweep_live_sessions(manager)
+
     return ReadoptReport(
         outcome=READOPT_RAN, held=held, failed=failed, plan=plan
     )

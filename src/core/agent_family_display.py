@@ -30,6 +30,14 @@ from src.core.agent_families import AGENT_FAMILY_BY_NAME, DEFAULT_FAMILY, AgentF
 FAMILY_SOURCE_WRAPPER = "wrapper"
 FAMILY_SOURCE_RESERVED_NAME = "reserved_name"
 FAMILY_SOURCE_FINGERPRINT = "fingerprint"
+#: The value was read off the pane's OWN PROCESS - the claude command
+#: line in its process tree - after a hook proved a claude was running
+#: there. A guess, and a STRONGER one than a scrollback fingerprint: it
+#: is a direct read of what the process was told to do rather than of
+#: what it printed, which is why it is the one guess allowed to name a
+#: wrapper. Renders dashed, exactly like a fingerprint, because a
+#: stronger guess is still a guess. See src/core/session_agent_infer.py.
+FAMILY_SOURCE_INFERRED_PROCESS = "inferred_process"
 FAMILY_SOURCE_DERIVED_DEEPEST = "derived_deepest"
 FAMILY_SOURCE_UNKNOWN = "unknown"
 
@@ -37,9 +45,30 @@ DISPLAY_FAMILY_SOURCES: Tuple[str, ...] = (
     FAMILY_SOURCE_WRAPPER,
     FAMILY_SOURCE_RESERVED_NAME,
     FAMILY_SOURCE_FINGERPRINT,
+    FAMILY_SOURCE_INFERRED_PROCESS,
     FAMILY_SOURCE_DERIVED_DEEPEST,
     FAMILY_SOURCE_UNKNOWN,
 )
+
+
+def _guess_source(from_fingerprint: bool, from_process: bool) -> Optional[str]:
+    """Which guess label, if either, this resolution must carry.
+
+    Description: the two guess flags in one place, so the three return
+      sites below cannot disagree about their precedence. A fingerprint
+      wins a contradiction on purpose - it is the WEAKER claim, and a
+      caller that somehow asserted both is better served by an answer
+      that under-claims.
+    Inputs: from_fingerprint (bool), from_process (bool).
+    Output: str | None - a DISPLAY_FAMILY_SOURCES guess value, or None
+      when this is not a guess at all.
+    Example: _guess_source(False, True) -> 'inferred_process'
+    """
+    if from_fingerprint:
+        return FAMILY_SOURCE_FINGERPRINT
+    if from_process:
+        return FAMILY_SOURCE_INFERRED_PROCESS
+    return None
 
 
 def resolve_family_for_display(
@@ -47,6 +76,7 @@ def resolve_family_for_display(
     wrappers: List,
     *,
     from_fingerprint: bool = False,
+    from_process: bool = False,
 ) -> Tuple[Optional[AgentFamily], str]:
     """Resolve ``agent_type`` into a family for DISPLAY, honestly.
 
@@ -88,7 +118,15 @@ def resolve_family_for_display(
          launch) AND that scan produced a value matching a known family
          name. A heuristic guess that happened to land on a real family -
          render it visibly as a guess, never identically to a stored fact.
-      5. ``"unknown"`` - none of the above. ``agent_type`` is missing,
+      5. ``"inferred_process"`` - the caller passes
+         ``from_process=True`` (meaning ``agent_type`` was read out of
+         the pane's own process tree by
+         ``src/core/session_agent_infer.py``, not chosen at launch) AND
+         the value resolves. A guess like ``fingerprint``, rendered the
+         same dashed way, kept as its own word because the two were
+         measured differently and a pill that says "guessed from session
+         output" about a process read is a small lie.
+      6. ``"unknown"`` - none of the above. ``agent_type`` is missing,
          blank, or a string that matches neither a wrapper id nor a
          family name (e.g. a wrapper that has since been deleted from
          config). Returns ``(None, "unknown")``. THIS is the outcome that
@@ -109,6 +147,14 @@ def resolve_family_for_display(
         on "codex" is textually identical to an explicit "codex" launch -
         so the caller must say so. Defaults to False (the common case:
         launched or config-derived).
+      from_process (bool) - True iff this ``agent_type`` was inferred
+        from the pane's process tree. THE TWO GUESS FLAGS ARE MUTUALLY
+        EXCLUSIVE by construction: one evidence ladder answers per
+        session and it sets exactly one basis. If a caller ever asserts
+        both, ``from_fingerprint`` wins - the WEAKER label - so a
+        contradiction under-claims rather than over-claims. It never
+        raises, because this decorates a listing and a listing must not
+        fail over a provenance label.
     Output:
       (AgentFamily | None, str) - the resolved family (or None when it
       could not be determined) and one of ``DISPLAY_FAMILY_SOURCES``.
@@ -120,10 +166,12 @@ def resolve_family_for_display(
     if not normalized:
         return None, FAMILY_SOURCE_UNKNOWN
 
+    guess_source = _guess_source(from_fingerprint, from_process)
+
     if normalized in AGENT_FAMILY_BY_NAME:
         family = AGENT_FAMILY_BY_NAME[normalized]
-        if from_fingerprint:
-            return family, FAMILY_SOURCE_FINGERPRINT
+        if guess_source:
+            return family, guess_source
         return family, FAMILY_SOURCE_RESERVED_NAME
 
     for w in wrappers:
@@ -140,8 +188,8 @@ def resolve_family_for_display(
 
         if family_name is not None and family_name in AGENT_FAMILY_BY_NAME:
             family = AGENT_FAMILY_BY_NAME[family_name]
-            if from_fingerprint:
-                return family, FAMILY_SOURCE_FINGERPRINT
+            if guess_source:
+                return family, guess_source
             return family, FAMILY_SOURCE_WRAPPER
 
         if not has_family_key or not family_name:
@@ -150,8 +198,8 @@ def resolve_family_for_display(
             # (wrappers_for_family applies the same rule), but only by
             # walking one layer deeper than a direct field read.
             family = AGENT_FAMILY_BY_NAME[DEFAULT_FAMILY]
-            if from_fingerprint:
-                return family, FAMILY_SOURCE_FINGERPRINT
+            if guess_source:
+                return family, guess_source
             return family, FAMILY_SOURCE_DERIVED_DEEPEST
 
         # A wrapper matched, but its recorded family is not a family this
