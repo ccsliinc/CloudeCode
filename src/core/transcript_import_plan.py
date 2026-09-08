@@ -152,6 +152,10 @@ class ProposedSession:
         title: the reconstructed label, or None when nothing named it.
         title_source: 'custom-title', 'first_user_message' or None.
         created_at / last_work_at: from the transcript's own timestamps.
+        transcript_path: the file this proposal was built from. Carried
+            so the WRITER can classify the conversation's ``kind``
+            without the plan having to read the file a second time -
+            this function reads nothing off disk and stays that way.
         detail: a plain sentence, on every non-import outcome.
     """
 
@@ -166,6 +170,7 @@ class ProposedSession:
     title_source: Optional[str] = None
     created_at: Optional[str] = None
     last_work_at: Optional[str] = None
+    transcript_path: Optional[str] = None
     detail: Optional[str] = None
 
     @property
@@ -289,6 +294,7 @@ def plan_transcript(
         title_source=title_source,
         created_at=facts.first_ts,
         last_work_at=facts.last_ts or facts.first_ts,
+        transcript_path=facts.path,
     )
 
 

@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 24
+CURRENT_SCHEMA_VERSION: int = 25
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1534,3 +1534,55 @@ REVERSAL_SQL_V24: Tuple[str, ...] = (
 )
 
 REVERSAL_DESTROYS[24] = ("session_group_membership (whole table)",)
+
+
+# ---------------------------------------------------------------------------
+# v24 -> v25: sessions.kind, so a list can be the OWNER'S work only
+# ---------------------------------------------------------------------------
+#
+# THE OWNER'S RULE, VERBATIM (2026-09-08): "lists should always just be
+# mine. the rest can be found in the archive explorer." After the
+# transcript import gave every conversation on this machine a row, 895 of
+# them, the lists carried work nobody sat at a keyboard for: 259
+# scheduler runs and 11 headless `claude -p` probes, measured.
+#
+# THE VOCABULARY IS THREE WORDS AND A FOURTH IS A BUG: 'interactive',
+# 'automated', 'unknown'. src/core/session_kind.py owns the ladder that
+# produces them and the argument for each rung.
+#
+# NULLABLE, WITH NO SQL DEFAULT, AND THAT IS THE SAFETY PROPERTY. SQLite
+# fills every existing row with a column default when one is given, which
+# would have stamped 'interactive' on all 895 imported rows and left the
+# backfill unable to tell "classified as the owner's" from "never
+# looked at". NULL means exactly "not classified", and every reader
+# excludes on `kind = 'automated'` ALONE - so NULL, 'unknown' and
+# 'interactive' all keep their place in the lists. An unwritten value can
+# never hide a session.
+#
+# NO INDEX, same reasoning as v23's last_work_at: the sessions table is
+# under a thousand rows on the largest install measured, and the filter
+# rides along on scans the lists already pay for.
+DDL_V25_SESSIONS_KIND = "ALTER TABLE sessions ADD COLUMN kind TEXT"
+
+#: Stamp the rows this app created or adopted ITSELF. Every one of them
+#: was launched or attached by the owner at a keyboard, so 'interactive'
+#: is a measurement about them rather than a guess - the app has no other
+#: way to make a session. Imported rows are deliberately left NULL for
+#: scripts/classify_session_kind.py, which reads the transcript.
+DDL_V25_SESSIONS_KIND_BACKFILL = (
+    "UPDATE sessions SET kind = 'interactive' "
+    "WHERE kind IS NULL AND origin IN ('created', 'adopted')"
+)
+
+#: Ordered DDL for a v24 -> v25 database. One ALTER TABLE ADD COLUMN
+#: guarded by PRAGMA table_info in the step (SQLite has no IF NOT EXISTS
+#: for it - same idiom as v3/v10/v11/v13/v15/v22/v23), then one UPDATE
+#: whose `kind IS NULL` clause makes it idempotent by itself.
+DDL_V25: Tuple[str, ...] = (
+    DDL_V25_SESSIONS_KIND,
+    DDL_V25_SESSIONS_KIND_BACKFILL,
+)
+
+#: Additive-only forward, RESTORE backward - same as V3, V4 and V23.
+#: Stated so the absence is a decision rather than a gap.
+REVERSAL_SQL_V25: Tuple[str, ...] = ()

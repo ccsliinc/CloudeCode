@@ -854,6 +854,38 @@ bookkeeping); 224 `agent-<id>.jsonl` SUBAGENT runs, whose records report
 the PARENT's `sessionId` - which is why identity is the FILE STEM; and
 the older of two transcripts for one uuid split by a cwd spelling.
 
+**NOT ALL OF IT IS THE OWNER'S TYPING, AND THE LISTS NOW SAY SO.** The
+owner's rule, verbatim: "lists should always just be mine. the rest can
+be found in the archive explorer." `sessions.kind` (schema v25) carries
+three words and never a fourth: `interactive` / `automated` / `unknown`.
+Measured over the 895 imported rows 2026-09-08 and applied on live: 320
+interactive, 270 automated, 305 unknown. `GET /sessions/records` and
+`GET /sessions/recent` exclude `kind='automated'` by default;
+`include_automated=true` returns it and no UI sets that. `/archive` reads
+the transcript archive and never `sessions`, so nothing here can hide a
+transcript from the explorer.
+
+**ONLY A FACT THE MACHINERY WROTE MAY SAY `automated`.** Two rungs, both
+emitted by the thing that did the automating: a `<scheduled-task ...>`
+tag around the prompt (259 rows), and `entrypoint: sdk-cli`, the headless
+SDK path (11). Interactive is reached by `entrypoint` `cli` or
+`claude-desktop` (266), a `planContent` record (30), or a `custom-title`
+/ `mode` record (24). Title shape, turn count and prompt wording are NOT
+in the ladder: 28 rows titled "Implement the following plan: ..." read as
+delegated work and every one is a HUMAN approving a plan in the TUI,
+while 3 scheduler runs are titled "Urbackup completion proof" and a title
+rule misses all three. `src/core/session_kind.py` owns the ladder;
+`scripts/classify_session_kind.py` is the operator entry point, DRY RUN
+BY DEFAULT, and it prints those negative controls on every run.
+
+**THE 305 UNKNOWNS ARE AN ERA, NOT A GAP, AND THEY STAY IN THE LISTS.**
+Every one was written by claude <= 2.1.77, which predates the
+`entrypoint` field; the earliest confirmed scheduler run is 2.1.121 and
+the earliest confirmed headless run is 2.1.198. The corpus holds NO
+confirmed automated run from that era to derive a marker from. NULL and
+`unknown` both list, because every reader excludes on `kind='automated'`
+ALONE - not having looked is not evidence of automation.
+
 An imported row has no `tmux_name`, epoch, `agent_type` or `model`, none
 of it invented, so `GET /sessions/restart/preview` cannot ADDRESS it.
 `session_imported_restart.py` + `imported_restart_routes.py` are the path

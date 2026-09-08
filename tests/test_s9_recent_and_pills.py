@@ -501,7 +501,13 @@ def test_recent_route_defends_against_a_non_stopped_row_even_if_the_query_did_no
     monkeypatch.setattr(type(_routes_settings()), "get_state_dir", lambda self: tmp_path)
     (tmp_path / "cloude.db").touch()
 
-    def _fake_list_sessions(conn, *, lifecycle=None, include_archived=True):
+    def _fake_list_sessions(
+        conn,
+        *,
+        lifecycle=None,
+        include_archived=True,
+        include_automated=True,
+    ):
         return [
             {
                 "session_uuid": "stopped-1",

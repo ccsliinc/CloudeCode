@@ -57,6 +57,8 @@ from src.core.db_models import (
     DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
     DDL_V23_SESSIONS_LAST_WORK_AT,
     DDL_V24,
+    DDL_V25_SESSIONS_KIND,
+    DDL_V25_SESSIONS_KIND_BACKFILL,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -1249,6 +1251,46 @@ def _step_v23_to_v24(conn: sqlite3.Connection) -> None:
     )
 
 
+def _step_v24_to_v25(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.kind``, and stamp the rows this app made itself.
+
+    Description: gives every session row a place to record whether a
+      HUMAN drove the conversation or machinery did. The owner's rule,
+      verbatim: "lists should always just be mine. the rest can be found
+      in the archive explorer." src/core/session_kind.py owns the
+      three-word vocabulary and the evidence ladder behind it.
+
+      THE COLUMN IS NULLABLE WITH NO SQL DEFAULT, ON PURPOSE. SQLite
+      backfills a column default into every existing row, which would
+      have written 'interactive' onto all 895 imported rows and destroyed
+      the only thing that distinguishes "classified" from "never looked
+      at". NULL is that distinction, and because every reader excludes on
+      ``kind = 'automated'`` alone, NULL keeps a row in the lists. An
+      unwritten value can never hide a session.
+
+      THE ONE BACKFILL IS A MEASUREMENT, NOT A GUESS. Rows with
+      ``origin`` 'created' or 'adopted' were launched or attached by the
+      owner through this app; it has no other way to make one. Rows with
+      ``origin = 'imported'`` are left NULL for
+      scripts/classify_session_kind.py, which reads the transcript rather
+      than assuming.
+
+      IDEMPOTENT ON BOTH HALVES: the ALTER is guarded by
+      ``column_exists`` because SQLite's ADD COLUMN has no IF NOT EXISTS,
+      and the UPDATE carries its own ``kind IS NULL`` clause so a re-run
+      after an interrupted attempt never overwrites a classification made
+      since. A no-op on an install whose sessions table was never created
+      (pre-v2).
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v24_to_v25(conn)  # after _step_v23_to_v24
+    """
+    if not table_exists(conn, "sessions"):
+        return
+    if not column_exists(conn, "sessions", "kind"):
+        conn.execute(DDL_V25_SESSIONS_KIND)
+    conn.execute(DDL_V25_SESSIONS_KIND_BACKFILL)
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1278,6 +1320,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     21: _step_v21_to_v22,
     22: _step_v22_to_v23,
     23: _step_v23_to_v24,
+    24: _step_v24_to_v25,
 }
 
 

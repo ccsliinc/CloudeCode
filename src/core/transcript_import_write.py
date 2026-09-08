@@ -51,6 +51,7 @@ from src.core.transcript_import_plan import (
     IMPORTED_ROW_CONSTANTS,
     ProposedSession,
 )
+from src.core.session_kind import classify_transcript
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
@@ -192,6 +193,26 @@ def create_archived_project(
     return int(cursor.lastrowid)
 
 
+
+def kind_for_plan(plan: ProposedSession) -> Optional[str]:
+    """Classify one proposal's conversation as the owner's or machinery's.
+
+    Description: reads the transcript the proposal was built from and
+      returns one of ``session_kind.SESSION_KINDS``. A proposal carrying
+      no ``transcript_path`` returns None, which stores as NULL - and
+      NULL keeps the row in every list, because "we never looked" and
+      "a machine ran this" are different facts and only the second one
+      may hide a session.
+    Inputs: plan (ProposedSession).
+    Output: str | None - 'interactive', 'automated', 'unknown', or None
+      when there was no file to read.
+    Example: kind_for_plan(plan)  # 'automated'
+    """
+    if not plan.transcript_path:
+        return None
+    return classify_transcript(plan.transcript_path).kind
+
+
 def insert_imported_session(
     conn: sqlite3.Connection,
     plan: ProposedSession,
@@ -207,6 +228,16 @@ def insert_imported_session(
       conversation inside one). It is its own path because neither of
       those can honestly describe this row: there is no instance to
       record and no parent to hang lineage off.
+
+      ``kind`` IS MEASURED FROM THE TRANSCRIPT, not assumed. The
+      importer walks this machine's whole corpus, and that corpus holds
+      scheduler runs and headless ``claude -p`` probes alongside the
+      owner's own work; giving them all the same kind would put 270
+      machine-run conversations (measured 2026-09-08) onto lists whose
+      whole purpose is to show the owner HIS sessions. When no path is
+      carried, or no marker in the file answers, the column stays NULL -
+      and NULL lists, because not having looked is not evidence of
+      automation. See src/core/session_kind.py.
 
       ``created_at`` and ``last_work_at`` come from the TRANSCRIPT, not
       from the clock. A recovered conversation from March belongs in
@@ -230,8 +261,8 @@ def insert_imported_session(
         "(session_uuid, project_id, project_attribution, working_dir, "
         " origin, lifecycle, lifecycle_source, lifecycle_checked_at, "
         " claude_session_uuid, claude_session_uuid_source, title, "
-        " archived_at, created_at, updated_at, last_work_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " archived_at, created_at, updated_at, last_work_at, kind) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_uuid,
             project_id,
@@ -248,6 +279,7 @@ def insert_imported_session(
             stamp,
             now,
             plan.last_work_at,
+            kind_for_plan(plan),
         ),
     )
     return session_uuid
