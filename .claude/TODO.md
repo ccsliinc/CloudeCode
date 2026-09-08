@@ -3137,3 +3137,91 @@ the pre-existing environmental ones `CLAUDE.md` names
 (`test_home_write_guard`, `test_state_dir_resolution`,
 `test_version_probe`). Real-hook test opted in once against a real claude
 in a throwaway tmux socket: 9 passed in 51.92s.
+
+---
+
+## 2026-09-08 - Punchlist 1: the choice on wake, not a better silent default - SHIPPED
+
+**What the app did before, read rather than assumed.** Two reconnect paths
+and they differ. The websocket re-attach (`src/api/websocket.py`) replays NO
+history at all: `request_dims`, the client's `pty_resize`, ~150 ms for
+SIGWINCH, then `ws_startup_paint` paints the VISIBLE SCREEN, or sends Ctrl+L
+and lets a TUI redraw itself. The launchpad/sidebar rejoin
+(`GET /sessions?include_scrollback=1`) captures
+`tmux capture-pane -p -e -J -S -<session.scrollback_lines>`, 3000 lines by
+default, and `terminal-reconnect-buffer.js` then decides alone: `keep` for
+the same session id with content already in xterm, `replace` otherwise.
+Nobody was ever asked, and nothing ever said what happened during the gap.
+
+**Threshold 60s, bound 3000 lines.** `TerminalAwayGap.AWAY_THRESHOLD_MS`.
+Under a minute is a blip and keeps today's behaviour with no prompt - a bar
+that fired on every wifi hiccup would be dismissed unread, which is worse
+than no bar. The full-history bound is `session.scrollback_lines` read from
+config, so the number the bar prints is the number tmux is asked for.
+
+**The absence is MEASURED by a heartbeat, not by a visibility event.** A
+sleeping phone may fire nothing: the tab is already hidden and the OS
+suspends the process. `terminal-away-bar.js` stamps the wall clock every 5s
+while visible; the gap between the last stamp and the next tick IS the
+absence. `visibilitychange` is wired too because a tab switch does fire it.
+
+**A remembered choice PRE-SELECTS AND NEVER SUPPRESSES.** Stored per device
+in `localStorage` under `cloude.away.lastChoice`. The bar shows every time
+and nothing runs without a press, because a remembered choice that acted on
+its own would be exactly the silent default this item exists to remove,
+wearing the user's own preference as a disguise. Pinned by a test.
+
+**The summary is built from what the app already has**, no LLM step and no
+new event log: toast records with a `created_at` inside the window counted
+by kind, the live `SessionActivityTracker` signal (`permission_open`,
+`notice_open`, and the later of `last_tool_event_ts` / `last_stop_ts`), and
+one `#{alternate_on}` probe. One new read-only route,
+`GET /api/v1/sessions/away/summary`, because three of those facts are on no
+existing endpoint. The server ships FACTS and never sentences, so the app
+keeps exactly one duration formatter instead of two that drift.
+
+**THE TURN COUNT IS A FLOOR.** `SessionManager.record_toast` supersedes an
+unacked `Stop` with the same title IN PLACE, so twelve finished turns can be
+one stored record. The report counts records, names the coalescing kinds,
+and the client prints "at least 3 turns finished". A total there would be
+the same class of lie the toast layer already refuses to tell in the other
+direction.
+
+**COVERAGE IS ITS OWN FIELD, and it is the negative control.** The toast
+store is in memory, so a bucket emptied by a restart is indistinguishable
+from a quiet session. A window starting before this process loaded reports
+`partial_server_restarted` and the bar says so out loud. "Nothing happened"
+and "the record was thrown away" must never render the same.
+
+**The bar is an OVERLAY inside `.terminal-container`.** An in-flow child
+there steals rows from `#terminal`, the ResizeObserver ships a `pty_resize`,
+tmux raises SIGWINCH and claude answers `ESC[2J`, which on the alternate
+screen erases the conversation. A bar asking "what should I repaint" must
+not be able to wipe the answer on its way in. `#localServersContainer`
+already paid for this.
+
+**STILL OPEN.** A websocket drop with the user PRESENT raises no bar, on
+purpose - that is not an absence and the reconnect buffer already kept the
+screen across it. If it ever should, the signal does not exist: nothing
+dispatches an event on `ws.onopen` and `client/js/terminal.js` is under a
+no-growth guard. Also unaddressed: on an alternate-screen pane "show full
+history" trades the browser's kept buffer for a single captured frame. The
+caveat is printed before the press, but for a Claude Code session the
+browser's buffer is usually the better record.
+
+**Files.** `client/js/terminal-away-gap.js` (pure rules and sentences),
+`client/js/terminal-away-bar.js` (heartbeat, element, actions),
+`client/css/terminal-away-bar.css`, `src/core/session_away_report.py`,
+`src/api/away_routes.py`, `docs/reconnect.md`,
+`tests/test_terminal_away_gap.node.mjs` (13),
+`tests/test_session_away_report.py` (19). Nothing in
+`terminal-reconnect-buffer.js` was touched; this layers on top of its keep
+rule.
+
+**Measured.** `venv/bin/python3 -m pytest -q`: 5328 passed / 4 failed / 21
+skipped. Three are the pre-existing environmental ones `CLAUDE.md` names;
+the fourth is
+`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`,
+the documented real-tmux flake, which passes 3/3 in isolation on the same
+tree minutes later. The passed/skipped counts include another session's
+uncommitted work in this tree.

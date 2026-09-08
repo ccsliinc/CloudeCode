@@ -1,0 +1,126 @@
+/* The away bar: "you were gone N min, what do you want repainted".
+ * ----------------------------------------------------------------------
+ * Rendered by client/js/terminal-away-bar.js, worded by
+ * client/js/terminal-away-gap.js.
+ *
+ * AN OVERLAY, AND THAT IS THE WHOLE POINT OF THIS FILE. `.terminal-container`
+ * is a flex column, so an in-flow child of it takes rows away from
+ * `#terminal`; the ResizeObserver reads that as a real geometry change,
+ * ships a pty_resize, tmux raises SIGWINCH and claude answers with
+ * `ESC[2J`, which on the alternate screen erases the conversation. A bar
+ * asking "what should I repaint" must not be able to wipe the answer on
+ * its way in. `#localServersContainer` already paid for this lesson - see
+ * `.local-servers` in styles.css.
+ *
+ * Its own file rather than more lines in styles.css, which is past the
+ * project's 500-line budget.
+ */
+
+.away-bar {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    right: 15px;
+    z-index: 30;
+
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    padding: 10px 12px;
+    border: 1px solid var(--color-accent-border, var(--color-border));
+    border-radius: 8px;
+    background: var(--color-bg-elevated, var(--color-bg-card));
+    color: var(--color-fg);
+    box-shadow: 0 6px 18px var(--color-accent-shadow-soft, rgba(0, 0, 0, 0.35));
+
+    font-size: 13px;
+    line-height: 1.4;
+
+    /* Long enough to read, never taller than the pane it sits over. */
+    max-height: 60%;
+    overflow-y: auto;
+}
+
+.away-bar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.away-bar-label {
+    font-weight: 600;
+    color: var(--color-fg-strong, var(--color-fg));
+}
+
+.away-bar-close {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    color: var(--color-fg-muted);
+    font: inherit;
+    cursor: pointer;
+}
+
+.away-bar-close:hover {
+    color: var(--color-fg);
+}
+
+.away-bar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.away-bar-choice {
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-bg-card);
+    color: var(--color-fg);
+    font: inherit;
+    cursor: pointer;
+}
+
+.away-bar-choice:hover {
+    background: var(--color-bg-hover);
+}
+
+/* The remembered choice is PRE-SELECTED and nothing more. It is styled so
+ * it can be found at a glance and is never acted on without a press: a
+ * remembered choice that ran itself would be the silent default this bar
+ * exists to remove. */
+.away-bar-choice.is-remembered {
+    border-color: var(--color-accent-border-strong, var(--color-accent));
+    background: var(--color-accent-bg-soft, var(--color-bg-hover));
+}
+
+.away-bar-caveat {
+    margin: 0;
+    color: var(--color-fg-muted);
+    font-size: 12px;
+}
+
+.away-bar-body ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.away-bar-body li {
+    margin: 2px 0;
+}
+
+@media (max-width: 520px) {
+    .away-bar {
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        font-size: 12px;
+    }
+
+    .away-bar-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

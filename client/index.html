@@ -213,6 +213,12 @@
          in archive-tlist.css, and load order is the whole mechanism -
          each selector is no more specific than the one it replaces. -->
     <link rel="stylesheet" href="/static/css/archive-panes.css" />
+    <!-- The away bar shown after a measured absence. Its own file because
+         it must be an OVERLAY inside .terminal-container: an in-flow child
+         there steals rows from #terminal, and the resize that follows is
+         an ESC[2J that erases the alternate screen. See
+         client/css/terminal-away-bar.css. -->
+    <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -895,6 +901,15 @@
          behaviour that shipped. -->
     <script src="/static/js/terminal-reconnect-buffer.js"></script>
     <script src="/static/js/terminal.js"></script>
+    <!-- Punchlist item 1: after a measured absence, OFFER full history, a
+         summary of what happened, or just carry on, instead of the app
+         picking silently. terminal-away-gap.js is pure (every rule and
+         every sentence) and must load BEFORE terminal-away-bar.js, which
+         self-installs a heartbeat on DOMContentLoaded and reads
+         window.TerminalController. Neither touches the reconnect buffer's
+         keep rule; they layer on top of it. -->
+    <script src="/static/js/terminal-away-gap.js"></script>
+    <script src="/static/js/terminal-away-bar.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
          ClipboardTools.pasteFromClipboard(). Must load AFTER terminal.js,
