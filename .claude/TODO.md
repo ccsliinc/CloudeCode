@@ -3744,3 +3744,109 @@ Verified after the restart, three outcomes each, all PASS:
 **STILL OPEN:** one session, `cloude_PT-IMC`, still reads unknown. It fired
 no hook in the window and the seeder declined it, so nothing here says
 whether its row, its transcript or its pane is the reason. Not measured.
+
+## 2026-09-08 - punchlist item 4 (activity-after-resume): the real four-minute
+## measurement, re-run against current code, and it does not reproduce
+
+- [x] **Item 4 verified closed with a live measurement, not just the earlier
+  root-cause fix.** Used `tests/real_hook_app.py` / `tests/real_hook_harness.py`
+  AS A LIBRARY from a standalone scratch driver (not added to the repo, per
+  instructions) to: create a real session, answer the trust dialog, run one
+  turn to completion (`Stop`), read the transcript uuid, SIGKILL the pane's
+  process, and `respawn-pane -k` the SAME pane with `claude --resume <uuid>`
+  and the same `--settings` file - the tmux-layer mechanic
+  `TmuxBackend.respawn(live_restart_confirmed=True)` performs in production.
+  Then polled `GET /sessions/list` every 2s from the moment the resumed pane
+  was born, logging `(t, activity_status, startup_gate, unread)` plus every
+  hook's arrival time off the harness's ledger. Two independent runs: one
+  with a trivial no-tool prompt, one with the real `WORKING_PROMPT`-style
+  5-file-read turn (so `Stop` is preceded by real `PreToolUse`/`PostToolUse`
+  pairs and a trailing `SubagentStop`, matching the owner's actual workflow).
+
+- [x] **A RESUME FIRES EXACTLY ONE HOOK - a fresh `SessionStart` - and
+  nothing else.** Measured identically in both runs: `SessionStart` lands
+  0.48s and 0.49s after the resumed pane's process starts. No
+  `UserPromptSubmit`, no `PreToolUse`/`PostToolUse`, no `Stop`, no
+  `SubagentStop` are replayed from the prior conversation's history. The
+  full ledger for the tool-using run: original turn
+  `SessionStart+4.66s, UserPromptSubmit+8.64s, PreToolUse/PostToolUse x5
+  (13.46s..32.35s), Stop+35.71s, SubagentStop+38.49s`, then after the kill
+  and resume: `SessionStart+69.62s` and NOTHING after it for the rest of
+  the 300s ceiling.
+
+- [x] **SECONDS TO SETTLE: ZERO, in both runs.** `activity_status` was
+  already at its post-resume value (`finished_unread`, `unread=true`) at
+  the very FIRST poll (t=0.0s) and held there for the full 10.9s
+  confirmation window (poll granularity is 2s, so 0.0s is the true
+  measurement, not an artifact of a coarse poll). It never reads `working`
+  at any point after a bare resume. This makes sense given the mapping in
+  `src/core/session_activity.py`: `SessionStart` is a lifecycle event
+  consumed only by the lineage/correlation path, not one of the events
+  that stamps `last_tool_event_ts` or moves the status machine - so a
+  resume with no NEW prompt cannot arm the 120s working heartbeat at all.
+
+- [x] **THE FOUR-MINUTE CLAIM DOES NOT HOLD.** Confirms and extends the
+  2026-09-08 earlier closure entry above ("a closing hook event is not a
+  heartbeat"): that entry fixed the mechanism (`SubagentStop` no longer
+  re-arms the heartbeat when `subagent_depth == 0` / `turn_open=False`) but
+  had not been re-run against an actual `--resume`. This run did that. The
+  guard was measured LIVE and firing correctly during the tool-using run's
+  original turn: `subagent_stop_without_start session_id=... turn_open=False`
+  logged 2.78s after `Stop`, and `activity_status` read `finished_unread`
+  (never `working`) both immediately before the kill and for the entire
+  post-resume window. **The word "resume" in the original punchlist item
+  was itself a red herring** - a resume does not replay hooks and cannot,
+  on its own, produce ANY working-state exposure; the historical ~4-minute
+  observation is fully explained by the (now-fixed) `SubagentStop`
+  heartbeat re-arm on the turn that happened to precede the resume, not by
+  anything the resume itself does. Two re-arms of the 120s
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` land almost exactly on "about four
+  minutes", which is consistent with the original report.
+
+- [ ] **SIDE FINDING, NOT CHASED DOWN: `record_claude_lifecycle_event`
+  answered `LINEAGE_UNRESOLVED` for every session created in this harness
+  ("no live session carries this cloudecode session id, and no persisted
+  tmux name is recorded for it"), even though the session was created by
+  the SAME process moments earlier and never restarted.** Reproduced 3/3
+  runs. `sessions.claude_session_uuid` was therefore never written via the
+  normal path in any of these runs; the measurement above used the
+  transcript uuid read directly off disk instead (newest `*.jsonl` under
+  `~/.claude/projects/<slugify_project_dir(realpath(work_dir))>/`), which
+  is independent of that column. Not investigated further - could be
+  specific to `RealHookApp`'s minimal bootstrap (it deliberately skips
+  `src.main.app`'s lifespan) rather than a defect reachable from the real
+  app; whoever touches `src/core/session_lineage.py` next should check
+  whether `session.tmux_session` is actually populated at the point
+  `record_claude_lifecycle_event` runs for a session created through the
+  same request/response cycle, since that is the exact case that failed
+  here.
+
+- [ ] **OPERATIONAL NEAR-MISS DURING THIS MEASUREMENT, recorded so the next
+  person does not repeat it: running `tests/real_hook_app.py` as a
+  standalone script (not through `pytest`) does NOT get
+  `tests/conftest.py`'s autouse `tmux_socket_isolation` fixture, so nothing
+  installs `tests/socket_guard`'s socket redirect or subprocess guard.**
+  First attempt created a REAL session (`cloude_ses_1d468a9a`) on the
+  user's live `cloude` tmux socket, alongside his 19 other real sessions
+  (confirmed via `tmux -L cloude list-sessions` logging
+  `socket_name=cloude`). Caught before any real damage - the stray session
+  was idle on the trust dialog and was killed by name
+  (`tmux -L cloude kill-session -t cloude_ses_1d468a9a`) within the same
+  turn, verified gone, no other session touched, no orphan claude process
+  left running. Fix: a standalone driver MUST call
+  `tests.socket_guard.install_default_socket_redirect()` and
+  `install_subprocess_guard()` itself before creating anything, verify
+  `settings.load_auth_config().session.tmux_socket_name` actually resolved
+  away from `"cloude"` before proceeding, and call
+  `kill_test_socket_server()` / `remove_subprocess_guard()` /
+  `remove_default_socket_redirect()` in a `finally`. The corrected pattern
+  is in the scratch script referenced below - if this harness ever grows a
+  documented "run as a script" mode, this guard installation belongs in it
+  by default, not left to whoever forgets it next.
+
+- Rerunnable driver (not part of the repo, per instructions):
+  `/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/item4_resume_timing.py`.
+  Run with `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 <path>` for the
+  no-tool original turn, or add `ITEM4_TOOL_PROMPT=1` for the tool-using
+  original turn. Needs claude/tmux/node on PATH, as the shipped real-hook
+  suite does.
