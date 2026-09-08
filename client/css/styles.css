@@ -1430,10 +1430,15 @@ body.home-header-active {
     font-weight: bold;
 }
 
-/* The projects heading carries a second control (show archived), so it
- * becomes a row. Scoped to #projects-section so no other section's
- * heading layout moves. */
-#projects-section .launchpad-section-title {
+/* The projects heading AND the recent-sessions heading each carry a
+ * second control (show archived), so both become a row: the toggle
+ * button hugs the left edge, the archived control hugs the right.
+ * Scoped to these two sections so no other section's heading layout
+ * moves. Recent used to be missing from this list, which is why its
+ * "show archived" control rendered on its own line below the heading
+ * instead of composing with it the way the projects one does. */
+#projects-section .launchpad-section-title,
+#recent-sessions-section .launchpad-section-title {
     display: flex;
     align-items: center;
     gap: 8px;

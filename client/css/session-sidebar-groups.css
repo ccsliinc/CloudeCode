@@ -403,19 +403,3 @@
     content: "\2713\00a0";
     color: var(--color-accent);
 }
-
-/* The header's summary LED and unread badge.
- *
- * Sits between the fold button and the group menu, so it is visible while
- * the section is COLLAPSED - which is the only time it is load-bearing.
- * `pointer-events: none` because it is a readout, not a control: a click
- * anywhere along the header row must reach the fold button behind it
- * rather than dying on the light. Its meaning is in the LED's own title
- * and aria-label. */
-.session-sidebar-group__summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15em;
-    margin: 0 0.35em 0 0.15em;
-    pointer-events: none;
-}

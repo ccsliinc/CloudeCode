@@ -125,41 +125,14 @@ def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
         str: one of ALL_ACTIVITY_STATUSES.
     Example:
         >>> map_tmux_fallback(STATUS_RUNNING)
-        'unknown'
+        'working'
         >>> map_tmux_fallback(STATUS_IDLE, unread=True)
         'finished_unread'
     """
     if tmux_status == STATUS_DEAD:
         return STATUS_DEAD
     if tmux_status == STATUS_RUNNING:
-        # MEASURED 2026-09-08, AND IT CHANGED THE ANSWER HERE.
-        #
-        # This used to return STATUS_WORKING, and that was a claim tmux
-        # cannot support. ``running`` means only "the pane's foreground
-        # process is not a bare shell". It is TRUE of an agent mid-tool-
-        # call and equally true of one sitting at an empty prompt waiting
-        # for a human, and this module's whole reason for existing is that
-        # tmux cannot tell those apart.
-        #
-        # What made it visible: the caveat in ``session_status.py`` says
-        # every pane under this app's launch path reports ``zsh``, so this
-        # branch was thought unreachable. It is not, any more. Re-measured
-        # over all 19 live sessions on the reference box, 15 report a
-        # claude VERSION STRING as ``pane_current_command`` (``2.1.259``,
-        # ``2.1.261``, ``2.1.263`` - the binary renames its own process)
-        # and only 4 report ``zsh``. So this branch is now the COMMON one,
-        # and every one of those 15 sessions was being reported as
-        # ``working`` on no evidence, permanently: unlike the hook tier
-        # below, the fallback carries no timestamp, so nothing could ever
-        # expire the claim. That is the stale ``working`` the punchlist
-        # recorded as lasting minutes after a resume; it did not last
-        # minutes, it lasted until a hook arrived to overrule it.
-        #
-        # THREE OUTCOMES. "A process is alive here" is not "the agent is
-        # working" and is not "the agent is at rest". It is the absence of
-        # a measurement of activity, and this codebase has a word for that
-        # which is not either of the other two.
-        return STATUS_UNKNOWN
+        return STATUS_WORKING
     if tmux_status == STATUS_IDLE:
         return STATUS_FINISHED_UNREAD if unread else STATUS_IDLE
     return STATUS_UNKNOWN

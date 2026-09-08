@@ -3673,19 +3673,29 @@ class Launchpad {
     }
 
     /**
-     * Wire up the two launchpad section headings ("running sessions" and
-     * "projects") as real collapsible disclosures. Collapsed state
-     * persists per-section in localStorage under
+     * Wire up the launchpad section headings ("running sessions",
+     * "recent" and "projects") as real collapsible disclosures. Collapsed
+     * state persists per-section in localStorage under
      * `cloude.launchpad.collapsed`, following the same convention as
      * `cloude.theme` / `cloude.audio.volume`.
      *
-     * There used to be a third, "server management". Its one control now
+     * THE "recent" ENTRY WAS MISSING FROM THIS LIST. `#recent-sessions-toggle`
+     * has rendered as a real `<button>` with `aria-expanded` since b1365a2,
+     * but nothing ever attached a click listener to it - clicking it did
+     * literally nothing, which reads on screen as a chevron stuck open and
+     * a section that will not collapse. It was never a repaint clobbering
+     * a collapse; there was no collapse behavior to clobber. Fixed by
+     * listing it here like its two siblings, so it gets the exact same
+     * click handler, persistence and re-apply-on-render behavior they do.
+     *
+     * There used to be a fourth, "server management". Its one control now
      * lives in the home bar's server-controls menu.
      */
     initSectionDisclosures() {
         const collapsedState = this.getLaunchpadCollapsedState();
         const sections = [
             { id: 'running-sessions', toggleId: 'running-sessions-toggle', contentId: 'running-sessions-list' },
+            { id: 'recent-sessions', toggleId: 'recent-sessions-toggle', contentId: 'recent-sessions-list' },
             { id: 'recent-projects', toggleId: 'projects-section-toggle', contentId: 'project-list' },
         ];
 

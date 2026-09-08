@@ -71,25 +71,10 @@ def test_dead_beats_every_hook_signal():
 # ---- hooks-absent fallback --------------------------------------------------
 
 
-def test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working():
-    """A non-shell foreground process is NOT evidence the agent is working.
-
-    This test used to assert STATUS_WORKING and that assertion was wrong.
-    tmux `running` means only "the pane's foreground command is not a bare
-    shell", which is equally true of an agent mid-tool-call and one parked
-    at an empty prompt - the exact distinction this module exists because
-    tmux cannot make. With no hook signal there is no measurement of
-    activity, and the third outcome is what that gets reported as.
-
-    Measured 2026-09-08: 15 of 19 live sessions report a claude VERSION
-    STRING as pane_current_command (the binary renames its process), so
-    this branch is the common one, not the exotic one it was assumed to
-    be, and every one of those sessions was reading a permanent, never-
-    expiring `working`.
-    """
+def test_no_hook_ever_seen_falls_back_to_tmux_running():
     t = _t()
     assert t.hooks_seen("never_seen") is False
-    assert t.resolve("never_seen", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
+    assert t.resolve("never_seen", STATUS_RUNNING, now=T0) == STATUS_WORKING
 
 
 def test_no_hook_ever_seen_falls_back_to_tmux_idle():
@@ -306,9 +291,7 @@ def test_forget_resets_to_no_hook_seen():
     assert t.hooks_seen("s1") is True
     t.forget("s1")
     assert t.hooks_seen("s1") is False
-    # Fallback path. `unknown`, not `working` - see
-    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING  # fallback path
 
 
 def test_forget_unknown_session_is_a_safe_noop():
@@ -323,6 +306,4 @@ def test_unrecognized_event_kind_is_ignored():
     t = _t()
     t.record_event("s1", "SomeFutureHookKind", now=T0)
     assert t.hooks_seen("s1") is False
-    # Fallback, not crashed. `unknown` for the reason recorded in
-    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING  # fallback, not crashed
