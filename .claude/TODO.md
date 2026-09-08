@@ -3580,3 +3580,103 @@ carry `session_uuid` on its rows instead of resolving one. (b) The launchpad's
 own stopped-row restart still goes to `POST /sessions/{uuid}/restart`, which has
 no presence gate and no directory-spelling measurement; it should be routed
 through this path, and `launchpad.js` was out of scope for this change.
+
+---
+
+## 2026-09-08 - punchlist 20: a resting claude reads idle, not unknown
+
+**COMPLAINT, verbatim:** "on the homepage and sidebar many status unknown."
+
+**MEASURED READ-ONLY ON LIVE, 2026-09-08 22:24Z.** 19 live panes on the
+`cloude` socket, 15 painting `unknown`. Cause: `SessionActivityTracker`
+(`src/core/session_activity.py`) is an in-memory dict and nothing hydrates it at
+boot or at adopt, so after a restart `resolve()` falls to `map_tmux_fallback`,
+which correctly answers `unknown` for any pane running claude. Ten of the 15 had
+NEVER fired a hook and never will - hand-started without the hook env, last
+assistant turns dated 2026-07-16 and 2026-08-24, alive at an idle prompt for
+weeks. Three carried real hook history in the row (Fantasy Football 20:01Z,
+daily-briefing 13:17Z, Mac 09-04) but all of it PERISHABLE and stale, so
+`activity_persist.restore_state` correctly refused it. Zero cases of
+hook-seen-but-unknown. The 4 bare-shell panes already read `idle`.
+
+**SHIPPED.** A second source of evidence, one that outlives the process.
+
+| Piece | File |
+|---|---|
+| The pure ladder, and the asymmetry it enforces | `src/core/session_status_seed.py` |
+| What one transcript record says about a turn | `src/core/session_status_seed_records.py` |
+| The cache and the refresh clock | `src/core/session_status_seed_store.py` |
+| The two reads, and the seam | `src/core/session_status_seed_read.py` |
+
+**IT MAY CLAIM REST AND MAY NEVER CLAIM `working`.** A file carries no
+heartbeat, so a `working` seeded from one could never be expired - the identical
+defect `4215ad0` had just fixed one tier up, where a raw tmux `running` painted
+15 sessions busy on no evidence. Rung A is the row, judged by
+`activity_persist.restore_state` (imported, never rebuilt) and read on the FULL
+INSTANCE TRIPLE - byte-for-byte the WHERE clause `write_state` writes on,
+because a name-scoped read answers for whichever epoch sorts newest, which is a
+different question. Rung B is the last decidable record of the bound transcript,
+walked BACKWARDS so the newest evidence wins.
+
+**THE ONE BOUNDED READER IS NOW SHARED.** `claude_title_sync.read_tail_records`
+was extracted out of `read_newest_custom_title`, which is rebuilt on top of it.
+The 64 KB bound and its reasoning are unchanged; there is one window/clamp/
+partial-line implementation instead of two about to drift.
+
+**TWO RECORD SHAPES THE LADDER HAD TO BE CORRECTED ABOUT, both caught by
+measuring rather than by reading the code.** A SIDECHAIN `end_turn` is a
+SUBAGENT finishing inside a turn that is still running, so it is UNDECIDABLE.
+And a SLASH COMMAND IS NOT A PROMPT: claude intercepts `/rename` before it
+becomes one (which is why no hook event carries it) but still writes a
+pseudo-`user` record about it wrapped in `<command-name>` /
+`<local-command-caveat>` envelopes whose own text says "DO NOT respond to these
+messages". Read as prompts, those were the ONLY two sessions the first version
+of this ladder refused - and both were sitting at an empty `>` prompt. They are
+now undecidable rather than rest, so the walk continues to a boundary claude
+really wrote and a slash command can never manufacture an idle either.
+
+**WIRED IN THREE PLACES, one hunk each.** `session_boot_readopt.py` (warm, at
+the end of the pass, beside `sweep_live_sessions`), `src/api/routes.py`
+(`adopt_session`, after the adopt returns), and ONE call site in
+`SessionManager._session_info_for` - reached only while the answer is still
+`unknown` on a pane measured LIVE, so a seed can add an answer and can never
+overwrite a measured one. `session_manager.py` grew 30 lines at that single
+seam and nothing else. The seed store hangs off a `WeakKeyDictionary` keyed on
+the manager rather than an attribute assigned in its `__init__`, deliberately:
+that file is far past the size guideline and was under concurrent edit.
+
+**A HOOK RETIRES A SEED INSTANTLY** - the seam is gated on `hooks_seen`, so
+there is no expiry to wait out and no value to clear. That gate is also what
+makes seeding idempotent: a seed is a cached READING of durable evidence, not
+an event applied to a state machine.
+
+**RESULT, measured read-only against the live DB and the real corpus before
+committing: all 15 of the unknowns would read `idle`**, every one via rung B,
+dated by its own transcript (oldest 2026-04-23, newest 2026-09-08). 0.27 ms
+median per session, 1.09 ms max. THE NEGATIVE CONTROL IS SEPARATE AND
+LOAD-BEARING, because a matcher that always finds something is worse than
+useless: over 400 randomly sampled transcripts the ladder splits 172 `at_rest` /
+70 `in_flight` / 158 `no_marker`.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: 5463 passed, 3 failed, 21
+skipped. The three failures are the same pre-existing environmental ones
+(`test_home_write_guard`, `test_state_dir_resolution`, `test_version_probe`).
+New: `tests/test_session_status_seed.py` (42) - positive per rung, and a
+negative control per rung: a stale `working` row does not seed working while a
+stale `idle` row still does, a user prompt and a `tool_use` seed nothing, an
+unreadable transcript refuses rather than answering idle, a measured absence is
+named apart from an unreadable file, a sidechain `end_turn` does not seed idle,
+the newest decidable record wins over an older closer, duplicated seeds are
+idempotent, and a session with live hook signal is never seeded. Plus a
+hermetic boot test in the style of `tests/test_boot_readopt.py` with `$HOME`
+redirected under `tmp_path` so nothing reads the developer's real corpus.
+
+**STILL OPEN:** (a) `SessionManager._restored_activity_state` (the pre-existing
+rung-A read at the seam) still selects `WHERE tmux_name = ? ... ORDER BY
+tmux_created_epoch DESC LIMIT 1` - name-scoped, so for two rows sharing one name
+it can answer for the wrong instance. It cannot currently produce a WRONG seed,
+because the new epoch-scoped read only runs after it has already declined, but
+it can produce a wrong RESTORE. Fixing it means a second hunk in
+`session_manager.py`, which was out of scope for this change. (b) The periodic
+re-seed rides the listing poll rather than a task of its own; if the listing
+ever stops running for a hookless session, its light freezes at its last seed.

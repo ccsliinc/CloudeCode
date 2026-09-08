@@ -1150,6 +1150,17 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
             },
         )
 
+    # WARM THE STATUS SEED FOR THE PANE JUST ADOPTED. An adopted session
+    # has no hook signal in this process, and a pane running claude has
+    # no tmux answer either, so without this its light reads ``unknown``
+    # until the next listing derives the seed lazily. Deriving it here
+    # costs one bounded transcript tail read (0.274 ms median) and makes
+    # the very first render correct. Idempotent and non-raising by
+    # construction - see ``src/core/session_status_seed.py``.
+    from src.core.session_status_seed_read import seed_live_sessions
+
+    seed_live_sessions(session_manager)
+
     return AdoptSessionResponse(**result)
 
 

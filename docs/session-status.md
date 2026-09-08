@@ -199,6 +199,123 @@ That is the stale `working` recorded on the punchlist as lasting minutes
 after a resume: it did not last minutes, it lasted until a hook arrived to
 overrule it.
 
+## Seeding at boot, and why it may only ever claim rest
+
+The fallback above is honest and it is not enough. `SessionActivityTracker`
+is an in-memory dict that nothing hydrates at boot or at adopt, so a
+restart leaves every surviving session with no hook signal, and a pane
+running claude has no tmux answer either. **Measured on live 2026-09-08
+22:24Z: 19 live panes, 15 painting `unknown`.** Ten of them had never
+fired a hook and never will - they were started by hand, without the hook
+environment, and their last assistant turns are dated 2026-07-16 and
+2026-08-24. They had been sitting at an idle prompt for weeks and the
+light could not say so. The owner's complaint, verbatim: "on the homepage
+and sidebar many status unknown."
+
+So a second source of evidence is consulted, one that OUTLIVES the
+process. `src/core/session_status_seed.py` is the pure ladder,
+`session_status_seed_records.py` reads what a transcript record means,
+`session_status_seed_store.py` is the cache, and
+`session_status_seed_read.py` does the two reads and holds the seam.
+
+**IT MAY CLAIM REST. IT MAY NEVER CLAIM WORK.** That asymmetry is the
+whole design and it is not a conservatism knob. Rest is self-evidencing: a
+conversation whose last record ends a turn is at rest until something
+appends to it, and nothing has, which is exactly why
+`activity_persist.PERISHABLE` excludes `idle`. Work is a claim about right
+now and it needs a heartbeat to expire it. Hooks carry one; a file on disk
+does not. A `working` seeded from a transcript could never be expired by
+anything, so it would be a permanent lie the moment it was wrong - the
+identical defect that had a raw tmux `running` painting 15 sessions busy
+on no evidence, one tier further down.
+
+The rungs, in order. Each names what it MEASURED.
+
+| Rung | Evidence | Answers |
+|---|---|---|
+| A | `sessions.activity_state` / `activity_state_at` for THIS instance | that state, if `restore_state` still trusts it |
+| B | the last decidable record of the bound transcript | `idle` when it ends a turn; nothing otherwise |
+| C | a bare shell pane | `idle` already, before this ladder is reached |
+| D | everything else | `unknown`, which is a real answer |
+
+**Rung A is read on the full instance triple**, `(tmux_socket, tmux_name,
+tmux_created_epoch)` - byte-for-byte the WHERE clause
+`activity_persist.write_state` writes on. A tmux name is reused the moment
+its owner dies, so two rows can carry one name at once, and a name-scoped
+read answers for whichever epoch sorts newest, which is a different
+question. No epoch means no instance was identified, and that is refused
+outright rather than guessed at. A stale PERISHABLE state
+(`working`/`question`/`notice`) is refused; a stale `idle` or
+`finished_unread` is kept.
+
+**Rung B walks the tail BACKWARDS and stops at the first decidable
+record**, so the newest evidence wins. An old end-of-turn can never
+outrank a newer prompt - the same ordering the startup gate uses when it
+reads a hook before it reads the scrollback, and for the same reason: old
+evidence is stale evidence. It reads through the one bounded reader this
+codebase has, `claude_title_sync.read_tail_records` (64 KB, 0.27 ms median
+against the real corpus).
+
+Three record shapes end a turn: `system`/`turn_duration`,
+`system`/`stop_hook_summary`, and an assistant whose `message.stop_reason`
+is `end_turn` or `stop_sequence`. A user prompt, a `tool_result`, and an
+assistant that stopped on `tool_use` are in flight and seed nothing.
+Everything else is UNDECIDABLE and the walk continues - collapsing that
+third value into either of the other two is how a ladder starts inventing
+boundaries.
+
+**A SIDECHAIN RECORD IS UNDECIDABLE**, and it is the subtle one. A record
+with `isSidechain` true belongs to a SUBAGENT running inside the parent's
+turn, so its `end_turn` says the subagent finished and says nothing about
+the conversation the user is watching. Reading one as rest would paint
+idle over the longest-running work there is.
+
+**A SLASH COMMAND IS NOT A PROMPT**, and the live measurement is what
+forced that rung. claude intercepts slash commands before they become
+prompts - which is why no hook event carries a `/rename` - but it still
+writes a pseudo-`user` record about one, wrapped in `<command-name>` /
+`<local-command-caveat>` envelopes whose own text says "DO NOT respond to
+these messages". Read as prompts, those pinned two sessions at in-flight
+forever while both sat at an empty `>`. They are now UNDECIDABLE, not
+rest: the walk continues to a boundary claude really wrote, so a slash
+command can never manufacture an idle either.
+
+**Where it is wired.** Warmed at the end of the boot re-adopt
+(`session_boot_readopt.py`, beside `sweep_live_sessions`) and after
+`POST /sessions/adopt`, so the FIRST listing after a restart is already
+right. Applied at the one seam in `SessionManager._session_info_for`,
+reached ONLY while the answer is still `unknown` and the pane was measured
+LIVE - so a seed can add an answer and can never overwrite a measured one.
+
+**A live hook always wins, immediately.** The seam is gated on
+`SessionActivityTracker.hooks_seen`, so the first hook event of the
+process retires the seed for good: there is no expiry to wait out and no
+value to clear. That gate is also what makes seeding idempotent. A seed is
+a cached READING of durable evidence, not an event applied to a state
+machine, so re-deriving it any number of times converges on the same
+answer - unlike the hook consumers, which had to be made idempotent by
+hand.
+
+**The periodic re-seed, and its one honest direction.** A hand-started
+claude has no hook plumbing at all, so its light would freeze at whatever
+the first seed said for the life of the process. The seam re-derives rung
+B every `SEED_REFRESH_INTERVAL_SECONDS` (60s; about 6ms a minute for a
+fleet of twenty). Re-deriving can move a session from `idle` back to
+`unknown` when the transcript grows an in-flight record, which is correct:
+a growing transcript is evidence the rest claim has expired, NOT evidence
+of work. Polling a file more often does not make it a heartbeat. A session
+with live hook signal is never re-seeded.
+
+**Measured read-only against the live database and the real corpus before
+this shipped:** all 15 of the sessions painting `unknown` would read
+`idle`, every one of them via rung B, dated by its own transcript - the
+oldest 2026-04-23, the newest 2026-09-08. Per-session cost 0.27ms median,
+1.09ms max. The negative control that matters is separate, because a
+matcher that always finds something is worse than useless: over 400
+randomly sampled transcripts the ladder splits 172 `at_rest` / 70
+`in_flight` / 158 `no_marker`, so it demonstrably refuses.
+
+
 ## Unread
 
 **Set** on `Stop` (the `auto` flag), and by the user's explicit control

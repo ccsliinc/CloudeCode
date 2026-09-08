@@ -953,6 +953,40 @@ live sessions report a claude VERSION STRING as `pane_current_command`, so
 that branch is the common case and all 15 were reporting a permanent
 `working` on no evidence. Hook-fed `working` still expires after 120s.
 
+**AND THAT LEFT `unknown` AS THE COMMON READING, SO A RESTING CLAUDE IS NOW
+SEEDED FROM EVIDENCE THAT OUTLIVES THE PROCESS.** `SessionActivityTracker` is
+in-memory and nothing hydrated it, so a restart left every session on the
+tmux tier: measured on live 2026-09-08 22:24Z, 19 live panes and 15 painting
+`unknown`. Ten had NEVER fired a hook and never will - hand-started without
+the hook env, last assistant turns dated 2026-07-16 and 2026-08-24, alive at
+an idle prompt for weeks. `src/core/session_status_seed.py` is the ladder
+(records in `_records`, cache in `_store`, the two reads and the seam in
+`_read`): rung A is `sessions.activity_state` judged by
+`activity_persist.restore_state` and read on the FULL INSTANCE TRIPLE, the
+same WHERE clause `write_state` writes on, because a name-scoped read answers
+for whichever epoch sorts newest; rung B is the last decidable record of the
+bound transcript, walked BACKWARDS through the one bounded reader
+(`claude_title_sync.read_tail_records`, now extracted so there is exactly
+one) so the newest evidence wins. **IT MAY CLAIM REST AND MAY NEVER CLAIM
+`working`**: a file carries no heartbeat, so a `working` seeded from one
+could never be expired - the identical defect the paragraph above just fixed,
+one tier down. A sidechain `end_turn` is UNDECIDABLE (a subagent finishing
+inside a live turn), and so is a slash-command envelope, which is what the
+measurement forced: claude intercepts `/rename` before it becomes a prompt
+but still writes a pseudo-`user` record about it, and reading those as
+prompts pinned the only two sessions the ladder refused at in-flight while
+both sat at an empty prompt. Wired at the boot re-adopt, after
+`POST /sessions/adopt`, and at ONE seam in `_session_info_for` reached only
+while the answer is still `unknown` on a pane measured LIVE, so a seed can
+add an answer and never overwrite a measured one. A hook retires it
+instantly (the seam is gated on `hooks_seen`), which is also what makes it
+idempotent - a seed is a cached READING, not an event. Read-only against the
+live DB and the real corpus before shipping: **all 15 unknowns would read
+`idle`**, every one via rung B, 0.27 ms median each. The negative control is
+separate and load-bearing, because a matcher that always finds something is
+worse than useless: over 400 sampled transcripts it splits 172 `at_rest` / 70
+`in_flight` / 158 `no_marker`. Full model in `docs/session-status.md`.
+
 **Unread is keyed on the INSTANCE**, `<tmux_name>@<#{session_created}>`,
 because a name is reused and a flag from a killed session reappeared on its
 successor. Set on `Stop` and by the user's control, cleared when a WS

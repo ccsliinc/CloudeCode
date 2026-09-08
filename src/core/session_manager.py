@@ -4540,6 +4540,42 @@ class SessionManager:
             # honest absence of a measurement.
             if restored and liveness == LIVENESS_LIVE:
                 activity_status = restored
+
+            # THE SEED. Measured on live 2026-09-08 22:24Z: 19 live
+            # panes, 13 of them painting ``unknown``, and 10 of those
+            # had never fired a hook and never will - they were started
+            # by hand without the hook environment and have been sitting
+            # at an idle prompt for weeks. The restore above cannot help
+            # them: their row was never written either. So a second
+            # source of DURABLE evidence is consulted - the conversation
+            # transcript, whose last record says whether the turn ended.
+            #
+            # IT MAY ONLY CLAIM REST. A file carries no heartbeat, so a
+            # ``working`` seeded from one could never be expired and
+            # would be permanent the moment it was wrong - the exact
+            # defect that had a raw tmux ``running`` painting 15
+            # sessions busy on no evidence. See
+            # ``src/core/session_status_seed.py``.
+            #
+            # Reached ONLY while the answer is still ``unknown``, so a
+            # seed can add an answer and can never overwrite a measured
+            # one, and only on a pane measured LIVE, for the same reason
+            # the restore above is.
+            if (
+                activity_status == STATUS_UNKNOWN
+                and liveness == LIVENESS_LIVE
+            ):
+                from src.core.session_status_seed_read import seeded_status
+
+                seeded = seeded_status(
+                    self,
+                    session_id,
+                    tmux_session_name,
+                    epoch=row.get("created_at_epoch") if row else None,
+                    unread=unread,
+                )
+                if seeded:
+                    activity_status = seeded
         else:
             # THE SETTLED VALUE, stamped where the inputs are real. The
             # hook path cannot write this: with no tmux probe it resolves

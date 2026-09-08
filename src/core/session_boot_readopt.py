@@ -390,6 +390,20 @@ async def readopt_surviving_sessions(
 
     sweep_live_sessions(manager)
 
+    # AND THE ONE MOMENT THE STATUS OF EVERY SURVIVOR CAN BE RE-ESTABLISHED.
+    # ``SessionActivityTracker`` is in-memory, so this pass hands back a
+    # fleet with no hook signal at all, and a pane running claude has no
+    # tmux answer either - it painted ``unknown`` for 13 of 19 sessions,
+    # measured 2026-09-08. Seeding reads their durable evidence (the row,
+    # then the transcript tail) so a session demonstrably at rest says so
+    # on the FIRST listing rather than after the seam fills the cache
+    # lazily. It is a WARM-UP only: it derives exactly what the seam
+    # derives, so running it, skipping it, or running it twice all reach
+    # the same place, and it never raises.
+    from src.core.session_status_seed_read import seed_live_sessions
+
+    seed_live_sessions(manager)
+
     return ReadoptReport(
         outcome=READOPT_RAN, held=held, failed=failed, plan=plan
     )
