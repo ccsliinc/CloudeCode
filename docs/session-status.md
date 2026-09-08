@@ -188,19 +188,26 @@ different palette redefines `--led-color-*`, never these rules.
 `--led-size` is 9px by default, and every call site in this app actually
 renders at that default: the sidebar row (`session-sidebar-rows.js`) and
 the launchpad card (`launchpad.js`) both call `dotHtml()` with no `size`,
-so neither passes a per-instance override. `--led-halo-scale` (1.7) and
-`--led-glow-spread` (`--led-size * 0.3`) size the halo off that one dot
-size; at the 9px default the whole lit object - halo plus glow, at the
-breathing peak - is about 21px across.
+so neither passes a per-instance override. `--led-halo-scale` (1.3) and
+`--led-glow-spread` (a fixed `1.5px`, not a fraction of the dot - a flat
+pixel value reads truer than a proportional one at this size) size the
+halo off that one dot size; at the 9px default the whole lit object -
+halo ring plus glow, at the breathing peak - is about 14.7px across:
+9 * 1.3 = 11.7px halo, plus 2 * 1.5 = 3px of glow.
 
-Before 2026-09-08 those tokens were 2.6 and 0.62, putting the same math
-at about 35px across at the peak: larger than the row text and
-overlapping neighbours on the compact sidebar density and on the
-launchpad cards, which is what the owner meant by "the breathing is way
-too big" on both surfaces. The breathing keyframes were also scaling the
-halo up to 1.06x at the peak on top of that; the peak is now scale(1),
-i.e. no growth beyond the halo's own resting size, so the geometry tokens
-above are the true maximum rather than a floor the animation overshoots.
+That is the owner's own calibration (2026-09-08): "glowing is still to
+big. like 1 or 2 px larger than the front circle" - the halo ring itself
+reads as only a couple of px bigger than the dot, with the glow adding a
+further 1-2px on top. Two earlier configs are worth knowing if you are
+tracing a regression: 1.7x scale / 0.3x spread (shipped earlier the same
+day) put the lit object at about 21px across, still visibly larger than
+"1 or 2px more"; before that, 2.6x scale / 0.62x spread put it at about
+35px across at the peak - larger than the row text itself and overlapping
+neighbours on the compact sidebar density and on the launchpad cards,
+which is what the owner meant by "the breathing is way too big" the first
+time. The breathing keyframes scale the halo between 0.92 and 1 - never
+past its own resting size - so the geometry tokens above are the true
+maximum rather than a floor the animation overshoots.
 
 There is one set of geometry tokens, not one per surface, because every
 surface that renders a LED today renders it at the same 9px size. A

@@ -378,38 +378,43 @@ test('the breathing period is about two seconds, as specified', () => {
 // `dotHtml()` with no `size`, so both got that oversized halo. These pin
 // the tuned-down geometry so a future edit cannot silently regrow it.
 
-test('the halo scale and glow spread are tuned down from the oversized defaults', () => {
+test('the halo scale and glow spread match the owner-calibrated "1-2px larger" geometry', () => {
     assert.ok(
-        CSS.includes('--led-halo-scale: 1.7;'),
-        'halo scale must stay at the tuned-down 1.7x, not regrow toward 2.6x',
+        CSS.includes('--led-halo-scale: 1.3;'),
+        'halo scale must stay at the tuned-down 1.3x, not regrow toward 1.7x or 2.6x',
     );
     assert.ok(
-        CSS.includes('--led-glow-spread: calc(var(--led-size) * 0.3);'),
-        'glow spread must stay at 0.3x the dot size, not regrow toward 0.62x',
+        CSS.includes('--led-glow-spread: 1.5px;'),
+        'glow spread must stay a fixed 1.5px, not regrow toward a larger fraction of the dot size',
     );
 });
 
-test('the lit object at the 9px default stays close to the sidebar row gap budget', () => {
+test('the lit object at the 9px default stays within about 1-2px of the dot, per the owner\'s calibration', () => {
     // Same arithmetic as the comment above the tokens in status-led.css:
-    // halo diameter = size * scale, glow adds spread on each side. This
-    // is not a rendering measurement - box-shadow blur softens the true
-    // edge - but it is the same approximation the "about 35px" regression
-    // and the "about 21px" fix were both reasoned from, so a silent
-    // increase here is caught before it reaches a browser.
+    // halo diameter = size * scale, glow adds a fixed spread on each side.
+    // This is not a rendering measurement - box-shadow blur softens the
+    // true edge - but it is the same approximation every prior regression
+    // and fix in this file was reasoned from, so a silent increase here is
+    // caught before it reaches a browser.
     const size = 9;
     const scaleMatch = CSS.match(/--led-halo-scale:\s*([\d.]+);/);
-    const spreadMatch = CSS.match(/--led-glow-spread:\s*calc\(var\(--led-size\)\s*\*\s*([\d.]+)\);/);
-    assert.ok(scaleMatch && spreadMatch, 'both geometry tokens must be plain multipliers of --led-size');
+    const spreadMatch = CSS.match(/--led-glow-spread:\s*([\d.]+)px;/);
+    assert.ok(scaleMatch && spreadMatch, 'halo scale must be a plain multiplier and glow spread a plain px value');
     const scale = Number(scaleMatch[1]);
-    const spread = Number(spreadMatch[1]) * size;
+    const spread = Number(spreadMatch[1]);
     const diameter = size * scale + 2 * spread;
-    // The compact sidebar row's flex gap is 5px on each side of the dot's
-    // own 9px box - see session-sidebar-density.css. Budget is generous
-    // (a couple of px over is invisible once the glow's blur has faded),
-    // but the old 2.6x/0.62 config (diameter ~34.6px) must never pass.
+    // The owner's own words: "like 1 or 2 px larger than the front
+    // circle." The halo ring alone (size * scale) must land in that
+    // window, and the whole lit object including glow must stay well
+    // clear of both the 1.7x/0.3 (~21px) and 2.6x/0.62 (~35px) regressions.
+    const haloDiameter = size * scale;
     assert.ok(
-        diameter < 25,
-        `lit object diameter ${diameter}px must stay well clear of the old ~35px regression`,
+        haloDiameter > size && haloDiameter <= size + 4,
+        `halo ring diameter ${haloDiameter}px must read as only 1-2px larger than the ${size}px dot`,
+    );
+    assert.ok(
+        diameter < 16,
+        `lit object diameter ${diameter}px must stay well clear of the old ~21px and ~35px regressions`,
     );
 });
 

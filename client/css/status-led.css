@@ -54,28 +54,29 @@
      * saying different things. */
     --led-color-unread: var(--color-warning, #d29922);
 
-    /* Geometry. The halo is 1.7x the dot and its glow spreads a further
-     * 30% of the dot's size beyond that. At the 9px default every call
-     * site actually renders at (sidebar row, launchpad card - neither
-     * passes `size`, so both get this value), that puts the whole lit
-     * object - halo plus glow, at the breathing peak - at about 21px
-     * across: 9 * 1.7 = 15.3px halo, plus 2 * (9 * 0.3) = 5.4px of glow.
-     * Measured against the compact sidebar row's 5px flex gap around the
-     * dot (`.session-sidebar-panel[data-density="compact"]
-     * .session-sidebar-row-main`, session-sidebar-density.css), a lit
-     * object has to stay inside the dot's own 9px box plus 2 * 5px of
-     * gap - 19px - to clear neighbouring text; the glow's opacity has
-     * already faded most of the way out by its outer edge, so a ~1-2px
-     * excess over that budget does not read as touching the text.
+    /* Geometry. The halo ring is 1.3x the dot and the soft glow beyond it
+     * is a fixed 1.5px - fixed rather than proportional because at this
+     * size a flat pixel value reads truer than a fraction of the dot.
+     * At the 9px default every call site actually renders at (sidebar
+     * row, launchpad card - neither passes `size`, so both get this
+     * value), the whole lit object - halo ring plus glow, at the
+     * breathing peak - is about 14.7px across: 9 * 1.3 = 11.7px halo,
+     * plus 2 * 1.5 = 3px of glow. The owner's own calibration: "glowing
+     * is still to big. like 1 or 2 px larger than the front circle" -
+     * i.e. the halo ring itself should read as only a couple of px
+     * bigger than the dot, with the glow adding a further 1-2px on top.
      *
-     * PREVIOUS VALUES (2.6x scale, 0.62 spread) put the same math at
-     * about 35px across at the breathing peak - larger than the row
-     * text itself and overlapping neighbours. That was the owner's
-     * "breathing is way too big" report on the compact sidebar and the
-     * launchpad cards, both of which render at this same 9px default. */
+     * PRIOR VALUES, for anyone tracing a regression:
+     *   - 1.7x scale, 0.3x spread (shipped 2026-09-08 morning) put the
+     *     lit object at about 21px across - still visibly larger than
+     *     "1 or 2px more than the dot".
+     *   - 2.6x scale, 0.62x spread (the original) put it at about 35px
+     *     across - larger than the row text itself and overlapping
+     *     neighbours on the compact sidebar density and the launchpad
+     *     cards, the owner's "breathing is way too big" report. */
     --led-size: 9px;
-    --led-halo-scale: 1.7;
-    --led-glow-spread: calc(var(--led-size) * 0.3);
+    --led-halo-scale: 1.3;
+    --led-glow-spread: 1.5px;
 
     /* Resolved per state by the [data-inner] / [data-outer] rules below.
      * Declared here so every LED always has a value for both, and an
@@ -198,7 +199,7 @@
     0%,
     100% {
         opacity: calc(var(--led-halo-opacity) * 0.45);
-        transform: scale(0.9);
+        transform: scale(0.92);
     }
     50% {
         opacity: var(--led-halo-opacity);
