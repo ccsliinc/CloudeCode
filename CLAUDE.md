@@ -792,41 +792,36 @@ turn was over, `record_event` stamped it again, and a finished session
 painted `working` for the full 120s - `finished_unread` lasted a second
 and a half and `idle` was UNREACHABLE. The rule now: an event that CLOSES
 something stamps only when something was open for it to close.
-`SubagentStop` needs `subagent_depth > 0` (at zero it moves nothing and
-logs `subagent_stop_without_start` at debug); `PostToolUse` keys on a
-`turn_open` boolean that every OPENING event sets and `Stop` clears, and
-is refused ONLY when a `Stop` was POSITIVELY seen and nothing has opened
-since - never having seen a `Stop` is not evidence the turn ended.
+**`SubagentStop` NEVER STAMPS the heartbeat: it says work ENDED, so the
+only thing it moves is `subagent_depth`, and it moves that with the floor
+at 0.** It first shipped gated on `subagent_depth > 0` instead, and THE
+GATE IS NOT THE CLAIM IT STANDS FOR - a duplicated `SubagentStart`
+delivered after `Stop` raises the depth off the floor by itself, so the
+duplicated `SubagentStop` behind it passed the gate and stamped, at its
+own arrival time, ratcheting the expiry out on every further pair.
+`PostToolUse` cannot take a blanket refusal (it is the only event some
+legitimate turns emit late), so it keys on a `turn_open` boolean that
+every OPENING event sets and `Stop` clears, and is refused ONLY when a
+`Stop` was POSITIVELY seen and nothing has opened since - never having
+seen a `Stop` is not evidence the turn ended. Opening events still stamp
+unconditionally, so a stray `SubagentStart` after `Stop` still buys ONE
+bounded window keyed on itself; what no `SubagentStop` can do is extend
+it.
 
-**A DEAD SESSION KEEPS ITS ROW.** `dead` was unreachable from live data
-until 2026-09-08: `resolve_listing_liveness` answered ONE verdict, `gone`,
-for two different facts - "the backend says there is no such tmux session"
-and "the session is there and its pane is a corpse" - and
-`_session_info_for` dropped the row for both, while `/sessions/attachable`
-filters out every name bound to a live backend. So a killed pane VANISHED
-off the sidebar and the running list, with `dead`/`off` sitting in
-`status-led.js` and restart + remove sitting in `actionsFor('dead')`,
-never delivered a row to paint. `src/core/session_liveness.py` splits it
-four ways, borrowing the pane words from `session_respawn.py`:
-`alive` / `pane_dead` / `session_gone` / `unknown`. `pane_dead` KEEPS the
-row and says `dead`, because `remain-on-exit` holding the corpse open is
-the same fact that lets `respawn-pane` revive it; `session_gone` drops it
-exactly as before and the reaper files the stored row into the recent
-list, where a restart is a resume. Existence is read BEFORE the pane, so a
-stale `dead` row cannot keep a session tmux no longer has on screen.
-`keeps_row` is an ALLOW-LIST of what survives, so a verdict added later
-cannot silently inherit "make the row vanish".
-
-THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
-than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
-pipe-pane a corpse, so it raises and the pass (which gathers with
-`return_exceptions=True`) simply does not hold that session. The row does
-not disappear: with no live backend bound to the name,
-`/sessions/attachable` lists it and decorates it with
-`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
-surfaced a husk. The two are complementary - bound to a backend, the
-session says `dead` on `/sessions/list`; unbound, it says `dead` on
-`/sessions/attachable` - and after this change they finally agree.
+**A DEAD PANE DROPS OFF THE LIVE LIST AND BELONGS IN RECENT.** The
+owner's call, verbatim 2026-09-08: "they go into recent, they can
+disappear." A session whose process died has stopped, so its row leaves
+`GET /sessions/list` rather than lingering there wearing a dead light,
+and a restart from Recent is a resume. `dead`/`off` stays in the LED
+vocabulary but is GALLERY-ONLY - no live endpoint is meant to carry a
+dead row to the client. A round that read the same measurement as a bug
+and made a husk KEEP its row, painted dead, was overruled and reverted
+(`ba2aa5d`), and `tests/test_led_real_hooks.py` holds the line against a
+real killed pane. STILL OPEN: `remain-on-exit` keeps the husk's tmux
+session in the listing, and `session_lifecycle` reaps on ABSENCE from
+that listing, so the row leaves the live list without yet arriving in
+Recent. Closing that needs a reaper rung keyed on a MEASURED
+`#{pane_dead}`, which is a new durable writer and its own change.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an

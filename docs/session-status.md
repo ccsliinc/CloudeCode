@@ -77,53 +77,27 @@ that surface on a phone.
 first and outranks every hook signal. Hooks cannot observe a dead process,
 so nothing else may report `dead`.
 
-**A DEAD SESSION KEEPS ITS ROW, and until 2026-09-08 it did not.** `dead`
-is only worth having if the user can see it, and they could not: the
-listing pass resolved one verdict, `gone`, from two different facts - "the
-backend says there is no such tmux session" and "the session is there and
-its pane is a corpse" - and dropped the row for both.
-`GET /sessions/attachable` cannot catch either, because the route filters
-out every tmux name bound to a live backend so the UI never offers
-self-adopt. So a session whose process died VANISHED off the sidebar and
-the running list, while `dead`/`off` sat in the LED table below and
-`actionsFor('dead')` sat ready with restart and remove. Measured against a
-real agent by `tests/test_led_real_hooks.py`, which pinned the vanishing
-as the behaviour that existed.
+**`dead` IS GALLERY-ONLY: a dead pane drops off the live list and belongs
+in Recent.** The owner's call, verbatim 2026-09-08: "they go into recent,
+they can disappear." A session whose process died has stopped, so
+`_session_info_for` drops its row from `GET /sessions/list` rather than
+leaving it in the sidebar wearing a dead light, and a restart from Recent
+is a resume. The `dead` row in the table above and the `dead`/`off` LED
+state below stay documented and stay implemented - they are what the
+archive and the attachable-session decorator render - but no live
+endpoint is meant to carry a dead row to the client. A round that read
+the same measurement as a bug and made a husk KEEP its row, painted dead,
+was overruled and reverted (`ba2aa5d`);
+`tests/test_led_real_hooks.py::test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead`
+holds the line against a real killed pane.
 
-`src/core/session_liveness.py` splits it into four named outcomes, and the
-pane words are borrowed from `session_respawn.py` rather than spelled a
-second time:
-
-| verdict | what was measured | what happens to the row |
-|---|---|---|
-| `alive` | the session exists and its pane is live | listed, normal status |
-| `pane_dead` | the session exists, `#{pane_dead}` = 1 | **listed, says `dead`** |
-| `session_gone` | the backend says there is no such session | dropped; the reaper files the stored row as ended and it appears in the recent list |
-| `unknown` | could not ask | listed, says `unknown` |
-
-`pane_dead` keeps the row because `remain-on-exit` holding the corpse open
-is the same fact that lets `respawn-pane` revive it - restart and remove
-are both real actions on that row, and neither is reachable on a row that
-is not drawn. `session_gone` has no pane to paint and nothing a respawn
-could land in, so it moves to the recent list, where a restart is a
-resume. Existence is read BEFORE the pane, so a stale `dead` in the bulk
-status map can never keep a row alive for a session tmux no longer has.
-
-The startup gate reads a `pane_dead` session as `ready` - the narrow claim
-"not blocked on a startup prompt", which is true of a corpse - raises no
-toast for it, and captures no scrollback, so a dead row costs nothing per
-poll.
-
-THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
-than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
-pipe-pane a corpse, so it raises and the pass (which gathers with
-`return_exceptions=True`) simply does not hold that session. The row does
-not disappear: with no live backend bound to the name,
-`/sessions/attachable` lists it and decorates it with
-`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
-surfaced a husk. The two are complementary - bound to a backend, the
-session says `dead` on `/sessions/list`; unbound, it says `dead` on
-`/sessions/attachable` - and after this change they finally agree.
+STILL OPEN, and the test records it rather than asserting it:
+`remain-on-exit` keeps a husk's tmux SESSION in the listing, and
+`src/core/session_lifecycle.py` reaps on ABSENCE from that listing, so the
+row leaves the live list without yet arriving in Recent. Closing that
+needs a reaper rung keyed on a MEASURED `#{pane_dead}` - a new durable
+writer, in the one module whose entire premise is never writing a verdict
+nobody measured, so it is its own change and not a footnote to this one.
 
 **Hook events are unordered, duplicated and droppable.** Every consumer in
 `session_activity.py` is idempotent: last-write-wins booleans, counters
@@ -145,16 +119,34 @@ stream rather than through the tmux fallback that was fixed for the same
 lie. The punchlist recorded it as "activity reads working for minutes
 after a resume".
 
-The rule: an event that CLOSES something stamps the heartbeat only when
-something was open for it to close. `SubagentStop` needs
-`subagent_depth > 0`, which is already the exact record of an unmatched
-`SubagentStart`; at zero it decrements nothing, stamps nothing, moves no
-state and logs `subagent_stop_without_start` at debug. `PostToolUse` has
-no counter (parallel tool calls and a droppable `PreToolUse` would
-desynchronise one), so it keys on a `turn_open` boolean that every
-OPENING event (`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and
-`Stop` clears. Opening events still stamp unconditionally - there is
-nothing they could be late for.
+**The rule: `SubagentStop` never stamps the heartbeat.** It reports that
+work ENDED, so the only thing it may move is `subagent_depth`, and it
+moves that with the floor at 0. At depth 0 it moves nothing at all and
+logs `subagent_stop_without_start` at debug.
+
+It first shipped gated on `subagent_depth > 0` instead - stamp only when
+a subagent was open to close - and **the gate is not the claim it stands
+for**. Hooks are duplicated: a duplicated `SubagentStart` delivered after
+`Stop` raises the depth off the floor by itself, and the duplicated
+`SubagentStop` behind it then passes the gate and stamps, through the
+very guard meant to refuse it. Worse, it stamps at its OWN arrival time,
+so every further duplicated pair pushes the expiry out again - a ratchet
+with no ceiling, driven entirely by strays. A guard keyed on a number the
+stream it distrusts can move is not a guard. Refusing outright loses
+nothing: a subagent FINISHING is not work happening now, so if the turn
+really is still running the parent's next `PreToolUse` / `PostToolUse`
+re-arms the heartbeat within one tool call.
+(`tests/test_session_activity.py::test_a_duplicated_subagent_pair_after_stop_cannot_ratchet_the_heartbeat`)
+
+`PostToolUse` cannot take the same blanket refusal - it is the only event
+some legitimate turns emit late - and it has no counter to key on
+(parallel tool calls and a droppable `PreToolUse` would desynchronise
+one), so it keys on a `turn_open` boolean that every OPENING event
+(`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and `Stop`
+clears. Opening events still stamp unconditionally - there is nothing
+they could be late for - so a stray `SubagentStart` after `Stop` still
+buys ONE bounded window keyed on itself. What no `SubagentStop` can do is
+extend it.
 
 **The refusal is narrow, which is what makes it a measurement.**
 `PostToolUse` is refused ONLY when a `Stop` has POSITIVELY been seen for
