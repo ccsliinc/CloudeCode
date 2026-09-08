@@ -35,6 +35,7 @@ from src.core.db import table_exists, transaction
 from src.core.db_models import PROJECT_SOURCE_USER
 from src.core.project_store import PROJECTS_TABLE, normalize_root
 from src.core.project_tombstones import clear_tombstone, record_tombstone
+from src.core.session_project_binding import backfill_sessions_under_root
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
@@ -343,8 +344,25 @@ def create_project(
         # make the next reconcile treat this row's config entry as a
         # deliberate deletion and drop it again.
         clear_tombstone(conn, root)
+        # PUNCHLIST 16, THE OTHER DIRECTION. A session created moments
+        # before its own project row attributed against a projects table
+        # that did not yet contain it and landed ``project_id NULL``,
+        # and nothing ever re-probed. Ordering the two writes fixes the
+        # race one way round; adopting the project-less sessions that
+        # already sit under this new root fixes it the other, so it
+        # cannot land wrong whichever way it resolves. Purely additive:
+        # only rows with NO project are considered, so this can never
+        # move a session off a project it already has.
+        adopted = backfill_sessions_under_root(
+            conn, root=root, project_id=int(new_id), now=stamp
+        )
 
-    logger.info("project_created_in_db", project_id=new_id, root=root)
+    logger.info(
+        "project_created_in_db",
+        project_id=new_id,
+        root=root,
+        sessions_adopted=adopted,
+    )
     return dict(
         conn.execute("SELECT * FROM projects WHERE id = ?", (new_id,)).fetchone()
     )

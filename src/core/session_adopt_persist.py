@@ -56,12 +56,15 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_RUNNING,
     SESSION_ORIGIN_OBSERVED,
 )
-from src.core.project_attribution import attribute
 from src.core.session_identity import (
     ADOPT_CLAIMED,
     claim_instance,
 )
-from src.core.session_import_mapping import _project_roots
+from src.core.session_project_binding import (
+    columns_to_write,
+    resolve_project_binding,
+)
+from src.core.session_store import get_instance
 from src.core.tmux_listing import TmuxListing
 
 logger = structlog.get_logger()
@@ -278,7 +281,25 @@ def persist_adoption(
     working_dir = live.get("working_dir")
     if working_dir is None and working_dir_probe is not None:
         working_dir = working_dir_probe(name)
-    project_id, attribution = attribute(working_dir, _project_roots(conn))
+    # WHAT THE ROW ALREADY SAYS IS AN INPUT, NOT A THING TO OVERWRITE. An
+    # adoption re-derives attribution every time, and the UI re-opens
+    # sessions through this path routinely, so a derivation that comes
+    # back worse than the stored answer must not be allowed to land. See
+    # src/core/session_project_binding.py: the pair moves together or
+    # neither moves.
+    stored = get_instance(conn, socket=socket, name=name, epoch=epoch) or {}
+    stored_project_id = stored.get("project_id")
+    binding = resolve_project_binding(
+        conn,
+        working_dir,
+        stored_project_id=stored_project_id,
+        # An adopt is not a moment the user asked for a new project; it
+        # is re-entering one that already exists. Minting is left to the
+        # create path and to the operator repair.
+        allow_create=False,
+        now=now,
+    )
+    project_id, attribution = columns_to_write(binding, stored_project_id)
 
     sighting = record_instance(
         conn,
@@ -316,12 +337,12 @@ def persist_adoption(
         epoch=epoch,
         now=now,
         project_id=project_id,
-        # Never write ``unknown`` over an attribution a previous pass
-        # measured. claim_instance skips a None, so an unreadable probe
-        # leaves the stored answer exactly as it was.
-        project_attribution=(
-            attribution if project_id is not None or working_dir else None
-        ),
+        # BOTH HALVES COME FROM columns_to_write, WHICH IS THE POINT.
+        # claim_instance skips a None column, and the previous
+        # expression here could produce a non-None attribution beside a
+        # None id - so the attribution landed alone and contradicted the
+        # id the row kept. Now either both are set or both are None.
+        project_attribution=attribution,
         working_dir=working_dir,
     )
     if not claim.claimed:
@@ -350,14 +371,15 @@ def persist_adoption(
         tmux_created_epoch=epoch,
         session_uuid=claim.session_uuid,
         project_attribution=attribution,
+        project_binding_rule=binding.rule,
         note="origin='adopted' is written once and never recomputed",
     )
     return AdoptPersistResult(
         outcome=ADOPT_CLAIMED,
         session_uuid=claim.session_uuid,
         working_dir=working_dir,
-        project_id=project_id,
-        project_attribution=attribution,
+        project_id=binding.project_id,
+        project_attribution=binding.attribution,
         epoch=epoch,
     )
 

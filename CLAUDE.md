@@ -99,6 +99,41 @@ pass is SCHEDULED, never awaited - uvicorn binds at the lifespan `yield`, so an
 awaited pass is dead port (measured: 1.2 ms to bind, versus 49 ms awaited and 945 ms
 serial). It takes its own listing because `discover_existing` carries no epoch.
 
+**EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
+The owner's rule, verbatim: "all sessions belong to projects, the root folder
+... its impossible to not have a project." Nothing in memory carries it - the
+`Session` model (`src/models.py:138`) has no project field and `SessionInfo`
+ships none, so `/sessions/list` cannot lose a project and cannot restore one.
+The launchpad tree reads `project_id` / `project_attribution` off
+`GET /sessions/records`, joined to the live session by tmux name plus epoch in
+`_buildProjectSessionGroups` (`client/js/launchpad.js:3878`), and it tests
+`attribution === 'none'` BEFORE it looks at `project_id`. So a row carrying
+both an id and `none` renders under "no project" while holding a perfectly good
+one, which is what the owner saw. The invariant is enforced in
+`src/core/session_project_binding.py` and nowhere else: `resolve_project_binding`
+is the ladder (as-written match, then the same path canonicalised, then a minted
+project, then `none` for a scratch dir, then `unknown`), and `columns_to_write`
+is the rule that **THE PAIR MOVES TOGETHER OR NEITHER MOVES**. It is called from
+`persist_adoption` (`session_adopt_persist.py`, `allow_create=False` - re-entering
+a session is not a moment to invent a project) and from `persist_creation`
+(`session_create_persist.py`, `allow_create=True`), while `create_project`
+(`project_writes.py`) adopts the project-less live rows already under its new
+root, which is punchlist 16 closed from both directions.
+
+Two things caused this and both are worth keeping. First, a HALF-WRITE:
+`claim_instance` applies each column "only when not None", so a derived
+`(None, 'none')` skipped the id and wrote the attribution ALONE - the row kept
+its project and acquired a value contradicting it. "Only when not None" reads
+as conservative and is not, when the columns are a pair. Second, a SPELLING the
+lexical matcher cannot cross: `project_attribution.attribute` refuses to resolve
+symlinks, correctly, so a session probed at `/Users/jsugamele/Development/...`
+could never match a project declared at the iCloud path that same directory
+resolves to. Canonicalising is a FALLBACK RUNG, tried only after the as-written
+match fails, so a project declared at a symlink still collects the sessions
+declared there. Measured 2026-09-08: rows 7 and 8 held projects 1 and 2 beside
+`none`, row 45 held NULL from the create race, and 3 of 22 running sessions
+rendered project-less.
+
 **IT HELD ZERO ON ITS FIRST REAL BOOT, and the cause is worth keeping.** The
 pass builds an OWNED backend (`build_backend`, not `TmuxBackend.for_external`)
 and calls `attach_existing(needs_pipe_setup=True)`. That reached

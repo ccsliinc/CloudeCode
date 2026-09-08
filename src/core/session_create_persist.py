@@ -66,9 +66,8 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_RUNNING,
     SESSION_ORIGIN_CREATED,
 )
-from src.core.project_attribution import attribute
 from src.core.session_adopt_persist import find_live_instance
-from src.core.session_import_mapping import _project_roots
+from src.core.session_project_binding import resolve_project_binding
 from src.core.tmux_listing import TmuxListing
 
 logger = structlog.get_logger()
@@ -261,7 +260,17 @@ def persist_creation(
     resolved_dir = working_dir or live.get("working_dir")
     if resolved_dir is None and working_dir_probe is not None:
         resolved_dir = working_dir_probe(name)
-    project_id, attribution = attribute(resolved_dir, _project_roots(conn))
+    # A SESSION BEING CREATED IS THE MOMENT A PROJECT MAY BE MINTED. The
+    # user has just chosen a directory to work in, so "no project
+    # contains it" is a gap to close rather than a fact to record - see
+    # the invariant in src/core/session_project_binding.py. This is also
+    # one half of punchlist item 16: the create path can no longer
+    # observe a projects table that does not yet contain its own
+    # project, because if it does not contain one, this puts one there.
+    binding = resolve_project_binding(
+        conn, resolved_dir, allow_create=True, now=now
+    )
+    project_id, attribution = binding.project_id, binding.attribution
 
     # THE FIX. A label reaching ``--name`` used to be the only place it
     # landed - the row itself stayed titleless until the title-sync's
@@ -391,6 +400,8 @@ def persist_creation(
         tmux_created_epoch=epoch,
         session_uuid=result.session_uuid,
         record_outcome=result.outcome,
+        project_id=project_id,
+        project_binding_rule=binding.rule,
         note=(
             "origin='created' is written once; a MERGE here leaves an "
             "existing origin alone, so this can never demote an adoption"
