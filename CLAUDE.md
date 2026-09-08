@@ -437,6 +437,31 @@ over all 39 rows finds 14 with `agent_type` NULL and a hook-written uuid. The
 two are independent, and the `agent_type` persistence gap is still its own open
 item.
 
+## Naming a session, and the one name rule
+
+ONE NAME PER SESSION, LAST RENAME WINS FROM EITHER SIDE. It lives in three places
+- `sessions.title` (the browser), claude's own name (`--name`, `/rename`) and the
+jsonl's `custom-title` record, where the two writers MEET. See
+`src/core/claude_title_sync.py` (tail reader + rules), `claude_title_sync_apply.py`
+(the seam, run from the hook route on every event), `claude_rename.py` (push out).
+**NO HOOK EVENT CARRIES A `/rename`** - claude intercepts slash commands before
+they become prompts - so the pane's name is only readable by READING THE
+TRANSCRIPT. Last 64 KB only, 0.274 ms median against a 244 MB file, because this
+runs on `PreToolUse`; an older rename reads `no_record` and changes nothing.
+`sessions.claude_title` stops being dead weight and becomes the marker that makes
+the sync idempotent under duplicated events.
+**FIRST SIGHT OF A TITLE IS A BASELINE, NOT AN INSTRUCTION**: `custom-title` has
+no timestamp, so it cannot be ordered against the label already on the row.
+**A BOUND uuid IS NOT EVIDENCE A TRANSCRIPT EXISTS** and the push paid for it -
+14:47:41Z 2026-09-08, a rename logged `claude_rename_pushed` and delivered
+nothing because the file appeared 2m33s later, `--resume` exited 1, stderr went to
+DEVNULL. `decide_push` now defers on a MEASURED absence only (`unchecked` still
+sends) and `spawn_oob_rename` reaps and logs. STILL OPEN: a deferred push is
+never retried; `title != claude_title` is the marker a retry would key on.
+**The plain create endpoint was the one creator passing no label**, so only
+launchpad sessions launched claude with no `--name`; `CreateSessionRequest.label`
+closes it, and an absent label leaves the command line byte-identical.
+
 ## Where a new project's folder comes from
 
 A project's directory is `sessions.working_dir`, and it is permanent: the

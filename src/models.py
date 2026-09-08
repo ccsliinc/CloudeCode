@@ -398,6 +398,29 @@ class SessionInfo(BaseModel):
             "we have never claimed"
         ),
     )
+    # punchlist 19 - IS THIS SESSION BLOCKED ON A STARTUP PROMPT IT HAS
+    # NOT BEEN ANSWERED? A claude parked on its folder-trust dialog is a
+    # live pane running a real process that has fired NO hook, so every
+    # other field on this model reads healthy and the row painted a green
+    # dot over a session waiting for a keypress.
+    #
+    # DELIBERATELY NOT A SIXTH ``activity_status``. That vocabulary
+    # describes what a RUNNING agent is doing; this says whether it
+    # started. Three outcomes, resolved by
+    # ``src.core.session_startup_gate.resolve_startup_gate``:
+    # 'ready' (measured no - a hook fired for this instance, or the pane
+    # is gone, or the scrollback was read and carries no prompt),
+    # 'awaiting_startup_prompt' (measured yes), 'unknown' (could not
+    # determine - liveness, age or the scrollback did not answer). The
+    # client renders an indicator ONLY for 'awaiting_startup_prompt';
+    # 'unknown' must never be painted as either of the other two.
+    startup_gate: str = Field(
+        default="unknown",
+        description=(
+            "Startup-prompt gate: 'ready' | 'awaiting_startup_prompt' | "
+            "'unknown'. See src.core.session_startup_gate."
+        ),
+    )
 
 
 # API Request Models
@@ -419,6 +442,33 @@ class CreateSessionRequest(BaseModel):
     project_name: Optional[str] = Field(
         None,
         description="Optional human-readable project display name"
+    )
+    # THE NAME THE SESSION IS BORN WITH, on both sides at once.
+    #
+    # Every other path that creates a session already passes a label -
+    # fork (routes.py fork endpoint) and restart-of-stopped both do - and
+    # ``SessionManager.create_session`` turns a non-empty one into
+    # ``--name <label>`` on the launch command via
+    # ``claude_rename.launch_name_args_for_agent_type``. The plain create
+    # endpoint was the ONE creator that passed none, so a session started
+    # from the launchpad got a row title and a claude that had never
+    # heard of it: measured, a project named "Punchlist Test" launched
+    # claude with no ``--name`` at all and the TUI status line showed the
+    # directory.
+    #
+    # ``--name`` AT BIRTH IS THE RISK-FREE HALF OF NAME SYNCING. It is
+    # set before anything is running, so it interrupts nothing and needs
+    # none of the gating the after-the-fact ``/rename`` push needs. An
+    # empty or absent label leaves the launch exactly as it was.
+    #
+    # DELIBERATELY SEPARATE FROM ``project_name``. A project is a folder
+    # and many sessions share one; a label names THIS session and the
+    # user renames it freely afterwards. The launchpad happens to seed
+    # the label from the project name, which is a client decision, not a
+    # rule the server should bake in.
+    label: Optional[str] = Field(
+        None,
+        description="Name for the new session; also passed to claude as --name"
     )
     # The PARENT folder a brand-new project is created inside. Sent only
     # by the "start empty" flow, which had no folder step at all and so

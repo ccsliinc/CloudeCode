@@ -72,6 +72,7 @@ from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
+from src.core import claude_title_sync_apply
 from src.core import debug_trace
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
@@ -695,6 +696,11 @@ async def create_session(request: Request, body: CreateSessionRequest):
             agent_type=body.agent_type,
             model=body.model,
             terminal_command_id=body.terminal_command_id,
+            # ONE NAME, SET AT BIRTH. This endpoint was the only creator
+            # that passed no label, so a launchpad session's row title and
+            # the name claude called itself were unrelated strings. An
+            # absent or blank label changes nothing about the launch.
+            label=(body.label or "").strip() or None,
         )
 
         # Mark this project most-recently-used so it sorts to the top of
@@ -2161,6 +2167,41 @@ async def claude_event_hook(request: Request):
     except Exception as exc:  # pragma: no cover - defensive, see docstring
         logger.warning(
             "hook_activity_record_failed",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+
+    # THE ONLY WAY THE APP CAN LEARN ABOUT `/rename` TYPED INTO A PANE.
+    # No hook event carries it - Claude intercepts slash commands before
+    # they become prompts, and there is no SessionRename event - so the
+    # name is only ever readable out of the transcript. Every event kind
+    # passes through here, which makes this the one seam where a pull can
+    # be hung without inventing a poller.
+    #
+    # BEST-EFFORT AND CHEAP. One SELECT plus a bounded 64 KB tail read
+    # (measured at 0.274 ms median against a 244 MB transcript) and NO
+    # write unless a name actually changed. It is wrapped for the same
+    # reason the lineage write below is: this runs on the critical path of
+    # a live working session and a title is telemetry, so nothing here may
+    # change the status code the hook sees.
+    try:
+        title_sync = claude_title_sync_apply.sync_claude_title(
+            session_manager, session_id
+        )
+        if title_sync.broadcast_title:
+            # Same message the browser rename broadcasts, so a name typed
+            # in the terminal and one typed in the browser update every
+            # attached tab through one code path rather than two.
+            await connection_manager.broadcast_to_session(
+                session_id,
+                SessionRenamedMessage(
+                    session_id=session_id, new_name=title_sync.broadcast_title
+                ).model_dump_json(),
+            )
+    except Exception as exc:  # noqa: BLE001 - see comment above
+        logger.warning(
+            "claude_title_sync_failed",
             session_id=session_id,
             event_kind=event_kind,
             error=str(exc),
