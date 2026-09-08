@@ -196,10 +196,20 @@ await test('with the preference off the request is unchanged', async () => {
 });
 
 // ---------------------------------------------------------------------
-// 2. A DELETED ROW IS DRAWN, AND DRAWN AS DELETED.
+// 2. AN ARCHIVED ROW IS DRAWN, AND DRAWN AS ARCHIVED.
+//
+// The copy was renamed from "delete"/"DELETED" to "archive"/"ARCHIVED"
+// on 2026-09-08 to match the "show archived" toggle beside it - the
+// operation was always a soft archive server-side (session_store.
+// archive_session stamps archived_at, never DELETE FROM sessions), and
+// the row-level control and badge said "delete" only because the copy
+// had not been brought in line with the toggle yet. The class names
+// (``ended-session-delete``, ``recent-session-deleted``) and internal
+// preference keys stay as they were, same precedent as the toggle's own
+// id and localStorage key - only the text a person reads changed.
 // ---------------------------------------------------------------------
 
-await test('a deleted record renders and is marked DELETED', async () => {
+await test('an archived record renders and is marked ARCHIVED', async () => {
     const { list } = await renderWith({
         deletedVisible: true,
         sessions: [
@@ -212,12 +222,42 @@ await test('a deleted record renders and is marked DELETED', async () => {
         ],
     });
     assert.ok(list.innerHTML.includes('uuid-deleted'),
-        `the deleted row did not render at all: ${list.innerHTML}`);
+        `the archived row did not render at all: ${list.innerHTML}`);
     assert.ok(list.innerHTML.includes('recent-session-row--deleted'),
-        'the deleted row is drawn identically to a live one, which makes '
+        'the archived row is drawn identically to a live one, which makes '
         + 'the toggle look like it did nothing');
-    assert.ok(list.innerHTML.includes('DELETED'),
-        'no visible marker names the row as deleted');
+    assert.ok(list.innerHTML.includes('ARCHIVED'),
+        'no visible marker names the row as archived');
+    assert.ok(!list.innerHTML.includes('>DELETED<'),
+        'the row still shows the old "DELETED" copy the rename replaced');
+});
+
+await test('a live row offers "archive", not "delete"', async () => {
+    const { list } = await renderWith({
+        deletedVisible: true,
+        sessions: [row()],
+    });
+    assert.ok(list.innerHTML.includes('>archive</button>'),
+        `a not-yet-archived row must offer an "archive" control: ${list.innerHTML}`);
+    assert.ok(!list.innerHTML.includes('>delete</button>'),
+        'the control still reads "delete", which the toggle beside it '
+        + 'does not - the two must use one word for one operation');
+});
+
+await test('an already-archived row loses the archive control', async () => {
+    const { list } = await renderWith({
+        deletedVisible: true,
+        sessions: [row({
+            session_uuid: 'uuid-deleted',
+            archived_at: '2026-09-07T13:40:24Z',
+        })],
+    });
+    // Archiving an already-archived row is a no-op the server answers
+    // "already deleted" to, and a control that cannot change anything is
+    // furniture - see the comment above the deletedBadge assignment in
+    // Launchpad._renderRecentSessionRowHtml.
+    assert.ok(!list.innerHTML.includes('ended-session-delete'),
+        'an archived row must not still offer the archive control');
 });
 
 await test('a deleted row keeps RESTART, which is what recovers it', async () => {
@@ -256,7 +296,7 @@ await test('an empty result keeps the section up while show-deleted is on', asyn
     assert.notEqual(section.style.display, 'none',
         'hiding the section takes away the only control that can turn '
         + 'show-deleted back off');
-    assert.ok(list.innerHTML.includes('no recent or deleted'),
+    assert.ok(list.innerHTML.includes('no recent or archived'),
         `an empty result must say so: ${list.innerHTML}`);
 });
 

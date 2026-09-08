@@ -3304,6 +3304,76 @@ async def delete_session_record(request: Request, session_uuid: str):
     )
 
 
+@router.post(
+    "/sessions/records/{session_uuid}/unarchive",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def unarchive_session_record(request: Request, session_uuid: str):
+    """Bring an archived session record back onto the user's screens.
+
+    Description: the reverse of ``DELETE /sessions/records/{uuid}``, and
+      it exists for the same reason ``POST /projects/{name}/unarchive``
+      does - an archive with no way back is a delete wearing a friendlier
+      label. Restarting an archived row already clears ``archived_at`` as
+      a side effect (``session_restart.rebind_instance``), which is why
+      the launchpad UI has relied on restart rather than a dedicated
+      control; this route gives the same restore WITHOUT requiring a live
+      tmux to restart into.
+
+      IDEMPOTENT. Unarchiving a row that is not archived is a 200, not a
+      404 or a 409 - the caller asked for a state (visible again) and
+      that state already holds. The message says which of the two
+      happened rather than flattening both into "ok".
+    Inputs: request (Request) - unused beyond auth. session_uuid (str,
+      path) - the row to restore.
+    Output: SuccessResponse - ``message`` says whether this call
+      performed the restore or found the row already live.
+    Raises: HTTPException 404 - no row carries that uuid, so nothing was
+      restored. HTTPException 503 - the datastore is absent or unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="no datastore: sessions cannot be restored on this install",
+        )
+
+    def _write() -> bool:
+        """Open, unarchive and close on ONE pooled thread.
+
+        Inputs: none (closes over db_path and session_uuid).
+        Output: bool - True when this call performed the restore.
+        Raises: session_store.SessionNotFoundError, DatastoreUnreadableError.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.unarchive_session(conn, session_uuid)
+
+    try:
+        performed = await run_in_threadpool(_write)
+    except session_store.SessionNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"no session record {session_uuid}"
+        )
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return SuccessResponse(
+        message=(
+            "Session restored to your lists"
+            if performed
+            else "Session was already visible"
+        )
+    )
+
+
 @router.get(
     "/sessions/recent",
     response_model=RecentSessionsResponse,

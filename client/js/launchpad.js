@@ -1892,25 +1892,29 @@ class Launchpad {
         const statusDot = (canRestart && window.SessionStatusUI)
             ? window.SessionStatusUI.dotHtml('stopped')
             : '';
-        // Delete is offered on EVERY row here, including one whose
+        // Archive is offered on EVERY row here, including one whose
         // lifecycle is unknown: hiding a row from your own list is safe
         // whatever state it is in, unlike restart, which is gated above.
-        const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>`;
-        // A ROW THE USER ALREADY DELETED IS MARKED, NOT BLENDED IN. It is
-        // only on screen because "show deleted" is on, and a deleted row
+        // The class name and data-uuid keying stay "delete"-shaped
+        // internally (see _deleteSessionRecord / DELETE
+        // /sessions/records/{uuid}) - only the copy a person reads
+        // changed, to match the "show archived" toggle beside it.
+        const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="archive this session from your lists (the record is kept)" aria-label="archive this session from your lists">archive</button>`;
+        // A ROW THE USER ALREADY ARCHIVED IS MARKED, NOT BLENDED IN. It is
+        // only on screen because "show archived" is on, and an archived row
         // drawn identically to a live one would make the toggle look like
         // it did nothing. It keeps RESTART, which is what recovers it:
         // session_restart.rebind_instance clears ``archived_at``, so
-        // restarting a deleted row is also how it comes back. It loses
-        // DELETE, because deleting an already-deleted row is a no-op the
-        // server answers "already deleted" to, and a control that cannot
-        // change anything is furniture.
+        // restarting an archived row is also how it comes back. It loses
+        // the archive control, because archiving an already-archived row
+        // is a no-op the server answers "already deleted" to, and a
+        // control that cannot change anything is furniture.
         const deletedRow = !!row.archived_at;
         const deletedClass = deletedRow ? ' recent-session-row--deleted' : '';
         const deletedAttr = deletedRow ? ' data-deleted="1"' : '';
         const deletedBadge = deletedRow
-            ? '<span class="recent-session-deleted" title="you deleted this '
-              + 'from your lists; restart brings it back">DELETED</span>'
+            ? '<span class="recent-session-deleted" title="you archived this '
+              + 'from your lists; restart brings it back">ARCHIVED</span>'
             : '';
         return `
                 <div class="recent-session-row${deletedClass}" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}"${deletedAttr}>
@@ -2009,7 +2013,7 @@ class Launchpad {
             if (this._deletedSessionsVisible) {
                 if (section) section.style.display = '';
                 container.innerHTML =
-                    '<div class="launchpad-empty">no recent or deleted '
+                    '<div class="launchpad-empty">no recent or archived '
                     + 'sessions</div>';
                 return;
             }
@@ -2132,18 +2136,18 @@ class Launchpad {
 
     async _deleteSessionRecord(sessionUuid) {
         if (!sessionUuid) {
-            // No id means we do not know WHICH row was asked for, and a
-            // delete aimed at nothing must say so rather than quietly
+            // No id means we do not know WHICH row was asked for, and an
+            // archive aimed at nothing must say so rather than quietly
             // doing nothing and looking like it worked.
-            this.showError('cannot delete: this row carries no session id');
+            this.showError('cannot archive: this row carries no session id');
             return;
         }
         try {
             await window.API.deleteSessionRecord(sessionUuid);
         } catch (error) {
-            console.error('Launchpad: delete of session record failed:', error);
+            console.error('Launchpad: archive of session record failed:', error);
             this.showError(
-                'failed to delete session: '
+                'failed to archive session: '
                 + ((error && error.message) || 'the server could not be reached')
             );
             return;
@@ -3995,7 +3999,7 @@ class Launchpad {
      *   and returns the rows the tree must show but no live probe can
      *   name. Three filters, each load-bearing:
      *
-     *     archived_at        DELETED. The user pressed delete; it is off
+     *     archived_at        ARCHIVED. The user pressed archive; it is off
      *                        his screens. This is the ONE thing that
      *                        hides a row, and it hides it whatever its
      *                        lifecycle - including a row that is somehow
@@ -4187,12 +4191,12 @@ class Launchpad {
      *       one. A dead row that looks identical to a live one is worse
      *       than a hidden one, because he would click it and try to
      *       attach to a tmux session that does not exist.
-     *     - restart and delete instead, which are the only two things
+     *     - restart and archive instead, which are the only two things
      *       that CAN be done to a record with no process behind it.
      *       Restart is the same action RECENT already offers: a NEW
      *       session in the same working directory, never a resurrection.
      *
-     *   `data-uuid` carries ``session_uuid`` because delete is keyed on
+     *   `data-uuid` carries ``session_uuid`` because archive is keyed on
      *   it, never on the tmux name - tmux reuses names, and two rows can
      *   differ only by creation epoch.
      * Inputs: s (object) - one row from ``_endedSessionsForTree``.
@@ -4214,7 +4218,7 @@ class Launchpad {
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                   ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
                   <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((s.title && String(s.title).trim()) || '')}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
-                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>
+                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="archive this session from your lists (the record is kept)" aria-label="archive this session from your lists">archive</button>
                 </div>
             `;
     }

@@ -415,6 +415,62 @@ def archive_session(
     return True
 
 
+def unarchive_session(
+    conn: sqlite3.Connection,
+    session_uuid: str,
+    *,
+    now: Optional[str] = None,
+) -> bool:
+    """Bring an archived session record back onto the user's screens.
+
+    Description: clears ``archived_at``. Restarting an archived row
+      already does this as a side effect (``session_restart.rebind_
+      instance``), which is why the launchpad UI has never needed a
+      dedicated control for it - restart both recovers the row AND gets
+      it running again, and a bare unarchive would leave it stopped and
+      still needing that same restart. This function exists so the
+      capability is not gated behind having a live tmux to restart into
+      (a scripted cleanup, or a future UI, can restore the row on its
+      own), matching the parity ``project_archive.unarchive_project``
+      already gives projects. See that module's docstring for why an
+      archive with no way back is a delete wearing a friendlier label.
+
+      IDEMPOTENT, AND THE FIRST STAMP LOSS WINS: an already-live row
+      (``archived_at`` already NULL) returns False rather than touching
+      ``updated_at`` for a no-op.
+    Inputs: conn (sqlite3.Connection). session_uuid (str). now (str |
+      None) - ISO-8601 stamp for ``updated_at``; defaults to the current
+      UTC time. ``archived_at`` itself is cleared to NULL, not stamped.
+    Output: bool - True when this call performed the restore, False when
+      the row was not archived.
+    Raises: SessionNotFoundError - no row carries that uuid, so nothing
+      was restored and the caller must not report success.
+    Example: unarchive_session(conn, 'a1b2')  # True
+    """
+    from src.core.trail_entry import utc_now
+
+    if not sessions_table_ready(conn):
+        raise SessionNotFoundError(session_uuid)
+    row = conn.execute(
+        "SELECT archived_at FROM sessions WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(session_uuid)
+    if row["archived_at"] is None:
+        return False
+
+    stamp = now or utc_now()
+    conn.execute(
+        "UPDATE sessions SET archived_at = NULL, updated_at = ? "
+        "WHERE session_uuid = ? AND archived_at IS NOT NULL",
+        (stamp, session_uuid),
+    )
+    conn.commit()
+    logger.info("session_unarchived", session_uuid=session_uuid)
+    return True
+
+
 def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """Return the rows the home screen must surface as CANNOT DETERMINE.
 

@@ -1284,6 +1284,23 @@ class API {
     }
 
     /**
+     * Sessions: UNARCHIVE a session record - the reverse of
+     * deleteSessionRecord(). Restarting an archived row already clears
+     * archived_at as a side effect, which is why no launchpad control
+     * calls this yet; it exists for parity with unarchiveProject() and
+     * so a restore does not require a live tmux to restart into.
+     *
+     * @param {string} sessionUuid - the archived row's session_uuid.
+     * @returns {Promise<object>} - {message}
+     */
+    async unarchiveSessionRecord(sessionUuid) {
+        return await this.call(
+            `/sessions/records/${encodeURIComponent(sessionUuid)}/unarchive`,
+            { method: 'POST' }
+        );
+    }
+
+    /**
      * Sessions: Adopt an externally-started tmux session.
      *
      * Server-side this sets up `pipe-pane` on the target, captures the
