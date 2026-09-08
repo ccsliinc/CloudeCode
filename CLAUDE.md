@@ -66,6 +66,19 @@ sighting BEFORE the id is resolved, so a row exists for every adoption by then.
 The derived rung is reached because a fresh `observed` row carries no
 `legacy_session_id` and no hook-token mapping.
 
+**ONE PANE IS ONE REGISTRATION, so the adopt teardown keys on the tmux NAME.**
+While the id was always `adopted:<name>`, "the registration for this id" and
+"the registration for this pane" were the same question. Resolving the id made
+them different, and keying the teardown on the id alone leaves the other one
+behind. Measured on live minutes after the re-key shipped: the rehydrated
+`session_metadata.json` entry held `cloude_Agent_-_Cloude_Code` as
+`adopted:cloude_Agent_-_Cloude_Code`, the browser's adopt correctly re-keyed to
+`ses_fb8dd410`, and `GET /sessions/list` returned **22 rows for 21 live tmux
+sessions** - one pane, two backends, two tailers on one FIFO.
+`_registered_ids_for_tmux_name` is what enforces the rule. Note this was caught
+only because the deploy was verified against `/sessions/list` rather than
+against the `boot_readopt_complete` log line, which was perfect.
+
 **AND A RECOVERED ID MUST NOT BE RE-MINTED A TOKEN.** `_mint_hook_token`
 REPLACES the token it holds for an id. Called on a re-keyed id it revokes the
 credential the running agent is holding and cannot be handed a replacement for,

@@ -841,6 +841,41 @@ class SessionManager:
         self._persist_hook_tokens()
         return existing
 
+    def _registered_ids_for_tmux_name(
+        self, name: str, also: Optional[str] = None
+    ) -> List[str]:
+        """Every registered session id currently bound to one tmux name.
+
+        Description: ONE PANE IS ONE REGISTRATION, and this is what lets
+          a caller enforce that. While an adoption's id was always
+          ``adopted:<name>``, "the registration for this id" and "the
+          registration for this pane" were the same question; once the
+          id is RESOLVED they are not, and a pane can already be held
+          under a different id (a rehydrated ``session_metadata.json``
+          entry, or the boot re-adopt). Dropping only the id's own
+          registration then leaves a second backend tailing the same
+          FIFO - measured on live, 22 rows for 21 live sessions.
+
+          ``also`` is included in the result whether or not it is bound
+          to this name, so a caller tearing down before a fresh attach
+          gets one list covering both reasons to drop a registration.
+          The order is stable (backend insertion order, ``also`` last)
+          so two calls over unchanged state agree.
+        Inputs: name (str) - literal tmux session name. also (str|None)
+          - an extra id to include, typically the id about to be
+          registered.
+        Output: list[str] - registered session ids, no duplicates.
+        Example: mgr._registered_ids_for_tmux_name('cloude_x', also='ses_1')
+        """
+        found = [
+            sid
+            for sid, backend in self.backends.items()
+            if getattr(backend, "tmux_session", None) == name
+        ]
+        if also and also in self.backends and also not in found:
+            found.append(also)
+        return found
+
     def _adopt_identity_for(
         self, name: str, epoch: Optional[int]
     ) -> "AdoptIdentity":
@@ -6058,13 +6093,27 @@ class SessionManager:
             )
 
         # Re-adopt of an already-attached session: tear down the stale
-        # backend for this exact id first (best-effort) so we don't leak
-        # two pipe-pane tailers on the same FIFO. Keyed on the RESOLVED
-        # id, so a session the boot re-adopt is already holding is
-        # replaced rather than duplicated alongside itself.
-        if adopt_session_id in self.backends:
-            old_backend = self.backends.get(adopt_session_id)
-            old_iw = self.idle_watchers.get(adopt_session_id)
+        # registration first (best-effort) so we don't leak two
+        # pipe-pane tailers on the same FIFO.
+        #
+        # KEYED ON THE PANE, NOT ON THE ID, and that is not a
+        # generalisation for its own sake. While the id was always
+        # ``adopted:<name>`` the two were the same question. Now that it
+        # is RESOLVED, a pane can already be registered under a
+        # DIFFERENT id than the one this adoption lands on, and keying
+        # the teardown on the id alone leaves that registration behind.
+        # Measured on live 2026-09-08, immediately after the re-key
+        # shipped: ``session_metadata.json`` rehydrated
+        # ``cloude_Agent_-_Cloude_Code`` as ``adopted:cloude_Agent_-
+        # _Cloude_Code``, the browser's adopt re-keyed to
+        # ``ses_fb8dd410``, and ``GET /sessions/list`` then returned 22
+        # rows for 21 live sessions - ONE PANE, TWO BACKENDS, two
+        # tailers on one FIFO. One pane is one registration.
+        for stale_id in self._registered_ids_for_tmux_name(
+            name, also=adopt_session_id
+        ):
+            old_backend = self.backends.get(stale_id)
+            old_iw = self.idle_watchers.get(stale_id)
             if old_iw is not None:
                 try:
                     await old_iw.stop()
@@ -6081,7 +6130,7 @@ class SessionManager:
                             pass
                     except Exception:
                         pass
-            self._wipe_session_state(adopt_session_id)
+            self._wipe_session_state(stale_id)
 
         if adopt_persist.epoch is not None:
             # Same cache as the create path - see ``_instance_epochs`` -

@@ -377,6 +377,59 @@ async def test_adopting_a_session_with_no_row_still_mints_adopted(live_state,
 
 @requires_tmux
 @pytest.mark.asyncio
+async def test_adopting_a_pane_already_held_under_another_id_holds_it_once(
+    live_state, tmp_path
+):
+    """ONE PANE IS ONE REGISTRATION, even when the ids differ.
+
+    CAUGHT ON LIVE, not by this suite, and only because the deploy was
+    verified against what the user sees rather than against the log
+    line. The re-key worked - ``adopt_rekeyed_to_stored_id`` fired and
+    resolved ``ses_fb8dd410`` - and ``GET /sessions/list`` still
+    returned **22 rows for 21 live tmux sessions**, because
+    ``session_metadata.json`` had rehydrated the same pane under
+    ``adopted:cloude_Agent_-_Cloude_Code`` first and the teardown was
+    keyed on the resolved id, which did not match it.
+
+    That is two backends tailing one FIFO. While the id was always
+    ``adopted:<name>`` the teardown's key and the pane were the same
+    question; resolving the id made them different, and this is the
+    regression that follows.
+    """
+    mgr = SessionManager()
+    work = tmp_path / "work"
+    work.mkdir()
+    name = f"cloude_rekey_{uuid.uuid4().hex[:6]}"
+
+    _start_session(name, STORED_ID, work)
+    _seed_row(live_state, mgr, name=name, epoch=_epoch_of(name),
+              working_dir=str(work))
+    mgr._hook_tokens[STORED_ID] = "tok_the_agent_already_carries"
+    mgr._hook_tmux_names[STORED_ID] = name
+
+    # Stand in for the rehydrate that runs before the adopt: the SAME
+    # pane, already registered under the id last boot minted for it.
+    stale_id = f"adopted:{name}"
+    await mgr.adopt_external_session(name)          # warm it up honestly
+    # Re-register the live backend under the OLD id as well, exactly the
+    # state the rehydrate leaves behind.
+    mgr.backends[stale_id] = mgr.backends[STORED_ID]
+    mgr.sessions[stale_id] = mgr.sessions[STORED_ID]
+    assert len(mgr.backends) == 2
+
+    try:
+        await mgr.adopt_external_session(name)
+
+        assert list(mgr.backends) == [STORED_ID], (
+            f"one pane must leave one registration, got {list(mgr.backends)}"
+        )
+        assert stale_id not in mgr.sessions
+    finally:
+        await _drop_backends(mgr)
+
+
+@requires_tmux
+@pytest.mark.asyncio
 async def test_adopting_the_same_session_twice_holds_it_once(live_state,
                                                              tmp_path):
     """Re-opening in a second tab replaces the registration, never doubles it.
