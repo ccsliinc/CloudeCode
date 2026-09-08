@@ -3644,17 +3644,31 @@ class SessionManager:
             decide_push,
             detect_claude_version,
             oob_rename_argv,
+            spawn_oob_rename,
         )
+        from src.core.session_transcript_presence import conversation_presence
 
         try:
             sess = self.sessions.get(session_id)
             family = getattr(sess, "agent_family", None) if sess else None
             claude_uuid = self._claude_uuid_for_tmux_name(tmux_name)
+            # A BOUND UUID IS NOT EVIDENCE A TRANSCRIPT EXISTS. Measured
+            # 2026-09-08 at 14:47:41Z: the row had its uuid from the
+            # SessionStart hook while Claude Code had not written the file
+            # yet - it appeared 2m33s later - so `--resume` exited 1 with
+            # "No conversation found with session ID" and the log still
+            # said the rename was pushed. Only a MEASURED absence defers;
+            # `unchecked` still sends, exactly as the restart guard does.
+            presence = conversation_presence(
+                claude_uuid,
+                working_dir=getattr(sess, "working_dir", None) if sess else None,
+            )
             outcome, reason = decide_push(
                 label=label,
                 claude_uuid=claude_uuid,
                 claude_version=detect_claude_version(),
                 is_claude_session=(family in (None, "claude")),
+                transcript_presence=presence.outcome,
             )
             if outcome != PUSH_SENT:
                 logger.info(
@@ -3673,24 +3687,23 @@ class SessionManager:
             if not claude_path:
                 return "deferred"
 
-            import subprocess
-
             argv = oob_rename_argv(claude_path, claude_uuid, label)
             # ARGV, NOT A SHELL STRING. The label is user text and may
             # contain quotes or $(...); passing it as an argv element
             # means no shell parses it at all.
-            subprocess.Popen(
-                argv,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            #
+            # AND THE RESULT IS OBSERVED. This used to be a bare Popen
+            # onto DEVNULL, so a rejected push and a successful one wrote
+            # identical logs - which is how the 14:47:41Z failure stayed
+            # invisible. spawn_oob_rename reaps the child on a daemon
+            # thread and logs what it actually did.
+            spawn_oob_rename(argv, session_id=session_id)
             logger.info(
                 "claude_rename_pushed",
                 session_id=session_id,
                 reason=reason,
                 timeout_s=OOB_TIMEOUT_SECONDS,
+                note="spawned; the landed/rejected verdict follows separately",
             )
             return outcome
         except Exception as exc:  # noqa: BLE001 - see docstring
@@ -7189,4 +7202,3 @@ class SessionManager:
         if not sid:
             return None
         return self.adopt_fifo_offsets.pop(sid, None)
-
