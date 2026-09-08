@@ -3070,3 +3070,70 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   three pre-existing environmental failures named in `CLAUDE.md`
   (`test_home_write_guard`, `test_state_dir_resolution`,
   `test_version_probe`). Nothing newly broken by the archive move.
+
+## 2026-09-08 - the status round, closed as the owner ruled (`cafb50c`)
+
+Two findings from `tests/test_led_real_hooks.py` (the real-claude harness
+added in `3af3a3d`), both now closed. The first was tightened, the second
+was overruled and reverted.
+
+**Finding 1 - a late `SubagentStop` reopened `working`. CLOSED, rule (a).**
+The owner's symptom was "clicking a tab does not change the light to idle".
+Measured cause: on a turn with NO subagent in it, claude 2.1.265 fires a
+`SubagentStop` about 1.5s AFTER `Stop`, and `record_event` stamped
+`last_tool_event_ts` on it, re-arming the 120s working heartbeat on a
+finished session. `e794aef` shipped option (b) - stamp only when
+`subagent_depth > 0`. Review found the hole: hooks are DUPLICATED, so a
+duplicated `SubagentStart` delivered after `Stop` raises the depth off the
+floor by itself and the duplicated `SubagentStop` behind it then passes the
+gate and stamps, at its own arrival time, ratcheting the expiry out on
+every further pair. Tightened to option (a) in `cafb50c`: **a
+`SubagentStop` NEVER stamps the heartbeat; it only decrements
+`subagent_depth`, floored at 0.** `PostToolUse` keeps the `turn_open`
+machinery unchanged - it is the only event some legitimate turns emit late,
+so a blanket refusal is wrong there.
+- Negative control moved with the rule and is still the load-bearing test.
+  The old one ("a real SubagentStop still stamps") is false by design now,
+  so it split in two: the DECREMENT is asserted on its own (a refusal that
+  also skipped it would wedge `working_subagent` forever - verified to trip
+  4 tests), and the non-stamping is asserted separately.
+- New: the ratchet test that pins the hole above, the measured real
+  timeline (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
+  `SubagentStop` +1.5s) reading `finished_unread` then `idle`, and the same
+  timeline duplicated and reordered. Both new assertions were confirmed to
+  FAIL against the `depth > 0` version before being kept.
+- NOT claimed: an OPENING event still stamps unconditionally, so a stray
+  `SubagentStart` after `Stop` still buys ONE bounded window keyed on
+  itself. Documented in the test rather than silently left.
+
+**Finding 2 - a dead pane vanished off every live surface. CLOSED by the
+owner's decision, and `ba2aa5d` REVERTED.** `ba2aa5d` read this as a bug
+and made a husk KEEP its row, painted dead. The owner ruled otherwise,
+verbatim: "they go into recent, they can disappear." So the row leaves the
+live list, `dead`/`off` stays GALLERY-ONLY, and `ba2aa5d` is reverted whole
+in `cafb50c`: `src/core/session_liveness.py`, its two test files, the
+`_session_info_for` row-keeping branch, the `pane_alive=False` startup-gate
+caller and the persist-settled skip. `resolve_listing_liveness` returns to
+`session_status.py` - moving it bought nothing once the verdict went back
+to three values.
+- `tests/test_led_real_hooks.py::test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead`
+  already asserted the owner's behaviour against a real killed pane. Its
+  docstring is rewritten from "characterisation of a defect, invert this"
+  to "this is the product decision, changing it needs the owner".
+
+**STILL OPEN (new item, from finding 2).** `remain-on-exit` keeps a husk's
+tmux SESSION in the listing, and `src/core/session_lifecycle.py` reaps on
+ABSENCE from that listing, so a killed pane's row leaves the live list
+without yet arriving in Recent. The second half of the owner's decision is
+therefore NOT built. Closing it needs a reaper rung keyed on a MEASURED
+`#{pane_dead}` - a new durable writer, in the one module whose entire
+premise is never writing a verdict nobody measured - so it is its own
+change with its own gates (a probe that could not answer must not reap).
+The real-hook test now PRINTS the recent-list membership on every run
+instead of pinning the gap open with an assertion in either direction.
+
+**Measured.** Full suite 5329 passed / 3 failed / 21 skipped; the three are
+the pre-existing environmental ones `CLAUDE.md` names
+(`test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`). Real-hook test opted in once against a real claude
+in a throwaway tmux socket: 9 passed in 51.92s.
