@@ -74,13 +74,24 @@ META_IMPORTED_FROM_JSON_RESULT = "imported_from_json_result"
 # once, at first run, by src/core/project_store.py's import step.
 # 'adoption' is reserved for the client/js/launchpad.js:953-973 side
 # effect (design section 3.2); not written by anything in this step.
+#
+# 'transcript_import' is written by scripts/import_transcript_sessions.py
+# for a directory that a real Claude Code conversation ran in and that no
+# existing project contains. It is NOT 'config_import' (that names the
+# one-shot first-run read of config.json) and NOT 'adoption' (that names
+# the launcher side effect); saying either would be a claim about where
+# the row came from that is simply false, and `source` exists to answer
+# exactly that question. Such a project is created ARCHIVED - see the
+# importer - so it stays off the user's screens until he asks for it.
 PROJECT_SOURCE_CONFIG_IMPORT = "config_import"
 PROJECT_SOURCE_USER = "user"
 PROJECT_SOURCE_ADOPTION = "adoption"
+PROJECT_SOURCE_TRANSCRIPT_IMPORT = "transcript_import"
 PROJECT_SOURCES: Tuple[str, ...] = (
     PROJECT_SOURCE_CONFIG_IMPORT,
     PROJECT_SOURCE_USER,
     PROJECT_SOURCE_ADOPTION,
+    PROJECT_SOURCE_TRANSCRIPT_IMPORT,
 )
 
 # projects.presence - the four-state model, design section 4.1. 'missing'
@@ -142,19 +153,41 @@ TRAIL_CLOSING_STATUSES: Tuple[str, ...] = (
 #             one would be inventing a fact.
 #   observed  a session on our socket we have seen and never claimed.
 #             The ONLY value that renders as external on a row.
+#   imported  NO TMUX SESSION EVER EXISTED FOR THIS ROW as far as this
+#             app is concerned. The row was reconstructed from a Claude
+#             Code transcript on disk by
+#             scripts/import_transcript_sessions.py: a conversation the
+#             owner really had, in a real directory, that this install
+#             never watched. It is a FOURTH kind and not a flavour of
+#             `observed` - observed means we saw a live pane on our
+#             socket and did not claim it, which is a measurement of a
+#             process. An imported row has no pane, no socket presence
+#             and no epoch, and never had one; it carries a
+#             claude_session_uuid and nothing else that could identify a
+#             process. Folding it into `observed` would put a row in the
+#             "sessions on this socket we have not claimed" bucket that
+#             is not on the socket at all.
 SESSION_ORIGIN_CREATED = "created"
 SESSION_ORIGIN_ADOPTED = "adopted"
 SESSION_ORIGIN_OBSERVED = "observed"
+SESSION_ORIGIN_IMPORTED = "imported"
 SESSION_ORIGINS: Tuple[str, ...] = (
     SESSION_ORIGIN_CREATED,
     SESSION_ORIGIN_ADOPTED,
     SESSION_ORIGIN_OBSERVED,
+    SESSION_ORIGIN_IMPORTED,
 )
 
-# The origins that badge as OURS. Both, per 4.6 - an adopted session
-# becomes ours for good. Kept as a tuple so no call site re-spells the
-# membership test and drifts from the others; the badge was already
-# hand-repaired across three sites once.
+# The origins that badge as OURS. Both of the first two, per 4.6 - an
+# adopted session becomes ours for good. Kept as a tuple so no call site
+# re-spells the membership test and drifts from the others; the badge was
+# already hand-repaired across three sites once.
+#
+# `imported` IS DELIBERATELY NOT HERE, and the reason is what this tuple
+# is read for: session_store.owned_names/owned_instances use it to answer
+# "which tmux sessions on this socket are ours", and an imported row has
+# no tmux session to own. Adding it would put a nameless row into a list
+# of names.
 SESSION_OWNED_ORIGINS: Tuple[str, ...] = (
     SESSION_ORIGIN_CREATED,
     SESSION_ORIGIN_ADOPTED,
