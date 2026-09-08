@@ -405,9 +405,52 @@ console.log('[TerminalMetrics Module] Loading...');
             const renderer = controller._webglAddon ? 'webgl' : 'dom';
             const family = String(o.fontFamily || '').split(',')[0].trim();
             return `font=${o.fontSize} lh=${o.lineHeight} cell=${cell} `
-                + `renderer=${renderer} fonts=${fonts} family=${family}`;
+                + `renderer=${renderer} fonts=${fonts} family=${family} `
+                + describeBoxHeights();
         } catch (err) {
             return 'cell=unreadable';
+        }
+    }
+
+    /**
+     * The heights of every box between the screen and the terminal.
+     *
+     * The other half of "what moved". A row count changes either because
+     * the cell changed or because the box did, and the cell fields above
+     * cover only the first. When the terminal went 45 rows to 41 with
+     * `cell=8x16` on both lines, the cell fields proved it was the box -
+     * and then could not say WHICH box, which is a second debugging round
+     * for the sake of four more numbers.
+     *
+     * `.info` is listed explicitly because it is the last in-flow sibling
+     * of `.terminal-container` and its contents (session id, status text,
+     * the re-parented status dot) all arrive after connect, so it is the
+     * box most able to change late. Its height is now reserved in CSS;
+     * this is how anyone checks that the reservation is holding.
+     *
+     * @returns {string} space-separated key=value pairs in CSS px.
+     * @example
+     *   describeBoxHeights() // 'screen=741 container=698 term=668 info=43'
+     */
+    function describeBoxHeights() {
+        try {
+            if (typeof document === 'undefined') return 'boxes=unreadable';
+            const h = (sel) => {
+                const el = sel.charAt(0) === '#'
+                    ? document.getElementById(sel.slice(1))
+                    : document.querySelector(sel);
+                return el && Number.isFinite(el.clientHeight) ? el.clientHeight : '?';
+            };
+            // .info carries a border, which clientHeight excludes - use
+            // offsetHeight so the number matches what it takes from the
+            // column.
+            let info = '?';
+            const infoEl = document.querySelector('.info');
+            if (infoEl && Number.isFinite(infoEl.offsetHeight)) info = infoEl.offsetHeight;
+            return `screen=${h('#terminal-screen')} container=${h('.terminal-container')} `
+                + `term=${h('#terminal')} info=${info}`;
+        } catch (err) {
+            return 'boxes=unreadable';
         }
     }
 
@@ -424,6 +467,7 @@ console.log('[TerminalMetrics Module] Loading...');
 
     window.TerminalMetrics = {
         describeCellMetrics,
+        describeBoxHeights,
         currentGrid,
         waitForFonts,
         xtermStylesheetApplied,

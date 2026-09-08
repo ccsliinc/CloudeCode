@@ -230,6 +230,14 @@
 }
 
 /* Base styles */
+/* Height reserved for the terminal screen's bottom bar (`.info`), so
+ * that populating it late can never resize the terminal above it. Named
+ * because the value is asserted in tests/test_terminal_resize_settle
+ * .node.mjs; see the block comment on `.info` for why it exists. */
+:root {
+    --terminal-bar-height: 43px;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -1136,6 +1144,32 @@ body.home-header-active {
     border-top: 1px solid var(--color-border);
     font-size: 12px;
     color: var(--color-fg-muted);
+
+    /* RESERVED HEIGHT, AND THE REASON IT MUST BE RESERVED.
+     *
+     * This bar is the last in-flow sibling of `.terminal-container` in
+     * `#terminal-screen`, so every pixel it takes is a pixel `#terminal`
+     * does not get. Its contents arrive LATE and from three different
+     * places: `#sessionInfo` is written when the session id and pid are
+     * known, `#terminal-bar-status-text` is filled by App._syncStatusLabel
+     * from `#statusText`'s data-status, and the status dot itself is a
+     * node App._placeStatusLight RE-PARENTS into `#terminal-bar-status`
+     * on every screen transition. An unpopulated bar is shorter than a
+     * populated one, so the bar grew several seconds after connect and
+     * stole rows from the terminal.
+     *
+     * That is not a cosmetic reflow. tmux answers a row change with
+     * SIGWINCH and claude answers that with ESC[2J, which on the
+     * alternate screen erases the whole visible conversation - measured
+     * 45 rows to 41 with the cell size unchanged at 8x16 throughout, so
+     * the box moved and nothing else did.
+     *
+     * Reserving the height makes the bar the same size empty as full, so
+     * nothing it does can reach the terminal. `min-height` rather than
+     * `height` so a genuinely taller content (a wrapped long session id)
+     * still grows rather than being clipped - that is a real layout
+     * change, not a transient one. */
+    min-height: var(--terminal-bar-height);
 }
 
 #sessionInfo {

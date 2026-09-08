@@ -407,6 +407,27 @@ test('describeCellMetrics distinguishes the two cell heights from the incident',
     assert.match(after, /renderer=dom/);
 });
 
+test('describeCellMetrics also reports the boxes, not only the cell', () => {
+    const { sandbox } = makeSandbox();
+    const out = sandbox.TerminalMetrics.describeCellMetrics(
+        metricsController({ width: 8, height: 16 }, {}, true));
+    // The incident that made this necessary: cell=8x16 on BOTH resize
+    // lines, 45 rows then 41. The cell fields proved it was the box and
+    // could not say which box. These four can.
+    for (const key of ['screen=', 'container=', 'term=', 'info=']) {
+        assert.ok(out.includes(key), `the line must carry ${key}`);
+    }
+});
+
+test('describeBoxHeights degrades rather than throwing without a DOM', () => {
+    const { sandbox } = makeSandbox();
+    const out = sandbox.TerminalMetrics.describeBoxHeights();
+    // This sandbox's document has getElementById/querySelector but no real
+    // layout, so every box reads '?'. A diagnostic must survive that.
+    assert.ok(typeof out === 'string' && out.length > 0);
+    assert.ok(!/undefined/.test(out), 'a log line must never print undefined');
+});
+
 test('describeCellMetrics never throws on an unreadable terminal', () => {
     const { sandbox } = makeSandbox();
     const d = sandbox.TerminalMetrics.describeCellMetrics;

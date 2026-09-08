@@ -213,6 +213,52 @@ await test('the panel is still hidden when there is nothing to show', () => {
 });
 
 // ---------------------------------------------------------------------
+// The bottom bar must never change the terminal's height either.
+//
+// Measured: 45 rows to 41 with `cell=8x16` on BOTH resize lines, so the
+// cell did not move and the box did. `.info` is the last in-flow sibling
+// of `.terminal-container` in `#terminal-screen`, and its three pieces of
+// content all land after connect - #sessionInfo when the id and pid are
+// known, #terminal-bar-status-text from App._syncStatusLabel, and the
+// status dot itself, which App._placeStatusLight RE-PARENTS into
+// #terminal-bar-status. An empty bar is shorter than a full one.
+// ---------------------------------------------------------------------
+
+await test('.info reserves a fixed height so late content cannot resize it', () => {
+    const body = ruleBody('.info');
+    assert.ok(body.length > 0, '.info rule missing');
+    assert.match(body, /min-height:\s*var\(--terminal-bar-height\)/,
+        'an unreserved bar grows when its content arrives and takes rows '
+        + 'from the terminal, which costs the user an ESC[2J');
+});
+
+await test('the reserved height is a named token with a real value', () => {
+    const css = fs.readFileSync(path.join(CLIENT, 'css', 'styles.css'), 'utf8');
+    const m = css.match(/--terminal-bar-height:\s*(\d+)px/);
+    assert.ok(m, '--terminal-bar-height is not defined anywhere');
+    assert.ok(Number(m[1]) > 0, 'a zero reservation reserves nothing');
+});
+
+await test('.info is in the markup at first paint, not built later', () => {
+    const html = fs.readFileSync(path.join(CLIENT, 'index.html'), 'utf8');
+    assert.ok(html.indexOf('<div class="info">') > 0,
+        'a bar injected by script appears after the first fit, which is the '
+        + 'same defect as a bar that grows');
+    // Its three late-populated children must also exist up front, so the
+    // bar is laid out at full size before anything fills them.
+    for (const id of ['sessionInfo', 'terminal-bar-status', 'terminal-bar-status-text']) {
+        assert.ok(html.indexOf(`id="${id}"`) > 0, `#${id} must exist at first paint`);
+    }
+});
+
+await test('the bottom bar is watched, so a regression announces itself', () => {
+    const src = fs.readFileSync(path.join(CLIENT, 'js', 'terminal-layout.js'), 'utf8');
+    assert.match(src, /TERM-BAR/,
+        'a bar that silently moved again would look exactly like one that '
+        + 'never moved');
+});
+
+// ---------------------------------------------------------------------
 // Load order.
 // ---------------------------------------------------------------------
 

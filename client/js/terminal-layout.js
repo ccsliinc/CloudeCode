@@ -323,6 +323,51 @@ console.log('[TerminalLayout Module] Loading...');
                 console.warn('TerminalLayout: ResizeObserver setup failed', err);
             }
         }
+        // Diagnostic only, and deliberately last: it must never be able to
+        // stop the real listeners above from being wired.
+        try {
+            watchBottomBar();
+        } catch (err) {
+            console.warn('TerminalLayout: bottom-bar watch failed', err);
+        }
+    }
+
+    /**
+     * Report, once per change, when the bottom bar's height moves.
+     *
+     * PURELY DIAGNOSTIC - it never fits and never resizes. `.info` is the
+     * last in-flow sibling of `.terminal-container`, so every pixel it
+     * takes comes out of the terminal, and its contents (the session id,
+     * the status label, the status dot App._placeStatusLight re-parents
+     * into it) all arrive after connect. Its height is reserved in CSS
+     * now; this is what proves the reservation is holding rather than
+     * assuming it. A silent bar and a bar that never moved look identical
+     * without it, which is the whole reason the last two rounds each cost
+     * a deploy.
+     *
+     * @returns {void}
+     */
+    function watchBottomBar() {
+        if (typeof ResizeObserver === 'undefined' || typeof document === 'undefined') return;
+        if (typeof document.querySelector !== 'function') return;
+        const bar = document.querySelector('.info');
+        if (!bar || typeof bar.offsetHeight !== 'number') return;
+        let last = null;
+        try {
+            new ResizeObserver(() => {
+                const h = bar.offsetHeight;
+                if (h === last) return;
+                const was = last;
+                last = h;
+                if (was === null) return;
+                console.warn(
+                    `[TERM-BAR] .info height ${was} -> ${h} `
+                    + `(this steals rows from the terminal; its height is `
+                    + `meant to be reserved in styles.css)`);
+            }).observe(bar);
+        } catch (err) {
+            console.warn('TerminalLayout: bottom-bar watch failed', err);
+        }
     }
 
     window.TerminalLayout = {
