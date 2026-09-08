@@ -2559,3 +2559,9 @@ commit-by-commit table in `HANDOFF.md` section 8.
 - [x] Real in-app causes, both fixed and deployed: the local-servers panel toggling in flow under the terminal (3ef5624, now an overlay) and the bottom status bar growing when its three late writers fill it (afbe005, height reserved via a named token). Reconnect keeps the browser buffer (d70e4ab, f5156aa). A settle guard drops transient unannounced resizes (3ef5624). `[TERM-RESIZE]` prints cell, renderer and box heights; `[TERM-BAR]` logs status-bar height changes.
 - [x] The residual flap seen during testing was the Brave automation infobar: the extension attaches a debugger on each action, the viewport shrinks 56 px, and detaches when idle (`screen=797` idle vs `screen=741` attached, info=43 both). Not an app defect.
 - [ ] Inherent limit, documented: claude 2.1.263 answers any real geometry change with ESC[2J, so a phone rotation, the on-screen keyboard, or a sidebar toggle still clears the visible screen. The transcript is never affected. Only spurious resizes are avoidable, and those are now avoided.
+
+### 2026-09-08 late findings
+
+- [x] Fork verified end to end in the browser: the forked session answered from the parent conversation history and took a new prompt, hooks and toast working (row 46).
+- [ ] Deep link rejects a session whose name contains parentheses: `/session/Punchlist%20Browser%20Rename(fork)` bounces home with "Invalid project name in URL"; the card click works and lands on `/session/Punchlist_Browser_Rename_fork`. The router validation and the slug the card uses disagree. Fix: accept the same set of names the app itself creates (fork labels carry `(fork)`), or link cards and deep links by the same slug.
+- [ ] Rename status-line staleness: after a browser rename the running TUI keeps its old name in the status line until that claude process restarts; the transcript carries the new name. Documented limitation, revisit only if claude gains an external rename signal.
