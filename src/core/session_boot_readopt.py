@@ -315,10 +315,18 @@ async def readopt_surviving_sessions(
             continue
         held.append(target.session_id)
 
-    if prior_current is not None and prior_current in manager.sessions:
-        manager._last_session_id = prior_current
-    elif held:
-        manager._last_session_id = held[0]
+    # ONLY THIS PASS'S OWN ATTACHES MAY BE OVERRULED. This task is not
+    # awaited by boot, so the port is already bound while the gather is in
+    # flight and a user can create or enter a session inside that window.
+    # That moves the pointer to something none of these attaches produced,
+    # and it is a choice made by somebody who is here NOW - it outranks a
+    # boot-time default. Re-pinning it regardless would take "current"
+    # away from the session the user is looking at.
+    if manager._last_session_id in set(held):
+        if prior_current is not None and prior_current in manager.sessions:
+            manager._last_session_id = prior_current
+        elif held:
+            manager._last_session_id = held[0]
 
     logger.info(
         "boot_readopt_complete",

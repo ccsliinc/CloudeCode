@@ -707,3 +707,57 @@ async def test_with_no_prior_current_the_pointer_is_deterministic(
     await readopt_surviving_sessions(mgr)
 
     assert mgr.current_session().id == "adopted:cloude_alpha"
+
+
+@pytest.mark.asyncio
+async def test_a_session_entered_during_the_pass_keeps_the_pointer(
+    state_dir, monkeypatch
+):
+    """A concurrent create outranks the boot-time default.
+
+    This task is NOT awaited by boot: uvicorn has already bound the port
+    by the time it runs, so a user can create or enter a session while
+    the gather is still in flight. That moves ``_last_session_id`` to a
+    session none of these attaches produced. Re-pinning the boot default
+    over it would take "current" away from the session the user is
+    actually looking at, so the pass only overrules a pointer its OWN
+    attaches moved.
+    """
+    mgr = SessionManager()
+    for name, epoch in (("cloude_alpha", EPOCH_A), ("cloude_beta", EPOCH_B)):
+        seed_row(state_dir, mgr, name=name, epoch=epoch)
+    install_backends(
+        monkeypatch,
+        discover=TmuxListing.answered([]),
+        attachable=listing_rows(
+            ("cloude_alpha", EPOCH_A), ("cloude_beta", EPOCH_B)
+        ),
+    )
+
+    # The user's create lands in the window between the LAST attach
+    # registering and the pointer being restored below it. Registering
+    # the session is exactly what the create path does, and it moves
+    # ``_last_session_id``.
+    register = mgr._register_session
+    registered = []
+
+    def register_then_maybe_user_creates(session, backend):
+        register(session, backend)
+        registered.append(session.id)
+        if len(registered) == 2:
+            register(
+                Session(
+                    id="ses_user_made",
+                    working_dir="/tmp",
+                    tmux_session="cloude_user_made",
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(
+        mgr, "_register_session", register_then_maybe_user_creates
+    )
+
+    await readopt_surviving_sessions(mgr)
+
+    assert mgr.current_session().id == "ses_user_made"
