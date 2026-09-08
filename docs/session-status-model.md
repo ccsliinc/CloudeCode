@@ -210,11 +210,22 @@ flowchart TD
     O["observed<br/>seen on our socket, never claimed<br/>the ONLY value that badges EXTERNAL"]
     C["created<br/>the app ran tmux new-session<br/>in SESSION_OWNED_ORIGINS"]
     A["adopted<br/>the user claimed a session the app did not start<br/>in SESSION_OWNED_ORIGINS"]
+    I["imported<br/>rebuilt from a transcript by scripts/import_transcript_sessions.py<br/>NO tmux session ever existed - not in SESSION_OWNED_ORIGINS"]
     O -->|"claim_instance, session_identity.py:545<br/>origin='adopted', adopted_at=COALESCE, written ONCE"| A
     C -->|"no transition - a created session is never re-badged"| C
+    I -->|"no transition - a restart CREATES a session onto this row<br/>(reuse_session_id) and never re-badges it"| I
 ```
 
 `observed` is the only value that renders as external (`db_models.py:144`).
+
+`imported` is a FOURTH kind, not a flavour of `observed`. `observed` means a
+live pane was seen on our socket and not claimed - a measurement of a process.
+An imported row has no pane, no socket presence and no epoch, and never had
+one; it carries a `claude_session_uuid` and nothing else that could identify a
+process. It is deliberately absent from `SESSION_OWNED_ORIGINS`, which
+`session_store.owned_names`/`owned_instances` read to answer "which tmux
+sessions on this socket are ours" - there is no tmux session to own. Restarting
+one goes through `src/core/session_imported_restart.py`, not the pane path.
 `claim_instance` refuses a row whose `lifecycle = 'stopped'` (the SQL's
 `AND lifecycle != ?` guard) - you cannot adopt a corpse.
 
@@ -394,6 +405,7 @@ unknown | lifecycle | src/core/db_models.py::SESSION_LIFECYCLE_UNKNOWN
 created | origin | src/core/db_models.py::SESSION_ORIGIN_CREATED
 adopted | origin | src/core/db_models.py::SESSION_ORIGIN_ADOPTED
 observed | origin | src/core/db_models.py::SESSION_ORIGIN_OBSERVED
+imported | origin | src/core/db_models.py::SESSION_ORIGIN_IMPORTED
 evaluated | reconcile | src/core/session_lifecycle.py::RECONCILE_EVALUATED
 probe_unavailable | reconcile | src/core/session_lifecycle.py::RECONCILE_PROBE_UNAVAILABLE
 listing_incomplete | reconcile | src/core/session_lifecycle.py::RECONCILE_LISTING_INCOMPLETE

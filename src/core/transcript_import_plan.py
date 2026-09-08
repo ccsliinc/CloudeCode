@@ -74,7 +74,7 @@ PROJECT RESOLUTION, IN TWO STEPS.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from src.core.message_model_serialize import (
     AGENT_SCHEME,
