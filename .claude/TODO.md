@@ -2553,3 +2553,9 @@ commit-by-commit table in `HANDOFF.md` section 8.
 
 - [x] Ruled out by measurement: the reconnect (keep path fires, no reset), the resize nudge (removed in f5156aa), the local-servers panel (overlaid in 3ef5624), the renderer and the font (cell 8x16 webgl on every resize line, 2361b33 instrumentation).
 - [ ] Arithmetic on the instrumented lines: 45 rows x 16 px = 720 px at reconnect, 41 x 16 = 656 px ten seconds later; `#terminal` measures 668 px after the flap; the only in-flow sibling is the 43 px `.info` status bar under the terminal. It is absent or collapsed at reconnect and appears once session info lands, stealing four rows and triggering claude ESC[2J. Fix in progress: reserve its height permanently or take it out of flow.
+
+### 2026-09-08 eraser hunt, closed
+
+- [x] Real in-app causes, both fixed and deployed: the local-servers panel toggling in flow under the terminal (3ef5624, now an overlay) and the bottom status bar growing when its three late writers fill it (afbe005, height reserved via a named token). Reconnect keeps the browser buffer (d70e4ab, f5156aa). A settle guard drops transient unannounced resizes (3ef5624). `[TERM-RESIZE]` prints cell, renderer and box heights; `[TERM-BAR]` logs status-bar height changes.
+- [x] The residual flap seen during testing was the Brave automation infobar: the extension attaches a debugger on each action, the viewport shrinks 56 px, and detaches when idle (`screen=797` idle vs `screen=741` attached, info=43 both). Not an app defect.
+- [ ] Inherent limit, documented: claude 2.1.263 answers any real geometry change with ESC[2J, so a phone rotation, the on-screen keyboard, or a sidebar toggle still clears the visible screen. The transcript is never affected. Only spurious resizes are avoidable, and those are now avoided.
