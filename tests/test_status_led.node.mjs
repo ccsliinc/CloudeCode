@@ -369,6 +369,67 @@ test('the breathing period is about two seconds, as specified', () => {
     assert.ok(CSS.includes('status-led-breathe 2s ease-in-out infinite'));
 });
 
+// ---- compact-size geometry ---------------------------------------------
+//
+// The owner's report ("on the compact view the breathing is way too big.
+// also in the homepage") traced to a halo that grew to about 35px across
+// at the breathing peak while the dot itself renders at the CSS default
+// of 9px everywhere - the sidebar row and the launchpad card both call
+// `dotHtml()` with no `size`, so both got that oversized halo. These pin
+// the tuned-down geometry so a future edit cannot silently regrow it.
+
+test('the halo scale and glow spread are tuned down from the oversized defaults', () => {
+    assert.ok(
+        CSS.includes('--led-halo-scale: 1.7;'),
+        'halo scale must stay at the tuned-down 1.7x, not regrow toward 2.6x',
+    );
+    assert.ok(
+        CSS.includes('--led-glow-spread: calc(var(--led-size) * 0.3);'),
+        'glow spread must stay at 0.3x the dot size, not regrow toward 0.62x',
+    );
+});
+
+test('the lit object at the 9px default stays close to the sidebar row gap budget', () => {
+    // Same arithmetic as the comment above the tokens in status-led.css:
+    // halo diameter = size * scale, glow adds spread on each side. This
+    // is not a rendering measurement - box-shadow blur softens the true
+    // edge - but it is the same approximation the "about 35px" regression
+    // and the "about 21px" fix were both reasoned from, so a silent
+    // increase here is caught before it reaches a browser.
+    const size = 9;
+    const scaleMatch = CSS.match(/--led-halo-scale:\s*([\d.]+);/);
+    const spreadMatch = CSS.match(/--led-glow-spread:\s*calc\(var\(--led-size\)\s*\*\s*([\d.]+)\);/);
+    assert.ok(scaleMatch && spreadMatch, 'both geometry tokens must be plain multipliers of --led-size');
+    const scale = Number(scaleMatch[1]);
+    const spread = Number(spreadMatch[1]) * size;
+    const diameter = size * scale + 2 * spread;
+    // The compact sidebar row's flex gap is 5px on each side of the dot's
+    // own 9px box - see session-sidebar-density.css. Budget is generous
+    // (a couple of px over is invisible once the glow's blur has faded),
+    // but the old 2.6x/0.62 config (diameter ~34.6px) must never pass.
+    assert.ok(
+        diameter < 25,
+        `lit object diameter ${diameter}px must stay well clear of the old ~35px regression`,
+    );
+});
+
+test('the breathing amplitude does not grow the halo past its resting size', () => {
+    // The old keyframes scaled up to 1.06 at the peak, growing the
+    // already-oversized halo further. The peak must now be the halo's own
+    // unscaled size (scale 1, i.e. no growth) so the geometry tokens above
+    // are the true maximum, not a floor the animation overshoots.
+    const block = CSS.split('@keyframes status-led-breathe')[1];
+    assert.ok(block, 'the breathing keyframes must exist');
+    assert.ok(
+        /50%\s*\{[^}]*transform:\s*scale\(1\)/.test(block),
+        'the breathing peak must not scale the halo past its own size',
+    );
+    assert.ok(
+        !/scale\(1\.0[1-9]/.test(block) && !/scale\(1\.1/.test(block),
+        'the breathing peak must not grow past scale(1)',
+    );
+});
+
 await runQueue();
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

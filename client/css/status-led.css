@@ -54,12 +54,28 @@
      * saying different things. */
     --led-color-unread: var(--color-warning, #d29922);
 
-    /* Geometry. The halo is 2.6x the dot and its glow spreads a further
-     * 40% beyond that - large enough to read as a glow at 9px, small
-     * enough not to collide with the row's text at the sizes used. */
+    /* Geometry. The halo is 1.7x the dot and its glow spreads a further
+     * 30% of the dot's size beyond that. At the 9px default every call
+     * site actually renders at (sidebar row, launchpad card - neither
+     * passes `size`, so both get this value), that puts the whole lit
+     * object - halo plus glow, at the breathing peak - at about 21px
+     * across: 9 * 1.7 = 15.3px halo, plus 2 * (9 * 0.3) = 5.4px of glow.
+     * Measured against the compact sidebar row's 5px flex gap around the
+     * dot (`.session-sidebar-panel[data-density="compact"]
+     * .session-sidebar-row-main`, session-sidebar-density.css), a lit
+     * object has to stay inside the dot's own 9px box plus 2 * 5px of
+     * gap - 19px - to clear neighbouring text; the glow's opacity has
+     * already faded most of the way out by its outer edge, so a ~1-2px
+     * excess over that budget does not read as touching the text.
+     *
+     * PREVIOUS VALUES (2.6x scale, 0.62 spread) put the same math at
+     * about 35px across at the breathing peak - larger than the row
+     * text itself and overlapping neighbours. That was the owner's
+     * "breathing is way too big" report on the compact sidebar and the
+     * launchpad cards, both of which render at this same 9px default. */
     --led-size: 9px;
-    --led-halo-scale: 2.6;
-    --led-glow-spread: calc(var(--led-size) * 0.62);
+    --led-halo-scale: 1.7;
+    --led-glow-spread: calc(var(--led-size) * 0.3);
 
     /* Resolved per state by the [data-inner] / [data-outer] rules below.
      * Declared here so every LED always has a value for both, and an
@@ -182,11 +198,11 @@
     0%,
     100% {
         opacity: calc(var(--led-halo-opacity) * 0.45);
-        transform: scale(0.82);
+        transform: scale(0.9);
     }
     50% {
         opacity: var(--led-halo-opacity);
-        transform: scale(1.06);
+        transform: scale(1);
     }
 }
 

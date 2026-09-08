@@ -183,6 +183,32 @@ The five state colours plus the unread hue are named tokens declared
 exactly once, at the top of `status-led.css`. A theme that wants a
 different palette redefines `--led-color-*`, never these rules.
 
+### Sizing
+
+`--led-size` is 9px by default, and every call site in this app actually
+renders at that default: the sidebar row (`session-sidebar-rows.js`) and
+the launchpad card (`launchpad.js`) both call `dotHtml()` with no `size`,
+so neither passes a per-instance override. `--led-halo-scale` (1.7) and
+`--led-glow-spread` (`--led-size * 0.3`) size the halo off that one dot
+size; at the 9px default the whole lit object - halo plus glow, at the
+breathing peak - is about 21px across.
+
+Before 2026-09-08 those tokens were 2.6 and 0.62, putting the same math
+at about 35px across at the peak: larger than the row text and
+overlapping neighbours on the compact sidebar density and on the
+launchpad cards, which is what the owner meant by "the breathing is way
+too big" on both surfaces. The breathing keyframes were also scaling the
+halo up to 1.06x at the peak on top of that; the peak is now scale(1),
+i.e. no growth beyond the halo's own resting size, so the geometry tokens
+above are the true maximum rather than a floor the animation overshoots.
+
+There is one set of geometry tokens, not one per surface, because every
+surface that renders a LED today renders it at the same 9px size. A
+surface that needs a different size passes `size` to `ledHtml()` (see
+`client/js/status-led.js`), which scales `--led-size` and, through it,
+the halo and glow with it - a second geometry override is only warranted
+if a surface ships at a different base size.
+
 ### Rolling a group up
 
 `client/js/session-status-summary.js` folds a set of sessions into one LED
