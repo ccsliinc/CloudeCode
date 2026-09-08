@@ -352,9 +352,17 @@
  * A real menu of real buttons, positioned fixed so it escapes the list's
  * own overflow clipping - a menu that opened inside a scrolling list
  * would be cut off by it at exactly the rows nearest the bottom.
+ *
+ * z-index MUST clear .session-sidebar-panel's 1100 (session-sidebar.css)
+ * - this menu is appended to document.body as a sibling of the panel,
+ * not a descendant of it, so a lower z-index here painted the menu
+ * UNDER the sidebar instead of over it. 1200 matches
+ * .session-row-menu (session-row-menu.css), the row-level kebab this
+ * menu is the group-level equivalent of; the two are never open at the
+ * same time (openMenu is a single slot), so sharing a value is safe.
  */
 .session-sidebar-group-menu {
-    z-index: 1000;
+    z-index: 1200;
     min-width: 160px;
     max-width: 240px;
     padding: 4px;
