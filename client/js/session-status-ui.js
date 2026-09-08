@@ -495,6 +495,31 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Archive-box glyph: a lid line over a box outline with a small
+     * handle slot. Same family as pencilIconSvg/trashIconSvg (16x16
+     * viewBox, stroke="currentColor", fill="none", stroke-width 1.5) -
+     * the launchpad's project-row archive control used to draw the
+     * file-cabinet emoji (U+1F5C4) here, a filled, detailed glyph that
+     * did not match the rest of the row's flat stroke icons. This is
+     * the same box already used by the header's message-archive button
+     * (#archiveBtn, index.html), pulled out as a shared function so both
+     * surfaces draw one archive icon rather than two independent copies.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   archiveIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function archiveIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+            '<path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         escapeAttr,
         normalizeStatus,
@@ -510,6 +535,7 @@ console.log('[SessionStatusUI Module] Loading...');
         folderIconSvg,
         fileIconSvg,
         lockIconSvg,
+        archiveIconSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

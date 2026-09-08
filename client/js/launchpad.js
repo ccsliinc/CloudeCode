@@ -4670,7 +4670,7 @@ class Launchpad {
                              user wants to archive, and refusing that
                              would leave the row permanently stuck on the
                              screen it is trying to leave. -->
-                        <button class="project-archive-btn" data-name="${project.name}" data-archived="${isArchived ? '1' : '0'}" title="${isArchived ? 'restore project to the list' : 'archive project - keeps it and its sessions, hides it from this list'}" aria-label="${isArchived ? 'restore project' : 'archive project'}">${isArchived ? '&#x21ba;' : '&#x1F5C4;'}</button>
+                        <button class="project-archive-btn" data-name="${project.name}" data-archived="${isArchived ? '1' : '0'}" title="${isArchived ? 'restore project to the list' : 'archive project - keeps it and its sessions, hides it from this list'}" aria-label="${isArchived ? 'restore project' : 'archive project'}">${isArchived ? '&#x21ba;' : (window.SessionStatusUI ? window.SessionStatusUI.archiveIconSvg() : '')}</button>
                         <div class="project-name">» ${project.name}</div>
                         <div class="project-path">${project.path}</div>
                         ${descriptionHtml}

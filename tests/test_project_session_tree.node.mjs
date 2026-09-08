@@ -140,6 +140,7 @@ function renderWith(fixture) {
         API: {},
         SessionStatusUI: {
             dotHtml() { return '<span class="status-dot"></span>'; },
+            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
             pencilIconSvg() { return '<svg class="pencil"></svg>'; },
             trashIconSvg() { return '<svg class="trash"></svg>'; },
         },

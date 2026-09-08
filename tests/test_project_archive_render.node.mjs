@@ -114,6 +114,7 @@ function renderWith(fixture) {
             dotHtml() { return '<span class="status-dot"></span>'; },
             pencilIconSvg() { return '<svg class="pencil"></svg>'; },
             trashIconSvg() { return '<svg class="trash"></svg>'; },
+            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
         },
         localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
         addEventListener() {},
@@ -242,6 +243,21 @@ test('every row offers an archive control, archived rows offering restore', () =
         html.includes('restore project'),
         'an archived row must offer RESTORE, or archive is a one-way trip'
     );
+});
+
+test('the live row draws the shared archive icon, not the old file-cabinet emoji', () => {
+    const html = renderWith({
+        projects: [LIVE, ARCHIVED],
+        showArchived: true,
+        archivedFetchOk: true,
+    });
+    assert.ok(html.includes('archive-icon'),
+        'the archive control must call SessionStatusUI.archiveIconSvg() - a '
+        + 'flat stroke icon matching pencilIconSvg/trashIconSvg, not a filled '
+        + 'emoji glyph');
+    assert.ok(!html.includes('\u{1F5C4}'),
+        'the file-cabinet emoji (U+1F5C4) must be gone - it was the "full '
+        + 'art" glyph the owner asked to replace');
 });
 
 // --- 2. the three-outcome rule on the fetch -------------------------------

@@ -219,6 +219,7 @@ async function boot(opts) {
         matchMedia() { return { matches: false, addEventListener() {} }; },
         SessionStatusUI: {
             dotHtml() { return '<span class="status-dot"></span>'; },
+            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
             pencilIconSvg() { return '<svg></svg>'; },
             trashIconSvg() { return '<svg></svg>'; },
             markUnreadHtml() { return ''; },
