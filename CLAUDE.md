@@ -699,6 +699,32 @@ directory is fine; a non-empty one refuses.
 "clone from github" does NOT have this defect: it has collected a parent
 directory since it shipped (`launchpad.js`, `modal-clone-parent`).
 
+## The status lights, and what they are allowed to claim
+
+Full model in `docs/session-status.md`. The five states are `working`,
+`waiting` (a permission or a question), `done`/idle, `dead` and `unknown`.
+`UserPromptSubmit`/`PreToolUse` move to working, `PermissionRequest`/
+`Notification` to waiting, `Stop` to done, tmux's `#{pane_dead}` to dead;
+everything else is `unknown`, which is a real answer and never `done`.
+
+**A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
+"the foreground command is not a bare shell", which is equally true of an
+agent mid-tool-call and one at an empty prompt, and the fallback carries no
+timestamp so nothing could expire the claim. Measured 2026-09-08: 15 of 19
+live sessions report a claude VERSION STRING as `pane_current_command`, so
+that branch is the common case and all 15 were reporting a permanent
+`working` on no evidence. Hook-fed `working` still expires after 120s.
+
+**Unread is keyed on the INSTANCE**, `<tmux_name>@<#{session_created}>`,
+because a name is reused and a flag from a killed session reappeared on its
+successor. Set on `Stop` and by the user's control, cleared when a WS
+terminal binds. An unmeasurable epoch degrades to the legacy name key.
+
+**The LED is two independent rings** (`client/js/status-led.js`): an inner
+dot for the chat's status and an outer halo for activity and attention, so
+"working, and also unread" is sayable. `dotHtml` delegates to it, so every
+surface renders the same component.
+
 ## The transcript archive the app maintains
 
 The app keeps a byte-exact archive of this machine's Claude Code
