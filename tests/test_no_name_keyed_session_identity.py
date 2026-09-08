@@ -74,17 +74,20 @@ durable state onto. Every current instance is below, verified against
 the live file at the time this guard was written; NONE of them is fixed
 by this file. This is a guard, not a fix.
 
-THE GROUP MEMBERSHIP TABLE. ``session_group_members`` has
-``tmux_name TEXT PRIMARY KEY`` (``src/core/db_models.py``,
-``DDL_SESSION_GROUP_MEMBERS``) - a SCHEMA asserting that an ephemeral
-name IS an identity, which is an enforced INCORRECT contract and worse
-than no contract at all. This file does not attempt to fix it (that is a
-migration and a design decision about what a group should key on,
-neither of which belongs in a guard test). It is a different table from
-``sessions`` and is therefore outside the query-pattern scan above by
-construction; ``test_group_membership_primary_key_is_a_known_bad_contract``
-below exists solely so this fact stays VISIBLE rather than quietly
-passing every run with nobody looking at it.
+THE GROUP MEMBERSHIP TABLE, FIXED IN SCHEMA v24. It used to be the
+worst instance of this class and the one this file could not scan:
+``session_group_members`` declared ``tmux_name TEXT PRIMARY KEY``
+(``src/core/db_models.py``, ``DDL_SESSION_GROUP_MEMBERS``) - a SCHEMA
+asserting that an ephemeral name IS an identity, an enforced INCORRECT
+contract and worse than no contract at all. v24 adds
+``session_group_membership`` keyed on ``sessions.session_uuid`` and
+carries every old row across (``src/core/db_steps.py``'s
+``_step_v23_to_v24``). The v8 table is LEFT IN PLACE and unread, because
+every migration step in this project is additive; that is why
+``test_group_membership_primary_key_is_a_known_bad_contract`` still
+asserts the old DDL text unchanged, and why a second test asserts the
+new table exists and keys on the durable id. The pair is what stops the
+fix from silently regressing in either direction.
 """
 
 from __future__ import annotations
@@ -277,6 +280,22 @@ def find_violations(root: pathlib.Path = SRC) -> List[Violation]:
 # ---------------------------------------------------------------------
 EXEMPTIONS = {
     (
+        "src/core/session_group_membership_migrate.py",
+        "resolve_session_uuid",
+    ): (
+        "THE BOUNDARY, not a lookup that could be keyed better. It is the "
+        "ONE place a tmux name becomes a durable session_uuid, and it "
+        "exists because the sidebar addresses its rows by name while the "
+        "v24 membership table keys on session_uuid; the guess is now made "
+        "once, explicitly, with a stated rule (running row, else newest) "
+        "instead of being frozen into a primary key on every row of "
+        "session_group_members. The blast radius is bounded: the wrong "
+        "answer files a conversation in a group, which is user-visible, "
+        "reversible with one drag, and touches no lifecycle, no lineage "
+        "and no conversation. The instance triple is not available here - "
+        "the caller has a name and nothing else."
+    ),
+    (
         "src/core/session_store.py",
         "identity_for_live_name",
     ): (
@@ -451,20 +470,20 @@ def test_epoch_exact_match_is_not_flagged():
 
 
 def test_group_membership_primary_key_is_a_known_bad_contract():
-    """``session_group_members.tmux_name`` is PRIMARY KEY - visible, not
-    silently passing.
+    """The RETIRED v8 table still declares its bad key, untouched.
 
-    Description: this is not a call-site bug the query scan above can
-      see (it is a different table, on purpose - see module docstring),
-      it is a SCHEMA asserting that an ephemeral tmux name IS a durable
-      identity. That is an enforced INCORRECT contract, worse than no
-      contract, because every INSERT into this table has to already
-      resolve to one name winning. This test does not fix it - that is a
-      migration and a design decision about what a group should key on
-      instead, out of scope for a guard test. It exists so the fact
-      cannot quietly stop being true (or quietly start being MORE true,
-      e.g. a second table copying the same key) without a human noticing,
-      by asserting the DDL text directly rather than by inference.
+    Description: this asserts the OLD table's DDL is unchanged, which
+      after schema v24 is a statement about the MIGRATION rather than
+      about the feature: every step in this project is additive, so v24
+      created a new correctly-keyed table and left ``session_group_members``
+      exactly as it was rather than dropping or retyping it. A step that
+      quietly "tidied" it would break the additive-forward /
+      restore-backward rollback design that db_steps.py's docstring
+      rests on, and this is what would notice.
+
+      The live contract is asserted by
+      ``test_group_membership_is_now_keyed_on_durable_identity`` below;
+      read the two together.
     Output: n/a (assertion only).
     """
     ddl_text = DB_MODELS.read_text(encoding="utf-8")
@@ -481,9 +500,45 @@ def test_group_membership_primary_key_is_a_known_bad_contract():
     )
     table_sql = match.group(1)
     assert re.search(r"tmux_name\s+TEXT\s+PRIMARY\s+KEY", table_sql, re.IGNORECASE), (
-        "session_group_members no longer keys on tmux_name as its PRIMARY "
-        "KEY. If this was a deliberate migration to a durable key (e.g. "
-        "session_uuid), this test should be UPDATED to assert the new key "
-        "and this known-bad-contract note should be removed from the "
-        "module docstring above - do not just delete the assertion."
+        "the RETIRED v8 session_group_members table was edited. Schema "
+        "v24 superseded it with session_group_membership and every "
+        "migration step in this project is additive, so the old table is "
+        "supposed to sit there unread and unchanged. If you meant to "
+        "retire it for real, that is a schema decision with a rollback "
+        "consequence - read src/core/db_steps.py's docstring first."
+    )
+
+
+def test_group_membership_is_now_keyed_on_durable_identity():
+    """``session_group_membership`` keys on ``session_uuid``, not a name.
+
+    Description: the live contract, asserted on the DDL text directly
+      rather than inferred from behaviour. The whole point of the v24
+      re-key is that two sessions sharing one tmux name hold two
+      memberships, and that a session with NO tmux name - one imported
+      from a transcript - can hold one at all. A key that drifted back
+      to the name would silently take both of those away.
+    Output: n/a (assertion only).
+    """
+    ddl_text = DB_MODELS.read_text(encoding="utf-8")
+    match = re.search(
+        r"DDL_SESSION_GROUP_MEMBERSHIP\s*=\s*\"\"\"(.*?)\"\"\"",
+        ddl_text,
+        re.DOTALL,
+    )
+    assert match is not None, (
+        "src/core/db_models.py no longer defines DDL_SESSION_GROUP_MEMBERSHIP "
+        "- the v24 membership table. Confirm the durable key was not "
+        "removed before updating this test."
+    )
+    table_sql = match.group(1)
+    assert re.search(
+        r"session_uuid\s+TEXT\s+PRIMARY\s+KEY", table_sql, re.IGNORECASE
+    ), (
+        "session_group_membership no longer keys on session_uuid. A tmux "
+        "name is not durable identity - see this module's docstring."
+    )
+    assert re.search(r"\bposition\s+INTEGER\b", table_sql, re.IGNORECASE), (
+        "session_group_membership lost its `position` column, which is "
+        "the durable order within a group."
     )

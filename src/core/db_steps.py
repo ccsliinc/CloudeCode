@@ -56,6 +56,7 @@ from src.core.db_models import (
     DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
     DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
     DDL_V23_SESSIONS_LAST_WORK_AT,
+    DDL_V24,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -70,6 +71,7 @@ from src.core.message_host_ddl import DDL_V17
 from src.core.message_archive_flag import message_archive_enabled
 from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
+from src.core.session_group_membership_migrate import carry_memberships
 
 logger = structlog.get_logger()
 
@@ -1197,6 +1199,56 @@ def _step_v22_to_v23(conn: sqlite3.Connection) -> None:
         conn.execute(DDL_V23_SESSIONS_LAST_WORK_AT)
 
 
+
+def _step_v23_to_v24(conn: sqlite3.Connection) -> None:
+    """Re-key group membership on ``session_uuid``, and give it an order.
+
+    Description: creates ``session_group_membership`` and carries every
+      v8 ``session_group_members`` row onto it, resolving each tmux NAME
+      to the ``sessions`` row the sidebar was drawing when the user filed
+      it. The resolution rule, its three outcomes and why the seed order
+      is what it is all live in
+      src/core/session_group_membership_migrate.py; db_models' v24 block
+      carries the argument for the key itself.
+
+      THE OLD TABLE IS NOT TOUCHED. Not dropped, not renamed, not
+      retyped - read once, here, and never again. That keeps this step
+      additive like every other one, so a rollback stays a RESTORE from a
+      verified backup rather than a hand-written reversal, and it leaves
+      the pre-migration filing readable if anybody ever needs to check
+      what this step decided.
+
+      IDEMPOTENT ON BOTH HALVES. Each DDL statement carries its own
+      IF NOT EXISTS, and ``carry_memberships`` skips any session_uuid the
+      new table already holds - so a re-run after an interrupted attempt
+      finishes the remainder and never overwrites a filing the user has
+      made since.
+
+      A NO-OP ON AN INSTALL WITHOUT GROUPS. Both source tables are
+      checked: an install that crossed v8 with the tables absent (or a
+      database predating v2's ``sessions``) gets the new table and no
+      backfill, which is the truth for it.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v23_to_v24(conn)  # after _step_v22_to_v23
+    """
+    for statement in DDL_V24:
+        conn.execute(statement)
+    if not table_exists(conn, "session_group_members"):
+        return
+    if not table_exists(conn, "sessions"):
+        return
+    carried = carry_memberships(conn)
+    outcomes: Dict[str, int] = {}
+    for entry in carried:
+        outcomes[entry.outcome] = outcomes.get(entry.outcome, 0) + 1
+    logger.info(
+        "session_group_membership_rekeyed",
+        legacy_rows=len(carried),
+        **outcomes,
+    )
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1225,6 +1277,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     20: _step_v20_to_v21,
     21: _step_v21_to_v22,
     22: _step_v22_to_v23,
+    23: _step_v23_to_v24,
 }
 
 

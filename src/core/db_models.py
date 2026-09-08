@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 23
+CURRENT_SCHEMA_VERSION: int = 24
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1423,3 +1423,81 @@ DDL_V23: Tuple[str, ...] = (DDL_V23_SESSIONS_LAST_WORK_AT,)
 #: Same reasoning as REVERSAL_SQL_V3 and V4: additive-only forward,
 #: RESTORE backward. Stated so the absence is a decision, not a gap.
 REVERSAL_SQL_V23: Tuple[str, ...] = ()
+
+
+# ---- schema v23 -> v24: group membership keyed on DURABLE identity ------
+#
+# THE DEFECT THIS CLOSES. ``session_group_members`` (v8, above) declares
+# ``tmux_name TEXT PRIMARY KEY`` - a SCHEMA asserting that an ephemeral
+# tmux name IS a durable identity. tmux recycles a name the moment a
+# session is recreated after its pane dies, so two rows with two
+# histories legitimately share one name, and the primary key forces one
+# of them to win. It is an ENFORCED INCORRECT contract, which is worse
+# than no contract: every INSERT has to already have picked a winner.
+# Measured on the owner's live database 2026-09-08 the collision is not
+# hypothetical - ``cloude_Mac`` and ``cloude_Fantasy Football 2026`` each
+# carry TWO sessions rows and each is a filed group member.
+#
+# It also makes a whole class of row UNFILEABLE. A session imported from
+# a transcript has no tmux name at all, so under a name-keyed primary key
+# it cannot be put in a group even in principle.
+#
+# THE NEW TABLE KEYS ON ``sessions.session_uuid``, which is NOT NULL
+# UNIQUE and is one of the three durable keys this schema recognises (the
+# other two being the instance triple and claude_session_uuid). One group
+# per session is still enforced by the primary key, exactly as before -
+# the rule did not change, only what identifies the session.
+#
+# ``position`` IS DURABLE ORDER WITHIN A GROUP, and it is new. Order
+# within a group used to live in localStorage, which means it was
+# per-device and was lost with the browser profile. It is stored here for
+# the same reason membership is: it is a fact about the conversation the
+# user arranged, not a property of the screen they arranged it on.
+# DEFAULT 0 is deliberate - a tie is broken by ``session_uuid`` in the
+# read, so a backfilled or hand-inserted row still has a TOTAL order
+# rather than whatever sqlite returns.
+#
+# ADDITIVE, LIKE EVERY OTHER STEP. The v8 table is NOT dropped, renamed
+# or retyped. It is left exactly as it is, read once by the backfill and
+# never again, so a rollback is a RESTORE and never a hand-written
+# reversal - see this module's DDL block for v3/v4 and db_steps.py's
+# docstring for the whole argument.
+DDL_SESSION_GROUP_MEMBERSHIP = """
+CREATE TABLE IF NOT EXISTS session_group_membership (
+  session_uuid TEXT PRIMARY KEY,
+  group_id     INTEGER NOT NULL REFERENCES session_groups(id) ON DELETE CASCADE,
+  position     INTEGER NOT NULL DEFAULT 0,
+  added_at     TEXT NOT NULL
+)
+"""
+
+#: The one index the read needs. ``list_groups`` buckets every membership
+#: by group and orders within the bucket, so the composite covers both
+#: halves of that query and a per-group count needs no table scan.
+DDL_SESSION_GROUP_MEMBERSHIP_ORDER_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_session_group_membership_order "
+    "ON session_group_membership (group_id, position)"
+)
+
+#: Ordered DDL for a v23 -> v24 database. One CREATE TABLE and one CREATE
+#: INDEX, each carrying its own IF NOT EXISTS, so the step is idempotent
+#: BY THE STATEMENT and needs no PRAGMA inspection - same shape as
+#: v7/v8/v14/v16/v18/v19. The row backfill that follows them in the step
+#: is idempotent separately, by INSERT ... WHERE NOT EXISTS.
+DDL_V24: Tuple[str, ...] = (
+    DDL_SESSION_GROUP_MEMBERSHIP,
+    DDL_SESSION_GROUP_MEMBERSHIP_ORDER_INDEX,
+)
+
+#: A REVERSE of v23 -> v24 drops the new table, which is the exact
+#: inverse of creating it. It destroys the memberships and the in-group
+#: order recorded since the migration, and destroys no conversation - the
+#: table holds no reference to one. The v8 table is untouched by both
+#: directions, so a reversed install falls back to the membership
+#: snapshot the migration read, which is stale but never wrong about a
+#: session that has not moved.
+REVERSAL_SQL_V24: Tuple[str, ...] = (
+    "DROP TABLE IF EXISTS session_group_membership",
+)
+
+REVERSAL_DESTROYS[24] = ("session_group_membership (whole table)",)
