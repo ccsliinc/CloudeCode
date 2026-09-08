@@ -3680,3 +3680,67 @@ it can produce a wrong RESTORE. Fixing it means a second hunk in
 `session_manager.py`, which was out of scope for this change. (b) The periodic
 re-seed rides the listing poll rather than a task of its own; if the listing
 ever stops running for a hookless session, its light freezes at its last seed.
+
+## 2026-09-08 deploy to live: 1f9b437
+
+Nine worker commits from `2361427..1f9b437` (LED centering, verify-script
+archive, sidebar header, the status machine split, badge removal, the
+sleep/wake bar, global toasts, the home page row and icon, wrapper
+inference, recreate, status seeding) shipped to the live install with
+`./scripts/deploy-mini.sh --target live --all`, restarted with
+`launchctl kickstart -k gui/501/com.cloudecode.menubar`.
+
+The index carried stale staged state from an earlier session (`MM`, `D`
+and `AD` rows against a worktree that already matched HEAD). `git reset -q`
+cleared it and left the tree clean, untracked included: every doc append
+the workers made was already committed, and `origin/v1.1` was already at
+`1f9b437`. Nothing was discarded.
+
+Pre-deploy baseline, measured before anything was copied: 19 rows on
+`GET /sessions/list` against 19 live tmux sessions, statuses 13 unknown,
+3 idle, 1 working, 2 notice.
+
+Tests on the clean tree: 5463 passed, 3 failed, 21 skipped in 196s. The
+three failures are the standing environmental ones (`test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`); the tmux-socket flake in
+`test_respawn_refreshes_pane_env.py` did not fire this run. Node: 188 files,
+only the pre-existing `test_archive_full_page_mode.node.mjs`.
+
+Verified after the restart, three outcomes each, all PASS:
+
+- Deploy hashes: `--verify-only` exit 0, 518/518 files on both the app
+  bundle Resources and the server dir, mirror-clean in both directions.
+- The RUNNING process serves HEAD. `GET /api/v1/version` carries a release
+  string (`1.0.33`) and no git hash, so the fallback was used instead:
+  seven files changed or added this round were fetched from the served
+  `/static` path and sha256-compared to the repo copy. All seven matched
+  (`status-led.js`, `status-led.css`, `session-sidebar-groups.js`,
+  `session-sidebar-band-menu.js`, `terminal-away-bar.js`,
+  `toast-global-poll.js`, `session-status-ui.js`). Corroborated by the log:
+  `status_seed_warm` and `agent_infer_sweep_complete` both ran at boot, and
+  neither module existed before this round.
+- Sessions: 19 rows against 19 live tmux sessions, no session vanished and
+  none appeared versus the pre-deploy set. `boot_readopt_complete` held 18,
+  failed 0, skipped 1, live_count 19, all 18 ids recovered from
+  `hook_token` and none derived.
+- The status seeding is what this round was for and it MOVED THE NUMBER:
+  unknown fell from 13 to 1 (`cloude_PT-IMC` alone), idle rose from 3 to 14,
+  1 working, 3 finished_unread.
+- Hooks over the two minutes after boot: 21 `POST /api/v1/hooks/claude-event`,
+  all 200, zero `hook_post_rejected`, zero stale-session refusals.
+- New routes: `GET /api/v1/toasts/history?limit=5` 200,
+  `GET /api/v1/sessions/away/summary` 200 with a real session and a
+  one-hour `since`, `GET /api/v1/sessions/recreate/preview` with a bogus
+  uuid 404 with a sentence naming the uuid, not a 500. Note the recreate
+  pair is mounted through `restart_routes.py`, not from `main.py`, which is
+  deliberate and documented in that file.
+- Client assets: the five new or changed JS files fetched from `/static`
+  all returned 200 and passed `node --check` ON THE FETCHED BODIES rather
+  than on the repo copies, and the served `index.html` references
+  `terminal-away-bar.css`, `terminal-away-bar.js`, `toast-global-poll.js`,
+  `session-sidebar-band-menu.js`, `session-status-ui.js` and
+  `toast-history.css`.
+
+**STILL OPEN:** one session, `cloude_PT-IMC`, still reads unknown. It fired
+no hook in the window and the seeder declined it, so nothing here says
+whether its row, its transcript or its pane is the reason. Not measured.
