@@ -228,7 +228,7 @@ test('the restart control still needs no generic confirm dialog', () => {
 // ---------------------------------------------------------------------------
 
 test('the arm control is emitted unchecked and takes no payload', () => {
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const html = w.SessionRestartLive.armHtml();
     assert.ok(html.includes('type="checkbox"'), 'the arm control is not a checkbox');
     assert.ok(
@@ -240,7 +240,7 @@ test('the arm control is emitted unchecked and takes no payload', () => {
 });
 
 test('a live pane paints every radio locked however good the projection', () => {
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     for (const projected of ['agent', 'shell', 'replay']) {
         const html = w.SessionRestartPicker.optionsHtml(livePreview(projected));
         const inputs = html.match(/<input[^>]*>/g) || [];
@@ -262,14 +262,14 @@ test('the two facts ride on separate attributes', () => {
     // `data-live-eligible` is only ever consulted alongside the checkbox,
     // so carrying it is not the same as acting on it. Keeping it apart from
     // `data-actionable-now` is what makes that separation checkable.
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const html = w.SessionRestartPicker.optionsHtml(livePreview('agent'));
     assert.ok(html.includes('data-actionable-now="0"'));
     assert.ok(html.includes('data-live-eligible="1"'));
 });
 
 test('a cannot-determine rung is not eligible even when armed', () => {
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const preview = livePreview('agent');
     preview.projected = {
         kind: 'cannot_determine',
@@ -288,7 +288,7 @@ test('a cannot-determine rung is not eligible even when armed', () => {
 test('a missing transcript is not eligible even when armed', () => {
     // The 2026-09-07 incident. On the live path the pane it would kill was
     // working, so this must never become pickable by ticking a box.
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const preview = livePreview('agent');
     preview.projected = {
         kind: 'transcript_missing',
@@ -301,7 +301,7 @@ test('a missing transcript is not eligible even when armed', () => {
 });
 
 test('the live notice renders the arm control, a dead pane does not', () => {
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const live = w.SessionRestartPicker.noticeHtml(livePreview('shell'));
     assert.ok(live.includes('restart-picker__arm'), 'no arm control on a live pane');
 
@@ -325,7 +325,7 @@ test('the live notice renders the arm control, a dead pane does not', () => {
 // ---------------------------------------------------------------------------
 
 test('the confirmation warns when the session comes back a bare shell', () => {
-    const w = load(['session-status-ui.js', 'session-restart-live.js',
+    const w = load(['session-status-ui.js', 'session-restart-live.js', 'session-restart-options.js',
         'session-restart-picker.js']);
     const copy = w.SessionRestartLive.liveConfirmCopy(
         livePreview('shell'), null, 'idle', 'daily briefing');
@@ -342,7 +342,7 @@ test('the confirmation warns when the session comes back a bare shell', () => {
 });
 
 test('a picked wrapper drops the shell warning and names what will run', () => {
-    const w = load(['session-status-ui.js', 'session-restart-live.js',
+    const w = load(['session-status-ui.js', 'session-restart-live.js', 'session-restart-options.js',
         'session-restart-picker.js']);
     const copy = w.SessionRestartLive.liveConfirmCopy(
         livePreview('shell'), 'claude-chrome', 'idle', 'api work');
@@ -360,7 +360,7 @@ test('a busy row informs the confirmation and never refuses it', () => {
     // activity_state reads 'working' for about four minutes after a resume
     // before self-correcting (HANDOFF section 6), so it is shown, not acted
     // on. There is no path here that returns "refused".
-    const w = load(['session-status-ui.js', 'session-restart-live.js',
+    const w = load(['session-status-ui.js', 'session-restart-live.js', 'session-restart-options.js',
         'session-restart-picker.js']);
     const busy = w.SessionRestartLive.liveConfirmCopy(
         livePreview('agent'), null, 'working', 'api work');
@@ -373,7 +373,7 @@ test('a busy row informs the confirmation and never refuses it', () => {
 });
 
 test('outcomeFor reads the PROJECTED rung, never the current one', () => {
-    const w = load(['session-restart-live.js', 'session-restart-picker.js']);
+    const w = load(['session-restart-live.js', 'session-restart-options.js', 'session-restart-picker.js']);
     const preview = livePreview('shell');
     const baseline = w.SessionRestartLive.outcomeFor(preview, null);
     assert.equal(baseline.kind, 'shell', 'the baseline read not_dead as its outcome');

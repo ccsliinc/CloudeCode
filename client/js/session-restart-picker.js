@@ -70,7 +70,17 @@
  * is minted, so project attribution, pinned theme, unread state, group
  * filing and sidebar position stay put because nothing moves.
  *
- * Load AFTER api.js and app.js; BEFORE session-sidebar-clicks.js.
+ * THE ROWS ARE NOT IN THIS FILE. session-restart-options.js owns the
+ * option list, the badge vocabulary and the rule that lifts a
+ * session-level sentence out of the per-option loop; this file owns the
+ * panel, the promise and the arming gate. The split happened because
+ * this file was 578 lines and past the project's 500-line rule, and
+ * because "which rows exist" and "what the panel does with a choice" are
+ * two jobs. The helpers that moved are re-exported here unchanged, so
+ * `SessionRestartPicker.optionsHtml` is still the same one function.
+ *
+ * Load AFTER api.js, app.js and session-restart-options.js; BEFORE
+ * session-sidebar-clicks.js.
  */
 
 console.log('[SessionRestartPicker Module] Loading...');
@@ -79,164 +89,27 @@ console.log('[SessionRestartPicker Module] Loading...');
     'use strict';
 
     /**
-     * Short badge for each predicted rung. The SENTENCE always comes from
-     * the server (`detail`) so the wording lives in one place; this is
-     * only the two- or three-word tag that lets the eye sort the list
-     * without reading every line.
-     * @type {Object<string, string>}
+     * THE OPTION LIST LIVES IN ITS OWN MODULE. session-restart-options.js
+     * owns every row, the badge vocabulary and the rule that lifts a
+     * session-level sentence out of the per-option loop. This file kept
+     * the panel, the promise and the arming gate, which is what it is
+     * for; it re-exports the list's helpers below so the module's public
+     * surface is the one it has always had.
+     * @type {object}
      */
-    var KIND_BADGE = {
-        agent: 'would start the agent',
-        replay: 'would replay the recorded command',
-        shell: 'would return a plain shell',
-        not_dead: 'still running',
-        transcript_missing: 'its conversation is gone',
-        cannot_determine: 'cannot be determined',
-    };
-
-    /**
-     * Rungs a user is allowed to commit to. Mirrors
-     * ACTIONABLE_RESPAWN_KINDS in src/core/session_respawn.py. The server
-     * is the authority (`actionable` / `actionable_now`); this exists so a
-     * payload missing that field fails CLOSED rather than open.
-     * @type {Array<string>}
-     */
-    var ACTIONABLE = ['agent', 'replay', 'shell'];
+    var Options = window.SessionRestartOptions;
 
     /** The open panel element, or null. Only ever one. */
     var overlayEl = null;
 
     /**
-     * Description: HTML-escape for text and attributes. Routed through
-     *   SessionSidebarRows when present so this module owns no second
-     *   escaper; the inline fallback keeps the panel safe if that module
-     *   has not loaded.
+     * Description: HTML-escape for text and attributes. One escaper, in
+     *   the options module, used from both.
      * Inputs: value (any).
      * Output: string, safe inside a double-quoted attribute or as text.
      */
     function esc(value) {
-        if (window.SessionSidebarRows) return window.SessionSidebarRows.esc(value);
-        var div = document.createElement('div');
-        div.textContent = value == null ? '' : String(value);
-        return div.innerHTML.replace(/"/g, '&quot;');
-    }
-
-    /**
-     * Description: can this predicted rung be acted on?
-     * Inputs: kind (string) - a ladder verdict.
-     * Output: boolean - false for not_dead, cannot_determine and anything
-     *   unrecognised. An unknown verdict is treated as NOT actionable,
-     *   because a client that guesses yes about a rung it has never heard
-     *   of is exactly the failure this panel exists to prevent.
-     */
-    function isActionable(kind) {
-        return ACTIONABLE.indexOf(kind) !== -1;
-    }
-
-    /**
-     * Description: build one selectable row.
-     * Inputs:
-     *   id (string) - DOM id for the input.
-     *   value (string) - the agent_type this row stands for, '' for the
-     *     "leave it as it is" row.
-     *   title (string) - the row's heading.
-     *   spec (object) - {kind, projectedKind, detail, actionableNow,
-     *     current, checked}. `kind` is what a restart does RIGHT NOW;
-     *     `projectedKind` is what this choice would come back AS.
-     * Output: string - HTML for one <label>.
-     */
-    function optionHtml(id, value, title, spec) {
-        // TWO DIFFERENT FACTS, TWO DIFFERENT USES, and the server keeps
-        // them apart so this can too:
-        //   projectedKind  what this choice would COME BACK AS. It is the
-        //                  badge and the sentence, because it is the
-        //                  question the user is actually asking, and it
-        //                  is the only one that says anything at all
-        //                  about a session that is still running.
-        //   actionableNow  whether a restart may act on it right now. It
-        //                  is the ONLY thing that enables the radio. A
-        //                  prediction is never a permission.
-        var kind = spec.projectedKind || spec.kind || 'cannot_determine';
-        // BOTH, and it is belt and braces on purpose. The server's
-        // `actionable_now` is the authority; `isActionable` refuses a rung
-        // this client has never heard of, so a future verdict added
-        // server-side cannot be offered by an old client that has no idea
-        // what it means.
-        var canPick = spec.actionableNow === true && isActionable(spec.kind);
-        // WHETHER THIS COULD BE PICKED IF THE USER ARMS A LIVE RESTART.
-        // Carried as data, never as `disabled`: the initial render is
-        // derived from `actionable_now` ALONE, so a live session paints
-        // every radio disabled however good its projection is. Only
-        // `sync()` may relax that, and only from a checkbox.
-        var liveEligible = isActionable(spec.projectedKind || spec.kind);
-        var disabled = canPick ? '' : ' disabled';
-        var checked = spec.checked ? ' checked' : '';
-        var current = spec.current
-            ? '<span class="restart-picker__current">current</span>'
-            : '';
-        return (
-            '<label class="restart-picker__option' + (canPick ? '' : ' is-unavailable')
-            + '" for="' + esc(id) + '">'
-            + '<input type="radio" name="restart-picker-choice" id="' + esc(id) + '" '
-            + 'value="' + esc(value) + '" data-kind="' + esc(kind) + '" '
-            + 'data-now-kind="' + esc(spec.kind || '') + '" '
-            + 'data-actionable-now="' + (canPick ? '1' : '0') + '" '
-            + 'data-live-eligible="' + (liveEligible ? '1' : '0') + '"'
-            + disabled + checked + '>'
-            + '<span class="restart-picker__body">'
-            + '<span class="restart-picker__title">' + esc(title) + current + '</span>'
-            + '<span class="restart-picker__kind" data-kind="' + esc(kind) + '">'
-            + esc(KIND_BADGE[kind] || 'cannot be determined') + '</span>'
-            + '<span class="restart-picker__detail">' + esc(spec.detail || '')
-            + '</span>'
-            + '</span></label>'
-        );
-    }
-
-    /**
-     * Description: the whole option list, "leave it as it is" first.
-     *
-     *   THE BASELINE ROW LEADS ON PURPOSE. It is the row that exposes the
-     *   shell landmine: on a pane with no recorded start command it reads
-     *   "returns a plain shell", which is the fact the user most needs
-     *   before deciding anything.
-     * Inputs: preview (object) - the RestartPreviewResponse body.
-     * Output: string - HTML.
-     */
-    function optionsHtml(preview) {
-        var unchanged = preview.unchanged || {};
-        var projected = preview.projected || {};
-        var baselineTitle = preview.current_agent_type
-            ? 'leave it on ' + preview.current_agent_type
-            : 'leave it as it is';
-        var out = [
-            optionHtml('restart-choice-keep', '', baselineTitle, {
-                kind: unchanged.kind || 'cannot_determine',
-                projectedKind: projected.kind || unchanged.kind
-                    || 'cannot_determine',
-                detail: projected.detail || unchanged.detail
-                    || 'what this would run could not be determined',
-                actionableNow: unchanged.actionable === true,
-                current: false,
-                checked: true,
-            }),
-        ];
-        (preview.options || []).forEach(function (o, i) {
-            out.push(optionHtml(
-                'restart-choice-' + i,
-                o.agent_type,
-                o.label || o.agent_type,
-                {
-                    kind: o.kind,
-                    projectedKind: o.projected_kind || o.kind,
-                    detail: o.projected_detail || o.detail,
-                    actionableNow: o.actionable_now === true,
-                    current: !!o.is_current,
-                    checked: false,
-                }
-            ));
-        });
-        return out.join('');
+        return Options.esc(value);
     }
 
     /**
@@ -349,9 +222,14 @@ console.log('[SessionRestartPicker Module] Loading...');
                 + 'deleted.</div>'
                 + noticeHtml(preview)
                 + busyHtml(status)
+                // WHAT IS TRUE OF THE SESSION, SAID ONCE, DIRECTLY ABOVE
+                // THE CHOICES IT CONSTRAINS. Empty unless every row would
+                // have printed the same sentence, in which case that
+                // sentence was never about any of the rows.
+                + Options.sharedDetailHtml(preview)
                 + '<div class="restart-picker__options" role="radiogroup" '
                 + 'aria-label="what to restart with">'
-                + optionsHtml(preview)
+                + Options.optionsHtml(preview)
                 + '</div>'
                 + '<div class="restart-picker__why" id="restart-picker-why"></div>'
                 + '</div>'
@@ -372,6 +250,12 @@ console.log('[SessionRestartPicker Module] Loading...');
             // answers false forever, which is the dead-pane behaviour
             // this panel has always had.
             var arm = overlay.querySelector('#restart-picker-live');
+            // EVERY ROW REFUSED FOR THE SAME REASON. Read from the same
+            // helper that hoisted the sentence above the list, so the
+            // panel's explanation and its heading can never contradict
+            // each other about whether any choice is left.
+            var allGone = Options.sharedDetail(preview).kind
+                === 'transcript_missing';
 
             /**
              * Description: has the user armed a live restart? Reads the
@@ -453,10 +337,21 @@ console.log('[SessionRestartPicker Module] Loading...');
                     // resume was looked for and is not there, so restarting
                     // would open a pane that exits at once - the exact
                     // false green this app keeps paying for.
+                    //
+                    // AND THE ADVICE HAS TO CHECK ITSELF. Telling the user
+                    // to pick a wrapper instead was true while a chosen
+                    // wrapper's command carried no --resume. It no longer
+                    // does: the preview resolves every offer with the
+                    // session's resume args, so when the conversation is
+                    // gone EVERY wrapper is refused too and sending the
+                    // user round the list is advice that cannot work.
                     why.textContent = 'the conversation this would resume is '
                         + 'not on this machine, so restarting it would open a '
-                        + 'pane that exits straight away. pick a wrapper '
-                        + 'instead to start a fresh one.';
+                        + 'pane that exits straight away.'
+                        + (allGone
+                            ? ' every choice here resumes that same '
+                                + 'conversation, so none of them can start.'
+                            : ' pick a wrapper instead to start a fresh one.');
                     return;
                 }
                 why.textContent = 'what this would run cannot be determined, so '
@@ -562,10 +457,16 @@ console.log('[SessionRestartPicker Module] Loading...');
         return lastErrorText;
     }
 
+    // RE-EXPORTED, NOT RE-IMPLEMENTED. These three moved to
+    // session-restart-options.js; they are surfaced here unchanged so
+    // every existing caller and test keeps the entry point it has, and so
+    // there is still exactly one implementation of each.
     window.SessionRestartPicker = {
-        KIND_BADGE: KIND_BADGE,
-        isActionable: isActionable,
-        optionsHtml: optionsHtml,
+        KIND_BADGE: Options.KIND_BADGE,
+        isActionable: Options.isActionable,
+        optionsHtml: Options.optionsHtml,
+        sharedDetail: Options.sharedDetail,
+        sharedDetailHtml: Options.sharedDetailHtml,
         noticeHtml: noticeHtml,
         wrapperNoticeHtml: wrapperNoticeHtml,
         busyHtml: busyHtml,

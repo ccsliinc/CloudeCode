@@ -317,6 +317,10 @@ test('GATE a reassuring continuity never enables a radio on a live pane', () => 
         'session-status-ui.js',
         'session-restart-continuity.js',
         'session-restart-live.js',
+        // The option list moved into its own module; the picker
+        // re-exports it, so the gate below still asks the same question
+        // of the same one implementation.
+        'session-restart-options.js',
         'session-restart-picker.js',
     ]);
     // Every projection actionable, every continuity 'resumed', every

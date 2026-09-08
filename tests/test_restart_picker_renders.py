@@ -78,6 +78,10 @@ JS_FILES = [
     "js/session-status-ui.js",
     "js/session-sidebar-rows.js",
     "js/session-restart-live.js",
+    # The option list moved into its own module and the picker re-exports
+    # it, so the shipped load order is reproduced here rather than
+    # loading a picker whose rows would never render.
+    "js/session-restart-options.js",
     "js/session-restart-picker.js",
 ]
 

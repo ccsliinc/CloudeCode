@@ -33,8 +33,24 @@
     cursor: pointer;
     /* A 44px-tall target on a coarse pointer without forcing it on a
        mouse, which would make a three-option list taller than the
-       viewport on a phone. */
+       viewport on a phone. It is a FLOOR, never a height: the row grows
+       past it whenever its text needs the room. */
     min-height: 44px;
+    /* THE LINE THAT STOPS THE ROWS PAINTING ON EACH OTHER. Do not remove.
+       The list above is a flex column with a max-height, and a flex item
+       defaults to `flex-shrink: 1`. So when the rows did not fit, the
+       flex algorithm took the difference out of the ROWS instead of
+       letting the container scroll: each row was compressed toward the
+       44px floor above while the text inside kept its natural height,
+       spilled past the border and landed on the next row's title. On the
+       owner's session that was a 62px box holding 113px of text on a
+       desktop and a 58px box holding 145px on a phone.
+
+       `0` makes the row refuse to give up height it needs, so the
+       overflow lands on `.restart-picker__options`, which has
+       `overflow-y: auto` and is built to take it.
+       tests/test_restart_picker_geometry.py fails without this. */
+    flex-shrink: 0;
 }
 
 .restart-picker__option:hover {
@@ -58,6 +74,12 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    /* Take the width the radio leaves and no more. `min-width: 0` is the
+       half that matters: without it this flex item's automatic minimum
+       size is its longest unbreakable word, so an absolute path in the
+       detail line would push the row wider than the panel instead of
+       wrapping inside it. */
+    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -104,6 +126,43 @@
     font-size: 0.85em;
     opacity: 0.8;
     overflow-wrap: anywhere;
+}
+
+/*
+ * THE ONE FACT THAT IS NOT A CHOICE.
+ *
+ * A sentence every option would have carried identically is a statement
+ * about the SESSION, so it is printed once here, immediately above the
+ * list it constrains, rather than five times inside it. It is a heading
+ * for the choices, not one of them, so it gets no border and no tap
+ * target: nothing about it should read as selectable.
+ */
+.restart-picker__shared {
+    font-size: 0.9em;
+    margin: 10px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.restart-picker__shared[data-kind="transcript_missing"]
+.restart-picker__shared-line {
+    color: var(--danger-color, #e06c75);
+}
+
+/* THE EXACT WORDING, KEPT AND FOLDED AWAY. The uuid and the absolute
+   path are what an operator needs to go looking; they are not what a
+   user needs to decide. `<details>` opens under a thumb, which a `title`
+   tooltip does not, and this app is driven from a phone. */
+.restart-picker__shared-more {
+    margin-top: 4px;
+    font-size: 0.9em;
+    opacity: 0.75;
+}
+
+.restart-picker__shared-more summary {
+    cursor: pointer;
+    /* A real target on a coarse pointer without turning a one-line
+       disclosure into a button-sized block on a mouse. */
+    padding: 4px 0;
 }
 
 .restart-picker__notice,
