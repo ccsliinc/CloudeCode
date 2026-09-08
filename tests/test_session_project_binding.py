@@ -159,6 +159,53 @@ class TestTheSymlinkSpellingRung:
         assert binding.project_id == at_link
 
 
+class TestTheArchivedCatchAll:
+    """A hidden project rooted at $HOME must not swallow every session."""
+
+    def test_an_archived_home_root_does_not_win_the_as_written_rung(
+        self, state_dir: Path, tmp_path: Path
+    ):
+        """CAUGHT BY THE REPAIR'S OWN DRY RUN, ON LIVE, 2026-09-08.
+
+        The owner's install carries an archived catch-all project rooted
+        at his home directory. It contains every session on the machine,
+        so it matched as-written for rows 7 and 8 - and matching there
+        meant the canonical rung, the one that finds the project they
+        actually belong to, never ran. The repair refused to relocate
+        them, which is how this was seen at all.
+        """
+        home = tmp_path / "home"
+        target = home / "iCloud" / "Media"
+        target.mkdir(parents=True)
+        link = home / "Development"
+        link.symlink_to(home / "iCloud")
+        with closing(_conn(state_dir)) as conn:
+            with conn:
+                catch_all = _add_project(conn, str(home), "home")
+                conn.execute(
+                    "UPDATE projects SET archived_at = '2026-01-02T00:00:00Z' "
+                    "WHERE id = ?", (catch_all,)
+                )
+                media = _add_project(conn, str(target), "Media")
+                binding = resolve_project_binding(
+                    conn, str(link / "Media"), stored_project_id=media
+                )
+        assert binding.project_id == media
+        assert binding.rule == BINDING_MATCHED_CANONICAL
+
+    def test_a_live_catch_all_still_matches(self, state_dir: Path,
+                                            tmp_path: Path):
+        """Only ARCHIVED roots are excluded. A real one still counts."""
+        home = tmp_path / "home"
+        (home / "loose").mkdir(parents=True)
+        with closing(_conn(state_dir)) as conn:
+            with conn:
+                catch_all = _add_project(conn, str(home), "home")
+                binding = resolve_project_binding(conn, str(home / "loose"))
+        assert binding.project_id == catch_all
+        assert binding.rule == BINDING_MATCHED
+
+
 class TestThePairMovesTogether:
     """A derivation may never overwrite half a row."""
 

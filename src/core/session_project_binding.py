@@ -65,6 +65,14 @@ transcript importer names, and it is about the PATH, not about the work:
 that are gone by tomorrow, and minting a project at one would put a dead
 folder in the launcher forever.
 
+AN ARCHIVED PROJECT TAKES NO PART IN MATCHING, and that was measured
+rather than reasoned. The owner's install carries an archived catch-all
+project rooted at ``$HOME``, which contains every session on the machine
+and therefore won the as-written rung for the very rows this module was
+written to repair - so the canonical rung never ran. The repair script's
+dry run caught it by refusing to relocate them, which is the whole
+reason it refuses. See :func:`matchable_roots`.
+
 MINTING IS IDEMPOTENT ACROSS BOTH SPELLINGS, which is the only reason it
 is safe to run automatically. ``projects.root`` is UNIQUE and
 ``project_writes.create_project`` refuses a duplicate root, so a mint
@@ -92,7 +100,6 @@ from src.core.db_models import (
     SESSION_ATTRIBUTION_UNKNOWN,
 )
 from src.core.project_attribution import attribute, normalize_path_for_match
-from src.core.session_import_mapping import _project_roots
 from src.core.transcript_import_paths import canonical, git_top_level, is_scratch
 from src.core.trail_entry import utc_now
 
@@ -144,6 +151,42 @@ class ProjectBinding:
         Example: ProjectBinding().determined  # False
         """
         return self.rule != BINDING_UNKNOWN
+
+
+def matchable_roots(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Project roots a LIVE session may be attributed to: not archived.
+
+    Description: MEASURED, NOT ASSUMED, AND IT CHANGED THE ANSWER. The
+      shared ``_project_roots`` returns every row, archived included,
+      and the owner's install carries an ARCHIVED catch-all project
+      rooted at ``$HOME``. That root contains literally every session,
+      so it won the as-written rung for the two rows this module was
+      written to repair - and winning there meant the canonical rung,
+      the one that finds the project they actually belong to, never ran
+      at all. The repair's own dry run is what caught it, by refusing to
+      relocate them.
+
+      So an archived project takes no part in matching. It is not a
+      place to put a running session: it is hidden behind "show
+      archived", and attributing a live session there would move it from
+      "no project" to "a project you cannot see", which is not an
+      improvement. A project at exactly the right root is still REUSED
+      rather than duplicated when one is minted - see
+      :func:`ensure_project_row`, which looks a root up without this
+      filter because ``projects.root`` is UNIQUE.
+    Inputs: conn (sqlite3.Connection).
+    Output: dict[str, int] - root -> project id, archived rows omitted.
+      Empty when the projects table is absent, which is the same
+      could-not-read answer ``_project_roots`` gives.
+    Example: matchable_roots(conn)  # {'/Users/j/code/app': 7}
+    """
+    try:
+        rows = conn.execute(
+            "SELECT root, id FROM projects WHERE archived_at IS NULL"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(row[0]): int(row[1]) for row in rows}
 
 
 def _spellings(working_dir: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -312,7 +355,7 @@ def resolve_project_binding(
     Example:
         resolve_project_binding(conn, '/Users/j/Development/app').rule
     """
-    known = _project_roots(conn) if roots is None else roots
+    known = matchable_roots(conn) if roots is None else roots
     written, resolved = _spellings(working_dir)
 
     if written is None:
