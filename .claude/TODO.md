@@ -2863,3 +2863,68 @@ owner note at "2026-09-08 owner note: clean up database backups when the
 row repairs are done" earlier in this file: keep exactly one verified
 full backup until a restart has proven the repaired rows work, then
 delete the rest.
+
+### 2026-09-08 real-hook led integration test closed out, 3af3a3d
+
+Closes the item logged above at "the real-hook led integration test is IN
+PROGRESS, not built" - it is now built, committed, and run for real.
+
+- [x] **The real-hook led integration test is DONE.** Commit `3af3a3d`
+  ("test(status): assert the led against hooks a real claude actually
+  fired") adds `tests/test_led_real_hooks.py`,
+  `tests/real_hook_harness.py`, `tests/real_hook_app.py`,
+  `tests/real_hook_assertions.py`, and `tests/led_state_for.node.mjs`,
+  and is pushed to origin/v1.1. Opt in with `CLOUDE_REAL_HOOK_TESTS=1`
+  plus claude, tmux, and node on PATH - without it, every test skips
+  naming what went unmeasured. The harness runs a real `SessionManager`,
+  real routes, and a real `/ws/terminal` under uvicorn on a free port
+  (not `src.main.app`, whose lifespan touches live config and db), feeds
+  a real claude the production `_build_hook_block()` via a temp settings
+  file passed as `claude --settings` (nothing written near
+  `~/.claude/settings.json`), runs tmux through `tests/socket_guard` on a
+  per-process socket, and asserts every state by piping
+  `GET /sessions/list` rows through the shipped `client/js/status-led.js`
+  under node.
+  Real run: 9 passed in 49.5s. Timeline: startup gate
+  `awaiting_startup_prompt` (waiting-input/active) at +20s, trust
+  answered, `SessionStart` at +23.2s gate `ready`, `working` on
+  `PreToolUse` at +30.9s, `Stop` at +39.8s `finished_unread`
+  (done/unread), `SubagentStop` at +41.5s back to `working`, ws bind
+  clears the halo, a real `PermissionRequest` at +48.6s `question`
+  (waiting-permission/active) made deterministic by a `permissions.ask
+  ["Bash"]` rule in the run's own settings file, a bogus token 403 leaves
+  state byte-identical, and a killed pane leaves the list.
+  Full suite after: `5274 passed / 3 failed / 21 skipped` (same three
+  pre-existing environmental failures; skipped rose from 12 to 21 because
+  these 9 real-hook tests skip without the env var). `node --check`
+  clean.
+  Also measured, recorded in the harness header:
+  `--dangerously-skip-permissions` does not clear the trust dialog (adds
+  a bypass-acceptance dialog instead); `CLAUDE_CONFIG_DIR` relocates
+  trust but loses auth; pre-seeding `~/.claude.json` is refused because
+  every live claude read-modify-writes it; binary ws frames sent before
+  the resize handshake are dropped by design.
+
+- [ ] **New defect found by the real-hook test: `SubagentStop` re-arms
+  `working` after `Stop` on a turn with no subagent.** Measured in the
+  9-pass run above: `SubagentStop` lands about 1.5s after `Stop` even
+  when no subagent ran, and `session_activity.record_event` stamps
+  `last_tool_event_ts` on it - the same timestamp `Stop` had just
+  cleared. A finished session therefore repaints `working` for the full
+  120-second heartbeat window; `finished_unread` is visible for only
+  about 1.5s and `idle` is unreachable in between. This is a light
+  claiming work nothing can see, arriving through the hook stream rather
+  than the tmux fallback. Fix direction: `SubagentStop` must not count as
+  tool activity - either never stamp `last_tool_event_ts` from it, or
+  only stamp it when a matching `SubagentStart` is actually open.
+
+- [ ] **New defect found by the real-hook test: a dead pane reaches no
+  live endpoint, so the led's dead/off state is unreachable from live
+  data.** `_session_info_for` drops a dead pane on `LIVENESS_GONE`
+  (deliberate, commented in code) and `/sessions/attachable` does not
+  carry it either, so a killed session simply vanishes from the sidebar
+  instead of rendering as dead. Decision needed, not yet made: either
+  make a dead row visible somewhere in live data so the led's `dead`
+  state has something to render against, or accept that in this app
+  dead means gone and drop `dead` from what the live endpoints are
+  expected to ever show.

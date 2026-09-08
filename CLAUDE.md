@@ -372,8 +372,10 @@ claude - a resolver that always finds something is worse than useless.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
   2026-09-08 after the status-split and hook-token-recovery round
-  (`117823d..6934965`), is 5274 passed / 3 failed / 12 skipped; the three
-  failures are the same ones as before, environmental and pre-existing:
+  (`117823d..6934965`), is 5274 passed / 3 failed / 21 skipped (the extra
+  nine are `tests/test_led_real_hooks.py`, skipping because
+  `CLOUDE_REAL_HOOK_TESTS=1` is not set); the three failures are the same
+  ones as before, environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
