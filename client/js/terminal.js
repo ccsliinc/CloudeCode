@@ -735,7 +735,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * collapse that stays within the same cell count, etc.).
      * @param {string} source - Origin tag for the [TERM-RESIZE] log line.
      *   Values: 'window.resize' | 'orientationchange' | 'visualViewport.resize'
-     *   | 'ResizeObserver' | 'handshake' | 'ws.onopen' | 'sidebar-pin'.
+     *   | 'ResizeObserver' | 'handshake' | 'ws.onopen' | 'sidebar-pin' | 'rejoin-keep'.
      *   Defaults to 'unknown' for callers that don't tag.
      * @param {boolean} force - Bypass the dedup gate. Used by the
      *   request_dims handshake so the server always gets a fresh frame
@@ -800,6 +800,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             adopted: !!initialScrollbackB64,
             fifoStartOffset,
         });
+        const paintPlan = window.TerminalReconnectBuffer ? window.TerminalReconnectBuffer.planFor(this.term, this._unwrapSession(this._currentSession).id, this._unwrapSession(session).id, initialScrollbackB64) : 'replace';
 
         // If a prior session was active, tear it down cleanly before painting the new one.
         // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
@@ -817,7 +818,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // Reset the xterm buffer and cursor. term.reset() clears scrollback +
         // alt-buffer + wraps state; term.clear() only clears the visible screen.
         // We want reset() so the VT parser starts fresh for the new session.
-        if (this.term) {
+        if (this.term && paintPlan !== 'keep') {
             try {
                 this.term.reset();
             } catch (e) {
@@ -856,7 +857,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // these through TextDecoder, which would mangle non-UTF8 ANSI
         // escape bytes. xterm.write() accepts Uint8Array directly and
         // feeds the parser without re-encoding.
-        if (initialScrollbackB64) {
+        if (paintPlan === 'keep') { this._needsReconnectRedrawNudge = this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
             // Let layout settle (screen-swap CSS toggle in app.js needs a
             // paint tick before clientWidth/clientHeight read truthful
             // values). Double-rAF is the canonical "wait for layout" guard.
@@ -937,6 +938,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     async reconnectToExistingSession(session) {
         console.log('Terminal: Reconnecting to existing session:', this._unwrapSession(session).id);
+        // THE path that lost a conversation on every server restart. See client/js/terminal-reconnect-buffer.js.
+        const paintPlan = window.TerminalReconnectBuffer ? window.TerminalReconnectBuffer.planFor(this.term, this._unwrapSession(this._currentSession).id, this._unwrapSession(session).id, session && session.initial_scrollback_b64) : 'replace';
 
         // If a prior session was active, tear it down cleanly before painting the new one.
         // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
@@ -954,7 +957,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // Reset the xterm buffer and cursor. term.reset() clears scrollback +
         // alt-buffer + wraps state; term.clear() only clears the visible screen.
         // We want reset() so the VT parser starts fresh for the new session.
-        if (this.term) {
+        if (this.term && paintPlan !== 'keep') {
             try {
                 this.term.reset();
             } catch (e) {
@@ -1000,7 +1003,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // forces the foreground app to redraw the live screen at the new
         // dims, on top of the painted history.
         const initialScrollbackB64 = session && session.initial_scrollback_b64;
-        if (initialScrollbackB64) {
+        if (paintPlan === 'keep') { this._needsReconnectRedrawNudge = this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
             // Let layout settle (screen-swap CSS toggle in app.js needs a
             // paint tick before clientWidth/clientHeight read truthful
             // values). Double-rAF is the canonical "wait for layout" guard.
@@ -1457,7 +1460,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             // Send initial resize (legacy fallback path - the server's
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
-            this.sendResize('ws.onopen');
+            const keepNudge = this._needsReconnectRedrawNudge === true; this._needsReconnectRedrawNudge = false; this.sendResize(keepNudge ? 'rejoin-keep' : 'ws.onopen', keepNudge);
 
             // DO NOT send Ctrl+L (0x0c) from the client here. The server's
             // resize handshake already writes a single 0x0c to the PTY after

@@ -855,6 +855,15 @@
          if this tag is missing or fails - load order still matters so the
          translucency is live from the very first theme applied. -->
     <script src="/static/js/terminal-background-opacity.js"></script>
+    <!-- Whether a re-attach may wipe the terminal buffer. Must load
+         BEFORE terminal.js, whose connectToSession() and
+         reconnectToExistingSession() both call
+         window.TerminalReconnectBuffer at the very top, before any
+         teardown. Pure - measurements in, one verdict out, no state and
+         no events - so this is its only ordering constraint. If it is
+         missing terminal.js falls back to 'replace', which is the
+         behaviour that shipped. -->
+    <script src="/static/js/terminal-reconnect-buffer.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
