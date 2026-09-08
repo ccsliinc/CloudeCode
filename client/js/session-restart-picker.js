@@ -207,7 +207,14 @@ console.log('[SessionRestartPicker Module] Loading...');
      *   box AND then agreed in the confirm modal. Two acts, and neither
      *   of them is anything the server sent.
      */
-    function present(displayName, preview, status) {
+    function present(displayName, preview, status, mode, sessionUuid) {
+        // WHICH ENDPOINT ANSWERED, carried through to the caller so the
+        // action posts to the same one that made the prediction. It is
+        // never derived from the payload here: two endpoints return this
+        // identical shape on purpose, and re-deriving it would be a
+        // second rule that can disagree with the first.
+        mode = mode || 'restart';
+        sessionUuid = sessionUuid || null;
         return new Promise(function (resolve) {
             var overlay = document.createElement('div');
             overlay.className = 'modal-overlay restart-picker';
@@ -383,6 +390,8 @@ console.log('[SessionRestartPicker Module] Loading...');
                     dismiss(resolve, {
                         agentType: value || null,
                         confirmRestartLive: false,
+                        mode: mode,
+                        sessionUuid: sessionUuid,
                     });
                     return;
                 }
@@ -402,6 +411,8 @@ console.log('[SessionRestartPicker Module] Loading...');
                     dismiss(resolve, {
                         agentType: value || null,
                         confirmRestartLive: true,
+                        mode: mode,
+                        sessionUuid: sessionUuid,
                     });
                 });
             });
@@ -425,25 +436,41 @@ console.log('[SessionRestartPicker Module] Loading...');
      *   tmuxName (string) - literal tmux session name.
      *   displayName (string) - what the row calls it.
      *   status (string|null) - the row's activity status, shown not acted on.
+     *   sessionUuid (string|null) - the row's durable key. Without one
+     *     the recreate question is never asked, because its endpoints
+     *     take a uuid and a tmux name is a reusable label.
      * Output: Promise<{agentType: string|null,
-     *   confirmRestartLive: boolean}|null> - null when the user
-     *   cancelled OR the preview could not be fetched. `error` is set on
-     *   the returned object shape only in the latter case, via
+     *   confirmRestartLive: boolean, mode: string}|null> - null when the
+     *   user cancelled OR the preview could not be fetched. `error` is
+     *   set on the returned object shape only in the latter case, via
      *   `lastError()`. Callers MUST forward `confirmRestartLive` to
      *   `API.respawnSession`; dropping it turns a live restart into a
-     *   silent no-op the server answers `not_dead`.
+     *   silent no-op the server answers `not_dead`. And they MUST read
+     *   `mode`: 'restart' posts to `API.respawnSession` with the tmux
+     *   name, 'recreate' to `API.recreateSession` with `sessionUuid`.
+     *   Posting a recreate choice to the respawn route reaches a
+     *   session with no pane and is answered `cannot_determine`, which
+     *   looks exactly like a click that did nothing.
      */
     var lastErrorText = '';
 
-    function open(tmuxName, displayName, status) {
+    function open(tmuxName, displayName, status, sessionUuid) {
         lastErrorText = '';
-        return window.API.restartPreview(tmuxName).then(function (preview) {
-            return present(displayName || tmuxName, preview, status);
-        }).catch(function (err) {
-            lastErrorText = (err && err.message) || String(err);
-            console.error('SessionRestartPicker: preview failed:', err);
-            return null;
-        });
+        // WHICH QUESTION TO ASK is Options.previewFor's job, because a
+        // dead row's answer comes from a different endpoint and the rule
+        // for choosing between them is a rule, not a fetch. It hands back
+        // the payload AND the mode that produced it, so the action posts
+        // to the endpoint that made the prediction.
+        return Options.previewFor(tmuxName, sessionUuid || null)
+            .then(function (answer) {
+                return present(
+                    displayName || tmuxName, answer.preview, status,
+                    answer.mode, answer.sessionUuid);
+            }).catch(function (err) {
+                lastErrorText = (err && err.message) || String(err);
+                console.error('SessionRestartPicker: preview failed:', err);
+                return null;
+            });
     }
 
     /**

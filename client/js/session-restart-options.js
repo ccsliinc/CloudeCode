@@ -56,6 +56,13 @@ console.log('[SessionRestartOptions Module] Loading...');
         not_dead: 'still running',
         transcript_missing: 'its conversation is gone',
         cannot_determine: 'cannot be determined',
+        // ITS OWN WORDS, not a synonym for `agent`. That rung puts a
+        // process back into a pane that still exists, so the scrollback
+        // on screen survives it. This one CREATES the tmux session,
+        // because the old one is gone, and the scrollback goes with it.
+        // Rendering them identically would promise continuity that the
+        // recreate cannot deliver.
+        recreate: 'would build a new session on this record',
     };
 
     /**
@@ -65,7 +72,7 @@ console.log('[SessionRestartOptions Module] Loading...');
      * payload missing that field fails CLOSED rather than open.
      * @type {Array<string>}
      */
-    var ACTIONABLE = ['agent', 'replay', 'shell'];
+    var ACTIONABLE = ['agent', 'replay', 'shell', 'recreate'];
 
     /**
      * Description: HTML-escape for text and attributes. Routed through
@@ -336,6 +343,131 @@ console.log('[SessionRestartOptions Module] Loading...');
         return out.join('');
     }
 
+
+    /**
+     * Description: should the panel ask the RECREATE endpoint instead?
+     *
+     *   THIS DECIDES NOTHING ABOUT THE SESSION. It decides only which
+     *   QUESTION to ask, and the server answers both honestly. The
+     *   restart preview reads a PANE, so a session whose whole tmux
+     *   session is gone has no pane to read and comes back
+     *   `cannot_determine` - a correct answer that leaves the user with a
+     *   disabled button and no way forward. The recreate preview measures
+     *   the SOCKET instead, and its own gate refuses when it cannot tell.
+     *   So re-asking is safe even when the reason for `cannot_determine`
+     *   was a broken tmux rather than a missing session: that case comes
+     *   back `unknown` and is refused there, by the half of the system
+     *   that measured it.
+     *
+     *   A LIVE SESSION IS NEVER RE-ASKED. `alive` is a measurement, and
+     *   the restart path owns those rows. Only a pane state that is not
+     *   positively alive, paired with a ladder that could not determine
+     *   anything, is the shape of a session with no tmux left.
+     * Inputs: preview (object) - a RestartPreviewResponse body.
+     * Output: boolean.
+     * Example: shouldRecreate({pane_state: 'unknown',
+     *   unchanged: {kind: 'cannot_determine'}})  // true
+     */
+    function shouldRecreate(preview) {
+        if (!preview) return false;
+        if (preview.pane_state === 'alive') return false;
+        var unchanged = preview.unchanged || {};
+        return unchanged.kind === 'cannot_determine';
+    }
+
+
+    /**
+     * Description: fetch the preview the panel should show, from
+     *   whichever endpoint can actually answer for this session.
+     *
+     *   A DEAD ROW USED TO GET A DISABLED BUTTON AND NOTHING ELSE. The
+     *   respawn ladder reads a PANE, so a session whose whole tmux
+     *   session is gone answers `cannot_determine` - correct, and a dead
+     *   end: the only way back was a fresh session built by hand, which
+     *   loses the record and with it the project binding, the title, the
+     *   pinned theme, the unread key and the group filing. So when the
+     *   first answer cannot address the session, this asks the other
+     *   question.
+     *
+     *   THE CLIENT DECIDES NOTHING BY DOING THIS. It re-asks. The
+     *   recreate endpoint measures the tmux socket itself and refuses
+     *   when it cannot tell, so a `cannot_determine` caused by a broken
+     *   tmux comes back `unknown` and is refused there - by the half of
+     *   the system that took the measurement.
+     *
+     *   A FAILED SECOND ASK FALLS BACK TO THE FIRST ANSWER, not to
+     *   nothing. The restart preview is a real answer that simply had no
+     *   action in it, and showing it tells the user why.
+     * Inputs: tmuxName (string) - literal tmux session name.
+     *   sessionUuid (string|null) - the row's durable key. WITHOUT ONE
+     *   THE SECOND QUESTION IS NEVER ASKED: the recreate endpoints take
+     *   a uuid because a tmux name is a reusable label, and this module
+     *   will not invent an identity to make an offer with.
+     * Output: Promise<{preview: object, mode: string,
+     *   sessionUuid: string|null}> - mode is 'restart' or 'recreate' and
+     *   names the endpoint the caller must post its action to;
+     *   sessionUuid is what to post it about, non-null only on
+     *   'recreate'.
+     * Example: previewFor('cloude_api', 'u1').then(function (a) { a.mode; })
+     */
+    function previewFor(tmuxName, sessionUuid) {
+        return window.API.restartPreview(tmuxName).then(function (preview) {
+            if (!shouldRecreate(preview) || !sessionUuid
+                || !window.API.recreatePreview) {
+                return { preview: preview, mode: 'restart', sessionUuid: null };
+            }
+            return window.API.recreatePreview(sessionUuid)
+                .then(function (recreated) {
+                    return {
+                        preview: recreated,
+                        mode: 'recreate',
+                        sessionUuid: sessionUuid,
+                    };
+                })
+                .catch(function (err) {
+                    console.warn(
+                        'SessionRestartOptions: recreate preview failed:', err);
+                    return { preview: preview, mode: 'restart', sessionUuid: null };
+                });
+        });
+    }
+
+    /**
+     * Description: the durable key for a tmux name, or null when naming
+     *   one would be a guess.
+     *
+     *   A NAME IS NOT AN IDENTITY. The recreate endpoints take a
+     *   `session_uuid` precisely because a tmux name is reusable and this
+     *   app re-mints them, so several records can carry one name across
+     *   time. The sidebar addresses its rows by name and holds no uuid,
+     *   so something has to bridge the two - and the bridge REFUSES
+     *   rather than picks. Exactly one record carrying the name is an
+     *   unambiguous answer; two is a question this function cannot
+     *   settle, and answering it with "the newest" is the recency guess
+     *   the server-side guard exists to keep out of new code.
+     *
+     *   A REFUSAL COSTS THE USER THE OFFER, NOT THEIR SESSION. With no
+     *   uuid the panel shows the restart preview's honest
+     *   `cannot_determine`, which is exactly what it showed before this
+     *   feature existed.
+     * Inputs: records (Array<object>|null) - rows from
+     *   `GET /sessions/records`. tmuxName (string).
+     * Output: string|null - the `session_uuid`, or null.
+     * Example: recreateTarget([{tmux_name: 'a', session_uuid: 'u'}], 'a')
+     *   // 'u'
+     */
+    function recreateTarget(records, tmuxName) {
+        if (!tmuxName || !records || !records.length) return null;
+        var hits = [];
+        for (var i = 0; i < records.length; i += 1) {
+            var r = records[i];
+            if (r && r.tmux_name === tmuxName && r.session_uuid) {
+                hits.push(r.session_uuid);
+            }
+        }
+        return hits.length === 1 ? hits[0] : null;
+    }
+
     window.SessionRestartOptions = {
         KIND_BADGE: KIND_BADGE,
         esc: esc,
@@ -344,6 +476,9 @@ console.log('[SessionRestartOptions Module] Loading...');
         sharedDetail: sharedDetail,
         sharedDetailHtml: sharedDetailHtml,
         optionsHtml: optionsHtml,
+        shouldRecreate: shouldRecreate,
+        previewFor: previewFor,
+        recreateTarget: recreateTarget,
     };
 })();
 

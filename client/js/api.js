@@ -985,6 +985,67 @@ class API {
     }
 
     /**
+     * Sessions: ask what RECREATING a dead session would do.
+     *
+     * GET /api/v1/sessions/recreate/preview. READ ONLY. Use this when
+     * `restartPreview` came back `cannot_determine` with a pane state
+     * that is not `alive` - that is what a session whose whole tmux
+     * session is gone looks like, because the respawn ladder reads a
+     * PANE and there is none to read.
+     *
+     * This one measures the SOCKET instead: `pane_state` is `dead` when
+     * the name was measured absent, `alive` when it is still running,
+     * and `unknown` when the listing did not answer. Only `dead` yields
+     * actionable options, so re-asking is safe even when the first
+     * `cannot_determine` was a broken tmux rather than a missing
+     * session.
+     *
+     * ADDRESSED BY `session_uuid`, NOT by the tmux name. A name is
+     * reusable and the app re-mints them, so "the newest row with this
+     * name" is a recency guess, and a wrong answer would rebind a
+     * different session's record onto a tmux session it has nothing to do
+     * with. The tmux name is read off the row the server resolves.
+     *
+     * @param {string} sessionUuid - the row's durable `session_uuid`.
+     * @returns {Promise<object>} a RestartPreviewResponse body, the same
+     *   shape `restartPreview` returns, so the picker renders it with no
+     *   second renderer.
+     */
+    async recreatePreview(sessionUuid) {
+        const qs = encodeURIComponent(sessionUuid);
+        return await this.call(`/sessions/recreate/preview?session_uuid=${qs}`);
+    }
+
+    /**
+     * Sessions: recreate a dead one on the row it already has.
+     *
+     * POST /api/v1/sessions/recreate. Creates a NEW tmux session and
+     * records it onto the existing session record, so the project
+     * binding, the title, the pinned theme, the unread key and the group
+     * filing all stay where they are, and the conversation is resumed
+     * with `--resume <uuid>` when the row names one.
+     *
+     * `agentType` is REQUIRED and is an ID, never a command. There is no
+     * unpicked path: a session whose tmux is gone has no recorded start
+     * command to fall back on, so an unpicked recreate could only ever
+     * hand back a login shell.
+     *
+     * A GATE THAT DECLINES ANSWERS 200 with `status: 'refused'` and a
+     * sentence in `detail` - show it verbatim. Read `status` before
+     * assuming anything started.
+     *
+     * @param {string} sessionUuid - the row's durable `session_uuid`.
+     * @param {string} agentType - configured wrapper id from the preview.
+     * @returns {Promise<object>} the RecreateResponse body.
+     */
+    async recreateSession(sessionUuid, agentType) {
+        return await this.call('/sessions/recreate', {
+            method: 'POST',
+            body: { session_uuid: sessionUuid, agent_type: agentType },
+        });
+    }
+
+    /**
      * Sessions: restart one in place.
      *
      * POST /api/v1/sessions/respawn. `confirmRestartLive` is the ONLY

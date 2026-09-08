@@ -503,6 +503,61 @@ for a real subset of the sessions on a working box, because
 | Keep the row keyed on its instance after a kill | `src/core/session_instance_rekey.py` |
 | The arm control and the kill confirmation | `client/js/session-restart-live.js` |
 | What the user is told about the conversation | `client/js/session-restart-continuity.js` |
+| Recreate a session whose tmux is GONE | `src/core/session_recreate.py` |
+| Is the tmux session still on the socket | `src/core/session_recreate_presence.py` |
+| `GET /sessions/recreate/preview`, `POST /sessions/recreate` | `src/api/recreate_routes.py` |
+
+**A SESSION WHOSE TMUX IS GONE HAS NO PANE TO RESPAWN INTO, AND THAT WAS A
+DEAD END UNTIL 2026-09-08.** The respawn ladder reads a PANE, so a row whose
+tmux SESSION was killed outright - the server restarted, the machine rebooted,
+the name is simply absent from `tmux -L cloude list-sessions` - answers
+`cannot_determine`. Honest, and the only way back was a fresh session built by
+hand, which loses the row and with it the project binding, the title, the pinned
+theme, the unread key and the group filing. `src/core/session_recreate.py`
+closes it as punchlist item 22's remaining half: a new tmux session, in the
+conversation's own directory, under the wrapper the user picked, with
+`--resume <uuid>`, recorded onto the EXISTING row through
+`create_session(reuse_session_id=...)`. It decides only the one fact it owns -
+presence - and calls `plan_imported_restart` for the transcript guard, the
+directory spelling, the wrapper and the three conversation words, so the two
+create-a-session paths cannot drift.
+
+**THE GATE IS A MEASURED ABSENCE, AND `is_alive()` CANNOT PROVIDE ONE.** It
+runs `has-session` and returns a bool, so "no such session" and "tmux is
+missing, timed out, or errored" are the same False; recreating on that would
+spawn a second tmux beside a healthy one and rebind the row onto the newcomer,
+leaving the pane the user is talking to alive and unreferenced. So the
+measurement is a LISTING (`discover_existing()`, whose `ok` and `complete`
+already carry the discipline) and `session_recreate_presence.tmux_presence`
+keeps three outcomes apart: `gone` only when a COMPLETE listing ran and the
+name is not in it, `present` reported as the ladder's own `not_dead`, and
+`unknown` for a listing that did not run, one that ran with rows the parser
+refused, or a name outside the `cloude_` namespace the listing does not cover.
+Only `gone` may act. `tests/test_recreate_gate_real_tmux.py` measures the
+transition against a real throwaway socket, because a double agrees with
+whatever it was built to agree with.
+
+**ADDRESSED BY `session_uuid`, NOT BY THE TMUX NAME, and that was caught rather
+than designed.** The first draft resolved the row by name plus greatest epoch;
+`tests/test_no_name_keyed_session_identity.py` failed it, correctly - a name is
+reusable and this app re-mints them, so "the newest row with this name" is a
+recency guess, and a wrong answer rebinds a DIFFERENT session's row. The routes
+now take the durable key and read the tmux name OFF the row. The client bridges
+its own gap the same way: the sidebar addresses rows by name, so
+`SessionRestartOptions.recreateTarget` returns a uuid only when EXACTLY ONE
+record carries that name and null otherwise. A refusal costs the user the offer,
+which is what they had before the feature existed; a guess would cost them a
+session.
+
+**THE ROW IS RE-KEYED, NOT REPLACED.** The new tmux session is a new instance,
+so `session_restart.rebind_instance` moves the triple while holding
+`sessions.id` fixed. Group filing rides along because `session_group_membership`
+has keyed on `session_uuid` since v24 - the v8 table it replaced keyed on
+`tmux_name`, which is the landmine an earlier design of this feature would have
+walked into. The SAME tmux name is asked for so name-scoped per-device browser
+state survives, and it is free by construction because the gate only passes on a
+measured absence; the create path still uniquifies on collision, so the name
+actually taken is REPORTED rather than assumed.
 
 **A PREDICTION IS NEVER A PERMISSION, and that is why the preview reports the
 rung twice.** `resolve_respawn_plan` short-circuits on `not_dead` BEFORE it

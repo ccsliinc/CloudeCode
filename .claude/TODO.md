@@ -3488,3 +3488,95 @@ here: those rows have no live pane, so only a transcript/argv archive
 could answer them, and it needs a verified backup first.
 
 2026-09-08: fix(launchpad) a74988a - project row session count moved from margin-left:auto (far from chevron, flush against card) to a fixed 4px gap beside the chevron, coloured to match the sidebar count treatment (2174b0d, accent text no pill). Archive action icon replaced U+1F5C4 file-cabinet emoji with a shared archiveIconSvg() (session-status-ui.js, same stroke family as pencilIconSvg) matching the header archive button shape; project row is the only surface using the new shared function so far. Targeted node tests updated and green: test_project_gutter_alignment, test_project_archive_render, test_project_authority_banner/render, test_project_list_render_guard, test_project_session_tree, test_home_screen_mechanics (via lib-home-mechanics.mjs stub).
+
+### 2026-09-08 - recreate a dead session on the same row - DONE (item 22, close-and-recreate)
+
+**THE GAP, restated as the owner would see it.** Restart in place shipped for a
+pane that died (`respawn-pane`) and for a pane that is alive (`respawn-pane -k`).
+Neither can touch a session whose tmux SESSION is gone entirely - the server was
+restarted, the machine rebooted, someone ran `kill-session`, so the name is
+simply absent from `tmux -L cloude list-sessions`. The respawn ladder reads a
+PANE, finds none, and answers `cannot_determine`. That is correct and it is a
+dead end: the only path left was building a fresh session by hand, which loses
+the row and with it the project binding, the title, the pinned theme, the unread
+key and the group filing.
+
+**REUSE BEFORE INVENTING, and it is a call rather than a copy.**
+`src/core/session_recreate.py` owns exactly one new fact - is the tmux session
+still on the socket - and hands everything else to
+`session_imported_restart.plan_imported_restart`: the measured directory
+spelling (`resume_directory`), the transcript refusal, the wrapper validation
+(`session_agent_choice.validate_agent_choice`), the `--resume` fragment
+(`resume_extra_args`) and the three conversation words. So there is ONE
+create-a-session classifier for the two rows that have no pane, and a change to
+the transcript guard cannot fix one path and miss the other.
+
+**THE GATE IS A LISTING, NOT `is_alive()`.** `has-session` returns the same
+False for "no such session" and for "tmux is missing / timed out / errored".
+Acting on that would spawn a second tmux beside a perfectly healthy one and
+rebind the row onto the newcomer, leaving the pane the user is talking to alive
+and unreferenced. `session_recreate_presence.tmux_presence` takes
+`discover_existing()`'s `ok` and `complete` and answers `gone` / `present` /
+`unknown`. Only `gone` acts; `present` is reported as the ladder's own
+`not_dead`; a listing that did not run, one that ran with rows the parser
+refused, and a name outside the `cloude_` namespace the listing does not cover
+are all `unknown`. `tests/test_recreate_gate_real_tmux.py` drives a real
+throwaway socket for the present -> killed -> gone transition, plus two negative
+controls (a neighbour session still running while the asked-about name is
+absent; a non-prefixed name that IS running and must never read gone).
+
+**THE IDENTITY GUARD CAUGHT THE FIRST DRAFT, and it was right.** The routes
+originally took the tmux name and resolved the row by greatest
+`tmux_created_epoch`. `tests/test_no_name_keyed_session_identity.py` failed it:
+a name is reusable and this app re-mints them, so that is a recency guess, and a
+wrong answer rebinds a DIFFERENT session's row onto a tmux session it has
+nothing to do with. `GET /sessions/recreate/preview` and `POST /sessions/recreate`
+now take `session_uuid` - the same durable key `imported_restart_routes` takes -
+and read the tmux name OFF the row. Client-side the same rule applies:
+`SessionRestartOptions.recreateTarget(records, name)` returns a uuid only when
+EXACTLY ONE record carries that name, null otherwise. A refusal costs the user
+the offer, which is what they had before this existed; a guess costs a session.
+
+**WHAT MOVES.** `create_session(reuse_session_id=...)` reaches
+`session_restart.rebind_instance`, which holds `sessions.id` fixed while moving
+the instance triple, so the project binding, the title, the conversation link,
+the pinned theme, the unread key and the group membership all ride the row.
+Group filing is safe because `session_group_membership` has keyed on
+`session_uuid` since v24; the v8 table it replaced keyed on `tmux_name`, which
+is the landmine the 2026-09-07 design notes flagged and which this shape does
+not touch. The SAME tmux name is asked for so name-scoped per-device browser
+state survives, and it is free by construction because the gate only passes on a
+measured absence - but the create path still uniquifies on collision, so the
+response REPORTS the name actually taken rather than the one requested.
+
+**UI.** The picker asks the second question itself:
+`SessionRestartOptions.previewFor(name, uuid)` re-asks the recreate endpoint when
+the restart preview came back `cannot_determine` on a pane state that is not
+`alive`, and carries the MODE back on the choice so the action posts to the
+endpoint that made the prediction. `recreate` is its own rung with its own badge
+("would build a new session on this record") rather than a synonym for `agent`,
+because `agent` reuses the pane and keeps its scrollback and this does neither.
+A failed second ask falls back to the restart preview's honest refusal, not to a
+blank panel.
+
+**MOUNTED THROUGH `src/api/restart_routes.py`** (`router.include_router`) rather
+than from `src/main.py`, which another session holds modified in this tree. Same
+`/api/v1` prefix, one mount, cannot be forgotten separately.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: 5417 passed, 3 failed, 21
+skipped. The three failures are the same pre-existing environmental ones
+(`test_home_write_guard`, `test_state_dir_resolution`, `test_version_probe`).
+New: `tests/test_session_recreate.py` (23, pure gate + plan),
+`tests/test_recreate_routes.py` (10, HTTP + the re-key against a real migrated
+schema with a project actually bound), `tests/test_recreate_gate_real_tmux.py`
+(3, real socket), `tests/test_recreate_picker.node.mjs` (13) with its
+`tests/test_recreate_picker_runs.py` wrapper. `tests/test_restart_picker_renders.py`
+gained `mode` / `sessionUuid` in the two choice-shape assertions.
+
+**STILL OPEN:** (a) the recreate offer is reachable only where a
+`GET /sessions/records` row uniquely names the session - a name shared by two
+records refuses rather than guesses, and the honest fix is for the sidebar to
+carry `session_uuid` on its rows instead of resolving one. (b) The launchpad's
+own stopped-row restart still goes to `POST /sessions/{uuid}/restart`, which has
+no presence gate and no directory-spelling measurement; it should be routed
+through this path, and `launchpad.js` was out of scope for this change.

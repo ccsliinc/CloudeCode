@@ -315,7 +315,20 @@ console.log('[SessionSidebarClicks Module] Loading...');
             ? rowEl.querySelector('.session-sidebar-row-name')
             : null;
         const label = (nameEl && nameEl.textContent.trim()) || name;
-        const choice = await picker.open(name, label, status);
+        // THE DURABLE KEY, resolved only when naming it is not a guess.
+        // The sidebar addresses rows by tmux NAME and holds no uuid, and
+        // the recreate endpoints take one - so the records the launchpad
+        // already fetched are consulted, and `recreateTarget` returns
+        // null unless exactly one of them carries this name. Null simply
+        // means the recreate question is never asked, which leaves the
+        // panel showing what it showed before the feature existed.
+        const opts = window.SessionRestartOptions;
+        const records = (window.Launchpad && window.Launchpad.sessionRecords)
+            || null;
+        const uuid = opts && opts.recreateTarget
+            ? opts.recreateTarget(records, name)
+            : null;
+        const choice = await picker.open(name, label, status, uuid);
         if (!choice) {
             const why = picker.lastError();
             if (why) {
@@ -327,21 +340,42 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
+        // POST TO THE ENDPOINT THAT MADE THE PREDICTION. `mode` comes
+        // back from the picker and names it; deriving it here from the
+        // row's status would be a second rule that can disagree with the
+        // one the panel was actually rendered from. A recreate posted to
+        // the respawn route reaches a session with no pane and is
+        // answered `cannot_determine`, which looks exactly like a click
+        // that did nothing.
+        const recreating = choice.mode === 'recreate';
+        const verb = recreating ? 'recreate' : 'restart';
+
         let result = null;
         try {
-            result = await window.API.respawnSession(
-                name, choice.agentType, choice.confirmRestartLive === true);
+            result = recreating
+                ? await window.API.recreateSession(
+                    choice.sessionUuid, choice.agentType)
+                : await window.API.respawnSession(
+                    name, choice.agentType, choice.confirmRestartLive === true);
         } catch (err) {
-            console.error('SessionSidebar: restart failed:', err);
-            alert(`could not restart "${name}": ${err.message || err}`);
+            console.error(`SessionSidebar: ${verb} failed:`, err);
+            alert(`could not ${verb} "${name}": ${err.message || err}`);
             ctrl._lastSig = null;
             await ctrl._fetchAndRender();
             return;
         }
 
-        if (!result || result.ok !== true) {
+        // TWO ROUTES, TWO SUCCESS WORDS, and neither is inferred from the
+        // absence of the other. Respawn reports `ok`; recreate reports
+        // `status`, because a gate declining there is a 200 rather than a
+        // failure. Reading only one field would let a refusal read as a
+        // success on whichever route was not being checked.
+        const worked = recreating
+            ? (result && result.status === 'started')
+            : (result && result.ok === true);
+        if (!worked) {
             alert(
-                `could not restart "${name}": `
+                `could not ${verb} "${name}": `
                 + ((result && result.detail) || 'no reason given')
             );
             ctrl._lastSig = null;
@@ -349,7 +383,22 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
-        if (choice.agentType && result.agent_type_persisted === false) {
+        if (recreating) {
+            // The reopen module reads `name` and `session_id`; a recreate
+            // reports the tmux name it ACTUALLY took, which is what the
+            // new session answers to. It asks for the old name back so
+            // name-scoped per-device state survives, but the create path
+            // uniquifies on collision, so the reported name is the one to
+            // reopen and the requested one is not.
+            result = {
+                name: result.tmux_session || name,
+                session_id: result.session_id || null,
+                detail: result.detail || '',
+            };
+        }
+
+        if (!recreating && choice.agentType
+            && result.agent_type_persisted === false) {
             // The restart worked and the choice did NOT stick. Said out
             // loud, because the next restart will not repeat it and a
             // user who was not told would reasonably assume it had.

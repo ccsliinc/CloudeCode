@@ -534,6 +534,16 @@ def test_picking_a_wrapper_returns_that_wrapper_and_nothing_else(page):
         # caller can forward one permission; a path that produced it
         # without the arm box would hand out a kill nobody asked for.
         "confirmRestartLive": False,
+        # WHERE THE ANSWER GOES, not what it says. `present()` is now
+        # reached by two endpoints - the respawn preview and the recreate
+        # preview, which return the same response shape on purpose - so
+        # the choice carries which one produced it. A recreate posted to
+        # the respawn route reaches a session with no pane and is answered
+        # `cannot_determine`, which looks exactly like a click that did
+        # nothing. This panel was opened with no uuid, so both are the
+        # restart path's own values.
+        "mode": "restart",
+        "sessionUuid": None,
     }
     assert page.evaluate("window.__confirms.length") == 0, (
         "a dead pane's restart asked the user to confirm killing something"
@@ -743,6 +753,16 @@ def test_a_live_restart_confirms_and_names_the_bare_shell_outcome(page):
     assert page.evaluate("window.__result") == {
         "agentType": None,
         "confirmRestartLive": True,
+        # WHERE THE ANSWER GOES, not what it says. `present()` is now
+        # reached by two endpoints - the respawn preview and the recreate
+        # preview, which return the same response shape on purpose - so
+        # the choice carries which one produced it. A recreate posted to
+        # the respawn route reaches a session with no pane and is answered
+        # `cannot_determine`, which looks exactly like a click that did
+        # nothing. This panel was opened with no uuid, so both are the
+        # restart path's own values.
+        "mode": "restart",
+        "sessionUuid": None,
     }
 
 
