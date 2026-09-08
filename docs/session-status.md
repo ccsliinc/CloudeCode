@@ -318,18 +318,45 @@ randomly sampled transcripts the ladder splits 172 `at_rest` / 70
 
 ## Unread
 
+ONE FLAG, TWO WRITERS. The owner's rule, verbatim: "when clicking a tab,
+the session is marked read. if i want it unread i click unread. it allows
+me to know whats waiting." So `auto` and `manual` are two writers of the
+SAME user-visible state, not two states.
+
 **Set** on `Stop` (the `auto` flag), and by the user's explicit control
 (the `manual` flag). A session is unread if either is set.
 
-**Cleared** when a WS terminal actually binds to the session
-(`SessionManager.mark_session_viewed`) - the strongest "the user is
-looking at this" signal the server has, deliberately stronger than merely
-appearing in a poll response. That clears `auto` only. A conversation the
-user pinned unread for followup stays flagged after they open it, until
-they clear it themselves.
+**Cleared**, BOTH sub-flags together, by either of two events: a WS
+terminal binding to the session (`SessionManager.mark_session_viewed` -
+the strongest "the user is looking at this" signal the server has), or
+the user clearing the control (`PATCH /sessions/{name}/unread` with
+`false`). Both go through `UnreadStore.clear`, which drops the pair in
+one write.
+
+The manual flag used to survive being viewed, on the theory that a
+followup pin outranks a glance. The owner's rule is the opposite and the
+simpler contract: opened means read. And clearing only the half the user
+happened to have set would leave a `Stop`-flagged row unread while the
+control the user just clicked reported itself off - a dead control.
 
 **Stored** server-side, not in `localStorage`, because the user drives
 this from a phone and a desktop and the flag has to follow them.
+
+### One flag, one key, or it is two flags
+
+Every writer resolves a MEASURED `#{session_created}` before it writes:
+the `Stop` branch and `mark_session_viewed` through
+`SessionManager._work_stamp_epoch` (probes tmux once, then caches), the
+manual control through `_epoch_for_tmux_name`. A writer that read the
+in-memory `_instance_epochs` cache instead would compose the LEGACY
+bare-name key whenever the cache missed - which after a server restart is
+every session - and file the same pane a second time.
+
+`GET /sessions/list` reads with the same measured epoch, taken from the
+`created_at_epoch` its own bulk tmux probe already carries; that read used
+`_instance_epochs` until 2026-09-08 and so could not see a flag the
+control had just written under the instance key. The value was on disk,
+the endpoint said `false`, and every layer in between looked correct.
 
 ### The key is the INSTANCE
 
@@ -398,6 +425,18 @@ ONE place the server vocabulary becomes a pair of rings.
 Order matters: `dead` outranks everything (an unread flag must not paint a
 corpse as something to go and read), then anything blocking on the user,
 then activity. `unread` rides the halo independently of all of it.
+
+THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
+`SessionStatusUI.dotHtml(status, signals)` takes `unread` and
+`startup_gate` as a second argument because a bare status string cannot
+express either, and until 2026-09-08 no live caller passed it. The flag
+reached the row, was fingerprinted by both repaint signatures and forced a
+repaint - and was dropped at the last inch, so an `idle` unread session
+painted a `steady` halo and a `working` one painted `active`. Only
+`finished_unread` looked right, and only because that status string
+hardcodes the halo. `tests/test_unread_led_one_field.node.mjs` renders one
+`/sessions/list` row through the sidebar row, the launchpad card and the
+project-tree row and fails if any of the three disagrees.
 
 Both inner waiting states are reachable from live data as of 2026-09-08.
 `waiting-permission` is `question` and nothing else - the agent is

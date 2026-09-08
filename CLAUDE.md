@@ -992,6 +992,21 @@ because a name is reused and a flag from a killed session reappeared on its
 successor. Set on `Stop` and by the user's control, cleared when a WS
 terminal binds. An unmeasurable epoch degrades to the legacy name key.
 
+**IT IS ONE FLAG, AND EVERY WRITER AND READER MUST MEASURE THE EPOCH.**
+The owner's rule, verbatim: "when clicking a tab, the session is marked
+read. if i want it unread i click unread." So `auto` and `manual` are two
+writers of one state: opening the tab clears BOTH (it used to spare
+`manual`), and so does clearing the control, through `UnreadStore.clear`.
+Both writers now resolve a measured epoch and `/sessions/list` reads with
+the `created_at_epoch` on its own bulk tmux probe rather than the
+`_instance_epochs` cache, which is EMPTY for every session predating the
+process and composed the legacy bare-name key - so a flag written under
+the instance key was on disk and invisible to the endpoint. And the LED
+finally receives it: `SessionStatusUI.dotHtml(status, signals)` takes
+`unread` and `startup_gate` as a second argument, no live caller passed
+it, and an unread `idle` session therefore painted a `steady` halo on
+every surface. Full model in `docs/session-status.md`.
+
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
 dot for the chat's status and an outer halo for activity and attention, so
 "working, and also unread" is sayable. `dotHtml` delegates to it, so every

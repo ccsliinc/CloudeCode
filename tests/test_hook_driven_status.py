@@ -128,7 +128,7 @@ def test_record_hook_event_unknown_session_is_a_safe_noop(monkeypatch, tmp_path)
 
 
 # =========================================================================== #
-# 2. mark_session_viewed clears auto but NOT manual                           #
+# 2. mark_session_viewed clears the WHOLE flag, auto and manual alike         #
 # =========================================================================== #
 
 
@@ -142,10 +142,13 @@ def test_mark_session_viewed_clears_auto_unread(monkeypatch, tmp_path):
     assert mgr._is_unread("cloude_proj") is False
 
 
-def test_manual_unread_survives_being_viewed(monkeypatch, tmp_path):
-    """The exact requirement from the spec: a MANUALLY pinned unread flag
-    must NOT be cleared just because the user opened (viewed) the
-    session - only clearing it explicitly should work."""
+def test_manual_unread_is_cleared_by_being_viewed(monkeypatch, tmp_path):
+    """The owner's rule, verbatim: "when clicking a tab, the session is
+    marked read. if i want it unread i click unread." So the manual flag
+    is NOT special - opening the session clears it exactly as it clears
+    the one a ``Stop`` hook set. This test used to assert the opposite
+    ("survives being viewed"); the requirement changed, not the code's
+    ability to satisfy the old one."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
 
@@ -153,9 +156,21 @@ def test_manual_unread_survives_being_viewed(monkeypatch, tmp_path):
     assert mgr._is_unread("cloude_proj") is True
 
     mgr.mark_session_viewed("ses1")  # simulates a WS terminal binding
-    assert mgr._is_unread("cloude_proj") is True  # still flagged
+    assert mgr._is_unread("cloude_proj") is False
 
-    mgr.set_manual_unread("cloude_proj", False)  # explicit clear
+
+def test_clearing_the_control_clears_an_auto_flag_too(monkeypatch, tmp_path):
+    """ONE FLAG. The envelope renders the unified unread state, so a row
+    flagged by a ``Stop`` hook shows the control as pressed; clicking it
+    off must mark the session read. Clearing only the manual half would
+    leave the row unread and read as a dead control."""
+    mgr = _bare_manager(monkeypatch, tmp_path)
+    _register_session(mgr, "ses1", "cloude_proj", tmp_path)
+
+    mgr.record_hook_event("ses1", "Stop", {})
+    assert mgr._is_unread("cloude_proj") is True
+
+    mgr.set_manual_unread("cloude_proj", False)
     assert mgr._is_unread("cloude_proj") is False
 
 

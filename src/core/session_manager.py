@@ -1808,54 +1808,47 @@ class SessionManager:
         return None
 
     def mark_session_viewed(self, session_id: str) -> None:
-        """Clear the AUTO unread flag for the session bound to ``session_id``.
+        """Clear the WHOLE unread flag for the session bound to ``session_id``.
 
-        Called when a WS terminal actually binds to a session (see
-        ``src/api/websocket.py``'s ``connection_manager.bind_session``
-        call site) - the strongest "the user is looking at this" signal
-        the server has, deliberately stronger than merely appearing in a
-        list/poll response. Does NOT touch the manual flag: a session the
-        user explicitly pinned unread for followup stays flagged even
-        after they open it, until they explicitly clear it (see
-        ``set_manual_unread``) - this is the "survives being viewed"
-        requirement.
+        Called when a WS terminal binds to a session (see
+        ``src/api/websocket.py``'s ``connection_manager.bind_session``) -
+        the strongest "the user is looking at this" signal the server has.
+        CLEARS BOTH SUB-FLAGS: it used to spare the manual one, and the
+        owner's rule is the opposite - "when clicking a tab, the session
+        is marked read. if i want it unread i click unread."
         """
         backend = self.backends.get(session_id)
         tmux_name = getattr(backend, "tmux_session", None) if backend else None
         if not tmux_name:
             return
-        # Same epoch source the Stop branch writes with, so a clear always
-        # lands on the key the set created. ``_work_stamp_epoch`` probes
-        # once and caches, so this costs nothing on the common path.
-        self._unread_store.set_flag(
-            tmux_name, "auto", False,
-            epoch=self._work_stamp_epoch(session_id, tmux_name),
+        # The Stop branch's own epoch source, so a clear finds the key.
+        self._unread_store.clear(
+            tmux_name, self._work_stamp_epoch(session_id, tmux_name)
         )
 
     def set_manual_unread(self, tmux_name: str, unread: bool) -> None:
         """Set or clear the MANUAL unread flag for a tmux session name.
 
         Description: The user-facing "mark unread for followup" control.
-            Keyed by tmux name (not session_id) so it works for BOTH a
-            live session and an attachable-but-not-live one - you can pin
-            a conversation unread whether or not anything is currently
-            attached to it. Unlike the auto flag, nothing but this method
-            (a repeat call, presumably from the user clicking again)
-            clears it.
+            Keyed by tmux name (not session_id) so it works for a live
+            session and an attachable-but-not-live one alike. SETTING
+            writes the manual half; CLEARING drops BOTH, because the
+            control renders the unified flag and a row may be unread from
+            a ``Stop``.
         Inputs:
             tmux_name: literal tmux session name (never a session_id).
-            unread: True to set, False to clear.
-        Output: None (persisted immediately).
+            unread: True to set, False to mark read (clears auto too).
+        Output: None (persisted immediately). Idempotent either way.
         Example:
-            >>> mgr.set_manual_unread("cloude_myproj", True)
-            >>> mgr._is_unread("cloude_myproj")
-            True
+            >>> mgr.set_manual_unread("cloude_myproj", True)  # now unread
         """
         if not tmux_name:
             raise ValueError("tmux_name is required")
-        self._unread_store.set_flag(
-            tmux_name, "manual", unread, epoch=self._epoch_for_tmux_name(tmux_name)
-        )
+        epoch = self._epoch_for_tmux_name(tmux_name)
+        if unread:
+            self._unread_store.set_flag(tmux_name, "manual", True, epoch=epoch)
+        else:
+            self._unread_store.clear(tmux_name, epoch)
 
     def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
         """Return the persisted pin for a tmux session name, or None."""
@@ -2571,9 +2564,12 @@ class SessionManager:
             self, session_id, tmux_name
         )
         if kind == EVENT_STOP and tmux_name:
+            # ONE FLAG, ONE KEY: the manual control and the viewed-clear
+            # resolve a MEASURED epoch, and `_instance_epochs` (empty for
+            # any session predating this process) would file a second key.
             self._unread_store.set_flag(
                 tmux_name, "auto", True,
-                epoch=self._instance_epochs.get(session_id),
+                epoch=self._work_stamp_epoch(session_id, tmux_name),
             )
         self._persist_activity_state(session_id, tmux_name)
         self._persist_work_stamp(session_id, tmux_name, kind)
@@ -4510,9 +4506,13 @@ class SessionManager:
         # feat/hook-driven-status - the raw tmux classification (dead check
         # + graceful-fallback source) is combined with this session's live
         # hook signal (if any) and its persisted unread flag into ONE
-        # unified status. See src/core/session_activity.py.
+        # unified status (src/core/session_activity.py). MEASURED EPOCH
+        # FIRST: ``_instance_epochs`` misses for a session predating this
+        # process, and a miss composes the LEGACY bare-name key.
         unread = self._is_unread(
-            tmux_session_name, self._instance_epochs.get(session_id)
+            tmux_session_name,
+            (row.get("created_at_epoch") if row else None)
+            or self._instance_epochs.get(session_id),
         )
         activity_status = self._activity_tracker.resolve(
             session_id, raw_tmux_status, unread=unread

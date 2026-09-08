@@ -39,11 +39,19 @@ class UnreadStore:
     """In-memory dict of ``{tmux_name: {"auto": bool, "manual": bool}}``,
     atomically persisted to a single JSON file.
 
-    - "auto" is set by a ``Stop`` hook, cleared when a WS terminal binds
-      to the session (the user looked at it) - see
-      ``SessionManager.mark_session_viewed``.
-    - "manual" is set/cleared ONLY by the user's explicit mark-unread
-      control; viewing the session does NOT clear it.
+    ONE FLAG, TWO WRITERS. The owner's rule, verbatim: "when clicking a
+    tab, the session is marked read. if i want it unread i click unread.
+    it allows me to know whats waiting." So both sub-flags describe the
+    SAME user-visible state and both are cleared by the same two events:
+
+    - "auto" is set by a ``Stop`` hook.
+    - "manual" is set by the user's explicit mark-unread control.
+    - EITHER is cleared by a WS terminal binding to the session (the user
+      opened the tab - see ``SessionManager.mark_session_viewed``) or by
+      the user clearing the control (``set_manual_unread(name, False)``).
+      Both go through ``clear``, which drops the pair in ONE write: a
+      "mark read" that cleared only the half the user happened to have
+      set would leave the row unread and read as a dead control.
     - A session is unread iff either sub-flag is True. An entry with both
       False is dropped rather than kept as a hygiene no-op row.
     """
@@ -224,6 +232,38 @@ class UnreadStore:
         if entry["auto"] or entry["manual"]:
             self._data[key] = entry
         else:
+            self._data.pop(key, None)
+        self._save()
+
+    def clear(self, tmux_name: str | None, epoch: Optional[int] = None) -> None:
+        """Drop BOTH sub-flags for one instance in a single write.
+
+        Description: The "mark read" primitive. Clearing one sub-flag at a
+            time is wrong for this app's semantics: unread is ONE state to
+            the user, so a clear that left the other half set would look
+            like a control that did nothing. Idempotent - clearing a
+            session that carries no entry reaches the same file and issues
+            no write at all.
+
+            Retires the legacy bare-name entry alongside the composite one
+            for the same reason ``set_flag`` does: one pane must never be
+            represented twice, and a clear that left the legacy row behind
+            would resurrect the flag on the next unmeasured-epoch read.
+        Inputs:
+            tmux_name: literal tmux session name. Falsy is a no-op.
+            epoch: ``#{session_created}``, or None when unmeasured.
+        Output: None (persisted immediately when something was dropped).
+        Example:
+            >>> store.clear("cloude_myproj", 1757000000)
+            >>> store.is_unread("cloude_myproj", 1757000000)
+            False
+        """
+        if not tmux_name:
+            return
+        keys = {self.compose_key(tmux_name, epoch), tmux_name}
+        if not any(k in self._data for k in keys):
+            return
+        for key in keys:
             self._data.pop(key, None)
         self._save()
 

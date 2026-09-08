@@ -1512,9 +1512,9 @@ async def set_session_unread(
     Persisted server-side (not localStorage) so the flag follows the user
     across browsers/devices - see ``SessionManager.set_manual_unread``.
 
-    Unlike the auto flag a ``Stop`` hook sets, this one is NOT cleared by
-    merely viewing the session - only a subsequent call to this same
-    endpoint (typically the user clicking the control again) clears it.
+    ONE FLAG. This writes the same instance-keyed unread a ``Stop`` hook
+    writes and ``/sessions/list`` reports, so every surface agrees. False
+    marks the session read outright, and so does opening its tab.
     """
     session_manager = request.app.state.session_manager
     session_manager.set_manual_unread(session_name, body.unread)

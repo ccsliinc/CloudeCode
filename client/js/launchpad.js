@@ -1727,19 +1727,18 @@ class Launchpad {
             // Pencil rename button, in one of three states - never absent.
             // See _renderRenamePencilHtml for why omitting it was the bug.
             const renamePencil = this._renderRenamePencilHtml(s, escapedName);
-            // Fork is offered on OWNED sessions only. An external tmux
-            // session has no row of ours and therefore no recorded Claude
-            // conversation to resume, so the server would refuse it with
-            // a 409 - better not to paint a control that cannot work.
+            // Fork is offered on OWNED sessions only: an external tmux
+            // session has no row of ours and so no conversation to
+            // resume; the server would refuse it with a 409.
             const forkBtn = owned
                 ? `<button type="button" class="running-session-fork" data-fork-name="${escapedName}" title="copy this conversation into a new session and open it - this session is not changed. Note: Claude Code&#39;s own /fork runs the copy in the BACKGROUND and leaves you here; this button behaves like its /branch." aria-label="fork this session into a new one">fork</button>`
                 : '';
-            // Status dot: real activity status (running/idle/dead/unknown)
-            // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
-            // NOT the old ownership-colored placeholder. title + aria-label
-            // on the dot itself so the state is never color-only.
+            // Real activity status via the shared SessionStatusUI helper,
+            // title + aria-label so state is never color-only. `signals`
+            // is what the LED outer ring needs - see session-sidebar-rows.js.
             const statusDot = window.SessionStatusUI
-                ? window.SessionStatusUI.dotHtml(s.status)
+                ? window.SessionStatusUI.dotHtml(s.status,
+                    { unread: !!s.unread, startup_gate: s.startup_gate })
                 : '';
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
@@ -4180,7 +4179,8 @@ class Launchpad {
         const escapedName = this._escapeHtml(s.name);
         const escapedDisplay = this._escapeHtml(displayName);
         const statusDot = window.SessionStatusUI
-            ? window.SessionStatusUI.dotHtml(s.status)
+            ? window.SessionStatusUI.dotHtml(s.status,
+                { unread: !!s.unread, startup_gate: s.startup_gate })
             : '';
         return `
                 <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">

@@ -3850,3 +3850,81 @@ whether its row, its transcript or its pane is the reason. Not measured.
   no-tool original turn, or add `ITEM4_TOOL_PROMPT=1` for the tool-using
   original turn. Needs claude/tmux/node on PATH, as the shipped real-hook
   suite does.
+
+---
+
+## 2026-09-08 - unread is ONE instance-keyed flag, read by every surface [DONE]
+
+**Reported, measured in the browser on the live app.** Clicking a running
+session card's "mark unread for followup" envelope on the home page turned
+the envelope yellow, while the SIDEBAR row for the same session stayed
+`data-outer="steady"` for over 12 seconds across two `/sessions/list`
+polls. The owner's spec, verbatim: "when clicking a tab, the session is
+marked read. if i want it unread i click unread. it allows me to know
+whats waiting."
+
+**The divergence, traced rather than guessed.** Three defects, one
+symptom, and the client one is the whole visible failure:
+
+1. **No live caller passed the LED its unread signal.**
+   `SessionStatusUI.dotHtml(status, signals)` takes `unread` and
+   `startup_gate` as an optional second argument, and
+   `StatusLed.ledStateFor` is the only thing that turns `unread` into an
+   outer `unread` halo. All three live call sites
+   (`session-sidebar-rows.js:389`, `launchpad.js` card, `launchpad.js`
+   project-tree row) passed the status alone. So the flag reached the row,
+   was fingerprinted by BOTH repaint signatures (which already carried
+   `unread`), forced a repaint, and was dropped at the last inch: `idle` +
+   unread painted `steady`, `working` + unread painted `active`. Only
+   `finished_unread` looked right, and only because that status string
+   hardcodes the halo. Every surface was equally broken - the launchpad's
+   yellow envelope, which reads `s.unread` directly, is what made it look
+   like only the sidebar was wrong.
+2. **The `/sessions/list` READ used a cache the WRITE never used.**
+   `_session_info_for` resolved the epoch from `self._instance_epochs`,
+   populated only by the create/adopt persist steps and therefore EMPTY
+   for every session predating the process (after any restart, all of
+   them). A miss composes the LEGACY bare-name key, which cannot see an
+   entry stored under `<name>@<epoch>` - the key the manual control writes
+   via `_epoch_for_tmux_name`. Now reads `row["created_at_epoch"]` off the
+   bulk tmux probe it already fetched.
+3. **The two WRITERS keyed differently.** The `Stop` branch of
+   `record_hook_event` also read `_instance_epochs`, so it filed the same
+   pane under the bare name while the control filed it under the instance
+   key. Now uses `_work_stamp_epoch` (probes tmux once, caches), the same
+   source `mark_session_viewed` already used.
+
+**Behaviour change, per the spec.** `mark_session_viewed` (the WS bind)
+now clears BOTH sub-flags: opening the tab marks the session read, full
+stop. It used to spare `manual` ("survives being viewed"), and
+`tests/test_hook_driven_status.py::test_manual_unread_survives_being_viewed`
+asserted that; it is now
+`test_manual_unread_is_cleared_by_being_viewed`. Clearing the control
+(`PATCH .../unread` with `false`) also clears both, because the envelope
+renders the UNIFIED flag - a row flagged by a `Stop` shows the control
+pressed, and clearing only `manual` would leave it unread and read as a
+dead control. New `UnreadStore.clear()` drops the pair in one write and
+retires the legacy bare-name entry alongside the composite one.
+
+**Verified.** Both new suites were run against the reverted code and
+FAIL there: `tests/test_unread_led_one_field.node.mjs` 6 of 17 fail
+without the client fix, `tests/test_unread_one_flag.py` 6 of 9 fail
+without the server fix. Full pytest 5473 passed / 3 failed / 21 skipped
+(the 3 are the known environmental ones: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`), up from the 5463
+baseline with no new failures. Node: 190 files, 2 fail, both known -
+`test_archive_full_page_mode.node.mjs` (pre-existing) and
+`led_state_for.node.mjs` (a piped-stdin CLI helper, not a standalone
+test).
+
+**Negative controls are in both suites** because a renderer that
+hardcoded the halo, or a read path that always answered True, would pass
+every positive assertion: an unmarked row must stay `steady`/`active`, a
+DEAD pane must never paint as unread whatever the flag says, and a mark
+aimed at a different tmux name must not reach this row.
+
+**Files.** `src/core/unread_store.py` (new `clear`),
+`src/core/session_manager.py` (three call sites; net -0 lines),
+`src/api/routes.py` (docstring), `client/js/session-sidebar-rows.js`,
+`client/js/launchpad.js` (net 0 lines), `docs/session-status.md`,
+`CLAUDE.md`, plus the two new test files.

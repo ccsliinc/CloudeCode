@@ -386,7 +386,15 @@ console.log('[SessionSidebarRows Module] Loading...');
      */
     function rowHtml(r, density) {
         const mode = density || 'cozy';
-        const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // THE SIGNALS ARGUMENT IS NOT OPTIONAL HERE. `unread` and the
+        // startup gate drive the LED's OUTER ring, and a bare status
+        // string cannot express either: `idle` + unread renders a steady
+        // halo, which is exactly how a session the user had just marked
+        // unread painted as read while the field on the row said true.
+        const dot = window.SessionStatusUI
+            ? window.SessionStatusUI.dotHtml(r.status, {
+                unread: !!r.unread, startup_gate: r.startup_gate })
+            : '';
         // punchlist 19 - "needs a keypress". Empty string for both 'ready'
         // and 'unknown', so this adds nothing to a normal row. It rides
         // at EVERY density including compact, unlike the tmux/external
