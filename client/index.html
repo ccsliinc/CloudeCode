@@ -59,6 +59,11 @@
          theme CSS custom properties (--color-accent, etc.) are available
          as fallbacks for the per-toast accent border. -->
     <link rel="stylesheet" href="/static/css/toast.css" />
+    <!-- Notification history (punchlist 8) plus the clickable-card rule
+         the toast stack gained when raising went global (punchlist 7).
+         After toast.css so it can override .toast, and after styles.css
+         for the theme custom properties both fall back to. -->
+    <link rel="stylesheet" href="/static/css/toast-history.css" />
     <!-- Session sidebar. Loaded after styles.css for the same
          token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
@@ -736,6 +741,11 @@
          (session-row-menu.js) draw it, so it must load before both. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
+    <!-- The two CROSS-SESSION toast reads, extending API.prototype the
+         way api-archive.js does. MUST load after api.js: `class API` is
+         not hoisted across scripts and this file refuses loudly rather
+         than defining nothing. -->
+    <script src="/static/js/api-toasts.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
@@ -747,6 +757,21 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- punchlist 7 - a toast raised by ANY session reaches the browser,
+         whatever session is on screen. Two things used to filter them:
+         the toast.new WS frame is fanned out only to sockets bound to the
+         raising session, and terminal.js backfills the ATTACHED session
+         alone, at WS open. The poller works on every screen, including
+         the launchpad and archive, which hold no terminal socket at all.
+         The ring is what stops a poll tick resurrecting a card whose ack
+         is still in flight; it must load BEFORE the poller that uses it.
+         ToastNavigate is the click target on a card - it resolves a real
+         /sessions/list row before entering, because a synthesised one
+         carries no pinned_theme (gotcha 7). All three load AFTER toast.js
+         and after api-toasts.js, whose two methods the poller calls. -->
+    <script src="/static/js/toast-dismissed-ring.js"></script>
+    <script src="/static/js/toast-navigate.js"></script>
+    <script src="/static/js/toast-global-poll.js"></script>
     <!-- The status LED component. Pure, no dependencies, no DOM access -
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->
@@ -1100,6 +1125,13 @@
          AFTER settings-sections.js and BEFORE settings-panel.js, which
          calls its render()/wire()/collect(). -->
     <script src="/static/js/settings-workspace.js"></script>
+    <!-- punchlist 8 - the notification history, mounted as a slot into
+         the settings panel's existing "notifications" tab. The renderer
+         is pure and decides every word a row claims; the panel only
+         places nodes and fetches. Both load BEFORE settings-panel.js,
+         which calls window.ToastHistoryPanel.mount() from mountSlots(). -->
+    <script src="/static/js/toast-history-render.js"></script>
+    <script src="/static/js/toast-history-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -

@@ -1951,8 +1951,20 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
     localStorage cross-tab sync needed.
 
     Idempotent at the storage layer: a double-click won't re-broadcast.
-    Returns 404 only when the toast id is unknown FOR THIS SESSION; an
-    already-acked toast returns 200 with ``success=true`` and no broadcast.
+
+    ALWAYS 200, and the message is what carries the outcome. This
+    docstring used to claim a 404 for a toast id unknown to this session;
+    it never did that - the branch below returns ``success=true`` with
+    "No-op" for BOTH "not in this session's bucket" and "already acked",
+    because the storage layer treats them as the same non-change.
+    Corrected 2026-09-08 while writing tests/test_toast_cross_session.py,
+    which asserts the resulting STATE rather than the status code.
+
+    THE SCOPING IS STILL REAL, and it is what keeps a dismissal per
+    session now that raising is global (see src/api/toast_routes.py):
+    ``ack_toast`` walks ONLY ``session_id``'s bucket, so acking session
+    B's toast id under session A leaves B's record untouched. The
+    isolation lives in the storage walk, not in the status code.
     """
     session_manager = request.app.state.session_manager
     changed = session_manager.ack_toast(session_id, toast_id)

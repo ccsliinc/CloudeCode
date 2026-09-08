@@ -3225,3 +3225,141 @@ the fourth is
 the documented real-tmux flake, which passes 3/3 in isolation on the same
 tree minutes later. The passed/skipped counts include another session's
 uncommitted work in this tree.
+
+### 2026-09-08 - punchlist 7 and 8 closed: toasts raise globally, dismiss per session, and a history page
+
+**WHAT FILTERED TOASTS TO THE SESSION ON SCREEN, and it was TWO filters,
+which is why fixing either alone would have left the bug.** (1) The
+`toast.new` WebSocket frame is fanned out only to sockets bound to the
+raising session (`src/api/routes.py`'s own comment: "toasts for session A
+never leak"), and a browser holds ONE terminal socket, bound to the
+session being viewed. (2) `client/js/terminal.js` backfills via `GET
+/sessions/{id}/toasts` for the ATTACHED session alone, and only at
+WebSocket open. So a session needing attention while the owner was
+elsewhere was silent - and the launchpad and archive screens, which hold
+no terminal socket at all, were deaf to notifications entirely.
+
+**WHAT RAISES THEM NOW.** `GET /api/v1/toasts` returns every session's
+records; `client/js/toast-global-poll.js` polls it every 10s from
+whatever screen is up and feeds the SAME `ToastManager.backfill` the
+attach path already used, so a record arriving by both routes dedupes on
+id and renders once. A poll rather than a wider WS broadcast on purpose:
+widening the fan-out would push every session's frames down the one
+terminal socket and make terminal.js filter them - coupling notification
+delivery to the terminal transport, which is the coupling that caused
+this - and would still leave the socket-less screens deaf.
+
+**THE DISMISSAL AXIS WAS ALREADY CORRECT AND THE WORK WAS NOT TO BREAK
+IT.** `ToastManager.dismiss()` already acked with `toast.session_id` -
+the toast's OWN session, never the one on screen - and
+`SessionManager.ack_toast` walks only that session's bucket.
+`dismissForSessionActivity` was already scoped to the session typed into.
+Item 7 was therefore purely a visibility problem, and the new tests exist
+to pin the isolation now that the read is global.
+
+**THE ONE NEW DEFECT THE POLL COULD HAVE INTRODUCED, and its guard.**
+`dismiss()` drops the id from its model immediately and fires the ack
+asynchronously; a poll tick that left BEFORE the ack landed returns a
+snapshot where the toast is still unacked, and `add()` would resurrect
+the card the user just dismissed. `client/js/toast-dismissed-ring.js` is
+a bounded, EXPIRING set of locally dismissed ids that the poller filters
+every result through, fed by a new `cloude:toast-dismissed` CustomEvent
+from `toast.js` (an event rather than a hard call, so the toast module
+keeps working with no poller loaded). It is a SUPPRESSION, NEVER AN ACK:
+if the ack genuinely failed the record is still unacked server-side, the
+ring forgets it after 60s and the toast correctly comes back. A permanent
+ring would turn a failed write into a notification never seen again.
+
+**CLICKING A CARD GOES TO THE SESSION THAT RAISED IT**
+(`client/js/toast-navigate.js`), which only became meaningful once most
+cards on screen were about somewhere else. It resolves the real
+`/sessions/list` row and hands it to `App.returnToExistingTerminal` ->
+`ThemeNavigation.applyForSession`. IT DOES NOT SYNTHESISE A ROW: the
+toast carries enough to NAME a session and not enough to ENTER one -
+`pinned_theme` rides on the SessionInfo WRAPPER - so a synthesised object
+would paint the previous session's theme, gotcha 7, already paid for
+once. The dismiss button calls `stopPropagation`, so dismissing never
+navigates, and the click NEVER ACKS: reading a notification is not
+answering it. A dead session is announced through `Router.showError`, the
+app's one banner.
+
+**WHERE THE HISTORY LIVES, MEASURED, because the handoff's "the server
+already holds the record" is true only for the current process.** There
+is NO toast table and NO json store. Everything is
+`SessionManager._pending_toasts`, an in-memory dict keyed by session id.
+Retention is asymmetric: unacked kept WITHOUT LIMIT (dropping one loses a
+notification nobody saw); acked kept to the last 50 PER SESSION
+(`_TOAST_ACKED_CAP`), older falling off the tail; a wiped session loses
+its whole bucket; a restart loses everything. So `GET
+/api/v1/toasts/history` reports `storage: "process_memory"` and the empty
+state says it in words - an empty list after a restart means the record
+was LOST, not that nothing ever happened.
+
+**THE HISTORY OUTCOME IS TWO-VALUED AND THAT IS A NAMED LIMITATION.**
+Item 8 wanted three outcomes distinguished (answered / auto-dismissed by
+typing / swept by "dismiss all") because "I answered it" and "it got
+swept" are different facts. `Toast` carries `acknowledged` as a bare
+boolean and nothing records which act set it, so a row says `dismissed`
+or `open` and nothing else. Rendering a guessed reason on a page whose
+only job is to be trusted would be worse than the missing column. Adding
+it needs a reason threaded through the ack route into
+`SessionManager.ack_toast`, which is in another session's uncommitted
+work this round.
+
+**WHERE IT IS REACHED.** Settings gear -> `notifications` tab -> beneath
+the channel fields. That tab already existed and settings-panel.js
+already had a declarative SLOT mechanism (wrappers, terminal commands),
+so this is `slots: ['toast-history']` plus one `mountSlots()` call, not a
+fourth navigation pattern in a place nobody would look for it.
+
+**CORRECTED A STALE DOCSTRING while testing it** (gotcha 8): the ack
+route claimed a 404 for a toast id unknown to the named session. It never
+did that - it returns 200 "No-op" for both "not in this bucket" and
+"already acked", because the storage layer treats them as the same
+non-change. The scoping is real and lives in the storage walk; the tests
+assert the resulting STATE rather than a status code.
+
+**FILES.** New: `src/core/toast_history.py` (pure: flatten, order with a
+`(created_at, id)` tiebreak, page), `src/api/toast_routes.py`,
+`client/js/api-toasts.js`, `client/js/toast-dismissed-ring.js`,
+`client/js/toast-global-poll.js`, `client/js/toast-navigate.js`,
+`client/js/toast-history-render.js`, `client/js/toast-history-panel.js`,
+`client/css/toast-history.css`, `docs/notifications.md`,
+`tests/test_toast_cross_session.py`,
+`tests/test_toast_history_render.node.mjs`. Edited:
+`client/js/toast.js` (+50), `client/js/settings-panel.js` (+14),
+`src/api/routes.py` (docstring only), `src/main.py` (router
+registration), `client/index.html` (tags).
+
+**THE TIEBREAK IS NOT COSMETIC.** `collect_toasts` orders on
+`(created_at, id)` because a hook burst records several toasts inside one
+`datetime.utcnow()` tick; two records comparing equal leave their order
+to whatever the sort last saw, so page 1 and page 2 can both contain a
+row and neither contain another. Asserted directly.
+
+**TEST BASELINE, and the attribution.** `venv/bin/python3 -m pytest -q`:
+**5325 passed / 7 failed / 21 skipped** in 190s. THREE are the documented
+environmental failures (`test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`). The other FOUR are
+all in `tests/test_session_activity.py` (subagent depth / `SubagentStop`
+cases) - that file AND `src/core/session_activity.py` are another
+session's uncommitted work in this tree, and the file passes 57/57 when
+run alone minutes later. Nothing in this round touches that path. Node:
+187 files, run individually (`node --test` hangs on
+`led_state_for.node.mjs`, which is a piped-stdin CLI helper, not a
+standalone test) - **185 pass, 1 fails**, the pre-existing
+`test_archive_full_page_mode.node.mjs`. `tests/test_viewport_units.node.mjs`
+caught a real defect in the new CSS during this round: a raw `46vh` with
+no `dvh` twin, fixed.
+
+**STILL OPEN, carried forward:** (a) no durable store - a restart clears
+the history, and a table needs a schema migration through modules another
+session holds this round; (b) the dismissal REASON is unrecorded, so the
+three-way outcome cannot be rendered; (c) a duplicate hook event arriving
+AFTER a dismissal mints a NEW toast, because supersession deliberately
+never returns an acked record - correct for a genuinely new turn, wrong
+for a duplicated delivery, and indistinguishable at the record level
+today; (d) nothing bounds the number of DISTINCT SESSIONS stacking at
+once (the client cap and coalescing bound what is drawn, and supersession
+bounds repeated `Stop`s per session) - the owner asked about this for
+20+ sessions and it wants measuring on a real box before a cap is added.

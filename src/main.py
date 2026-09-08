@@ -67,6 +67,7 @@ from src.api.imported_restart_routes import router as imported_restart_router
 from src.api.away_routes import router as away_router
 from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
+from src.api.toast_routes import router as toast_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
 from src.api.archive_routes import router as archive_router
@@ -836,6 +837,11 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+# Cross-session toast reads. The per-session toast routes stay in routes.py;
+# these two are the ones that made a toast visible from ANY session (raise is
+# global) and readable afterwards (history). Dismissal is untouched and stays
+# per session on POST /toasts/{id}/ack. See src/api/toast_routes.py.
+app.include_router(toast_router, prefix="/api/v1")  # Cross-session toast list + history (auth required)
 if MESSAGE_ARCHIVE.enabled:
     # THE MESSAGE ARCHIVE'S ENTIRE HTTP SURFACE. Mounted only when the
     # master switch resolved to enabled; otherwise these paths 404 like

@@ -124,7 +124,13 @@
         { id: 'workspace', label: 'workspace', sectionIds: [], slots: ['workspace'] },
         { id: 'wrappers', label: 'wrappers', sectionIds: [], slots: ['wrappers'] },
         { id: 'terminal', label: 'terminal', sectionIds: [], slots: ['terminal-commands'] },
-        { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: [] },
+        // punchlist 8 - the notification HISTORY mounts as a slot under
+        // the tab already titled 'notifications', beneath the channel
+        // fields. Not a new screen: a read-only list of what was raised
+        // belongs on the screen a user already opens to ask about
+        // notifications, and a fourth navigation pattern would put it
+        // somewhere nobody looks. See client/js/toast-history-panel.js.
+        { id: 'notifications', label: 'notifications', sectionIds: ['notifications'], slots: ['toast-history'] },
         // 'audio' is the global music volume (settings-audio.js). It sits
         // in general next to appearance because it is an app-wide output
         // preference attached to themes, not to any one agent, terminal
@@ -336,6 +342,13 @@
         if (window.AgentWrappersPanel) {
             var wrapperSlot = overlayEl.querySelector('#settings-wrappers-slot');
             if (wrapperSlot) window.AgentWrappersPanel.mount(wrapperSlot);
+        }
+        if (window.ToastHistoryPanel) {
+            var historySlot = overlayEl.querySelector('#settings-toast-history-slot');
+            // Read-only and self-fetching, so unlike the panels below it
+            // takes no seed from `lastSummary` - the history is not part
+            // of the settings document and never joins the batched Save.
+            if (historySlot) window.ToastHistoryPanel.mount(historySlot);
         }
         if (window.TerminalCommandsPanel) {
             var commandSlot = overlayEl.querySelector('#settings-terminal-commands-slot');

@@ -299,6 +299,30 @@ class ToastManager {
     if (syncToServer && toast && toast.session_id) {
       this._ack(toastId, toast.session_id);
     }
+
+    // ANNOUNCE THE DISMISSAL, so the cross-session poller can suppress
+    // this id until its ack lands. Raising went global in
+    // toast-global-poll.js, which means a poll tick can now return a
+    // snapshot taken BEFORE the ack above was applied - and feeding that
+    // back through `add()` would resurrect the card the user just
+    // dismissed, in front of them. The poller's ToastDismissedRing
+    // listens for this and filters the id out for a minute.
+    //
+    // AN EVENT RATHER THAN A DIRECT CALL: this module must keep working
+    // with no poller loaded (it did for three releases), and a hard
+    // reference would make the poller a load-order dependency of every
+    // dismissal path. Fired for BOTH sync values on purpose - a
+    // server-driven ack from another tab is equally a reason not to
+    // re-add the id here.
+    try {
+      document.dispatchEvent(new CustomEvent('cloude:toast-dismissed', {
+        detail: { id: toastId, sessionId: toast ? toast.session_id : null },
+      }));
+    } catch (err) {
+      // CustomEvent is unavailable in the node stub suites, which do not
+      // exercise the poller. Swallowed rather than logged: it is not a
+      // fault in a browser and the suites would print it on every case.
+    }
   }
 
   /**
@@ -658,6 +682,25 @@ class ToastManager {
       el.appendChild(body);
     }
 
+    // CLICK THE CARD, GO TO THE SESSION THAT RAISED IT. Only meaningful
+    // now that raising is global: before, every card was about the
+    // session already on screen. The handler sits on the CARD and the
+    // dismiss button below calls stopPropagation, so "dismiss" cannot
+    // also mean "navigate". Reading a notification is not answering it,
+    // so this never acks.
+    el.dataset.sessionId = newest.session_id || '';
+    if (newest.session_id && window.ToastNavigate) {
+      el.classList.add('toast--clickable');
+      el.setAttribute('tabindex', '0');
+      el.addEventListener('click', () => window.ToastNavigate.go(newest));
+      el.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter' || evt.key === ' ') {
+          evt.preventDefault();
+          window.ToastNavigate.go(newest);
+        }
+      });
+    }
+
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
     dismissBtn.className = 'toast__dismiss';
@@ -667,7 +710,13 @@ class ToastManager {
     dismissBtn.setAttribute('aria-label', label);
     dismissBtn.setAttribute('title', label);
     dismissBtn.textContent = '×';
-    dismissBtn.addEventListener('click', () => this.dismissGroup(key));
+    dismissBtn.addEventListener('click', (evt) => {
+      // Do not let the dismiss click bubble into the card's
+      // navigate handler above - dismissing a card must not also
+      // yank the user into the session it was about.
+      if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+      this.dismissGroup(key);
+    });
     el.appendChild(dismissBtn);
 
     if (isNew) {
