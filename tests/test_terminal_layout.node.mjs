@@ -695,7 +695,13 @@ test('sendResize names its no-op instead of failing silently when no session is 
     // both warn (observable) and return a named reason (inspectable),
     // never a bare `return;` that looks identical to "nothing happened".
     const src = readClientJs('terminal.js');
-    const fn = src.slice(src.indexOf('sendResize(source'), src.indexOf('sendResize(source') + 900);
+    // The window was 900 chars and is 1400 because the [TERM-RESIZE] log
+    // line now also carries the cell metrics (font size, line height, the
+    // renderer's actual cell box, document.fonts.status) - a row count
+    // alone cannot distinguish "the box changed" from "the cell changed",
+    // which cost a debugging round. Widened, not weakened: every
+    // assertion below is unchanged.
+    const fn = src.slice(src.indexOf('sendResize(source'), src.indexOf('sendResize(source') + 1400);
     assert.ok(/no-session/.test(fn), 'the no-op must be named, not a bare return');
     assert.ok(/console\.warn/.test(fn), 'the no-op must also be observable, not just structurally named');
     assert.ok(/delivered:\s*true/.test(fn), 'a successful send must report the same named-outcome shape');

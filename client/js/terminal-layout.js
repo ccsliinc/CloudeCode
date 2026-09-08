@@ -150,6 +150,8 @@ console.log('[TerminalLayout Module] Loading...');
             console.log(
                 `[TERM-RESIZE] transient ignored ${controller.term.cols}x`
                 + `${controller.term.rows} source=${reason} `
+                + `${window.TerminalMetrics && window.TerminalMetrics.describeCellMetrics
+                    ? ' ' + window.TerminalMetrics.describeCellMetrics(controller) : ''} `
                 + `shown=${settle.describeCulprit(
                     document.getElementById('terminal')
                     && document.getElementById('terminal').parentElement)}`);

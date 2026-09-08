@@ -758,7 +758,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             rows,
         }));
 
-        console.log(`[TERM-RESIZE] ${cols}x${rows} source=${source}`);
+        console.log(`[TERM-RESIZE] ${cols}x${rows} source=${source} ${window.TerminalMetrics && window.TerminalMetrics.describeCellMetrics ? window.TerminalMetrics.describeCellMetrics(this) : ''}`);
 
         this.lastSentCols = cols;
         this.lastSentRows = rows;

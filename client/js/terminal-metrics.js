@@ -357,7 +357,73 @@ console.log('[TerminalMetrics Module] Loading...');
         }
     }
 
+    /**
+     * Everything that can move a row count without the box moving, in one
+     * log-safe string.
+     *
+     * WHY THIS EXISTS. A terminal was measured at 45 rows on reconnect and
+     * 41 rows eight seconds later while `#terminal` stayed 668px tall the
+     * whole time. The box did not change; the CELL did - roughly 14.8px to
+     * 16.3px per row. Row count alone cannot tell those two situations
+     * apart, so `[TERM-RESIZE]` could not say which had happened, and
+     * neither could anyone reading it afterwards.
+     *
+     * These are the only inputs to a cell height, so a line carrying all
+     * of them can be diffed between two resizes and the mover identified
+     * without guessing: the two options, the renderer's actual cell box,
+     * the font stack, whether font loading is still in flight, and which
+     * renderer is live. The last matters more than it looks - the WebGL
+     * renderer floors the cell to whole device pixels and the DOM renderer
+     * does not (see renderedWidth above), so losing the WebGL context
+     * silently changes the cell size and therefore the grid.
+     *
+     * Never throws: a diagnostic that can break a resize is worse than no
+     * diagnostic.
+     *
+     * @param {object} controller - a TerminalController with .term.
+     * @returns {string} space-separated key=value pairs, or 'cell=unreadable'.
+     * @example
+     *   describeCellMetrics(ctl)
+     *   // 'font=14 lh=1 cell=8.33x14.85 renderer=webgl fonts=loaded family=ui-monospace'
+     */
+    function describeCellMetrics(controller) {
+        try {
+            const term = controller && controller.term;
+            if (!term) return 'cell=no-term';
+            const o = term.options || {};
+            let cell = 'unreadable';
+            try {
+                const c = term._core._renderService.dimensions.css.cell;
+                cell = `${round2(c.width)}x${round2(c.height)}`;
+            } catch (err) {
+                // Private API; a version bump can move it. The rest of the
+                // line is still worth printing, so this is not fatal.
+                cell = 'unreadable';
+            }
+            const fonts = (typeof document !== 'undefined' && document.fonts
+                && document.fonts.status) || 'unknown';
+            const renderer = controller._webglAddon ? 'webgl' : 'dom';
+            const family = String(o.fontFamily || '').split(',')[0].trim();
+            return `font=${o.fontSize} lh=${o.lineHeight} cell=${cell} `
+                + `renderer=${renderer} fonts=${fonts} family=${family}`;
+        } catch (err) {
+            return 'cell=unreadable';
+        }
+    }
+
+    /**
+     * Round to two decimals for a log line, tolerating non-numbers.
+     *
+     * @param {*} n - candidate number.
+     * @returns {string} the rounded value, or '?' when not finite.
+     * @example round2(14.84375) // '14.84'
+     */
+    function round2(n) {
+        return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : '?';
+    }
+
     window.TerminalMetrics = {
+        describeCellMetrics,
         currentGrid,
         waitForFonts,
         xtermStylesheetApplied,
