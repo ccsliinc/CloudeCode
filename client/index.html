@@ -68,6 +68,13 @@
          never its home. Its vocabulary is defined in
          client/js/session-status-ui.js. -->
     <link rel="stylesheet" href="/static/css/status-dot.css" />
+    <!-- The two-ring status LED that replaces the flat dot on every
+         surface. MUST load AFTER status-dot.css: session-status-ui.js
+         emits one element carrying both vocabularies, and this file's
+         `.status-dot.status-led` block is what stops the two stylesheets
+         from both painting it. Its own markup comes from
+         client/js/status-led.js. -->
+    <link rel="stylesheet" href="/static/css/status-led.css" />
     <!-- Row density, the per-row reorder/pin controls, and the two
          three-outcome blocks the list can render instead of rows. Its own
          file so session-sidebar.css stays under the 500-line convention;
@@ -734,6 +741,14 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- The status LED component. Pure, no dependencies, no DOM access -
+         it only builds a string. MUST load BEFORE session-status-ui.js,
+         which renders every light in the app through it. -->
+    <script src="/static/js/status-led.js"></script>
+    <!-- Rolls a set of sessions up into one LED for a group header or the
+         launchpad top bar. Depends on status-led.js for the vocabularies,
+         so it loads after it. -->
+    <script src="/static/js/session-status-summary.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>
