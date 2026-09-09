@@ -71,6 +71,27 @@ console.log('[Toast Module] Loading...');
  * input but the card itself is not the decision. Stop is LOW: "your
  * turn" is information the terminal in front of the user already shows.
  */
+/**
+ * The one CLIENT-raised toast kind. Every other kind in this file comes
+ * from a Claude Code hook by way of the server
+ * (src/core/claude_hooks.py TOAST_EVENTS); this one is raised in the
+ * browser when the user attaches a file to the prompt, and there is no
+ * server record behind it.
+ *
+ * It is declared HERE, beside the severity and coalesce rules that
+ * govern it, because this file is the registry of what a toast kind
+ * means. client/js/attachment-toast.js produces the record and reads
+ * the name back off `ToastManager.ATTACHMENT_KIND` rather than
+ * repeating the string, so the two cannot drift.
+ */
+const ATTACHMENT_KIND = 'Attachment';
+
+/**
+ * Kinds that a keystroke must NOT clear. See
+ * `dismissForSessionActivity`, which is where the reasoning lives.
+ */
+const SURVIVES_TYPING = new Set([ATTACHMENT_KIND]);
+
 const TOAST_SEVERITY = {
   PermissionRequest: 3,
   // punchlist 19 - a session parked on an unanswered startup prompt
@@ -82,6 +103,13 @@ const TOAST_SEVERITY = {
   StartupPrompt: 3,
   Notification: 2,
   Stop: 1,
+  // LOW, and lower than it may look like it deserves. This card is a
+  // receipt for something the user did one second ago and can see in
+  // their own prompt buffer; it is not news. Low severity keeps it
+  // cap-eligible, so a stack of attachments can be pushed behind the
+  // overflow row rather than burying a permission prompt - which is the
+  // exact failure the tiering exists to prevent.
+  [ATTACHMENT_KIND]: 1,
 };
 const SEVERITY_DEFAULT = 2; // an unknown future kind is not assumed harmless
 
@@ -122,11 +150,20 @@ const COALESCE_KEY = {
   // collapsing them loses nothing - unlike PermissionRequest, where the
   // second card carries a different command.
   StartupPrompt: (t) => `${t.session_id}|StartupPrompt`,
+  // COALESCES ON THE SESSION ALONE, so attaching four files to one
+  // prompt is ONE card carrying four thumbnails rather than four cards.
+  // Unlike PermissionRequest, nothing is hidden by collapsing them: the
+  // card renders every member of the group (see
+  // AttachmentToast.renderThumbs), so the count and the pictures agree
+  // and no filename is lost behind an "x4".
+  [ATTACHMENT_KIND]: (t) => `${t.session_id}|${ATTACHMENT_KIND}`,
 };
 
 class ToastManager {
   constructor(containerId = 'toast-container') {
     this.containerId = containerId;
+    /** The client-raised kind, read by client/js/attachment-toast.js. */
+    this.ATTACHMENT_KIND = ATTACHMENT_KIND;
     /** id -> server-shape toast. Insertion-ordered = arrival-ordered. */
     this._byId = new Map();
     /** User expanded the overflow row; the cap is suspended until reset. */
@@ -296,9 +333,67 @@ class ToastManager {
       this._render();
     }
 
-    if (syncToServer && toast && toast.session_id) {
+    // A LOCAL TOAST HAS NOTHING TO ACK. Acking is how a dismissal is
+    // made to stick against a SERVER record, and an attachment toast has
+    // no such record - its id was minted in this browser. POSTing it
+    // would be a guaranteed 404 on every dismissal, which trains the
+    // reader of that log to ignore a line that is supposed to mean
+    // something. The flag is set by client/js/attachment-toast.js.
+    if (syncToServer && toast && toast.session_id && !toast.local) {
       this._ack(toastId, toast.session_id);
     }
+  }
+
+  /**
+   * Patch a toast this browser raised itself, in place.
+   *
+   * The one writer is client/js/attachment-toast.js, filling in a
+   * thumbnail that finished decoding after the card went up. It is
+   * deliberately NOT a general `update`: `add()` already refreshes a
+   * server toast in place, and a second write path into a server-owned
+   * record would let the client hold content the server never sent.
+   *
+   * IT REFUSES A TOAST THAT IS GONE rather than re-adding it. By the
+   * time an image has decoded the user may have sent the prompt, which
+   * retires the card; re-creating it here would resurrect something
+   * that was correctly dismissed, holding a picture of a file that is
+   * no longer staged.
+   *
+   * Inputs: toastId (string); patch (object) - fields to merge.
+   * Output: boolean - true when a live local toast was updated.
+   */
+  updateLocal(toastId, patch) {
+    const toast = this._byId.get(toastId);
+    if (!toast || !toast.local || !patch) return false;
+    this._byId.set(toastId, Object.assign({}, toast, patch));
+    this._render();
+    return true;
+  }
+
+  /**
+   * Dismiss every toast of ONE kind belonging to ONE session.
+   *
+   * The narrowest of the bulk dismissals, and it exists because the
+   * attachment receipt has a lifecycle none of the others share: it is
+   * retired by the prompt being SENT, an event that says nothing about
+   * the notifications sitting beside it. Clearing them too would
+   * destroy a permission prompt the user never read.
+   *
+   * Inputs: kind (string); sessionId (string).
+   * Output: number - how many were dismissed.
+   * Example: mgr.dismissKindForSession('Attachment', 'ses_1') -> 2
+   */
+  dismissKindForSession(kind, sessionId) {
+    if (!kind || !sessionId) return 0;
+    // Snapshot before mutating: `dismiss` deletes from the same Map.
+    const ids = [];
+    for (const [id, toast] of this._byId.entries()) {
+      if (toast && toast.kind === kind && toast.session_id === sessionId) {
+        ids.push(id);
+      }
+    }
+    for (const id of ids) this.dismiss(id, { syncToServer: true });
+    return ids.length;
   }
 
   /**
@@ -391,12 +486,44 @@ class ToastManager {
    *   case, and is why this is cheap to call per keystroke).
    * Example: ToastManager.dismissForSessionActivity('sess-1') -> 2
    */
-  dismissForSessionActivity(sessionId) {
+  dismissForSessionActivity(sessionId, data) {
     if (!sessionId) return 0;
+    // THE SECOND HALF OF THE SAME POLICY, dispatched from here because
+    // this is where the policy is written. terminal.js is under a hard
+    // line-count guard and, more to the point, "what does user input
+    // retire" is one question with one home; splitting it across the
+    // caller would put half the rule in a file whose docstring says it
+    // keeps none of it.
+    //
+    // `data` is the bytes just sent, and it is OPTIONAL: four of the
+    // five call sites are not keystrokes at all (focus, attach, session
+    // entry, a synthesised write), and for those "was this a submit"
+    // has no answer. attachment-toast.js reads undefined as "no", so
+    // they clear notifications and leave receipts standing, which is
+    // correct - entering a session does not send its prompt.
+    //
+    // The submit test lives THERE, not here: this file is the registry
+    // of what a toast kind means and has no business knowing that
+    // ESC+CR is a newline while a bare CR is a send.
+    if (data !== undefined && window.AttachmentToast
+        && typeof window.AttachmentToast.noteUserInput === 'function') {
+      window.AttachmentToast.noteUserInput(sessionId, data);
+    }
     // Snapshot before mutating: `dismiss` deletes from the same Map.
     const ids = [];
     for (const [id, toast] of this._byId.entries()) {
-      if (toast && toast.session_id === sessionId) ids.push(id);
+      if (!toast || toast.session_id !== sessionId) continue;
+      // A RECEIPT IS NOT A NOTIFICATION, so typing does not answer it.
+      //
+      // Everything above turns on input being the ANSWER to a card. An
+      // attachment receipt is the opposite relationship: it describes
+      // what is staged in the prompt buffer the user is typing INTO, so
+      // it is true for exactly as long as they keep typing. Clearing it
+      // on the first keystroke would make it flash and vanish - a worse
+      // version of the unreadable overlay it replaced. It is retired by
+      // the prompt being SENT, through `dismissKindForSession`.
+      if (SURVIVES_TYPING.has(toast.kind)) continue;
+      ids.push(id);
     }
     for (const id of ids) this.dismiss(id, { syncToServer: true });
     return ids.length;
@@ -656,6 +783,20 @@ class ToastManager {
       body.className = 'toast__body';
       body.textContent = newest.body;
       el.appendChild(body);
+    }
+
+    // AN ATTACHMENT CARD SHOWS THE FILES, and the drawing of them is
+    // not this file's business. A thumbnail needs decoding, downscaling
+    // and a CSP-legal `data:` URL, none of which a notification card
+    // has any reason to know about, so the whole strip is built by
+    // client/js/attachment-toast.js and this is the one line that asks
+    // for it. The WHOLE GROUP is passed, not `newest`: attachments
+    // coalesce per session, so the card is showing four files when the
+    // badge says x4 and must draw all four.
+    if (newest.kind === ATTACHMENT_KIND
+        && window.AttachmentToast
+        && typeof window.AttachmentToast.renderThumbs === 'function') {
+      window.AttachmentToast.renderThumbs(el, group.toasts);
     }
 
     const dismissBtn = document.createElement('button');

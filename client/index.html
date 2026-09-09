@@ -741,6 +741,15 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- The one CLIENT-raised toast kind: the receipt for a file the user
+         attached to the prompt. It contributes the thumbnail strip that
+         toast.js asks for by name and nothing else - the card itself is
+         still toast.js's. Every call between the two is made at RENDER
+         time, not at parse time, so this may load after toast.js; it sits
+         here because it is a toast kind and belongs beside the registry
+         that defines what one means. clipboard.js raises it and
+         terminal.js retires it, both at runtime, both behind a guard. -->
+    <script src="/static/js/attachment-toast.js"></script>
     <!-- The status LED component. Pure, no dependencies, no DOM access -
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->

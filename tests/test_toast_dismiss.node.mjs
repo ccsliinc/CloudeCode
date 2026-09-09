@@ -355,7 +355,11 @@ test('the onData and Shift+Enter call sites are still wired', () => {
     // not a behavioural test, and must not be mistaken for one.
     const src = fs.readFileSync(
         path.join(ROOT, 'client/js/terminal.js'), 'utf8');
-    assert.match(src, /if \(!isMouse\) this\._noteUserInputToSession\(\);/,
+    // The call now carries the POST-TRANSFORM bytes, which is what lets
+    // an attachment receipt tell a send apart from a keystroke. It must
+    // be `data` and not the raw event: by this line the mobile keyboard's
+    // Yen key has already become '\n', and a newline is not a submit.
+    assert.match(src, /if \(!isMouse\) this\._noteUserInputToSession\(data\);/,
         'term.onData must clear the session, gated on the SAME isMouse test '
         + 'the neighbouring guards use - a pointer move is not an answer');
     assert.match(

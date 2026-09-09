@@ -336,7 +336,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 // isMouse gate as the two guards above, same reason: a
                 // pointer move is not an answer. After the send, so a
                 // dropped frame does not clear a toast nobody answered.
-                if (!isMouse) this._noteUserInputToSession();
+                if (!isMouse) this._noteUserInputToSession(data);
             }
         });
 
@@ -771,7 +771,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     sendKeyToTerminal(keyData) {
         if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
-        this._noteUserInputToSession();
+        this._noteUserInputToSession(keyData);
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(new TextEncoder().encode(keyData));
         } else {
@@ -1205,12 +1205,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *
      * Output: void.
      */
-    _noteUserInputToSession() {
+    _noteUserInputToSession(data) {
         const sessionId = this._sessionId();
         if (!sessionId) return;
         if (window.ToastManager
             && typeof window.ToastManager.dismissForSessionActivity === 'function') {
-            window.ToastManager.dismissForSessionActivity(sessionId);
+            window.ToastManager.dismissForSessionActivity(sessionId, data);
         }
     }
 
@@ -2399,7 +2399,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // Send text to terminal without newline
         this.ws.send(new TextEncoder().encode(text));
-        this._noteUserInputToSession();
+        this._noteUserInputToSession(text);
 
         console.log('Terminal: Inserted text:', text);
     }
