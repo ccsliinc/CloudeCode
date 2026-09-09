@@ -905,6 +905,23 @@ currently listed" note, which named bookkeeping no reader could act on;
 the remembered slots themselves are untouched and still stamped on the
 list element as `data-order-missing`.
 
+**BELOW THE KEY SITS THE APP'S OWN VERSION, ONE COMPONENT FOR BOTH
+PLACEMENTS IT APPEARS IN.** `client/js/version-footer.js` renders a
+small grey `<span class="version">` and both surfaces call it: the
+sidebar footer (right after the status key, its own `.version-footer`
+block) and the home screen's bottom bar chip
+(`renderHomeBarVersion()` in `launchpad.js`, which now only owns a mount
+point). It reads `<meta name="cloude-app-version">`, stamped once at
+serve time by `src/main.py` from the SAME resolver `GET /api/v1/version`
+calls (`src/core/version.py::resolve_version()`) - not a second fetch of
+that endpoint, because the value cannot change while the page is open
+and the Electron tray already polls that endpoint every 20 seconds for
+its own reason. **AN UNRESOLVED VERSION RENDERS `"version unknown"`, NOT
+A BLANK CHIP.** Before this file existed, an empty meta tag made the
+home bar's chip vanish (`.home-bar__version:empty { display: none }`,
+now removed) - which read as a missing control, not as "the build could
+not be determined", and defeated the one thing a version footer is for.
+
 **A DROPPED SOCKET IS THE ONE SIGNAL THE SERVER CANNOT REPORT**, so it
 lives in `client/js/session-transport.js`, written from `terminal.js`'s
 `ws.onopen` / `ws.onclose` and read by the sidebar rows and the launchpad

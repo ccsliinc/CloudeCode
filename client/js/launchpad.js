@@ -3562,7 +3562,7 @@ class Launchpad {
                     <span class="home-bar__status-text" id="home-bar-status-text"></span>
                 </span>
                 <span class="home-bar__spacer" aria-hidden="true"></span>
-                <span class="version home-bar__version" id="home-bar-version"></span>
+                <span class="home-bar__version" id="home-bar-version"></span>
                 <a class="home-bar__link" href="https://nyedis.ai" target="_blank" rel="noopener noreferrer"
                    aria-label="nyedis.ai" title="nyedis.ai">
                         <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
@@ -3591,21 +3591,24 @@ class Launchpad {
     /**
      * Stamp the app version into the home bar's chip.
      *
-     * The version is resolved server-side and stamped into the
-     * `cloude-app-version` meta tag by src/main.py; this markup is built
-     * at runtime and so has no server-rendered token of its own. An
-     * absent or empty meta leaves the chip empty, which
-     * `.home-bar__version:empty` then removes from the layout - a blank
-     * gap beside the bird would read as a broken control.
+     * `#home-bar-version` is a mount point, not the version text itself:
+     * client/js/version-footer.js owns the string (a real version, or
+     * "version unknown" when the resolver could not determine one - see
+     * that file for why the unresolved case is named rather than left
+     * blank) and this markup is built at runtime, so it has no
+     * server-rendered content of its own to stamp. The same call
+     * produces the sidebar footer's version line
+     * (VersionFooter.sidebarFooterHtml() in
+     * client/js/session-sidebar-rows.js), so the two placements can
+     * never show two different strings.
      *
      * @returns {void}
      */
     renderHomeBarVersion() {
-        const chip = document.getElementById('home-bar-version');
-        if (!chip) return;
-        const meta = document.querySelector('meta[name="cloude-app-version"]');
-        const version = meta ? (meta.getAttribute('content') || '').trim() : '';
-        chip.textContent = version;
+        const mount = document.getElementById('home-bar-version');
+        if (!mount) return;
+        mount.innerHTML = window.VersionFooter
+            ? window.VersionFooter.versionSpanHtml() : '';
     }
 
     /**

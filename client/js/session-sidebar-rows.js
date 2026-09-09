@@ -295,14 +295,14 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: the foot of the list - the status-light key, and
-     *   nothing else. It used to be the "N remembered positions are held"
-     *   note, removed 2026-09-09; the slots themselves are untouched -
-     *   client/js/session-status-key.js has the whole story.
-     * Inputs: none. Output: string - HTML, '' with no key module.
+     * Description: the foot of the list - the status-light key, then the
+     *   app's version (client/js/version-footer.js's sidebar placement).
+     * Inputs: none. Output: string - HTML. Either half is '' with no module.
      */
     function footerHtml() {
-        return window.SessionStatusKey ? window.SessionStatusKey.keyHtml() : '';
+        const key = window.SessionStatusKey ? window.SessionStatusKey.keyHtml() : '';
+        const version = window.VersionFooter ? window.VersionFooter.sidebarFooterHtml() : '';
+        return key + version;
     }
 
     /**
