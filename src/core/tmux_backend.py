@@ -45,7 +45,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import structlog
 
@@ -2455,13 +2455,60 @@ class TmuxBackend(SessionBackend):
         exact geometry, so tmux's own line breaks are the correct ones and
         joining them would re-wrap content that is already right.
 
-        Trailing blank lines are dropped so the cursor ends up immediately
-        after the last real character. That is what makes an unterminated
-        prompt ("password: ") look like a prompt rather than like text
-        with the cursor parked below it.
+        Trailing blank lines are dropped so a short screen does not park
+        the client's cursor on a blank row far below the content.
+
+        THE CURSOR IS PART OF THE SCREEN, AND OMITTING IT PUT EVERY
+        KEYSTROKE IN THE WRONG PLACE. The capture on its own leaves the
+        client's cursor immediately after the last character it wrote,
+        which is where the pane's cursor is only by coincidence. Measured
+        on a real pane 2026-09-08, Claude Code 2.1.266 at 172x53: the
+        pane's cursor sat on row 9 (the prompt line inside its input box)
+        while the capture was 12 lines long, because the box's bottom
+        border, the path/branch line and the mode line all sit BELOW the
+        prompt. So the client was left three rows too low.
+
+        That used to be survivable and is not any more, and the reason is
+        which renderer Claude Code is using. Byte-for-byte on the same
+        keystroke, same pane size:
+
+            alternate screen:  ESC[?25l ESC[H \r ESC[4C ESC[49B l
+                               ESC[53;1H ESC[50;6H ESC[?25h
+            normal screen:     ESC[?25l ESC[5D ESC[4B \r ESC[5C ESC[4A l
+                               \r\n \r\n \r\n \r\n ESC[6C ESC[4A ESC[?25h
+
+        The alternate-screen renderer re-anchors ABSOLUTELY on every
+        frame (``ESC[H`` to start, ``ESC[50;6H`` to finish), so a client
+        whose cursor was wrong is silently corrected by the next
+        keystroke. The normal-screen renderer contains no absolute
+        positioning at all - it is pure ``ESC[nA`` / ``ESC[nB`` / ``\r``
+        / ``ESC[nC`` relative motion - so a wrong starting cursor is
+        never recovered from. It also skips over spaces with ``ESC[nG``
+        rather than writing them, so the row it lands on is not even
+        erased: the user's typed sentence appeared painted ON TOP of the
+        input box's bottom border with the border's dashes showing
+        through every word gap.
+
+        Since ``AuthConfig.session.disable_alternate_screen`` defaults on
+        (it is what makes scrollback exist at all), the normal-screen
+        renderer is the shipped case, so the cursor is restored here with
+        an explicit ``ESC[row;colH``. Rows line up one to one because the
+        caller homes and clears first and ``-S 0`` starts at viewport row
+        1, so tmux's 0-based ``#{cursor_y}`` is simply row ``y + 1``.
+
+        A cursor that cannot be read appends nothing. Leaving the client
+        where the text ended is the old behavior, and an invented
+        position would be worse than the honest absence of one.
+
+        Racing the app is possible and bounded: the cursor is read a
+        couple of milliseconds after the capture, so an app that redraws
+        inside that window is described by a cursor slightly newer than
+        the screen. That is strictly better than the previous state,
+        which was wrong on every attach rather than on a rare one.
 
         Returns:
-            Bytes with CRLF line endings, or ``b""`` on failure.
+            Bytes with CRLF line endings and a trailing absolute cursor
+            positioning sequence, or ``b""`` on failure.
         """
         rc, out, _ = self._run_tmux_sync(
             "capture-pane",
@@ -2478,7 +2525,49 @@ class TmuxBackend(SessionBackend):
         body = out.rstrip(b"\r\n")
         if not body.strip():
             return b""
-        return normalize_replay_newlines(body)
+        screen = normalize_replay_newlines(body)
+        cursor = self.pane_cursor_position()
+        if cursor is None:
+            return screen
+        col, row = cursor
+        return screen + f"\x1b[{row + 1};{col + 1}H".encode("ascii")
+
+    def pane_cursor_position(self) -> Optional[Tuple[int, int]]:
+        """Read the pane's cursor as tmux reports it, 0-based.
+
+        The two values are ``#{cursor_x}`` and ``#{cursor_y}``, both
+        measured from the top-left of the VISIBLE pane, which is the same
+        origin ``capture-pane -S 0`` uses.
+
+        Returns:
+            ``(x, y)`` 0-based, or ``None`` when tmux failed or answered
+            something unparseable. ``None`` is a refusal to claim a
+            position, never a claim of ``(0, 0)``.
+
+        Example:
+            >>> backend.pane_cursor_position()
+            (2, 8)
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{cursor_x} #{cursor_y}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        parts = out.decode("utf-8", errors="replace").split()
+        if len(parts) != 2:
+            return None
+        try:
+            x, y = int(parts[0]), int(parts[1])
+        except ValueError:
+            return None
+        if x < 0 or y < 0:
+            return None
+        return x, y
 
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""

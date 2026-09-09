@@ -238,6 +238,68 @@ on a hash mismatch). Do not add a host to the CSP, do not weaken
 `frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
 read `style-src 'unsafe-inline'` as license to widen anything further.
 
+**THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
+SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`
+(`src/core/tmux_backend.py`) appends an explicit `ESC[row;colH` read from
+tmux's `#{cursor_x}` / `#{cursor_y}` via `pane_cursor_position()`. Without
+it the client's cursor lands wherever the last captured character was
+written, which is where the pane's cursor is only by coincidence.
+Measured on a real Claude Code pane 2026-09-08: the pane's cursor sat on
+row 8, inside its input box, while the capture ran to row 13, because the
+box's bottom border, the path line and the mode line all sit BELOW the
+prompt. The client was left five rows too low.
+
+That was survivable on the ALTERNATE screen and is fatal on the NORMAL
+one, which is now the shipped case because `disable_alternate_screen`
+defaults on and is the only thing that makes scrollback exist. Captured
+over a real keystroke, a normal-screen frame is
+`ESC[38D ESC[4B \r ESC[38C ESC[4A X ...` and contains ZERO absolute
+positioning, so a wrong starting cursor is never recovered from; the
+alternate-screen renderer re-anchors with `ESC[H` and `ESC[r;cH` every
+frame and silently corrects the client on the next keypress. The
+normal-screen renderer also steps over runs of spaces with `ESC[nG`
+rather than writing them, so the row it lands on is not even erased,
+which is why the user's typed sentence appeared painted ON TOP of the
+input box's bottom border with the border showing through the word gaps.
+
+Rows line up one to one: `paint_on_attach` sends `ESC[H ESC[2J` first and
+`-S 0` starts at the first VISIBLE row, so tmux's 0-based `#{cursor_y}`
+is client row `y + 1`. **A cursor that cannot be read appends nothing** -
+leaving the client where the text ended is the old behaviour, and an
+invented `(0, 0)` would move every session to the top-left while looking
+like a working feature.
+
+**THE REPORTED "INPUT LAG" WAS THAT SAME DEFECT, NOT A THROUGHPUT
+PROBLEM, AND THE NUMBERS SAY SO.** Claude Code diffs against its OWN
+model of the screen, so the bytes it emits are identical no matter where
+the browser's cursor is: a mispositioned cursor cannot make a repaint
+bigger. Measured on a throwaway socket, per keystroke on the normal
+screen: 52 bytes at an idle prompt, about 650 while the thinking spinner
+animates. With the UI parked at the bottom of the viewport the pane
+scrolled 4 lines over 10 keystrokes, not once per keystroke. And
+`HISTORY_LIMIT` at 50000 does not reach the attach at all - the attach
+paints ONE viewport through `paint_on_attach`, never `scrollback_lines`
+and never the history. What the user actually experienced was measured
+end to end by replaying a real pane's capture into a second real pane and
+then feeding it that pane's own keystroke bytes: with the cursor
+uncorrected, one typed `H` landed on the mode line at row 12 instead of
+the input box at row 8; with it corrected the two panes agreed cell for
+cell. You type, nothing appears where you are looking, a later full
+redraw dumps it all at once. That is indistinguishable from lag from the
+user's seat.
+
+The residual cost of the normal screen is FLICKER on redraw, not latency,
+and it is the price of having scrollback at all;
+`AuthConfig.session.disable_alternate_screen` is the switch and turning
+it off costs every line of history. Note this was NOT A/B'd between
+renderers: Claude Code 2.1.215 on the developer's box reports
+`alternate_on=0` even with no env var and no settings key, so a
+fullscreen comparison could not be produced. The fix costs one extra
+tmux round trip per attach, 9.8 ms median against 17.5 ms for the capture
+beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
+a real second pane rather than a substring assertion, because asserting
+the bytes end in `ESC[3;6H` proves only that the string was formatted.
+
 **Config writes are atomic and backed up.** Copy the pattern in
 `Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
 pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
