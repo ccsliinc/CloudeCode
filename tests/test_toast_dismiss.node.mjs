@@ -155,13 +155,15 @@ test('the Dismiss all control is absent with one toast, present with two', async
     assert.equal(row.textContent, 'Dismiss all (2)');
 });
 
-test('the control counts TOASTS, not cards, so a coalesced pile offers it', () => {
+test('the control counts CARDS, so the number matches what is on screen', () => {
     const { container, mgr } = makeEnv();
     for (let i = 0; i < 4; i++) mgr.add(toast('Stop', 'Your turn', `t${i}`, 'A'));
     assert.equal(cards(container).length, 1, 'setup: one coalesced card');
+    assert.equal(dismissAllRow(container), null,
+        'one card is not a pile, so the control does not appear');
+    mgr.add(toast('Notification', 'other', 'b', 'B'));
     const row = dismissAllRow(container);
-    assert.ok(row, 'four records behind one card is exactly the pile-up case');
-    assert.equal(row.textContent, 'Dismiss all (4)');
+    assert.equal(row.textContent, 'Dismiss all (2)', 'two cards, two counted');
 });
 
 test('the control sits at the head of the stack, above every card', () => {

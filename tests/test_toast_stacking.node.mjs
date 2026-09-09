@@ -372,14 +372,14 @@ test('dismissing the one card acks EVERY record of that session, of every kind',
     assert.equal(cards(container).length, 0);
 });
 
-test('Dismiss all counts RECORDS, and discloses only the blocking ones', () => {
+test('Dismiss all counts CARDS, and discloses only the blocking ones', () => {
     const { container, mgr } = makeEnv();
     for (let i = 0; i < 6; i++) mgr.add(toast('Stop', 'Your turn', `t${i}`, 'A'));
     mgr.add(toast('PermissionRequest', 'Permission needed', 'cmd', 'A'));
     mgr.add(toast('Notification', 'wants your attention', 'x', 'B'));
     const row = container.childNodes.find((e) => e._classes().has('toast-dismiss-all'));
-    assert.equal(row.getAttribute('data-total'), '8',
-        'eight records are pending, however few cards they paint');
+    assert.equal(row.getAttribute('data-total'), '2',
+        'two cards are on screen, so the control counts two');
     assert.equal(row.getAttribute('data-blocking'), '1',
         'six finished turns behind a permission prompt are not permission '
         + 'prompts; a disclosure that overstates is worse than none');

@@ -752,7 +752,8 @@ class ToastManager {
    *   one.
    */
   _renderDismissAll(groups, container) {
-    const total = groups.reduce((n, g) => n + g.count, 0);
+    // Count CARDS, not records: the number must match what is on screen.
+    const total = groups.length;
     let row = container.querySelector('.toast-dismiss-all');
     if (total < 2) {
       if (row) row.remove();
