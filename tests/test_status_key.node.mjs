@@ -12,9 +12,20 @@
 //      second implementation of the component, free to show a colour the
 //      app does not paint - and this repo has already paid for two
 //      stylesheets drawing one dot.
-//   2. IT COVERS THE WHOLE VOCABULARY. A state added to status-led.js and
-//      not to the key is a light on screen that the legend claims does not
-//      exist, which is worse than having no legend.
+//   2. IT COVERS EVERY LIGHT. A colour added to status-led.css and not to
+//      the key is a light on screen that the legend claims does not exist,
+//      which is worse than having no legend.
+//
+// THAT SECOND PROPERTY IS ABOUT LIGHTS, NOT STATES, since 2026-09-09. The
+// key used to carry one row per inner state and now carries one per
+// colour, at the owner's request, because two rows showing the same
+// yellow send a reader hunting for a difference the light cannot show
+// them. So coverage is checked by resolving each state's `--led-ink`
+// through the STYLESHEET to the value it really paints - the two yellows
+// and the two reds each count once, and a genuinely new hue still fails.
+// The states that lost their own row did not lose their distinction: it
+// moved entirely into the dot's `title` and `aria-label`, which is why
+// those are now asserted here too.
 //
 // Run with: node tests/test_status_key.node.mjs
 // Exits 0 and prints "ALL PASS" on success; exits 1 otherwise.
@@ -124,15 +135,107 @@ function fakeTree() {
 
 const { Led, Key } = loadModules();
 
-// ---- the whole vocabulary, and nothing invented -------------------------
+const CSS = repoFile('client', 'css', 'status-led.css');
 
-test('EVERY INNER STATE THE COMPONENT CAN PAINT IS IN THE KEY', () => {
-    // The anti-drift assertion. A state added to status-led.js and not to
-    // the key is a light on screen the legend says does not exist.
-    const covered = new Set(Key.ENTRIES.map((e) => e.inner));
+/**
+ * The colour VALUE an inner state paints, read out of the stylesheet.
+ *
+ * Description: resolves the state's `--led-ink` to its `--led-color-*`
+ *   token and then that token to its declared value, so two states with
+ *   different token names but one hue (`--led-color-permission` and
+ *   `--led-color-waiting` both resolve to `var(--color-warning, #fbbf24)`)
+ *   compare EQUAL. That is the whole point: the key now carries one row
+ *   per light, and "which lights are the same light" is a fact about the
+ *   stylesheet, not something this file may hardcode a table of.
+ * Inputs: inner (string) - a member of Led.INNER_STATES.
+ * Output: string - the declared colour value.
+ * Example: hueOf('dead') -> 'var(--color-danger, #ff4444)'
+ */
+function hueOf(inner) {
+    const block = CSS.split(`.status-led[data-inner='${inner}'] {`)[1].split('}')[0];
+    const token = block.match(/--led-ink:\s*var\((--led-color-[a-z-]+)\)/)[1];
+    return CSS.match(new RegExp(`${token}:\\s*([^;]+);`))[1].trim();
+}
+
+// ---- one row per light, and nothing invented ----------------------------
+
+test('THE KEY CARRIES EXACTLY SEVEN ROWS', () => {
+    // The owner's 2026-09-09 count, and it is a count of LIGHTS rather
+    // than of states: "there should only be one entry per colour". Nine
+    // rows showed the same yellow twice and the same red twice, which
+    // sends a reader looking up a dot hunting for a difference the light
+    // cannot show them. Pinned as a number because the failure mode is a
+    // future edit re-expanding a collapsed pair one row at a time.
+    assert.equal(Key.ENTRIES.length, 7, 'seven lights, seven rows');
+});
+
+test('EVERY LIGHT THE COMPONENT CAN PAINT HAS A ROW OF ITS OWN COLOUR', () => {
+    // The anti-drift assertion, restated for a key that no longer has one
+    // row per state. A hue added to status-led.css and not to the key is
+    // a light on screen the legend says does not exist. Resolved through
+    // the stylesheet, so the two yellows and the two reds each count once
+    // and a genuinely NEW colour still fails this.
+    const covered = new Set(Key.ENTRIES.map((e) => hueOf(e.inner)));
     for (const state of Led.INNER_STATES) {
-        assert.ok(covered.has(state), `the key never explains "${state}"`);
+        assert.ok(
+            covered.has(hueOf(state)),
+            `the key never explains the colour "${state}" paints`,
+        );
     }
+});
+
+test('AND NO TWO ROWS DRAW THE SAME LIGHT', () => {
+    // The other half of "one entry per colour". Two rows may share a hue
+    // ONLY when they differ in shape - a solid green dot beside a green
+    // ring, a solid grey dot beside a grey outline - because those are
+    // four distinct things on screen. Two rows with the same hue AND the
+    // same halo treatment would be the nine-row problem coming back.
+    const seen = new Set();
+    for (const e of Key.ENTRIES) {
+        const light = `${hueOf(e.inner)}|${e.outer}`;
+        assert.ok(!seen.has(light), `two rows draw the same light: ${e.text}`);
+        seen.add(light);
+    }
+});
+
+test('THE COLLAPSED PAIRS ARE STILL SEPARATED IN WORDS', () => {
+    // COLLAPSING THE ROWS DID NOT MERGE THE STATES. Four states now share
+    // two rows, so the legend can no longer tell a user whether a yellow
+    // dot is a permission prompt or a startup prompt, or whether a red
+    // one is a dead process or a dead socket. The dot's own tooltip and
+    // accessible name are the only place left that can, which makes them
+    // load-bearing rather than decorative.
+    for (const [a, b] of [
+        ['waiting-permission', 'waiting-input'],
+        ['dead', 'disconnected'],
+    ]) {
+        assert.equal(hueOf(a), hueOf(b), `${a} and ${b} really are one colour`);
+        const la = Led.INNER_LABELS[a];
+        const lb = Led.INNER_LABELS[b];
+        assert.ok(la && lb, 'both states are labelled');
+        assert.notEqual(la, lb, `${a} and ${b} must not share words too`);
+    }
+    // And the row that stands in for each pair says something true of
+    // BOTH members, not just of the one it happens to draw.
+    const yellow = Key.ENTRIES.find((e) => e.inner === 'waiting-permission');
+    assert.ok(/waiting on you/.test(yellow.text), yellow.text);
+    const red = Key.ENTRIES.find((e) => e.inner === 'dead');
+    assert.ok(/dead/.test(red.text) && /disconnected/.test(red.text), red.text);
+});
+
+test('THE NOT-MEASURED ROW SAYS IT IS NOT IDLE, in so many words', () => {
+    // The row the owner had to ask about ("what does this even mean").
+    // Grey and grey-outline are one hue told apart by shape alone, so
+    // this sentence is the only thing that stops a reader filing the
+    // outline under "idle" - which is this project's recurring false-green
+    // failure wearing its other face.
+    const unknown = Key.ENTRIES.find((e) => e.inner === 'unknown');
+    const idle = Key.ENTRIES.find((e) => e.inner === 'done' && e.outer === 'steady');
+    assert.ok(unknown && idle, 'both grey rows exist');
+    assert.equal(hueOf('unknown'), hueOf('done'), 'they really share a hue');
+    assert.ok(/measured/.test(unknown.text), unknown.text);
+    assert.ok(/idle/.test(unknown.text), 'it must name the state it is not');
+    assert.notEqual(unknown.text, idle.text);
 });
 
 test('AND NOTHING IN THE KEY IS INVENTED', () => {

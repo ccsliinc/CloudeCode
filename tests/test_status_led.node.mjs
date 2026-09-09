@@ -84,6 +84,34 @@ const CSS = fs.readFileSync(
 );
 
 /**
+ * The body of the one rule whose WHOLE selector list is `selector`.
+ *
+ * Description: most assertions in this file reach a rule with
+ *   `CSS.split("<fragment> {")[1]`, which is fine while every selector
+ *   fragment appears once. It stopped being fine on 2026-09-09: the
+ *   cleared centre is now declared in a rule naming TWO states, so
+ *   `[data-outer='unread'] {` matches that shared rule as well as the
+ *   unread block, and `[data-inner='unknown'] {` is additionally a
+ *   substring of the legacy `.status-dot.status-led[...]` selector. A
+ *   split then reads the wrong body and the assertion fails while the
+ *   stylesheet is correct. This matches on the ENTIRE selector list
+ *   instead, with comments stripped first so a comment above a rule
+ *   cannot end up inside it, and asserts the match is unique.
+ * Inputs: selector (string) - the full selector list, comma and newline
+ *   normalised to ', ' (e.g. "a, b").
+ * Output: string - the declarations between the braces.
+ * Example: ruleBody(".status-led[data-outer='off']")
+ */
+function ruleBody(selector) {
+    const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const hits = [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
+        (m) => m[1].trim().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ') === selector,
+    );
+    assert.equal(hits.length, 1, `expected exactly one "${selector}" rule`);
+    return hits[0][2];
+}
+
+/**
  * Re-create a value in THIS realm.
  *
  * status-led.js is evaluated inside a `vm` context, so every array and
@@ -331,6 +359,44 @@ test('DEAD AND DISCONNECTED SHARE A COLOUR AND MUST NOT SHARE WORDS', () => {
     assert.ok(/connection/.test(gone), 'disconnected must say the connection is gone');
 });
 
+test('AND SO DO THE TWO YELLOWS - permission is not a startup prompt', () => {
+    // The mirror of the test above, and it became load-bearing on
+    // 2026-09-09 when the KEY collapsed to one row per colour. The legend
+    // now shows one yellow light and one sentence, so the only place a
+    // user can still learn which of the two a particular dot is, is the
+    // dot's own tooltip and accessible name. A paraphrase in both would
+    // retire that distinction without deleting anything.
+    const perm = Led.INNER_LABELS['waiting-permission'];
+    const input = Led.INNER_LABELS['waiting-input'];
+    assert.ok(perm && input && perm !== input);
+    assert.ok(/permission/.test(perm), `permission must say so, got "${perm}"`);
+    // Both are "stopped", which is the fact they genuinely share and the
+    // reason they paint one hue. It is the rest of the sentence that has
+    // to differ.
+    for (const label of [perm, input]) {
+        assert.ok(/stopped/.test(label), `got "${label}"`);
+    }
+    // And the pair really does resolve to ONE colour, or collapsing the
+    // key's two yellow rows into one would have hidden a real difference.
+    const inkFor = (state) => {
+        const block = CSS.split(`[data-inner='${state}'] {`)[1].split('}')[0];
+        return block.match(/--led-ink:\s*var\((--led-color-[a-z-]+)\)/)[1];
+    };
+    const hueOf = (token) => CSS.match(
+        new RegExp(`${token}:\\s*([^;]+);`),
+    )[1].trim();
+    assert.equal(
+        hueOf(inkFor('waiting-permission')),
+        hueOf(inkFor('waiting-input')),
+        'the two yellow states must really paint the same hue',
+    );
+    assert.equal(
+        hueOf(inkFor('dead')),
+        hueOf(inkFor('disconnected')),
+        'and so must the two red ones',
+    );
+});
+
 test('connected and unknown transports change nothing', () => {
     // This browser holds a socket to at most ONE session; knowing nothing
     // about the rest is the normal case, not a fault.
@@ -436,19 +502,25 @@ test('THE WHOLE MAPPING, one row per state, is what the user asked for', () => {
     }
 });
 
-test('the finished-turn ring is a GREEN OUTLINE around a GREY DOT', () => {
-    // The owner's words. This is the treatment that replaced the unread
+test('the finished-turn ring is a GREEN OUTLINE around a RECESSED CENTRE', () => {
+    // The owner's 2026-09-09 correction, verbatim: "it should look like
+    // the 'status not measured' dot, but the outline should be green
+    // instead of light grey with the dark grey center". The first version
+    // filled the middle with the grey `done` dot, which read as two
+    // lights stacked. This is the treatment that replaced the unread
     // envelope icon, so it is the only thing left saying "there is
     // something here for you".
     const led = Led.ledStateFor({ activity_status: 'finished_unread' });
+    // THE STATE MACHINE DID NOT MOVE. Only the paint of the centre did,
+    // so the inner state is still `done` and still resolves to the grey
+    // ink every other resting light uses.
     assert.equal(led.inner, 'done');
     assert.equal(led.outer, 'unread');
-    // grey dot
     assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
     assert.ok(/\[data-inner='done'\]\s*\{\s*--led-ink: var\(--led-color-idle\)/.test(CSS));
     // green ring
     assert.ok(CSS.includes('--led-color-unread: var(--color-success'));
-    const block = CSS.split("[data-outer='unread'] {")[1].split('}')[0];
+    const block = ruleBody(".status-led[data-outer='unread']");
     assert.ok(/--led-halo-opacity:\s*1;/.test(block), 'the ring is opaque');
     // AND IT MUST NOT RESIZE ITSELF. This block used to carry its own
     // `--led-halo-scale: 1.7`, which is precisely how `unread` and
@@ -464,22 +536,73 @@ test('the finished-turn ring is a GREEN OUTLINE around a GREY DOT', () => {
     // A transparent centre with an inset band is what leaves the dot
     // visible. If this ever reverts to a fill, the treatment the owner
     // asked for silently stops existing.
-    const pseudo = CSS.split("[data-outer='unread']::after {")[1].split('}')[0];
+    const pseudo = ruleBody(".status-led[data-outer='unread']::after");
     assert.ok(/background:\s*transparent/.test(pseudo), 'the centre must be clear');
     assert.ok(/box-shadow:\s*inset/.test(pseudo), 'the band must be an inset ring');
     assert.ok(CSS.includes('--led-ring-width'), 'the band width is a named token');
 });
 
+test('THE CLEARED CENTRE IS ONE RECIPE SHARED BY BOTH HOLLOW STATES', () => {
+    // The unread ring and the `unknown` dot are now the same
+    // construction in two hues, which is precisely what the owner asked
+    // for. Two copies of "clear the middle" would be free to drift into
+    // one state showing the real background and the other showing a grey
+    // somebody picked, and at nine pixels nobody would notice for weeks.
+    //
+    // So the clear is a TOKEN, set in exactly one rule that names both
+    // states. Asserting the count is the whole point: a second
+    // declaration is the drift.
+    const clears = CSS.match(/--led-fill:\s*transparent;/g) || [];
+    assert.equal(
+        clears.length, 1,
+        'the cleared centre must be declared in exactly one place',
+    );
+    assert.ok(
+        /--led-fill:\s*transparent;/.test(ruleBody(
+            ".status-led[data-inner='unknown'], .status-led[data-outer='unread']",
+        )),
+        'the one clear must name both hollow states',
+    );
+    // AND THE DOT MUST ACTUALLY READ THE TOKEN. `background:
+    // var(--led-ink)` here would refill both of them and every assertion
+    // above would still pass.
+    const base = CSS.split('.status-led {')[1].split('\n}')[0];
+    assert.ok(
+        /background:\s*var\(--led-fill\);/.test(base),
+        'the dot is painted with the fill token, not the ink',
+    );
+    assert.ok(
+        /--led-fill:\s*var\(--led-ink\);/.test(base),
+        'and it defaults to the ink, so a solid state stays solid',
+    );
+    // THE LEGACY COMPAT BLOCK IS THE TRAP. `.status-dot.status-led`
+    // outranks `.status-led[data-outer='unread']` and sits later in the
+    // file, so a `var(--led-ink)` there would silently put the grey blob
+    // back on every surface that emits the legacy class - which is all of
+    // them, via session-status-ui.js's dotHtml.
+    const legacy = CSS.split('.status-dot.status-led {')[1].split('\n}')[0];
+    assert.ok(
+        /background:\s*var\(--led-fill\);/.test(legacy),
+        'the legacy compat block must not refill the hollow states',
+    );
+});
+
 test('grey at rest and grey unmeasured are told apart by SHAPE', () => {
-    // Same hue on purpose. `unknown` is the one hollow dot in the
-    // component, which is how "we did not look" stays distinguishable
-    // from "we looked and it is quiet" without ranking one above the
-    // other with a louder colour.
+    // Same hue on purpose, which is how "we did not look" stays
+    // distinguishable from "we looked and it is quiet" without ranking
+    // one above the other with a louder colour. `unknown` keeps its own
+    // 2px rim on the 9px dot; the cleared middle now comes from the
+    // shared rule tested above.
     assert.ok(CSS.includes('--led-color-unknown: var(--color-fg-muted'));
     assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
-    const hollow = CSS.split("[data-inner='unknown'] {")[1].split('}')[0];
-    assert.ok(/background:\s*transparent/.test(hollow));
-    assert.ok(/box-shadow:\s*inset/.test(hollow));
+    const hollow = ruleBody(".status-led[data-inner='unknown']");
+    assert.ok(/box-shadow:\s*inset/.test(hollow), 'the rim is an inset shadow');
+    // AND THE TWO HOLLOW STATES ARE NOT THE SAME LIGHT. They share a
+    // construction and must not share a hue, or the legend's last two
+    // rows would be describing one dot.
+    assert.ok(/var\(--led-color-unknown\)/.test(hollow), 'the rim is grey');
+    const ring = ruleBody(".status-led[data-outer='unread']");
+    assert.ok(/var\(--led-color-unread\)/.test(ring), 'the ring is green');
 });
 
 // ---- the stylesheet ---------------------------------------------------

@@ -63,45 +63,65 @@ console.log('[SessionStatusKey Module] Loading...');
      * come first, rest and not-measured last. A reader scanning the top of
      * this list is reading the states worth acting on.
      *
+     * ONE ROW PER LIGHT, NOT ONE ROW PER STATE. This list carried nine
+     * rows until 2026-09-09 and the owner asked for seven: "there should
+     * only be one entry per colour". The two yellow rows collapsed into
+     * one and the two red rows collapsed into one, because a reader
+     * looking up a dot is asking what the COLOUR on their screen means,
+     * and being shown the same yellow twice with two different sentences
+     * makes them hunt for a difference the light cannot show them.
+     *
+     * THE STATE MACHINE DID NOT CHANGE. There are still eight inner
+     * states; `waiting-permission` and `waiting-input` still paint one
+     * yellow, `dead` and `disconnected` still paint one red, and the
+     * component's own `title` and `aria-label` still say WHICH of the
+     * pair any given dot is - see INNER_LABELS in client/js/status-led.js
+     * and the test that pins it. What collapsed is this legend's rows.
+     *
+     * Green appears twice and grey appears twice, and that is not a
+     * violation of the rule: those are four visually distinct lights, not
+     * two. A solid green dot and a green ring are different shapes, and
+     * so are a solid grey dot and a grey outline - which is exactly the
+     * distinction the last row exists to explain.
+     *
      * @type {Array<{inner: string, outer: string, text: string}>}
      */
     const ENTRIES = [
+        // YELLOW. Both stopped-on-a-human states land here. Drawn as
+        // `waiting-permission` because that is the commoner of the two;
+        // the other paints the identical hue, and its own dot on a real
+        // row still says "startup prompt" in words.
         {
             inner: 'waiting-permission',
             outer: 'active',
-            text: 'stopped, waiting on you to approve something',
+            text: 'stopped, waiting on you',
         },
-        {
-            inner: 'waiting-input',
-            outer: 'active',
-            text: 'stopped, waiting on you to answer a startup prompt',
-        },
+        // LIGHT BLUE. The one state that is working AND wants a human.
         {
             inner: 'notice',
             outer: 'active',
-            text: 'still working, and wants your attention',
+            text: 'still working, but needs your attention',
         },
+        // GREEN, SOLID.
         { inner: 'working', outer: 'active', text: 'working' },
-        {
-            inner: 'done',
-            outer: 'unread',
-            text: 'a finished turn you have not read yet',
-        },
-        { inner: 'done', outer: 'steady', text: 'nothing pending, already seen' },
-        {
-            inner: 'dead',
-            outer: 'off',
-            text: 'dead - the process in this pane exited',
-        },
-        {
-            inner: 'disconnected',
-            outer: 'off',
-            text: 'disconnected - no live connection to this session',
-        },
+        // GREEN, AS A RING. The finished-turn treatment: a green outline
+        // around a cleared centre, which is why the row after this one
+        // has to say what a SOLID grey dot means instead.
+        { inner: 'done', outer: 'unread', text: 'done, unread' },
+        // GREY, SOLID.
+        { inner: 'done', outer: 'steady', text: 'idle' },
+        // RED. A dead pane and a dead socket paint the same red; the dot
+        // on a real row says which in its tooltip and its aria-label.
+        { inner: 'dead', outer: 'off', text: 'dead / disconnected session' },
+        // GREY, AS AN OUTLINE. The row the owner had to ask about, so the
+        // sentence has to land without a second reading: the difference
+        // from the solid grey above is not severity, it is whether anyone
+        // looked. Solid grey is a MEASURED "nothing pending"; this is no
+        // measurement at all.
         {
             inner: 'unknown',
             outer: 'dim',
-            text: 'status not measured - this is not the same as idle',
+            text: 'not measured - nothing reported in, so this is not idle',
         },
     ];
 

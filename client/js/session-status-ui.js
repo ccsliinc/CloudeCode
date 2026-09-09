@@ -36,7 +36,7 @@
  *                       surviving indicator of it: the manual mark-unread
  *                       envelope was removed from the sidebar and the
  *                       launchpad, and this state now paints a green ring
- *                       around a grey dot instead. Server-side unread
+ *                       around a cleared centre instead. Server-side unread
  *                       TRACKING is untouched.
  *   idle             - alive, nothing pending, already seen.
  *   unknown          - status could not be determined (non-tmux backend,

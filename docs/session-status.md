@@ -328,7 +328,9 @@ stopped waiting for a response, then yellow. if it's still working but
 needs something from me, make it light blue", over "red if the connection
 is disconnected, grey if the session is idle, green if there is activity",
 plus "finished turn waiting on me to look at should be a green outline and
-grey filled dot".
+grey filled dot". The grey fill was withdrawn on 2026-09-09 - see the
+cleared centre below - and the quote is left whole because the ask it
+records is still the ask.
 
 The eight inner state NAMES stay eight. Only the paint collapses onto
 five hues, and the accessible label still says which state it is, because
@@ -565,7 +567,7 @@ unknown**.
 **The roll-up IS the row component.** `summaryHtml` picks an (inner,
 outer) pair and hands it to `StatusLed.ledHtml`, the same builder every
 row uses, so a header takes every treatment a row takes - including the
-green ring around a grey centre for a finished turn nobody has read. It
+green ring around a cleared centre for a finished turn nobody has read. It
 is not a header-shaped dot, and building one would be how the two come to
 disagree.
 

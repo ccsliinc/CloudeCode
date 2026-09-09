@@ -107,12 +107,17 @@
     --led-color-disconnected: var(--color-danger, #ff4444);
 
     /* THE FINISHED-TURN RING. Not a sixth colour: it is the green above,
-     * worn as an outline around a grey dot - "finished turn waiting on me
-     * to look at should be a green outline and grey filled dot". This
-     * treatment replaced the unread envelope icon on both the sidebar and
-     * the launchpad, so it is now the only thing saying "there is
-     * something here for you" and it has to be unmistakable at nine
-     * pixels. See [data-outer='unread'] below for the geometry. */
+     * worn as an outline around a RECESSED CENTRE - the owner's
+     * 2026-09-09 correction to the first version of this treatment, which
+     * put the green ring around a mid-grey FILLED dot: "it should look
+     * like the 'status not measured' dot, but the outline should be green
+     * instead of light grey with the dark grey center". So it is now the
+     * `unknown` dot's construction wearing a different hue - see
+     * --led-fill and the recessed-centre rule below. This treatment
+     * replaced the unread envelope icon on both the sidebar and the
+     * launchpad, so it is the only thing saying "there is something here
+     * for you" and it has to be unmistakable at nine pixels. See
+     * [data-outer='unread'] below for the geometry. */
     --led-color-unread: var(--color-success, #4ade80);
 
     /* Geometry. ONE LIT DIAMETER FOR EVERY STATE, and that is the whole
@@ -173,13 +178,25 @@
     --led-halo-ink: var(--led-color-unknown);
     --led-halo-opacity: 0.35;
 
+    /* WHAT THE CENTRE OF THE DOT IS PAINTED WITH, and it is a token
+     * rather than a literal because TWO states need it to be nothing.
+     * By default the centre is the state's own ink, i.e. a solid dot.
+     * The recessed-centre rule below is the ONE place that turns it off,
+     * for `unknown` and for the finished-turn ring together, so the two
+     * hollow treatments cannot drift apart into two recipes. Reading it
+     * through a variable rather than through a second `background`
+     * declaration is also what keeps the legacy `.status-dot` compat
+     * block at the foot of this file from having to re-state it at a
+     * higher specificity once per hollow state. */
+    --led-fill: var(--led-ink);
+
     position: relative;
     display: inline-block;
     flex-shrink: 0;
     width: var(--led-size);
     height: var(--led-size);
     border-radius: var(--radius-full);
-    background: var(--led-ink);
+    background: var(--led-fill);
     /* Isolate the negative-z-index halo to this element's own stacking
      * context, so it can sit behind the dot without falling behind the
      * row background it is painted on. */
@@ -246,15 +263,37 @@
     --led-ink: var(--led-color-disconnected);
 }
 
+/* ---- THE RECESSED CENTRE: ONE RECIPE, TWO STATES --------------------
+ * Both hollow treatments in this component clear the centre the same
+ * way - the fill is dropped so the row background shows through, which
+ * is what makes the middle read as dark and set back rather than as a
+ * second colour. They are declared together, in this one rule, so a
+ * later edit cannot give one of them a "dark" centre that is really a
+ * grey it painted while the other keeps showing the true background.
+ *
+ * The two are told apart by HUE and by WHERE THE BAND IS DRAWN, never by
+ * the centre: `unknown` is a grey rim on the 9px dot itself (below), the
+ * finished-turn ring is a green band on the halo box (further down).
+ *
+ * WHY `unread` AND NOT `done + unread`. The recessed centre belongs to
+ * the RING, which is an outer-halo treatment, so it is keyed on the
+ * halo. `done` is the only inner state `ledStateFor` ever pairs with it,
+ * but a matrix gallery may render others and all of them should show the
+ * one ring the app actually ships. */
+.status-led[data-inner='unknown'],
+.status-led[data-outer='unread'] {
+    --led-fill: transparent;
+}
+
 .status-led[data-inner='unknown'] {
-    /* THE ONLY HOLLOW DOT, carried over from `.status-dot--unknown` for
+    /* THE HOLLOW GREY DOT, carried over from `.status-dot--unknown` for
      * the reason recorded there: `unknown` is not a new severity, so it
      * may not take a louder colour, but it must not be pixel-identical
      * to a measured state under a theme that flattens the greys. Shape
      * separates them without ranking them. An inset shadow rather than a
      * border or a radius trick, so it stays hollow under the themes that
-     * set --radius-full to 0 and turn every dot into a square. */
-    background: transparent;
+     * set --radius-full to 0 and turn every dot into a square. The
+     * cleared centre itself comes from the shared rule above. */
     box-shadow: inset 0 0 0 2px var(--led-color-unknown);
     --led-ink: var(--led-color-unknown);
 }
@@ -274,9 +313,19 @@
 }
 
 .status-led[data-outer='unread'] {
-    /* A FINISHED TURN NOBODY HAS LOOKED AT: a crisp green ring around
-     * whatever the dot is, which in the only state that reaches it
-     * (`finished_unread`) is the grey idle dot.
+    /* A FINISHED TURN NOBODY HAS LOOKED AT: a crisp green ring around a
+     * RECESSED CENTRE.
+     *
+     * THE CENTRE IS CLEARED, NOT GREY, and that is the 2026-09-09
+     * correction. The first version of this treatment left the grey
+     * `done` dot filled inside the green band, and the owner rejected
+     * exactly that: "it should look like the 'status not measured' dot,
+     * but the outline should be green instead of light grey with the
+     * dark grey center". A mid-grey disc inside a green ring reads as
+     * two lights stacked; a cleared centre reads as one ring. The clear
+     * itself is `--led-fill: transparent`, set in the SHARED rule above
+     * that `unknown` also uses, so the two hollow states cannot end up
+     * with two different ideas of what "dark centre" means.
      *
      * IT IS DRAWN AS A RING, NOT AS A DISC, and that is not a style
      * preference. The halo pseudo-element carries `z-index: -1`, which
@@ -284,14 +333,15 @@
      * element's background - and the element's background IS the dot.
      * Every other halo gets away with that because it is a wash at
      * 0.18 to 0.55 opacity, so the dot reads straight through it. An
-     * OPAQUE disc at the same z-index hides the dot completely: measured
-     * in a 6x render, `finished_unread` came out a solid green blob with
-     * no grey in it at all. So the fill is dropped and an inset shadow
-     * draws the band at the outer edge, leaving the middle clear for the
-     * dot to show through.
+     * OPAQUE disc at the same z-index hides everything under it:
+     * measured in a 6x render, `finished_unread` came out a solid green
+     * blob. So the fill is dropped and an inset shadow draws the band at
+     * the outer edge, leaving the middle clear. With `--led-fill` also
+     * cleared, what shows through that middle is the row background, not
+     * a dot - which is the whole point of the correction above.
      *
      * GEOMETRY, AND IT SETS THE NUMBER FOR EVERY OTHER STATE. This is
-     * the one treatment with a hard size requirement - a 9px dot, a
+     * the one treatment with a hard size requirement - a 9px dot box, a
      * visible gap, and a band thick enough to read - so `--led-lit-scale`
      * is derived from it and then applied to all of them: 9 + 2*0.65 +
      * 2*2.5 = 15.3px, i.e. 1.7x the dot. THIS RULE DOES NOT OVERRIDE THE
@@ -389,13 +439,19 @@
 .status-dot.status-led {
     animation: none;
     box-shadow: none;
-    background: var(--led-ink);
+    /* Reads the FILL token, not the ink, so both hollow states keep
+     * their cleared centre here for free. Restating `var(--led-ink)`
+     * would refill them, and it would do it silently: this rule outranks
+     * `.status-led[data-outer='unread']` on specificity and comes later
+     * in the file, so the ring would quietly go back to a grey blob on
+     * every surface that emits the legacy class. */
+    background: var(--led-fill);
 }
 
-/* The hollow treatment is the one legacy shape worth keeping, so it is
- * re-asserted here in LED terms rather than inherited by accident. */
+/* The hollow rim is the one legacy shape worth keeping, so it is
+ * re-asserted here in LED terms rather than inherited by accident. The
+ * cleared centre needs no restatement - see the background above. */
 .status-dot.status-led[data-inner='unknown'] {
-    background: transparent;
     box-shadow: inset 0 0 0 2px var(--led-color-unknown);
 }
 

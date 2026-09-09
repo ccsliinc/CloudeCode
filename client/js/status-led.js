@@ -77,7 +77,11 @@ console.log('[StatusLed Module] Loading...');
      * five-colour pass it is a crisp, still green ring rather than a
      * breathing glow, because an outline that pulses stops reading as an
      * outline at nine pixels. Motion is therefore now a signal in its own
-     * right - a light that moves is a session that is moving.
+     * right - a light that moves is a session that is moving. Since
+     * 2026-09-09 the ring also CLEARS THE CENTRE of the dot it surrounds,
+     * so it reads as one ring rather than as a ring around a second
+     * light; the stylesheet does that with the same `--led-fill` the
+     * `unknown` dot uses.
      *
      * @type {string[]}
      */
@@ -341,13 +345,16 @@ console.log('[StatusLed Module] Loading...');
             return { inner: 'working', outer: 'active' };
         }
 
-        // THE FINISHED TURN NOBODY HAS LOOKED AT. Grey dot, green ring -
-        // the owner's words, "finished turn waiting on me to look at
-        // should be a green outline and grey filled dot". It is the one
-        // place the two rings say two different things about the same
-        // session: the CHAT is at rest (grey), and there is something
-        // here for the user (green ring). This is what the envelope icon
-        // used to carry, before the icon was removed from both surfaces.
+        // THE FINISHED TURN NOBODY HAS LOOKED AT. A green ring around a
+        // recessed centre: the owner asked first for "a green outline and
+        // grey filled dot", then on 2026-09-09 for the fill to go, "it
+        // should look like the 'status not measured' dot, but the outline
+        // should be green instead of light grey with the dark grey
+        // center". The inner state is still `done` - the CHAT is at rest,
+        // and the ring is what says there is something here for the user.
+        // Only the PAINT of the centre changed; see --led-fill in
+        // client/css/status-led.css. This is what the envelope icon used
+        // to carry, before the icon was removed from both surfaces.
         if (status === 'finished_unread') {
             return { inner: 'done', outer: 'unread' };
         }

@@ -847,12 +847,44 @@ dot". GREEN is `working` / `working_subagent`. YELLOW is `question` AND
 the startup gate's `awaiting_startup_prompt` - both are fully stopped and
 the user's answer to both is the same. LIGHT BLUE is `notice` alone, the
 only state that is working AND asking for you. GREY is `idle` and
-`unknown`, told apart by SHAPE (`unknown` is the one hollow dot) rather
+`unknown`, told apart by SHAPE (`unknown` is drawn hollow) rather
 than by a louder colour. RED is `dead` and a dropped WebSocket. And
-`finished_unread` is the two rings saying two things at once: a grey dot
-in a crisp green ring. THE EIGHT INNER STATE NAMES STAY EIGHT - only the
-paint collapses onto five hues, because the accessible label still has to
-say which state it is and colour was never allowed to be the only signal.
+`finished_unread` is a crisp green ring around a CLEARED centre. THE
+EIGHT INNER STATE NAMES STAY EIGHT - only the paint collapses onto five
+hues, because the accessible label still has to say which state it is and
+colour was never allowed to be the only signal.
+
+**THE GREY FILL IN THAT RING WAS WITHDRAWN, and the two hollow lights now
+share one recipe.** Shipped, the ring put a mid-grey `done` dot inside the
+green band and it read as two lights stacked. The owner's 2026-09-09
+correction, verbatim: "it should look like the 'status not measured' dot,
+but the outline should be green instead of light grey with the dark grey
+center". So `--led-fill: transparent` is declared in ONE rule naming both
+`[data-inner='unknown']` and `[data-outer='unread']`, and the dot's
+`background` reads that token rather than `--led-ink`. Two copies of
+"clear the middle" would drift into one state showing the real background
+and the other showing a grey somebody picked, so the count of that
+declaration is asserted. Note the trap the token also closes: the legacy
+`.status-dot.status-led` compat block outranks `[data-outer='unread']` and
+sits later in the file, so a `background: var(--led-ink)` there silently
+refills both hollow states on every surface. CLEARING A FILL MOVES PAINT,
+NOT GEOMETRY - measured at 8x device scale before and after, all nine
+(inner, outer) pairs painted an IDENTICAL extent to the hundredth of a
+pixel, so `--led-lit-scale` is untouched.
+
+**THE KEY IS SEVEN ROWS, ONE PER LIGHT, NOT ONE PER STATE.** It carried
+nine and the owner asked for "one entry per colour": two rows showed the
+same yellow and two the same red, which sends a reader looking up a dot
+hunting for a difference the light cannot show them. Yellow is now
+"stopped, waiting on you", red is "dead / disconnected session", and green
+and grey each appear twice ONLY because a solid dot and an outline are two
+different things on screen. THE STATE MACHINE DID NOT CHANGE: the four
+collapsed states still exist and the dot's own `title` / `aria-label`
+still say which of each pair it is, which makes those labels load-bearing
+rather than decorative. `tests/test_status_key.node.mjs` pins the count,
+that every hue has a row, that no two rows draw the same light, and that
+the collapsed pairs resolve to one colour in the STYLESHEET while their
+words still differ.
 
 The unread ENVELOPE ICON went with it, from the sidebar row menu and the
 launchpad card. It was also the manual mark-unread control, so its click

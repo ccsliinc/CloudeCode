@@ -436,3 +436,56 @@ permission prompts. The attachment receipt is deliberately outside the
 grouping and keeps its own card. Screens measured in a real Chromium:
 13 records across 3 sessions paint 3 cards on desktop and 2 plus an
 accurate overflow row at 330px, in both a dark and a light theme.
+
+[key-collapse] [2026-09-09T21:28:22Z]: the status-light key is seven rows, one per LIGHT
+rather than one per state, and the finished-turn ring lost its grey fill.
+The owner's ask was "one entry per colour", so the two yellow rows
+(permission, startup prompt) collapsed into "stopped, waiting on you" and
+the two red rows (dead pane, dead socket) into "dead / disconnected
+session". Green and grey still appear twice because a solid dot and an
+outline are two different things on screen; the last row is reworded to
+say what the outline means ("not measured - nothing reported in, so this
+is not idle"). THE STATE MACHINE DID NOT CHANGE - eight inner states,
+four of them now sharing two rows, and the dot's own title/aria-label is
+the only place left that says which of a pair it is, which is now pinned
+by tests rather than left as decoration. The visual fix went into the LED
+COMPONENT, not the key: `--led-fill` is a new token that the dot's
+background reads instead of `--led-ink`, and ONE rule naming both
+`[data-inner='unknown']` and `[data-outer='unread']` sets it to
+transparent, so the two hollow lights cannot drift into two ideas of what
+a dark centre is. The trap the token also closes is the legacy
+`.status-dot.status-led` compat block: it outranks the unread selector
+and sits later in the file, so a `var(--led-ink)` there silently refills
+both hollow states everywhere. Clearing a fill moves paint and not
+geometry, and that was MEASURED rather than reasoned: rendered at 8x
+device scale off the real stylesheet, all nine (inner, outer) pairs
+painted an identical extent before and after, to the hundredth of a pixel
+(15.75 for the four breathing states, 16.00 for the ring, 15.62 steady,
+15.38 dim, 9.00 for the two `off` states, which carry no halo by
+design). Note for whoever reads the history: commit 65faa8c, another
+agent's toast change, swept this round's docs/session-status.md edits
+into itself, so part of this work is recorded under that message.
+
+[header-wrap] [2026-09-09T00:00:00Z]: Screenshot complaint ("session editor
+sliders button still floats top-right, clipboard FAB still shows bottom-right")
+is NOT a code defect. Built a Playwright harness (real client/index.html header
+markup, all 46 real CSS files, real header-menu.js building the real kebab,
+served same-origin via request interception against the live 127.0.0.1:8000 so
+no file:// cross-origin CSS quirks) and swept 330-1435px. Result: at every
+width the session editor button sits inline between the folder icon and the
+kebab, `wraps=false` everywhere, matching `tests/test_mobile_only_fab_and_header_editor.node.mjs`
+(10/10 pass, unchanged). The terminal-tools clipboard FAB flips exactly at the
+documented 769px line (flex through 768, none from 769), also as coded. The
+screenshot is 1435 physical px wide; at a plausible 2x Retina scale that is a
+~717 CSS px window, comfortably under 769, so the FAB showing there is BY
+DESIGN, not a bug. The floating sliders button in the screenshot is styled
+like the OLD retired `.fab-menu-btn`/`.session-editor-fab` rail (dark
+`--color-bg-elevated` circle, `--color-fg-muted` icon) that 07a202b deleted
+from both CSS and JS - no code path in the current tree can produce that
+look (grepped, only `.btn-icon` touches `#sessionEditorBtn` now). Most likely
+explanation: the browser tab in the screenshot was opened before 07a202b
+deployed and was never reloaded, so it is still running pre-deploy JS/HTML
+held in memory - a `<link>`/`<script>` already loaded does not refetch just
+because the server's cache-control says no-cache; that header only matters on
+a NEW request. No code changed. Recommend: reload/refresh that window and
+re-screenshot before assuming anything is still broken.
