@@ -84,6 +84,21 @@ const CSS = fs.readFileSync(
 );
 
 /**
+ * The stylesheet with every `/* ... *\/` comment removed.
+ *
+ * This file is heavily commented and several of those comments name the
+ * very properties the structural assertions below forbid - the block
+ * explaining WHY the referee may not reset `box-shadow` contains the
+ * string `box-shadow`, and the one explaining why nothing may move the
+ * element contains `inset:`. Matching against the raw text makes those
+ * explanations fail their own tests, so anything asserting "this
+ * property does not appear" reads RULES instead. Assertions about a
+ * specific declaration's text may use either.
+ * @type {string}
+ */
+const RULES = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
  * Re-create a value in THIS realm.
  *
  * status-led.js is evaluated inside a `vm` context, so every array and
@@ -332,73 +347,170 @@ test('an unread session that could not be measured still shows the halo', () => 
     });
 });
 
-// ---- concentricity -----------------------------------------------------
-//
-// The owner's report: "the leds are not lined up directly centered so
-// there is a weird offset." Root cause: the halo used to be positioned
-// with `top: 50%; left: 50%` plus a NEGATIVE MARGIN from its own calc(),
-// sized by a THIRD, separate calc() on width/height - three independently
-// evaluated expressions that all had to agree, to the sub-pixel, for the
-// halo to land centred on the dot. At the shipped 9px default,
-// 9 * 1.3 = 11.7px is not an integer, so the two independently-rounded
-// quantities (the resolved position and the resolved size) were not
-// guaranteed to agree on which side absorbed the leftover 0.7px, and the
-// dot's own exactly-integer box never had this problem - only the halo's
-// did. `inset` sets all four edges from ONE shared expression instead, so
-// the box is symmetric by construction rather than by two calc()s
-// happening to produce equal floats.
 
-test('the halo is centred with inset from a single shared offset, not independent top/left/margin/width calcs', () => {
-    const afterBlock = CSS.split('.status-led::after {')[1].split('\n}')[0];
+// ---- ONE ELEMENT, and why -----------------------------------------------
+//
+// The owner's report, twice. First: "the leds are not lined up directly
+// centered so there is a weird offset." That was traced to the halo's own
+// internal asymmetry - a `top`/`left` percentage plus a negative margin
+// plus a separate width calc, three independently-rounded quantities that
+// all had to agree - and fixed by giving the halo a single symmetric
+// `inset`. Then, after that shipped: "the circles are still not lining up
+// properly. can we do the same with only one icon?"
+//
+// The remaining drift was never inside the halo. It was BETWEEN TWO
+// BOXES. The layout engine snaps a box's position and size to the device
+// pixel grid, and it does that for the halo's box independently of the
+// dot's, so whenever the dot landed on a fractional x/y - routine inside
+// a flex row, or wherever a text baseline puts an inline box on a half
+// pixel - the two rounded different ways and came apart. No arrangement
+// of a second box can fix that, because the second box is the defect.
+//
+// A box-shadow is not a box. It is painted from the element's own border
+// box at that box's own subpixel position, so it cannot be snapped to a
+// different grid than the fill it surrounds. These tests pin the shape of
+// that fix: no pseudo-element, one box-shadow, and nothing in the
+// animation that can move the element.
+
+test('the halo pseudo-element is gone entirely', () => {
+    // The whole point of the rewrite. A ::after on this component is a
+    // second box, and a second box is the drift.
     assert.ok(
-        /inset:\s*var\(--led-halo-inset\)/.test(afterBlock),
-        'the halo must position itself with inset from the one shared token',
+        !RULES.includes('.status-led::after'),
+        'no ::after rule may remain on the LED - that is the two-box defect',
     );
-    // Regression guard: none of the old three-calc technique's properties
-    // may reappear on the halo. Each one reintroduces a second,
-    // independently-rounded quantity that can disagree with the others.
-    for (const prop of ['top:', 'left:', 'margin-top:', 'margin-left:']) {
+    assert.ok(
+        !RULES.includes('::before'),
+        'and no ::before either - one element means one box',
+    );
+});
+
+test('the ring and the glow are layers of ONE box-shadow on the element', () => {
+    const base = RULES.split('\n.status-led {')[1].split('\n}')[0];
+    const shadowDeclarations = base.split('box-shadow:').length - 1;
+    assert.equal(
+        shadowDeclarations,
+        1,
+        'the base rule must declare box-shadow exactly once',
+    );
+    assert.ok(
+        base.includes(
+            'box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-glow-layer);',
+        ),
+        'the one declaration must be the three named layers, in paint order',
+    );
+});
+
+test('the hard ring is a zero-blur spread shadow, so its outer edge is exact', () => {
+    // `0 0 0 <width>` puts the ring's outer diameter at exactly
+    // size + 2 * width with no blur to soften where it lands. At the 9px
+    // default that is an integer, 11px, so the ring's edge sits on the
+    // pixel grid whenever the dot's does.
+    assert.ok(
+        /--led-ring-layer:\s*0 0 0 var\(--led-ring-width\)/.test(CSS),
+        'the ring layer must be 0 0 0 <ring-width>, not a blurred shadow',
+    );
+    const widthMatch = CSS.match(/--led-ring-width:\s*([\d.]+)px;/);
+    assert.ok(widthMatch, '--led-ring-width must be a plain px value');
+    const width = Number(widthMatch[1]);
+    const size = 9;
+    const ringDiameter = size + 2 * width;
+    assert.ok(
+        ringDiameter > size && ringDiameter <= size + 4,
+        `ring diameter ${ringDiameter}px must read as 1-2px larger than the ${size}px dot, per the owner's calibration`,
+    );
+    assert.ok(
+        Number.isInteger(ringDiameter),
+        'the ring diameter must be an integer at the 9px default so it cannot land off-grid',
+    );
+});
+
+test('the soft glow is a blurred layer with its own blur and spread tokens', () => {
+    assert.ok(
+        /--led-glow-layer:\s*0 0 var\(--led-glow-blur\) var\(--led-glow-spread\)/.test(
+            CSS,
+        ),
+        'the glow layer must be 0 0 <blur> <spread>',
+    );
+    const blurMatch = CSS.match(/--led-glow-blur:\s*([\d.]+)px;/);
+    const spreadMatch = CSS.match(/--led-glow-spread:\s*([\d.]+)px;/);
+    assert.ok(blurMatch && spreadMatch, 'both glow tokens must be plain px values');
+    // A blurred shadow reaches spread + blur/2 past the border box. The
+    // ::after era reached 16.2px across at the 9px default; this must not
+    // regrow past that, or the "1 or 2px larger" calibration is lost.
+    const reach = Number(spreadMatch[1]) + Number(blurMatch[1]) / 2;
+    const litDiameter = 9 + 2 * reach;
+    assert.ok(
+        litDiameter <= 16.2,
+        `lit object ${litDiameter}px must not exceed the 16.2px the ::after halo reached`,
+    );
+});
+
+test('alpha lives in the shadow colour, never in element opacity', () => {
+    // One element cannot carry an `opacity` for its ring without fading
+    // the state colour at the centre too. Every alpha is mixed into the
+    // shadow's own colour instead.
+    assert.ok(
+        !/^\s*opacity:/m.test(RULES),
+        'no rule may set opacity on the LED - it would fade the fill as well as the ring',
+    );
+    assert.ok(
+        CSS.includes('color-mix(in srgb, var(--led-ring-ink) var(--led-ring-alpha), transparent)'),
+        'the ring alpha must be mixed into the ring colour',
+    );
+    assert.ok(
+        CSS.includes('color-mix(in srgb, var(--led-ring-ink) var(--led-glow-alpha), transparent)'),
+        'the glow alpha must be mixed into the glow colour',
+    );
+});
+
+test('the hollow unknown rim is a shadow LAYER, not a second box-shadow declaration', () => {
+    // There is one box-shadow property on this element and the outer ring
+    // needs it. An inner-state rule declaring its own would erase the
+    // outer ring for that state, and the two dimensions would stop being
+    // independent - the invariant this whole component exists to hold.
+    const unknownBlock = RULES.split(".status-led[data-inner='unknown'] {")[1].split(
+        '\n}',
+    )[0];
+    assert.ok(
+        !unknownBlock.includes('box-shadow:'),
+        'the unknown rule must not declare box-shadow',
+    );
+    assert.ok(
+        unknownBlock.includes('--led-inset-ring: inset 0 0 0 var(--led-hollow-width)'),
+        'it must set the inset layer instead',
+    );
+    assert.ok(
+        CSS.includes('--led-inset-ring: inset 0 0 0 0 transparent;'),
+        'and the default must be a no-op inset layer, so the list length never changes',
+    );
+});
+
+test('the legacy referee no longer resets box-shadow, which would erase every ring', () => {
+    // That reset was correct while the ring lived on a pseudo-element. Now
+    // that the ring is ON the element, `.status-dot.status-led` is two
+    // classes and therefore beats every rule above it - a `box-shadow:
+    // none` here would blank the outer ring on every LED in the app.
+    const refereeBlocks = RULES.split('.status-dot.status-led');
+    for (let i = 1; i < refereeBlocks.length; i++) {
+        const block = refereeBlocks[i].split('\n}')[0];
         assert.ok(
-            !afterBlock.includes(prop),
-            `the halo must not carry ${prop} - that is the old off-centre technique`,
+            !block.includes('box-shadow'),
+            'no .status-dot.status-led rule may touch box-shadow',
         );
     }
 });
 
-test('--led-halo-inset is declared exactly once and derives from the halo scale and size alone', () => {
-    const declarations = CSS.split('--led-halo-inset:').length - 1;
-    assert.equal(declarations, 1, '--led-halo-inset must be declared exactly once');
+test('the referee animation reset excludes the two breathing states', () => {
+    // A blanket `.status-dot.status-led { animation: none }` is (0,2,0),
+    // ties with the breathing rule and wins on source order, silently
+    // killing the pulse for every LED in the app. Excluding the two
+    // states makes it order-independent.
     assert.ok(
         CSS.includes(
-            '--led-halo-inset: calc((1 - var(--led-halo-scale)) * var(--led-size) / 2);',
+            ".status-dot.status-led:not([data-outer='active']):not([data-outer='unread']) {",
         ),
-        'the inset formula must reference --led-halo-scale and --led-size directly',
-    );
-});
-
-test('the inset arithmetic reproduces the exact halo geometry at the 9px default', () => {
-    // Same formula as --led-halo-inset, evaluated here in JS: a negative
-    // inset that expands the halo by (scale - 1) * size total, split
-    // evenly across both edges on each axis.
-    const size = 9;
-    const scale = 1.3;
-    const inset = ((1 - scale) * size) / 2;
-    assert.ok(Math.abs(inset - -1.35) < 1e-9, 'inset must be -1.35px at the 9px default');
-    const haloWidth = size - 2 * inset; // inset is negative, so this expands
-    assert.ok(
-        Math.abs(haloWidth - 11.7) < 1e-9,
-        'the resulting halo width must be unchanged from the pre-fix 11.7px',
-    );
-    // The centre of a box defined by symmetric inset X on both sides of a
-    // size-S parent is always S/2, whatever X is - that is the whole
-    // point of deriving both edges from one shared value instead of a
-    // separately-rounded width plus a separately-rounded position.
-    const haloLeftEdge = 0 + inset;
-    const haloCenter = haloLeftEdge + haloWidth / 2;
-    const dotCenter = size / 2;
-    assert.ok(
-        Math.abs(haloCenter - dotCenter) < 1e-9,
-        'the halo center must land exactly on the dot center',
+        'the legacy animation reset must be scoped off the breathing states',
     );
 });
 
@@ -413,11 +525,22 @@ test('every inner state has a colour rule', () => {
     }
 });
 
-test('every outer state has a rule', () => {
+test('every outer state has a rule, and every one of them sets the ring', () => {
     for (const outer of plain(Led.OUTER_STATES)) {
         assert.ok(
             CSS.includes(`[data-outer='${outer}']`),
             `no rule for outer state ${outer}`,
+        );
+        const block = RULES.split(`.status-led[data-outer='${outer}'] {`)[1].split(
+            '\n}',
+        )[0];
+        assert.ok(
+            block.includes('--led-ring-alpha:'),
+            `outer state ${outer} must say how solid its ring reads`,
+        );
+        assert.ok(
+            block.includes('--led-glow-alpha:'),
+            `outer state ${outer} must say how strong its glow reads`,
         );
     }
 });
@@ -436,110 +559,150 @@ test('the five state colours are named tokens in one place', () => {
     }
 });
 
-test('only the two breathing states animate, and only on the halo', () => {
-    // The dot itself must never animate: the state colour has to stay at
-    // full strength and legible at every point in the cycle.
-    assert.ok(CSS.includes("[data-outer='active']::after"));
-    assert.ok(CSS.includes("[data-outer='unread']::after"));
-    // The `.status-dot.status-led` compat block sets `animation: none`,
-    // which is a reset and not motion, so the check is anchored to a rule
-    // whose selector is the bare component at the start of a line.
+test('the retired halo tokens are gone, not left behind as dead weight', () => {
+    // --led-halo-scale sized a box that no longer exists, and
+    // --led-halo-inset positioned it. A token nothing reads is a false
+    // lead for the next person tuning this component.
+    for (const token of [
+        '--led-halo-scale',
+        '--led-halo-inset',
+        '--led-halo-ink',
+        '--led-halo-opacity',
+    ]) {
+        assert.ok(!RULES.includes(token), `${token} must be retired with the halo box`);
+    }
+});
+
+test('only the two breathing states animate, and the animation is on the element', () => {
+    assert.ok(CSS.includes(".status-led[data-outer='active'],"));
+    assert.ok(CSS.includes(".status-led[data-outer='unread'] {"));
+    // The base rule must not carry a running animation - a resting LED
+    // holds still.
     assert.ok(
-        !/^\.status-led\s*\{[^}]*animation:\s*(?!none)/m.test(CSS),
-        'the dot itself must not carry a running animation',
+        !/^\.status-led\s*\{[^}]*animation:\s*(?!none)/m.test(RULES),
+        'the base rule must not carry a running animation',
     );
 });
 
 test('done is steady - it has no animation', () => {
-    const block = CSS.split("[data-outer='steady']")[1].split('}')[0];
+    const block = RULES.split(".status-led[data-outer='steady'] {")[1].split('\n}')[0];
     assert.ok(!block.includes('animation'), 'steady must not pulse');
 });
 
-test('dead has no halo at all, rather than a dim one', () => {
-    const block = CSS.split("[data-outer='off']")[1].split('}')[0];
-    assert.ok(block.includes('--led-halo-opacity: 0'), 'a corpse must not glow');
+test('dead has no ring and no glow at all, rather than dim ones', () => {
+    const block = RULES.split(".status-led[data-outer='off'] {")[1].split('\n}')[0];
+    assert.ok(block.includes('--led-ring-alpha: 0%'), 'a corpse must not ring');
+    assert.ok(block.includes('--led-glow-alpha: 0%'), 'a corpse must not glow');
+    // And it must go transparent rather than `box-shadow: none`, which
+    // would take the hollow `unknown` rim with it and make one dimension
+    // depend on the other.
+    assert.ok(
+        !block.includes('box-shadow'),
+        'off must not blank the whole box-shadow - the inset layer belongs to the other dimension',
+    );
 });
 
-test('prefers-reduced-motion kills the pulse but keeps the glow', () => {
-    assert.ok(CSS.includes('@media (prefers-reduced-motion: reduce)'));
-    const block = CSS.split('@media (prefers-reduced-motion: reduce)')[1];
-    assert.ok(block.includes('animation: none'), 'no motion');
-    // The glow must survive: it is what makes the LED readable, and the
-    // active/resting distinction moves entirely into opacity.
+test('dim is a low-alpha ring, not a lit one', () => {
+    const block = RULES.split(".status-led[data-outer='dim'] {")[1].split('\n}')[0];
+    const alpha = Number(block.match(/--led-ring-alpha:\s*(\d+)%/)[1]);
+    assert.ok(alpha > 0 && alpha < 50, `dim ring alpha ${alpha}% must be faint but present`);
+    assert.ok(block.includes('--led-glow-alpha: 0%'), 'not-measured must not glow');
+});
+
+test('the breathing keyframes move the GLOW LAYER and nothing else', () => {
+    const block = RULES.split('@keyframes status-led-breathe')[1].split('\n}\n')[0];
+    assert.ok(block, 'the breathing keyframes must exist');
+    // Only box-shadow may appear. A transform, a width, a margin or an
+    // inset in here would move the element's own box and reintroduce the
+    // drift the one-element rewrite exists to remove.
+    for (const forbidden of [
+        'transform:',
+        'width:',
+        'height:',
+        'margin',
+        'inset:',
+        'top:',
+        'left:',
+        'scale(',
+        'opacity:',
+    ]) {
+        assert.ok(
+            !block.includes(forbidden),
+            `the keyframes must not touch ${forbidden} - box-shadow is the only paint-only option`,
+        );
+    }
+    const shadowFrames = block.split('box-shadow:').length - 1;
+    assert.equal(shadowFrames, 2, 'exactly two keyframes, each writing box-shadow');
+    // The two frames must differ in the glow layer alone: same inset
+    // layer, same ring layer, one uses the rest variant of the glow.
     assert.ok(
-        block.includes('opacity: var(--led-halo-opacity)'),
-        'the halo stays lit at its full value',
+        block.includes('var(--led-glow-layer-rest)'),
+        'the trough must use the rest glow layer',
+    );
+    assert.ok(
+        block.includes('var(--led-ring-layer)'),
+        'the ring layer must be identical at both ends, so the ring never moves',
+    );
+    assert.equal(
+        block.split('var(--led-ring-layer)').length - 1,
+        2,
+        'both frames must carry the same ring layer',
+    );
+    assert.equal(
+        block.split('var(--led-inset-ring)').length - 1,
+        2,
+        'both frames must carry the same inset layer, so the layer count never changes mid-animation',
+    );
+});
+
+test('the rest glow shrinks and dims from ONE fraction', () => {
+    // Spread and alpha move together off --led-glow-rest, which is what
+    // reads as a glow swelling rather than a light flickering.
+    assert.ok(
+        CSS.includes('calc(var(--led-glow-spread) * var(--led-glow-rest))'),
+        'the trough spread must derive from the rest fraction',
+    );
+    assert.ok(
+        CSS.includes('calc(var(--led-glow-alpha) * var(--led-glow-rest))'),
+        'the trough alpha must derive from the same fraction',
+    );
+    const rest = Number(CSS.match(/--led-glow-rest:\s*([\d.]+);/)[1]);
+    assert.ok(rest > 0 && rest < 1, `--led-glow-rest ${rest} must be a real fraction`);
+});
+
+test('nothing in the stylesheet can move the element', () => {
+    // The static half of the same guarantee. A transform, a negative
+    // margin or an inset on this component would put its painted box
+    // somewhere other than its layout box, which is exactly the class of
+    // thing that made the two circles come apart.
+    for (const forbidden of ['transform:', 'margin-top:', 'margin-left:', 'inset:']) {
+        assert.ok(
+            !RULES.includes(forbidden),
+            `the LED must not use ${forbidden} anywhere`,
+        );
+    }
+    assert.ok(
+        !RULES.includes('position: absolute'),
+        'nothing here may be taken out of flow - there is only one box now',
+    );
+});
+
+test('prefers-reduced-motion kills the pulse and leaves the ring lit', () => {
+    assert.ok(CSS.includes('@media (prefers-reduced-motion: reduce)'));
+    const block = RULES.split('@media (prefers-reduced-motion: reduce)')[1];
+    assert.ok(block.includes('animation: none'), 'no motion');
+    // The glow must survive. It does so by simply not being animated:
+    // the base rule already paints the full-strength ring and glow, so
+    // the reduced-motion block needs to kill the animation and nothing
+    // else. It must NOT re-state geometry, or the two would drift apart.
+    assert.ok(
+        !block.includes('box-shadow'),
+        'reduced motion must not restate the shadow - the base rule is already the lit value',
     );
 });
 
 test('the breathing period is about two seconds, as specified', () => {
     assert.ok(CSS.includes('status-led-breathe 2s ease-in-out infinite'));
-});
-
-// ---- compact-size geometry ---------------------------------------------
-//
-// The owner's report ("on the compact view the breathing is way too big.
-// also in the homepage") traced to a halo that grew to about 35px across
-// at the breathing peak while the dot itself renders at the CSS default
-// of 9px everywhere - the sidebar row and the launchpad card both call
-// `dotHtml()` with no `size`, so both got that oversized halo. These pin
-// the tuned-down geometry so a future edit cannot silently regrow it.
-
-test('the halo scale and glow spread match the owner-calibrated "1-2px larger" geometry', () => {
-    assert.ok(
-        CSS.includes('--led-halo-scale: 1.3;'),
-        'halo scale must stay at the tuned-down 1.3x, not regrow toward 1.7x or 2.6x',
-    );
-    assert.ok(
-        CSS.includes('--led-glow-spread: 1.5px;'),
-        'glow spread must stay a fixed 1.5px, not regrow toward a larger fraction of the dot size',
-    );
-});
-
-test('the lit object at the 9px default stays within about 1-2px of the dot, per the owner\'s calibration', () => {
-    // Same arithmetic as the comment above the tokens in status-led.css:
-    // halo diameter = size * scale, glow adds a fixed spread on each side.
-    // This is not a rendering measurement - box-shadow blur softens the
-    // true edge - but it is the same approximation every prior regression
-    // and fix in this file was reasoned from, so a silent increase here is
-    // caught before it reaches a browser.
-    const size = 9;
-    const scaleMatch = CSS.match(/--led-halo-scale:\s*([\d.]+);/);
-    const spreadMatch = CSS.match(/--led-glow-spread:\s*([\d.]+)px;/);
-    assert.ok(scaleMatch && spreadMatch, 'halo scale must be a plain multiplier and glow spread a plain px value');
-    const scale = Number(scaleMatch[1]);
-    const spread = Number(spreadMatch[1]);
-    const diameter = size * scale + 2 * spread;
-    // The owner's own words: "like 1 or 2 px larger than the front
-    // circle." The halo ring alone (size * scale) must land in that
-    // window, and the whole lit object including glow must stay well
-    // clear of both the 1.7x/0.3 (~21px) and 2.6x/0.62 (~35px) regressions.
-    const haloDiameter = size * scale;
-    assert.ok(
-        haloDiameter > size && haloDiameter <= size + 4,
-        `halo ring diameter ${haloDiameter}px must read as only 1-2px larger than the ${size}px dot`,
-    );
-    assert.ok(
-        diameter < 16,
-        `lit object diameter ${diameter}px must stay well clear of the old ~21px and ~35px regressions`,
-    );
-});
-
-test('the breathing amplitude does not grow the halo past its resting size', () => {
-    // The old keyframes scaled up to 1.06 at the peak, growing the
-    // already-oversized halo further. The peak must now be the halo's own
-    // unscaled size (scale 1, i.e. no growth) so the geometry tokens above
-    // are the true maximum, not a floor the animation overshoots.
-    const block = CSS.split('@keyframes status-led-breathe')[1];
-    assert.ok(block, 'the breathing keyframes must exist');
-    assert.ok(
-        /50%\s*\{[^}]*transform:\s*scale\(1\)/.test(block),
-        'the breathing peak must not scale the halo past its own size',
-    );
-    assert.ok(
-        !/scale\(1\.0[1-9]/.test(block) && !/scale\(1\.1/.test(block),
-        'the breathing peak must not grow past scale(1)',
-    );
 });
 
 await runQueue();

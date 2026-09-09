@@ -1,41 +1,66 @@
-/* Status LED - the two-ring session indicator.
+/* Status LED - the two-ring session indicator, drawn as ONE element.
  *
  * Renders the markup from client/js/status-led.js. Everything here is
  * selected off the two data attributes that module emits:
  *
- *   [data-inner] - the chat's own status  -> the colour of the centre dot
- *   [data-outer] - activity and attention -> the colour, motion and
- *                  presence of the halo behind it
+ *   [data-inner] - the chat's own status  -> the FILL colour of the dot
+ *   [data-outer] - activity and attention -> the RING colour, its glow,
+ *                  and whether that glow breathes
  *
  * The two are INDEPENDENT. No rule may read one to decide the other; the
  * whole point of two rings is that either can change without the other.
  *
- * STRUCTURE. One inline-block `<span>` is the dot. The halo is its
- * ::after, absolutely positioned and centred, larger than the dot, and
- * blurred at the edges by a wide box-shadow in its own colour. It is a
- * pseudo-element rather than a second span so the LED is one element in
- * the markup and one inline box in the layout - it drops into any row
- * that held a `.status-dot` without moving anything.
+ * STRUCTURE: ONE ELEMENT, NO PSEUDO-ELEMENT. A single inline-block
+ * `<span>` carries both rings. The inner ring is its `background-color`.
+ * The outer ring and the glow around it are LAYERS OF ONE `box-shadow`
+ * on that same span: a hard `0 0 0 <ring-width>` spread ring, then a
+ * soft blurred layer beyond it.
  *
- * The halo is drawn UNDER the dot (negative z-index on the pseudo) so a
- * bright glow never washes out the state colour at the centre.
+ * WHY THAT MATTERS, AND WHAT IT REPLACES. The halo used to be an
+ * `::after` - a real box, absolutely positioned, sized off the dot by a
+ * scale factor. A box gets its position and its size PIXEL-SNAPPED by
+ * the layout engine as two separate quantities, and it is snapped
+ * independently of its parent's box. So whenever the dot itself landed
+ * on a fractional x/y - which is routine inside a flex row, or when a
+ * text baseline puts an inline box on a half pixel - the halo's box
+ * rounded one way and the dot's rounded the other, and the two circles
+ * came apart by a device pixel. Symmetric `inset` fixed the halo's own
+ * internal symmetry (its left and right offsets could no longer
+ * disagree) and still could not fix this, because the drift was between
+ * TWO BOXES, not inside one. The owner's report after that fix, verbatim:
+ * "the circles are still not lining up properly."
  *
- * SIZING. `--led-size` is the dot's diameter and every other dimension is
- * derived from it, so one custom property scales the whole component.
- * ledHtml() may set it per instance; nothing else should.
+ * A box-shadow is not a box. It is painted from the element's own border
+ * box, at the same subpixel position that box already has, so it CANNOT
+ * be snapped to a different grid than the thing it surrounds. Concentric
+ * is not something this rule arranges - it is the only geometry a
+ * box-shadow can have. That is the whole reason for the rewrite, and it
+ * is why nothing here may reintroduce a second box.
  *
- * NO THEME MAY NEED TO OVERRIDE THIS FILE. The six state colours are
- * tokens declared once in the block below, each falling back to a theme
- * token where one exists and to a literal only when it does not. A theme
- * that wants a different LED palette redefines --led-color-*, not these
- * rules.
+ * TRANSPARENCY LIVES IN THE COLOUR, NOT IN `opacity`. The old halo was a
+ * separate element, so it could carry its own `opacity` without touching
+ * the dot. One element cannot: `opacity` would fade the state colour at
+ * the centre too. Every alpha is therefore mixed into the shadow's own
+ * colour with `color-mix(in srgb, <hue> <alpha>, transparent)`, which is
+ * already used elsewhere in this app's stylesheets. The hue and the alpha
+ * stay separate tokens so a theme can restyle one without the other.
+ *
+ * SIZING. `--led-size` is the dot's diameter; the ring and glow are flat
+ * pixel values around it rather than fractions of it, because at 9px a
+ * flat value reads truer than a proportional one. ledHtml() may set
+ * `--led-size` per instance; nothing else should.
+ *
+ * NO THEME MAY NEED TO OVERRIDE THIS FILE. The state colours are tokens
+ * declared once in the block below, each falling back to a theme token
+ * where one exists and to a literal only when it does not. A theme that
+ * wants a different LED palette redefines --led-color-*, not these rules.
  */
 
 .status-led {
     /* ---- the one place the six state colours are named --------------
-     * Each is the hue for BOTH rings of that state - the halo is the
-     * same colour as the dot, only larger and blurred, which is what
-     * makes it read as one lit object rather than two shapes.
+     * Each is the hue for BOTH rings of that state - the ring is the
+     * same colour as the fill, only outside it and softened, which is
+     * what makes it read as one lit object rather than two shapes.
      *
      * Every value defers to a theme token first. --color-accent and
      * --color-danger already exist in every theme; the rest fall back to
@@ -59,113 +84,114 @@
      * must never be confusable at a glance. The danger-adjacent
      * --color-danger-strong (#ff6b6b) was rejected for that last reason
      * alone. It is also clear of --color-unread's amber (#fbbf24), which
-     * rides the halo and could otherwise sit behind it. */
+     * rides the ring and could otherwise sit behind it. */
     --led-color-permission: var(--color-status-pending, #ffa500);
     --led-color-done: var(--color-success, #3fb950);
     --led-color-dead: var(--color-danger, #ff4444);
     --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
 
     /* Attention has its own hue, deliberately NOT one of the five above.
-     * Unread is a property of the halo alone and can sit behind any
+     * Unread is a property of the outer ring alone and can sit around any
      * inner state, so if it shared a colour with one of them the two
      * rings would read as one signal in exactly the case where they are
      * saying different things. */
     --led-color-unread: var(--color-warning, #d29922);
 
-    /* Geometry. The halo ring is 1.3x the dot and the soft glow beyond it
-     * is a fixed 1.5px - fixed rather than proportional because at this
-     * size a flat pixel value reads truer than a fraction of the dot.
-     * At the 9px default every call site actually renders at (sidebar
-     * row, launchpad card - neither passes `size`, so both get this
-     * value), the whole lit object - halo ring plus glow, at the
-     * breathing peak - is about 14.7px across: 9 * 1.3 = 11.7px halo,
-     * plus 2 * 1.5 = 3px of glow. The owner's own calibration: "glowing
-     * is still to big. like 1 or 2 px larger than the front circle" -
-     * i.e. the halo ring itself should read as only a couple of px
-     * bigger than the dot, with the glow adding a further 1-2px on top.
+    /* ---- geometry ---------------------------------------------------
+     * The owner's calibration, verbatim (2026-09-08): "glowing is still
+     * to big. like 1 or 2 px larger than the front circle."
+     *
+     * --led-ring-width is the HARD ring: a zero-blur spread shadow, so
+     * the lit ring's outer diameter is exactly size + 2 * ring-width.
+     * At the 9px default every call site actually renders (the sidebar
+     * row and the launchpad card both call dotHtml() with no `size`),
+     * that is 11px - two pixels larger than the dot, the top of the
+     * owner's window, and an INTEGER, so the ring's outer edge lands on
+     * the pixel grid whenever the dot's does.
+     *
+     * --led-glow-blur / --led-glow-spread are the soft layer beyond it.
+     * A blurred shadow reaches spread + blur/2 past the border box, so
+     * 1.5 + 2 = 3.5px, and the whole lit object fades out by about 16px
+     * across. That is the same reach the ::after halo had (11.7px box
+     * plus 1.5px spread and 1.5px blur = 16.2px), so this is a rounding
+     * fix and not a resize.
      *
      * PRIOR VALUES, for anyone tracing a regression:
-     *   - 1.7x scale, 0.3x spread (shipped 2026-09-08 morning) put the
-     *     lit object at about 21px across - still visibly larger than
-     *     "1 or 2px more than the dot".
-     *   - 2.6x scale, 0.62x spread (the original) put it at about 35px
-     *     across - larger than the row text itself and overlapping
-     *     neighbours on the compact sidebar density and the launchpad
-     *     cards, the owner's "breathing is way too big" report. */
+     *   - 1.3x halo scale, 1.5px spread (the ::after era, shipped
+     *     2026-09-08) - correct SIZE, but two boxes, hence the drift.
+     *   - 1.7x scale, 0.3x spread put the lit object at about 21px.
+     *   - 2.6x scale, 0.62x spread put it at about 35px - larger than
+     *     the row text, the owner's "breathing is way too big". */
     --led-size: 9px;
-    --led-halo-scale: 1.3;
+    --led-ring-width: 1px;
+    --led-glow-blur: 4px;
     --led-glow-spread: 1.5px;
 
-    /* The halo's offset from the dot's own edges, on all four sides at
-     * once. ONE calc(), reused by `inset` below instead of the dot's
-     * width/height/top/left/margin each carrying their own separate
-     * calc(). That is not cosmetic - see the block comment on
-     * `.status-led::after` for the rounding bug this replaced. */
-    --led-halo-inset: calc((1 - var(--led-halo-scale)) * var(--led-size) / 2);
+    /* The trough of the breath, as a fraction of the glow's resting
+     * spread AND of its alpha. One number drives both so the glow shrinks
+     * and dims together, which is what reads as a glow swelling rather
+     * than a light flickering. The RING is not multiplied by it - see the
+     * keyframes. */
+    --led-glow-rest: 0.4;
 
     /* Resolved per state by the [data-inner] / [data-outer] rules below.
-     * Declared here so every LED always has a value for both, and an
-     * unstyled state is impossible. */
+     * Declared here so every LED always has a value for all of them, and
+     * an unstyled state is impossible.
+     *
+     * --led-ink       the fill, from [data-inner]
+     * --led-ring-ink  the ring hue, from [data-outer]
+     * --led-ring-alpha  how solid the hard ring reads
+     * --led-glow-alpha  how strong the soft glow reads at its peak */
     --led-ink: var(--led-color-unknown);
-    --led-halo-ink: var(--led-color-unknown);
-    --led-halo-opacity: 0.35;
+    --led-ring-ink: var(--led-color-unknown);
+    --led-ring-alpha: 30%;
+    --led-glow-alpha: 0%;
 
-    position: relative;
+    /* The hollow treatment for `unknown`, carried as a SHADOW LAYER
+     * rather than as its own `box-shadow` declaration. There is exactly
+     * one box-shadow property on this element and the outer ring needs
+     * it, so an inner-state rule that declared its own would silently
+     * erase the outer ring for that one state - the two dimensions would
+     * stop being independent, which is the invariant this component
+     * exists to hold. Default is a no-op layer, replaced by
+     * [data-inner='unknown'] below. */
+    --led-hollow-width: 2px;
+    --led-inset-ring: inset 0 0 0 0 transparent;
+
+    /* The two outer layers, named so the base rule and both keyframes
+     * can share one definition instead of restating the whole list three
+     * times. A custom property cannot be interpolated by an animation
+     * unless it is registered with @property, so the keyframes below
+     * still write a real `box-shadow`; what they write is these vars. */
+    --led-ring-layer: 0 0 0 var(--led-ring-width)
+        color-mix(in srgb, var(--led-ring-ink) var(--led-ring-alpha), transparent);
+    --led-glow-layer: 0 0 var(--led-glow-blur) var(--led-glow-spread)
+        color-mix(in srgb, var(--led-ring-ink) var(--led-glow-alpha), transparent);
+    --led-glow-layer-rest: 0 0 var(--led-glow-blur)
+        calc(var(--led-glow-spread) * var(--led-glow-rest))
+        color-mix(
+            in srgb,
+            var(--led-ring-ink) calc(var(--led-glow-alpha) * var(--led-glow-rest)),
+            transparent
+        );
+
     display: inline-block;
     flex-shrink: 0;
     width: var(--led-size);
     height: var(--led-size);
     border-radius: var(--radius-full);
-    background: var(--led-ink);
-    /* Isolate the negative-z-index halo to this element's own stacking
-     * context, so it can sit behind the dot without falling behind the
-     * row background it is painted on. */
-    isolation: isolate;
+    background-color: var(--led-ink);
+    /* THE ONE box-shadow. Three layers, painted back to front: the
+     * optional hollow rim INSIDE the dot, the hard ring just outside it,
+     * and the soft glow beyond that. All three are painted from this
+     * element's own border box, so all three are concentric with the
+     * fill by construction and none of them can round to a different
+     * pixel than it. */
+    box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-glow-layer);
 }
 
-/* CONCENTRIC BY CONSTRUCTION, NOT BY COINCIDENCE. The halo used to be
- * placed with a `top`/`left` percentage plus a NEGATIVE MARGIN computed by
- * its own calc(), sized by a THIRD, separate calc() on width/height -
- * three independently-evaluated expressions that all had to agree, to the
- * sub-pixel, for the halo's box to land exactly centred on the dot's. At
- * the shipped 9px default, 9 * 1.3 = 11.7px is not an integer, so the
- * browser's layout engine pixel-snaps the box's resolved position and its
- * resolved size as separate quantities; nothing in the spec requires
- * those two snapping passes to agree on which side absorbs the leftover
- * 0.7px. The dot's own box is an exact 9x9 (or whatever integer `size` a
- * caller passes), so it never had this problem - only the halo did, which
- * is exactly the "not concentric" report: the dot sat still and the
- * halo's rounded box drifted a device pixel to one side.
- *
- * `inset` sets all four edges from the ONE `--led-halo-inset` expression
- * declared on `.status-led` above, instead of deriving width from one
- * calc() and position from another. The left and right edges are now the
- * SAME computed offset applied to opposite sides of the SAME parent box,
- * so there is no second, independently-rounded quantity that can disagree
- * with it - the box is symmetric by construction instead of by two
- * calc()s happening to produce equal floats. The resulting geometry is
- * numerically identical to the old rule (at 9px/1.3x: inset -1.35px on
- * every side, same 11.7px halo, same centre) - this is a rounding-safety
- * fix, not a resize. */
-.status-led::after {
-    content: '';
-    position: absolute;
-    inset: var(--led-halo-inset);
-    border-radius: var(--radius-full);
-    background: var(--led-halo-ink);
-    /* The glow itself. A wide, spread box-shadow in the halo colour is
-     * what softens the edge; `filter: blur()` was rejected because it
-     * forces a compositing layer per LED and there can be dozens of
-     * these in a long session list. */
-    box-shadow: 0 0 var(--led-glow-spread) var(--led-glow-spread)
-        var(--led-halo-ink);
-    opacity: var(--led-halo-opacity);
-    z-index: -1;
-    pointer-events: none;
-}
-
-/* ---- inner dot: the chat's own status ------------------------------
- * Colour only. Motion belongs to the halo. */
+/* ---- inner dot: the fill ---------------------------------------------
+ * Colour only. Motion and the ring belong to [data-outer]. */
 
 .status-led[data-inner='working'] {
     --led-ink: var(--led-color-working);
@@ -194,24 +220,38 @@
      * to a measured state under a theme that flattens the greys. Shape
      * separates them without ranking them. An inset shadow rather than a
      * border or a radius trick, so it stays hollow under the themes that
-     * set --radius-full to 0 and turn every dot into a square. */
-    background: transparent;
-    box-shadow: inset 0 0 0 2px var(--led-color-unknown);
+     * set --radius-full to 0 and turn every dot into a square - and it
+     * goes in through --led-inset-ring rather than as its own
+     * `box-shadow`, so it composes with the outer ring instead of
+     * replacing it. */
+    background-color: transparent;
+    --led-inset-ring: inset 0 0 0 var(--led-hollow-width) var(--led-color-unknown);
     --led-ink: var(--led-color-unknown);
 }
 
-/* ---- outer halo: activity and attention ----------------------------
- * Colour, opacity and motion. */
+/* ---- outer ring: activity and attention ------------------------------
+ * Hue, alpha and motion.
+ *
+ * The alphas are re-derived from the ::after era rather than copied: the
+ * old halo had ONE opacity for a whole filled disc, and this has two
+ * layers with different jobs. The HUES are unchanged. The hard ring runs
+ * hotter than the old halo's opacity because it is one pixel wide and
+ * would otherwise disappear; the soft glow runs at about the value the
+ * halo used, because it covers about the area the halo did. */
 
 .status-led[data-outer='active'] {
-    --led-halo-ink: var(--led-ink);
-    --led-halo-opacity: 0.55;
+    /* Moving. Same hue as the fill, so the whole thing reads as one lit
+     * object, and the glow breathes (see the keyframes below). */
+    --led-ring-ink: var(--led-ink);
+    --led-ring-alpha: 85%;
+    --led-glow-alpha: 55%;
 }
 
 .status-led[data-outer='steady'] {
     /* Lit and still. Done, seen, nothing pending. */
-    --led-halo-ink: var(--led-ink);
-    --led-halo-opacity: 0.3;
+    --led-ring-ink: var(--led-ink);
+    --led-ring-alpha: 60%;
+    --led-glow-alpha: 25%;
 }
 
 .status-led[data-outer='unread'] {
@@ -219,58 +259,26 @@
      * exists to surface. Same 2s period as `active`: unread is not more
      * urgent than working, it is a different KIND of thing, and a faster
      * pulse would read as a severity ranking that is not intended. */
-    --led-halo-ink: var(--led-color-unread);
-    --led-halo-opacity: 0.6;
+    --led-ring-ink: var(--led-color-unread);
+    --led-ring-alpha: 85%;
+    --led-glow-alpha: 60%;
 }
 
 .status-led[data-outer='off'] {
-    /* Dead. No halo at all - not a dim one. A corpse must not glow. */
-    --led-halo-opacity: 0;
+    /* Dead. No ring and no glow at all - not dim ones. A corpse must not
+     * glow. Both layers go fully transparent rather than the whole
+     * box-shadow going `none`, because `none` would take the hollow
+     * `unknown` rim with it and make one dimension depend on the other. */
+    --led-ring-alpha: 0%;
+    --led-glow-alpha: 0%;
 }
 
 .status-led[data-outer='dim'] {
-    --led-halo-ink: var(--led-color-unknown);
-    --led-halo-opacity: 0.18;
-}
-
-/* The breathing glow. Animates the HALO only (the ::after), never the
- * dot, so the state colour at the centre stays at full strength and
- * legible at every point in the cycle. Opacity and scale together, so it
- * reads as a glow swelling rather than a light flickering. */
-.status-led[data-outer='active']::after,
-.status-led[data-outer='unread']::after {
-    animation: status-led-breathe 2s ease-in-out infinite;
-}
-
-@keyframes status-led-breathe {
-    0%,
-    100% {
-        opacity: calc(var(--led-halo-opacity) * 0.45);
-        transform: scale(0.92);
-    }
-    50% {
-        opacity: var(--led-halo-opacity);
-        transform: scale(1);
-    }
-}
-
-/* REDUCED MOTION. The glow stays - it is what makes the LED readable -
- * but it stops breathing and sits at its full lit value. A user who has
- * asked for no motion must still be able to tell an active session from
- * a resting one, so the distinction moves entirely into opacity: `active`
- * and `unread` remain the brightest haloes on screen, they just hold
- * still. */
-@media (prefers-reduced-motion: reduce) {
-    .status-led,
-    .status-led::after {
-        animation: none !important;
-    }
-
-    .status-led[data-outer='active']::after,
-    .status-led[data-outer='unread']::after {
-        opacity: var(--led-halo-opacity);
-        transform: none;
-    }
+    /* Not measured. A faint grey ring and no glow: enough to read as a
+     * ring, not enough to claim the session is lit. */
+    --led-ring-ink: var(--led-color-unknown);
+    --led-ring-alpha: 30%;
+    --led-glow-alpha: 0%;
 }
 
 /* ---- legacy `.status-dot` compatibility -----------------------------
@@ -280,31 +288,95 @@
  * attributes (which do the drawing).
  *
  * That means status-dot.css and this file would otherwise BOTH paint the
- * same element. This block is the referee: where both classes are
- * present, the LED owns the paint and the legacy element-level treatment
- * is switched off. Specifically it drops the `dead` ring and the
- * `unknown` inset rim (both element box-shadows), and the per-state
- * `status-dot-pulse` animation, which would otherwise flash the centre
- * dot on top of the halo's breathing and read as two lights.
+ * same element. This block is the referee.
+ *
+ * IT NO LONGER RESETS `box-shadow`, AND MUST NOT. That reset existed
+ * when the LED's own ring lived on a pseudo-element and the element's
+ * box-shadow was purely legacy. The ring is now ON THIS ELEMENT, so a
+ * `.status-dot.status-led { box-shadow: none }` here - two classes, and
+ * therefore more specific than every rule above - would erase the outer
+ * ring on every LED in the app. The legacy shadows it used to cancel
+ * (`.status-dot--dead`'s ring, `.status-dot--question`'s glow) are all
+ * single-class rules in status-dot.css, which loads BEFORE this file, so
+ * the base `.status-led` rule already beats them on source order at equal
+ * specificity. That file-order requirement is load-bearing; see the
+ * comment on the <link> tags in client/index.html.
+ *
+ * The `animation` reset is still needed - `status-dot-pulse` would flash
+ * the fill on top of the ring's breathing and read as two lights - but it
+ * is scoped OFF the two breathing states rather than applied to all of
+ * them and re-overridden. The breathing rule below is (0,2,0) and a
+ * blanket `.status-dot.status-led` reset would tie with it and win on
+ * order, silently killing the pulse for every LED in the app. Excluding
+ * the two states is order-independent and says why in the selector.
  *
  * This is a PAIR with the extraClass call in session-status-ui.js's
  * dotHtml. Deleting either one alone leaves the other wrong. status-dot.css
  * is still the sole styling for any `.status-dot` emitted WITHOUT the LED
  * (the fallback path when status-led.js fails to load), which is why that
- * file is not deleted.
- *
- * Must load AFTER status-dot.css. */
+ * file is not deleted. */
+
+.status-dot.status-led:not([data-outer='active']):not([data-outer='unread']) {
+    animation: none;
+}
 
 .status-dot.status-led {
-    animation: none;
-    box-shadow: none;
-    background: var(--led-ink);
+    background-color: var(--led-ink);
 }
 
 /* The hollow treatment is the one legacy shape worth keeping, so it is
- * re-asserted here in LED terms rather than inherited by accident. */
+ * re-asserted here in LED terms rather than lost to the rule above. Only
+ * the fill: the rim itself rides --led-inset-ring, which no rule in this
+ * block touches. */
 .status-dot.status-led[data-inner='unknown'] {
-    background: transparent;
-    box-shadow: inset 0 0 0 2px var(--led-color-unknown);
+    background-color: transparent;
 }
 
+/* ---- motion ----------------------------------------------------------
+ *
+ * The breathing glow. Animates the GLOW LAYER only - its spread and its
+ * alpha - so the fill stays at full strength and legible at every point
+ * in the cycle, and the hard ring stays put as the shape that says where
+ * the LED ends.
+ *
+ * NOTHING HERE MOVES THE ELEMENT. No transform, no width, no margin, no
+ * inset: box-shadow is a paint-only property, so the dot's own box is
+ * byte-identical at every frame of the animation and the LED cannot
+ * drift against the text it sits beside. That is the same guarantee the
+ * one-element rewrite bought statically, held across time.
+ *
+ * The two keyframes differ in exactly one layer, and both restate the
+ * whole three-layer list because a box-shadow animation interpolates
+ * layer by layer and needs the same count and the same inset flags at
+ * both ends. They restate it as the SAME vars the base rule uses, so
+ * there is still one definition of each layer. */
+
+.status-led[data-outer='active'],
+.status-led[data-outer='unread'] {
+    animation: status-led-breathe 2s ease-in-out infinite;
+}
+
+@keyframes status-led-breathe {
+    0%,
+    100% {
+        box-shadow: var(--led-inset-ring), var(--led-ring-layer),
+            var(--led-glow-layer-rest);
+    }
+    50% {
+        box-shadow: var(--led-inset-ring), var(--led-ring-layer),
+            var(--led-glow-layer);
+    }
+}
+
+/* REDUCED MOTION. The glow stays - it is what makes the LED readable -
+ * but it stops breathing and sits at its full lit value, which is
+ * exactly what the base rule already paints, so killing the animation is
+ * the whole of it. A user who has asked for no motion must still be able
+ * to tell an active session from a resting one, so the distinction moves
+ * entirely into the ring and glow alphas: `active` and `unread` remain
+ * the brightest rings on screen, they just hold still. */
+@media (prefers-reduced-motion: reduce) {
+    .status-led {
+        animation: none !important;
+    }
+}

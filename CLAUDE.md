@@ -1033,9 +1033,21 @@ it, and an unread `idle` session therefore painted a `steady` halo on
 every surface. Full model in `docs/session-status.md`.
 
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
-dot for the chat's status and an outer halo for activity and attention, so
+dot for the chat's status and an outer ring for activity and attention, so
 "working, and also unread" is sayable. `dotHtml` delegates to it, so every
-surface renders the same component.
+surface renders the same component. BOTH RINGS ARE ONE ELEMENT: the inner
+is the span's `background-color` and the outer is a two-layer `box-shadow`
+on that same span (a hard `0 0 0 1px` ring, then a blurred glow), with
+every alpha mixed into the shadow colour by `color-mix` rather than an
+element `opacity` that would fade the fill too. There is NO pseudo-element,
+and there may not be one: the halo used to be an `::after`, and the browser
+pixel-snaps that box's position and size independently of the dot's box, so
+whenever the dot landed on a fractional x/y - routine in a flex row, or
+wherever a text baseline puts an inline box on a half pixel - the two
+circles came apart by a device pixel. Symmetric `inset` fixed the halo's own
+internal symmetry and NOT this, because the drift was between two boxes. A
+box-shadow is painted from the element's own border box, so concentric is
+the only geometry it can have.
 
 ## The transcript archive the app maintains
 

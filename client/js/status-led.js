@@ -12,7 +12,15 @@
  * So this module models the LED as TWO INDEPENDENT DIMENSIONS:
  *
  *   inner dot  - the chat's own status. One of INNER_STATES.
- *   outer halo - activity and attention. One of OUTER_STATES.
+ *   outer ring - activity and attention. One of OUTER_STATES.
+ *
+ * BOTH ARE DRAWN ON ONE ELEMENT. The inner dot is the span's fill and
+ * the outer ring is a box-shadow on that same span - there is no
+ * pseudo-element and no second box. A box gets pixel-snapped
+ * independently of its parent's box, so a halo drawn as its own box came
+ * apart from the dot by a device pixel whenever the dot landed on a
+ * fractional x/y; a box-shadow is painted from the element's own border
+ * box and cannot. See the header of client/css/status-led.css.
  *
  * They are set separately (`data-inner` / `data-outer`) and every
  * combination renders. That is deliberate: it is what lets a gallery
@@ -172,9 +180,11 @@ console.log('[StatusLed Module] Loading...');
      * Description: PURE - no DOM, no globals, no side effects. Returns a
      *   single `<span>` carrying `data-inner` and `data-outer`; every
      *   colour and every animation is selected off those two attributes
-     *   by client/css/status-led.css. The halo is a pseudo-element on the
-     *   same span, so the LED occupies one inline box and drops into any
-     *   row that used to hold a `.status-dot` with no layout change.
+     *   by client/css/status-led.css. Both rings are painted on that one
+     *   span - fill for the inner state, box-shadow for the outer - so
+     *   the LED occupies one inline box, drops into any row that used to
+     *   hold a `.status-dot` with no layout change, and stays concentric
+     *   by construction rather than by two boxes agreeing.
      *
      *   `role="img"` marks it a meaningful glyph rather than decoration.
      *   Unrecognised inputs are clamped rather than rejected, so a stale
@@ -185,8 +195,8 @@ console.log('[StatusLed Module] Loading...');
      *     `outer` are clamped onto the two vocabularies. `size` is an
      *     optional CSS length for the whole LED (default comes from the
      *     stylesheet); it is emitted as a custom property, never as a
-     *     raw style rule, so the stylesheet keeps control of the ratio
-     *     between the dot and its halo. `title` overrides the derived
+     *     raw style rule, so the stylesheet keeps control of the ring
+     *     and glow around it. `title` overrides the derived
      *     label when a caller has a more specific sentence.
      * Output:
      *   string - HTML for one inline `<span>`.

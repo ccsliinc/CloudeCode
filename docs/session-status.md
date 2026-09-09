@@ -440,12 +440,66 @@ way at all to say "working, and also unread". Two rings say both.
 `working`, `waiting-permission`, `waiting-input`, `done`, `dead`,
 `unknown`.
 
-**Outer halo** (`data-outer`), activity and attention:
+**Outer ring** (`data-outer`), activity and attention:
 `active` (breathing), `steady` (lit, still), `unread` (its own hue,
-breathing), `off` (dead, no halo at all), `dim` (not measured).
+breathing), `off` (dead, no ring at all), `dim` (not measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
+
+### One element, and why there is no pseudo-element
+
+BOTH RINGS ARE PAINTED ON ONE SPAN. The inner ring is its
+`background-color`; the outer ring and its glow are two layers of ONE
+`box-shadow` on that same span - a hard `0 0 0 var(--led-ring-width)`
+spread ring, then a blurred layer beyond it. There is no `::after`, and
+there may not be one.
+
+The halo WAS an `::after`, and that is what the owner kept seeing. A box
+gets its position and its size pixel-snapped by the layout engine, and
+snapped independently of its parent's box, so whenever the dot itself
+landed on a fractional x or y - routine inside a flex row, or wherever a
+text baseline puts an inline box on a half pixel - the halo's box rounded
+one way and the dot's rounded the other, and the two circles came apart by
+a device pixel. Giving the halo a single symmetric `inset` (2026-09-08)
+fixed its own INTERNAL symmetry, so its left and right offsets could no
+longer disagree, and did not fix this at all: the drift was BETWEEN TWO
+BOXES, not inside one. The owner's report after that shipped, verbatim:
+"the circles are still not lining up properly. can we do the same with
+only one icon?"
+
+A box-shadow is not a box. It is painted from the element's own border box,
+at that box's own subpixel position, so it cannot be snapped to a different
+grid than the fill it surrounds. Concentric stops being something a rule
+arranges and becomes the only geometry available. Nothing in this component
+may reintroduce a second box, and nothing may take it out of flow.
+
+TRANSPARENCY LIVES IN THE COLOUR, NOT IN `opacity`. The old halo was its
+own element and could carry its own `opacity` without touching the dot. One
+element cannot - `opacity` would fade the state colour at the centre too -
+so every alpha is mixed into the shadow's own colour with
+`color-mix(in srgb, <hue> <alpha>, transparent)`, which this app's
+stylesheets already use. Hue and alpha stay separate tokens
+(`--led-ring-ink`, `--led-ring-alpha`, `--led-glow-alpha`) so a theme can
+restyle one without the other.
+
+THE HOLLOW `unknown` RIM IS A SHADOW LAYER, NOT A SECOND DECLARATION.
+There is one `box-shadow` property on the element and the outer ring needs
+it, so an inner-state rule declaring its own would silently erase the outer
+ring for that one state and the two dimensions would stop being
+independent. `--led-inset-ring` carries it as a layer instead, defaulting
+to a no-op `inset 0 0 0 0 transparent` so the layer count never changes.
+For the same reason `off` zeroes the ring and glow ALPHAS rather than
+setting `box-shadow: none`, which would take the rim with it.
+
+THE LEGACY REFEREE MAY NOT RESET `box-shadow`. `.status-dot.status-led` is
+two classes and beats every rule in the component, so a reset there would
+blank the outer ring on every LED in the app. The legacy shadows it used to
+cancel are single-class rules in `status-dot.css`, which loads BEFORE
+`status-led.css`, so source order already handles them. Its `animation`
+reset survives, scoped off the two breathing states with `:not()` - a
+blanket reset ties with the breathing rule at (0,2,0) and wins on order,
+which would kill the pulse everywhere.
 
 ### The mapping
 
@@ -468,7 +522,7 @@ ONE place the server vocabulary becomes a pair of rings.
 
 Order matters: `dead` outranks everything (an unread flag must not paint a
 corpse as something to go and read), then anything blocking on the user,
-then activity. `unread` rides the halo independently of all of it.
+then activity. `unread` rides the OUTER RING independently of all of it.
 
 THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
 `SessionStatusUI.dotHtml(status, signals)` takes `unread` and
@@ -498,12 +552,28 @@ learn one.
 
 ### Motion
 
-`active` and `unread` breathe on a 2s ease-in-out cycle, opacity and scale
-together, on the HALO only - the dot itself never animates, so the state
-colour stays at full strength at every point in the cycle. `steady` is lit
-and still. `off` has no halo. Under
-`prefers-reduced-motion: reduce` the glow stays and the pulse stops; the
-active/resting distinction moves entirely into opacity.
+`active` and `unread` breathe on a 2s ease-in-out cycle. The keyframes
+animate the GLOW LAYER of the box-shadow only - its spread and its alpha,
+both off the one `--led-glow-rest` fraction so it shrinks and dims together
+and reads as a glow swelling rather than a light flickering. The fill stays
+at full strength at every point in the cycle, and the hard ring is
+byte-identical at both ends of the animation, so it is the shape that says
+where the LED ends.
+
+NOTHING IN THE ANIMATION MOVES THE ELEMENT. No transform, no width, no
+margin, no inset - `box-shadow` is a paint-only property, so the dot's own
+box is identical at every frame and the LED cannot drift against the text
+it sits beside. That is the same guarantee the one-element rewrite bought
+statically, held across time. (It costs a repaint per frame rather than a
+composited transform; the repainted region is about 16px square, and the
+alternative is a second box.)
+
+`steady` is lit and still. `off` has no ring and no glow. Under
+`prefers-reduced-motion: reduce` the ring and glow stay and the pulse
+stops - the base rule already paints the full lit value, so killing the
+animation is the whole of it, and the reduced-motion block must NOT restate
+the shadow or the two would drift apart. The active/resting distinction
+lives entirely in the ring and glow alphas.
 
 The six state colours plus the unread hue are named tokens declared
 exactly once, at the top of `status-led.css`. A theme that wants a
@@ -514,12 +584,23 @@ different palette redefines `--led-color-*`, never these rules.
 `--led-size` is 9px by default, and every call site in this app actually
 renders at that default: the sidebar row (`session-sidebar-rows.js`) and
 the launchpad card (`launchpad.js`) both call `dotHtml()` with no `size`,
-so neither passes a per-instance override. `--led-halo-scale` (1.3) and
-`--led-glow-spread` (a fixed `1.5px`, not a fraction of the dot - a flat
-pixel value reads truer than a proportional one at this size) size the
-halo off that one dot size; at the 9px default the whole lit object -
-halo ring plus glow, at the breathing peak - is about 14.7px across:
-9 * 1.3 = 11.7px halo, plus 2 * 1.5 = 3px of glow.
+so neither passes a per-instance override.
+
+The ring and glow are FLAT PIXEL VALUES around that dot, not fractions of
+it, because at this size a flat value reads truer than a proportional one.
+`--led-ring-width` (1px) is the hard ring: a zero-blur spread shadow, so
+the lit ring's outer diameter is exactly `size + 2 * width`, which at the
+9px default is 11px - two pixels larger than the dot, the top of the
+owner's window, and an INTEGER, so the ring's outer edge lands on the pixel
+grid whenever the dot's does. `--led-glow-blur` (4px) and
+`--led-glow-spread` (1.5px) are the soft layer beyond it; a blurred shadow
+reaches `spread + blur/2` past the border box, so 3.5px, and the whole lit
+object fades out by about 16px across - the same reach the `::after` halo
+had (an 11.7px box plus 1.5px spread and 1.5px blur is 16.2px). This is a
+rounding fix, not a resize.
+
+`--led-halo-scale` and `--led-halo-inset` are RETIRED. They sized and
+positioned a box that no longer exists.
 
 That is the owner's own calibration (2026-09-08): "glowing is still to
 big. like 1 or 2 px larger than the front circle" - the halo ring itself
@@ -531,16 +612,18 @@ day) put the lit object at about 21px across, still visibly larger than
 35px across at the peak - larger than the row text itself and overlapping
 neighbours on the compact sidebar density and on the launchpad cards,
 which is what the owner meant by "the breathing is way too big" the first
-time. The breathing keyframes scale the halo between 0.92 and 1 - never
-past its own resting size - so the geometry tokens above are the true
-maximum rather than a floor the animation overshoots.
+time. The breathing keyframes move the glow's spread between
+`--led-glow-rest` (0.4) and 1 of its resting value - never past it - so the
+geometry tokens above are the true maximum rather than a floor the
+animation overshoots.
 
 There is one set of geometry tokens, not one per surface, because every
 surface that renders a LED today renders it at the same 9px size. A
 surface that needs a different size passes `size` to `ledHtml()` (see
-`client/js/status-led.js`), which scales `--led-size` and, through it,
-the halo and glow with it - a second geometry override is only warranted
-if a surface ships at a different base size.
+`client/js/status-led.js`), which sets `--led-size`. Note the ring and glow
+do NOT scale with it - they are flat pixel values - so a much larger LED
+reads as a thinner ring. That is deliberate at the sizes in play and would
+need revisiting if a surface ever shipped at, say, 36px.
 
 ### Rolling a group up
 

@@ -4336,3 +4336,94 @@ not chased).
   `unread` beside a cleared Hockey row is also correct, not stale:
   `cloude_daily-briefing` is genuinely unread in that group, and the client's
   unread set matched the server's four rows exactly. No code change.
+
+## 2026-09-09 - status LED: one element, fill plus a box-shadow ring and glow
+
+DONE. Owner's report, verbatim: "the circles are still not lining up properly.
+can we do the same with only one icon? can we have a fill color and a border
+color, and can the border have a an opacity or blur so we can make the same
+effect with only one icon?" then "go".
+
+ROOT CAUSE, and why the previous fix could not have worked. The halo was an
+`::after` - a second box, sized off the dot. The layout engine pixel-snaps a
+box's position and its size, and it snaps the halo's box independently of the
+dot's box. So whenever the dot itself landed on a fractional x or y - routine
+inside a flex row, or wherever a text baseline puts an inline box on a half
+pixel - the two rounded different ways and the circles came apart by a device
+pixel. The 2026-09-08 symmetric-`inset` change fixed the halo's own INTERNAL
+symmetry (its left and right offsets could no longer disagree) and was
+therefore correct and insufficient: the drift was BETWEEN TWO BOXES, not
+inside one. A box-shadow is not a box - it is painted from the element's own
+border box at that box's own subpixel position - so concentric stops being
+something a rule arranges and becomes the only geometry available.
+
+WHAT SHIPPED. `client/css/status-led.css` rewritten. No pseudo-element. Fill
+is `background-color` from `data-inner`; the outer ring and its glow are two
+layers of ONE `box-shadow` from `data-outer` (`0 0 0 1px` hard ring, then
+`0 0 4px 1.5px` glow). Alpha is mixed into the shadow colour with
+`color-mix(in srgb, <hue> <alpha>, transparent)` rather than element
+`opacity`, which on one element would fade the fill too.
+
+TOKENS INTRODUCED: `--led-ring-width` (1px), `--led-glow-blur` (4px),
+`--led-glow-rest` (0.4), `--led-ring-ink`, `--led-ring-alpha`,
+`--led-glow-alpha`, `--led-hollow-width`, `--led-inset-ring`,
+`--led-ring-layer`, `--led-glow-layer`, `--led-glow-layer-rest`.
+RETIRED: `--led-halo-scale`, `--led-halo-inset`, `--led-halo-ink`,
+`--led-halo-opacity`. KEPT: `--led-size` (9px), `--led-glow-spread` (1.5px),
+every `--led-color-*` hue unchanged.
+
+THREE TRAPS THE REWRITE HAD TO CLEAR, all recorded in the file and in
+docs/session-status.md:
+
+1. THE HOLLOW `unknown` RIM WOULD HAVE ERASED THE OUTER RING. There is one
+   `box-shadow` property and the ring needs it, so `[data-inner='unknown']`
+   declaring its own would have made one dimension depend on the other - the
+   invariant this component exists to hold. It goes in as a LAYER,
+   `--led-inset-ring`, defaulting to a no-op `inset 0 0 0 0 transparent` so
+   the layer count never changes. For the same reason `off` zeroes the ring
+   and glow ALPHAS instead of setting `box-shadow: none`, which would take
+   the rim with it.
+2. THE LEGACY REFEREE'S `box-shadow: none` WOULD HAVE BLANKED EVERY RING.
+   `.status-dot.status-led` is two classes and beats every rule in the
+   component. It was correct while the ring lived on a pseudo-element and is
+   now removed; the legacy shadows it cancelled are single-class rules in
+   `status-dot.css`, which loads FIRST, so source order already handles them.
+3. THE REFEREE'S BLANKET `animation: none` WOULD HAVE KILLED THE PULSE. Now
+   that the animation is on the element rather than the pseudo, that reset
+   ties with the breathing rule at (0,2,0) and wins on order. It is scoped
+   off the two breathing states with `:not()`, which is order-independent.
+
+MOTION: keyframes touch the glow layer only, spread and alpha together off
+the one `--led-glow-rest` fraction. The ring layer is byte-identical at both
+ends. No transform, no width, no margin, no inset - `box-shadow` is
+paint-only, so the element's box is identical at every frame. Costs a repaint
+per frame instead of a composited transform; the region is about 16px square,
+and the alternative is a second box. `prefers-reduced-motion` kills the
+animation and nothing else, because the base rule already paints the full lit
+value.
+
+TESTS: `tests/test_status_led.node.mjs` rewritten from the halo assertions -
+46 pass. Adds a comment-stripped `RULES` view, because this stylesheet's own
+explanations name the properties the structural assertions forbid and were
+failing their own tests. New assertions: no `::after`/`::before` anywhere, one
+`box-shadow` declaration, the hard ring is zero-blur and its 9px diameter is
+an integer, glow reach does not exceed the 16.2px the halo had, no `opacity`
+rule anywhere, the hollow rim is a layer not a declaration, the referee
+touches no `box-shadow`, the referee's animation reset excludes the breathing
+states, keyframes touch box-shadow alone with matching layer counts, and
+nothing in the sheet uses transform / margin-top / margin-left / inset /
+position:absolute. Also green: test_session_status_ui (7), test_status_summary
+(17), test_unread_led_one_field (17), test_no_remote_assets (9).
+
+GALLERY (scratchpad, not published): three rounds side by side - the shipping
+single-element round with `status-led.css` inlined VERBATIM and unscoped, plus
+the 1.3x and 1.7x halo rounds re-created and scoped under `.era-halo`, so the
+round under test is byte-identical to what ships. Every inner x outer cell at
+9px, 12px and 16px, crosshair stages, and rows offset by `margin-left: 0.5px`
+and `0.25px` to force the dot's box onto a fractional device pixel - the exact
+condition the drift needed.
+
+OPEN, deliberately: the ring and glow are flat pixel values and do NOT scale
+with `--led-size`, so a much larger LED reads as a thinner ring. Correct at
+the 9px every call site actually ships; would need revisiting if a surface
+ever rendered at 36px.
