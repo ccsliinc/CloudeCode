@@ -991,6 +991,41 @@ plainly blue. Summary priority is unchanged:
 `notice` still buckets as `input` - the colour split is a rendering
 decision on the ROW, not a re-ranking.
 
+**A SESSION WAITING ON ITS OWN SUB-AGENTS IS NOT WAITING ON THE USER, AND
+NEITHER `Stop` NOR `Notification` MAY SAY IT IS.** claude fires `Stop`
+when the MAIN turn ends whether or not the background agents it launched
+are still running, and it raises a `Notification` in that same state, so
+a pane reading "Waiting for 2 background agents to finish" was raising
+both a "Your turn" and a "wants your attention" card. That is the
+false-urgency twin of the `question`/`notice` fold above: a summons to a
+session that wants nothing. The gate is one condition in
+`claude_event_hook` (`src/api/routes.py`) reading
+`SessionManager.subagent_depth`, a passthrough to the count
+`SessionActivityTracker` already keeps for `working_subagent`; nothing new
+is stored and the state machine is untouched, so a suppressed `Stop`
+still flips unread and still resolves its status. Only the interruption
+is skipped.
+
+**`PermissionRequest` IS NEVER SUPPRESSED, AT ANY DEPTH**, because it is
+a HARD BLOCK - claude has stopped mid-turn and cannot continue until a
+human answers - which is the one case where a busy session genuinely is
+waiting on the user. That is the whole exception, and it is the negative
+control the tests turn on: a suppression rule that quietly grew to cover
+it would pass every positive test and strand claude behind a yes/no
+nobody was told about.
+
+**THE DEPTH IS READ BEFORE THE EVENT IS APPLIED, and that ordering is the
+whole mechanism.** `Stop` RESETS `subagent_depth` to 0, so a gate reading
+the count afterwards answers 0 every time and can never fire. It also
+cannot be built on `SubagentStop`, which on a turn with no subagent in it
+arrives about 1.5s AFTER the `Stop` (the punchlist 4 measurement above) -
+an event that has not landed yet can neither confirm nor deny anything.
+And it FAILS TOWARD NOTIFYING: an unknown session, a dropped
+`SubagentStart`, or a read that threw all leave the count at 0 and the
+toast is raised exactly as before. Silence is bought only with a POSITIVE
+count, because a missed "your turn" is a worse failure than a spurious
+one.
+
 **THAT SAME FOLD NOW PICKS THE ONE TOAST CARD A SESSION GETS.** The toast
 stack coalesced on (kind, session) until 2026-09-09, so one session
 produced one card per kind - a "wants your attention" card AND a "Your
