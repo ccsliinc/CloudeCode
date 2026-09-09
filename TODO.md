@@ -489,3 +489,29 @@ held in memory - a `<link>`/`<script>` already loaded does not refetch just
 because the server's cache-control says no-cache; that header only matters on
 a NEW request. No code changed. Recommend: reload/refresh that window and
 re-screenshot before assuming anything is still broken.
+
+[slash-fab-mobile] [2026-09-09 18:12 ET]: Owner's screenshot (round "/" button,
+bottom-left, circled in yellow) is `#slash-commands-btn` (client/js/slash-commands.js),
+confirmed by grepping its id/class against `position: fixed; bottom: var(--fab-edge);
+left: var(--fab-edge);` in styles.css - matches the screenshot's position and glyph
+exactly. Hidden on desktop with the same rule as the terminal-tools clipboard FAB:
+new file `client/css/slash-commands-fab.css`, `@media (min-width: 769px) {
+.slash-commands-btn, #slash-commands-modal { display: none !important; } }`, linked
+from index.html after slash-command-chips.css. Hides both the button AND
+`#slash-commands-modal` (the command-list panel it opens), same half-change
+guard as terminal-tools.css. Reachability: typing "/" in the terminal reaches
+claude's own CLI directly, but the modal offers something typing does not - every
+command grouped with a description, starred favorites, live filtering - so the
+owner is losing a real (if replaceable) discovery feature, recorded in CLAUDE.md
+rather than fixed. Extended tests/test_mobile_only_fab_and_header_editor.node.mjs
+(14/14 pass, was 10/10). Full suite baseline unaffected: 192/192 node suites,
+5309 passed/2 known-environmental-failed/18 skipped pytest (same 2 failures
+CLAUDE.md already documents as environmental, no new ones). Committed `4435edb`,
+pushed to master. Deployed live: killed the old Electron+Python tree (PID 48586
+Electron, PID 48595 Python child on port 8000 - both had to go, confirmed via
+`ps -o ppid` that killing Electron alone would NOT have taken the Python child,
+so it was targeted explicitly), relaunched via `nohup npm start` from macOS/,
+verified HTTP 200 on `/` and on `/static/css/slash-commands-fab.css` from the
+derived copy at `~/Library/Application Support/cloude-code-menubar/server/`.
+15 live tmux sessions and `cloude_cloudecode` (the user's own live pane)
+confirmed untouched throughout.
