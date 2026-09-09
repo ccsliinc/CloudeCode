@@ -243,6 +243,10 @@ console.log('[SessionSidebarRows Module] Loading...');
                 // `session.renamed` come through this diff.
                 label: r.label || null,
                 status: r.status || 'unknown',
+                // The tooltip is part of the paint: without this, a row
+                // whose status stopped being hook-fed keeps claiming
+                // "via hooks" until some other field happens to differ.
+                statusSource: r.status_source || 'none',
                 active: !!r.is_active,
                 thisTab: !!r.is_this_tab,
                 unread: !!r.unread,
@@ -393,7 +397,9 @@ console.log('[SessionSidebarRows Module] Loading...');
         // unread painted as read while the field on the row said true.
         const dot = window.SessionStatusUI
             ? window.SessionStatusUI.dotHtml(r.status, {
-                unread: !!r.unread, startup_gate: r.startup_gate })
+                unread: !!r.unread,
+                startup_gate: r.startup_gate,
+                status_source: r.status_source })
             : '';
         // punchlist 19 - "needs a keypress". Empty string for both 'ready'
         // and 'unknown', so this adds nothing to a normal row. It rides

@@ -186,7 +186,7 @@ test('dotHtml escapes its interpolations too', () => {
     assert.ok(html.includes('status-dot--question'));
     assert.equal(
         rawAttr(html, 'aria-label'),
-        'your turn - claude needs your permission',
+        'waiting for permission',
     );
     // An unknown status must not leak the caller's raw string into markup.
     const unknown = StatusUI.dotHtml('<script>');
@@ -203,7 +203,7 @@ test('question and notice are separate keys with separate labels', () => {
     assert.ok(n.includes('status-dot--notice'));
     assert.equal(
         rawAttr(n, 'aria-label'),
-        'your turn - claude wants your attention',
+        'wants your attention',
     );
     assert.notEqual(rawAttr(q, 'aria-label'), rawAttr(n, 'aria-label'));
     // Two distinct legacy classes as well, so the fallback path this

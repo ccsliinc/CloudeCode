@@ -66,15 +66,20 @@ import structlog
 
 from src.core.session_status_seed import (
     SEED_RUNG_NONE,
-    TAIL_ABSENT,
-    TAIL_UNREADABLE,
     StatusSeed,
     TranscriptRest,
-    classify_tail_records,
     display_state,
     resolve_status_seed,
 )
 from src.core.session_status_seed_store import SessionStatusSeeds
+from src.core.session_status_source import (
+    STATUS_SOURCE_NONE,
+    source_for_seed_rung,
+)
+from src.core.session_transcript_status_read import (
+    read_transcript_signal,
+    transcript_status_for,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -138,46 +143,9 @@ def read_transcript_rest(
     Output: TranscriptRest.
     Example: read_transcript_rest(uuid, '/Users/x/proj').verdict
     """
-    if not uuid:
-        return TranscriptRest(
-            TAIL_ABSENT,
-            detail=(
-                "no claude conversation is bound to this row, so there is "
-                "no transcript to read a resting state out of"
-            ),
-        )
-
-    try:
-        from src.core.session_transcript_presence import conversation_presence
-
-        presence = conversation_presence(str(uuid), working_dir=working_dir)
-    except _SEED_READ_ERRORS as exc:
-        # A probe must not break a listing, but a repeated failure here
-        # was previously invisible (debug-only, and this server emits no
-        # debug lines) - see the module docstring's cache section.
-        logger.warning(
-            "status_seed_presence_failed",
-            session_id=session_id,
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        return TranscriptRest(
-            TAIL_UNREADABLE,
-            detail=f"the transcript could not be located: {exc}",
-        )
-
-    if presence.path is None:
-        return TranscriptRest(
-            TAIL_ABSENT if presence.missing else TAIL_UNREADABLE,
-            detail=presence.detail,
-        )
-
-    from src.core.claude_title_sync import read_tail_records
-
-    read = read_tail_records(str(presence.path))
-    if not read.readable:
-        return TranscriptRest(TAIL_UNREADABLE, detail=read.detail)
-    return classify_tail_records(read.records)
+    return read_transcript_signal(
+        uuid, working_dir, session_id=session_id
+    ).tail
 
 
 def read_instance_row(
@@ -273,21 +241,39 @@ def derive_seed(
     tmux_name: Optional[str],
     *,
     epoch: Optional[int] = None,
+    unread: bool = False,
     now: Optional[datetime] = None,
 ) -> StatusSeed:
     """Run the whole ladder for one session and return what it supports.
 
-    Description: does the two reads and hands them to the PURE
+    Description: does the reads and hands them to the PURE
       ``resolve_status_seed``. Never raises. A session whose instance row
       cannot be identified gets a refusal naming that, not a seed built
       on a row that might belong to a different pane of the same name.
+
+      ONE PRESENCE RESOLUTION, TWO MEASUREMENTS. The transcript is
+      located once and both its mtime and its tail come off that path
+      (``read_transcript_signal``), because resolving a uuid to a file is
+      the only real cost on this path and doing it twice per poll would
+      double it for nothing.
+
+      The mtime and the tail then go through
+      ``session_transcript_status`` as rung 0 - the only rung that
+      measures the present, the only one that may claim ``working``, and
+      the only one that may set an unread flag. It is reached ONLY here,
+      which is to say only for a session with no live hook signal,
+      because the seam that calls this refuses any session whose hooks
+      have spoken.
     Inputs: manager (SessionManager). session_id (str). tmux_name
       (str | None). epoch (int | None) - defaults to the manager's
-      recorded epoch for this session. now (datetime | None).
+      recorded epoch for this session. unread (bool) - the session's
+      persisted flag, read by rung 0 and written only when a NEW turn
+      end is measured. now (datetime | None).
     Output: StatusSeed - ``seeds`` is False whenever no rung answered.
     Example: derive_seed(mgr, 'ses_5a756046', 'cloude_Punchlist').state
     """
     epoch = _resolve_epoch(manager, session_id, epoch)
+    stamp = now or datetime.now(timezone.utc)
 
     row = read_instance_row(manager, tmux_name, epoch, session_id=session_id)
     if row is None:
@@ -299,16 +285,26 @@ def derive_seed(
             ),
         )
 
-    tail = read_transcript_rest(
+    reading = read_transcript_signal(
         row.get("claude_session_uuid"),
         row.get("working_dir"),
         session_id=session_id,
     )
+    live = transcript_status_for(
+        manager,
+        session_id=session_id,
+        tmux_name=tmux_name,
+        epoch=epoch,
+        reading=reading,
+        unread=unread,
+        now=stamp,
+    )
     return resolve_status_seed(
         row_state=row.get("activity_state"),
         row_state_at=row.get("activity_state_at"),
-        tail=tail,
-        now=now,
+        tail=reading.tail,
+        live=live,
+        now=stamp,
     )
 
 
@@ -335,11 +331,50 @@ def seeded_status(
       session has no live hook signal; a hook outranks a seed and this
       function is never reached once one has landed.
     Inputs: manager (SessionManager). session_id (str). tmux_name
-      (str | None). epoch (int | None). unread (bool) - read, never
-      written; see ``session_status_seed.display_state``. now
-      (datetime | None).
+      (str | None). epoch (int | None). unread (bool) - the persisted
+      flag; read by the display and by rung 0, which is the ONLY thing
+      here that may write one. now (datetime | None).
     Output: str | None - an activity status, or None for "nothing seeded".
     Example: seeded_status(mgr, sid, name, unread=False) -> 'idle'
+    """
+    return seeded_display(
+        manager, session_id, tmux_name, epoch=epoch, unread=unread, now=now
+    )[0]
+
+
+def seeded_display(
+    manager: Any,
+    session_id: str,
+    tmux_name: Optional[str],
+    *,
+    epoch: Optional[int] = None,
+    unread: bool = False,
+    now: Optional[datetime] = None,
+) -> Tuple[Optional[str], str]:
+    """The seeded status AND the provenance to report for it.
+
+    Description: THE SEAM. Same work ``seeded_status`` describes; it
+      returns the pair so a caller does not have to ask twice and cannot
+      get a status from one call and a source from another that no longer
+      agrees with it. THE SOURCE IS DERIVED FROM THE RUNG THAT ANSWERED,
+      never from what the caller believed, so the two can only ever
+      travel together.
+
+      Re-derives at most once per
+      ``session_status_seed.SEED_REFRESH_INTERVAL_SECONDS`` per session
+      and serves the cached reading in between, so a listing that polls
+      every few seconds costs one bounded tail read a minute per hookless
+      session. It is the CALLER's job to have established that this
+      session has no live hook signal; a hook outranks a seed and this
+      function is never reached once one has landed.
+
+      A seed that has EXPIRED renders as no answer, and its source is
+      reported as ``none`` for the same reason: nothing currently
+      supports a status, so nothing may be credited with supporting one.
+    Inputs: as ``seeded_status``.
+    Output: tuple[str | None, str] - the status (or None) and one of
+      ``session_status_source.ALL_STATUS_SOURCES``.
+    Example: seeded_display(mgr, sid, name) -> ('idle', 'transcript')
     """
     try:
         store = seeds_for(manager)
@@ -347,12 +382,20 @@ def seeded_status(
         resolved_epoch = _resolve_epoch(manager, session_id, epoch)
         if store.due(session_id, now=stamp, epoch=resolved_epoch):
             seed = derive_seed(
-                manager, session_id, tmux_name, epoch=resolved_epoch, now=stamp
+                manager,
+                session_id,
+                tmux_name,
+                epoch=resolved_epoch,
+                unread=unread,
+                now=stamp,
             )
             store.remember(session_id, seed, now=stamp, epoch=resolved_epoch)
         else:
             seed = store.get(session_id) or StatusSeed()
-        return display_state(seed, unread=unread)
+        state = display_state(seed, unread=unread, now=stamp)
+        if state is None:
+            return (None, STATUS_SOURCE_NONE)
+        return (state, source_for_seed_rung(seed.rung))
     except _SEED_READ_ERRORS as exc:
         # A status must not break a listing, but a repeated failure here
         # was previously invisible (debug-only, and this server emits no
@@ -363,7 +406,7 @@ def seeded_status(
             error=str(exc),
             error_type=type(exc).__name__,
         )
-        return None
+        return (None, STATUS_SOURCE_NONE)
 
 
 def seed_live_sessions(manager: Any) -> Tuple[int, int]:

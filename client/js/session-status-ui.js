@@ -55,12 +55,18 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     const STATUS_LABELS = {
         dead: 'dead - process exited',
-        question: 'your turn - claude needs your permission',
-        notice: 'your turn - claude wants your attention',
+        question: 'waiting for permission',
+        notice: 'wants your attention',
         working_subagent: 'working - a subagent is active',
-        working: 'working - agent active',
-        finished_unread: 'finished - unread',
-        idle: 'idle - waiting at the shell',
+        working: 'working',
+        finished_unread: 'done - unread',
+        // MEASURED 2026-09-09: 15 of 19 live panes were running claude,
+        // not a shell, so "waiting at the shell" was wrong about four
+        // fifths of the sessions it described. `idle` means the light
+        // has nothing to report: the session has been read and nothing
+        // is running in it. It does NOT mean a bare shell, and it never
+        // did - a bare shell is only one of the ways to get here.
+        idle: 'idle - read, nothing running',
         // feat/ended-sessions-visibility. NOT a synonym for `dead`, and
         // the difference is the whole reason it earns a key: `dead` is a
         // tmux session that still EXISTS holding an exited process, so it
@@ -70,14 +76,64 @@ console.log('[SessionStatusUI Module] Loading...');
         // a stored record. Reusing `dead` for it would have told the user
         // to go clear up a pane that does not exist.
         stopped: 'ended - the session is no longer running',
-        unknown: 'status unknown',
+        // NOT MEASURED, not "nothing is happening". The two are
+        // different facts about the world and this is the one that has
+        // to keep saying so out loud.
+        unknown: 'not measured',
         // Back-compat: a stale cached response (pre feat/hook-driven-status
         // server, or a browser tab that hasn't reloaded yet) may still send
         // the old tmux-only 'running' string. Map it onto 'working' rather
         // than falling through to 'unknown' so a half-upgraded deployment
         // still renders something meaningful.
-        running: 'working - agent active',
+        running: 'working',
     };
+
+    /**
+     * How each `status_source` reads in the tooltip.
+     *
+     * Description: PROVENANCE, NEVER STATE. The server resolves where a
+     *   status came from (src/core/session_status_source.py) and this is
+     *   the only place the client renders it. It is appended to the
+     *   label and NOTHING ELSE: no class, no color, no shape. One status
+     *   with two appearances would undo the single vocabulary the light
+     *   rests on, and a user cannot be expected to learn a second colour
+     *   axis that means "how sure are we".
+     *
+     *   'none' is absent on purpose. When nothing measured the status
+     *   there is nothing to credit, and appending "via nothing" reads as
+     *   a fault rather than as the honest silence it is.
+     * @type {Object<string, string>}
+     */
+    const SOURCE_SUFFIX = {
+        hook: 'via hooks',
+        transcript: 'via transcript',
+        seed_row: 'via the session record',
+        tmux: 'via tmux',
+    };
+
+    /**
+     * Label for a status, with its provenance appended when known.
+     *
+     * Description: The ONE composer, so the dot, the LED title and any
+     *   plain-text caller cannot drift on how a source is worded. An
+     *   unknown or missing source returns the bare label unchanged,
+     *   which is exactly what an older server payload produces.
+     * Inputs:
+     *   status (string|null|undefined) - raw activity_status value.
+     *   statusSource (string|null|undefined) - raw status_source value.
+     * Output:
+     *   string - e.g. 'working (via hooks)', or 'working'.
+     * Example:
+     *   labelWithSource('idle', 'transcript')
+     *     -> 'idle - read, nothing running (via transcript)'
+     */
+    function labelWithSource(status, statusSource) {
+        const label = STATUS_LABELS[normalizeStatus(status)];
+        const suffix = Object.prototype.hasOwnProperty.call(
+            SOURCE_SUFFIX, statusSource,
+        ) ? SOURCE_SUFFIX[statusSource] : '';
+        return suffix ? `${label} (${suffix})` : label;
+    }
 
     /**
      * CSS modifier class per status - kept separate from STATUS_LABELS so
@@ -173,7 +229,7 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     function dotHtml(status, signals) {
         const key = normalizeStatus(status);
-        const label = STATUS_LABELS[key];
+        const label = labelWithSource(key, (signals || {}).status_source);
         const cssClass = STATUS_DOT_CLASS[key];
 
         // THE LED IS THE INDICATOR NOW, and this is the one seam that
@@ -246,7 +302,7 @@ console.log('[SessionStatusUI Module] Loading...');
      * Output:
      *   string - human-readable label.
      * Example:
-     *   labelFor('idle') -> 'idle - waiting at the shell'
+     *   labelFor('idle') -> 'idle - read, nothing running'
      */
     function labelFor(status) {
         return STATUS_LABELS[normalizeStatus(status)];
@@ -525,6 +581,7 @@ console.log('[SessionStatusUI Module] Loading...');
         normalizeStatus,
         dotHtml,
         labelFor,
+        labelWithSource,
         markUnreadHtml,
         trashIconSvg,
         closeIconSvg,

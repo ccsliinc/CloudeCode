@@ -991,6 +991,28 @@ separate and load-bearing, because a matcher that always finds something is
 worse than useless: over 400 sampled transcripts it splits 172 `at_rest` / 70
 `in_flight` / 158 `no_marker`. Full model in `docs/session-status.md`.
 
+**AND A HOOKLESS SESSION NOW READS ITS OWN TRANSCRIPT FOR WORK, because an
+mtime is a TIMESTAMP and the objection above was about a RECORD** - measured
+2026-09-09, only 6 of 19 live sessions had ever fired a hook, and three of
+the other thirteen had touched their transcript inside 36 minutes while
+painting the same rest as ones last touched in July;
+`src/core/session_transcript_status{,_read}.py` is rung 0 of the same ladder
+(mtime inside `WORKING_HEARTBEAT_TIMEOUT_SECONDS` -> `working`, carrying an
+`expires_at` that `display_state` enforces so the 60s seed cache cannot
+stretch it; a turn end NEWER than the one its instance-keyed ledger already
+holds -> `finished_unread` plus ONE auto-unread claim, where FIRST SIGHT IS A
+BASELINE so a restart never re-lights the fleet), gated on `hooks_seen` and
+NOT on the hook token store, which holds 33 entries for 19 live sessions
+including every adopted pane. **A VIEW NOW CLEARS AN OPEN `notice` AND NEVER
+AN OPEN `permission`** (`src/core/session_view_clears.py`, reached from the
+WS bind and from mark-read): a `Notification` is a message to the user and
+survived a 46-minute visit on BHPP, while a `PermissionRequest` is a blocking
+fact about the agent that looking at does not answer. `status_source`
+(`hook` / `transcript` / `seed_row` / `tmux` / `none`,
+`src/core/session_status_source.py`) rides the `/sessions/list` wrapper and
+renders in the TOOLTIP ONLY, and `client/js/session-header-led.js` finally
+puts the same LED beside the session name in the terminal header.
+
 **Unread is keyed on the INSTANCE**, `<tmux_name>@<#{session_created}>`,
 because a name is reused and a flag from a killed session reappeared on its
 successor. Set on `Stop` and by the user's control, cleared when a WS

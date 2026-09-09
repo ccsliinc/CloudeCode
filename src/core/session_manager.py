@@ -84,6 +84,13 @@ from src.core.session_startup_gate_ledger import (
     capture_pane_tail,
 )
 from src.core import unread_identity
+from src.core import session_view_clears
+from src.core.session_status_source import (
+    STATUS_SOURCE_HOOK,
+    STATUS_SOURCE_NONE,
+    STATUS_SOURCE_SEED_ROW,
+    STATUS_SOURCE_TMUX,
+)
 from src.core.unread_store import UnreadStore
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
@@ -1809,23 +1816,22 @@ class SessionManager:
         )
 
     def mark_session_viewed(self, session_id: str) -> None:
-        """Clear the WHOLE unread flag for the session bound to ``session_id``.
+        """Clear everything a VIEW resolves for the session ``session_id``.
 
         Called when a WS terminal binds to a session (see
         ``src/api/websocket.py``'s ``connection_manager.bind_session``) -
         the strongest "the user is looking at this" signal the server has.
-        CLEARS BOTH SUB-FLAGS: it used to spare the manual one, and the
-        owner's rule is the opposite - "when clicking a tab, the session
-        is marked read. if i want it unread i click unread."
+        CLEARS BOTH UNREAD SUB-FLAGS: it used to spare the manual one, and
+        the owner's rule is the opposite - "when clicking a tab, the
+        session is marked read. if i want it unread i click unread."
+
+        IT ALSO CLEARS AN OPEN ``notice`` and deliberately not an open
+        ``permission``. The rules and the incident behind them live in
+        ``src/core/session_view_clears.py``, which both this method and
+        the manual mark-read control route through so the two can never
+        drift on what looking at a session means.
         """
-        backend = self.backends.get(session_id)
-        tmux_name = getattr(backend, "tmux_session", None) if backend else None
-        if not tmux_name:
-            return
-        # THE SAME epoch source the Stop writer and the manual control
-        # use, which is the whole point: a clear derived any other way
-        # lands on a key nobody wrote and the flag is unclearable.
-        self._unread_store.clear(tmux_name, self._unread_epoch(tmux_name))
+        session_view_clears.clear_view_state(self, session_id=session_id)
 
     def set_manual_unread(self, tmux_name: str, unread: bool) -> None:
         """Set or clear the MANUAL unread flag for a tmux session name.
@@ -1845,11 +1851,16 @@ class SessionManager:
         """
         if not tmux_name:
             raise ValueError("tmux_name is required")
-        epoch = self._unread_epoch(tmux_name)
         if unread:
-            self._unread_store.set_flag(tmux_name, "manual", True, epoch=epoch)
+            self._unread_store.set_flag(
+                tmux_name, "manual", True, epoch=self._unread_epoch(tmux_name)
+            )
         else:
-            self._unread_store.clear(tmux_name, epoch)
+            # MARK READ IS A VIEW. It goes through the same seam a
+            # WebSocket bind does, so it clears the open notice too - the
+            # control says "I have seen this", and a notification is
+            # exactly the claim that answers.
+            session_view_clears.clear_view_state(self, tmux_name=tmux_name)
 
     def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
         """Return the persisted pin for a tmux session name, or None."""
@@ -4503,6 +4514,17 @@ class SessionManager:
             # as alive. Neither was measured, so the row survives and
             # says ``unknown``.
             raw_tmux_status = STATUS_UNKNOWN
+        # WHERE THE STATUS BELOW CAME FROM. Set here so the weakest
+        # provenance is the default and every stronger source has to
+        # claim it explicitly on its own branch - the reverse would let a
+        # missed branch report an inference as a measurement. tmux
+        # answered for this pane unless liveness itself could not be
+        # established. See src/core/session_status_source.py.
+        status_source = (
+            STATUS_SOURCE_NONE
+            if liveness == LIVENESS_UNKNOWN
+            else STATUS_SOURCE_TMUX
+        )
         # feat/hook-driven-status - the raw tmux classification (dead check
         # + graceful-fallback source) is combined with this session's live
         # hook signal (if any) and its persisted unread flag into ONE
@@ -4549,6 +4571,7 @@ class SessionManager:
             # honest absence of a measurement.
             if restored and liveness == LIVENESS_LIVE:
                 activity_status = restored
+                status_source = STATUS_SOURCE_SEED_ROW
 
             # THE SEED. Measured on live 2026-09-08 22:24Z: 19 live
             # panes, 13 of them painting ``unknown``, and 10 of those
@@ -4574,9 +4597,9 @@ class SessionManager:
                 activity_status == STATUS_UNKNOWN
                 and liveness == LIVENESS_LIVE
             ):
-                from src.core.session_status_seed_read import seeded_status
+                from src.core.session_status_seed_read import seeded_display
 
-                seeded = seeded_status(
+                seeded, seeded_source = seeded_display(
                     self,
                     session_id,
                     tmux_session_name,
@@ -4585,7 +4608,20 @@ class SessionManager:
                 )
                 if seeded:
                     activity_status = seeded
+                    # THE SOURCE TRAVELS WITH THE VALUE, resolved by the
+                    # rung that answered rather than assumed here. Rung 0
+                    # can now also have SET the unread flag on the way
+                    # past, which is why the flag is re-read below.
+                    status_source = seeded_source
+                    unread = self._is_unread(
+                        tmux_session_name,
+                        self._unread_epochs.get(tmux_session_name),
+                    )
         else:
+            # A hook is the only source that is the agent's own word
+            # about itself. Everything else on this path is a reading of
+            # something the agent left behind.
+            status_source = STATUS_SOURCE_HOOK
             # THE SETTLED VALUE, stamped where the inputs are real. The
             # hook path cannot write this: with no tmux probe it resolves
             # to UNKNOWN once the heartbeat expires and correctly declines
@@ -4705,6 +4741,7 @@ class SessionManager:
             agent_wrapper_label=wrapper_display.label,
             pinned_theme=sess.pinned_theme,
             activity_status=activity_status,
+            status_source=status_source,
             unread=unread,
             startup_gate=startup_gate,
             # fix/session-ownership-source - ownership is membership in the

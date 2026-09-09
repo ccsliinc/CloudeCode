@@ -1026,6 +1026,12 @@ class Launchpad {
                     // its trust prompt must STOP saying it needs a
                     // keypress, and a `||` would keep the stale value.
                     existing.startup_gate = live.startup_gate;
+                    // Provenance for the status above, rendered in the
+                    // tooltip only (see session-status-ui.js). Overwritten
+                    // unconditionally for the same reason the gate is: a
+                    // status that stops being hook-fed must stop claiming
+                    // it was.
+                    existing.status_source = live.status_source;
                     // feat/agent-family-pills - THREE-OUTCOME family
                     // display. ``agent_family`` is null (not a string)
                     // whenever the server could not determine it -
@@ -1738,7 +1744,8 @@ class Launchpad {
             // is what the LED outer ring needs - see session-sidebar-rows.js.
             const statusDot = window.SessionStatusUI
                 ? window.SessionStatusUI.dotHtml(s.status,
-                    { unread: !!s.unread, startup_gate: s.startup_gate })
+                    { unread: !!s.unread, startup_gate: s.startup_gate,
+                      status_source: s.status_source })
                 : '';
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
@@ -4180,7 +4187,8 @@ class Launchpad {
         const escapedDisplay = this._escapeHtml(displayName);
         const statusDot = window.SessionStatusUI
             ? window.SessionStatusUI.dotHtml(s.status,
-                { unread: !!s.unread, startup_gate: s.startup_gate })
+                { unread: !!s.unread, startup_gate: s.startup_gate,
+                  status_source: s.status_source })
             : '';
         return `
                 <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">

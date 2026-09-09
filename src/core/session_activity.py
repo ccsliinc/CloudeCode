@@ -478,6 +478,51 @@ class SessionActivityTracker:
 
         return STATUS_IDLE
 
+    def clear_notice(self, session_id: str) -> bool:
+        """Clear an open ``Notification`` because the user LOOKED. Idempotent.
+
+        Description: the ONE thing outside the hook stream that may move
+            this state machine, and it may move exactly one field.
+            ``notice`` means "claude wants you to look"; a WebSocket
+            terminal binding to the session, or the user's explicit
+            mark-read control, is the user looking. Nothing in the hook
+            stream carries that fact - the three events that clear
+            ``notice_open`` today (``UserPromptSubmit`` / ``PreToolUse``
+            / ``Stop``) are all the AGENT acting, which is why a
+            notification survived a 46-minute visit on live 2026-09-09.
+
+            IT DOES NOT TOUCH ``permission_open``. A permission prompt
+            is a BLOCKING fact about the agent, not a message to the
+            user: looking at it does not answer it, and it already
+            clears on the events that do. See
+            ``src/core/session_view_clears.py``.
+
+            Idempotent and order-tolerant like every other update here:
+            clearing a notice that is not open is a no-op, and a
+            ``Notification`` arriving after this call simply re-opens
+            one, which is correct - that is a NEW request for attention.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            bool: True when a notice was actually open and has been
+            cleared, False when there was nothing to clear. Returned so a
+            caller can log the difference rather than guess at it; no
+            caller is required to act on it.
+        Example:
+            >>> t = SessionActivityTracker()
+            >>> t.record_event("s1", EVENT_NOTIFICATION)
+            >>> t.clear_notice("s1")
+            True
+            >>> t.clear_notice("s1")
+            False
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.notice_open:
+            return False
+        state.notice_open = False
+        logger.debug("notice_cleared_by_view", session_id=session_id)
+        return True
+
     def hooks_seen(self, session_id: str) -> bool:
         """True iff at least one hook event has ever landed for this session.
 

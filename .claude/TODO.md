@@ -4783,3 +4783,99 @@ the new ring/feather/glow numbers, plus a note on why `idle` + `unread:
 true` is defensive rather than normally reachable. `CLAUDE.md`: the status
 paragraph now says the box-shadow is three ring-side layers (was two) and
 names `--led-color-idle`; the summary-priority line gains `idle`.
+
+## 2026-09-09: status light audit, defects A to E closed
+
+Audited on live at `f77a978`, 19 live sessions. Client and server agreed on
+all 19 rows, so nothing here is a rendering bug; every defect was upstream of
+the paint.
+
+- [x] **A. A view now clears an open `notice`, and still never a
+  `permission`.** `notice` is set by claude's `Notification` hook (its
+  roughly-60s "waiting for your input"), outranks the heartbeat, and cleared
+  only on `UserPromptSubmit` / `PreToolUse` / `Stop` - all three the AGENT
+  acting. Nothing represented the USER showing up, so BHPP painted terracotta
+  for 46 minutes ACROSS a visit. `src/core/session_view_clears.py` is the one
+  definition of what looking at a session resolves, reached from the WS bind
+  (`mark_session_viewed`) and from the manual mark-read control, which arrive
+  holding different identifiers. `SessionActivityTracker.clear_notice` is the
+  only thing outside the hook stream allowed to move that machine, and it may
+  move exactly one field. `permission_open` is deliberately untouched: a
+  blocking fact about the agent is not answered by looking at it. No time
+  expiry was added either, per the owner - "a session left alone should not go
+  gray".
+
+- [x] **B. A hook-less session reads its own transcript.** Only 6 of 19 live
+  sessions had EVER fired a hook; the other 13 rested on seed rung B, which
+  can say `idle` and nothing else, so three sessions that had touched their
+  transcript inside 36 minutes painted the same rest as ones last touched in
+  July. `src/core/session_transcript_status.py` (pure) plus
+  `_read.py` (the reads, the turn ledger, the unread write) is rung 0 of the
+  same ladder, fed by the existing 60s re-seed. Rung 1 mtime inside
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` -> `working`; rung 2 a turn end NEWER
+  than the ledger's -> `finished_unread` plus ONE auto-unread claim; rung 3
+  the turn end already recorded -> `finished_unread` while unread, `idle`
+  after a view; rung 4 stale in-flight -> nothing; rung 5 no transcript ->
+  nothing.
+  - **An mtime is a TIMESTAMP, which is exactly the objection the old
+    docstring raised.** It refused file-derived work because a RECORD carries
+    no clock. A modification time is a clock, so the claim expires on the same
+    120s a hook heartbeat does. `StatusSeed.expires_at` plus `display_state`
+    enforce it, because the seed cache holds a reading for 60s and would
+    otherwise stretch the window.
+  - **FIRST SIGHT OF A TURN END IS A BASELINE, NOT AN INSTRUCTION.** The
+    ledger is in memory; a first-sighting claim would light the whole fleet
+    unread on every restart, July conversations included. It records and
+    claims nothing. The baseline only moves FORWARD, and only the two
+    turn-end rungs may move it - rung 1's timestamp is a file mtime, not a
+    turn boundary.
+  - **The gate is `hooks_seen`, NOT the hook token store.** Measured:
+    `hook_tokens.json` holds 33 entries against 19 live sessions and includes
+    every `adopted:` id, because an adopt mints a token for a pane it never
+    spawned into. Gating on it would have refused the ladder to exactly the
+    sessions it was built for, and shipped a no-op.
+
+- [x] **C. The legend says what the states mean.** `idle` was "waiting at the
+  shell" while 15 of 19 panes ran claude. Now: `waiting for permission` /
+  `wants your attention` / `working` / `done - unread` /
+  `idle - read, nothing running` / `not measured` / `dead - process exited`,
+  all in `STATUS_LABELS` and reached by every surface through `dotHtml`.
+
+- [x] **D. The terminal header has a light.** The screen you actually look at
+  was the one surface with no LED, so the status of the session you were IN
+  was the one you had to open a list to read.
+  `client/js/session-header-led.js` renders through
+  `SessionStatusUI.dotHtml`, so it inherits the rings, the colours and the
+  legend and cannot drift. Fed from one call site at the end of
+  `session-sidebar-fetch.js`'s `load()`; because that poll runs only while the
+  drawer is OPEN, the module also arms a fallback timer at the same cadence
+  that stands down while the drawer is open. AT MOST ONE POLLER, EVER, and
+  none at all with no session attached.
+
+- [x] **E. `status_source` on the `/sessions/list` wrapper.** `hook` /
+  `transcript` / `seed_row` / `tmux` / `none`, defined once in
+  `src/core/session_status_source.py` and DERIVED FROM THE RUNG THAT
+  ANSWERED, so a status and its provenance travel together. Rendered in the
+  TOOLTIP ONLY (`via hooks`, `via transcript`) - never a colour, a class or a
+  shape, because one status with two appearances would undo the single
+  vocabulary the light rests on.
+
+**ACCEPTED AS IS, both by design and both re-confirmed against live:**
+- A COLLAPSED GROUP HIDES ITS ROWS. Rows missing from the sidebar under a
+  folded band are folded, not lost. Folding is in the paint signature
+  precisely so it repaints; nothing to fix.
+- A PERMISSION STAYS LIT UNTIL IT IS ANSWERED. `question` is not cleared by a
+  view, an expiry or a poll - only by the events that resolve it. That is the
+  one light meaning "this cannot proceed without you" and it must not be
+  dimmable by a glance.
+
+**Tests.** `tests/test_status_view_and_transcript.py` (35: the view rules with
+their permission negative control, every rung, the once-per-turn claim, the
+first-sight baseline, the older-turn-end control, the hooked-session and
+bare-shell controls, the expiry) and
+`tests/test_status_legend_and_header_led.node.mjs` (14: the legend copy, the
+tooltip suffix, and the header light rendering and updating from a list row).
+Full suite 5530 passed / 3 failed / 21 skipped - the three are the known
+environmental ones (`test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`). Node 190 passed / 1 failed, the pre-existing
+`test_archive_full_page_mode`.

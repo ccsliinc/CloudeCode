@@ -192,6 +192,11 @@ class SessionSidebarController {
         if (this.isOpen) this._fetchAndRender();
     }
 
+    /** Description: the tmux session this tab is attached to, or null.
+     *  Public so the terminal header's light reads the SAME answer this
+     *  list does. Inputs: none. Output: string|null. */
+    activeTmuxName() { return this._activeTmuxName; }
+
     /** Description: toggle open/closed. Inputs: none. Output: void. */
     toggle() {
         if (this.isOpen) this.close(); else this.open();

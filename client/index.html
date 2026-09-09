@@ -80,6 +80,11 @@
          from both painting it. Its own markup comes from
          client/js/status-led.js. -->
     <link rel="stylesheet" href="/static/css/status-led.css" />
+    <!-- Position (only) for the same LED when it rides in the terminal
+         header beside the session name. Paint still comes from
+         status-led.css above, which must therefore load first. Its own
+         markup comes from client/js/session-header-led.js. -->
+    <link rel="stylesheet" href="/static/css/session-header-led.css" />
     <!-- Row density, the per-row reorder/pin controls, and the two
          three-outcome blocks the list can render instead of rows. Its own
          file so session-sidebar.css stays under the 500-line convention;
@@ -783,6 +788,11 @@
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>
+    <!-- The status light in the terminal header. Must load AFTER
+         session-status-ui.js (it renders through window.SessionStatusUI)
+         and BEFORE session-sidebar.js, whose poll and whose
+         setActiveSession both call window.SessionHeaderLed. -->
+    <script src="/static/js/session-header-led.js"></script>
     <!-- Shared X (close) / trash (remove) row control: which one a session
          row gets, its tooltip, and its confirm copy. Must load AFTER
          session-status-ui.js (uses its glyphs) and BEFORE launchpad.js,

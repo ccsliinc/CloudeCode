@@ -46,6 +46,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 import tempfile
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -547,11 +548,20 @@ def corpus(tmp_path, monkeypatch):
     return projects
 
 
-def write_transcript(corpus, working_dir, uuid, records):
+def write_transcript(corpus, working_dir, uuid, records, age_seconds=3600):
     """Write a transcript where ``conversation_presence`` will find it.
 
+    THE MTIME IS BACKDATED BY DEFAULT, and that is load-bearing. Rung 0
+    of the ladder (``session_transcript_status``) reads the file's mtime
+    and answers ``working`` for anything touched inside the heartbeat
+    window, so a transcript written by a test is, correctly, a
+    transcript that was just appended to. Every test in this file that
+    is about the TAIL therefore ages the file out of that window first;
+    a test about rung 0 passes ``age_seconds=0`` and says so.
+
     Inputs: corpus (Path). working_dir (str). uuid (str). records
-      (list[dict]).
+      (list[dict]). age_seconds (int) - how far in the past to stamp the
+      file's mtime; 0 leaves it at now.
     Output: Path - the transcript.
     """
     directory = corpus / slugify_project_dir(working_dir)
@@ -560,6 +570,9 @@ def write_transcript(corpus, working_dir, uuid, records):
     path.write_text(
         "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
     )
+    if age_seconds:
+        stamp = time.time() - age_seconds
+        os.utime(path, (stamp, stamp))
     return path
 
 

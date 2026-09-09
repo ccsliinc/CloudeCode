@@ -116,7 +116,17 @@ console.log('[SessionSidebarFetch Module] Loading...');
             // was worked on at the epoch.
             row.last_work_at = workByName.get(row.name) || null;
         }
-        return { rows: defaultSort(rows), listing };
+        const sorted = defaultSort(rows);
+        // THE TERMINAL HEADER'S LIGHT, off THIS fetch and THESE rows, so
+        // the header and the sidebar row for one session are painted from
+        // one object and cannot disagree. Wired here rather than in
+        // session-sidebar.js because this function already holds both
+        // halves it needs - the merged rows and the attached session's
+        // name - and because that file is at its 500-line budget.
+        if (window.SessionHeaderLed) {
+            window.SessionHeaderLed.update(sorted, activeTmuxName);
+        }
+        return { rows: sorted, listing };
     }
 
     /**
@@ -155,6 +165,13 @@ console.log('[SessionSidebarFetch Module] Loading...');
             // and the renderer normalizes it to 'unknown', which paints
             // nothing - the right degradation for an older payload.
             existing.startup_gate = info.startup_gate;
+            // PROVENANCE TRAVELS WITH THE STATUS, and unconditionally
+            // for the same reason the gate above does: a server that
+            // stopped being able to say where a status came from must
+            // not leave the previous poll's answer on screen. An older
+            // payload sends nothing, which lands on undefined and
+            // renders no suffix at all.
+            existing.status_source = info.status_source;
             // THE LIVE ROW IS THE FRESHER ANSWER ABOUT THE LABEL. It is
             // the payload a rename's own response and the session.renamed
             // repaint come back through, while the attachable probe may
@@ -181,6 +198,7 @@ console.log('[SessionSidebarFetch Module] Loading...');
             is_active: true,
             session_id: sessionId,
             status,
+            status_source: info.status_source,
             unread,
             agent_family: info.agent_family !== undefined ? info.agent_family : null,
             agent_family_source: info.agent_family_source !== undefined

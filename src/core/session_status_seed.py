@@ -32,6 +32,17 @@ So the in-flight verdict on rung B seeds NOTHING and leaves the session
 ``unknown``. Under-claiming is this module's safe direction, the same way
 it is ``session_activity``'s.
 
+QUALIFIED 2026-09-09, AND THE QUALIFICATION IS EXACT. The paragraph above
+argues against claiming work from the CONTENT of a record, which says what
+happened and carries no clock of its own. It is not an argument against
+claiming work from a TIMESTAMP. A transcript's mtime is a timestamp, so a
+claim built on it can be expired against the same
+``WORKING_HEARTBEAT_TIMEOUT_SECONDS`` a hook heartbeat uses, and it is:
+:class:`StatusSeed` now carries ``expires_at`` and ``display_state``
+refuses a seed whose claim has run out. That is RUNG ZERO below, owned by
+``session_transcript_status``, and it is the only rung that may say
+``working``. Everything else in this file is unchanged and still may not.
+
 A LIVE HOOK ALWAYS WINS, IMMEDIATELY. The seam consults a seed only while
 ``SessionActivityTracker.hooks_seen`` is False, so the first hook event of
 this process retires the seed for good with no expiry to wait out and no
@@ -43,6 +54,13 @@ answer and re-deriving it after a hook has landed changes nothing.
 THE RUNGS, IN ORDER. Each names what it MEASURED; none of them rounds a
 missing measurement up to an answer.
 
+  0. THE TRANSCRIPT AS IT STANDS RIGHT NOW - its mtime, and the newest
+     turn end in its tail - resolved by ``session_transcript_status`` and
+     passed in as ``live``. It is FIRST because it is the only rung that
+     measures the present: rungs A and B are both records of what was
+     true when something last wrote. It is the only rung that can say
+     ``working``, the only one that can set an unread flag, and the only
+     one that carries an expiry.
   A. THE ROW. ``sessions.activity_state`` / ``activity_state_at``, judged
      by ``activity_persist.restore_state`` - imported, never rebuilt, so
      the staleness horizon has one definition. A stale PERISHABLE state
@@ -78,15 +96,16 @@ pays on every hook event). Re-deriving can move a session from ``idle``
 back to ``unknown`` when the transcript grows an in-flight record, which
 is the honest direction: a growing transcript is evidence the rest claim
 has expired, NOT evidence of work. It still cannot say ``working``,
-because a poll every sixty seconds is not a heartbeat and nothing about
-reading a file more often makes a file into one. A session with live hook
-signal is never re-seeded; hooks are its truth.
+because a poll every sixty seconds is not a heartbeat - but rung 0 can,
+because the claim it makes is expired by the FILE's timestamp rather than
+by the poll's. A session with live hook signal is never re-seeded; hooks
+are its truth.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.core.session_status import (
@@ -163,6 +182,13 @@ class StatusSeed:
     at: Optional[datetime] = None
     rung: str = SEED_RUNG_NONE
     detail: Optional[str] = None
+    #: When ``state`` stops being supportable, or None when it does not
+    #: rot. Only the transcript ladder's ``working`` rung sets this: it
+    #: is the one seeded state that is a claim about NOW, and a cached
+    #: reading must not be able to stretch the window it was taken in.
+    #: A resting state never carries one, because a conversation does
+    #: not stop resting by sitting still.
+    expires_at: Optional[datetime] = None
 
     @property
     def seeds(self) -> bool:
@@ -182,6 +208,7 @@ def resolve_status_seed(
     row_state: Optional[str],
     row_state_at: Optional[str],
     tail: Optional[TranscriptRest] = None,
+    live: Optional["TranscriptStatus"] = None,
     now: Optional[datetime] = None,
 ) -> StatusSeed:
     """The status a session's durable evidence supports, or a refusal.
@@ -208,6 +235,28 @@ def resolve_status_seed(
       resolve_status_seed(row_state='idle', row_state_at=stamp).state -> 'idle'
     """
     from src.core.activity_persist import restore_state
+
+    # RUNG ZERO, AND IT COMES FIRST BECAUSE IT IS THE ONLY MEASUREMENT OF
+    # NOW. ``live`` is ``session_transcript_status``'s verdict for a
+    # session with no hook signal: the transcript's own mtime and the
+    # newest turn end in its tail. Everything below it is a RECORD OF
+    # THEN - the row was written by a process that has since exited, and
+    # the tail's ``at_rest`` says only that nothing has been appended
+    # since. A measurement of the last two minutes outranks both, and
+    # unlike them it EXPIRES: the ``working`` it can produce carries
+    # ``expires_at`` and dies with the heartbeat window whatever else
+    # happens. That is the objection the module docstring raises against
+    # a file-derived working claim, answered rather than argued with -
+    # see ``session_transcript_status`` on why an mtime is a timestamp
+    # and a tail record is not.
+    if live is not None and live.answers:
+        return StatusSeed(
+            state=live.state,
+            at=live.at,
+            rung=SEED_RUNG_TRANSCRIPT,
+            detail=live.detail,
+            expires_at=live.expires_at,
+        )
 
     restored, reason = restore_state(row_state, row_state_at, now=now)
     if restored:
@@ -247,7 +296,12 @@ def resolve_status_seed(
     )
 
 
-def display_state(seed: StatusSeed, *, unread: bool = False) -> Optional[str]:
+def display_state(
+    seed: StatusSeed,
+    *,
+    unread: bool = False,
+    now: Optional[datetime] = None,
+) -> Optional[str]:
     """What a seed renders as, given the session's unread flag.
 
     Description: mirrors the tail of ``SessionActivityTracker.resolve``
@@ -255,14 +309,27 @@ def display_state(seed: StatusSeed, *, unread: bool = False) -> Optional[str]:
       ``finished_unread``, not ``idle``. It READS the unread flag and
       never writes one: unread is keyed on the tmux INSTANCE and owned
       elsewhere, and nothing in this module may move it.
+      AN EXPIRED SEED RENDERS NOTHING. A seed is cached for up to
+      :data:`SEED_REFRESH_INTERVAL_SECONDS`, so a claim about NOW - the
+      transcript ladder's ``working`` - could otherwise be served for a
+      minute after the window it was measured in had closed. Every
+      resting seed carries no ``expires_at`` at all and is unaffected;
+      only the one state that is a claim about right now can go stale
+      here, and when it does this returns None and the caller keeps
+      ``unknown``, which is the honest answer for a claim that ran out.
     Inputs: seed (StatusSeed). unread (bool) - the session's persisted
-      unread flag, supplied by the caller.
+      unread flag, supplied by the caller. now (datetime | None) -
+      injectable clock, used only to judge ``expires_at``.
     Output: str | None - the status to render, or None when the seed
-      declined to answer.
+      declined to answer or its claim has expired.
     Example: display_state(StatusSeed('idle'), unread=True) -> 'finished_unread'
     """
     if not seed.seeds:
         return None
+    if seed.expires_at is not None:
+        stamp = now or datetime.now(timezone.utc)
+        if stamp > seed.expires_at:
+            return None
     if seed.state == STATUS_IDLE and unread:
         return STATUS_FINISHED_UNREAD
     return seed.state

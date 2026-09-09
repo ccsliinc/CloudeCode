@@ -28,6 +28,31 @@ client mirrors the same set in `client/js/session-status-ui.js`.
 and "I looked and found rest" are different claims and must never render
 the same way.
 
+### The legend, in one place
+
+The words a user reads live in `STATUS_LABELS`
+(`client/js/session-status-ui.js`) and nowhere else; every surface gets
+them through `dotHtml`, so they cannot drift between the sidebar, the
+launchpad and the terminal header.
+
+| state | tooltip |
+|---|---|
+| `question` | waiting for permission |
+| `notice` | wants your attention |
+| `working` | working |
+| `working_subagent` | working - a subagent is active |
+| `finished_unread` | done - unread |
+| `idle` | idle - read, nothing running |
+| `dead` | dead - process exited |
+| `unknown` | not measured |
+
+`idle` used to read "idle - waiting at the shell", which was wrong about
+four fifths of the sessions it described: measured 2026-09-09, 15 of 19
+live panes were running claude, not a shell. `idle` means the light has
+nothing to report - read, and nothing running - and a bare shell is only
+one of the ways to get there. `unknown` used to read "status unknown",
+which sounds like a fault; it is a measurement that was not taken.
+
 ### Why `question` and `notice` are two states, not one
 
 They were one state until 2026-09-08, and that state was named `question`
@@ -233,10 +258,114 @@ The rungs, in order. Each names what it MEASURED.
 
 | Rung | Evidence | Answers |
 |---|---|---|
+| 0 | the transcript AS IT STANDS NOW: its mtime, and its newest turn end | `working` / `finished_unread` / `idle`, and nothing else may |
 | A | `sessions.activity_state` / `activity_state_at` for THIS instance | that state, if `restore_state` still trusts it |
 | B | the last decidable record of the bound transcript | `idle` when it ends a turn; nothing otherwise |
 | C | a bare shell pane | `idle` already, before this ladder is reached |
 | D | everything else | `unknown`, which is a real answer |
+
+## Sessions without hook plumbing
+
+**Measured on live 2026-09-09, f77a978: only 6 of 19 live sessions had
+ever fired a hook.** The other thirteen were started by hand without the
+hook environment, so the state machine above will never hold a signal for
+them and their light rested entirely on rung B, which can say `idle` and
+nothing else. Three of those thirteen had touched their transcript inside
+the previous 36 minutes and painted exactly the same rest as sessions
+last touched in July. A session doing work is the one thing a status
+light exists to show, and for two thirds of the fleet it could not show
+it.
+
+`src/core/session_transcript_status.py` is the ladder that closes it
+(pure), with its reads and its turn ledger next door in
+`session_transcript_status_read.py`. It is reached ONLY through the seed
+seam, which runs only while `SessionActivityTracker.hooks_seen` is False,
+so a hooked session is never touched by it: hooks are that session's
+truth and the first hook of the process retires the seed for good.
+
+**An mtime is a TIMESTAMP, and that is why rung 0 may claim work when
+rung B may not.** The objection above is about the CONTENT of a record,
+which says what happened and carries no clock of its own; it is not an
+objection to a file's modification time. A claim built on an mtime is
+expired by the same `WORKING_HEARTBEAT_TIMEOUT_SECONDS` a hook heartbeat
+uses, so a transcript that stops growing stops claiming work within one
+window whether or not anything else ever happens. `StatusSeed` carries
+`expires_at` and `display_state` refuses a seed whose claim has run out,
+which matters because the seed cache holds a reading for up to sixty
+seconds - without it, a `working` measured at the end of its window would
+be served for another minute.
+
+| Rung | What it measured | Answers |
+|---|---|---|
+| 1 | the transcript file was written inside the heartbeat window | `working`, carrying an expiry |
+| 2 | a turn end NEWER than the one already recorded for this pane | `finished_unread`, and sets the auto unread flag ONCE |
+| 3 | the turn end already recorded | `finished_unread` while unread, `idle` once a view cleared it |
+| 4 | mid-turn when last written, and that was longer ago than a heartbeat | nothing; the session stays `unknown` |
+| 5 | no transcript, or one that could not be read | nothing, and the two are named separately |
+
+**FIRST SIGHT OF A TURN END IS A BASELINE, NOT AN INSTRUCTION.** Rung 2
+is written as "newer than the one already recorded", never "not yet
+recorded", and that is load-bearing. The turn ledger is in memory, so a
+server restart empties it; a first-sighting claim would light every
+hookless session on the box unread on every restart, including
+conversations that ended in July. The first reading for an instance
+records the timestamp and claims nothing. `claude_title_sync` applies the
+same rule to a `custom-title` for the same reason.
+
+The ledger is keyed on the tmux INSTANCE (`<tmux_name>@<epoch>`, composed
+by `UnreadStore.compose_key` rather than re-spelled), its baseline only
+ever moves FORWARD, and only the two turn-end rungs may move it - rung 1
+carries a timestamp too, but it is a file mtime and not a turn boundary,
+and recording it would push the baseline past turn ends nobody observed.
+
+**Why the gate is `hooks_seen` and not the hook token store.** Membership
+in `hook_tokens.json` looks like the stronger gate and is not one:
+measured on live 2026-09-09 it holds 33 entries against 19 live tmux
+sessions, and every externally adopted pane is in it, because an adopt
+mints a token for a pane it never spawned into. A token proves this app
+minted one; it does not prove a hook can ever arrive. Gating on it would
+have refused the ladder to exactly the sessions it was built for.
+
+## Where a status came from
+
+`GET /sessions/list` carries `status_source` beside `activity_status` on
+the WRAPPER. Five values, defined once in
+`src/core/session_status_source.py`, in descending strength of evidence:
+
+| Value | Meaning |
+|---|---|
+| `hook` | Claude Code's own lifecycle hooks are live for this session this run. The agent said what it was doing. |
+| `transcript` | Measured off the conversation file: its mtime, or the last decidable record in its tail. |
+| `seed_row` | Restored from `sessions.activity_state`, judged still worth something by `restore_state`. |
+| `tmux` | tmux alone: a dead pane, a bare shell, or the honest `unknown` a non-shell foreground process earns. |
+| `none` | Nothing answered. Said out loud rather than left blank. |
+
+**It is rendered in the tooltip and nowhere else** - `via hooks`, `via
+transcript` - by `SessionStatusUI.labelWithSource`. It never changes a
+colour, a class or a shape. One status with two appearances would undo
+the single vocabulary the light rests on, and a user cannot be expected
+to learn a second colour axis meaning "how sure are we". The source is
+DERIVED FROM THE RUNG THAT ANSWERED, never from what the caller believed,
+so a status and its provenance can only travel together.
+
+## The light in the terminal header
+
+The sidebar row, the launchpad card and the project tree all painted an
+LED; the terminal header - the surface on screen the whole time you are
+working in a session - showed only the name, so the status of the session
+you were IN was the one status you had to open a list to read.
+`client/js/session-header-led.js` puts the same light beside the title,
+rendered through `SessionStatusUI.dotHtml` rather than its own markup, so
+it inherits the two-ring model, the colours and the legend copy and
+cannot drift from the other surfaces.
+
+It is fed by the sidebar's own poll (one call site in
+`_fetchAndRender`) reading the SAME merged row the list just painted. That
+poll runs only while the drawer is open, so the module also arms a
+fallback timer at the same cadence which stands down whenever the sidebar
+is polling: AT MOST ONE POLLER, EVER. With no session attached it fetches
+nothing and removes the light, because a light left under a header that
+now names the launchpad is a claim about something that is not on screen.
 
 **Rung A is read on the full instance triple**, `(tmux_socket, tmux_name,
 tmux_created_epoch)` - byte-for-byte the WHERE clause
@@ -332,6 +461,36 @@ the strongest "the user is looking at this" signal the server has), or
 the user clearing the control (`PATCH /sessions/{name}/unread` with
 `false`). Both go through `UnreadStore.clear`, which drops the pair in
 one write.
+
+### A view also clears an open `notice`, and never an open `permission`
+
+Both paths route through `src/core/session_view_clears.py` so there is
+one definition of what looking at a session resolves.
+
+**Measured on live 2026-09-09: the session named BHPP painted the
+terracotta `notice` light for 46 minutes ACROSS A VISIT.** The owner
+opened the tab, read it, left, and the light was still asking for
+attention. `notice` is set by claude's `Notification` hook (the one it
+fires after about sixty seconds of waiting for input), it outranks the
+heartbeat, and the only things that cleared it were `UserPromptSubmit`,
+`PreToolUse` and `Stop` - all three the AGENT doing something. None of
+them is the user showing up, and "come and look at me" is a claim only
+the user can answer.
+
+`question` is deliberately untouched by a view. A `PermissionRequest`
+means claude is STOPPED until a human answers a yes/no: it is a fact
+about the agent, not a message to the user, and glancing at it does not
+answer it. It already clears on the events that really do resolve it.
+Clearing it on a view would turn the one light meaning "this cannot
+proceed without you" into one meaning "you looked at it".
+
+No time expiry was added either. The owner's rule, verbatim: "a session
+left alone should not go gray. if i dont focus the tab it keeps its
+color." A notice is cleared by a person, not by a clock.
+
+Only the READ direction is a view. Marking a session UNREAD is the user
+saying "come back to this", which is the opposite of having looked, so it
+moves nothing else.
 
 The manual flag used to survive being viewed, on the theory that a
 followup pin outranks a glance. The owner's rule is the opposite and the

@@ -425,6 +425,28 @@ class SessionInfo(BaseModel):
         ),
     )
 
+    # WHERE ``activity_status`` CAME FROM. Provenance, not state: a
+    # ``working`` fed by a live hook stream and an ``idle`` inferred from
+    # a file on disk used to render as the same word with the same
+    # confidence, which is this project's recurring false-green shape.
+    # Five values, defined in src.core.session_status_source, in
+    # descending strength of evidence: 'hook' (the agent's own lifecycle
+    # hooks), 'transcript' (a measurement of the conversation file),
+    # 'seed_row' (restored from sessions.activity_state), 'tmux' (the
+    # pane classification alone), 'none' (nothing answered).
+    #
+    # THE CLIENT RENDERS IT IN THE TOOLTIP ONLY. It must never change a
+    # color: one status with two appearances would undo the single
+    # vocabulary the light rests on.
+    status_source: str = Field(
+        default="none",
+        description=(
+            "Provenance of activity_status: 'hook' | 'transcript' | "
+            "'seed_row' | 'tmux' | 'none'. See "
+            "src.core.session_status_source."
+        ),
+    )
+
 
 # API Request Models
 
