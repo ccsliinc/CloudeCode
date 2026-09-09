@@ -242,10 +242,28 @@ class SessionActivitySignal:
     #: "hooks are not installed / haven't fired yet" - only the latter
     #: falls back to ``map_tmux_fallback``.
     hook_seen: bool = False
-    #: True between an unresolved ``PermissionRequest`` and the next
-    #: UserPromptSubmit or PreToolUse event. THE AGENT IS STOPPED while
-    #: this is set - it cannot proceed until the user answers.
+    #: True while a ``PermissionRequest`` is believed unresolved. THE
+    #: AGENT IS STOPPED while this is set - it cannot proceed until the
+    #: user answers. THREE THINGS RETIRE IT, and it needs all three: the
+    #: next UserPromptSubmit / PreToolUse / Stop (the answer being given,
+    #: and the fastest route WHEN the events reach this same key), the
+    #: user viewing the session (``clear_permission`` via
+    #: ``session_view_clears``), and the pane being read and found to hold
+    #: no dialog (``session_permission_verify``). The last two exist
+    #: because the first is a closed loop only while every event lands on
+    #: this key, and on live 2026-09-09 one session's did not.
     permission_open: bool = False
+    #: When ``permission_open`` last went False -> True, or None while it
+    #: is clear. It exists because a PermissionRequest is a CLAIM that
+    #: something is on screen, and the pane is the only thing that can
+    #: confirm it - see ``src/core/session_permission_verify.py``. Stamped
+    #: ONLY on the transition, never refreshed by a duplicate: a duplicated
+    #: PermissionRequest means "still blocked", and letting it re-stamp
+    #: would push the verification grace window out for as long as the
+    #: duplicates kept arriving, which is exactly when verification is
+    #: most needed. Cleared to None everywhere the flag clears, so a
+    #: stale stamp can never outlive the claim it dates.
+    permission_opened_at: Optional[datetime] = None
     #: True between an unresolved ``Notification`` and the next
     #: UserPromptSubmit or PreToolUse event. Claude wants attention and is
     #: NOT blocked, which is why it is a second boolean rather than a
@@ -325,6 +343,14 @@ class SessionActivityTracker:
             # duplicate, or a second distinct permission prompt before the
             # first resolved, both just mean "still blocked" - correct
             # either way.
+            #
+            # THE STAMP IS THE TRANSITION, NOT THE EVENT. Only a
+            # False -> True move dates the claim; a duplicate leaves the
+            # original stamp alone so the pane verification's grace window
+            # cannot be pushed out indefinitely by a repeating hook. See
+            # the field comment on ``permission_opened_at``.
+            if not state.permission_open:
+                state.permission_opened_at = now
             state.permission_open = True
         elif kind == EVENT_NOTIFICATION:
             # Deliberately does NOT touch permission_open. The two flags
@@ -335,6 +361,7 @@ class SessionActivityTracker:
             state.notice_open = True
         elif kind == EVENT_USER_PROMPT_SUBMIT:
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             # An OPENING event: a prompt was submitted, so a turn is live
             # again even though this event stamps no heartbeat of its own
@@ -348,6 +375,7 @@ class SessionActivityTracker:
             # "permission answered" event at all. It clears BOTH for the
             # same reason: the user showing up is what resolves either.
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             state.turn_open = True
             state.last_tool_event_ts = now
@@ -395,6 +423,7 @@ class SessionActivityTracker:
             # attention, no in-flight tool work, no in-flight subagent. A
             # duplicate Stop re-applies the exact same reset - harmless.
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             state.subagent_depth = 0
             state.last_tool_event_ts = None
@@ -499,11 +528,12 @@ class SessionActivityTracker:
             / ``Stop``) are all the AGENT acting, which is why a
             notification survived a 46-minute visit on live 2026-09-09.
 
-            IT DOES NOT TOUCH ``permission_open``. A permission prompt
-            is a BLOCKING fact about the agent, not a message to the
-            user: looking at it does not answer it, and it already
-            clears on the events that do. See
-            ``src/core/session_view_clears.py``.
+            IT DOES NOT TOUCH ``permission_open``, and that is a
+            division of labour rather than a policy: the permission has
+            its own clear next door (``clear_permission``), which the
+            same view path calls, and which the pane check also calls.
+            One field per method keeps a caller that wants only one of
+            them from having to want both.
 
             Idempotent and order-tolerant like every other update here:
             clearing a notice that is not open is a no-op, and a
@@ -530,6 +560,82 @@ class SessionActivityTracker:
         state.notice_open = False
         logger.debug("notice_cleared_by_view", session_id=session_id)
         return True
+
+    def clear_permission(self, session_id: str) -> bool:
+        """Clear an open ``PermissionRequest``. Idempotent.
+
+        Description: the second thing outside the hook stream that may
+            move this state machine, and like ``clear_notice`` it may
+            move exactly one claim (the flag and the stamp that dates it,
+            which are one fact in two fields).
+
+            IT HAS TWO CALLERS AND THEY ANSWER THE SAME QUESTION FROM
+            OPPOSITE ENDS. ``session_view_clears`` calls it because the
+            OWNER showed up - his rule, verbatim: "when clicking a tab,
+            the session is marked read. if i want it unread i click
+            unread." ``session_permission_verify_apply`` calls it because
+            the PANE was read and holds no dialog, which is the only
+            evidence that can retire a flag whose agent can no longer be
+            reached by a clearing hook.
+
+            WHY THE VIEW MAY NOW CLEAR IT, having deliberately not done
+            so before. The old reasoning was that looking at a permission
+            prompt does not answer it, so a view clearing it would paint
+            false green. Measured on live 2026-09-09 that argument
+            protected the wrong thing: ``cloude_Media_Compression`` held
+            ``question`` with NO dialog on its pane at all, because the
+            hooks that clear the flag arrived under a DIFFERENT session
+            id than the one the flag was set on, and no event reachable
+            from that pane could ever retire it. A claim no observation
+            can retire is not a safe claim, it is a stuck one. The pane
+            check next door is the honest retirement path; the view is
+            the user's own override of it, consistent with every other
+            attention state on this screen.
+
+            Order-tolerant: a ``PermissionRequest`` arriving after this
+            call simply re-opens the flag with a FRESH stamp, which is
+            correct - that is a new prompt, and it gets its own grace
+            window before the pane is asked about it.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            bool: True when a permission was actually open and has been
+            cleared, False when there was nothing to clear.
+        Example:
+            >>> t = SessionActivityTracker()
+            >>> t.record_event("s1", EVENT_PERMISSION_REQUEST)
+            >>> t.clear_permission("s1")
+            True
+            >>> t.clear_permission("s1")
+            False
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.permission_open:
+            return False
+        state.permission_open = False
+        state.permission_opened_at = None
+        return True
+
+    def permission_open_since(self, session_id: str) -> Optional[datetime]:
+        """When this session's open permission claim was first raised.
+
+        Description: the accessor the pane-verification seam reads, so
+            nothing outside this module has to reach into ``_signals``.
+            Returns None both when no permission is open and when the
+            session is unknown - the caller treats either as "nothing to
+            verify", which is the same action for both.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            datetime | None - naive UTC stamp of the False -> True move.
+        Example:
+            >>> SessionActivityTracker().permission_open_since("s1") is None
+            True
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.permission_open:
+            return None
+        return state.permission_opened_at
 
     def hooks_seen(self, session_id: str) -> bool:
         """True iff at least one hook event has ever landed for this session.

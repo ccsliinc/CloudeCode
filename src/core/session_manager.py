@@ -87,6 +87,7 @@ from src.core.session_startup_gate_ledger import (
 from src.core import unread_identity
 from src.core import session_view_clears
 from src.core import toast_auto_ack
+from src.core import session_permission_verify_apply
 from src.core.session_status_source import (
     STATUS_SOURCE_HOOK,
     STATUS_SOURCE_NONE,
@@ -4648,6 +4649,23 @@ class SessionManager:
             or unread_identity.resolve_epoch(
                 self._unread_epochs, tmux_session_name
             ),
+        )
+        # A PERMISSION CLAIM IS RE-VERIFIED AGAINST THE PANE BEFORE IT IS
+        # RESOLVED. ``permission_open`` is set by one hook and cleared by
+        # another, which is a closed loop only while both reach the same
+        # tracker key - and measured on live 2026-09-09 they did not, so
+        # cloude_Media_Compression painted the permission light over a pane
+        # holding no dialog at all. This runs BEFORE resolve() so the
+        # corrected flag produces the status, rather than a second place
+        # patching one. It costs one capture-pane for a session that has
+        # held an open permission for longer than the grace window, which
+        # in steady state is the empty set - see should_capture_permission_tail.
+        session_permission_verify_apply.verify_open_permission(
+            self,
+            session_id=session_id,
+            backend=backend,
+            tmux_name=tmux_session_name,
+            pane_alive=True if liveness == LIVENESS_LIVE else None,
         )
         activity_status = self._activity_tracker.resolve(
             session_id, raw_tmux_status, unread=unread

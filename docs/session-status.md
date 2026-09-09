@@ -519,7 +519,7 @@ auto flag. Deriving there against the flag as it stood BEFORE that
 measurement would answer `idle` about a turn that finished unseen. Every
 other rung reads the flag; that one moves it.
 
-### A view also clears an open `notice`, and never an open `permission`
+### A view clears an open `notice` AND an open `permission`
 
 Both paths route through `src/core/session_view_clears.py` so there is
 one definition of what looking at a session resolves.
@@ -534,12 +534,80 @@ heartbeat, and the only things that cleared it were `UserPromptSubmit`,
 them is the user showing up, and "come and look at me" is a claim only
 the user can answer.
 
-`question` is deliberately untouched by a view. A `PermissionRequest`
-means claude is STOPPED until a human answers a yes/no: it is a fact
-about the agent, not a message to the user, and glancing at it does not
-answer it. It already clears on the events that really do resolve it.
-Clearing it on a view would turn the one light meaning "this cannot
-proceed without you" into one meaning "you looked at it".
+**`question` was deliberately untouched by a view until 2026-09-09, and
+what changed is worth keeping.** The old argument: a `PermissionRequest`
+means claude is STOPPED until a human answers a yes/no, so it is a fact
+about the agent rather than a message to the user, glancing at it does
+not answer it, and clearing it on a view would turn the one light meaning
+"this cannot proceed without you" into one meaning "you looked at it".
+That reasoning is sound and it was still protecting the wrong thing.
+
+**Measured on live 2026-09-09: `cloude_Media_Compression` painted the
+permission light over a pane holding no dialog at all**, for over an hour
+and across a visit. Its tail read a settings warning, a typed prompt line
+and `bypass permissions on`. The flag had been set on session id
+`ses_949a8585`, while the claude actually running in that pane was
+measured - in its own process environment - to hold
+`CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression`, a spawn-time
+value tmux cannot rewrite into a running process. The hook token store
+held tokens for BOTH ids against the one tmux name, so nothing was
+rejected and no log line looked wrong; the pane's own `UserPromptSubmit`
+and both its later `Stop` events simply landed on a different tracker key.
+**NOTHING REACHABLE FROM THAT PANE COULD EVER RETIRE THE FLAG.** The
+toast path already survives this exact split (it remaps a stale id onto
+the live one before it stores or acks); the activity tracker does not.
+
+A claim no observation can retire is not a careful claim, it is a stuck
+bit. So the flag now has three retirement paths instead of one: the hook
+events that answer it (unchanged, and still the fastest when the ids line
+up), the user viewing the session, and the pane being read and found to
+hold no dialog.
+
+### An open `permission` is verified against the pane after 20 seconds
+
+`src/core/session_permission_verify.py` is the ladder,
+`session_permission_verify_apply.py` the seam that runs it from the
+listing pass, before `resolve()` so the corrected flag produces the
+status rather than a second place patching one.
+
+While `permission_open` has been set for longer than
+`PERMISSION_TAIL_GRACE_SECONDS` (20) on a pane measured LIVE, the listing
+pass takes ONE `capture-pane` for that session and looks for claude's
+permission dialog. The gate (`should_capture_permission_tail`) is the
+same shape as the startup gate's, and for the same reason: in steady
+state the set it admits is EMPTY, so a healthy box pays nothing. Do not
+move that capture into the unconditional path.
+
+Three outcomes, and only one clears:
+
+| Pane read | Marker | Verdict |
+|---|---|---|
+| yes | present | keep `question` - the hook was right |
+| yes | absent | clear `permission_open`, log `permission_flag_cleared_no_dialog` once |
+| no | n/a | KEEP. Not having managed to look is not evidence of absence |
+
+The markers were **measured, not guessed** - a real `claude` on a
+throwaway tmux socket with a `permissions.ask` rule in its own settings
+file, 2026-09-09, versions 2.1.265 and 2.1.266. Two wordings were
+captured because assuming one would have shipped a matcher that misses
+the other: the Bash prompt asks `Do you want to proceed?` and the Write
+prompt asks `Do you want to create note2.txt?`, so a matcher keyed on the
+literal first string answers "no dialog" for every file operation. What
+IS identical across both is the option block (`❯ 1. Yes` / `2. No` -
+NUMBERED, unlike the trust dialog) and the footer `Esc to cancel · Tab to
+amend`. Any of the three keeps the flag.
+
+The direction of error is deliberate. A false positive keeps a flag that
+is already set, which costs nothing new; a false negative paints a
+blocked session as idle. So the matcher is broad, and the negative
+controls in `tests/test_session_permission_verify.py` are the load-
+bearing tests - a matcher that always finds something would pass every
+positive case and clear nothing, forever. The stamp that dates the claim
+is written on the False -> True transition ONLY, so a repeating
+`PermissionRequest` cannot push the grace window out indefinitely.
+
+Nothing here can INVENT a permission: only a hook opens this claim, and
+the pane may only close it.
 
 No time expiry was added either. The owner's rule, verbatim: "a session
 left alone should not go gray. if i dont focus the tab it keeps its

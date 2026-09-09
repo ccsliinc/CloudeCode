@@ -16,15 +16,34 @@ read. if i want it unread i click unread." A notification is exactly that
 kind of state, so a view clears it, on the same event and through the
 same seam that clears the unread flag.
 
-A PERMISSION IS NOT CLEARED, AND THAT ASYMMETRY IS THE WHOLE POINT.
-``question`` means claude is STOPPED until a human answers a yes/no. It
-is a fact about the agent, not a message to the user, and looking at it
-does not answer it - the pane is still blocked the instant you look away.
-It already clears on the events that really do resolve it
-(``UserPromptSubmit`` / ``PreToolUse`` / ``Stop``), which is to say when
-the answer is given. Clearing it on a view would turn the one light that
-means "this cannot proceed without you" into one that means "you glanced
-at it", which is the false-green shape this project keeps removing.
+A PERMISSION IS NOW CLEARED TOO, AND THE ASYMMETRY THAT USED TO BE HERE
+IS WORTH KEEPING IN THE RECORD. The old rule was that ``question`` is a
+fact about the agent rather than a message to the user - it is STOPPED
+until a human answers a yes/no - so looking at it does not answer it, and
+clearing on a view would be the false-green shape this project keeps
+removing. The argument is sound and it was still protecting the wrong
+thing.
+
+MEASURED ON LIVE 2026-09-09. ``cloude_Media_Compression`` painted the
+permission light with NO dialog on its pane: the tail showed a settings
+warning, a typed-but-unsubmitted prompt line and ``bypass permissions
+on``. The flag had been set on session id ``ses_949a8585``, while the
+claude in that pane was measured to hold
+``CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression`` in its own
+process environment - a spawn-time value tmux cannot rewrite into a
+running process. So the three events that clear the flag were landing on
+a different tracker key and NOTHING REACHABLE FROM THAT PANE COULD EVER
+RETIRE IT. A claim no observation can retire is not a careful claim, it
+is a stuck bit, and it had been stuck for over an hour across a visit.
+
+So the flag now has two retirement paths, and the owner's rule covers
+both: "when clicking a tab, the session is marked read. if i want it
+unread i click unread." The user's own eyes are one path, and this is
+where it is applied. The other is evidence: while the flag is open past a
+grace window, the listing pass reads the pane and clears it when no
+dialog is on screen (``src/core/session_permission_verify.py``). The
+hook-driven clears are untouched - all three still fire, and they are
+still the fastest of the three routes when the ids line up.
 
 NO TIME EXPIRY IS ADDED EITHER, per the owner: "a session left alone
 should not go gray. if i dont focus the tab it keeps its color." A
@@ -81,9 +100,10 @@ def clear_view_state(
     """Clear everything that LOOKING at a session resolves. Idempotent.
 
     Description: drops the whole unread flag (both sub-flags, one write -
-      see ``UnreadStore.clear``) and clears the open NOTICE on the
-      session's activity signal. Does NOT touch ``permission_open``: see
-      the module docstring. Accepts either identifier and resolves the
+      see ``UnreadStore.clear``) and clears BOTH open attention flags on
+      the session's activity signal - the notice and the permission. See
+      the module docstring for why the permission was excluded until
+      2026-09-09 and what measurement changed it. Accepts either identifier and resolves the
       other; a caller that supplies neither, or one that names a session
       with no tmux backend, is a no-op rather than an error, because a
       view must never be able to raise on a socket bind.
@@ -115,6 +135,11 @@ def clear_view_state(
     if tracker is not None:
         for sid in ids:
             tracker.clear_notice(sid)
+            # BOTH ATTENTION FLAGS, on every id this pane is registered
+            # under. Clearing only the first id would leave the other
+            # registration holding the light that is actually on screen -
+            # the same reason ``session_ids_for_tmux_name`` returns a list.
+            tracker.clear_permission(sid)
 
     if not tmux_name:
         return False

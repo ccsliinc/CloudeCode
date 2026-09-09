@@ -960,6 +960,22 @@ that listing, so the row leaves the live list without yet arriving in
 Recent. Closing that needs a reaper rung keyed on a MEASURED
 `#{pane_dead}`, which is a new durable writer and its own change.
 
+**A VIEW CLEARS AN OPEN `permission`, AND AN OPEN ONE IS VERIFIED
+AGAINST THE PANE AFTER 20 SECONDS.** Measured 2026-09-09,
+`cloude_Media_Compression` painted `question` over a pane holding no
+dialog because the flag was set on `ses_949a8585` while the claude in
+that pane posts its spawn-time `adopted:cloude_Media_Compression`, so
+every clearing hook landed on a different tracker key and nothing
+reachable could retire it; the toast path already remaps that split and
+the activity tracker does not. So `session_view_clears` now clears
+`permission_open` too, and while the flag is open past
+`PERMISSION_TAIL_GRACE_SECONDS` the listing pass takes ONE `capture-pane`
+and clears it when claude's dialog is not on screen - marker present
+keeps, marker absent clears and logs `permission_flag_cleared_no_dialog`,
+an UNREADABLE tail keeps, and the markers were read off two real dialogs
+(`Do you want to ...?`, `❯ 1. Yes`, `Esc to cancel · Tab to amend`)
+rather than guessed. See `src/core/session_permission_verify{,_apply}.py`.
+
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an
 agent mid-tool-call and one at an empty prompt, and the fallback carries no

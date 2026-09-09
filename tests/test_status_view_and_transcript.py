@@ -125,12 +125,15 @@ def test_clear_notice_is_idempotent():
 
 
 def test_clear_notice_never_clears_a_permission():
-    """NEGATIVE CONTROL. A blocked agent stays blocked when you look at it.
+    """ONE METHOD, ONE FIELD - not a policy about views any more.
 
-    A ``PermissionRequest`` halts claude until a human answers a yes/no.
-    Looking at the pane does not answer it, so a view must leave the
-    claim exactly where it found it - including when a Notification
-    arrived alongside it, which is the common shape on live.
+    ``clear_notice`` moves the notice and nothing else, including when a
+    Notification arrived alongside a PermissionRequest, which is the
+    common shape on live. That the VIEW now clears both is a fact about
+    ``session_view_clears``, which calls the two methods; it is not a
+    reason for either method to reach into the other's field. See
+    ``tests/test_session_permission_verify.py`` for the view's own
+    contract and the 2026-09-09 measurement that changed it.
     """
     tracker = SessionActivityTracker()
     tracker.record_event("s1", EVENT_PERMISSION_REQUEST, now=NOW)
@@ -157,19 +160,34 @@ def test_a_websocket_bind_clears_the_notice_and_the_unread_flag(
     assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) != STATUS_NOTICE
 
 
-def test_a_websocket_bind_leaves_a_permission_prompt_alone(
-    monkeypatch, tmp_path
-):
-    """NEGATIVE CONTROL, through the manager rather than the tracker."""
+def test_a_websocket_bind_clears_a_permission_prompt(monkeypatch, tmp_path):
+    """REVERSED 2026-09-09, and the reversal is the point of the test.
+
+    This asserted the opposite until the owner's rule was applied to the
+    permission flag as well: "when clicking a tab, the session is marked
+    read. if i want it unread i click unread." The old reasoning - that
+    looking at a permission prompt does not answer it - was sound and was
+    protecting the wrong thing: measured on live, one session held this
+    flag with NO dialog on its pane and no reachable event that could
+    ever retire it, because the clearing hooks were arriving under a
+    different session id. A claim nothing can retire is a stuck bit.
+
+    The pane check (``src/core/session_permission_verify.py``) is the
+    evidence-driven retirement path; this is the user's own override of
+    it, through the same seam that clears unread.
+    """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
     mgr.record_hook_event("ses1", EVENT_PERMISSION_REQUEST, {})
+    assert mgr._activity_tracker.resolve(
+        "ses1", STATUS_RUNNING
+    ) == STATUS_QUESTION
 
     mgr.mark_session_viewed("ses1")
 
     assert mgr._activity_tracker.resolve(
         "ses1", STATUS_RUNNING
-    ) == STATUS_QUESTION
+    ) != STATUS_QUESTION
 
 
 def test_the_manual_mark_read_control_clears_the_notice_too(

@@ -5125,3 +5125,126 @@ now, and an unrecognised reason still reads `dismissed`).
 Full pytest 5572 passed / 3 failed / 21 skipped - the three are the known
 environmental pre-existing ones. Node sweep 191 passed, only the
 pre-existing `test_archive_full_page_mode`.
+
+---
+
+## 2026-09-09 - a view clears a permission flag, and an open flag is verified against the pane
+
+**The report.** "media compression has a bad status and not clearing."
+`GET /sessions/list` for `cloude_Media_Compression` (`ses_949a8585`) read
+`activity_status: question`, `status_source: hook`, `unread: false`,
+while its pane tail showed no dialog at all - a settings warning about
+`Write(.claude/notes/**)`, a typed-but-unsubmitted prompt line "thats me,
+i have another session running", and `bypass permissions on`.
+
+### What the log says, traced to the id
+
+At **17:55:12.153Z** a `Notification` toast and at **17:55:12.165Z** a
+`PermissionRequest` toast were recorded **directly under `ses_949a8585`,
+with no `toast_session_id_remapped` line before either**. Every other
+hook from that pane in the same window logged a remap from
+`adopted:cloude_Media_Compression`: the `UserPromptSubmit` at
+17:55:20.489 (which auto-acked both of those toasts), the `Stop` at
+17:55:57.649, a `Notification` at 17:56:57.723, a `UserPromptSubmit` at
+17:57:16.642, a `Stop` at 17:57:26.806 and a `Notification` at
+17:58:26.897. `record_toast` and `auto_ack_toasts` both remap and both
+LOG when they do, so the absence of a remap on the 17:55:12 pair is
+positive evidence those two POSTs carried the live id literally - which
+the pane's own claude cannot produce.
+
+**Measured directly**: the claude running in that pane (pid 93139,
+started 2026-09-08 14:27:37Z, never restarted since) holds
+`CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` in its own
+process environment. tmux copies the session env into a pane's process at
+spawn and cannot rewrite a running one, so that id is fixed for the life
+of the process. `hook_tokens.json` holds tokens for BOTH
+`ses_949a8585` and `adopted:cloude_Media_Compression`, both mapped to
+tmux name `cloude_Media_Compression`, which is why nothing was rejected -
+zero `hook_post_rejected_invalid_token` lines for this session, ever.
+
+**So**: the toast test's synthetic `PermissionRequest` set
+`permission_open` on `ses_949a8585` (the id `tmux show-environment`
+hands out, and the one a test script would naturally read), while every
+event that clears the flag arrived under `adopted:cloude_Media_Compression`
+and landed on a different tracker key. `record_hook_event` passes the RAW
+header id to `SessionActivityTracker.record_event` and does not remap,
+unlike the toast path either side of it. Confirmed live through
+`GET /sessions/away/summary`: `permission_open: true` on `ses_949a8585`,
+`notice_open: false`, `last_activity_at: null`.
+
+**`cloude_N8N` (`ses_36e98dcd`) cleared for exactly the reason Media
+Compression did not.** It took a `Notification` toast in the same 17ms
+burst (17:55:12.170Z), and its pane's claude (pid 58667) holds
+`CLOUDECODE_SESSION_ID=ses_36e98dcd` - the SAME id the synthetic toast
+used. So its own next `UserPromptSubmit` cleared `notice_open` on the key
+the flag was actually on. It reads `idle` now. The difference between the
+two sessions is not the event, it is whether the pane can still reach the
+key its flag sits on.
+
+### The rule this produced
+
+A flag set by an event channel keyed on an id the running agent can no
+longer be re-keyed to is not a claim, it is a stuck bit. Rather than add
+a second id remap and hope the two never drift, the flag is re-verified
+against the thing both ids share: the pane.
+
+- **FIX A** `session_view_clears.clear_view_state` now calls
+  `tracker.clear_permission(sid)` alongside `clear_notice(sid)`, on every
+  id registered for the pane. The owner's rule, verbatim: "when clicking
+  a tab, the session is marked read. if i want it unread i click unread."
+  The three hook-driven clears are untouched.
+- **FIX B** `src/core/session_permission_verify.py` (pure ladder +
+  matcher) and `session_permission_verify_apply.py` (the seam, called
+  from `_session_info_for` BEFORE `resolve()`). While `permission_open`
+  is set, dated, and older than `PERMISSION_TAIL_GRACE_SECONDS` (20) on a
+  pane measured live, ONE `capture-pane` per poll. Marker present -> keep.
+  Tail read, no marker -> clear + `permission_flag_cleared_no_dialog`,
+  which fires once per episode because clearing drops the stamp and the
+  gate then refuses. Tail UNREADABLE -> keep, refusing on no evidence.
+  Nothing here can invent a permission.
+- The stamp `permission_opened_at` is written on the False -> True
+  TRANSITION only, so a repeating `PermissionRequest` cannot push the
+  grace window out for as long as the duplicates keep arriving.
+
+### The markers were measured, not guessed
+
+Two real dialogs captured from a real `claude` on a THROWAWAY tmux socket
+(never `cloude`) with a `permissions.ask` rule in its own settings file,
+2026-09-09, versions 2.1.265 and 2.1.266:
+
+```
+ Do you want to proceed?          <- Bash,  ask rule on "Bash"
+ Do you want to create note2.txt? <- Write, ask rule on "Write", Bash denied
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend
+```
+
+The question line CHANGES with the tool, so a matcher keyed on the
+literal "Do you want to proceed?" would answer "no dialog" for every file
+operation - the exact family the owner's stuck session was about. The
+option block and the footer are identical across both. Note the contrast
+with the trust dialog `session_startup_gate.py` matches: that one is NOT
+numbered on 2.1.263+ and its footer reads "Enter to confirm · Esc to
+cancel". Two screens, two ladders, no shared pattern.
+
+### Item 4 needed no change
+
+The `question` tooltip already reads **waiting for permission**
+(`client/js/session-status-ui.js:58`) and the LED title already reads
+"waiting on you - permission" (`client/js/status-led.js:129`). No JS was
+touched, so no node sweep was owed.
+
+**Tests.** `test_session_permission_verify.py`, 35 cases. The matcher
+against BOTH captured dialogs and against TWO negative controls, one of
+which is the real captured tail of the stuck live session - all three
+fixture blocks verified line-for-line verbatim against the capture files.
+Plus an unseen third wording matched by shape, the phrase mid-sentence
+refused, the cost gate's four refusals, the ladder's four verdicts, the
+transition-only stamp, re-arming after a clear, and the seam end to end
+with a stubbed capture (no capture inside grace, none with no flag open,
+one per poll then none, keeps on dialog, keeps on unreadable, never
+invents, never raises). `test_status_view_and_transcript.py`'s
+`test_a_websocket_bind_leaves_a_permission_prompt_alone` was REVERSED to
+`..._clears_a_permission_prompt` with the reasoning recorded in place.
