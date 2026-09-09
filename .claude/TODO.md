@@ -4171,3 +4171,144 @@ the way index.html does so it measures the real path.
   skipped 1 against 19 live tmux sessions, identical to the pre-deploy
   baseline. Over one minute: 2 hook POSTs accepted, 0 403s, 0 410s, 0
   `hook_post_rejected_invalid_token`.
+
+---
+
+## 2026-09-08 - late round closed out (07bbbb8..54731f9), deployed and confirmed live
+
+21 commits, all deployed to live and verified: `./scripts/deploy-mini.sh
+--target live --verify-only` reported 520/520 file hashes matching on both
+destinations, boot held 18 sessions plus 1 benign skip against 19 live tmux
+sessions, zero hook-token rejections in the post-deploy window, and zero
+`unknown` activity statuses out of 19.
+
+**Commits, newest first:**
+
+- `54731f9` - the sidebar-rejoin and adopt code paths each carried their own
+  bare rAF wait above the websocket connect; both now race
+  `TerminalLayoutWait` instead of hanging in a backgrounded tab.
+- `43ef512` - a terminal bind clears the same instance-keyed unread flag the
+  stop hook and the manual mark write, via `unread_identity.py`'s one epoch
+  source (the live tmux listing).
+- `c360cfc` - boot epoch race closed: a session the legacy metadata reconcile
+  registered first is now recorded (`boot_readopt_epoch_recorded_for_registered`)
+  instead of silently skipped by the triple-keyed pass.
+- `c39dd14` - unread collapsed to one instance-keyed flag; every `dotHtml`
+  call site now passes the `unread`/`startup_gate` signals it was silently
+  dropping; `UnreadStore.clear()` clears both sub-flags.
+- `1d03f28` - the unread-count badge removed from the sidebar summary LED
+  (the outer ring already says unread).
+- `a9d0da2` - sleep/wake choice: after 60s away, the bar offers full history
+  (bounded by `scrollback_lines`) / summary (toasts + hook state + alternate
+  screen probe via `GET /api/v1/sessions/away/summary`) / just continue. Open
+  item: a WS drop with the user present raises no bar.
+- `54475f3` - items 7 and 8 closed: toasts raised from any screen
+  (`toast-global-poll.js`, `GET /api/v1/toasts`), dismissed per session with
+  an expiring ring; history page under settings > notifications,
+  `GET /api/v1/toasts/history`, storage is process memory (acked capped at 50
+  per session), not durable. Verified in Brave: a "Your turn" toast for BHPP
+  appeared on the home page.
+- `a74988a` - home page: project count sits 4px off the fold arrow in accent
+  text; archive button is a stroke icon (`archiveIconSvg` in
+  `session-status-ui.js`) matching the pencil.
+- `41382ee` - item 3 partial: `session_agent_infer.py` +
+  `session_agent_infer_sweep.py` infer a hand-started session's wrapper from
+  ps argv at boot, adopt, and first hook; new `agent_family_source
+  inferred_process` renders as a dashed guess pill, never a launch fact.
+  Live: 0 rows to fill (all 19 live panes already carried `agent_type`).
+  Open: no periodic sweep timer.
+- `46c4872` - item 22: `session_recreate.py`, `recreate_routes.py`
+  (`GET /sessions/recreate/preview`, `POST /sessions/recreate`, keyed on
+  `session_uuid`, mounted via `restart_routes.py`); gate is a tmux LISTING
+  answering gone/present/unknown, only gone acts; row re-keyed to the new
+  triple, project/title/theme/unread/group membership ride the row.
+- `1f9b437` - status seeding: `session_status_seed.py`, rung A row
+  `activity_state` if fresh (stale working refused), rung B transcript tail
+  last decidable record (turn end seeds idle at its timestamp; prompt/tool_use
+  seeds nothing; `/rename` envelopes undecidable), rung C bare shell idle,
+  else unknown; may never claim working. Live: unknown 13 -> 1 at first
+  deploy, then 0.
+- `c360cfc` (deploy record `2692b63`) - see above.
+- `537c10c` - docs: closed the two status findings, recorded the reaper gap.
+- `cafb50c` - `SubagentStop` NEVER counts as activity (only decrements depth
+  with a floor); fork's dead-row-in-live-list hunk removed per owner ("they
+  go into recent, they can disappear"); real-hook test 9 passed. Item 4.
+- `2174b0d` - sidebar group headers: count first in a 22px gutter
+  (`--sidebar-gutter`), colored tabular text, no pill; kebab on every header
+  incl. pinned and other (`session-sidebar-band-menu.js`, fold/expand).
+- `3c640fa` - 21 one-off verify scripts (7,649 lines) archived to
+  `scripts/archive/verify/` with README; 8 kept (CI-called or reusable).
+- `07bbbb8` - LED halo concentric (one shared inset on all four sides;
+  measured -1.35px at 9px).
+
+**Items closed with no commit of their own, verified or decided this round:**
+
+- **Item 4, closed.** Measured with `CLOUDE_REAL_HOOK_TESTS=1` driving a real
+  claude through `--resume`: exactly one hook fires, `SessionStart` at
+  +0.48s; `activity_status` reads `finished_unread` from the very first poll;
+  zero seconds of `working` exposure. The old ~four-minute observation is
+  fully explained by the (separately fixed, `cafb50c`) `SubagentStop`
+  heartbeat re-arm landing on the turn that happened to precede the resume,
+  not by anything the resume itself does. Reproduced 3/3 runs. Side finding,
+  not chased: `record_claude_lifecycle_event` answered `LINEAGE_UNRESOLVED`
+  for every session created inside this harness, even though the session was
+  created by the same process moments earlier - see the harness entry above
+  this section for the full note and what to check first.
+- **Item 9, closed by owner decision, no migration.** Pin is a flag that
+  floats the row to the top; ungrouped stays legal. Residue: a check that a
+  pinned row floats regardless of its group is still untracked verification
+  work.
+- **Item 11, closed.** Verified live on `54731f9` by the orchestrator in
+  Brave: mark unread on the home page -> server reports `unread: true`,
+  `finished_unread`; open the tab -> server reports `unread: false`, `idle`.
+  A hidden automation tab's DOM repaint lagging is Brave throttling hidden-tab
+  timers, not the app - confirmed separately by the terminal-layout-wait fix
+  landing before this check.
+
+**Git housekeeping, no code behind it:** 184 local branches merged into
+`v1.1` deleted (`git branch -d`, branch count 207 -> 16), 7 stale worktrees
+whose branches were already merged removed, plain `git gc` ran clean, `.git`
+163M -> 135M. `feat/gui-fork` (unmerged to its own remote-tracking branch)
+and the `editor-project-roots` worktree (dirty) were left alone, not forced.
+Recovery record (sha of every ref before deletion) is in a scratchpad file
+noted in the "Local branch/worktree prune + gc" entry earlier in this file -
+treat that path as non-durable across sessions. Remote rule restated: push
+only to `origin` (ccsliinc/CloudeCode) or `adamdev` (CloudeCodeDev), never
+`upstream` (Adoom666/CloudeCode) - its push URL is disabled by construction.
+
+**Consolidation candidates measured, none started (for HANDOFF's "next"):**
+`src/core/session_manager.py` 7,684 lines, `src/api/routes.py` 4,022,
+`src/core/tmux_backend.py` 2,542, `client/js/launchpad.js` 6,472,
+`client/js/terminal.js` 2,423; 29 Python files and 13 JS files over the
+500-line guideline in total; the same HTML-escape helper is copy-pasted
+across 7 JS files; `PTYBackend` legacy branches remain in 5 core files. The
+small `src/core` module families are healthy as-is and should be left alone -
+the size problem is concentrated in the five files named above.
+
+**Test baseline at the end of this round:** pytest 5491 passed / 3 failed
+(the same three environmental: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped. Node 191
+tracked files, 1 known failure (`test_archive_full_page_mode.node.mjs`);
+`tests/led_state_for.node.mjs` is a piped-stdin CLI helper, not a standalone
+test.
+
+**Still open after this round:** the websocket push (last, deliberately -
+`src/api/websocket.py` still carries no project/session-list message type);
+item 2b (re-measure the db integrity request-path cost on a quiet box);
+the HTML-escape helper dedupe across 7 JS files; the `PTYBackend` trim; the
+big-file splits listed above; a periodic sweep for `session_agent_infer`
+(item 3's residual piece); a bar for a WS drop while the user is present
+(only the 60s-away sleep/wake bar exists); toast history durability
+(process memory only, does not survive a restart); the deferred rename-push
+retry (a push deferred on a measured-missing transcript is never retried);
+`FALLBACK_PROJECTS_ROOT` hardcoding `/Users/jsugamele`
+(`src/core/project_directory.py:85`); `--name` dropped on a restart's
+resume; gitleaks not installed on the mini; the
+`~/.config/restic/mini-m4.pw` plaintext password awaiting the owner's
+rotation decision; the ~24GB of `cloude.db.bak-*` copies awaiting the
+owner's word to delete (list the actual state dir first, not every filename
+is recorded in this repo's docs); `_restored_activity_state` still
+name-scoped rather than instance-keyed; and
+`record_claude_lifecycle_event` answering `LINEAGE_UNRESOLVED` for sessions
+created inside the real-hook test harness (found by the item-4 run above,
+not chased).

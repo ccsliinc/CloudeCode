@@ -1,6 +1,7 @@
 # HANDOFF - CloudeCode app development
 
-Written 2026-09-07, UPDATED 2026-09-08. Re-scoped from
+Written 2026-09-07, UPDATED 2026-09-08 (late round, `07bbbb8..54731f9`,
+closed out and confirmed live). Re-scoped from
 `Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
 was written for someone continuing the MacBook-to-mini MIGRATION. This one is
 written for someone continuing APP DEVELOPMENT.
@@ -38,18 +39,21 @@ hand `scp` must do both explicitly.
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
 
-**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 night: repo HEAD is
-`6934965`, three commits past the `8ee40d1` this file previously named as
-live (`117823d..6934965`: `e7a212e` halo recalibration, `cc885d6` the
-question/notice split, `6934965` the hook-token recovery self-heal).
-**A deploy of this HEAD was in progress by another agent at the time this
-line was written - treat it as deploy in progress at time of writing,
-not confirmed.** The last CONFIRMED live state is still what `8ee40d1`
-left running: boot held 19 sessions (18 plus 1 benign skip), every
-running session carries a project, session lists show interactive
-conversations only (645 archived visible, 270 automated excluded by
-default, 305 unknown kept). See section 8 for the full commit-by-commit
-state of both rounds and the branch's push status.
+**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 late night: repo HEAD is
+`54731f9`, CONFIRMED live and deployed - not in progress. This is the
+end of the "late round" (`07bbbb8..54731f9`, 21 commits): LED halo
+concentric, sidebar group headers, the SubagentStop status fix, unread
+reduced to one instance-keyed flag with one epoch source, the sleep/wake
+choice bar, cross-session toasts plus a toast history page, agent-type
+inference for hand-started sessions, dead-session recreate on the same
+row, status seeding for resting sessions, a boot epoch race closed, and
+the background-tab websocket connect fixed (three separate bare
+`requestAnimationFrame` awaits, not one). Verified by the deploy script's
+own hash check (520/520 files on both destinations) plus a live read:
+boot held 18 sessions plus 1 benign skip against 19 live tmux sessions,
+zero hook-token rejections in the post-deploy window, and zero
+`unknown` activity statuses out of 19. See section 8 for the full
+commit-by-commit list, what got closed, and what did not.
 
 ---
 
@@ -431,11 +435,16 @@ move, so the fourteen triple-keyed queries keep matching.
 answers `unchanged` / `rekeyed` / `cannot_determine` - a measurement that can
 stop being true is not a thing to assume.
 
-Related, and open as backlog item 3: every session created via
-`auto_start_claude:false` plus a hand-sent claude command lands with
-`sessions.agent_type` NULL, because the agent_type wrapper only applies on
-auto-start. The flag IS on the running process. Fix the persistence, not the
-display.
+Related, backlog item 3: every session created via `auto_start_claude:false`
+plus a hand-sent claude command lands with `sessions.agent_type` NULL,
+because the agent_type wrapper only applies on auto-start. The flag IS on
+the running process. **PARTIALLY CLOSED 2026-09-08 late round (`41382ee`):**
+`session_agent_infer.py` now infers the wrapper from the process's own argv
+and fills it, run at boot, at adopt, and on a session's first hook. Live run
+found 0 rows to fill - all 19 live panes already carried `agent_type` by the
+time it shipped. **Still open:** the inference is one-shot; nothing re-checks
+a session that was already live when this landed, so a periodic sweep is the
+remaining piece.
 
 ---
 
@@ -455,11 +464,17 @@ reading `running` while its pane was DEAD (exited status 0). Two independent
 routes to the same wrong answer, so a fix must reconcile against the PANE and
 the agent, not the listing.
 
-**`activity_state` reads `working` for about four minutes after a resume.** Then
-it self-corrects (measured moving to `question` at 21:49:38 on 2026-09-06). Real
-and self-clearing on that evidence, not stuck - a narrower defect than backlog
-item 4 as written. Do not treat the existing signal as trustworthy while
-building read/unread state or alert lights on top of it.
+**CLOSED, item 4. `activity_state` no longer reads `working` after a resume -
+measured at 0 seconds, not four minutes.** This entry originally reported the
+defect as real and self-clearing; that was itself wrong, and the correction is
+worth keeping because the mechanism is instructive. A real `--resume` fires
+exactly one hook (`SessionStart`, +0.48s) and `SessionStart` was never one of
+the events that stamps the working heartbeat, so a bare resume cannot expose
+`working` at all - the historical ~4-minute observation is now understood to
+be the (separately fixed) `SubagentStop` heartbeat re-arm landing on the turn
+that happened to precede the resume, not anything the resume itself does.
+Reproduced 3/3 runs with `CLOUDE_REAL_HOOK_TESTS=1` driving a real claude; see
+`TODO.md`'s dated "item 4 measured" entry for the harness and the numbers.
 
 **The UI gives NO signal when the server dies.** Covered in section 2. It is the
 same family as the two above: an absence of bad news rendered as good news.
@@ -547,6 +562,20 @@ inside the verification step itself:
   fired both handlers, flipped the state twice and landed back where it started,
   which reads exactly like a dead control. The wiring had been correct the whole
   time. Re-running an init mutates the thing you are measuring.
+- **Running `tests/real_hook_app.py` as a standalone script, not through
+  `pytest`, skips `conftest.py`'s autouse socket guard.** The guard is what
+  redirects a real-hook test off the user's live `cloude` tmux socket onto a
+  throwaway one; a bare script never gets it installed. This actually happened
+  during the item-4 resume-timing measurement: the first run created a REAL
+  session (`cloude_ses_1d468a9a`) on the user's live socket, alongside his 19
+  other real sessions. Caught in the same turn (the stray pane was idle on the
+  trust dialog, killed by name, confirmed gone, nothing else touched) but it
+  should never have been possible. **Always run the real-hook harness through
+  `pytest`, never as a bare script.** If a standalone driver is ever needed,
+  it must call `tests.socket_guard.install_default_socket_redirect()` and
+  `install_subprocess_guard()` itself before creating anything, verify the
+  resolved tmux socket name is actually NOT `cloude` before proceeding, and
+  tear both down in a `finally`.
 
 **A DOM-text assertion cannot see whether a glyph actually rendered.** Where a
 defect is visible to a human, the test has to fail on the pixel: a computed
@@ -564,11 +593,15 @@ owner's theme on whichever one it stopped at, with no prior value on record to
 restore.
 
 **Tests and syntax.** `venv/bin/python3 -m pytest -q` from the repo root; system
-python3 has no fastapi. **Baseline as of 2026-09-08: 3 failed / 4874 passed /
-12 skipped**, the three being `test_home_write_guard`,
+python3 has no fastapi. **Baseline as of 2026-09-08 morning: 3 failed / 4874
+passed / 12 skipped**, the three being `test_home_write_guard`,
 `test_state_dir_resolution` and `test_version_probe`, all environmental and all
 pre-existing. Node: 169 files, only `test_archive_full_page_mode.node.mjs`
-fails. **The number in `CLAUDE.md` was stale by an order of magnitude** because
+fails. **SUPERSEDED by the end of the day: 5491 passed / 3 failed (the same
+three) / 21 skipped, node 191 files (still only that one failure). Read
+`CLAUDE.md`'s test-baseline bullet for the current number, not this one -
+this paragraph is the morning starting point, kept for the symlink lesson
+below.** The number in `CLAUDE.md` was stale by an order of magnitude because
 the repo `venv` symlink pointed at a deleted `venv.nosync`, which is the exact
 failure `CLAUDE.md` warns about: the suite limps along undercounting instead of
 failing outright. Check the symlink before trusting any count that looks
@@ -581,117 +614,122 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ## 8. CURRENT GIT STATE
 
-Branch `v1.1`, pushed to `origin/v1.1` as of this session (git-workflow
-protocol followed: `git pull --rebase` then push, no force). HEAD is
-`6934965`, three commits past `8ee40d1` (`117823d..6934965`). **Another
-agent was deploying this HEAD to the mini as this section was written -
-say "deploy in progress at time of writing" rather than confirmed, and
-re-check the live commit directly before trusting either claim.** The
-last state actually CONFIRMED live is still what `8ee40d1` left running:
-boot held 19 sessions (18 plus 1 benign skip), every running session
-carries a project, session lists show interactive conversations only.
+Branch `v1.1`, pushed to `origin/v1.1` (git-workflow protocol followed:
+`git pull --rebase` then push, no force). HEAD is `54731f9`, CONFIRMED
+live - not in progress, not a log-line claim. The deploy script's own
+hash check passed (520/520 files matched on both destinations) and a
+post-deploy read of the live app confirmed it: boot held 18 sessions
+plus 1 benign skip against 19 live tmux sessions, zero hook-token
+rejections in the post-deploy window, and zero `unknown` activity
+statuses out of 19.
 
-**What rides the next deploy** (i.e. is committed but was not yet
-confirmed live as this was written): the LED halo's second, smaller
-recalibration (`e7a212e`), the `question`/`notice` split
-(`cc885d6`), and the hook-token self-heal (`6934965`). None of the three
-needed a database change, so a deploy of this HEAD is a straight code
-push - no migration, no backfill, nothing to run against `cloude.db`.
+**This round is `07bbbb8..54731f9`, 21 commits, all deployed and
+confirmed.** It closed punchlist items 4, 9, 11 and 22 outright, made
+real progress on item 3 (a residual sub-task remains open), and closed
+items 7 and 8. See the commit table below for what each one did.
 
 **WHAT TO DO FIRST NEXT SESSION, in this order:**
 
-1. **Confirm the deploy landed.** Check the live commit directly (not a
-   log line that only reports what the deploy script believed) before
-   trusting anything in this file that says "deployed" for `e7a212e`,
-   `cc885d6`, or `6934965`.
-2. **The real-hook LED integration test is DONE, landed and run.**
-   Commit `3af3a3d` ("test(status): assert the led against hooks a real
-   claude actually fired") adds `tests/test_led_real_hooks.py`,
-   `tests/real_hook_harness.py`, `tests/real_hook_app.py`,
-   `tests/real_hook_assertions.py`, and `tests/led_state_for.node.mjs`,
-   pushed to `origin/v1.1`. Run with
-   `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 -m pytest -q
-   tests/test_led_real_hooks.py` (needs claude, tmux, and node on PATH;
-   without the env var every test in the file skips, naming what went
-   unmeasured). Real run: 9 passed in 49.5s, driving a real
-   `SessionManager` plus real routes plus a real `/ws/terminal` under
-   uvicorn, a real claude fed the production `_build_hook_block()` via a
-   temp settings file, and every assertion piping `GET /sessions/list`
-   through the shipped `client/js/status-led.js` under node. It measured
-   two new open defects, added to the punchlist in step 5 below and
-   spelled out in `TODO.md`'s "real-hook led integration test closed
-   out, 3af3a3d" section: (a) `SubagentStop` re-arms `working` after
-   `Stop` on a turn with no subagent, stealing the `finished_unread`
-   window down to about 1.5s; (b) a dead pane reaches no live endpoint,
-   so the led's `dead` state is unreachable from live data and a killed
-   session just vanishes from the sidebar instead of showing dead.
-3. **Get the owner's sign-off on the LED gallery states**, now against
-   the SECOND recalibration. Reference artifact:
-   https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627 -
-   it enumerates every inner/outer LED combination. The owner already
-   confirmed the shape after two rounds of shrinking (final tokens: 1.3x
-   halo, 1.5px glow, lit object under 15px at the 9px default,
-   `e7a212e`); what remains is his confirmation of the individual STATES
-   rendered in the gallery, which he said he would do when using it.
-4. **Verify and close items 4 and 11, or write down what's still
-   wrong.** Both are BUILT, neither is verified this round. Item 4
-   (alert lights / activity-after-resume): the narrower defect on record
-   - `activity_state` staying `working` for about four minutes after a
-   resume - is now addressed by the 120-second hook-fed expiry plus the
-   fix that stops a raw tmux `running` pane from ever mapping to
-   `working` on no evidence. Reproduce a resume and time it before
-   closing. Item 11 (read/unread per session): the mechanism is built and
-   documented (`CLAUDE.md`, "Unread is keyed on the INSTANCE") - keyed on
-   the tmux instance so a reused name can't inherit a dead session's
-   flag, set on `Stop`, cleared when a WS terminal binds. What's
-   unconfirmed is the owner-facing half - entering a session marks it
-   read, and there is a control to mark it unread again from the sidebar.
-   Click through that by hand before closing.
-5. **Then the remaining punchlist**, oldest-numbered first since they are
-   independent of each other: item 1, item 2b, item 3
-   (`sessions.agent_type` persistence for a session started via
-   `auto_start_claude:false` plus a hand-sent claude command), item 7
-   (toasts must be visible ACROSS sessions - raise global, dismiss
-   per-session), item 8 (a toast history page), item 9 (group everything
-   including pinned - owner decision still outstanding), item 22
-   (close-and-recreate), and the websocket push (last, deliberately -
-   re-measure whether polling is still the real cost once the event loop
-   and render-guard work is further along). Full definitions in
-   `TODO.md`'s "Session and agent identity" / "Attention, toasts and
-   sidebar" sections and this final round's closing entry. **Also add**
-   the two defects the real-hook led test measured (item 2 above):
-   `SubagentStop` re-arming `working` after `Stop` on a subagent-less
-   turn, and a dead pane being unreachable from any live endpoint so the
-   led's `dead` state has nothing to render against - full detail in
-   `TODO.md`'s "real-hook led integration test closed out, 3af3a3d"
-   section.
-6. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the
-   live `cloude` socket are measured FLAKY, not just risky - one test in
-   this final round's own baseline run flaked this way, see `TODO.md`'s
-   closing entry), gitleaks not installed on the mini, the
-   `~/.config/restic/mini-m4.pw` plaintext password awaiting the owner's
-   rotation decision, `FALLBACK_PROJECTS_ROOT` hardcoding
-   `/Users/jsugamele` (`src/core/project_directory.py:85`), the deferred
-   rename-push retry (a push deferred on a measured-missing transcript is
-   never retried), 48 test files over the 500-line guideline, `--name`
-   dropped on a restart's resume, `SessionInfo` carrying no
-   `created_at_epoch`, and the database backups needing deletion (six
-   4.6GB `cloude.db.bak-*` copies as of the last count - four are named
-   in `TODO.md`'s closing entry for this round, two more ("the
-   sessionkind and projectbind ones") are known to exist but have no
-   filename recorded anywhere in this repo's docs; list the actual state
-   dir before deleting anything).
+1. **Confirm no other agent is live on this branch before touching
+   anything.** Standing hazard, restated below - eight to ten agents have
+   committed here in a single day before. Cheap to check, expensive to
+   skip.
+2. **The websocket push, deliberately last.** `src/api/websocket.py`
+   still carries no project or session-list message type, so
+   project/session state is still polled, not pushed. Re-measure whether
+   polling is still the real cost before designing this - it may not be,
+   now that the render-guard and status-seeding work has landed.
+3. **Then the open functional gaps**, in no particular order since they
+   are independent: a WS drop with the user PRESENT raises no bar (only
+   the 60-second-away sleep/wake bar exists, see the commit table); toast
+   history is process memory only, not durable, so it does not survive a
+   restart; a rename push deferred on a measured-missing transcript is
+   never retried; `--name` is dropped on a restart's resume (the app's own
+   row title survives via `sessions.title`, claude's own name does not);
+   the periodic agent-infer sweep is still missing (item 3's one-shot
+   inference at boot/adopt/first-hook is built, but nothing re-checks a
+   session that was already live when it shipped); item 2b (the db
+   integrity request-path cost) wants a re-measurement on a quiet box, per
+   the note in section 3; `FALLBACK_PROJECTS_ROOT` still hardcodes
+   `/Users/jsugamele` (`src/core/project_directory.py:85`).
+4. **Then the consolidation work**, measured this round and not yet
+   started: `src/core/session_manager.py` is 7,684 lines, `src/api/
+   routes.py` 4,022, `src/core/tmux_backend.py` 2,542,
+   `client/js/launchpad.js` 6,472, `client/js/terminal.js` 2,423 - 29
+   Python files and 13 JS files sit over the 500-line guideline in total.
+   The same HTML-escape helper is copy-pasted across 7 JS files (dedupe
+   candidate). `PTYBackend` legacy branches remain in 5 core files and
+   should be trimmed now that tmux is the only backend that runs. The
+   small `src/core` module families (the ladders, the seam files) are
+   healthy as-is - leave those alone, the size problem is concentrated in
+   the five files named above.
+5. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the
+   live `cloude` socket are measured FLAKY, not just risky), gitleaks not
+   installed on the mini, the `~/.config/restic/mini-m4.pw` plaintext
+   password awaiting the owner's rotation decision, `SessionInfo` carrying
+   no `created_at_epoch`, `_restored_activity_state` still name-scoped
+   rather than instance-keyed, `record_claude_lifecycle_event` answering
+   `LINEAGE_UNRESOLVED` for sessions created inside the real-hook test
+   harness (found by the item-4 timing run, not chased - see the note in
+   its own TODO.md entry for what to check first), and the database
+   backups needing deletion (owner's word: six 4.6GB `cloude.db.bak-*`
+   copies as of the last count; list the actual state dir before deleting
+   anything, the filenames are not all recorded in this repo's docs).
 
-Full commit-by-commit list and item mapping for THIS final round (3
-commits, `117823d..6934965`) is in `TODO.md`'s dated 2026-09-08 "final
-round closed out" section, including the re-measured test baseline
-(5274 passed / 3 failed / 12 skipped, matching `6934965`'s own commit
-message) and a correction to the node test file count (185 tracked
-files, not the 190 `cc885d6`'s commit message claimed). **That 12
-figure is now stale**: `3af3a3d` (the real-hook led integration test,
-step 2 above) landed 9 opt-in tests that skip without
-`CLOUDE_REAL_HOOK_TESTS=1`, so the current baseline is 5274 passed / 3
-failed / 21 skipped.
+**Git housekeeping done this round, no code behind it.** 184 local
+branches merged into `v1.1` were deleted (`git branch -d`, branch count
+207 -> 16), 7 stale worktrees whose branches were already merged were
+removed, and a plain `git gc` ran clean: `.git` 163M -> 135M. Two things
+were deliberately left alone: `feat/gui-fork` (git refused `-d` - merged
+to `v1.1`'s HEAD but not to its own `origin/feat/gui-fork`, not
+force-deleted) and the `editor-project-roots` worktree (dirty, an
+uncommitted change to `client/css/config-editor.css` sits in it). The sha
+of every ref before any deletion was recorded first, so any branch can be
+recreated - the recovery file's path is in `TODO.md`'s dated
+"Local branch/worktree prune + gc" entry, in a scratchpad directory that
+is not durable across sessions; do not assume it still exists without
+checking.
+
+**Remote rule, restated because it is easy to get backwards: push only
+to `origin` (ccsliinc/CloudeCode) or `adamdev` (CloudeCodeDev). NEVER
+`upstream` (Adoom666/CloudeCode)** - its push URL is disabled by
+construction on the owner's clone.
+
+Full commit-by-commit list and item mapping for THIS round (`07bbbb8..
+54731f9`) is in `TODO.md`'s dated 2026-09-08 "late round" closing
+section, including the re-measured test baseline (5491 passed / 3
+failed / 21 skipped, the three failures the same environmental ones as
+always) and the node count (191 tracked files, one known failure). See
+`CLAUDE.md`'s test-baseline bullet for the number to quote going
+forward.
+
+**This round's commits (`07bbbb8..54731f9`, 21 commits), newest first, all
+deployed and confirmed live:**
+
+| commit | what it did | punchlist |
+|---|---|---|
+| `54731f9` | the sidebar-rejoin and adopt paths each had their own bare rAF wait above the websocket connect; both now race `TerminalLayoutWait` instead | item 11 |
+| `43ef512` | a terminal bind clears the same instance-keyed unread flag the stop hook and the manual mark write, via `unread_identity.py`'s one epoch source | item 11 |
+| `c360cfc` | boot epoch race: a session the legacy metadata reconcile registered first now gets its epoch recorded instead of silently skipped | - |
+| `c39dd14` | unread collapsed to one instance-keyed flag; every `dotHtml` call site now passes the `unread`/`startup_gate` signals it was silently dropping | item 11 |
+| `1f9b437` | status seeding: a resting claude reads `idle` from its row or transcript tail instead of `unknown`, and can never seed `working` | - |
+| `46c4872` | a dead session can be recreated on the same row, resuming its conversation (`session_recreate.py`, keyed on `session_uuid`) | item 22 |
+| `41382ee` | a hand-started session's wrapper is inferred from its process once, at boot/adopt/first-hook, rendered as a dashed guess pill | item 3 (partial - no periodic sweep yet) |
+| `a74988a` | home page: project count sits by the fold arrow, archive button matches the pencil (stroke icon) | - |
+| `54475f3` | toasts raise from any screen, dismiss per session with an expiring ring, plus a toast history page under settings | items 7, 8 |
+| `a9d0da2` | after 60s away, a bar offers full history / summary / just continue | - |
+| `1d03f28` | the unread-count badge dropped from the sidebar summary LED (the outer ring already says it) | - |
+| `537c10c` | docs: closed the two status findings, recorded the reaper gap | - |
+| `cafb50c` | `SubagentStop` never counts as activity, only decrements depth with a floor; a dead pane drops to Recent rather than lingering | item 4 |
+| `2174b0d` | sidebar group headers: count first in a fixed gutter, kebab on every header including pinned and other | - |
+| `3c640fa` | 21 one-off verify scripts (7,649 lines) archived to `scripts/archive/verify/`, 8 kept (CI-called or reusable) | - |
+| `07bbbb8` | LED halo rendered concentric with the dot at every size (one shared inset on all four sides) | - |
+
+Item 9 (pin floats a row regardless of group, ungrouped stays legal) was
+decided by the owner this round with no commit behind it - see section 9.
+Item 4 and item 11 were also verified live this round with no code change
+of their own; the verification entries are in `TODO.md`'s dated sections
+for 2026-09-08 ("item 4 measured" and the unread deploy record).
 
 Full commit-by-commit list and item mapping for the late round (12 commits,
 `455d692..8ee40d1`) is in `TODO.md`'s dated 2026-09-08 "late round closed out"
@@ -846,8 +884,16 @@ originally planned.
 
 6. Confirm the LED states rendered in the reference gallery
    (https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627),
-   in particular the resized halo shipped in `8ee40d1`. This is the top item
-   on next session's list in section 8.
+   in particular the resized halo shipped in `8ee40d1`. Still open - not
+   revisited this round.
+
+**CLOSED in the 2026-09-08 late round (`07bbbb8..54731f9`):**
+
+7. **CLOSED.** Punchlist item 9 (group everything including pinned).
+   Owner's decision, verbatim in substance: pin is a flag that floats the
+   row to the top; ungrouped stays legal; no migration needed. The only
+   residue is a check that a pinned row floats regardless of its group,
+   which is untracked verification work, not a decision.
 
 ---
 

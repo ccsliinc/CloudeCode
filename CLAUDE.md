@@ -442,11 +442,9 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-08 after the status-split and hook-token-recovery round
-  (`117823d..6934965`), is 5274 passed / 3 failed / 21 skipped (the extra
-  nine are `tests/test_led_real_hooks.py`, skipping because
-  `CLOUDE_REAL_HOOK_TESTS=1` is not set); the three failures are the same
-  ones as before, environmental and pre-existing:
+  2026-09-08 after the late round's unread/boot-epoch/rAF-trap fixes
+  (`07bbbb8..54731f9`), is 5491 passed / 3 failed / 21 skipped; the three
+  failures are the same ones as before, environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
@@ -464,11 +462,11 @@ per server process and no subprocess at all.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: 185 tracked files (re-counted 2026-09-08; the earlier
-  "169" figure undercounted and predates this round), only the pre-existing
-  `test_archive_full_page_mode.node.mjs` fails. `tests/led_state_for.node.mjs`
-  is a piped-stdin CLI helper for that harness, not a standalone test, and
-  exits non-zero when run with no input; that is expected, not a failure.
+  chasing it. Node: 191 tracked files (re-counted 2026-09-08), only the
+  pre-existing `test_archive_full_page_mode.node.mjs` fails.
+  `tests/led_state_for.node.mjs` is a piped-stdin CLI helper for that
+  harness, not a standalone test, and exits non-zero when run with no
+  input; that is expected, not a failure.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real
@@ -1285,3 +1283,15 @@ file only under the slug of the LITERAL cwd; a measured absence refuses,
    read the code; a confidently wrong one sends it to write a bug. If you change
    behavior this file describes, update this file in the same change. If you find
    a claim here that reality contradicts, fix it and say so in the commit.
+9. **A bare `await requestAnimationFrame` never resolves in a hidden tab.**
+   A browser does not paint a backgrounded tab, so it never runs that
+   tab's rAF callbacks; anything awaiting one hangs there permanently, not
+   just slowly. `waitForFontsAndLayout()` suspended `connectWebSocket()`
+   before it ever opened a socket, and two other call sites
+   (`reconnectToExistingSession`, the adopt path) carried their own copies
+   of the same bare wait, so fixing the first one alone changed nothing -
+   only a live re-check in an actually-backgrounded tab caught the other
+   two. Anything that must happen for a background tab (a websocket
+   connect, a state clear, a save) must not wait on a frame; race it
+   against a timer instead, the way `client/js/terminal-layout-wait.js`
+   does, so the wait can delay the work but never cancel it.
