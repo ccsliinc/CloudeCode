@@ -368,3 +368,50 @@ test_session_editor_menu, test_terminal_layout and test_button_box_sizing. Node
 updates needed a comment-stripping pass first, because these stylesheets explain
 retired layouts in prose and a bare includes() cannot tell a declaration from the
 sentence saying there is no declaration.
+
+[cross-session-bleed] [2026-09-09 16:40 ET]: One session's transcript rendered
+inside another session's terminal. THE CROSSING IS IN THE BROWSER, NOT ON THE
+SERVER, and that was settled by measurement before a line was changed. Every
+pipe-pane file on disk was clean: one working directory per file (a footer scan
+of `tmux_ses_18ec7875`, `tmux_ses_732c7cd6`, `tmux_ses_2a0b116d` found exactly
+one cwd each), one `cat >>` writer per pane (15 writers, 15 panes, all distinct
+targets) and ONE reader per file under `lsof` (all in pid 66406). Decisive
+control: `tmux_ses_18ec7875.pipe` holds ZERO bytes matching `InlineAdjustEditor`
+or `step4-inventory`, yet that text was photographed inside ses_18ec7875's
+terminal - and it is native to ses_732c7cd6, whose own pipe holds 38 and 1. Text
+that is not in a session's pipe file cannot have reached its browser through the
+server, so tonight's streaming commits (`9f01c6c`, `230bad8`, `3366257`) and the
+two-backends-on-one-pane defect are both RULED OUT. No commit was reverted.
+
+THE CAUSE: there is ONE xterm in the page and the user moves between sessions
+inside it. `WebSocket.close()` only STARTS the closing handshake, so a socket
+already replaced keeps dispatching the frames that were in flight, and the
+handlers `setupWebSocketHandlers()` installs close over the CONTROLLER rather
+than over their own socket and were never detached. `onmessage` went straight to
+`this.enqueue()` with nothing checking which socket, or which session, the bytes
+belonged to. Reproduced headlessly by loading the real `client/js/terminal.js`
+into a `vm` realm, attaching to session A, navigating to B, then firing one
+frame on A's superseded socket: it landed in B's buffer.
+
+`3366257` is not the cause but IS why this reads as corruption rather than as
+stray text: an attach capture carries an absolute cursor sequence, so a foreign
+frame moves the live session's cursor and the user's own typing lands elsewhere.
+
+FIX: `client/js/terminal-frame-guard.js` is now the one place that decides
+whether a WS event may touch the terminal - socket identity AND session
+identity, both checked, with an unknown session id never refusing (the server
+documents a WS with no `?session_id=` as "the current session"). A superseded
+socket is detached on its first stray event. `onclose` no longer nulls the LIVE
+socket when an OLD socket's close lands late, which was a second defect in the
+same handler. A missing guard module falls back to the socket-identity half
+rather than to "allow".
+
+WATCH OUT (measured, unresolved, NOT part of this fix): three panes named
+`cloude_Insiders App`, `-2`, `-3` all report `pane_current_path` =
+`.../DiscountCodeGenerator/thcdiscountcodes`, and rows 18-21 of `sessions` record
+that same `working_dir` for titles `Insiders App` / `Insiders - Codex` /
+`Insiders - Fable`. The app recorded it, so it is consistent rather than
+corrupt, but those sessions are not sitting where their names say. Also
+`tmux_ses_63beb976.pipe` is 3.0 MB with NO writer and NO reader - an orphaned
+pipe from a session now streaming through `tmux_ext_cloude_cloudecode.pipe`.
+Neither is the bleed; both are worth a separate look.

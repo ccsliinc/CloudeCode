@@ -1409,7 +1409,46 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     setupWebSocketHandlers() {
         if (!this.ws) return;
 
+        // ISOLATION GATE. There is one xterm in the page and the user moves
+        // between sessions inside it. `WebSocket.close()` only STARTS the
+        // closing handshake, so a socket we have already replaced keeps
+        // dispatching the frames that were in flight, and these handlers
+        // close over the controller rather than over their own socket -
+        // which put session A's transcript inside session B's terminal.
+        // Capture the socket and the session it was opened FOR, and let
+        // TerminalFrameGuard decide, in one place, whether an event may act.
+        // See client/js/terminal-frame-guard.js for the full reasoning.
+        const sock = this.ws;
+        const boundSessionId = this._sessionId();
+        const live = (what) => {
+            const verdict = window.TerminalFrameGuard
+                ? window.TerminalFrameGuard.accepts({
+                    socket: sock,
+                    liveSocket: this.ws,
+                    boundSessionId,
+                    currentSessionId: this._sessionId(),
+                })
+                // Module missing is a load-order failure, not a licence to
+                // paint foreign bytes: fall back to the socket-identity
+                // half of the rule rather than to "allow".
+                : { ok: sock === this.ws, reason: 'guard-unavailable' };
+            if (!verdict.ok) {
+                // Detach so a superseded socket stops costing us anything
+                // at all after its first stray event.
+                sock.onmessage = null;
+                sock.onopen = null;
+                sock.onerror = null;
+                sock.onclose = null;
+                console.warn(
+                    `Terminal: dropped ${what} from ${verdict.reason}`,
+                    { boundSessionId, currentSessionId: this._sessionId() }
+                );
+            }
+            return verdict.ok;
+        };
+
         this.ws.onopen = () => {
+            if (!live('open')) return;
             console.log('Terminal: WebSocket connected');
 
             // Reset reconnect state
@@ -1502,6 +1541,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         };
 
         this.ws.onmessage = (event) => {
+            // THE confidentiality check. Everything painted into the shared
+            // xterm arrives here, so this is the one gate that has to hold.
+            if (!live('frame')) return;
             // Handle binary frames (PTY data)
             if (event.data instanceof ArrayBuffer) {
                 this.enqueue(new Uint8Array(event.data));
@@ -1518,11 +1560,30 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         };
 
         this.ws.onerror = (error) => {
+            if (!live('error')) return;
             console.error('Terminal: WebSocket error:', error);
             this.updateStatus('WebSocket error', 'error');
         };
 
         this.ws.onclose = (event) => {
+            // A superseded socket's close is not this session's disconnect.
+            // Without this the LIVE socket's reference was nulled by the OLD
+            // socket's close event, and the reconnect + banner ran for a
+            // session the user had already left.
+            if (!live('close')) {
+                // The keepalive belongs to the controller, not to this
+                // socket, and the live branch below is what used to stop
+                // it. When nothing is attached any more - detach/destroy
+                // closed us and set ws to null - that branch will never
+                // run, so stop the timer here rather than leaking it. A
+                // socket superseded while another session IS attached
+                // leaves the timer alone: it is that session's now.
+                if (!this.ws && this.keepaliveInterval) {
+                    clearInterval(this.keepaliveInterval);
+                    this.keepaliveInterval = null;
+                }
+                return;
+            }
             const closeCode = (event && typeof event.code === 'number') ? event.code : null;
             console.log('Terminal: WebSocket closed', { code: closeCode });
             this.ws = null;

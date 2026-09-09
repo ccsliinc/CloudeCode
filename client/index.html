@@ -964,6 +964,9 @@
          missing terminal.js falls back to 'replace', which is the
          behaviour that shipped. -->
     <script src="/static/js/terminal-reconnect-buffer.js"></script>
+    <!-- Must load BEFORE terminal.js: it is the gate that keeps one
+         session's bytes out of another session's terminal. -->
+    <script src="/static/js/terminal-frame-guard.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
