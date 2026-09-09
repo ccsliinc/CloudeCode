@@ -1,7 +1,9 @@
 # HANDOFF - CloudeCode app development
 
 Written 2026-09-07, UPDATED 2026-09-08 (late round, `07bbbb8..54731f9`,
-closed out and confirmed live). Re-scoped from
+closed out and confirmed live), UPDATED AGAIN 2026-09-09 (status-light and
+housekeeping round, `922e400..dfddbdc`, closed out and confirmed live).
+Re-scoped from
 `Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
 was written for someone continuing the MacBook-to-mini MIGRATION. This one is
 written for someone continuing APP DEVELOPMENT.
@@ -39,21 +41,25 @@ hand `scp` must do both explicitly.
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
 this project.
 
-**WHAT LIVE ACTUALLY RUNS, updated 2026-09-08 late night: repo HEAD is
-`54731f9`, CONFIRMED live and deployed - not in progress. This is the
-end of the "late round" (`07bbbb8..54731f9`, 21 commits): LED halo
-concentric, sidebar group headers, the SubagentStop status fix, unread
-reduced to one instance-keyed flag with one epoch source, the sleep/wake
-choice bar, cross-session toasts plus a toast history page, agent-type
-inference for hand-started sessions, dead-session recreate on the same
-row, status seeding for resting sessions, a boot epoch race closed, and
-the background-tab websocket connect fixed (three separate bare
-`requestAnimationFrame` awaits, not one). Verified by the deploy script's
-own hash check (520/520 files on both destinations) plus a live read:
-boot held 18 sessions plus 1 benign skip against 19 live tmux sessions,
-zero hook-token rejections in the post-deploy window, and zero
-`unknown` activity statuses out of 19. See section 8 for the full
-commit-by-commit list, what got closed, and what did not.
+**WHAT LIVE ACTUALLY RUNS, updated 2026-09-09: repo HEAD is `dfddbdc`,
+CONFIRMED live and deployed - not in progress. This is the end of the
+2026-09-09 status-light round (`922e400..dfddbdc`, 13 commits): the LED
+rebuilt as one element (fill for the inner state, a box-shadow ring plus
+glow for the outer, concentric at every fractional position), idle
+carrying its own grey fill, hook-less sessions reading their own
+transcript for status, a single `derive_read_state` function deciding
+`finished_unread` versus `idle` on every path so the outer ring means
+activity alone, the sidebar group-header roll-up fixed
+(`signalsFor` reconciles `status` on children against `activity_status`
+on the fold), toasts auto-answered by the hook event that resolves them,
+and a view clearing an open permission flag - with an open one, past 20
+seconds, now verified against the pane before it is trusted. Verified by
+the deploy script's own hash check (529/529 files on both destinations)
+plus a live read: boot held 18 sessions plus 1 benign skip against 19
+live tmux sessions, zero hook-token rejections in the post-deploy window.
+See section 8 for the full commit-by-commit list, what got closed, and
+what did not. The prior end state (`54731f9`, the 2026-09-08 late round)
+is kept below for history.
 
 ---
 
@@ -615,66 +621,109 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 ## 8. CURRENT GIT STATE
 
 Branch `v1.1`, pushed to `origin/v1.1` (git-workflow protocol followed:
-`git pull --rebase` then push, no force). HEAD is `54731f9`, CONFIRMED
+`git pull --rebase` then push, no force). HEAD is `dfddbdc`, CONFIRMED
 live - not in progress, not a log-line claim. The deploy script's own
-hash check passed (520/520 files matched on both destinations) and a
+hash check passed (529/529 files matched on both destinations) and a
 post-deploy read of the live app confirmed it: boot held 18 sessions
 plus 1 benign skip against 19 live tmux sessions, zero hook-token
-rejections in the post-deploy window, and zero `unknown` activity
-statuses out of 19.
+rejections in the post-deploy window.
 
-**This round is `07bbbb8..54731f9`, 21 commits, all deployed and
-confirmed.** It closed punchlist items 4, 9, 11 and 22 outright, made
-real progress on item 3 (a residual sub-task remains open), and closed
-items 7 and 8. See the commit table below for what each one did.
+**This round is `922e400..dfddbdc`, 13 commits, all deployed and
+confirmed** (the status-light round plus the day's disk/backup
+housekeeping). See the commit table below for what each one did. The
+prior round (`07bbbb8..54731f9`, 21 commits) is kept further down for
+history.
 
 **WHAT TO DO FIRST NEXT SESSION, in this order:**
 
-1. **Confirm no other agent is live on this branch before touching
-   anything.** Standing hazard, restated below - eight to ten agents have
-   committed here in a single day before. Cheap to check, expensive to
-   skip.
-2. **The websocket push, deliberately last.** `src/api/websocket.py`
-   still carries no project or session-list message type, so
-   project/session state is still polled, not pushed. Re-measure whether
-   polling is still the real cost before designing this - it may not be,
-   now that the render-guard and status-seeding work has landed.
-3. **Then the open functional gaps**, in no particular order since they
-   are independent: a WS drop with the user PRESENT raises no bar (only
-   the 60-second-away sleep/wake bar exists, see the commit table); toast
-   history is process memory only, not durable, so it does not survive a
-   restart; a rename push deferred on a measured-missing transcript is
-   never retried; `--name` is dropped on a restart's resume (the app's own
-   row title survives via `sessions.title`, claude's own name does not);
-   the periodic agent-infer sweep is still missing (item 3's one-shot
-   inference at boot/adopt/first-hook is built, but nothing re-checks a
-   session that was already live when it shipped); item 2b (the db
-   integrity request-path cost) wants a re-measurement on a quiet box, per
-   the note in section 3; `FALLBACK_PROJECTS_ROOT` still hardcodes
-   `/Users/jsugamele` (`src/core/project_directory.py:85`).
-4. **Then the consolidation work**, measured this round and not yet
-   started: `src/core/session_manager.py` is 7,684 lines, `src/api/
-   routes.py` 4,022, `src/core/tmux_backend.py` 2,542,
-   `client/js/launchpad.js` 6,472, `client/js/terminal.js` 2,423 - 29
-   Python files and 13 JS files sit over the 500-line guideline in total.
-   The same HTML-escape helper is copy-pasted across 7 JS files (dedupe
-   candidate). `PTYBackend` legacy branches remain in 5 core files and
-   should be trimmed now that tmux is the only backend that runs. The
-   small `src/core` module families (the ladders, the seam files) are
-   healthy as-is - leave those alone, the size problem is concentrated in
-   the five files named above.
-5. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the
-   live `cloude` socket are measured FLAKY, not just risky), gitleaks not
-   installed on the mini, the `~/.config/restic/mini-m4.pw` plaintext
-   password awaiting the owner's rotation decision, `SessionInfo` carrying
-   no `created_at_epoch`, `_restored_activity_state` still name-scoped
-   rather than instance-keyed, `record_claude_lifecycle_event` answering
-   `LINEAGE_UNRESOLVED` for sessions created inside the real-hook test
-   harness (found by the item-4 timing run, not chased - see the note in
-   its own TODO.md entry for what to check first), and the database
-   backups needing deletion (owner's word: six 4.6GB `cloude.db.bak-*`
-   copies as of the last count; list the actual state dir before deleting
-   anything, the filenames are not all recorded in this repo's docs).
+1. **Verify live actually equals HEAD before touching anything.** Run
+   `./scripts/deploy-mini.sh --verify-only --target live`. Note the trap
+   in the flag itself: `--verify-only` WITHOUT `--target live` checks the
+   v11 staging target by default and reports `== DEPLOY FAILED ==` for
+   the live one - a bare `--verify-only` run is not a verification of
+   live at all, it is a verification of a target nobody asked about.
+2. **Run the real-hook test once.**
+   `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 -m pytest tests/test_led_real_hooks.py -q`.
+   It launches a REAL claude on a throwaway tmux socket and asserts the
+   status LED against hooks it actually fired - about 50 seconds, spends
+   real turns, and is the only test in the suite that measures the LED
+   against a live agent rather than a stub.
+3. **Then the open list, in value order:**
+   1. the websocket push (`src/api/websocket.py` still carries no project
+      or session-list message type, so state is polled, not pushed -
+      re-measure whether polling is still the real cost before designing
+      this)
+   2. the big-file splits (`session_manager.py` ~7,700 lines, `routes.py`
+      4,022, `tmux_backend.py` 2,542, `launchpad.js` 6,472, `terminal.js`
+      2,422 - all past the 500-line guideline)
+   3. the HTML-escape helper copy-pasted across 9 JS files (dedupe
+      candidate)
+   4. `PTYBackend` legacy branches remaining in 6 core files, trimmable
+      now that tmux is the only backend that runs
+   5. the periodic agent-infer sweep (item 3's one-shot inference at
+      boot/adopt/first-hook is built; nothing re-checks a session that
+      was already live when it shipped)
+   6. toast history is process memory only, not durable, so it does not
+      survive a restart
+   7. no bar raised for a WS drop while the user is PRESENT (only the
+      60-second-away sleep/wake bar exists)
+   8. `--name` is dropped on a restart's resume (the app's own row title
+      survives via `sessions.title`, claude's own name does not)
+   9. `FALLBACK_PROJECTS_ROOT` still hardcodes `/Users/jsugamele`
+      (`src/core/project_directory.py:85`)
+   10. `record_claude_lifecycle_event` answers `LINEAGE_UNRESOLVED` for
+       sessions created inside the real-hook test harness
+   11. the LED ring/glow are fixed px, not relative to the dot size
+   12. the adopted-id tracker key item: a pane whose claude holds an
+       adopted id while the row holds a `ses_` id has two tracker keys:
+       the toast path remaps the split, `session_view_clears` now covers
+       `permission_open` too, but nothing has audited every OTHER tracker
+       flag for the same split - confirm or rekey the tracker on remap
+   13. gitleaks not installed on the mini
+   14. restic password rotation and the `.orig` script with an inline
+       password (owner's call, deferred with the rest of credential
+       rotation until this project is finished)
+   15. watch restic repo growth from the nightly 4.6 GB dump
+   16. the archive README on the NAS records a stale size/hash for
+       `cloude.db`
+   17. `refresh_tokens.db` now sits on the NAS (credential material, owner
+       aware)
+
+**This round's commits (`922e400..dfddbdc`, 13 commits), newest first, all
+deployed and confirmed live:**
+
+| commit | what it did |
+|---|---|
+| `dfddbdc` | a view clears an open `permission_open`, and a flag left open past 20 seconds is verified against the pane's own dialog markers before it is trusted (`session_permission_verify{,_apply}.py`) - root cause of the Media Compression incident was the toast path remapping an adopted pane's id while the activity tracker did not |
+| `389ae5b` | toasts are auto-answered by the hook event that resolves them: `UserPromptSubmit` acks every open toast on the session, `PreToolUse` acks permission, `Stop` acks permission and notice but never its own; a `toast.ack` frame plus a per-poll reconcile, with an open/dismissed/answered reason in history |
+| `8e78f5d` | sidebar group-header roll-up fixed: children carried `status`, the fold read `activity_status` - `signalsFor` now reconciles the two names for one field so a folded group summarises correctly |
+| `880247f` | `finished_unread` versus `idle` is derived from the unread flag on every path by one function, `derive_read_state`; the outer ring now means activity alone, and the outer `unread` state is retired |
+| `5e13cb1` | a view clears an open notice; hook-less sessions (13 of 19, started by hand with no hook env) get a transcript-driven ladder (mtime inside 120s = working, a new turn end lights unread once, then idle); a terminal-header LED; `status_source` (hook/transcript/tmux/seed_row/none) rides the tooltip |
+| `bc12886` | idle gets its own grey fill, distinct from `unknown`'s hollow rim; the ring is 1.5px with a feathered edge, glow blur 6px |
+| `922e400` | the LED becomes one element: the fill is the inner state, a box-shadow ring plus glow is the outer, concentric at every fractional position (fixes the sub-pixel drift a separate `::after` pseudo-element had) |
+| `d419000` | docs: 18 legacy `cloude.db` backup files moved to Trash, v24 kept |
+| `611780a` | docs: restic now covers `Development` and the app data dir |
+| `36e55c2` | docs: v24 backup and scratch dbs moved to Trash |
+| `7587d96` | docs: ClaudeArchive released to Trash, multihost.db archived to archive-nas |
+| `f77a978` | docs: disk cleanup closed - 38 GiB to 147 GiB free |
+
+Housekeeping today, no commit behind any of it because it is disk and backup
+work, not code: 32 GB of db backups and 37 GB of ClaudeArchive released after
+byte-verified copies landed on archive-nas (10.0.1.237, TrueNAS,
+`/mnt/ARCHIVE/vault/85_cloud-exports/claude/`); `multihost.db` archived there
+with a full sha256; restic (`rest://10.0.10.80:8000/mini-m4`, daily 03:30) now
+covers `Development` and the app data dir with a `VACUUM INTO` db dump, two
+verify-loop bugs fixed, the backup script committed (`2f26e45`) and pushed to
+Gogs after fixing a repo-local `core.sshCommand` that had been pinning a
+read-only deploy key; APFS local snapshots thinned; free space 38 GiB to
+147 GiB.
+
+Full commit-by-commit detail for THIS round (`922e400..dfddbdc`) is in
+`TODO.md`'s dated 2026-09-09 closing section, including the re-measured test
+baseline (5609 passed / 3 failed / 21 skipped, the same three environmental
+failures as always) and the node count (191 tracked files, one known
+failure). See `CLAUDE.md`'s test-baseline bullet for the number to quote
+going forward.
 
 **Git housekeeping done this round, no code behind it.** 184 local
 branches merged into `v1.1` were deleted (`git branch -d`, branch count

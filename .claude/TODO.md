@@ -5248,3 +5248,124 @@ one per poll then none, keeps on dialog, keeps on unreadable, never
 invents, never raises). `test_status_view_and_transcript.py`'s
 `test_a_websocket_bind_leaves_a_permission_prompt_alone` was REVERSED to
 `..._clears_a_permission_prompt` with the reasoning recorded in place.
+
+## 2026-09-09 - closed out (922e400..dfddbdc), deployed and confirmed live
+
+13 commits (7 code, 6 docs/housekeeping), all deployed to live and verified:
+`./scripts/deploy-mini.sh --target live --verify-only` reported 529/529 file
+hashes matching on both destinations, boot held 18 sessions plus 1 benign
+skip against 19 live tmux sessions, and zero hook-token rejections in the
+post-deploy window.
+
+**Commits, newest first:**
+
+- `dfddbdc` - a view clears an open `permission_open`, and one left open past
+  `PERMISSION_TAIL_GRACE_SECONDS` (20s) is verified against the pane with one
+  `capture-pane` per poll before it is trusted (`session_permission_verify.py`
+  the pure ladder, `session_permission_verify_apply.py` the seam). Markers
+  measured from two real claude 2.1.265/266 dialogs: "Do you want to ...?",
+  "❯ 1. Yes", "Esc to cancel · Tab to amend". Root cause of the Media
+  Compression incident: a synthetic `PermissionRequest` landed on
+  `ses_949a8585` while the pane's own claude presents
+  `CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` on every real hook
+  it fires (tmux fixes env into a process at spawn, cannot rewrite a running
+  one) - the toast path remaps that split and logs when it does, the
+  activity tracker did not, so nothing reachable could clear the flag. 35
+  test cases against both captured dialogs plus two negative controls,
+  including the real captured tail of the stuck session.
+- `389ae5b` - toasts are auto-answered by the hook event that resolves them:
+  `UserPromptSubmit` acks every open toast on the session, `PreToolUse` acks
+  permission, `Stop` acks permission and notice but never its own; a
+  `toast.ack` frame plus a per-poll reconcile, with an open/dismissed/
+  answered reason recorded in history.
+- `8e78f5d` - sidebar group-header roll-up fixed: children carried `status`,
+  the fold read `activity_status` - the two names for one field disagreed
+  and a folded group summarised wrong. `signalsFor` now reconciles both
+  names so a folded group's roll-up matches its children again.
+- `880247f` - `finished_unread` versus `idle` is derived from the unread
+  flag on every path by ONE function, `derive_read_state`
+  (`src/core/session_status.py`), called from the hook tracker's resolve,
+  the tmux fallback, the seed's `display_state`, the transcript ladder's
+  rung 3, and the assembled answer in `_session_info_for`. Shipped as a
+  one-directional rule (add unread to `idle`, never remove it from a stored
+  `finished_unread`) so a saved state is a cache, never a stale claim. The
+  outer ring now means activity alone; the outer `unread` state and its
+  `--led-color-unread` hue are retired.
+- `5e13cb1` - a view clears an open notice (never an open permission - a
+  `Notification` is a message that looking at answers, a `PermissionRequest`
+  is a blocking fact that looking at does not); hook-less sessions (13 of 19
+  live panes, started by hand with no hook env) get a transcript-driven
+  ladder (`session_transcript_status{,_read}.py`): an mtime inside
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` reads `working` with an `expires_at`
+  the display enforces, a turn end newer than the instance-keyed ledger
+  reads `finished_unread` plus one auto-unread claim (first sight is a
+  baseline, so a restart never re-lights the fleet); a terminal-header LED
+  (`session-header-led.js`); `status_source`
+  (hook/transcript/tmux/seed_row/none) rides the `/sessions/list` wrapper
+  and renders in the tooltip only.
+- `bc12886` - idle gets its own grey fill, `--led-color-idle`, distinct from
+  `unknown`'s hollow rim and from `done`'s green; the ring is 1.5px with a
+  feathered edge, glow blur 6px.
+- `922e400` - the LED becomes one element: the fill is the `background-color`
+  for the inner state, and a three-layer `box-shadow` on that same span (a
+  hard ring, a low-alpha feather softening the ring's own edge, then a
+  blurred glow) is the outer, concentric with the dot at every fractional
+  x/y position. There is no pseudo-element and there must not be one - a
+  `::after` halo pixel-snaps its own box independently of the dot's box, so
+  a dot landing on a fractional position (routine in a flex row) drifted a
+  device pixel from its own ring.
+- `d419000`, `611780a`, `36e55c2`, `7587d96`, `f77a978` - docs-only:
+  18 legacy `cloude.db` backup files moved to Trash (v24 kept); restic now
+  covers `Development` and the app data dir; v24 backup and scratch dbs
+  moved to Trash; ClaudeArchive released to Trash after archive-nas
+  verification; disk cleanup closed at 38 GiB to 147 GiB free.
+
+**Housekeeping today, no commit behind it (database/disk operations, not
+code):** 32 GB of db backups and 37 GB of ClaudeArchive released to Trash
+after byte verification against copies on archive-nas (10.0.1.237, TrueNAS,
+`/mnt/ARCHIVE/vault/85_cloud-exports/claude/`, ssh user `truenas_admin`);
+`multihost.db` archived there with a full sha256; restic
+(`rest://10.0.10.80:8000/mini-m4`, job
+`/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh`, daily
+03:30) now covers `Development` and the app data dir with a `VACUUM INTO`
+db dump, two verify-loop bugs fixed, script committed (`2f26e45`) and
+pushed to Gogs after fixing a repo-local `core.sshCommand` that had been
+pinning a read-only deploy key; APFS local snapshots thinned; free space
+38 GiB to 147 GiB.
+
+**Test baseline at the end of this round:** pytest 5609 passed / 3 failed
+(the same three environmental: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped. Node 191
+tracked files, 1 known failure (`test_archive_full_page_mode.node.mjs`);
+`tests/led_state_for.node.mjs` is a piped-stdin CLI helper, not a
+standalone test.
+
+**Owner-verified today:** the dot goes grey on click; group headers roll up
+correctly again.
+
+**Still open after this round (carried from yesterday plus new), in value
+order:** the websocket push (`src/api/websocket.py` still carries no
+project/session-list message type, so state is polled, not pushed -
+re-measure whether polling is still the real cost before designing it);
+the big-file splits (`session_manager.py` ~7,700 lines, `routes.py` 4,022,
+`tmux_backend.py` 2,542, `launchpad.js` 6,472, `terminal.js` 2,422); the
+HTML-escape helper copy-pasted across 9 JS files; `PTYBackend` legacy
+branches remaining in 6 core files; the periodic agent-infer sweep (item
+3's one-shot inference at boot/adopt/first-hook is built, nothing re-checks
+a session already live when it shipped); toast history is process memory
+only, not durable, does not survive a restart; no bar raised for a WS drop
+while the user is present (only the 60s-away sleep/wake bar exists);
+`--name` dropped on a restart's resume; `FALLBACK_PROJECTS_ROOT` hardcoding
+`/Users/jsugamele` (`src/core/project_directory.py:85`);
+`record_claude_lifecycle_event` answering `LINEAGE_UNRESOLVED` for sessions
+created inside the real-hook test harness; the LED ring/glow are fixed px,
+not relative to the dot size; the adopted-id tracker key item (`dfddbdc`
+covers `permission_open` via the pane-verify fix - confirm every OTHER
+tracker flag for the same adopted/row-id split, or rekey the tracker on
+remap, rather than patching flags one at a time); gitleaks not installed on
+the mini; restic password rotation and the `.orig` script with an inline
+password (owner's call, deferred with credential rotation until this
+project is finished); watch restic repo growth from the nightly 4.6 GB
+dump; the archive README on the NAS records a stale size/hash for
+`cloude.db`; `refresh_tokens.db` now sits on the NAS (credential material,
+owner aware).

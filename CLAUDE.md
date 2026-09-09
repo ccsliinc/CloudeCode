@@ -450,9 +450,9 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-08 after the late round's unread/boot-epoch/rAF-trap fixes
-  (`07bbbb8..54731f9`), is 5491 passed / 3 failed / 21 skipped; the three
-  failures are the same ones as before, environmental and pre-existing:
+  2026-09-09 after the status-light round (`922e400..dfddbdc`), is
+  5609 passed / 3 failed / 21 skipped; the three failures are the same
+  ones as before, environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
@@ -1388,3 +1388,23 @@ file only under the slug of the LITERAL cwd; a measured absence refuses,
    connect, a state clear, a save) must not wait on a frame; race it
    against a timer instead, the way `client/js/terminal-layout-wait.js`
    does, so the wait can delay the work but never cancel it.
+10. **A synthetic hook aimed at a row id can set a tracker flag the pane's
+    own claude can never clear, when that claude holds an adopted id.**
+    `cloude_Media_Compression`'s pane process presents
+    `CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` on every real
+    hook it fires, because tmux fixed that env var into the process at
+    spawn and cannot rewrite a running one. A test's synthetic
+    `PermissionRequest` landed on `ses_949a8585` instead - the id
+    `tmux show-environment` hands back, and the one a script naturally
+    reads - with no `toast_session_id_remapped` line, because the toast
+    path only remaps when it recognizes the split; every REAL clearing
+    hook from that pane kept arriving under the adopted id and clearing a
+    key nothing was set on. The row painted `question` over a pane with no
+    dialog open, indefinitely. The fix in `dfddbdc` does not chase a
+    second remap: it re-verifies an open `permission_open` against the
+    PANE itself once it has sat open past 20 seconds, on the theory that
+    two ids can drift apart but the pane cannot lie about its own screen.
+    Any new tracker flag keyed on a session id needs the same question
+    asked of it: can this id and the pane's own id ever diverge, and if
+    they do, is there a way back to ground truth that does not depend on
+    either id being the right one.
