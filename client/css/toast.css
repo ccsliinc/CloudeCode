@@ -62,8 +62,15 @@
   /* Each toast catches its own clicks (dismiss button etc.) */
   pointer-events: auto;
 
-  /* The per-session accent. Set inline by ToastManager from toast.color;
-     falls back to the active theme's --color-accent, then a sane default. */
+  /* The per-session accent. Set inline by ToastManager from toast.color,
+     which the server bakes at record time from the SAME source
+     client/js/theme-navigation.js reads for a session's pinned theme
+     (src/core/session_manager.py resolve_project_theme() falls back to
+     get_pinned_theme() whenever no project-level .cc.theme override
+     exists, which is the ordinary case) - so this already IS "that
+     session's theme colour", not a second theme concept. Falls back to
+     the active theme's --color-accent, then a sane default, for a
+     session with no pin, which is the "keep today's look" case. */
   --toast-accent: var(--color-accent, #ff8800);
 
   background: var(--color-bg-card, #252526);
@@ -82,6 +89,22 @@
   transform: translateX(0);
   opacity: 1;
   transition: transform 200ms ease-out, opacity 200ms ease-out;
+}
+
+/* THE CARD, NOT JUST ITS EDGE - but ONLY when a session actually has its
+   own theme. `[data-themed="1"]` is set by client/js/toast.js in the
+   SAME branch that bakes --toast-accent from a real toast.color, which
+   `.toast` above cannot key on by itself: that variable always resolves
+   to something, a baked colour or the plain CSS fallback to whatever
+   theme is currently on screen, so a rule reading the variable alone
+   could not tell "this session is themed" apart from "nothing was ever
+   baked here" - and would have painted the SAME wash on every unthemed
+   card too, which breaks "a session with no pin keeps today's look".
+   The mix is weak enough that --color-fg / --color-fg-muted stay
+   legible over it - a tint, not a repaint. */
+.toast[data-themed="1"] {
+  background: color-mix(in srgb, var(--toast-accent) 7%, var(--color-bg-card, #252526));
+  border-color: color-mix(in srgb, var(--toast-accent) 30%, var(--color-border, #3e3e42));
 }
 
 /* Entry animation - start off-screen right, slide to rest. */
@@ -108,6 +131,7 @@
    is not a name - so it gets a real font-size and its own line rather
    than being tucked into the title's row. */
 .toast__session {
+  display: block;
   margin: 0 0 4px 0;
   color: var(--color-fg-muted, #858585);
   font-size: 11px;
@@ -119,6 +143,27 @@
    Italic is the only cue, deliberately: the text already says it. */
 .toast__session[data-unknown="1"] {
   font-style: italic;
+}
+
+/* client/js/toast.js only renders <button> here when there is somewhere
+   for it to switch TO, so this selector is exactly the clickable case -
+   there is no bare `button {}` reset left anywhere in this codebase (see
+   styles.css) to fight, but the user-agent stylesheet still is, hence
+   the full reset. */
+button.toast__session {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.toast__session:hover,
+button.toast__session:focus-visible {
+  color: var(--color-fg, #d4d4d4);
+  text-decoration: underline;
 }
 
 .toast__body {

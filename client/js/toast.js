@@ -804,7 +804,19 @@ class ToastManager {
     el.dataset.kind = winner.kind || '';
     el.dataset.severity = String(severity);
     el.dataset.count = String(count);
-    if (winner.color) el.style.setProperty('--toast-accent', winner.color);
+    // `data-themed` is what toast.css keys the background/border tint on,
+    // SEPARATELY from `--toast-accent` itself: that variable always
+    // resolves to something (a baked colour, or the CSS fallback to
+    // whatever theme is currently on screen), so a CSS rule reading the
+    // variable alone cannot tell "this session has its own theme" apart
+    // from "nothing was ever baked for this card". Only the truthy case
+    // gets the attribute, so an unpinned session's card keeps painting
+    // exactly as it always has - see toast.css for the rest of the
+    // reasoning.
+    if (winner.color) {
+      el.style.setProperty('--toast-accent', winner.color);
+      el.dataset.themed = '1';
+    }
     // A blocking prompt interrupts the screen reader; chatter does not.
     el.setAttribute('role', severity >= CAP_EXEMPT_SEVERITY ? 'alert' : 'status');
 
@@ -852,14 +864,44 @@ class ToastManager {
     // THE THIRD OUTCOME IS SPOKEN, NOT DROPPED. A toast recorded before
     // the server carried identity has neither field. It says so. Silently
     // omitting the line would be the dishonest option.
-    const session = document.createElement('div');
+    // CLICKING THE NAME SWITCHES TO THAT SESSION, so it is a real <button>
+    // whenever there is somewhere to switch TO - a bare tmux name to hand
+    // the existing switch flow, `winner.session_name`. Without one
+    // (the pre-identity toast case just above) it stays a <div>: a
+    // control that cannot do anything is worse than no control.
+    const canNavigate = !!winner.session_name;
+    const session = document.createElement(canNavigate ? 'button' : 'div');
     session.className = 'toast__session';
+    if (canNavigate) session.type = 'button';
     const resolved = window.SessionLabel
       ? window.SessionLabel.resolveToast(winner)
       : (winner.session_label || winner.session_name || null);
     session.textContent = resolved
       || (window.SessionLabel ? window.SessionLabel.UNKNOWN : 'unknown session');
     if (!resolved) session.dataset.unknown = '1';
+    if (canNavigate) {
+      // SAME NAVIGATION THE SIDEBAR ROW USES, not a second path to it:
+      // SessionSidebarClicks.activateRow is the exact function a sidebar
+      // row's click runs, exported for exactly this kind of reuse. It
+      // wants a controller (only for the already-active-session check
+      // and closing the sidebar afterward, neither of which applies to a
+      // toast card) and a row element (only for `dataset.name` /
+      // `dataset.sessionId`), so both are the minimal stand-ins that let
+      // it run unmodified.
+      // No stopPropagation: the dismiss button is a SIBLING of this
+      // element, not a parent, and nothing on `.toast` itself listens
+      // for a click - there is no bubbling path for the two to fight
+      // over.
+      session.addEventListener('click', () => {
+        if (window.SessionSidebarClicks
+            && typeof window.SessionSidebarClicks.activateRow === 'function') {
+          window.SessionSidebarClicks.activateRow(
+            { _activeTmuxName: null, _closeAfterSwitch: () => {} },
+            { dataset: { name: winner.session_name, sessionId: winner.session_id || '' } },
+          );
+        }
+      });
+    }
     el.appendChild(session);
 
     if (winner.body) {

@@ -195,12 +195,20 @@ let seq = 0;
 /**
  * Description: a server-shape toast.
  * Inputs: kind (string), title (string), body (string|null),
- *   session (string).
+ *   session (string) - session_id. sessionName (string|null) -
+ *   session_name, the bare tmux name a click on the card's name would
+ *   navigate to; most cases don't need it and leave it null, which
+ *   matches a card with no navigation target. color (string) - the
+ *   server-baked per-session accent hex; defaults so every existing
+ *   caller keeps its card looking the way it always has.
  * Output: object.
  */
-export function toast(kind, title, body = null, session = 's1') {
+export function toast(kind, title, body = null, session = 's1', sessionName = null, color = '#ff8800') {
     seq += 1;
-    return { id: `t${seq}`, session_id: session, kind, title, body, color: '#ff8800', acknowledged: false };
+    return {
+        id: `t${seq}`, session_id: session, session_name: sessionName, kind, title, body,
+        color, acknowledged: false,
+    };
 }
 
 /** Description: the cards actually in the container, top to bottom. */

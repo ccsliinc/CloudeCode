@@ -418,6 +418,73 @@ test('the container is a polite live region', () => {
     assert.equal(container.getAttribute('aria-live'), 'polite');
 });
 
+// ------------------------------------------------------------- session name
+
+test('clicking the session name runs the SAME switch the sidebar row runs', () => {
+    const { container, mgr, sandbox } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', null, 'ses_1', 'cloude_myproject'));
+    const calls = [];
+    // Stand in for the real module: proves toast.js calls THIS function
+    // rather than reimplementing the switch itself.
+    sandbox.window.SessionSidebarClicks = {
+        activateRow: (ctrl, rowEl) => calls.push({ ctrl, rowEl }),
+    };
+    const nameBtn = cards(container)[0].querySelector('.toast__session');
+    assert.equal(nameBtn.tagName, 'BUTTON',
+        'a session with somewhere to switch to must be a real, keyboard-activatable control');
+    assert.equal(nameBtn.getAttribute('type'), 'button');
+    nameBtn.click();
+    assert.equal(calls.length, 1, 'the click must reach SessionSidebarClicks.activateRow exactly once');
+    assert.equal(calls[0].rowEl.dataset.name, 'cloude_myproject',
+        'the tmux name the sidebar switch needs must be the toast record\'s session_name');
+    assert.equal(calls[0].rowEl.dataset.sessionId, 'ses_1');
+});
+
+test('a toast with no session_name renders a plain, non-clickable name', () => {
+    const { container, mgr } = makeEnv();
+    // Neither field: the pre-identity toast case already covered above.
+    mgr.add(toast('Stop', 'Your turn'));
+    const nameEl = cards(container)[0].querySelector('.toast__session');
+    assert.equal(nameEl.tagName, 'DIV',
+        'nothing to navigate to must not render a control that does nothing on click');
+});
+
+test('the dismiss button still works, and does not also trigger the name switch', () => {
+    const { container, mgr, sandbox, acked } = makeEnv();
+    const t = toast('Stop', 'Your turn', null, 'ses_1', 'cloude_myproject');
+    mgr.add(t);
+    const calls = [];
+    sandbox.window.SessionSidebarClicks = { activateRow: (...args) => calls.push(args) };
+    const card = cards(container)[0];
+    card.querySelector('.toast__dismiss').click();
+    assert.deepEqual(acked, [t.id], 'the dismiss must still ack the toast it belongs to');
+    assert.equal(calls.length, 0, 'dismissing must never also fire the session switch');
+});
+
+// ------------------------------------------------------------------- theme
+
+test('two cards carry two different sessions\' accent colours', () => {
+    const { container, mgr } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', null, 'ses_1', null, '#d7788c'));
+    mgr.add(toast('Stop', 'Your turn', null, 'ses_2', null, '#4fc1ff'));
+    // Same severity, so _groups() is free to order them either way - the
+    // claim under test is which COLOURS are on screen, not which sits on
+    // top, so compare the set rather than a card at a fixed index.
+    const accents = cards(container).map((c) => c._css['--toast-accent']).sort();
+    assert.deepEqual(accents, ['#4fc1ff', '#d7788c'],
+        'each card must carry its OWN session\'s colour, not a shared one');
+});
+
+test('a session with no baked colour leaves --toast-accent unset, which is the default-look case', () => {
+    const { container, mgr } = makeEnv();
+    const t = toast('Stop', 'Your turn');
+    t.color = null; // server sends no colour when the session has no theme resolution
+    mgr.add(t);
+    const card = cards(container)[0];
+    assert.equal(card._css && card._css['--toast-accent'], undefined,
+        'no inline override means the CSS fallback (today\'s look) applies, not an invented colour');
+});
+
 // ------------------------------------------------------------------- run
 
 let failed = 0;
