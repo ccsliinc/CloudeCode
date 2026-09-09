@@ -858,10 +858,10 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // escape bytes. xterm.write() accepts Uint8Array directly and
         // feeds the parser without re-encoding.
         if (paintPlan === 'keep') { this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
-            // Let layout settle (screen-swap CSS toggle in app.js needs a
-            // paint tick before clientWidth/clientHeight read truthful
-            // values). Double-rAF is the canonical "wait for layout" guard.
-            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            // Let layout settle (the screen-swap toggle needs a paint tick
+            // first). BOUNDED: the bare double-rAF this replaced never
+            // resolves in an unpainted tab, and the WS connect is below it.
+            await (window.TerminalLayoutWait?.settleFrames(2) ?? Promise.resolve());
 
             // Fit xterm to the container BEFORE painting scrollback so the
             // captured bytes land at the correct column width. xterm.js
@@ -1004,10 +1004,10 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // dims, on top of the painted history.
         const initialScrollbackB64 = session && session.initial_scrollback_b64;
         if (paintPlan === 'keep') { this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
-            // Let layout settle (screen-swap CSS toggle in app.js needs a
-            // paint tick before clientWidth/clientHeight read truthful
-            // values). Double-rAF is the canonical "wait for layout" guard.
-            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            // Let layout settle (the screen-swap toggle needs a paint tick
+            // first). BOUNDED: the bare double-rAF this replaced never
+            // resolves in an unpainted tab, and the WS connect is below it.
+            await (window.TerminalLayoutWait?.settleFrames(2) ?? Promise.resolve());
 
             // Fit xterm to the container BEFORE painting scrollback so the
             // captured bytes land at the correct column width. xterm.js
@@ -1076,8 +1076,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         } else if (document.fonts?.ready) {
             try { await document.fonts.ready; } catch {}
         }
-        const r = await window.TerminalLayoutWait.waitForLayout(container);
-        if (r.timedOut) console.warn('Terminal: layout wait timed out, connecting anyway', r);
+        const r = await (window.TerminalLayoutWait?.waitForLayout(container) ?? null);
+        if (r?.timedOut) console.warn('Terminal: layout wait timed out, connecting anyway', r);
     }
 
     /**

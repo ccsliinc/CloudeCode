@@ -1010,8 +1010,14 @@ a browser never runs for an unpainted tab, suspending
 `connectWebSocket()` before `openWebSocket()`. No socket means no
 `onclose`, so no reconnect rung fires either: the terminal sat on
 "Connecting to terminal..." for 35 minutes and resumed the instant the
-tab was painted. `client/js/terminal-layout-wait.js` races every wait
-against a timer - a layout wait may DELAY a connect, never CANCEL one.
+tab was painted. THERE WERE THREE such waits, not one - the sidebar
+rejoin and the adopt path each carry their own, ABOVE the
+`setTimeout(..., 500)` that schedules the connect, so fixing only the
+first changed nothing and only a live re-check found that.
+`client/js/terminal-layout-wait.js` races every wait against a timer - a
+layout wait may DELAY a connect, never CANCEL one - and
+`tests/test_terminal_layout_wait.node.mjs` fails the build if a bare rAF
+await reappears in `terminal.js`.
 
 **IT IS ONE FLAG, AND EVERY WRITER AND READER MUST MEASURE THE EPOCH.**
 The owner's rule, verbatim: "when clicking a tab, the session is marked

@@ -4130,3 +4130,44 @@ positive assertion.
 
 pytest 5491 passed / 3 failed / 21 skipped, the 3 the known environmental ones.
 Node 189 of 190, the one failure the known `test_archive_full_page_mode`.
+
+**FOLLOW-UP, same day: FIXING ONE rAF WAIT WAS NOT ENOUGH, and only a live
+re-verification caught it.** After the first deploy the delegate was live in
+the page (`waitForFontsAndLayout.toString()` contained `TerminalLayoutWait`,
+the module was loaded) and a hidden tab STILL opened no socket and still read
+`unread: true`. `reconnectToExistingSession` (the sidebar row click) and the
+adopt branch of `connectToSession` each carried their OWN bare
+`await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`,
+and both sit ABOVE the `setTimeout(() => this.connectWebSocket(), 500)` in the
+same async function - so the connect was never even SCHEDULED, let alone
+reached. `TerminalLayoutWait.settleFrames(frames, timeoutMs)` replaces both,
+and `tests/test_terminal_layout_wait.node.mjs` now also asserts the SOURCE of
+terminal.js carries no bare rAF await at all, so a third one cannot be added
+back quietly.
+
+Two things this round is worth remembering for. A unit test on the module
+would never have caught it: the module was correct and the caller above it was
+not, which is exactly what "verify what the user sees" means here. And the
+first version of the delegate dereferenced `window.TerminalLayoutWait`
+unguarded, which threw in `tests/test_terminal_reconnect_buffer.node.mjs` - a
+real defect, not a harness artifact, since a missing optional script would have
+broken the connect outright. It is `?.` with a `Promise.resolve()` fallback
+now (never a timer: that harness stubs `setTimeout` to a no-op, and a fallback
+that cannot resolve is the bug being fixed), and the harness loads the module
+the way index.html does so it measures the real path.
+
+**Live verification, deployed build, 2026-09-09.**
+- Server end to end (no browser): mint a JWT from the install's TOTP secret,
+  PATCH manual unread, open a real `/ws/terminal?session_id=ses_9523c563`,
+  hold 2s, close. `unread: true` / `finished_unread` -> `unread: false` /
+  `idle`; the key `cloude_Fantasy_Hockey_2026@1788444912` appears and is
+  dropped; negative control `cloude_Hirschfeld` stays `unread: true`.
+- The actual defect, in a BACKGROUNDED tab (`visibilityState: 'hidden'`), as a
+  genuine session-to-session switch: before `unread: true` /
+  `finished_unread`, a WebSocket opens and is scoped to the right session id,
+  after `unread: false` / `idle`, Hirschfeld untouched either side.
+- `deploy-mini.sh --target live --verify-only` exit 0, 520/520 on both
+  destinations, mirror-clean. `boot_readopt_complete` held 18 / failed 0 /
+  skipped 1 against 19 live tmux sessions, identical to the pre-deploy
+  baseline. Over one minute: 2 hook POSTs accepted, 0 403s, 0 410s, 0
+  `hook_post_rejected_invalid_token`.

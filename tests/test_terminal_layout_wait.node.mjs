@@ -174,6 +174,48 @@ await check('nextFrameOrTimeout settles exactly once', async () => {
     assert.equal(settles, 1, 'a late frame must not re-resolve');
 });
 
+// --- settleFrames: THE SECOND HANG, one layer up ------------------------
+//
+// Fixing `waitForFontsAndLayout` alone was measured NOT ENOUGH on live.
+// `reconnectToExistingSession` (the sidebar row click) and the adopt path
+// in `connectToSession` each carried their own bare
+// `await new Promise(r => requestAnimationFrame(() =>
+// requestAnimationFrame(r)))`, and both sit ABOVE the
+// `setTimeout(() => this.connectWebSocket(), 500)` in the same async
+// function - so the connect was never even SCHEDULED, let alone reached.
+// Verified against the deployed build: the delegate was live in the page,
+// the module was loaded, and a hidden tab still opened no socket.
+
+await check('settleFrames resolves in an UNPAINTED tab', async () => {
+    const { api } = load({ painting: false });
+    const painted = await Promise.race([
+        api.settleFrames(2, 25),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('HUNG: never resolved')), 1500))
+    ]);
+    assert.equal(painted, 0, 'no frame painted, and it says so');
+});
+
+await check('settleFrames still awaits real frames in a PAINTED tab', async () => {
+    const { api, rafRequests } = load({ painting: true });
+    const painted = await api.settleFrames(2, 500);
+    assert.equal(painted, 2, 'both frames were genuinely awaited');
+    assert.equal(rafRequests.length, 2);
+});
+
+await check('terminal.js has no bare rAF await left on the connect path', async () => {
+    const src = fs.readFileSync(
+        path.join(HERE, '..', 'client', 'js', 'terminal.js'), 'utf8');
+    assert.equal(
+        src.indexOf('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))'),
+        -1,
+        'a bare double-rAF await is a permanent hang in an unpainted tab'
+    );
+    assert.equal(
+        src.indexOf('await new Promise(requestAnimationFrame)'), -1,
+        'a bare single-rAF await is the same defect'
+    );
+});
+
 await check('hasBox refuses zero and missing elements', async () => {
     const { api } = load({ painting: true });
     assert.equal(api.hasBox(el(10, 10)), true);

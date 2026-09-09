@@ -388,6 +388,13 @@ line above the await) and the row kept an unread halo nothing could
 clear. The suspended connect completed the instant the tab was painted,
 35 minutes later.
 
+FIXING ONE OF THEM WAS NOT ENOUGH, and only re-verifying on live caught
+it. `reconnectToExistingSession` (the sidebar row click) and the adopt
+branch of `connectToSession` each carried their own bare double-rAF
+await, and both sit ABOVE the `setTimeout(() => this.connectWebSocket(),
+500)` in the same async function - so the connect was not merely
+suspended, it was never SCHEDULED.
+
 `client/js/terminal-layout-wait.js` is the rule now: a layout wait may
 DELAY a connect, never CANCEL one. Every wait there is raced against a
 timer, because `setTimeout` fires in a background tab and rAF does not,

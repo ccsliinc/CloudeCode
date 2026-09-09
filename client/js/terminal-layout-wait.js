@@ -149,6 +149,34 @@
     }
 
     /**
+     * Let layout settle for a few frames, BOUNDED.
+     *
+     * Description: the drop-in replacement for the canonical
+     *   `await new Promise(r => requestAnimationFrame(() =>
+     *   requestAnimationFrame(r)))` layout guard. That idiom is correct
+     *   in a painted tab and a PERMANENT HANG in an unpainted one, and
+     *   when it sits in an async function that goes on to open the
+     *   WebSocket, the connect is never even reached. Two of them did,
+     *   on the adopt path and the rejoin path.
+     * Inputs:
+     *   frames (number) - how many frames to wait for. Default 2.
+     *   timeoutMs (number) - per-frame cap. Default FRAME_TIMEOUT_MS.
+     * Output: Promise<number> - how many frames actually painted, so a
+     *   caller can tell a settled layout from a skipped one.
+     * Example:
+     *   await TerminalLayoutWait.settleFrames(2);
+     */
+    async function settleFrames(frames, timeoutMs) {
+        var n = typeof frames === 'number' ? frames : FRAME_COUNT;
+        var ms = typeof timeoutMs === 'number' ? timeoutMs : FRAME_TIMEOUT_MS;
+        var painted = 0;
+        for (var i = 0; i < n; i++) {
+            if (await nextFrameOrTimeout(ms)) painted++;
+        }
+        return painted;
+    }
+
+    /**
      * True when the element reports a non-zero layout box.
      *
      * Description: `offsetWidth`/`offsetHeight` read 0 for a detached or
@@ -166,6 +194,7 @@
 
     global.TerminalLayoutWait = {
         waitForLayout: waitForLayout,
+        settleFrames: settleFrames,
         nextFrameOrTimeout: nextFrameOrTimeout,
         hasBox: hasBox,
         SIZE_TIMEOUT_MS: SIZE_TIMEOUT_MS,
