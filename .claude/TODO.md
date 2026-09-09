@@ -4312,3 +4312,27 @@ name-scoped rather than instance-keyed; and
 `record_claude_lifecycle_event` answering `LINEAGE_UNRESOLVED` for sessions
 created inside the real-hook test harness (found by the item-4 run above,
 not chased).
+
+- [x] NOT A BUG: "a cleared unread does not repaint the led". Investigated on
+  live 54731f9 in Brave. The answer is (c), the poll pauses, and it pauses on
+  purpose. Both list polls stop for a surface that is off screen: the sidebar's
+  `_startPoll`/`_stopPoll` are called from `open()`/`close()`
+  (`client/js/session-sidebar.js:219,245`) so a closed panel has NO timer at all,
+  and the launchpad's 5s `_startRunningSessionsPoller` (`launchpad.js:529`) keeps
+  ticking but returns early on `ProjectListRenderGuard.shouldPoll(document)` while
+  `#launchpad-screen` lacks `.active`. Measured mid-symptom with the terminal up:
+  `sidebar.poll:false`, `guardShouldPoll:false`, server `unread:false`, all three
+  DOM leds still `data-outer="unread"`. Ruled OUT (b): the fingerprint already
+  carries `unread` (`session-sidebar-rows.js:207` `signature()`), and calling the
+  real tick `SessionSidebar._fetchAndRender()` by hand flipped the row to
+  `unread:false` and the led to `steady` in one pass. Ruled OUT (a): the launchpad
+  interval was alive and firing throughout, and the sidebar had no timer to
+  throttle. The earlier hand-call of `SessionSidebarFetch.load()` proved nothing
+  because it only fetches and returns rows, it never assigns `_rows` and never
+  calls `repaint()`. Every surface refreshes the moment it becomes visible:
+  `open()` ends in `_fetchAndRender()` and `showLaunchpad()` ends in
+  `loadProjects()`, both verified painting `steady` on return, and a sidebar left
+  PINNED open repaints within one 5s poll unaided. The `Joe` group header reading
+  `unread` beside a cleared Hockey row is also correct, not stale:
+  `cloude_daily-briefing` is genuinely unread in that group, and the client's
+  unread set matched the server's four rows exactly. No code change.
