@@ -1061,7 +1061,11 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     }
 
     /**
-     * Wait for fonts and layout to be ready
+     * Wait for fonts and layout, BOUNDED - see
+     * client/js/terminal-layout-wait.js for why an unbounded rAF wait
+     * here silently stopped the WebSocket from ever opening.
+     * @param {Element} container - the terminal host element.
+     * @returns {Promise<void>}
      */
     async waitForFontsAndLayout(container) {
         // TerminalMetrics.waitForFonts bounds the wait so a font that never
@@ -1072,13 +1076,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         } else if (document.fonts?.ready) {
             try { await document.fonts.ready; } catch {}
         }
-        const t0 = performance.now();
-        while ((container.offsetWidth|0) === 0 || (container.offsetHeight|0) === 0) {
-            if (performance.now() - t0 > 2000) break;
-            await new Promise(r => setTimeout(r, 16));
-        }
-        await new Promise(requestAnimationFrame);
-        await new Promise(requestAnimationFrame);
+        const r = await window.TerminalLayoutWait.waitForLayout(container);
+        if (r.timedOut) console.warn('Terminal: layout wait timed out, connecting anyway', r);
     }
 
     /**

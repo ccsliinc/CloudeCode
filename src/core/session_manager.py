@@ -83,6 +83,7 @@ from src.core.session_startup_gate_ledger import (
     StartupGateLedger,
     capture_pane_tail,
 )
+from src.core import unread_identity
 from src.core.unread_store import UnreadStore
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
@@ -457,6 +458,11 @@ class SessionManager:
         # (own file, name-keyed, survives detach/swap/re-adopt) without
         # growing this already-large file further.
         self._unread_store = UnreadStore(settings.get_unread_state_path())
+        # THE ONE EPOCH SOURCE the unread key is derived from, name-keyed
+        # and filled only from tmux listings. See src/core/unread_identity.py
+        # for why the row's epoch and the session_id-keyed _instance_epochs
+        # memo are both refused here.
+        self._unread_epochs: dict[str, int] = {}
 
         # S9 - listing-time fingerprint cache, keyed on the INSTANCE
         # TRIPLE (tmux_socket, tmux_name, tmux_created_epoch), never on
@@ -1770,42 +1776,37 @@ class SessionManager:
         """
         return self._unread_store.is_unread(tmux_name, epoch)
 
-    def _epoch_for_tmux_name(self, tmux_name: Optional[str]) -> Optional[int]:
-        """This tmux name's ``#{session_created}``, or None if unresolvable.
+    def _unread_epoch(self, tmux_name: Optional[str]) -> Optional[int]:
+        """The epoch THIS session's unread flag keys on. One source, always.
 
-        Description: The name-keyed twin of ``_work_stamp_epoch``, for the
-            paths that hold a tmux NAME and no session_id - the manual
-            mark-unread control, which must work on an attachable session
-            that nothing is currently attached to.
+        Description: delegates to ``src/core/unread_identity.py``, which
+            is the only thing in this file allowed to answer the question
+            - the manual control, the ``Stop`` writer and the
+            viewed-clear all call THIS, so a clear can never land on a
+            key the set did not write. It reads a tmux measurement (memo
+            first, one listing on a miss) and refuses the two answers
+            that used to compete with it: the database row's recorded
+            epoch and the session_id-keyed ``_instance_epochs``.
 
-            NEVER CALL THIS FROM INSIDE ``list_attachable_sessions``: it
-            asks that method for the listing, so a call from within its own
-            loop re-enters it. That loop already carries
-            ``created_at_epoch`` on each row and must read it there.
-
-            A name tmux does not list is a CANNOT-DETERMINE and returns
-            None, which the store treats as an unmeasured instance (the
-            legacy bare-name key) rather than as a new one.
+            NEVER CALL THIS FROM INSIDE ``list_attachable_sessions``: the
+            probe it may spend asks that method for the listing, so a
+            call from within its own loop re-enters it. That loop already
+            carries ``created_at_epoch`` on each row and calls
+            ``unread_identity.remember`` instead.
         Inputs:
             tmux_name: literal tmux session name, or None.
-        Output: int | None.
+        Output: int | None - None when tmux could not answer, which the
+            store treats as an unmeasured instance (the legacy bare-name
+            key) rather than as a new one.
         """
-        if not tmux_name:
-            return None
-        try:
-            listing = coerce_listing(self.list_attachable_sessions())
-            if not listing.ok:
-                return None
-            for row in listing.sessions:
-                if row.get("name") == tmux_name:
-                    epoch = row.get("created_at_epoch")
-                    return int(epoch) if epoch is not None else None
-        except (OSError, ValueError, TypeError, KeyError) as exc:
-            # A probe must never break the control it serves; an
-            # unresolvable epoch degrades to the legacy key, it does not
-            # fail the mark.
-            logger.debug("unread_epoch_probe_failed", error=str(exc))
-        return None
+        return unread_identity.resolve_epoch(
+            self._unread_epochs,
+            tmux_name,
+            # coerce_listing is this codebase's ONE normalizer for a
+            # listing-shaped return, so unread_identity can stay a pure
+            # module that knows only ``.ok`` / ``.sessions``.
+            lambda: coerce_listing(self.list_attachable_sessions()),
+        )
 
     def mark_session_viewed(self, session_id: str) -> None:
         """Clear the WHOLE unread flag for the session bound to ``session_id``.
@@ -1821,10 +1822,10 @@ class SessionManager:
         tmux_name = getattr(backend, "tmux_session", None) if backend else None
         if not tmux_name:
             return
-        # The Stop branch's own epoch source, so a clear finds the key.
-        self._unread_store.clear(
-            tmux_name, self._work_stamp_epoch(session_id, tmux_name)
-        )
+        # THE SAME epoch source the Stop writer and the manual control
+        # use, which is the whole point: a clear derived any other way
+        # lands on a key nobody wrote and the flag is unclearable.
+        self._unread_store.clear(tmux_name, self._unread_epoch(tmux_name))
 
     def set_manual_unread(self, tmux_name: str, unread: bool) -> None:
         """Set or clear the MANUAL unread flag for a tmux session name.
@@ -1844,7 +1845,7 @@ class SessionManager:
         """
         if not tmux_name:
             raise ValueError("tmux_name is required")
-        epoch = self._epoch_for_tmux_name(tmux_name)
+        epoch = self._unread_epoch(tmux_name)
         if unread:
             self._unread_store.set_flag(tmux_name, "manual", True, epoch=epoch)
         else:
@@ -2564,12 +2565,11 @@ class SessionManager:
             self, session_id, tmux_name
         )
         if kind == EVENT_STOP and tmux_name:
-            # ONE FLAG, ONE KEY: the manual control and the viewed-clear
-            # resolve a MEASURED epoch, and `_instance_epochs` (empty for
-            # any session predating this process) would file a second key.
+            # ONE FLAG, ONE KEY. This, the manual control and the
+            # viewed-clear all derive the epoch through _unread_epoch, so
+            # the three cannot file the same pane under two keys.
             self._unread_store.set_flag(
-                tmux_name, "auto", True,
-                epoch=self._work_stamp_epoch(session_id, tmux_name),
+                tmux_name, "auto", True, epoch=self._unread_epoch(tmux_name),
             )
         self._persist_activity_state(session_id, tmux_name)
         self._persist_work_stamp(session_id, tmux_name, kind)
@@ -4506,13 +4506,22 @@ class SessionManager:
         # feat/hook-driven-status - the raw tmux classification (dead check
         # + graceful-fallback source) is combined with this session's live
         # hook signal (if any) and its persisted unread flag into ONE
-        # unified status (src/core/session_activity.py). MEASURED EPOCH
-        # FIRST: ``_instance_epochs`` misses for a session predating this
-        # process, and a miss composes the LEGACY bare-name key.
+        # unified status (src/core/session_activity.py). ONE SOURCE for
+        # the key, here too. The row's epoch is a MEASURED
+        # tmux value when the listing carried one, so it seeds the memo;
+        # what is gone is the `or self._instance_epochs.get(session_id)`
+        # fallback, a session_id-keyed value seeded from the DATABASE that
+        # could name a different instance than the one the writers used.
         unread = self._is_unread(
             tmux_session_name,
-            (row.get("created_at_epoch") if row else None)
-            or self._instance_epochs.get(session_id),
+            unread_identity.remember(
+                self._unread_epochs,
+                tmux_session_name,
+                unread_identity.epoch_of_row(row),
+            )
+            or unread_identity.resolve_epoch(
+                self._unread_epochs, tmux_session_name
+            ),
         )
         activity_status = self._activity_tracker.resolve(
             session_id, raw_tmux_status, unread=unread
@@ -6154,7 +6163,14 @@ class SessionManager:
                 # helper that probes tmux: this loop IS the body of
                 # ``list_attachable_sessions``, and a probe would re-enter
                 # it.
-                unread = self._is_unread(name, row.get("created_at_epoch"))
+                unread = self._is_unread(
+                    name,
+                    unread_identity.remember(
+                        self._unread_epochs,
+                        name,
+                        unread_identity.epoch_of_row(row),
+                    ),
+                )
                 row["status"] = map_tmux_fallback(raw_tmux_status, unread=unread)
                 row["unread"] = unread
                 # S9 - listing NOW fingerprints (cached per instance

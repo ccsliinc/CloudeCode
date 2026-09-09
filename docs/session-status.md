@@ -344,19 +344,56 @@ this from a phone and a desktop and the flag has to follow them.
 
 ### One flag, one key, or it is two flags
 
-Every writer resolves a MEASURED `#{session_created}` before it writes:
-the `Stop` branch and `mark_session_viewed` through
-`SessionManager._work_stamp_epoch` (probes tmux once, then caches), the
-manual control through `_epoch_for_tmux_name`. A writer that read the
-in-memory `_instance_epochs` cache instead would compose the LEGACY
-bare-name key whenever the cache missed - which after a server restart is
-every session - and file the same pane a second time.
+THE EPOCH COMES FROM TMUX AND NOTHING ELSE, and since 2026-09-09 it comes
+through exactly one function. `src/core/unread_identity.py` owns the
+question; `SessionManager._unread_epoch` is the only caller in that file,
+and the set (`Stop`), the other set (the manual control), the clear
+(`mark_session_viewed`) and the read (`_session_info_for` and the
+attachable listing) all go through it. Two derivations for one key is two
+keys the moment they disagree, and a clear that lands on a key nobody
+wrote leaves a flag no click can ever clear while every layer in between
+reads correct.
 
-`GET /sessions/list` reads with the same measured epoch, taken from the
-`created_at_epoch` its own bulk tmux probe already carries; that read used
-`_instance_epochs` until 2026-09-08 and so could not see a flag the
-control had just written under the instance key. The value was on disk,
-the endpoint said `false`, and every layer in between looked correct.
+The two answers it deliberately refuses are the ones that used to compete
+with it. `_instance_epochs` is keyed by session_id and seeded from the
+create / adopt / boot-readopt paths out of the DATABASE ROW, so it is
+empty for every session predating the process and otherwise answers "what
+did this process decide when it first saw this handle", not "what does
+tmux say now". A row's recorded epoch answers what the epoch WAS when the
+row was written. Only the live listing answers the question the key asks.
+
+The memo behind `unread_identity.resolve_epoch` is a MEMO OF THAT
+MEASUREMENT, not a second source: every value in it was read out of a tmux
+listing, it is keyed by tmux NAME rather than by session_id, and every
+listing the manager performs refreshes it (`remember` / `remember_listing`),
+so a recycled name cannot keep its predecessor's epoch for longer than one
+poll. A probe is spent only on a miss, which is what keeps this callable
+from the hook path. A failed probe changes nothing - a transient tmux
+failure is not evidence an epoch moved - and an unmeasurable epoch
+degrades to the legacy bare-name key rather than minting a second entry.
+
+### Opening the tab only marks it read if a WebSocket actually opens
+
+The clear hangs off the WS bind, so anything that stops the socket from
+opening stops the session being marked read. Measured on live 2026-09-09:
+a session entered in a BACKGROUNDED browser tab never opened one at all.
+`TerminalController.connectWebSocket()` awaited
+`waitForFontsAndLayout()`, which ended on two bare
+`await new Promise(requestAnimationFrame)` calls, and a browser does not
+run rAF for a tab it is not painting. The connect suspended inside that
+await, before `openWebSocket()` - and because no socket existed there was
+no `onclose`, so no rung of the auto-reconnect ladder could fire either.
+The terminal sat on "Connecting to terminal..." (the string set on the
+line above the await) and the row kept an unread halo nothing could
+clear. The suspended connect completed the instant the tab was painted,
+35 minutes later.
+
+`client/js/terminal-layout-wait.js` is the rule now: a layout wait may
+DELAY a connect, never CANCEL one. Every wait there is raced against a
+timer, because `setTimeout` fires in a background tab and rAF does not,
+and a timed-out wait is reported rather than thrown - the caller connects
+on the geometry it has and the resize handshake corrects the grid on the
+first real paint, the same path a rotation already takes.
 
 ### The key is the INSTANCE
 

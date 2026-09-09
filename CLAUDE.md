@@ -996,6 +996,22 @@ worse than useless: over 400 sampled transcripts it splits 172 `at_rest` / 70
 because a name is reused and a flag from a killed session reappeared on its
 successor. Set on `Stop` and by the user's control, cleared when a WS
 terminal binds. An unmeasurable epoch degrades to the legacy name key.
+**THE EPOCH HAS ONE SOURCE, `src/core/unread_identity.py`, AND IT IS THE
+LIVE TMUX LISTING** - set, clear and read all reach it through
+`SessionManager._unread_epoch`, because two derivations for one key are
+two keys the moment they disagree and a clear on a key nobody wrote can
+never be undone by clicking. It refuses the DB row's recorded epoch and
+the session_id-keyed `_instance_epochs` alike; its name-keyed cache is a
+memo of the tmux measurement, refreshed by every listing.
+**AND THE CLEAR ONLY HAPPENS IF A SOCKET ACTUALLY OPENS.** Measured
+2026-09-09: a session entered in a BACKGROUNDED tab opened none, because
+`waitForFontsAndLayout` ended on bare `requestAnimationFrame` awaits that
+a browser never runs for an unpainted tab, suspending
+`connectWebSocket()` before `openWebSocket()`. No socket means no
+`onclose`, so no reconnect rung fires either: the terminal sat on
+"Connecting to terminal..." for 35 minutes and resumed the instant the
+tab was painted. `client/js/terminal-layout-wait.js` races every wait
+against a timer - a layout wait may DELAY a connect, never CANCEL one.
 
 **IT IS ONE FLAG, AND EVERY WRITER AND READER MUST MEASURE THE EPOCH.**
 The owner's rule, verbatim: "when clicking a tab, the session is marked

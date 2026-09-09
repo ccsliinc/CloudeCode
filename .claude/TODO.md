@@ -4063,3 +4063,70 @@ rejected hook counts were read off uvicorn's own access lines rather than
 off a success-only application event, because the accepted path logs
 nothing of its own and a grep for rejections alone can never tell "none
 rejected" from "none received".
+
+## 2026-09-09 - a terminal bind clears the same instance key the writers wrote
+
+**Reported.** Browser measurement on live (HEAD 2692b63): mark "unread for
+followup" on the Fantasy Hockey 2026 card - card LED, sidebar row and the Joe
+group header all paint the outer `unread` halo within one poll, so c39dd14's
+set half works. Then click the row: the page navigates, the terminal paints,
+and nine seconds later `GET /sessions/list` still reports `unread: true`,
+`activity_status: finished_unread` for `cloude_Fantasy_Hockey_2026`
+(`ses_9523c563`). Owner's rule, verbatim: "when clicking a tab, the session is
+marked read. if i want it unread i click unread."
+
+**Cause, measured, and it was NOT the server.** A live end-to-end probe against
+the running install - mint a JWT from the install's TOTP secret, PATCH the
+manual unread, open a real `/ws/terminal?session_id=ses_9523c563`, hold it two
+seconds, close it - cleared BOTH sub-flags on the correct instance key
+`cloude_Fantasy_Hockey_2026@1788444912`, moved the row to `unread: false` /
+`activity_status: idle`, and left the negative control `cloude_Hirschfeld`
+untouched. The server was never the problem.
+
+THE BROWSER NEVER OPENED A WEBSOCKET. Grepping the live log across the whole
+window: `websocket_disconnected` at 23:57:28.776Z (the navigation away) and NO
+`websocket_connected` until the probe's own at 00:01:35.065Z, four minutes
+later. Confirmed in the live tab: `TerminalController.ws === null` while
+`sessionActive === true`, `isReconnecting false`, `_intentionalClose false`,
+footer stuck on "Connecting to terminal..." - the string set on the line ABOVE
+the await in `connectWebSocket()`. A bare `requestAnimationFrame` in that tab
+did not fire within 3000 ms at `visibilityState === 'hidden'`, and
+`waitForFontsAndLayout()` did not resolve within 4000 ms. The suspended connect
+opened its socket the instant the tab was painted, 35 minutes on.
+
+So: `waitForFontsAndLayout` ended on two bare
+`await new Promise(requestAnimationFrame)` calls; a browser does not run rAF
+for a tab it is not painting; `connectWebSocket()` suspended there, before
+`openWebSocket()`. No socket means no `onclose`, so every rung of the
+auto-reconnect ladder is unreachable too - the failure is silent and permanent,
+and it breaks the terminal outright, not only the unread flag.
+
+**Fixed.**
+- NEW `client/js/terminal-layout-wait.js` - every wait raced against a timer
+  (`setTimeout` fires in a background tab, rAF does not). A layout wait may
+  DELAY a connect, never CANCEL one. A timed-out wait is reported, not thrown;
+  the resize handshake corrects the grid on the first real paint.
+  `terminal.js` is a thin delegate and got SHORTER (2423 -> 2422 lines).
+- NEW `src/core/unread_identity.py` - THE one epoch source the unread key is
+  derived from, and it is the live tmux listing. `_unread_epoch` is the only
+  caller in `session_manager.py`; the `Stop` writer, the manual control,
+  `mark_session_viewed` and both read paths all reach it. Removes the two
+  answers that used to compete: the session_id-keyed `_instance_epochs` (seeded
+  from the DB row, empty after a restart) and the row's own recorded epoch. The
+  name-keyed cache is a memo of the tmux measurement, refreshed by every
+  listing, so a recycled name cannot hold a dead session's epoch past one poll.
+  `_epoch_for_tmux_name` is gone, folded into the one resolver.
+
+**Tests.** `tests/test_unread_bind_clears_same_key.py` (the measured sequence:
+manual mark, bind, list reads read; Stop sets it again, bind clears again, a
+duplicate bind is harmless; set and clear agree with a COLD memo after a
+simulated restart) and `tests/test_terminal_layout_wait.node.mjs` (an unpainted
+tab resolves instead of hanging, with the negative control that a painted tab
+still awaits both frames rather than being short-circuited). Negative controls
+throughout: a bind for a different session leaves this flag alone, a bind on a
+different INSTANCE of the same name does not clear, and the on-disk file keeps
+every other row verbatim - a clear that dropped everything would pass every
+positive assertion.
+
+pytest 5491 passed / 3 failed / 21 skipped, the 3 the known environmental ones.
+Node 189 of 190, the one failure the known `test_archive_full_page_mode`.

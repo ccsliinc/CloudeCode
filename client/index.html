@@ -900,6 +900,7 @@
          window.TerminalMetrics.guardedFit so an untrustworthy cell
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
+    <script src="/static/js/terminal-layout-wait.js"></script>
     <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
          whose requestFit() asks it how long to wait and whose flush()
          asks it whether a settled grid is worth a pty_resize at all. A
