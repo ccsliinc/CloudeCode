@@ -4427,3 +4427,24 @@ OPEN, deliberately: the ring and glow are flat pixel values and do NOT scale
 with `--led-size`, so a much larger LED reads as a thinner ring. Correct at
 the 9px every call site actually ships; would need revisiting if a surface
 ever rendered at 36px.
+
+## 2026-09-09: 18 legacy cloude.db backup files moved to Trash
+
+Storage cleanup of `~/Library/Application Support/CloudeCode/`, verified
+reversible move (not delete). 18 named backup snapshots (bak-uuidrepair,
+bak-agenttype, bak-uuidfill, bak-import, bak-v23, bak-projectbind,
+bak-sessionkind, bak-claudeuuid, bak-preidentity, bak-v6, bak-v8, bak-v9,
+bak-v10, bak-v11, pre-cleanup, pre-media-migrate, pre-v10, pre-v11) plus
+34 `-shm`/`-wal` sidecars (52 files total, 32G) moved via `mv` into
+`~/.Trash/cloude-db-backups-20260909/` (same volume, instant rename).
+Preconditions checked before moving: zero open file handles (lsof),
+live `cloude.db` quick_check ok. Kept untouched:
+`cloude.db.bak-v24-20260908T194725Z` (4.6G, verified SQLite format 3
+header) - the most recent pre-v24-migration backup - plus the live
+`cloude.db`, `unread_state.json`, `hook_tokens.json`, and everything else
+in the data dir. Data dir size 46G -> 14G. Post-move directory diff
+confirmed no file outside the 18-name target list was removed. Note: an
+unrelated `cloude.online-backup.db` (4.6G) appeared during this pass from
+the app's own background backup process - not touched, not part of this
+cleanup. Reclaim the 32G by emptying the Trash (not done here, left for
+the owner).
