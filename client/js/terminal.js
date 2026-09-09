@@ -533,10 +533,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * Wire the two session-scoped FAB menus, split by JOB not by corner.
      *
      * TOOLS (#terminalToolsBtn) moves content across the terminal's
-     * boundary: copy output, paste from clipboard, attach image. SESSION
-     * EDITOR (#sessionEditorBtn) configures the session itself: theme and
-     * music. They were merged into one drawer once and the grouping had
-     * no rule a user could learn; keep them apart.
+     * boundary: copy output, paste from clipboard, attach image. It is
+     * the only FAB of the two and is mobile-only (terminal-tools.css).
+     * SESSION EDITOR (#sessionEditorBtn) configures the session itself:
+     * theme and detach, and is a header button now. They were merged
+     * into one drawer once and the grouping had no rule a user could
+     * learn; keep them apart.
      *
      * Both buttons and the file input live OUTSIDE #terminal, so
      * term.reset() on a session swap cannot wipe their handlers and the

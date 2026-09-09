@@ -328,3 +328,43 @@ raised the dead-pane poll budget in `test_attach_to_a_dead_pane_still_succeeds`
 from 5s to 15s after measuring real death latency at ~0.01s. Full suite: 3
 failed / 5307 passed baseline, 2 failed / 5309 passed after; remaining two are
 the environmental `test_nuke_sandbox` and `test_version_probe`.
+
+[mobile-chrome] [2026-09-09 13:40]: Two chrome moves the owner asked for with
+screenshots. (1) The clipboard FAB over the terminal's bottom-right corner and
+its three-row menu are now PHONE ONLY, hidden above 769px by one media query in
+terminal-tools.css - the same breakpoint styles.css already uses to make the
+d-pad beside it touch-only, chosen over the app's other "mobile" number
+(MOBILE_MAX_PX = 700, which answers "is there room to dock a panel"). Pure CSS,
+so there is no flash of a control desktop is not meant to have. WHAT DESKTOP
+LOSES, traced before shipping: "paste from clipboard" is fully covered (xterm's
+own cmd+V plus terminal.js's capture-phase file-paste handler, which uploads a
+pasted file and injects its path); "copy output" and "attach file" have NO other
+desktop entry point - CopyOutput.open has exactly one caller, the hidden file
+input is clicked from exactly one row, and there is no drag-and-drop handler
+anywhere in client/. cmd+C still copies a mouse selection, which is a different
+job. Reported, not fixed: inventing replacement desktop UI is the owner's call.
+(2) The floating "session editor" (sliders) button moved into the header's
+.controls row immediately after the folder icon, carrying .btn-icon so its box,
+gap, hover, focus and tooltip come from the header rather than from anything
+written for it. Deleted rather than overridden: the .session-editor-fab rule, the
+--fab-top-edge token in styles.css, and the ios-chrome.css safe-area pair plus
+the :not(.session-editor-fab) exclusion that existed only to keep it off the
+bottom row. Its session scoping is now an ALLOW-LIST in the new
+client/css/session-editor-header.css (body:has(#terminal-screen.active)) instead
+of the deny-list of three sessionless screens it used to inherit - that list had
+already needed amending once when the archive screen arrived. The home header's
+title centring is untouched because the button is display:none there, so
+--home-header-flank-w needs no new branch. Header does NOT overflow at 330px:
+measured in headless Chrome, four controls occupy x 140-318 of a 330px header at
+--control-size 40 (the 480px breakpoint's value, not 44), which is what its three
+neighbours have always been. The menu needed no code change - AnchorPopover
+already prefers above and falls to below, and from the header there is never room
+above. Tests: added test_mobile_only_fab_and_header_editor.node.mjs, which
+RESOLVES the cascade at a width rather than grepping source, with the unchanged
+d-pad as a control and a loud refusal on any selector its matcher cannot read;
+updated (not deleted) the placement assertions in test_terminal_tools_menu,
+test_session_editor_menu, test_terminal_layout and test_button_box_sizing. Node
+191/191 suites pass (was 190/190). Note for the next person: several of those
+updates needed a comment-stripping pass first, because these stylesheets explain
+retired layouts in prose and a bare includes() cannot tell a declaration from the
+sentence saying there is no declaration.

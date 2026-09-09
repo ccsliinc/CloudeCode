@@ -117,6 +117,12 @@
          After styles.css so it inherits the theme vars, AND so its
          explicit width/height beat the bare `button` base rule there. -->
     <link rel="stylesheet" href="/static/css/terminal-tools.css" />
+    <!-- The session editor is a HEADER control, not a floating one, so its
+         placement rules do not belong in terminal-tools.css beside the
+         controls that still float. After terminal-tools.css because the
+         id selectors here are what put the button back in the header's
+         normal flow if that file ever regrows a floating rule for it. -->
+    <link rel="stylesheet" href="/static/css/session-editor-header.css" />
     <!-- The copy-output sheet those tools open. Split from
          terminal-tools.css at the 500-line limit; same load reasoning. -->
     <link rel="stylesheet" href="/static/css/copy-output.css" />
@@ -438,6 +444,40 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <!-- SESSION EDITOR. Sliders glyph: this one CONFIGURES the
+                 session (theme, detach) rather than moving its content.
+                 It used to be a 45px floating button pinned over the
+                 terminal's top-right corner on its own vertical rail;
+                 the owner asked for it "up into the menu next to the
+                 folder one", so it is a normal header control now and
+                 the rail is gone with it - token, safe-area rule and
+                 all. Do not rebuild the rail: a control that floats
+                 over live output has to earn the pixels it covers, and
+                 this one is set once per session.
+
+                 IT IS STILL SESSION-SCOPED, which is the one thing the
+                 move must not lose. `.controls` is mounted on every
+                 screen, so session-editor-header.css shows this button
+                 ONLY while `#terminal-screen` is the active screen and
+                 hides it everywhere else. That is also why `.controls`
+                 is still two buttons wide on the home screen and
+                 `--home-header-flank-w` (styles.css) needs no new
+                 branch: the title's centring never sees this control.
+
+                 Its menu still opens through FabMenu + AnchorPopover,
+                 which prefer ABOVE the trigger and fall to BELOW when
+                 there is no room above - from the header there never
+                 is, so the dropdown hangs down with no code change. -->
+            <button type="button" id="sessionEditorBtn" class="btn-icon"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
+                    aria-label="session editor" title="session editor" data-tooltip="session editor">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+            </button>
             <!-- THE LAUNCHER HELP BUTTON IS NOT IN THIS ROW ANY MORE.
                  It now sits inside #appTitle, immediately right of the
                  title text - see there. It was moved out of .controls on
@@ -674,17 +714,18 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
-        <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
+        <!-- NOTHING FLOATS IN THE TOP-RIGHT CORNER. A folded three-icon
              strip used to float here holding copy output / session theme
              / session music, while a second paperclip menu in the
              bottom-right held paste / attach image. The STRIP is gone for
              good - it covered terminal output across its whole width.
              Its contents were re-split by JOB rather than by corner:
              #terminalToolsBtn moves content, #sessionEditorBtn configures
-             the session. Both are at the bottom of this file, and the
-             session editor alone is pinned back over this corner as a
-             SINGLE 45px button. One button is not a strip; do not grow it
-             back into one. -->
+             the session. The editor was then pinned back over this corner
+             as a single 45px button for a while; it is in the HEADER now,
+             beside the file editor, so this corner is empty again. Do not
+             put a floating control back here - not a strip, and not one
+             button that grows into one. -->
 
         <div class="terminal-container">
             <div id="terminal"></div>
@@ -1299,23 +1340,29 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- THE TWO SESSION-SCOPED FAB MENUS, split by JOB and by how often
-         you reach for them.
+    <!-- THE TWO SESSION-SCOPED MENUS, split by JOB and by how often you
+         reach for them. They are still two menus with one learnable
+         rule; only the SURFACES differ now.
 
          TERMINAL TOOLS (bottom row, slot 0, the right edge) moves content
          across the terminal's boundary: copy output, paste from
          clipboard, attach image. It stays on the bottom row with the
-         d-pad, over the command line, because it is used all day.
+         d-pad, over the command line, because it is used all day - and
+         it is MOBILE ONLY, gated by one media query in
+         terminal-tools.css against the same 769px line that already
+         makes the d-pad touch-only. On a desktop the pointer and the
+         keyboard reach the same jobs directly, so the button was
+         covering output to no end.
 
-         SESSION EDITOR (top-right rail) configures the session itself:
-         theme and music. Set once per session, so it is out of the
-         working row entirely. Two coherent groups with a rule a user can
-         learn, not one drawer of everything.
+         SESSION EDITOR configures the session itself: theme and detach.
+         Set once per session, so it is out of the working row entirely -
+         it is a HEADER control now, up in `.controls` beside the file
+         editor, and no longer floats at all.
 
-         Both are direct children of <body>. NOTHING may move inside
-         #terminal: TerminalScroll.blockOverscrollEscape calls
-         preventDefault on single-touch drags there, so a control mounted
-         inside it loses its gestures.
+         The terminal tools button is a direct child of <body>. NOTHING
+         may move inside #terminal: TerminalScroll.blockOverscrollEscape
+         calls preventDefault on single-touch drags there, so a control
+         mounted inside it loses its gestures.
 
          The hidden file input is the "attach file" path, opened
          programmatically by that menu row; the change handler lives in
@@ -1354,16 +1401,11 @@
         </svg>
     </button>
 
-    <!-- Sliders glyph: this one CONFIGURES rather than moves anything. -->
-    <button type="button" id="sessionEditorBtn" class="fab-menu-btn session-editor-fab"
-            aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
-            aria-label="session editor" title="session editor">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-        </svg>
-    </button>
+    <!-- NO SESSION EDITOR BUTTON DOWN HERE ANY MORE. It was the second
+         body-level FAB, pinned to the top-right rail. It is a header
+         control now, declared inside `.controls` above beside the file
+         editor. Its MENU still mounts on <body> at open time, which is
+         what kept it out of #terminal's gesture guard in the first
+         place, so nothing about that reasoning is lost by the move. -->
 </body>
 </html>

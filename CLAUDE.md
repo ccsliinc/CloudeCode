@@ -1267,6 +1267,80 @@ directory is MEASURED across every spelling, because `--resume` finds the
 file only under the slug of the LITERAL cwd; a measured absence refuses,
 `unchecked` never does.
 
+## The two session-scoped menus, and where each one lives
+
+They are split by JOB and the rule is learnable: one moves content across
+the terminal's boundary, the other configures the session. They share
+their plumbing (`client/js/fab-menu.js` builds the dropdown,
+`client/js/anchor-popover.js` places it) and nothing else.
+
+| Control | Rows | Surface |
+|---|---|---|
+| `#terminalToolsBtn` | copy output, paste from clipboard, attach file | floating button, bottom row slot 0, **phone only** |
+| `#sessionEditorBtn` | session theme, detach session | a button in the header's `.controls` row, beside the file editor |
+
+**THE TOOLS BUTTON IS MOBILE ONLY, ON THE D-PAD'S BREAKPOINT.** One media
+query in `terminal-tools.css` hides the trigger AND its menu above 769px,
+which is the same line `styles.css` already uses to make
+`.dpad-float-button` touch-only. They sit in the same row, and two
+controls in one row that vanish at two different widths is how that row
+ends up with a hole at some third width nobody tested. The app's OTHER
+"mobile" number, `MOBILE_MAX_PX = 700` in `session-sidebar-pin.js` and
+`config-drawer-pin.js`, answers a different question - is there room to
+dock a panel - and is deliberately not reused. It is pure CSS because a
+JS width check paints the button on the first frame and removes it once
+the script runs.
+
+**AND DESKTOP LOSES TWO OF THE THREE ROWS, WHICH IS RECORDED RATHER THAN
+PAPERED OVER.** Traced before the change shipped: `paste from clipboard`
+is fully covered on a desktop (xterm's own cmd+V, plus the capture-phase
+handler in `terminal.js` that uploads a pasted FILE and injects its path).
+`copy output` - the whole-scrollback sheet - and `attach file` - the file
+picker - have NO other desktop entry point: `CopyOutput.open` has exactly
+one caller and the hidden `#cloude-image-attach-input` is clicked from
+exactly one row, and there is no drag-and-drop handler anywhere in
+`client/`. cmd+C still copies a mouse selection, which is a different
+job. Adding replacement desktop UI is a separate decision.
+
+**THE SESSION EDITOR IS A HEADER BUTTON, AND THE TOP-RIGHT RAIL IS GONE.**
+It was a 45px FAB pinned over the terminal's top-right corner until the
+owner asked for it "up into the menu next to the folder one". The move is
+a MOVE: it carries `.btn-icon`, the class `#configEditorBtn` and the
+kebab carry, so its size, gap, hover, focus and tooltip come from the
+header rather than from anything written for it. `.session-editor-fab`,
+the `--fab-top-edge` token and its `ios-chrome.css` safe-area pair were
+all DELETED, not overridden - an orphan token is how a retired layout
+gets revived by accident.
+
+**SCOPE IS THE ONE THING THAT MOVE COULD LOSE, AND IT IS AN ALLOW-LIST
+NOW.** `.controls` mounts on every screen, including the launchpad and
+the archive where "session theme" and "detach session" name nothing. The
+floating version got its scoping from a DENY-LIST in
+`terminal-tools.css` naming the three sessionless screens, and that list
+had already had to be amended once - when the archive screen arrived and
+the FAB painted a 45x22px overlap across its Export label.
+`client/css/session-editor-header.css` names the ONE screen instead
+(`body:has(#terminal-screen.active)`), so a fourth sessionless screen
+cannot leak it. That file declares `display` and nothing else; a colour
+in it would be a header button restyled somewhere the header cannot see.
+
+**THE HOME HEADER'S CENTRING SURVIVED BECAUSE THE BUTTON IS HIDDEN
+THERE.** `.header--home` centres the launcher title against
+`--home-header-flank-w`, a token mirroring `.controls`' real width, and
+`header-menu.js` is explicit that a third INLINE control is a layout fact
+rather than a list entry. This one is `display: none` on the home screen,
+so the token needs no new branch. Change that gate and you have to
+revisit the token. Measured in headless Chrome at 330px: the four header
+controls occupy x 140-318 of a 330px header at `--control-size` 40 - the
+480px breakpoint's value, not the 768px one - with no overflow, and the
+title elides into what is left.
+
+`tests/test_mobile_only_fab_and_header_editor.node.mjs` RESOLVES the
+cascade at a given width rather than grepping the source, so it answers
+"is the button on screen at 330px" instead of "does the file contain this
+string". It carries a control (the d-pad, unchanged) and refuses loudly
+on any selector its small matcher cannot read.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,
