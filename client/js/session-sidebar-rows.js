@@ -295,21 +295,14 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: the note naming remembered positions whose sessions are
-     *   not currently running. It is deliberately not an error and not a
-     *   silent drop: the slots are kept, and the count says so out loud.
-     * Inputs: missing (Array<string>). Output: string - HTML, or ''.
+     * Description: the foot of the list - the status-light key, and
+     *   nothing else. It used to be the "N remembered positions are held"
+     *   note, removed 2026-09-09; the slots themselves are untouched -
+     *   client/js/session-status-key.js has the whole story.
+     * Inputs: none. Output: string - HTML, '' with no key module.
      */
-    function missingNoteHtml(missing) {
-        if (!missing || !missing.length) return '';
-        const n = missing.length;
-        const names = esc(missing.join(', '));
-        return (
-            `<div class="session-sidebar-note" data-order-missing="${n}" title="${names}">` +
-            `${n} remembered ${n === 1 ? 'position is' : 'positions are'} held for ` +
-            `${n === 1 ? 'a session' : 'sessions'} not currently listed` +
-            '</div>'
-        );
+    function footerHtml() {
+        return window.SessionStatusKey ? window.SessionStatusKey.keyHtml() : '';
     }
 
     /**
@@ -342,27 +335,34 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   confident empty state would be a claim the app cannot support -
      *   and would contradict the CANNOT DETERMINE block the home screen is
      *   rendering from the same failed probe at the same moment.
+     *   The remembered-position count is NOT a parameter any more (see
+     *   footerHtml); it still reaches `signature()`.
      * Inputs: rows (Array<object>), density (string), listing (object|null)
-     *   - {ok, reason, detail}, missing (Array<string>),
+     *   - {ok, reason, detail},
      *   arrangement (object|null) - {status, reason, collapsed},
      *   opts (object|null) - {dragging (boolean)}, passed straight
      *   through to client/js/session-sidebar-groups.js, which is the only
      *   thing that reads it.
      * Output: string - HTML.
      */
-    function listHtml(rows, density, listing, missing, arrangement, opts) {
+    function listHtml(rows, density, listing, arrangement, opts) {
         const attention = window.SessionListingState
             ? window.SessionListingState.attentionHtml(listing)
             : '';
         const notice = arrangementNoticeHtml(arrangement);
+        // THE KEY RIDES EVERY BRANCH, including the two that draw no
+        // rows: it explains lights the user has seen on other surfaces
+        // too, so it is not conditional on this list holding anything.
+        const footer = footerHtml();
         if (!rows || rows.length === 0) {
-            if (listing && !listing.ok) return notice + attention;
-            return notice + '<div class="session-sidebar-empty">no other conversations</div>';
+            if (listing && !listing.ok) return notice + attention + footer;
+            const empty = '<div class="session-sidebar-empty">no other conversations</div>';
+            return notice + empty + footer;
         }
         const body = window.SessionSidebarGroups
             ? window.SessionSidebarGroups.bodyHtml(rows, density, arrangement, opts)
             : rows.map((r) => rowHtml(r, density)).join('');
-        return notice + attention + body + missingNoteHtml(missing);
+        return notice + attention + body + footer;
     }
 
     /**
@@ -493,7 +493,7 @@ console.log('[SessionSidebarRows Module] Loading...');
 
     window.SessionSidebarRows = {
         listHtml, rowHtml, signature, esc, gripHtml, renameState,
-        pinButtonHtml, ageLabel, missingNoteHtml, arrangementNoticeHtml,
+        pinButtonHtml, ageLabel, footerHtml, arrangementNoticeHtml,
     };
     console.log('[SessionSidebarRows Module] Exported as window.SessionSidebarRows');
 })();

@@ -258,3 +258,73 @@ Updated: `test_session_sidebar_rows`, `test_session_row_actions`,
 `test_kebab_icon_shared`, `test_sidebar_group_menu_stacking`,
 `test_project_list_render_guard`, `test_session_status_ui`, and
 `scripts/verify_sidebar_group_drag.py` (now opens the picker with `g`).
+
+[sidebar-polish] [2026-09-09 10:55 PT]: four sidebar changes shipped together.
+
+THE OVERSIZED GREEN DOT WAS NOT AN OVERSIZED DOT. Measured in Chromium
+across all forty (inner, outer) pairs: the ELEMENT box read 9.00 x 9.00 in
+every single one, which is why the whole node suite was green while the
+owner could plainly see the difference. What varied was the HALO, which
+was sized per state AND painted partly outside its own box by
+`box-shadow: 0 0 1.5px 1.5px`. Lit diameters before: `active` about
+14.7px (an 11.69px disc plus 3px of glow, in the dot's own hue at 0.55
+opacity), `unread` 15.30px (that block set `--led-halo-scale: 1.7` of its
+own), and `steady` / `dim` / `off` all effectively 9px because a grey
+halo at 0.18-0.30 opacity on a grey dot is invisible. So a working
+session in a column of resting ones read about 60 percent wider than its
+neighbours. Fix: `--led-lit-scale` declared ONCE on `.status-led`, no
+state may override it, and the glow is now a radial gradient (fades out
+AT the box edge, so painted extent is the declared box) instead of a
+spread shadow (paints beyond the element by definition, so it could never
+be held to a number). After, every pair: dot 9.00px, lit 15.30px, nothing
+painting outside. Verified by `scripts/verify_status_led_geometry.py`
+against `tests/manual/status-light-key-harness.html`, three themes, two
+viewports.
+
+THE YELLOW `(n)` BADGE is gone from `summaryHtml` and its
+`.status-summary-badge` rule is gone from `status-led.css`. `unreadCount`
+is still RETURNED by `summarizeStates` and rendered by nothing. The plain
+count pill on the header is a different control and stays.
+
+THE HEADER ROLL-UP already called `StatusLed.ledHtml`; the tests now
+assert it byte-for-byte against what a row builds for the same pair, so
+the two cannot be reimplemented apart. With the badge gone the ring on
+the roll-up is the only thing saying a group holds an unread turn.
+
+THE FOOTER NOTE is gone. The remembered-position FEATURE is NOT orphaned:
+`session-sidebar-arrangement.js` still keeps the slots, they still reach
+the repaint signature, and `session-sidebar.js` still stamps
+`data-order-missing` on the list element. `listHtml` lost its now-unused
+`missing` parameter; the two call sites moved with it.
+
+NEW: `client/js/session-status-key.js` + `client/css/session-status-key.css`,
+a foldable legend at the foot of the list, collapsed by default on
+`cloude.statusKey.open` (the app's existing `cloude.*` preference
+convention). Every swatch is a real `ledHtml`, and
+`tests/test_status_key.node.mjs` asserts both directions of coverage so a
+state added to the component and not to the key fails the build.
+
+[ci-flake] [2026-09-09 10:58 PT]: the macos-latest `python tests` job was failing
+intermittently on `test_readopted_backend_streams_live_output_without_a_reattach`
+with `pane_pipe='1'` and `bytes_seen=0`. It is NOT a slow test, it is a real
+defect in the streaming path. `TmuxBackend.attach_existing` recorded
+`_adopt_tail_start_offset` only inside the external-setup branch, so on the
+owned/boot-re-adopt branch the tail loop seeked to plain `SEEK_END` whenever the
+event loop first scheduled it. `read_async()` only calls `create_task` and
+nothing awaits after it, so every byte tmux appends between the attach and the
+reader's first run was dropped. Reproduced deterministically with a fast pane
+shell plus a blocking window: 9 of 10 attaches delivered ZERO bytes while the
+marker sat in the pipe file every time; even the passing runs lost 29 of 116
+bytes. macOS loses because a `tmux send-keys` subprocess costs more there than
+the pane needs to echo, so the whole burst lands before the reader opens, and an
+idle pane then produces nothing to reveal the loss. Fix: record the offset on
+BOTH attach paths via one `_record_tail_start_offset()` helper. Added
+`test_output_written_before_the_reader_opens_is_still_delivered`, which uses that
+window instead of racing it and so fails on any platform if the offset is
+dropped. Also replaced two fixed `sleep(1.0)` waits in
+`test_respawn_refreshes_pane_env.py` with the pane-dead poll the first test in
+that file already used (that flake reproduced in my clean-tree baseline run), and
+raised the dead-pane poll budget in `test_attach_to_a_dead_pane_still_succeeds`
+from 5s to 15s after measuring real death latency at ~0.01s. Full suite: 3
+failed / 5307 passed baseline, 2 failed / 5309 passed after; remaining two are
+the environmental `test_nuke_sandbox` and `test_version_probe`.

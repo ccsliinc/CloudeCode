@@ -412,12 +412,12 @@ solid green blob with no grey in it at all. So the `::after` drops its
 fill and draws the band with an inset shadow instead, leaving the middle
 clear.
 
-Geometry: `--led-halo-scale` 1.7 with a `--led-ring-width` of 2.5px. At
+Geometry: `--led-lit-scale` 1.7 with a `--led-ring-width` of 2.5px. At
 the 9px default that is a 15.3px lit object, an unmistakable 2.5px of
 green, and about 0.65px of background separating ring from dot so the two
-read as two things. It stays comparable to the ~14.7px an `active` LED
-reaches at its breathing peak, so it does not reintroduce the
-oversized-glow problem the geometry was calibrated against.
+read as two things. **This ring is what sets the size for every other
+state** - see Sizing below. It used to override the halo scale in its own
+block; it must not do that again.
 
 Every state colour is a named token declared exactly once, at the top of
 `status-led.css`, and every one of them defers to a palette token that all
@@ -426,42 +426,83 @@ palette redefines `--led-color-*`, never these rules.
 
 ### Sizing
 
-`--led-size` is 9px by default, and every call site in this app actually
-renders at that default: the sidebar row (`session-sidebar-rows.js`) and
-the launchpad card (`launchpad.js`) both call `dotHtml()` with no `size`,
-so neither passes a per-instance override. `--led-halo-scale` (1.3) and
-`--led-glow-spread` (a fixed `1.5px`, not a fraction of the dot - a flat
-pixel value reads truer than a proportional one at this size) size the
-halo off that one dot size; at the 9px default the whole lit object -
-halo ring plus glow, at the breathing peak - is about 14.7px across:
-9 * 1.3 = 11.7px halo, plus 2 * 1.5 = 3px of glow.
+**ONE LIT DIAMETER FOR EVERY STATE.** `--led-size` (9px) is the dot and
+`--led-lit-scale` (1.7) multiplies it into the halo box, so everything
+the component paints in any state fits inside one 15.3px circle. States
+differ in colour, opacity and fill. They never differ in size. Both
+tokens are declared once, on `.status-led`, and **no `[data-inner]` or
+`[data-outer]` rule may override either**.
 
-That is the owner's own calibration (2026-09-08): "glowing is still to
-big. like 1 or 2 px larger than the front circle" - the halo ring itself
-reads as only a couple of px bigger than the dot, with the glow adding a
-further 1-2px on top. Two earlier configs are worth knowing if you are
-tracing a regression: 1.7x scale / 0.3x spread (shipped earlier the same
-day) put the lit object at about 21px across, still visibly larger than
-"1 or 2px more"; before that, 2.6x scale / 0.62x spread put it at about
-35px across at the peak - larger than the row text itself and overlapping
-neighbours on the compact sidebar density and on the launchpad cards,
-which is what the owner meant by "the breathing is way too big" the first
-time. The breathing keyframes scale the halo between 0.92 and 1 - never
-past its own resting size - so the geometry tokens above are the true
-maximum rather than a floor the animation overshoots.
+Every call site renders at the 9px default: the sidebar row
+(`session-sidebar-rows.js`) and the launchpad card (`launchpad.js`) both
+call `dotHtml()` with no `size`. A surface that needs a different size
+passes `size` to `ledHtml()`, which scales `--led-size` and the halo with
+it.
 
-There is one set of geometry tokens, not one per surface, because every
-surface that renders a LED today renders it at the same 9px size. A
-surface that needs a different size passes `size` to `ledHtml()` (see
-`client/js/status-led.js`), which scales `--led-size` and, through it,
-the halo and glow with it - a second geometry override is only warranted
-if a surface ships at a different base size.
+**Why that had to be written down.** Until 2026-09-09 the halo was sized
+per state AND drawn partly outside its own box, so the LIT object came
+out at three different diameters while the ELEMENT box measured 9px in
+every one of them - which is exactly why no test caught it:
+
+| state | halo box | painted outside it | what a reader sees |
+|---|---|---|---|
+| `active` | 11.69px | a 1.5px spread glow | about 14.7px, saturated |
+| `unread` | 15.30px (own override) | nothing | 15.3px ring |
+| `steady` | 11.69px | a glow at 0.30 opacity | 9px - grey on a grey dot |
+| `dim` | 11.69px | a glow at 0.18 opacity | 9px |
+| `off` | 11.69px | nothing, opacity 0 | 9px |
+
+The bottom three are invisible on a real row, so in a sidebar where one
+session is working and the rest are at rest, that one dot read about 60
+percent wider than its neighbours. That is what the owner reported.
+
+**The glow is a radial gradient, not a spread box-shadow, and that is the
+load-bearing half of the fix.** A spread shadow paints beyond the element
+it sits on by definition, so it can never be held to a declared diameter.
+A gradient fades out AT the box edge, so the halo's painted extent IS its
+box and is measurable. `--led-halo-core` (55 percent) is how far out the
+halo stays fully opaque before it fades: at 55 percent of 15.3px that is
+an 8.4px core, just inside the 9px dot, so the only thing outside the dot
+is falloff. That is the owner's 2026-09-08 calibration ("glowing is still
+to big. like 1 or 2 px larger than the front circle") expressed as a
+shape rather than as a smaller number.
+
+Earlier configurations, if you are tracing a regression: 1.3x halo plus a
+1.5px spread glow put the lit object at about 14.7px with a hard-edged
+11.7px core, so a working session read as a wider dot rather than a lit
+one; 1.7x/0.3x put it at about 21px; the original 2.6x/0.62x put it at
+about 35px, larger than the row text itself. The breathing keyframes
+scale the halo between 0.92 and 1, never past its resting size, so the
+tokens are the true maximum rather than a floor the animation overshoots.
+
+`scripts/verify_status_led_geometry.py` measures all forty (inner, outer)
+pairs in a real Chromium, across three themes and two viewports, and
+fails if two of them differ or if anything paints outside its box. A CSS
+read cannot do that job: the divergence was in what the box RESOLVES to
+once a per-state override and a pseudo-element's own shadow are composed.
 
 ### Rolling a group up
 
-`client/js/session-status-summary.js` folds a set of sessions into one LED
-plus an unread count. Priority: **permission > input > working > unread >
-done > dead > unknown**.
+`client/js/session-status-summary.js` folds a set of sessions into one
+LED. Priority: **permission > input > working > unread > done > dead >
+unknown**.
+
+**The roll-up IS the row component.** `summaryHtml` picks an (inner,
+outer) pair and hands it to `StatusLed.ledHtml`, the same builder every
+row uses, so a header takes every treatment a row takes - including the
+green ring around a grey centre for a finished turn nobody has read. It
+is not a header-shaped dot, and building one would be how the two come to
+disagree.
+
+**There is no numeric unread badge beside it.** A yellow `(n)` pill used
+to carry the unread count on every group header; it was removed on
+2026-09-09 at the owner's request ("to be clear remove the yello (1)")
+and nothing replaced it. The ring already says there is something here
+for the user, and two indicators for one fact is how two indicators end
+up disagreeing. `summarizeStates` still RETURNS `unreadCount`, which is a
+measured property of the fold; nothing renders it. The plain count pill
+on the header is a different control - it says how many conversations a
+folded section is hiding - and stays.
 
 `permission` is a session stopped on a yes/no; `input` is one that wants
 the user's eyes (a `notice`, or a startup prompt nobody has answered)
@@ -490,6 +531,35 @@ and a header that disagreed with its only child is a bug the suite guards.
 `disconnected` buckets with `dead`: they paint the same red and rank the
 same way. No group feeds one in today - children come from a REST listing,
 which has no socket.
+
+### The key, and why the lights finally have words
+
+`client/js/session-status-key.js` renders a foldable legend at the foot
+of the session sidebar. Collapsed by default; the fold rides
+`cloude.statusKey.open` in localStorage, the same `cloude.*` convention
+the pin and the density preference use, and an unreadable or absent value
+means collapsed rather than an error.
+
+It exists because the LED is now the ONLY thing on a row saying what a
+session is doing - the envelope is gone and there is no text badge beside
+it - and its meaning lives in a `title` nobody hovers on a phone.
+
+**Every swatch is a real LED.** `itemHtml` calls `StatusLed.ledHtml` with
+the same (inner, outer) pair the rows resolve to, so the key cannot show
+a colour, a size or a shape the app does not paint. A hand-drawn legend
+would be a second implementation of the component, and this project has
+already paid for two stylesheets drawing one dot.
+`tests/test_status_key.node.mjs` asserts both directions: every member of
+`INNER_STATES` appears in the key, and nothing in the key names a state
+the component cannot produce.
+
+It sits where the sidebar's "N remembered positions are held for sessions
+not currently listed" note used to, removed the same day: it named
+bookkeeping no reader could act on. **The remembered positions themselves
+are untouched** - `session-sidebar-arrangement.js` still keeps those
+slots, they still reach the repaint signature, and
+`session-sidebar.js` still stamps the count on the list element as
+`data-order-missing`. Only the sentence went.
 
 ## A silent degradation worth knowing about
 

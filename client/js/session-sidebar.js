@@ -401,7 +401,7 @@ class SessionSidebarController {
             'data-groups-state', G ? G.current().status : 'nogroups',
         );
         this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
-            rows, density, this._listing, missing, state, groups,
+            rows, density, this._listing, state, groups,
         );
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.afterRender();
         if (window.SessionSidebarRename) window.SessionSidebarRename.afterRender();

@@ -861,11 +861,49 @@ sets it, a WS terminal binding still clears it, `src/core/unread_store.py`
 still keys on the instance, and `PATCH /sessions/{name}/unread` still
 exists with nothing in the UI calling it. The green ring is the only thing
 saying it now, which is why it is drawn as a REAL RING - transparent
-centre, 2.5px inset band, 1.7x the dot - and not as the blurred 1.3x wash
-every other halo wears. THE FILL WAS THE TRAP: the halo pseudo-element
-paints ABOVE the element background, which IS the dot, so an opaque disc
-renders `finished_unread` as a solid green blob with no grey in it.
-Measured in a 6x render before it shipped.
+centre, 2.5px inset band - and not as the blurred wash every other halo
+wears. THE FILL WAS THE TRAP: the halo pseudo-element paints ABOVE the
+element background, which IS the dot, so an opaque disc renders
+`finished_unread` as a solid green blob with no grey in it. Measured in a
+6x render before it shipped.
+
+**ONE LIT DIAMETER FOR EVERY STATE, and the element box was never the
+thing that varied.** Measured 2026-09-09, all forty (inner, outer) pairs
+reported a 9.0px ELEMENT box - which is exactly why 190 green suites had
+never caught what the owner could see. The HALO was sized per state and
+drawn partly OUTSIDE its own box by a spread `box-shadow`, so the lit
+object came out at three diameters: about 14.7px for `active`, 15.3px for
+`unread` (that block set its own scale), and an invisible halo for every
+resting state, which therefore reads at the bare 9px dot. One working
+session in a column of quiet ones read about 60 percent wider than its
+neighbours. `--led-lit-scale` is now declared ONCE on `.status-led` and
+overridden by no state, and the glow is a RADIAL GRADIENT rather than a
+spread shadow - a gradient fades out AT the box edge, so the halo's
+painted extent IS its declared box and can be held to a number; a spread
+shadow paints beyond the element by definition and never could.
+`scripts/verify_status_led_geometry.py` measures the whole matrix in a
+real Chromium across three themes and two viewports, because the
+divergence was in what the box RESOLVES to once a per-state override and
+a pseudo-element's own shadow are composed, and no CSS read composes
+those.
+
+**THE GROUP HEADER'S ROLL-UP IS THE ROW COMPONENT, and its yellow `(n)`
+badge is gone** (2026-09-09, "to be clear remove the yello (1)").
+`session-status-summary.js` folds the children to an (inner, outer) pair
+and hands it to `StatusLed.ledHtml`, so a header takes the finished-turn
+ring exactly as a row does. Nothing replaced the count: the ring already
+says there is something in here for you, and two indicators for one fact
+is how they come to disagree. The plain count pill saying how many
+conversations a folded section hides is a DIFFERENT control and stays.
+
+**THE LIGHTS FINALLY HAVE WORDS**, in `client/js/session-status-key.js` -
+a foldable legend at the foot of the sidebar, collapsed by default on
+`cloude.statusKey.open`. Every swatch is a real `ledHtml`, never a
+drawing of one, so the legend cannot show a colour the app does not
+paint. It replaced the "N remembered positions are held for sessions not
+currently listed" note, which named bookkeeping no reader could act on;
+the remembered slots themselves are untouched and still stamped on the
+list element as `data-order-missing`.
 
 **A DROPPED SOCKET IS THE ONE SIGNAL THE SERVER CANNOT REPORT**, so it
 lives in `client/js/session-transport.js`, written from `terminal.js`'s

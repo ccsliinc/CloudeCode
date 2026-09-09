@@ -1,6 +1,12 @@
 /**
  * Session status summary - roll a set of sessions up into ONE LED.
  *
+ * ONE COMPONENT, TWO PLACES. The roll-up is not a header-shaped dot: it
+ * is `StatusLed.ledHtml` with an (inner, outer) pair this module folds
+ * out of the children, so a group header and a row cannot draw two
+ * different vocabularies. The finished-turn ring in particular is the
+ * SAME ring on both.
+ *
  * A group header (and the launchpad's top bar, which is the same question
  * asked of every session at once) has to answer "is there anything in
  * here I need to deal with" without the user opening the group. That is a
@@ -198,22 +204,33 @@ console.log('[SessionStatusSummary Module] Loading...');
     }
 
     /**
-     * The summary LED plus its unread-count badge, as one HTML string.
+     * The summary LED, as one HTML string.
      *
      * Description: What a group header and the launchpad top bar both
-     *   render. The badge is omitted entirely at zero rather than shown
-     *   as "0" - an empty badge is noise, and its absence is already the
-     *   signal. Copy is lowercase and plain, per the project's voice.
+     *   render, and it is EXACTLY the component the rows render - this
+     *   function only picks the (inner, outer) pair and hands it to
+     *   `StatusLed.ledHtml`. A roll-up therefore takes every treatment a
+     *   row LED takes, including the green-ring-with-grey-centre that
+     *   says a turn finished in here and nobody has looked. Building a
+     *   second dot for headers is what would let the two drift.
+     *
+     *   THERE IS NO LONGER A NUMERIC BADGE BESIDE IT. A yellow "(n)" pill
+     *   used to carry the unread count; it was removed on 2026-09-09 at
+     *   the owner's request. The count is not replaced by anything,
+     *   deliberately: the ring already says "there is something here for
+     *   you", and a second indicator for one fact is how two indicators
+     *   end up disagreeing. `summarizeStates` still RETURNS
+     *   `unreadCount` - it is a measured property of the fold and cheap
+     *   to keep - but nothing renders it.
      * Inputs:
      *   children (Array|null) - as summarizeStates.
      *   opts (Object|null) - `{size}` forwarded to ledHtml.
      * Output:
-     *   string - HTML: one `.status-led` and, when non-zero, one
-     *     `.status-summary-badge`.
+     *   string - HTML for one `.status-led`.
      * Example:
      *   summaryHtml([{activity_status: 'idle', unread: true}])
-     *   // '<span class="status-led" ...></span>
-     *   //  <span class="status-summary-badge" ...>1</span>'
+     *   // '<span class="status-led" data-inner="done" data-outer="unread"
+     *   //   ...></span>'
      */
     function summaryHtml(children, opts) {
         const o = opts || {};
@@ -222,25 +239,12 @@ console.log('[SessionStatusSummary Module] Loading...');
             s.total === 0
                 ? 'no sessions'
                 : s.bucket + ' - ' + s.total + ' session' + (s.total === 1 ? '' : 's');
-        let html = globalThis.StatusLed.ledHtml({
+        return globalThis.StatusLed.ledHtml({
             inner: s.inner,
             outer: s.outer,
             size: o.size,
             title: label,
         });
-        if (s.unreadCount > 0) {
-            const badgeLabel = s.unreadCount + ' unread';
-            html +=
-                '<span class="status-summary-badge" role="status" ' +
-                'title="' +
-                badgeLabel +
-                '" aria-label="' +
-                badgeLabel +
-                '">' +
-                s.unreadCount +
-                '</span>';
-        }
-        return html;
     }
 
     const api = {

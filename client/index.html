@@ -82,6 +82,11 @@
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
+    <!-- The foldable key to the status lights, at the foot of the session
+         sidebar. AFTER session-sidebar-density.css, whose quiet footer
+         note treatment it matches, and after status-led.css - the key's
+         swatches are real LEDs and this file must never repaint one. -->
+    <link rel="stylesheet" href="/static/css/session-status-key.css" />
     <!-- The conversation row's inline pin and close/restart/remove, sized
          for a thumb. MUST load after session-sidebar.css and
          session-sidebar-density.css: those size both controls as 18px
@@ -756,6 +761,10 @@
          launchpad top bar. Depends on status-led.js for the vocabularies,
          so it loads after it. -->
     <script src="/static/js/session-status-summary.js"></script>
+    <!-- The foldable legend naming every light. Draws REAL LEDs through
+         status-led.js, so it loads after it and before
+         session-sidebar-rows.js, which puts it at the foot of the list. -->
+    <script src="/static/js/session-status-key.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>

@@ -448,12 +448,16 @@ test('the finished-turn ring is a GREEN OUTLINE around a GREY DOT', () => {
     assert.ok(/\[data-inner='done'\]\s*\{\s*--led-ink: var\(--led-color-idle\)/.test(CSS));
     // green ring
     assert.ok(CSS.includes('--led-color-unread: var(--color-success'));
-    // and the ring is a RING, not the 1.3x fringe every other halo wears
     const block = CSS.split("[data-outer='unread'] {")[1].split('}')[0];
     assert.ok(/--led-halo-opacity:\s*1;/.test(block), 'the ring is opaque');
-    const scale = /--led-halo-scale:\s*([0-9.]+);/.exec(block);
-    assert.ok(scale && parseFloat(scale[1]) >= 1.6,
-        'the ring must be wide enough to read as a ring at 9px');
+    // AND IT MUST NOT RESIZE ITSELF. This block used to carry its own
+    // `--led-halo-scale: 1.7`, which is precisely how `unread` and
+    // `active` came to paint two different diameters in one list. The
+    // size now lives once, on `.status-led`, and every state inherits it.
+    assert.ok(
+        !/--led-lit-scale:/.test(block) && !/--led-halo-scale:/.test(block),
+        'no state may set its own lit diameter - see the geometry block',
+    );
     // AND IT MUST BE A RING, NOT A DISC. The halo pseudo-element paints
     // ABOVE the element background, which IS the dot, so an opaque FILL
     // hides the grey entirely - measured, it came out a solid green blob.
@@ -570,43 +574,69 @@ test('the breathing period is about two seconds, as specified', () => {
 // `dotHtml()` with no `size`, so both got that oversized halo. These pin
 // the tuned-down geometry so a future edit cannot silently regrow it.
 
-test('the halo scale and glow spread match the owner-calibrated "1-2px larger" geometry', () => {
+test('THE LIT DIAMETER IS DECLARED ONCE AND NO STATE MAY OVERRIDE IT', () => {
+    // The 2026-09-09 defect. Every LED's ELEMENT box measured 9px in
+    // every state - which is why nothing caught it - while the lit
+    // object came out at three different diameters, because the halo
+    // was sized per state AND drawn partly outside its own box. Only
+    // the two loud states were ever visible, so in a list where one
+    // session is working and the rest are at rest, one dot read about
+    // 60 percent wider than its neighbours.
+    //
+    // Both halves of the fix are asserted here: the size token appears
+    // exactly once in the file, and the glow is a contained gradient
+    // rather than an outward box-shadow.
+    const declarations = CSS.match(/--led-lit-scale:/g) || [];
+    assert.equal(
+        declarations.length, 1,
+        'the lit diameter must be declared in exactly one place',
+    );
+    const base = CSS.split('.status-led {')[1].split('\n}')[0];
     assert.ok(
-        CSS.includes('--led-halo-scale: 1.3;'),
-        'halo scale must stay at the tuned-down 1.3x, not regrow toward 1.7x or 2.6x',
+        /--led-lit-scale:\s*1\.7;/.test(base),
+        'the lit diameter lives on .status-led itself',
     );
     assert.ok(
-        CSS.includes('--led-glow-spread: 1.5px;'),
-        'glow spread must stay a fixed 1.5px, not regrow toward a larger fraction of the dot size',
+        !/--led-glow-spread/.test(CSS),
+        'the spread box-shadow glow is gone - it painted outside its own box, '
+        + 'so it could never be held to a declared diameter',
+    );
+    const pseudo = CSS.split('.status-led::after {')[1].split('\n}')[0];
+    assert.ok(
+        /background:\s*radial-gradient\(/.test(pseudo),
+        'the glow must be a gradient that fades out AT the box edge',
+    );
+    assert.ok(
+        /box-shadow:\s*none;/.test(pseudo),
+        'and nothing may paint beyond that edge',
     );
 });
 
-test('the lit object at the 9px default stays within about 1-2px of the dot, per the owner\'s calibration', () => {
-    // Same arithmetic as the comment above the tokens in status-led.css:
-    // halo diameter = size * scale, glow adds a fixed spread on each side.
-    // This is not a rendering measurement - box-shadow blur softens the
-    // true edge - but it is the same approximation every prior regression
-    // and fix in this file was reasoned from, so a silent increase here is
-    // caught before it reaches a browser.
+test('the lit object stays within the owner-calibrated size, and the ring sets it', () => {
+    // The ring is the one treatment with a hard size requirement: a 9px
+    // dot, a readable gap, and a band thick enough to see. 9 + 2*0.65 +
+    // 2*2.5 = 15.3px, i.e. 1.7x the dot. Every other state now paints
+    // inside that same box, so this is the whole component's maximum.
     const size = 9;
-    const scaleMatch = CSS.match(/--led-halo-scale:\s*([\d.]+);/);
-    const spreadMatch = CSS.match(/--led-glow-spread:\s*([\d.]+)px;/);
-    assert.ok(scaleMatch && spreadMatch, 'halo scale must be a plain multiplier and glow spread a plain px value');
-    const scale = Number(scaleMatch[1]);
-    const spread = Number(spreadMatch[1]);
-    const diameter = size * scale + 2 * spread;
-    // The owner's own words: "like 1 or 2 px larger than the front
-    // circle." The halo ring alone (size * scale) must land in that
-    // window, and the whole lit object including glow must stay well
-    // clear of both the 1.7x/0.3 (~21px) and 2.6x/0.62 (~35px) regressions.
-    const haloDiameter = size * scale;
+    const scale = Number(CSS.match(/--led-lit-scale:\s*([\d.]+);/)[1]);
+    const band = Number(CSS.match(/--led-ring-width:\s*([\d.]+)px;/)[1]);
+    const lit = size * scale;
     assert.ok(
-        haloDiameter > size && haloDiameter <= size + 4,
-        `halo ring diameter ${haloDiameter}px must read as only 1-2px larger than the ${size}px dot`,
+        lit < 16,
+        `lit diameter ${lit}px must stay well clear of the old ~21px and ~35px regressions`,
     );
+    // The band must leave the grey dot visible with daylight around it,
+    // or the ring and the dot read as one blob.
+    const gap = (lit - 2 * band - size) / 2;
+    assert.ok(gap > 0.3, `the ring must clear the dot, got ${gap}px of gap`);
+    // And the halo's OPAQUE core must not exceed the dot, or the glow
+    // stops reading as a glow and starts reading as a wider dot - which
+    // is what the owner reported.
+    const core = Number(CSS.match(/--led-halo-core:\s*([\d.]+)%;/)[1]);
+    const opaque = lit * (core / 100);
     assert.ok(
-        diameter < 16,
-        `lit object diameter ${diameter}px must stay well clear of the old ~21px and ~35px regressions`,
+        opaque <= size,
+        `the halo's solid core (${opaque}px) must not exceed the ${size}px dot`,
     );
 });
 

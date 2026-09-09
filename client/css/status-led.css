@@ -115,33 +115,55 @@
      * pixels. See [data-outer='unread'] below for the geometry. */
     --led-color-unread: var(--color-success, #4ade80);
 
-    /* Geometry. The halo ring is 1.3x the dot and the soft glow beyond it
-     * is a fixed 1.5px - fixed rather than proportional because at this
-     * size a flat pixel value reads truer than a fraction of the dot.
-     * At the 9px default every call site actually renders at (sidebar
-     * row, launchpad card - neither passes `size`, so both get this
-     * value), the whole lit object - halo ring plus glow, at the
-     * breathing peak - is about 14.7px across: 9 * 1.3 = 11.7px halo,
-     * plus 2 * 1.5 = 3px of glow. The owner's own calibration: "glowing
-     * is still to big. like 1 or 2 px larger than the front circle" -
-     * i.e. the halo ring itself should read as only a couple of px
-     * bigger than the dot, with the glow adding a further 1-2px on top.
+    /* Geometry. ONE LIT DIAMETER FOR EVERY STATE, and that is the whole
+     * rule: `--led-size` is the dot, `--led-lit-scale` multiplies it into
+     * the halo box, and NOTHING outside this block may change either.
+     * States differ in colour, opacity and fill. They never differ in
+     * size.
+     *
+     * WHY THAT HAD TO BE STATED. Until 2026-09-09 the halo was sized per
+     * state and drawn partly OUTSIDE its own box: `active` was an 11.7px
+     * disc plus a 1.5px spread box-shadow, `unread` was a 15.3px ring,
+     * and every resting state's halo was either absent (`off`) or grey on
+     * a grey dot at 0.18-0.30 opacity and so invisible. The element box
+     * measured 9px in all of them, which is why nothing caught it - but
+     * the LIT object came out at three different diameters (9.0, ~14.7
+     * and 15.3), and only the two loud ones were ever visible. In a
+     * sidebar where one session is working and the rest are at rest, that
+     * paints one dot 60 percent wider than its neighbours, which is
+     * exactly what the owner reported.
+     *
+     * THE RING IS WHAT SETS THE NUMBER. The finished-turn treatment needs
+     * a 9px dot, a visible gap, and a 2.5px band around it: 9 + 2*0.65 +
+     * 2*2.5 = 15.3px, i.e. 1.7x the dot. Every other state now paints
+     * inside that same box.
+     *
+     * THE GLOW IS A GRADIENT, NOT A BOX-SHADOW, for the same reason. A
+     * spread shadow paints beyond the element it is on, so it can never
+     * be held to a declared diameter; a radial gradient fades out AT the
+     * box edge, so the halo's painted extent is the box and is
+     * measurable. `--led-halo-core` is how far out the halo stays fully
+     * opaque before it starts to fade - at 55 percent of the 15.3px box
+     * that is an 8.4px core, just inside the 9px dot, so the only thing
+     * outside the dot is falloff. That is the owner's calibration
+     * ("glowing is still to big. like 1 or 2 px larger than the front
+     * circle") expressed as a shape rather than as a smaller number.
      *
      * PRIOR VALUES, for anyone tracing a regression:
-     *   - 1.7x scale, 0.3x spread (shipped 2026-09-08 morning) put the
-     *     lit object at about 21px across - still visibly larger than
-     *     "1 or 2px more than the dot".
+     *   - 1.3x halo + a 1.5px spread glow (2026-09-08 afternoon) put the
+     *     lit object at about 14.7px with a hard-edged 11.7px core, so a
+     *     working session read as a wider dot rather than a lit one.
+     *   - 1.7x scale, 0.3x spread put it at about 21px across.
      *   - 2.6x scale, 0.62x spread (the original) put it at about 35px
-     *     across - larger than the row text itself and overlapping
-     *     neighbours on the compact sidebar density and the launchpad
-     *     cards, the owner's "breathing is way too big" report. */
+     *     across - larger than the row text itself, the owner's
+     *     "breathing is way too big" report. */
     --led-size: 9px;
-    --led-halo-scale: 1.3;
-    --led-glow-spread: 1.5px;
+    --led-lit-scale: 1.7;
+    --led-halo-core: 55%;
     /* The band thickness of the finished-turn ring, and nothing else
-     * uses it. Flat pixels rather than a fraction of the dot, for the
-     * same reason --led-glow-spread is: at nine pixels a proportional
-     * value rounds to something that reads thinner than it measures. */
+     * uses it. Flat pixels rather than a fraction of the dot: at nine
+     * pixels a proportional value rounds to something that reads thinner
+     * than it measures. */
     --led-ring-width: 2.5px;
 
     /* Resolved per state by the [data-inner] / [data-outer] rules below.
@@ -169,18 +191,25 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    width: calc(var(--led-size) * var(--led-halo-scale));
-    height: calc(var(--led-size) * var(--led-halo-scale));
-    margin-top: calc(var(--led-size) * var(--led-halo-scale) / -2);
-    margin-left: calc(var(--led-size) * var(--led-halo-scale) / -2);
+    width: calc(var(--led-size) * var(--led-lit-scale));
+    height: calc(var(--led-size) * var(--led-lit-scale));
+    margin-top: calc(var(--led-size) * var(--led-lit-scale) / -2);
+    margin-left: calc(var(--led-size) * var(--led-lit-scale) / -2);
     border-radius: var(--radius-full);
-    background: var(--led-halo-ink);
-    /* The glow itself. A wide, spread box-shadow in the halo colour is
-     * what softens the edge; `filter: blur()` was rejected because it
-     * forces a compositing layer per LED and there can be dozens of
-     * these in a long session list. */
-    box-shadow: 0 0 var(--led-glow-spread) var(--led-glow-spread)
-        var(--led-halo-ink);
+    /* The glow itself, and it is CONTAINED. A radial gradient stays
+     * solid out to --led-halo-core and fades to nothing at the box
+     * edge, so the halo's painted extent IS its declared box - which is
+     * what lets every state be held to one diameter. A spread
+     * box-shadow (what this replaced) paints outside the box by
+     * definition and so could not be. `filter: blur()` was rejected
+     * separately: it forces a compositing layer per LED and there can
+     * be dozens of these in a long session list. */
+    background: radial-gradient(
+        closest-side,
+        var(--led-halo-ink) 0 var(--led-halo-core),
+        transparent 100%
+    );
+    box-shadow: none;
     opacity: var(--led-halo-opacity);
     z-index: -1;
     pointer-events: none;
@@ -261,14 +290,13 @@
      * draws the band at the outer edge, leaving the middle clear for the
      * dot to show through.
      *
-     * GEOMETRY. 1.7x the dot with a 2.5px band: at the 9px default every
-     * call site actually renders at, that is a 15.3px lit object, an
-     * unmistakable 2.5px of green, and about 0.65px of background
-     * separating the ring from the dot so the two read as two things.
-     * The whole object stays comparable to the ~14.7px an `active` LED
-     * reaches at its breathing peak, so this does not reintroduce the
-     * oversized-glow problem the geometry block above was calibrated
-     * against.
+     * GEOMETRY, AND IT SETS THE NUMBER FOR EVERY OTHER STATE. This is
+     * the one treatment with a hard size requirement - a 9px dot, a
+     * visible gap, and a band thick enough to read - so `--led-lit-scale`
+     * is derived from it and then applied to all of them: 9 + 2*0.65 +
+     * 2*2.5 = 15.3px, i.e. 1.7x the dot. THIS RULE DOES NOT OVERRIDE THE
+     * SCALE, and must not start to. It used to, which is how `unread` and
+     * `active` ended up painting two different diameters.
      *
      * IT DOES NOT BREATHE - see the animation block below. This is the
      * only indicator left for "there is something here for you" now that
@@ -278,7 +306,6 @@
      * moving. */
     --led-halo-ink: var(--led-color-unread);
     --led-halo-opacity: 1;
-    --led-halo-scale: 1.7;
 }
 
 .status-led[data-outer='unread']::after {
@@ -372,23 +399,14 @@
     box-shadow: inset 0 0 0 2px var(--led-color-unknown);
 }
 
-/* ---- the unread-count badge ----------------------------------------
- * Rendered beside a SUMMARY led (a group header, the launchpad top bar)
- * by client/js/session-status-summary.js. Never rendered at zero - see
- * that module for why. Copy is a bare number; the count's meaning is in
- * its title and aria-label. */
-
-.status-summary-badge {
-    display: inline-block;
-    min-width: 1.25em;
-    padding: 0 0.35em;
-    margin-left: 0.4em;
-    border-radius: var(--radius-full);
-    background: var(--led-color-unread, var(--color-warning, #d29922));
-    color: var(--color-bg, #111);
-    font-size: 0.72rem;
-    font-weight: 600;
-    line-height: 1.5;
-    text-align: center;
-    vertical-align: middle;
-}
+/* ---- THE UNREAD-COUNT BADGE IS GONE ---------------------------------
+ * A yellow numeric pill used to sit beside a summary LED on every group
+ * header. It was removed on 2026-09-09 at the owner's request ("to be
+ * clear remove the yello (1)"), and nothing replaced it: the roll-up LED
+ * carries the same finished-turn ring the rows do, so unread is already
+ * said once, in the same vocabulary, in the same place. Two indicators
+ * for one fact is how they end up disagreeing.
+ *
+ * The plain count pill on the header (`.session-sidebar-group__count`,
+ * in client/css/session-sidebar-groups.css) is a DIFFERENT control - it
+ * says how many conversations a folded section is hiding - and stays. */
