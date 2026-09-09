@@ -7,10 +7,19 @@
 <!--
   STAGE C - MEASURE THE CARD, DO NOT EYEBALL IT.
 
-  Loads the real client/js/launchpad.js, the real client/css/styles.css
-  and the real client/css/attribution-prompt.css, stubs window.API with
-  canned response SHAPES, calls the real render path, and reports REAL
+  Loads the real client/js/launchpad.js, the real compiled bundle
+  client/dist/app.js, the real client/css/styles.css and the real
+  client/css/attribution-prompt.css, stubs window.API with canned
+  response SHAPES, calls the real render path, and reports REAL
   getBoundingClientRect() and getComputedStyle() readings.
+
+  THE CARD IS A SVELTE COMPONENT AS OF SLICE 1 of the strangler
+  migration. loadProjects() mounts it through
+  window.CloudeWeb.launchpad.mountAttributionPrompt(); the five legacy
+  render methods were deleted in the same commit. The bundle is a
+  DEFERRED module and the scripts below are classic ones, so the boot
+  block waits for window.CloudeWeb before it drives anything - without
+  that wait the harness would race the very thing it measures.
 
   WHY THIS EXISTS AT ALL. This codebase has shipped three visibly broken
   features through fully green suites: a badge that rendered the literal
@@ -38,6 +47,9 @@
 <link rel="stylesheet" href="../../client/css/styles.css" />
 <link rel="stylesheet" href="../../client/css/home-bar.css" />
 <link rel="stylesheet" href="../../client/css/attribution-prompt.css" />
+<!-- The compiled tree's stylesheet. The card is a Svelte component now,
+     and this file is what the vite build emits beside app.js. -->
+<link rel="stylesheet" href="../../client/dist/app.css" />
 <style>
   #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 44vw;
          max-height: 92vh; overflow: auto;
@@ -59,6 +71,9 @@
 <script src="../../client/js/session-row-actions.js"></script>
 <script src="../../client/js/session-theme-tint.js"></script>
 <script src="../../client/js/launchpad.js"></script>
+<!-- The compiled tree. A module script, so it executes AFTER the classic
+     scripts above and after the document is parsed. -->
+<script type="module" src="../../client/dist/app.js"></script>
 <script>
 const PENDING = {
     state: 'pending',
@@ -225,12 +240,48 @@ function report() {
     };
 }
 window.__attributionReport = report;
+
+// EVERY CSP VIOLATION THIS PAGE RAISES, collected from the first line
+// of the first inline script. Serving the header is only half a check:
+// a violation is reported to the PAGE, never to the server, so a harness
+// that stamps the policy and never reads the report has measured
+// nothing. See scripts/lib_csp_static_server.py.
+window.__cspViolations = [];
+document.addEventListener('securitypolicyviolation', (event) => {
+    window.__cspViolations.push({
+        directive: event.effectiveDirective || event.violatedDirective,
+        blockedURI: event.blockedURI,
+        sourceFile: event.sourceFile,
+        lineNumber: event.lineNumber,
+    });
+});
+
+// Drive the card's controls by id, the way a user's click does.
 window.__choose = () => document.getElementById('attribution-choose').click();
+window.__adoptAll = () => document.getElementById('attribution-adopt-all').click();
+window.__adoptPicked = () => document.getElementById('attribution-adopt-picked').click();
 window.__declineAll = () => document.getElementById('attribution-decline-all').click();
+window.__declinePicked = () => document.getElementById('attribution-decline-picked').click();
 window.__close = () => document.getElementById('attribution-prompt-close').click();
+/** Untick ONE row, by tmux name, firing the real change event. */
+window.__untick = (name) => {
+    const box = document.querySelector(
+        '.attribution-prompt__check[data-tmux-name="' + name + '"]');
+    if (!box) return false;
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+};
 
 window.__attributionReady = false;
 (async () => {
+    // The bundle is a deferred module; these are classic scripts. Wait
+    // for the namespace rather than assuming an execution order this
+    // file does not control.
+    for (let i = 0; i < 200 && !window.CloudeWeb; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    window.__bundleLoaded = !!window.CloudeWeb;
     const lp = new Launchpad();
     window.__lp = lp;
     lp.init();

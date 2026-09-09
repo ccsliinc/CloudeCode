@@ -26,6 +26,32 @@ import StatusLed from './lib/StatusLed.svelte';
 import * as led from './lib/led';
 import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './lib/status-dot';
 import type { StatusSignals } from './lib/status-dot';
+import { mountPanel, unmountPanel } from './lib/mount';
+import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
+
+/** The id of the container `renderLaunchpadUI()` writes for the card. */
+const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
+
+/**
+ * Mount the Stage C attribution prompt into the launchpad's own slot.
+ *
+ * Description: THE ONE LINE `client/js/launchpad.js` CALLS. It sits at
+ *   the exact point `loadProjects()` used to call the five legacy
+ *   attribution methods, which were deleted in the same commit. Kept as
+ *   a named function rather than a bare `mountPanel` call at the call
+ *   site so the container id lives in this tree, where the component
+ *   does, and so the legacy line stays greppable and one line long.
+ *
+ *   The card fetches its own question set as it mounts, exactly as
+ *   `loadAttributionPrompt()` did. Nothing is awaited here: a failure
+ *   inside it must not stop the projects rendering.
+ * Inputs: none.
+ * Output: void.
+ * Example: window.CloudeWeb.launchpad.mountAttributionPrompt();
+ */
+function mountAttributionPrompt(): void {
+    mountPanel(ATTRIBUTION_PROMPT_CONTAINER, AttributionPrompt, {});
+}
 
 /**
  * Render the StatusLed component once, off-document, and hand back its
@@ -86,6 +112,18 @@ const CloudeWeb = {
     /** The Svelte component itself, for a parent that can mount one. */
     StatusLed,
     renderProbe,
+    /**
+     * THE ONLY MOUNT PATH. Every panel a migration slice moves out of
+     * client/js is mounted through this, by container id, so there is
+     * exactly one place that owns a live component handle. Nothing else
+     * may call Svelte's `mount()` on an element that is in the document.
+     */
+    mountPanel,
+    unmountPanel,
+    /** Panels that belong to the launchpad screen, by name. */
+    launchpad: {
+        mountAttributionPrompt,
+    },
 } as const;
 
 declare global {
