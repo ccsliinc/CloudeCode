@@ -46,6 +46,21 @@
 # copies - a tracked-but-undeployed asset (a doc, a vendor font) must
 # never be mistaken for a leftover.
 #
+# THE COMMITTED SVELTE BUNDLE IS CHECKED BEFORE ANYTHING IS COPIED
+# (2026-09-09). client/dist/app.js and app.css are a BUILD ARTIFACT that
+# is committed, because this script ships the committed file set and the
+# mini runs no build. That makes a stale bundle invisible to every check
+# below: the bytes on the target really do match the bytes on this Mac,
+# because they are both the stale ones. scripts/web-build-check.sh
+# rebuilds from web/src and fails if the committed bundle drifted, and it
+# runs BEFORE the transfer so a stale one is caught while nothing has
+# been written anywhere. Its exit 2 (could not evaluate: no node, no npm,
+# build failed) becomes this script's exit 3, because a check that did
+# not run is not a check that passed. Set CLOUDE_DEPLOY_SKIP_WEB_CHECK=1
+# to deploy from a machine with no node toolchain; it prints a loud line
+# saying the bundle went unverified, which is the whole difference
+# between an accepted risk and a silent one.
+#
 # Exit codes:
 #   0  DEPLOYED and verified (both directions: present+correct, and clean)
 #   1  DEPLOY FAILED (transfer, copy, prune or restart)
@@ -86,7 +101,10 @@ while [ $# -gt 0 ]; do
         --no-restart)  RESTART=0; shift ;;
         --dry-run)     DRY=1; shift ;;
         --verify-only) VERIFY_ONLY=1; RESTART=0; shift ;;
-        -h|--help)     sed -n '2,45p' "$0"; exit 0 ;;
+        # The header grew when the committed-bundle check landed
+        # (2026-09-09). The range ends at the last usage line rather than
+        # at a number somebody has to remember to move.
+        -h|--help)     sed -n '2,34p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
 done
@@ -185,6 +203,38 @@ if [ "$COUNT" -le 25 ]; then
 else
     printf '%s\n' "$FILES" | head -10 | sed 's/^/         /'
     echo "         ... and $(( COUNT - 10 )) more"
+fi
+
+# ------------------------------------------------- committed bundle check
+# BEFORE THE TRANSFER, on every path that actually copies. See the header.
+# --verify-only and --dry-run are exempt: neither writes a destination, so
+# neither can ship a stale bundle, and refusing to re-hash a target
+# because this Mac has no node would be answering a question nobody asked.
+if [ "$VERIFY_ONLY" -eq 0 ] && [ "$DRY" -eq 0 ]; then
+    if [ "${CLOUDE_DEPLOY_SKIP_WEB_CHECK:-0}" = "1" ]; then
+        echo
+        echo "web    : SKIPPED by CLOUDE_DEPLOY_SKIP_WEB_CHECK=1."
+        echo "         The committed client/dist bundle is going out UNVERIFIED."
+    else
+        echo
+        echo "web    : checking the committed client/dist bundle ..."
+        set +e
+        "$SCRIPT_DIR/web-build-check.sh"
+        WRC=$?
+        set -e
+        if [ "$WRC" -eq 1 ]; then
+            say_failed
+            echo "The committed client/dist does not match web/src." >&2
+            echo "Nothing was copied. Rebuild and commit the bundle first." >&2
+            exit 1
+        elif [ "$WRC" -ne 0 ]; then
+            say_failed
+            echo "CANNOT DETERMINE whether client/dist is current." >&2
+            echo "Nothing was copied. Install node and npm, or set" >&2
+            echo "CLOUDE_DEPLOY_SKIP_WEB_CHECK=1 to ship it unverified." >&2
+            exit 3
+        fi
+    fi
 fi
 
 LIST=$(mktemp -t cloudedeploy)

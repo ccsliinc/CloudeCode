@@ -229,6 +229,19 @@
          an ESC[2J that erases the alternate screen. See
          client/css/terminal-away-bar.css. -->
     <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
+
+    <!-- THE COMPILED TREE'S STYLESHEET (see web/ and CLAUDE.md, "The web/
+         build"). Built by vite from web/src into client/dist with a FIXED
+         name, so this line never has to be rewritten per build.
+
+         It carries Tailwind UTILITIES ONLY - no preflight, so nothing here
+         resets a margin, a heading or a border on the legacy app - and
+         every utility is prefixed `tw:` and sits in `@layer utilities`, so
+         it can neither collide with a legacy class name nor outrank a
+         legacy rule. It is LAST on purpose for the same reason it is
+         harmless anywhere: a layered rule loses to every unlayered one in
+         this file regardless of order. -->
+    <link rel="stylesheet" href="/static/dist/app.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -1337,6 +1350,26 @@
     <script src="/static/js/archive-screen.js"></script>
 
     <script src="/static/js/app.js"></script>
+
+    <!-- THE COMPILED TREE (see web/ and CLAUDE.md, "The web/ build").
+         Svelte 5 + TypeScript, bundled by vite into client/dist/app.js
+         with a FIXED name so this line never has to be rewritten.
+
+         LAST, AND A MODULE. Last because the legacy IIFEs above publish
+         the globals this bundle will progressively take over, and a
+         module because that is how the bundle is built - `type="module"`
+         also makes it deferred, so it runs after the document is parsed
+         whatever its position. Loaded with a plain `src` from this app's
+         own origin: `script-src 'self'` permits exactly that and forbids
+         inline script and eval, and the vite config is arranged so no
+         inline script is ever emitted (tests/test_no_remote_assets.py
+         fails the build if one appears).
+
+         AS OF THIS ROUND IT CHANGES NOTHING ON SCREEN. It publishes
+         window.CloudeWeb and returns; it mounts no component into the
+         document and overwrites no existing global. Screens move over one
+         at a time in later rounds. -->
+    <script type="module" src="/static/dist/app.js"></script>
 
     <!-- v0.7.0 Part 2 — toast notifications container. Fixed top-right via
          CSS (toast.css). aria-live=polite so screen readers announce new

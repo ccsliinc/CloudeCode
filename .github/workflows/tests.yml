@@ -240,6 +240,32 @@ jobs:
         # error would otherwise reach the browser unnoticed.
         run: scripts/ci/check-js-syntax.sh
 
+      - name: Run the web/ vitest suite
+        # The compiled tree (web/, Svelte 5 + TypeScript - see CLAUDE.md,
+        # "The web/ build") has its own harness, because a .node.mjs script
+        # cannot import a .ts module or compile a .svelte one. One line here
+        # rather than a second workflow: it is the same node, the same
+        # checkout and the same verdict.
+        #
+        # `npm ci` NOT `npm install` - the lockfile is committed and the
+        # committed client/dist bundle is only reproducible against the
+        # exact dependency tree it was built from.
+        working-directory: web
+        run: |
+          npm ci --no-fund --no-audit
+          npm test
+
+      - name: Prove the committed bundle matches web/src
+        # client/dist is a COMMITTED build artifact (see the .gitignore
+        # note beside the negation that keeps it tracked). A stale one is
+        # invisible to every other check in this repository, because the
+        # bytes really do match everywhere - they are all the stale ones.
+        # node_modules was just installed by the step above, so the install
+        # is skipped rather than repeated.
+        env:
+          CLOUDE_WEB_CHECK_NO_INSTALL: '1'
+        run: scripts/web-build-check.sh
+
       - name: Run every client javascript suite
         # Each tests/*.node.mjs is a standalone node script with no
         # test-runner dependency: it exits non-zero on failure and prints
