@@ -677,17 +677,6 @@
 
         <div class="terminal-container">
             <div id="terminal"></div>
-            <!-- INSIDE the terminal container, and absolutely positioned
-                 there (see .local-servers), so that showing or hiding it
-                 cannot change #terminal's height. It used to be a sibling
-                 below this container, and every appearance shrank the
-                 terminal by ~4 rows, which tmux answered with a SIGWINCH
-                 and claude with ESC[2J - erasing the conversation a few
-                 seconds after every reconnect. -->
-            <div class="local-servers" id="localServersContainer" style="display: none;">
-                <h3>Local Servers</h3>
-                <div id="localServersList"></div>
-            </div>
         </div>
 
         <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always

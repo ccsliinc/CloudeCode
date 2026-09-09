@@ -1342,21 +1342,6 @@ class API {
     }
 
     /**
-     * Local servers: list dev servers detected on the host for a given
-     * tmux session. Pure read - never triggers detection.
-     *
-     * @param {string} sessionName - tmux session name (the value the
-     *   server tracks entries under).
-     * @returns {Promise<Array<{port: number, url: string,
-     *   first_seen: string, last_seen: string}>>}
-     */
-    async getLocalServers(sessionName) {
-        return await this.call(
-            `/sessions/${encodeURIComponent(sessionName)}/local-servers`
-        );
-    }
-
-    /**
      * Get plain WebSocket base URL for the terminal endpoint.
      * Does NOT append a token - JWT auth is carried in the
      * Sec-WebSocket-Protocol header via openWebSocket() below.

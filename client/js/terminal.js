@@ -909,9 +909,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // Connect WebSocket
         setTimeout(() => this.connectWebSocket(), 500);
-
-        // Load any locally-detected dev servers for this session
-        this.loadLocalServers();
     }
 
     /**
@@ -1054,10 +1051,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // fit/font readiness dance in connectWebSocket() has a stable
         // container to measure.
         setTimeout(() => this.connectWebSocket(), 500);
-
-        // Refresh local-servers panel in case dev servers came up or
-        // shut down while the user was away on the launchpad.
-        this.loadLocalServers();
     }
 
     /**
@@ -1612,8 +1605,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * header status affordance (updateStatus) and the shared notice
      * (_showStatusPill); nothing is dropped, it just stops interleaving.
      *
-     * @param {{type: string, content?: string, message?: string,
-     *   url?: string, port?: number}} message - a decoded WS frame.
+     * @param {{type: string, content?: string, message?: string}} message
+     *   - a decoded WS frame.
      * @returns {void}
      */
     handleWebSocketMessage(message) {
@@ -1621,17 +1614,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         if (type === 'log') {
             if (message.content) this._showStatusPill(message.content, 'info');
-        } else if (type === 'local_server_detected') {
-            // Plan v3.2 - A dev server was detected on the host and
-            // confirmed as a live TCP listener. Merge into local state
-            // and re-render.
-            if (message.url) {
-                this._showStatusPill(`local server detected: ${message.url}`, 'info');
-            }
-            this._mergeLocalServer({ port: message.port, url: message.url });
-        } else if (type === 'local_server_lost') {
-            // The janitor sweep stopped seeing this listener - drop it.
-            this._dropLocalServer(message.port);
         } else if (type === 'error') {
             this._showStatusPill(`error: ${message.message}`, 'error');
         } else if (type === 'pong') {
@@ -2114,88 +2096,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         } else {
             window.dispatchEvent(new CustomEvent('auth-required'));
         }
-    }
-
-    /**
-     * Resolve the tmux session name to query the local-servers endpoint
-     * for. Returns null when no session is active or the name can't be
-     * read (e.g. fresh session view, server not yet replied).
-     */
-    _activeSessionName() {
-        const sess = this._currentSession;
-        if (!sess) return null;
-        return sess.tmux_session || sess.id || null;
-    }
-
-    /**
-     * Load locally-detected dev servers for the active session and paint
-     * them into the Local Servers panel. Detection is server-side only;
-     * this call is a pure read.
-     */
-    async loadLocalServers() {
-        const name = this._activeSessionName();
-        if (!name) {
-            this._localServers = [];
-            this._renderLocalServers();
-            return;
-        }
-        try {
-            const list = await window.API.getLocalServers(name);
-            this._localServers = Array.isArray(list) ? list : [];
-            this._renderLocalServers();
-        } catch (error) {
-            console.error('Terminal: Error loading local servers:', error);
-        }
-    }
-
-    /**
-     * Merge a single local-server entry into local state (idempotent on
-     * port). Triggered by the `local_server_detected` WS event.
-     */
-    _mergeLocalServer(entry) {
-        if (!entry || !entry.port) return;
-        if (!Array.isArray(this._localServers)) this._localServers = [];
-        const idx = this._localServers.findIndex(s => s.port === entry.port);
-        if (idx === -1) {
-            this._localServers.push({ port: entry.port, url: entry.url });
-        } else {
-            this._localServers[idx] = { ...this._localServers[idx], url: entry.url };
-        }
-        this._localServers.sort((a, b) => a.port - b.port);
-        this._renderLocalServers();
-    }
-
-    /**
-     * Drop a local-server entry by port. Triggered by `local_server_lost`.
-     */
-    _dropLocalServer(port) {
-        if (!Array.isArray(this._localServers)) return;
-        this._localServers = this._localServers.filter(s => s.port !== port);
-        this._renderLocalServers();
-    }
-
-    /**
-     * Repaint the Local Servers panel from `this._localServers`. Hides
-     * the container when no entries are tracked.
-     */
-    _renderLocalServers() {
-        const container = document.getElementById('localServersContainer');
-        const list = document.getElementById('localServersList');
-        if (!container || !list) return;
-
-        const entries = Array.isArray(this._localServers) ? this._localServers : [];
-        if (entries.length === 0) {
-            container.style.display = 'none';
-            list.innerHTML = '';
-            return;
-        }
-        container.style.display = 'block';
-        list.innerHTML = entries.map(entry => `
-            <div class="local-server-item">
-                <span class="local-server-port">${entry.port}</span>
-                <a class="local-server-url" href="${entry.url}" target="_blank" rel="noopener">${entry.url}</a>
-            </div>
-        `).join('');
     }
 
     /**
