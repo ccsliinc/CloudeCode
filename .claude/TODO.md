@@ -4663,3 +4663,17 @@ the owner).
   and port 5055 was probed (`curl` got no response) before the move, because
   moving a live database out from under a running service is the obvious way
   to turn a cleanup into an incident.
+
+## 2026-09-09: disk cleanup closed (measured)
+
+- Owner emptied the Trash and thinned APFS local snapshots twice
+  (`sudo tmutil thinlocalsnapshots / 60000000000 4`). Free space on
+  /System/Volumes/Data: 38 GiB this morning -> 147 GiB now (67 percent
+  used). Local snapshots: 19 -> 1. Trash 0 B. ~/ClaudeArchive 119 MB
+  (regenerable code and venv only). App data dir 9.4 GB (live db plus the
+  nightly VACUUM INTO dump).
+- Lesson: on APFS, emptying the Trash frees nothing while a local Time
+  Machine snapshot still references the blocks; thin the snapshots after a
+  large delete or the measurement lies. Also, a folder moved into ~/.Trash
+  by `mv` from a shell may not appear in Finder until Finder relaunches;
+  `ls ~/.Trash` is the truth.
