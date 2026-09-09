@@ -82,13 +82,12 @@
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
-    <!-- The row's kebab and the panel it opens. MUST load after
-         session-sidebar.css and session-sidebar-density.css: those size
-         .session-sidebar-row-pin and
-         .session-sidebar-row-delete as small square icon buttons for the
-         row, and this file re-styles those same elements as full-width
-         labelled menu items once they are inside the panel. -->
-    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
+    <!-- The conversation row's inline pin and close/restart/remove, sized
+         for a thumb. MUST load after session-sidebar.css and
+         session-sidebar-density.css: those size both controls as 18px
+         square icon buttons, and this file widens them on a coarse
+         pointer. Loaded earlier it would silently lose the tap targets. -->
+    <link rel="stylesheet" href="/static/css/session-row-inline-controls.css" />
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
@@ -714,9 +713,13 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
-    <!-- The vertical three-dot mark, in ONE place. Both the header
-         overflow (header-menu.js) and every conversation row
-         (session-row-menu.js) draw it, so it must load before both. -->
+    <!-- The vertical three-dot mark. Its one consumer is the header
+         overflow (header-menu.js), so it must load before that. It was
+         shared with the conversation rows until their overflow menu was
+         removed on 2026-09-08; the module stays a module rather than
+         being folded back into its caller, because a glyph inlined at
+         its only call site is exactly how the app ended up with two
+         drifting copies of it before. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
@@ -1038,17 +1041,6 @@
          move a session between them. Loads AFTER reorder because it
          borrows that module's live-region announcer. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
-    <!-- The row's overflow menu, and the three gestures that open it.
-         session-row-menu.js composes the row's own control builders
-         (session-sidebar-rows.js, session-status-ui.js,
-         session-row-actions.js, session-sidebar-group-actions.js for the
-         group picker item), places itself with anchor-popover.js and
-         routes its clicks into session-sidebar-clicks.js, so it must load
-         after all of them. The gesture module must load after the menu
-         AND after session-sidebar.js, whose #session-sidebar-list it
-         attaches to. -->
-    <script src="/static/js/session-row-menu.js"></script>
-    <script src="/static/js/session-row-menu-gestures.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the

@@ -195,3 +195,66 @@ passed / 3 failed, and all three are the documented environmental ones
 (`test_nuke_sandbox`, `test_respawn_refreshes_pane_env` flaky,
 `test_version_probe`); `test_session_row_menu_renders` failed mid-flight against
 my half-applied change and is green again.
+
+[row-icons] [2026-09-08]: pin and close are inline icons on the conversation
+row again, and the three-dot overflow menu is gone. "move the pin and close
+icons back to the inline icons. remove 'add to group' / 'restart the agent'
+and the three dots now that they're not needed."
+
+EVERY ITEM THAT WAS IN THAT MENU, AND WHAT HAPPENED TO IT. Pin: back inline,
+same builder (`SessionSidebarRows.pinButtonHtml`), same `aria-pressed`, same
+labels. Close / remove: back inline, same builder (`SessionRowActions.html`),
+same confirm copy. Add to a group: REMOVED. Restart the agent: REMOVED FROM A
+LIVE ROW ONLY - a dead row still offers it inline. Nothing else was in the
+menu, so the trigger had nothing left and went with it.
+
+DELETED: `client/js/session-row-menu.js`, `session-row-menu-gestures.js`,
+`client/css/session-row-menu.css`, `SessionSidebarGroupActions.rowMenuItemHtml`,
+`SessionRowActions.LIVE_STATUSES`, the render guard's `SessionRowMenu.isOpen()`
+check, and the `data-row-menu` / `data-row-pinned` attributes. `data-row-status`
+MOVED off the kebab onto the row, because the row is now the only element built
+from the whole payload and `session-sidebar-clicks.js` reads it there for the
+restart picker. Right-click and long-press on a row now open nothing.
+
+SURFACES. Only the SIDEBAR row ever had this menu. The launchpad's
+running-session card already drew close/restart inline and changes only by
+losing the live restart; the project-tree row carries no actions at all and is
+untouched. So "one consistent treatment" is what shipped, not three copies.
+
+REACHABILITY, TRACED. Restart: reachable ONLY from a dead row now (sidebar
+inline, launchpad card inline) plus the launchpad's separate "restart" on an
+ENDED tree row, which is its own path (`imported_restart_routes.py`). No
+command palette, keyboard shortcut or deep link reaches it. The four gates in
+front of a LIVE respawn are all still present server-side and still tested; the
+first one is now shut, so `confirm_restart_live`, `RespawnPlan.kills_live_pane`,
+`SessionRestartLive.armHtml` and `liveConfirmCopy` are ORPHANED - reachable by
+no user action. Left in place deliberately; flagged for the owner to decide.
+Add to a group: the picker itself is untouched and still opens on `g` over a
+focused row, on Alt+Arrow across a band edge, and by dragging onto a group
+header. It has NO POINTER ROUTE left, so on a phone the drag is the only way,
+which breaks the "drag is never the only way to do anything" rule at the head of
+`session-sidebar-group-actions.js`. Also flagged rather than papered over.
+
+TOUCH TARGETS, MEASURED IN CHROMIUM. The kebab bought a 44px target from a
+transparent `::after` reaching sideways, which is free when nothing sits to your
+right. Two neighbours cannot do that, so `client/css/session-row-inline-
+controls.css` grows WIDTH on the real box (36px) and HEIGHT on the overlay
+(44px), cozy and detailed only. At a 330px viewport that left the name column at
+81.9px live and 22.6px on a DEAD row (three controls), which paints "Punchlist
+Test" as "P...". The ownership badge is 58px of that line and is the glyph the
+row builder already drops outright at compact density, so it is hidden under
+`(pointer: coarse) and (max-width: 420px)` - a display rule, still in the
+markup. After: name 125.5px live (the kebab layout gave 117.9, the ORIGINAL
+pre-kebab inline layout gave 85.9 with 18px targets), 81.5px dead, row height
+unchanged at 46px, no horizontal scroll, both controls fully on screen.
+
+TESTS. `tests/test_session_row_menu.node.mjs` deleted (its module is gone) and
+replaced by `tests/test_session_row_inline_controls.node.mjs`, 14 assertions.
+`tests/test_session_row_menu_renders.py` renamed to
+`tests/test_session_row_controls_render.py` and rewritten against the same real
+harness, 18 assertions including the 330px squeeze and the dead-row case.
+Updated: `test_session_sidebar_rows`, `test_session_row_actions`,
+`test_session_row_restart`, `test_restart_live_gate`, `test_dead_row_renders_dead`,
+`test_kebab_icon_shared`, `test_sidebar_group_menu_stacking`,
+`test_project_list_render_guard`, `test_session_status_ui`, and
+`scripts/verify_sidebar_group_drag.py` (now opens the picker with `g`).

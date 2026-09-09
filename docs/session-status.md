@@ -329,9 +329,9 @@ what says it now. Unread TRACKING is untouched: `src/core/unread_store.py`
 still keys on the instance, `Stop` still sets it, binding a WS terminal
 still clears it, and `PATCH /sessions/{name}/unread` still exists. Only
 the client control went, along with its click and keyboard handlers in
-`launchpad.js`, `session-row-menu.js`, `session-sidebar-clicks.js` and
-`session-sidebar.js`, and its CSS. The kebab no longer carries
-`data-row-unread`, because nothing reads it.
+`launchpad.js`, `session-sidebar-clicks.js` and `session-sidebar.js`, and
+its CSS. Nothing carries `data-row-unread` any more, because nothing
+reads it.
 
 ### The mapping
 

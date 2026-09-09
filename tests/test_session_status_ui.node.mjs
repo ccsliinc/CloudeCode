@@ -142,7 +142,6 @@ test('NO SURFACE STILL DRAWS THE ENVELOPE OR ITS HANDLERS', () => {
     // dead code, and a dead handler reads like a live feature.
     for (const file of [
         'launchpad.js',
-        'session-row-menu.js',
         'session-sidebar-clicks.js',
         'session-sidebar.js',
         'session-sidebar-rows.js',

@@ -178,16 +178,14 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
         const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        // THE BUTTON IS NOT ALWAYS INSIDE THE ROW ANY MORE. These controls
-        // now also render inside the row's overflow menu, which is mounted
-        // on document.body (client/js/session-row-menu.js explains why: the
-        // sidebar panel is `transform`ed, so it would become the containing
-        // block for a fixed panel rendered inside it). From there the walk
-        // up to `.session-sidebar-row` finds nothing, and both `data-active`
-        // and `data-session-id` would read as absent - which looks exactly
-        // like "this is not the open tab and has no backend" and would send
-        // an own-tab close down the wrong path. Falling back to the live row
-        // by NAME keeps one handler for both mount points.
+        // THE BUTTON IS BACK INSIDE THE ROW, so `closest` is the primary
+        // route again. The by-NAME lookup stays as the fallback rather
+        // than being deleted with the overflow menu it was added for:
+        // `data-active` and `data-session-id` read as absent when the walk
+        // fails, which looks exactly like "this is not the open tab and
+        // has no backend" and would send an own-tab close down the wrong
+        // path. Resolving by name costs one query and cannot produce that
+        // silent misroute.
         const rowEl = btnEl.closest('.session-sidebar-row')
             || document.querySelector(
                 `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
@@ -270,15 +268,20 @@ console.log('[SessionSidebarClicks Module] Loading...');
             alert(`could not restart "${name}": the restart picker did not load.`);
             return;
         }
-        // The row does not carry its own status; the KEBAB does
-        // (`data-row-status`, set in SessionRowMenu.kebabHtml). Read it
-        // from there rather than adding a second copy of the same fact to
-        // the row, and resolve it by NAME so this works identically
-        // whether the button was clicked on the row or inside the
-        // body-mounted overflow panel.
-        const kebab = document.querySelector(
-            `[data-row-menu="${CSS.escape(name)}"]`);
-        const status = kebab ? kebab.getAttribute('data-row-status') : null;
+        // THE ROW CARRIES ITS OWN STATUS. `data-row-status` used to live
+        // on the kebab, which was the only element built from the whole
+        // payload; the kebab is gone and the row is stamped with it
+        // instead (client/js/session-sidebar-rows.js). Resolved by NAME
+        // rather than from `rowEl`, so a null row - which this function
+        // already tolerates - still yields a status when the list has one
+        // on screen. A null status is passed through untouched: the
+        // picker treats "not stated" as unknown and says so, which is not
+        // the same claim as a measured state.
+        const statusRow = rowEl || document.querySelector(
+            `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
+        const status = statusRow
+            ? statusRow.getAttribute('data-row-status')
+            : null;
         // The name column's TEXT is the display label - the same value
         // SessionLabel resolved when the row was painted. A dialog that
         // names the session differently than the row does is the bug the

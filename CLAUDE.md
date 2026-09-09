@@ -612,10 +612,20 @@ sidesteps rather than fixes the `session_group_members` primary-key
 defect, which keys on `tmux_name`.
 
 It is DESTRUCTIVE and irreversible, so it is gated four times and no
-gate is derivable from a prediction:
+gate is derivable from a prediction. **GATE 1 IS NOW SHUT, AND THAT
+MAKES A LIVE RESTART UNREACHABLE FROM THE UI.** Gates 2 to 4 and every
+line of the server path described here are untouched and still tested;
+what is gone is the only control that handed a RUNNING session to them.
+If a live restart is ever offered again, put the control back - do not
+rebuild the gates, they never left.
 
-1. `actionsFor` offers restart on a row whose status we POSITIVELY know
-   is live. `unknown` still gets close alone.
+1. `actionsFor` offered restart on a row whose status we POSITIVELY know
+   is live, and stopped on 2026-09-08: "remove 'add to group' /
+   'restart the agent' and the three dots now that they're not needed".
+   It now answers `['close']` for every live status and for `unknown`,
+   and `['restart', 'remove']` for `dead` - so a DEAD row is the one
+   surface in the app that still reaches the respawn ladder, which is
+   also the case restart exists for.
 2. The picker's arm checkbox (`SessionRestartLive.armHtml`, always
    emitted unchecked, takes no argument) is what unlocks the choices. `optionsHtml` derives
    `disabled` from `actionable_now` ALONE, so a live pane paints every
@@ -960,6 +970,51 @@ the disconnected red can never render. A WORKING session is solid green
 whatever its unread flag says, and `unknown` never takes the ring at all:
 the ring asserts that a turn FINISHED here, and neither of those measured
 one.
+
+**THE ROW'S CONTROLS ARE INLINE ICONS, AND THERE IS NO OVERFLOW MENU.**
+They were folded into a per-row three-dot kebab in `cddc823` and unfolded
+again on 2026-09-08: "move the pin and close icons back to the inline
+icons. remove 'add to group' / 'restart the agent' and the three dots now
+that they're not needed." `client/js/session-row-menu.js`, its gesture
+module and `session-row-menu.css` are DELETED, so right-click and
+long-press on a row now open nothing. A sidebar row draws grip, light,
+name, theme swatch, startup gate, ownership badge, pin, action - where
+the action is close on a live row and restart plus remove on a dead one.
+The launchpad's running-session card already drew its action inline and
+is unchanged apart from losing the same live restart; the project-tree
+row never carried any of this and is untouched. `data-row-status` moved
+off the kebab onto the row, because the row is now the only element
+built from the whole payload and the restart flow reads it there.
+
+TWO THINGS THE MENU CARRIED AWAY WITH IT, both deliberate and both
+lossy. FILING A SESSION INTO A GROUP has no pointer route left: the
+picker is untouched and still opens on `g` over a focused row, on
+Alt+Arrow across a band edge, and by dragging the row onto a group
+header, but on a phone that last one is the only route, which breaks the
+"drag is never the only way" rule at the head of
+`client/js/session-sidebar-group-actions.js`. And RESTARTING A LIVE
+SESSION is unreachable - see gate 1 under "Replacing what is running".
+
+**A THUMB TARGET CANNOT BE AN OVERLAY IN BOTH AXES ONCE TWO CONTROLS SIT
+SIDE BY SIDE.** The kebab was last on the line with nothing to its
+right, so it bought a 44px target from a transparent `::after` that
+reached sideways for free. Pin and close are neighbours, so an overlay
+reaching sideways lands on the other control and a user aiming at pin
+closes the session. `client/css/session-row-inline-controls.css` splits
+it: WIDTH grows on the real box (36px, two of which cannot overlap) and
+HEIGHT on the overlay (44px, costing the row no pixels), at cozy and
+detailed only - a 24px compact row would steal its neighbours' taps.
+
+**AND THE NAME HAD TO BE PAID FOR OUT OF SOMETHING.** Measured in
+Chromium at a 330px viewport, where the sidebar is 85vw: the name column
+fell to 81.9px on a live row and **22.6px on a DEAD one**, which carries
+three controls, rendering "Punchlist Test" as "P...". The ownership
+badge is 58px of that line and is the most redundant glyph on the row -
+the builder already drops it outright at compact density - so it is
+hidden under `(pointer: coarse) and (max-width: 420px)`. That is a
+display rule, not a removal: the badge stays in the markup. Result,
+measured: live 125.5px (the kebab layout gave 117.9), dead 81.5px, row
+height unchanged at 46px, no horizontal scroll.
 
 ## The transcript archive the app maintains
 
