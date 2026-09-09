@@ -26,7 +26,7 @@
  * IT IS NOT ONLY THE TERMINAL THAT BREAKS. The WS bind is where the
  * server clears the unread flag (`SessionManager.mark_session_viewed`),
  * so a session opened this way is never marked read and the user's row
- * keeps its unread halo with nothing able to clear it. That is the
+ * keeps its unread light with nothing able to clear it. That is the
  * symptom this was found through.
  *
  * THE RULE: a layout wait may DELAY a connect, never CANCEL one. Every

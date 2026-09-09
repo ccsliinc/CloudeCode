@@ -4879,3 +4879,84 @@ Full suite 5530 passed / 3 failed / 21 skipped - the three are the known
 environmental ones (`test_home_write_guard`, `test_state_dir_resolution`,
 `test_version_probe`). Node 190 passed / 1 failed, the pre-existing
 `test_archive_full_page_mode`.
+
+---
+
+## 2026-09-09 - the read state is derived on every path, and the ring means activity only
+
+Two defects the owner reported minutes apart, both measured on live at
+HEAD 5e13cb1, both about a light claiming something nobody measured.
+
+**1. WRONG STATUS AFTER A VIEW.** Owner: "i just clicked into the daily
+briefing tab, nothing changed." `/sessions/list` for
+`cloude_daily-briefing` after the click: `unread: false`,
+`activity_status: finished_unread`, `status_source: seed_row`. The WS
+bind had cleared the flag exactly as designed; the durable row still held
+the word `finished_unread` stamped before the view, and the seed path
+returned it verbatim.
+
+ROOT CAUSE, AND IT IS A SHAPE WORTH KEEPING: every source had its own
+half of the read/unread rule, and one of them had only the half that ADDS
+unread. `idle` plus a set flag became `finished_unread`;
+`finished_unread` plus a cleared flag stayed exactly as it was. A
+one-directional derivation is not a derivation, it is a cache - and a
+cache of a fact that moves is a lie with a timestamp.
+
+FIX. `session_status.derive_read_state(state, *, unread)` is the ONE
+function, pure, total and idempotent, and every path runs through it:
+`SessionActivityTracker.resolve`, `session_activity.map_tmux_fallback`
+(which is also the attachable-row path), `session_status_seed
+.display_state`, `session_transcript_status.resolve_transcript_status`
+rung 3, and `SessionManager._session_info_for` on the assembled answer -
+that last one AFTER the seed path has had its chance to set a flag.
+`activity_persist.write_state` now stores the BASE state, so
+`sessions.activity_state` stops baking a read verdict into a column
+nothing rewrites on a view; rows written before today are reconciled on
+read by the same function, which is why this needed no migration.
+
+THE ONE RUNG THAT IS NOT DERIVED IS THE ONE THAT SETS THE FLAG.
+Transcript rung 2 has just MEASURED a turn end newer than anything
+recorded and reports `claim_turn_end_at`; deriving there against the flag
+as it stood BEFORE that measurement would answer `idle` about a turn that
+finished unseen.
+
+**2. THE RING MEANT UNREAD, WHICH READS AS ACTIVITY.** Owner: "the ring
+around some of the leds are not gray, which means there should be
+background tasks. i dont think those few have any background tasks."
+`finished_unread` mapped to outer `unread` - a breathing amber ring - so
+the quietest state on the dial wore the loudest light in the app. The
+original spec, verbatim: "behind this is a larger glowing circle is
+colored and pulsing on activity and steady on done."
+
+FIX. The outer ring encodes ACTIVITY ONLY: `working` /
+`working_subagent` / `running` -> `active` (the only thing that
+breathes), `question` / `notice` / an unanswered startup gate ->
+`steady` (a live turn that is not moving), `finished_unread` / `idle` /
+`dead` -> `off`, `unknown` -> `dim`. Unread rides the INNER dot alone,
+green `done` against grey `idle`. The outer `unread` state is retired
+from `OUTER_STATES`, from the CSS (`--led-color-unread` with it), from
+the gallery and from the tests. The group header folds the two
+dimensions SEPARATELY - highest-priority inner among members, ring from
+activity across the whole group - so a group with one parked session and
+one busy one paints the parked dot inside a breathing ring, which is
+both facts at once. The `done` bucket ("finished and already read") is
+retired with it: the grey dot spells that itself.
+
+**Tests.** New `tests/test_read_state_derivation.py` (21: the pure
+function in both directions and its idempotence, the pass-through
+negative control over every non-resting state, all four sources, the
+assembled `_session_info_for` answer, set/view/set/view applied twice
+each, and the writer storing the base state). NEGATIVE CONTROL RUN: with
+the `_session_info_for` derivation removed, 3 of the 21 fail - the test
+sees the defect. Node: `test_status_led.node.mjs` (56) gained an
+exhaustive sweep proving no `activity_status` x `unread` x
+`startup_gate` combination can produce an `unread` ring and that exactly
+three statuses breathe; `test_status_summary.node.mjs` (23) gained the
+same sweep at the header level plus the separate ring fold;
+`test_unread_led_one_field.node.mjs` (18) now proves the flag survives
+to the INNER dot on all three surfaces, which is a stronger claim than
+the halo assertion it replaces.
+
+Full suite 5551 passed / 3 failed / 21 skipped - the three are the known
+environmental ones. Node sweep: only the pre-existing
+`test_archive_full_page_mode` fails.

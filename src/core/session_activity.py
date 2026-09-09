@@ -99,6 +99,7 @@ from src.core.session_status import (
     STATUS_UNKNOWN,
     STATUS_WORKING,
     STATUS_WORKING_SUBAGENT,
+    derive_read_state,
 )
 
 # ---------------------------------------------------------------------------
@@ -215,7 +216,11 @@ def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
         # which is not either of the other two.
         return STATUS_UNKNOWN
     if tmux_status == STATUS_IDLE:
-        return STATUS_FINISHED_UNREAD if unread else STATUS_IDLE
+        # ONE DERIVATION, shared with the hook path and both seeds. See
+        # ``session_status.derive_read_state``: the read/unread half of
+        # this vocabulary is a projection of the flag, never a value a
+        # source gets to decide for itself.
+        return derive_read_state(STATUS_IDLE, unread=unread)
     return STATUS_UNKNOWN
 
 
@@ -470,13 +475,16 @@ class SessionActivityTracker:
                 else STATUS_WORKING
             )
 
-        if unread:
-            return STATUS_FINISHED_UNREAD
-
-        if tmux_status == STATUS_UNKNOWN:
+        # AT REST. Which of the two resting states this is, is not a
+        # decision this state machine makes - it is the unread flag,
+        # applied by the one function every other source applies too.
+        # ``unknown`` is untouched by it deliberately: not having
+        # measured a session is not a claim that it is resting, so an
+        # unread flag may not turn it into one.
+        if tmux_status == STATUS_UNKNOWN and not unread:
             return STATUS_UNKNOWN
 
-        return STATUS_IDLE
+        return derive_read_state(STATUS_IDLE, unread=unread)
 
     def clear_notice(self, session_id: str) -> bool:
         """Clear an open ``Notification`` because the user LOOKED. Idempotent.

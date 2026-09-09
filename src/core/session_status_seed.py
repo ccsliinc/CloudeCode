@@ -109,8 +109,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.core.session_status import (
-    STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
+    derive_read_state,
 )
 
 # Re-exported so a caller has ONE import for the whole ladder, the way
@@ -304,11 +304,19 @@ def display_state(
 ) -> Optional[str]:
     """What a seed renders as, given the session's unread flag.
 
-    Description: mirrors the tail of ``SessionActivityTracker.resolve``
-      exactly - a session at rest that nobody has looked at is
-      ``finished_unread``, not ``idle``. It READS the unread flag and
-      never writes one: unread is keyed on the tmux INSTANCE and owned
-      elsewhere, and nothing in this module may move it.
+    Description: applies ``session_status.derive_read_state``, the SAME
+      function the hook tracker, the tmux fallback and the transcript
+      ladder apply - a session at rest that nobody has looked at is
+      ``finished_unread``, and one that has been looked at is ``idle``.
+      IT RUNS IN BOTH DIRECTIONS, which is the whole fix of 2026-09-09:
+      a seed built from a row that RECORDS ``finished_unread`` renders
+      ``idle`` the moment the flag clears, instead of serving the word
+      the row was stamped with before the user opened the tab. A seed is
+      a cached READING of durable evidence and the flag is not part of
+      that evidence - it is measured fresh on every call. It READS the
+      unread flag and never writes one: unread is keyed on the tmux
+      INSTANCE and owned elsewhere, and nothing in this module may move
+      it.
       AN EXPIRED SEED RENDERS NOTHING. A seed is cached for up to
       :data:`SEED_REFRESH_INTERVAL_SECONDS`, so a claim about NOW - the
       transcript ladder's ``working`` - could otherwise be served for a
@@ -323,6 +331,7 @@ def display_state(
     Output: str | None - the status to render, or None when the seed
       declined to answer or its claim has expired.
     Example: display_state(StatusSeed('idle'), unread=True) -> 'finished_unread'
+    Example: display_state(StatusSeed('finished_unread'), unread=False) -> 'idle'
     """
     if not seed.seeds:
         return None
@@ -330,6 +339,4 @@ def display_state(
         stamp = now or datetime.now(timezone.utc)
         if stamp > seed.expires_at:
             return None
-    if seed.state == STATUS_IDLE and unread:
-        return STATUS_FINISHED_UNREAD
-    return seed.state
+    return derive_read_state(seed.state, unread=unread)

@@ -76,6 +76,7 @@ from src.core.session_status import (
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
     STATUS_WORKING,
+    derive_read_state,
 )
 from src.core.session_status_seed_records import TranscriptRest
 
@@ -241,6 +242,13 @@ def resolve_transcript_status(
     at = tail.at
     if at is not None and last_turn_end_seen is not None and at > last_turn_end_seen:
         return TranscriptStatus(
+            # THE ONE RUNG THAT IS NOT DERIVED FROM THE FLAG, because it
+            # is the rung that SETS it. ``claim_turn_end_at`` tells the
+            # seam to write the auto unread flag for this turn, so the
+            # flag passed in describes the instant BEFORE this
+            # measurement and deriving against it would answer ``idle``
+            # about a turn that just finished unseen. Every other rung
+            # reads the flag; this one moves it.
             state=STATUS_FINISHED_UNREAD,
             at=at,
             claim_turn_end_at=at,
@@ -253,7 +261,12 @@ def resolve_transcript_status(
         )
 
     return TranscriptStatus(
-        state=STATUS_FINISHED_UNREAD if unread else STATUS_IDLE,
+        # THE SAME DERIVATION EVERY OTHER SOURCE USES. Rung 3 owns no
+        # opinion about read versus unread: it establishes that the
+        # session is AT REST, and ``derive_read_state`` says which of the
+        # two resting states that is, from the flag as measured on this
+        # call. See ``session_status.derive_read_state``.
+        state=derive_read_state(STATUS_IDLE, unread=unread),
         at=at,
         rung=RUNG_TURN_END_SEEN,
         detail=(

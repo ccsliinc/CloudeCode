@@ -125,7 +125,10 @@ def test_a_pane_on_the_trust_dialog_is_awaiting_a_keypress(live: RealHookApp) ->
         "trust dialog",
         want_status=("idle", "unknown", "running", "working"),
         want_inner=("waiting-input",),
-        want_outer=("active",),
+        # 2026-09-09: STEADY, not breathing. A pane parked on its trust
+        # dialog is a live turn that is not moving, and the ring means
+        # activity - see docs/session-status.md.
+        want_outer=("steady",),
         want_gate=("awaiting_startup_prompt",),
         timeout=50.0,
     )
@@ -182,7 +185,9 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
         "UserPromptSubmit+tools",
         want_status=("working", "working_subagent"),
         want_inner=("working",),
-        want_outer=("active", "unread"),
+        # The ONLY breathing ring in the app, and it no longer varies
+        # with the unread flag: a working session is working.
+        want_outer=("active",),
         timeout=60.0,
     )
 
@@ -195,13 +200,16 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
 def test_a_real_stop_with_nobody_viewing_paints_finished_unread(
     live: RealHookApp,
 ) -> None:
-    """``Stop`` sets the auto-unread flag, and the halo has to show it."""
+    """``Stop`` sets the auto-unread flag, and the DOT has to show it."""
     await_state(
         live,
         "Stop (unviewed)",
         want_status=("finished_unread",),
+        # 2026-09-09: the green dot is the whole signal. It used to
+        # breathe an amber ring, which read as background work on the one
+        # state that means the opposite.
         want_inner=("done",),
-        want_outer=("unread",),
+        want_outer=("off",),
         timeout=180.0,
     )
     assert "Stop" in live.ledger.events(live.session_id), (
@@ -272,7 +280,7 @@ def test_a_trailing_subagent_stop_does_not_re_arm_the_heartbeat(
         f"  led:        {led}\n"
         f"  hooks seen: {live.ledger.describe()}"
     )
-    assert led["inner"] == "done" and led["outer"] == "unread", (
+    assert led["inner"] == "done" and led["outer"] == "off", (
         f"the light disagrees with the status it was given: {led} from "
         f"{observed}"
     )
@@ -283,16 +291,17 @@ def test_a_trailing_subagent_stop_does_not_re_arm_the_heartbeat(
 # =========================================================================== #
 
 
-def test_binding_a_terminal_clears_the_unread_halo(live: RealHookApp) -> None:
+def test_binding_a_terminal_clears_the_unread_light(live: RealHookApp) -> None:
     """A WS terminal binding is the ONLY thing that clears auto-unread.
 
-    The assertion is about the HALO, which is what binding a terminal is
-    responsible for. It also now asserts that the dot lands on ``idle``,
-    because that is the state punchlist item 4 made UNREACHABLE: with the
-    trailing ``SubagentStop`` re-arming the heartbeat, clearing the unread
-    halo revealed ``working`` underneath for the rest of the 120s window
-    rather than a session at rest. Reaching ``idle`` here is the live
-    proof of the fix the previous test asserts against the event.
+    The assertion is about the DOT, which since 2026-09-09 is where unread
+    lives: green ``done`` while unread, grey ``idle`` once read. It also
+    asserts the status itself lands on ``idle``, because that is the state
+    punchlist item 4 made UNREACHABLE: with the trailing ``SubagentStop``
+    re-arming the heartbeat, clearing the flag revealed ``working``
+    underneath for the rest of the 120s window rather than a session at
+    rest. Reaching ``idle`` here is the live proof of the fix the previous
+    test asserts against the event.
     """
     before = live.signals()
     assert before.get("unread") is True, (
@@ -304,19 +313,19 @@ def test_binding_a_terminal_clears_the_unread_halo(live: RealHookApp) -> None:
     def cleared(observed: dict[str, Any]) -> bool:
         return (
             observed.get("unread") is False
-            and led_state_for(observed)["outer"] != "unread"
+            and led_state_for(observed)["inner"] != "done"
         )
 
     matched, observed = poll_until(live.signals, cleared, timeout=30.0)
     led = led_state_for(observed or {})
     record("terminal bound", observed or {}, led)
     assert matched, (
-        "binding a WS terminal did not clear the unread halo.\n"
+        "binding a WS terminal did not clear the unread light.\n"
         f"  last signals: {observed}\n"
         f"  hooks seen:   {live.ledger.describe()}"
     )
     assert (observed or {}).get("activity_status") == "idle", (
-        "the halo cleared but the dot did not reach idle, which is what "
+        "the flag cleared but the dot did not reach idle, which is what "
         "punchlist item 4 made unreachable.\n"
         f"  last signals: {observed}\n"
         f"  last led:     {led}\n"
@@ -363,7 +372,8 @@ def test_a_real_permission_request_paints_the_waiting_state(
         "PermissionRequest",
         want_status=("question", "notice"),
         want_inner=("waiting-permission", "waiting-input"),
-        want_outer=("active",),
+        # Lit and STILL: the agent is stopped, so nothing is running.
+        want_outer=("steady",),
     )
 
 

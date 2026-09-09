@@ -247,11 +247,13 @@ console.log('[SessionStatusUI Module] Loading...');
         // is dead.
         //
         // `signals` carries the two fields the LED needs that a bare
-        // status string cannot express - `unread` (which drives the halo
-        // independently of the dot) and `startup_gate` (a separate probe
-        // from the hook stream). It is optional: a caller that passes
-        // nothing gets a correct LED for the status alone, just without
-        // the unread halo.
+        // status string cannot express - `unread` (which since
+        // 2026-09-09 selects between the green `done` dot and the grey
+        // `idle` one; the ring carries activity alone) and
+        // `startup_gate` (a separate probe from the hook stream). It is
+        // optional: a caller that passes nothing gets a correct LED for
+        // the status alone, just without the read/unread distinction on
+        // a resting row.
         if (globalThis.StatusLed) {
             const s = signals || {};
             const led = globalThis.StatusLed.ledStateFor({

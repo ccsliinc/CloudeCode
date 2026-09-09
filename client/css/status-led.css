@@ -83,8 +83,7 @@
      * red, because a blocked session is not a dead one and the two lights
      * must never be confusable at a glance. The danger-adjacent
      * --color-danger-strong (#ff6b6b) was rejected for that last reason
-     * alone. It is also clear of --color-unread's amber (#fbbf24), which
-     * rides the ring and could otherwise sit behind it. */
+     * alone. */
     --led-color-permission: var(--color-status-pending, #ffa500);
     --led-color-done: var(--color-success, #3fb950);
     /* THE READ/IDLE COLOUR, added 2026-09-09. Owner's report, verbatim:
@@ -92,7 +91,10 @@
      * a tab. there needs to be a read/idle color." Before this, `idle`
      * (already-seen, at rest) painted the same green fill as `done`
      * (finished, still unread) - opening a tab only moved the outer ring,
-     * which is too subtle a change to register at a glance.
+     * which is too subtle a change to register at a glance. Since the
+     * ring stopped carrying unread entirely (2026-09-09) this pair of
+     * fills IS the read/unread signal, so grey against green has to stay
+     * clearly legible.
      *
      * A NEUTRAL MID-GREY, DELIBERATELY DIFFERENT FROM `unknown`'s. Both
      * are "nothing urgent here" greys, but they answer different
@@ -109,12 +111,13 @@
     --led-color-dead: var(--color-danger, #ff4444);
     --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
 
-    /* Attention has its own hue, deliberately NOT one of the five above.
-     * Unread is a property of the outer ring alone and can sit around any
-     * inner state, so if it shared a colour with one of them the two
-     * rings would read as one signal in exactly the case where they are
-     * saying different things. */
-    --led-color-unread: var(--color-warning, #d29922);
+    /* THERE IS NO UNREAD COLOUR ANY MORE, and that is the point.
+     * --led-color-unread was an amber ring that could sit around any
+     * inner state; it was retired 2026-09-09 along with the outer
+     * `unread` state it painted. The ring now says ACTIVITY and takes
+     * the fill's own hue, so it can never read as a second, competing
+     * signal. Unread is the green `done` fill against the grey `idle`
+     * one. See client/js/status-led.js. */
 
     /* ---- geometry ---------------------------------------------------
      * The owner's calibration, verbatim (2026-09-08): "glowing is still
@@ -338,25 +341,28 @@
 }
 
 .status-led[data-outer='steady'] {
-    /* Lit and still. Done, seen, nothing pending. */
+    /* Lit and STILL: a live turn that is not moving. An agent stopped on
+     * a permission prompt, one asking to be looked at, or a session
+     * parked on its startup prompt. Something is there, nothing is
+     * running, so the ring is on and does not breathe. */
     --led-ring-ink: var(--led-ink);
     --led-ring-alpha: 60%;
     --led-glow-alpha: 25%;
 }
 
-.status-led[data-outer='unread'] {
-    /* Its own hue, and it breathes - this is the state the whole feature
-     * exists to surface. Same 2s period as `active`: unread is not more
-     * urgent than working, it is a different KIND of thing, and a faster
-     * pulse would read as a severity ranking that is not intended. */
-    --led-ring-ink: var(--led-color-unread);
-    --led-ring-alpha: 85%;
-    --led-glow-alpha: 60%;
-}
+/* THE `unread` RING IS GONE, 2026-09-09. It breathed an amber ring around
+ * a session that had finished a turn and was doing nothing at all, which
+ * is what the owner saw: "the ring around some of the leds are not gray,
+ * which means there should be background tasks. i dont think those few
+ * have any background tasks." A ring that means both "work is running"
+ * and "something is unread" means neither, so unread moved entirely to
+ * the fill. Do not add another lit ring state without saying what
+ * ACTIVITY it describes. */
 
 .status-led[data-outer='off'] {
-    /* At rest: a dead pane, or a session that has been read and has
-     * nothing pending. No ring and no glow at all - not dim ones. Both
+    /* At rest: nothing is running here. A finished turn (read or
+     * unread alike - the fill says which), an idle prompt, or a dead
+     * pane. No ring and no glow at all - not dim ones. Both
      * layers go fully transparent rather than the whole box-shadow going
      * `none`, because `none` would take the hollow `unknown` rim with it
      * and make one dimension depend on the other. The feather layer needs
@@ -410,7 +416,7 @@
  * (the fallback path when status-led.js fails to load), which is why that
  * file is not deleted. */
 
-.status-dot.status-led:not([data-outer='active']):not([data-outer='unread']) {
+.status-dot.status-led:not([data-outer='active']) {
     animation: none;
 }
 
@@ -448,8 +454,7 @@
  * it is the shape of the edge, not the glow, and the glow is the only
  * thing that breathes. */
 
-.status-led[data-outer='active'],
-.status-led[data-outer='unread'] {
+.status-led[data-outer='active'] {
     animation: status-led-breathe 2s ease-in-out infinite;
 }
 
@@ -470,8 +475,8 @@
  * exactly what the base rule already paints, so killing the animation is
  * the whole of it. A user who has asked for no motion must still be able
  * to tell an active session from a resting one, so the distinction moves
- * entirely into the ring and glow alphas: `active` and `unread` remain
- * the brightest rings on screen, they just hold still. */
+ * entirely into the ring and glow alphas: `active` remains the
+ * brightest ring on screen, it just holds still. */
 @media (prefers-reduced-motion: reduce) {
     .status-led {
         animation: none !important;

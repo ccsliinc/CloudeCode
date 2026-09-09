@@ -1,21 +1,29 @@
-// ONE `/sessions/list` ROW, TWO SURFACES, THE SAME HALO.
+// ONE `/sessions/list` ROW, THREE SURFACES, THE SAME LIGHT.
 //
 // WHAT WENT WRONG. `SessionStatusUI.dotHtml(status, signals)` takes an
 // OPTIONAL second argument carrying the two fields a bare status string
 // cannot express - `unread` and `startup_gate` - and `StatusLed.ledStateFor`
-// is the only thing that turns `unread` into an outer `unread` halo. Every
-// live call site passed the status alone. So the flag reached the row, was
-// fingerprinted by both repaint signatures, forced a repaint, and was then
-// dropped at the last inch: an `idle` session the user had just marked
-// unread painted `data-outer="steady"`, and a `working` one painted
-// `active`, both identical to a session with nothing waiting on it. Only
-// `finished_unread` looked right, and only because that status STRING
-// hardcodes the halo.
+// is the only thing that reads them. Every live call site passed the
+// status alone. So the flag reached the row, was fingerprinted by both
+// repaint signatures, forced a repaint, and was then dropped at the last
+// inch: an `idle` session the user had just marked unread rendered
+// identically to one with nothing waiting on it.
+//
+// WHAT THE FLAG MOVES CHANGED ON 2026-09-09, and this file changed with
+// it. Unread used to paint an outer `unread` halo; the ring now carries
+// ACTIVITY alone and unread rides the INNER dot - green `done` against
+// grey `idle`. So the observable that proves the field survived the trip
+// is `data-inner`, not `data-outer`, and it is only observable on a
+// RESTING row: a working session is painted working whether or not an
+// older turn is unread, deliberately. The assertions below moved to the
+// dot for that reason, and the cross-surface agreement check now compares
+// BOTH attributes, which is a stronger claim than the halo one it
+// replaces.
 //
 // WHY A NODE TEST AND NOT A SCREENSHOT. The defect is a dropped argument,
 // which is exactly what source-level rendering can see and a pixel diff
 // cannot explain. What this file will NOT catch is CSS that paints the
-// `unread` halo invisibly; tests/test_status_led.node.mjs owns that half.
+// dot invisibly; tests/test_status_led.node.mjs owns that half.
 //
 // THE LOAD-BEARING PART IS THAT ONE ROW OBJECT FEEDS BOTH SURFACES. Two
 // separate fixtures would let the two renderers agree with their own
@@ -141,6 +149,16 @@ function outerOf(html) {
 }
 
 /**
+ * Read the `data-inner` value off the FIRST LED in a fragment.
+ * @param {string} html  Rendered markup.
+ * @returns {?string} The inner state, or null when no LED was drawn.
+ */
+function innerOf(html) {
+    const m = String(html).match(/data-inner="([^"]*)"/);
+    return m ? m[1] : null;
+}
+
+/**
  * Render the launchpad's running-session CARD for one row, through the
  * real `renderRunningSessions()` and the real LED stack.
  * @param {object} row  One merged session row.
@@ -196,16 +214,18 @@ const SURFACES = [
 // ---------------------------------------------------------------------
 
 for (const [name, render] of SURFACES) {
-    await test(`${name}: an idle+unread row paints the unread halo`, () => {
+    await test(`${name}: an idle+unread row paints the green unread dot`, () => {
         const html = render(listRow('idle', true));
-        assert.equal(outerOf(html), 'unread',
+        assert.equal(innerOf(html), 'done',
             `${name} dropped the row's unread field`);
     });
 
-    await test(`${name}: a working+unread row paints the unread halo`, () => {
-        const html = render(listRow('working', true));
-        assert.equal(outerOf(html), 'unread',
-            `${name} dropped the row's unread field on a working session`);
+    await test(`${name}: and it does NOT ring - nothing is running`, () => {
+        // 2026-09-09. The ring means activity; a finished conversation
+        // with an unread turn has none, and it used to breathe.
+        const html = render(listRow('idle', true));
+        assert.equal(outerOf(html), 'off',
+            `${name} rang an idle session that is only unread`);
     });
 }
 
@@ -216,20 +236,28 @@ for (const [name, render] of SURFACES) {
 // ---------------------------------------------------------------------
 
 for (const [name, render] of SURFACES) {
-    await test(`${name}: an idle row with NOTHING waiting stays off (2026-09-09: idle is at rest, not steady-done)`, () => {
-        assert.equal(outerOf(render(listRow('idle', false))), 'off',
+    await test(`${name}: an idle row with NOTHING waiting paints the grey read dot`, () => {
+        const html = render(listRow('idle', false));
+        assert.equal(innerOf(html), 'idle',
             `${name} claimed unread on a row that is not`);
+        assert.equal(outerOf(html), 'off', `${name} rang a resting session`);
     });
 
-    await test(`${name}: a working row with nothing waiting stays active`, () => {
+    await test(`${name}: a working row rings active whatever the flag says`, () => {
+        // BOTH directions, because the ring must be a function of the
+        // status alone now. A renderer that still folded unread into the
+        // ring would differ across these two.
         assert.equal(outerOf(render(listRow('working', false))), 'active',
-            `${name} claimed unread on a working row that is not`);
+            `${name} lost the working ring`);
+        assert.equal(outerOf(render(listRow('working', true))), 'active',
+            `${name} let an unread flag change a working session's ring`);
     });
 
     await test(`${name}: a DEAD pane is never painted as something to read`, () => {
         // An unread flag must not paint a corpse as waiting for you.
-        assert.equal(outerOf(render(listRow('dead', true))), 'off',
-            `${name} painted a dead pane as unread`);
+        const html = render(listRow('dead', true));
+        assert.equal(outerOf(html), 'off', `${name} rang a dead pane`);
+        assert.equal(innerOf(html), 'dead', `${name} painted a dead pane as unread`);
     });
 }
 
@@ -239,16 +267,36 @@ for (const [name, render] of SURFACES) {
 //    halos depending on which screen you were looking at.
 // ---------------------------------------------------------------------
 
-await test('every surface renders the same halo for the same list row', () => {
+await test('every surface renders the same LIGHT for the same list row', () => {
     for (const status of ['idle', 'working', 'finished_unread', 'unknown', 'dead']) {
         for (const unread of [true, false]) {
             const row = listRow(status, unread);
-            const seen = SURFACES.map(([name, render]) => [name, outerOf(render(row))]);
+            const seen = SURFACES.map(([name, render]) => {
+                const html = render(row);
+                return [name, innerOf(html) + '/' + outerOf(html)];
+            });
             const first = seen[0][1];
-            for (const [name, outer] of seen) {
-                assert.equal(outer, first,
-                    `${status}/unread=${unread}: ${name} said ${outer}, ` +
+            for (const [name, light] of seen) {
+                assert.equal(light, first,
+                    `${status}/unread=${unread}: ${name} said ${light}, ` +
                     `${seen[0][0]} said ${first}`);
+            }
+        }
+    }
+});
+
+// ---------------------------------------------------------------------
+// 3b. AND NO SURFACE RINGS UNREAD, ever. The retired outer state must not
+//     survive anywhere in the render path.
+// ---------------------------------------------------------------------
+
+await test('no surface can produce the retired unread ring', () => {
+    for (const status of ['idle', 'working', 'finished_unread', 'unknown', 'dead']) {
+        for (const unread of [true, false]) {
+            const row = listRow(status, unread);
+            for (const [name, render] of SURFACES) {
+                assert.notEqual(outerOf(render(row)), 'unread',
+                    `${name} still paints an unread ring for ${status}`);
             }
         }
     }

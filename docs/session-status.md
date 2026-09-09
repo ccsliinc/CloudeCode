@@ -30,6 +30,11 @@ the same way.
 
 ### The legend, in one place
 
+**THE DOT IS THE STATE AND WHETHER IT HAS BEEN READ; THE RING IS
+ACTIVITY.** Green `done` means finished and unread, grey `idle` means
+finished and read, and only a session with something RUNNING in it
+breathes. See "The LED: two independent dimensions" below.
+
 The words a user reads live in `STATUS_LABELS`
 (`client/js/session-status-ui.js`) and nowhere else; every surface gets
 them through `dotHtml`, so they cannot drift between the sidebar, the
@@ -462,6 +467,58 @@ the user clearing the control (`PATCH /sessions/{name}/unread` with
 `false`). Both go through `UnreadStore.clear`, which drops the pair in
 one write.
 
+### Read and unread are DERIVED, never stored
+
+`finished_unread` and `idle` are ONE resting state seen through ONE flag,
+and which of the two a session is, is decided at resolve time by
+`session_status.derive_read_state` - the single function every source runs
+through. Two directions, not one: no path may answer `finished_unread`
+while the flag is False, and a session at rest whose flag IS set must
+answer `finished_unread`.
+
+**MEASURED ON LIVE 2026-09-09 at 5e13cb1.** The owner opened the
+daily-briefing tab and nothing changed. `/sessions/list` for
+`cloude_daily-briefing` answered `activity_status: finished_unread` beside
+`unread: false`, with `status_source: seed_row`: the WebSocket bind had
+cleared the flag exactly as designed, and the durable row still held the
+word `finished_unread` stamped before the view. The seed path returned it
+verbatim and the green dot stayed green over a session that had been read.
+
+Each source had its own half of the rule and one of them had only the half
+that ADDS unread. **A one-directional derivation is not a derivation, it
+is a cache** - and a cache of a fact that moves is a lie with a timestamp.
+
+The callers, all of them applying the same pure function:
+
+| where | what it derives |
+|---|---|
+| `SessionActivityTracker.resolve` | the hook path's resting tail |
+| `session_activity.map_tmux_fallback` | the tmux-only path (attachable rows too) |
+| `session_status_seed.display_state` | the durable row and the transcript seed |
+| `session_transcript_status.resolve_transcript_status` | the hookless ladder, rung 3 |
+| `SessionManager._session_info_for` | the assembled answer, against the flag as it stands |
+
+`_session_info_for` re-applying it is not belt and braces for its own
+sake: the seed path can SET the flag on the way past (a newly measured
+turn end), so the assembled answer is derived after that write. The
+function is idempotent, so running it over a value a source already
+derived cannot change it.
+
+**THE COLUMN HOLDS THE BASE STATE.** `activity_persist.write_state`
+collapses the pair back to `idle` on the way into
+`sessions.activity_state`, because the flag is durable in a store of its
+own and a row that records the projection records an answer nothing
+rewrites when the user opens the tab. Rows written before this still carry
+the old spelling and are reconciled on read by the same function, which is
+why the fix needed no migration.
+
+**THE ONE RUNG THAT IS NOT DERIVED IS THE ONE THAT SETS THE FLAG.** The
+transcript ladder's rung 2 has just MEASURED a turn end newer than
+anything recorded, and reports `claim_turn_end_at` so the seam writes the
+auto flag. Deriving there against the flag as it stood BEFORE that
+measurement would answer `idle` about a turn that finished unseen. Every
+other rung reads the flag; that one moves it.
+
 ### A view also clears an open `notice`, and never an open `permission`
 
 Both paths route through `src/core/session_view_clears.py` so there is
@@ -543,8 +600,8 @@ run rAF for a tab it is not painting. The connect suspended inside that
 await, before `openWebSocket()` - and because no socket existed there was
 no `onclose`, so no rung of the auto-reconnect ladder could fire either.
 The terminal sat on "Connecting to terminal..." (the string set on the
-line above the await) and the row kept an unread halo nothing could
-clear. The suspended connect completed the instant the tab was painted,
+line above the await) and the row kept its unread light with nothing able
+to clear it. The suspended connect completed the instant the tab was painted,
 35 minutes later.
 
 FIXING ONE OF THEM WAS NOT ENOUGH, and only re-verifying on live caught
@@ -590,12 +647,31 @@ duplicated.
 
 `client/js/status-led.js` and `client/css/status-led.css`.
 
-One flat dot had to answer two questions at once - what is the chat doing,
-and does it want my attention - and could not. `finished_unread` exists as
-a whole extra state only to say "done, and also unread", and there was no
-way at all to say "working, and also unread". Two rings say both.
+One flat dot had to answer two questions at once - WHAT STATE the chat is
+in, and WHETHER ANYTHING IS RUNNING in it - and could not. An agent stopped
+on a permission prompt is a live turn making no progress; a conversation
+that ended an hour ago and one mid-tool-call are both "not blocked". Two
+rings say both.
 
-**Inner dot** (`data-inner`), the chat's own status:
+**THE TWO RINGS ANSWER TWO QUESTIONS, and since 2026-09-09 each answers
+exactly one.** The INNER dot is the session's state INCLUDING whether it
+has been read: green `done` is finished-and-unread, grey `idle` is
+finished-and-read. The OUTER ring is ACTIVITY ONLY: breathing means
+something is running right now, steady means a live turn is stopped
+waiting on the user, off means nothing is running, dim means nothing was
+measured. The ring says nothing about unread and the dot says nothing
+about activity.
+
+That is the owner's original spec, restored: "behind this is a larger
+glowing circle is colored and pulsing on activity and steady on done."
+It had drifted - `finished_unread` painted a breathing amber ring, so the
+quietest state on the dial wore the loudest light in the app. The report,
+verbatim: "the ring around some of the leds are not gray, which means
+there should be background tasks. i dont think those few have any
+background tasks." The outer `unread` state and its `--led-color-unread`
+hue were retired in the same change.
+
+**Inner dot** (`data-inner`), the chat's own status and its read state:
 `working`, `waiting-permission`, `waiting-input`, `idle`, `done`, `dead`,
 `unknown`.
 
@@ -608,12 +684,13 @@ is too subtle to register at a glance. `idle` is a neutral grey
 (`--led-color-idle`), a solid dot (not the hollow `unknown` treatment -
 one is a measurement, the other is the absence of one), and pairs with
 outer `off` so a read session reads as calm and at rest rather than as a
-dimmer copy of `done`.
+dimmer copy of `done`. Since the ring stopped carrying unread, this pair
+of fills IS the read/unread signal and nothing else says it.
 
-**Outer ring** (`data-outer`), activity and attention:
-`active` (breathing), `steady` (lit, still), `unread` (its own hue,
-breathing), `off` (no ring at all - dead, or read-and-at-rest), `dim` (not
-measured).
+**Outer ring** (`data-outer`), ACTIVITY, and nothing else:
+`active` (breathing - something is running), `steady` (lit and still - a
+live turn stopped waiting on the user), `off` (no ring at all - nothing is
+running, read or unread alike), `dim` (not measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
@@ -668,7 +745,7 @@ two classes and beats every rule in the component, so a reset there would
 blank the outer ring on every LED in the app. The legacy shadows it used to
 cancel are single-class rules in `status-dot.css`, which loads BEFORE
 `status-led.css`, so source order already handles them. Its `animation`
-reset survives, scoped off the two breathing states with `:not()` - a
+reset survives, scoped off the one breathing state with `:not()` - a
 blanket reset ties with the breathing rule at (0,2,0) and wins on order,
 which would kill the pulse everywhere.
 
@@ -680,32 +757,45 @@ ONE place the server vocabulary becomes a pair of rings.
 | activity_status | startup_gate | unread | inner | outer |
 |---|---|---|---|---|
 | `dead` / `stopped` | any | any | `dead` | `off` |
-| any | `awaiting_startup_prompt` | any | `waiting-input` | `active` |
-| `question` | any | any | `waiting-permission` | `active` |
-| `notice` | any | any | `waiting-input` | `active` |
-| `working` / `working_subagent` / `running` | any | no | `working` | `active` |
-| `working` / `working_subagent` / `running` | any | yes | `working` | `unread` |
-| `finished_unread` | any | any | `done` | `unread` |
+| any | `awaiting_startup_prompt` | any | `waiting-input` | `steady` |
+| `question` | any | any | `waiting-permission` | `steady` |
+| `notice` | any | any | `waiting-input` | `steady` |
+| `working` / `working_subagent` / `running` | any | any | `working` | `active` |
+| `finished_unread` | any | any | `done` | `off` |
 | `idle` | any | no | `idle` | `off` |
-| `idle` | any | yes | `done` | `unread` |
-| `unknown` / absent / unrecognised | any | no | `unknown` | `dim` |
-| `unknown` / absent / unrecognised | any | yes | `unknown` | `unread` |
+| `idle` | any | yes | `done` | `off` |
+| `unknown` / absent / unrecognised | any | any | `unknown` | `dim` |
 
 Order matters: `dead` outranks everything (an unread flag must not paint a
 corpse as something to go and read), then anything blocking on the user,
-then activity. `unread` rides the OUTER RING independently of all of it.
+then activity. THE RING IS A FUNCTION OF THE STATUS ALONE - the unread
+flag appears in exactly one row of that table, the defensive `idle` one,
+and it moves the DOT.
+
+`working` no longer changes ring when a session is also unread: it is
+working, and the ring says what is running. The unread turn behind it is
+still counted by the group badge, which reads the row's own flag rather
+than the colour of a light (`summarizeStates`).
 
 THE `idle` + `unread: true` ROW IS DEFENSIVE, NOT NORMALLY REACHABLE. The
-server flips a session to `finished_unread` the instant it goes unread and
-back to `idle` only once it has been read, so a well-formed row never
-carries both at once. If one ever arrives contradictory, the row renders
-identically to `finished_unread` (`done` / `unread`) rather than the grey
-`idle` dot - the unread flag is the louder, more urgent claim, and
+server derives this pair from the flag on every path (see "read and unread
+are derived, never stored" below), so a well-formed row never carries both
+at once. If one ever arrives contradictory, the row renders identically to
+`finished_unread` (`done` / `off`) rather than the grey `idle` dot - the
+unread flag is the louder, more urgent claim, and
 `session-status-summary.js`'s group rollup depends on this: its `unread`
-bucket always renders as `{inner: 'done', outer: 'unread'}`, so a row that
-disagreed with that fixed pair would make the header lie about its own
-child (`tests/test_status_summary.node.mjs`, "a single-child group renders
-the same LED state as that child").
+bucket is inner `done`, so a row that disagreed would make the header lie
+about its own child (`tests/test_status_summary.node.mjs`, "a single-child
+group renders the same LED state as that child").
+
+THE GROUP HEADER FOLDS THE TWO DIMENSIONS SEPARATELY, for the same reason
+a row keeps them apart. Its inner dot is the highest-priority state among
+the members (permission > input > working > unread > idle > dead >
+unknown); its ring is activity across the WHOLE group - `active` if any
+member is working, `steady` if any is a live turn waiting on the user,
+`off` otherwise, `dim` when nothing in there was measured. So a group
+holding one parked session and one busy one paints the parked dot inside a
+breathing ring, which is both facts at once.
 
 THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
 `SessionStatusUI.dotHtml(status, signals)` takes `unread` and
@@ -713,11 +803,14 @@ THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
 express either, and until 2026-09-08 no live caller passed it. The flag
 reached the row, was fingerprinted by both repaint signatures and forced a
 repaint - and was dropped at the last inch, so an `idle` unread session
-painted a `steady` halo and a `working` one painted `active`. Only
-`finished_unread` looked right, and only because that status string
-hardcodes the halo. `tests/test_unread_led_one_field.node.mjs` renders one
-`/sessions/list` row through the sidebar row, the launchpad card and the
-project-tree row and fails if any of the three disagrees.
+rendered identically to one with nothing waiting on it.
+`tests/test_unread_led_one_field.node.mjs` renders one `/sessions/list`
+row through the sidebar row, the launchpad card and the project-tree row
+and fails if any of the three disagrees. Since the ring stopped carrying
+unread, the observable that proves the field survived the trip is
+`data-inner` (`done` versus `idle`), and it is only observable on a
+RESTING row - a working session is painted working whether or not an
+older turn is unread, deliberately.
 
 Both inner waiting states are reachable from live data as of 2026-09-08.
 `waiting-permission` is `question` and nothing else - the agent is
@@ -840,8 +933,23 @@ need revisiting if a surface ever shipped at, say, 36px.
 ### Rolling a group up
 
 `client/js/session-status-summary.js` folds a set of sessions into one LED
-plus an unread count. Priority: **permission > input > working > unread >
-done > idle > dead > unknown**.
+plus an unread count. THE TWO DIMENSIONS ARE FOLDED SEPARATELY, the same
+way a row keeps them apart.
+
+The INNER dot is the highest-priority state present. Priority:
+**permission > input > working > unread > idle > dead > unknown**.
+
+The OUTER ring is ACTIVITY across the whole group, computed independently:
+`active` if any member is working, `steady` if any member is a live turn
+waiting on the user, `off` otherwise, and `dim` when nothing in the group
+was measured at all. So a group holding one parked session and one busy
+one paints the parked dot inside a breathing ring - both facts at once,
+which is what two rings are for. Taking the ring off the winning bucket's
+row instead would hide the running work behind the more urgent dot.
+
+The `done` bucket ("finished and already read") was retired 2026-09-09 and
+lost no meaning: the inner dot spells that difference itself now, so
+`done`-as-read IS `idle` and a bucket for it could never be reached.
 
 `permission` is a session stopped on a yes/no; `input` is one that wants
 the user's eyes (a `notice`, or a startup prompt nobody has answered)
@@ -849,18 +957,20 @@ without being stopped. Permission leads because it is the only bucket
 guaranteed to make no progress at all until a human acts - a header that
 hoisted a chatty notification over a parked session would point the user
 at the wrong row. Both outrank working because they are about the user
-and will stay that way; working resolves on its own. `idle` (added
-2026-09-09) sits below `done` - `done` here means "unread", the louder of
-the two rest states - and above `dead`, so a group with one unread and ten
+and will stay that way; working resolves on its own. `idle` (the grey
+read-and-at-rest dot) sits below `unread` - the louder of the two rest
+states - and above `dead`, so a group with one unread and ten
 read-and-idle sessions still bubbles unread, and a group of nothing but
 idle sessions reads idle rather than falling all the way to unknown. Dead
 sits BELOW both deliberately - a group with one corpse and nine busy
 sessions must not read as dead. An EMPTY group is `unknown`, not `done`:
 nothing to measure is not the same as measured-and-quiet.
 
-Each child is bucketed from the LED state it already resolved to, not from
+Each child is bucketed from the INNER dot it already resolved to, not from
 its raw `activity_status`, so a header cannot disagree with the rows under
-it.
+it. The unread COUNT is read off each row's own flag rather than off the
+colour of a light, so a working session with an older unread turn is still
+counted even though its dot says `working`.
 
 ## A silent degradation worth knowing about
 

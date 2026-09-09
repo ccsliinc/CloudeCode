@@ -15,6 +15,15 @@
 //      `unknown`/`dim` rather than on a state that claims a measurement.
 //   3. `unknown` IS NOT `done`. The single most repeated defect class in
 //      this project is a not-measured value rendering as a measured one.
+//   4. THE RING MEANS ACTIVITY AND NOTHING ELSE (2026-09-09). Only a
+//      session with something RUNNING in it may breathe. The outer
+//      `unread` state was retired because a finished, idle conversation
+//      was painting the loudest ring on the screen - the owner's report:
+//      "the ring around some of the leds are not gray, which means there
+//      should be background tasks. i dont think those few have any
+//      background tasks." Unread lives on the inner dot now, green
+//      against grey, and several assertions below are negative controls
+//      that no `unread` outer value can come back.
 //
 // The stylesheet assertions are deliberately here rather than in a manual
 // harness: `prefers-reduced-motion` support and the existence of a colour
@@ -145,14 +154,83 @@ test('the inner vocabulary is exactly the seven documented states', () => {
     ]);
 });
 
-test('the outer vocabulary is exactly the five documented states', () => {
-    assert.deepEqual(plain(Led.OUTER_STATES), [
-        'active',
-        'steady',
-        'unread',
-        'off',
-        'dim',
-    ]);
+test('the outer vocabulary is exactly the four documented states', () => {
+    assert.deepEqual(plain(Led.OUTER_STATES), ['active', 'steady', 'off', 'dim']);
+});
+
+test('THE RETIRED `unread` OUTER STATE IS GONE FROM THE VOCABULARY', () => {
+    // The negative control for the whole 2026-09-09 change. A value left
+    // in the vocabulary is a value some caller can still pass, and it
+    // would render as an unstyled ring rather than fail loudly.
+    assert.equal(plain(Led.OUTER_STATES).indexOf('unread'), -1);
+    assert.ok(!CSS.includes("[data-outer='unread']"), 'and no rule paints it');
+    assert.ok(
+        !CSS.includes('--led-color-unread:'),
+        'and its colour token is retired with it',
+    );
+});
+
+test('NO ACTIVITY_STATUS CAN PRODUCE AN unread RING, WHATEVER THE FLAG', () => {
+    // The exhaustive sweep. This is the assertion that would have caught
+    // the defect: `finished_unread` used to answer `unread` here.
+    const statuses = [
+        'working',
+        'working_subagent',
+        'running',
+        'question',
+        'notice',
+        'finished_unread',
+        'idle',
+        'dead',
+        'stopped',
+        'unknown',
+        undefined,
+        'a-state-from-2030',
+    ];
+    for (const status of statuses) {
+        for (const unread of [true, false]) {
+            for (const gate of [undefined, 'awaiting_startup_prompt', 'unknown']) {
+                const led = Led.ledStateFor({
+                    activity_status: status,
+                    unread,
+                    startup_gate: gate,
+                });
+                assert.notEqual(
+                    led.outer,
+                    'unread',
+                    `${status}/unread=${unread}/gate=${gate} produced an unread ring`,
+                );
+                assert.ok(
+                    plain(Led.OUTER_STATES).indexOf(led.outer) >= 0,
+                    `${status} produced an outer value outside the vocabulary`,
+                );
+            }
+        }
+    }
+});
+
+test('ONLY A RUNNING SESSION BREATHES', () => {
+    // `active` is the one animated ring, so the set of statuses that map
+    // to it is the set of things the user will see moving. It must be
+    // exactly "work is happening", which after the 2026-09-09 change
+    // means the working family and nothing else.
+    const breathing = [];
+    for (const status of [
+        'working',
+        'working_subagent',
+        'running',
+        'question',
+        'notice',
+        'finished_unread',
+        'idle',
+        'dead',
+        'unknown',
+    ]) {
+        if (Led.ledStateFor({ activity_status: status, unread: true }).outer === 'active') {
+            breathing.push(status);
+        }
+    }
+    assert.deepEqual(breathing, ['working', 'working_subagent', 'running']);
 });
 
 test('the exported vocabularies are copies, so a caller cannot mutate them', () => {
@@ -237,7 +315,10 @@ test('a startup prompt is waiting-input even when the status says nothing', () =
             activity_status: 'idle',
             startup_gate: 'awaiting_startup_prompt',
         })),
-        { inner: 'waiting-input', outer: 'active' },
+        // STEADY, not breathing: a session parked on its startup prompt
+        // is a live turn that is not moving, and a pulsing ring would
+        // claim work nobody measured.
+        { inner: 'waiting-input', outer: 'steady' },
     );
 });
 
@@ -253,14 +334,14 @@ test('a startup gate that could not be measured does not claim anything', () => 
 test('question maps to waiting-permission - the agent is stopped', () => {
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'question' })), {
         inner: 'waiting-permission',
-        outer: 'active',
+        outer: 'steady',
     });
 });
 
 test('notice maps to waiting-input - it wants you but is not blocked', () => {
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'notice' })), {
         inner: 'waiting-input',
-        outer: 'active',
+        outer: 'steady',
     });
 });
 
@@ -286,11 +367,11 @@ test('a startup prompt and a notice share waiting-input', () => {
 });
 
 test('an unread flag never downgrades a blocking permission prompt', () => {
-    // The halo is where unread lives; it may not overwrite the dot that
-    // says the agent is stopped.
+    // The flag may not overwrite the dot that says the agent is stopped,
+    // and since 2026-09-09 it may not touch the ring either.
     assert.deepEqual(
         plain(Led.ledStateFor({ activity_status: 'question', unread: true })),
-        { inner: 'waiting-permission', outer: 'active' },
+        { inner: 'waiting-permission', outer: 'steady' },
     );
 });
 
@@ -308,15 +389,22 @@ test('the legacy `running` spelling still maps to working', () => {
     assert.equal(Led.ledStateFor({ activity_status: 'running' }).inner, 'working');
 });
 
-test('unread rides the HALO independently of the inner dot', () => {
-    // This is the whole reason there are two rings: the old single dot
-    // could not say "working, and also unread" at all.
+test('UNREAD RIDES THE INNER DOT, and never the ring', () => {
+    // The 2026-09-09 correction. A working session is working whether or
+    // not an earlier turn is unread - the ring says what is RUNNING, and
+    // the fact that something is unread is carried by the green dot on
+    // the resting states, where it is the only thing being said.
     const busy = Led.ledStateFor({ activity_status: 'working', unread: true });
-    assert.equal(busy.inner, 'working', 'still working');
-    assert.equal(busy.outer, 'unread', 'and still wants attention');
+    assert.deepEqual(plain(busy), { inner: 'working', outer: 'active' });
 
     const rested = Led.ledStateFor({ activity_status: 'idle', unread: true });
-    assert.deepEqual(plain(rested), { inner: 'done', outer: 'unread' });
+    assert.deepEqual(plain(rested), { inner: 'done', outer: 'off' });
+
+    // And the read version of the same resting session differs in the
+    // DOT, which is what makes opening a tab visible at a glance.
+    const read = Led.ledStateFor({ activity_status: 'idle', unread: false });
+    assert.deepEqual(plain(read), { inner: 'idle', outer: 'off' });
+    assert.notEqual(read.inner, rested.inner);
 });
 
 test('idle and seen is its OWN gray dot, at rest with no ring at all', () => {
@@ -340,11 +428,20 @@ test('idle is not done, and not unknown either', () => {
     assert.equal(idle.inner, 'idle');
 });
 
-test('finished_unread is done plus an unread halo', () => {
+test('finished_unread is the green dot ALONE - no ring at all', () => {
+    // It used to breathe an amber ring, which read as background work on
+    // the one state that means the opposite of work.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'finished_unread' })), {
         inner: 'done',
-        outer: 'unread',
+        outer: 'off',
     });
+});
+
+test('finished_unread and idle differ in the dot, not the ring', () => {
+    const unread = Led.ledStateFor({ activity_status: 'finished_unread' });
+    const read = Led.ledStateFor({ activity_status: 'idle' });
+    assert.equal(unread.outer, read.outer, 'both are at rest, so both rings are off');
+    assert.notEqual(unread.inner, read.inner, 'and the dot is the whole signal');
 });
 
 test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () => {
@@ -354,11 +451,16 @@ test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () =
     assert.equal(Led.ledStateFor({ activity_status: 'a-state-from-2030' }).inner, 'unknown');
 });
 
-test('an unread session that could not be measured still shows the halo', () => {
-    // The measurement failed; the fact that something is waiting did not.
+test('an unmeasured session stays unmeasured even with the flag set', () => {
+    // A flag is not a measurement of what the session is DOING, and the
+    // ring may only speak about activity that was measured. `unknown`
+    // plus a set flag is not reachable from a well-formed row anyway -
+    // the server derives the resting pair from the flag on every path
+    // (src/core/session_status.derive_read_state) and never promotes an
+    // unmeasured session into one of them.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'unknown', unread: true })), {
         inner: 'unknown',
-        outer: 'unread',
+        outer: 'dim',
     });
 });
 
@@ -567,16 +669,14 @@ test('the legacy referee no longer resets box-shadow, which would erase every ri
     }
 });
 
-test('the referee animation reset excludes the two breathing states', () => {
+test('the referee animation reset excludes the breathing state', () => {
     // A blanket `.status-dot.status-led { animation: none }` is (0,2,0),
     // ties with the breathing rule and wins on source order, silently
-    // killing the pulse for every LED in the app. Excluding the two
-    // states makes it order-independent.
+    // killing the pulse for every LED in the app. Excluding the one
+    // breathing state makes it order-independent.
     assert.ok(
-        CSS.includes(
-            ".status-dot.status-led:not([data-outer='active']):not([data-outer='unread']) {",
-        ),
-        'the legacy animation reset must be scoped off the breathing states',
+        CSS.includes(".status-dot.status-led:not([data-outer='active']) {"),
+        'the legacy animation reset must be scoped off the breathing state',
     );
 });
 
@@ -675,7 +775,6 @@ test('the state colours are named tokens in one place', () => {
         '--led-color-idle',
         '--led-color-dead',
         '--led-color-unknown',
-        '--led-color-unread',
     ]) {
         const declarations = CSS.split(`${token}:`).length - 1;
         assert.equal(declarations, 1, `${token} must be declared exactly once`);
@@ -696,9 +795,13 @@ test('the retired halo tokens are gone, not left behind as dead weight', () => {
     }
 });
 
-test('only the two breathing states animate, and the animation is on the element', () => {
-    assert.ok(CSS.includes(".status-led[data-outer='active'],"));
-    assert.ok(CSS.includes(".status-led[data-outer='unread'] {"));
+test('EXACTLY ONE outer state animates, and the animation is on the element', () => {
+    assert.ok(CSS.includes(".status-led[data-outer='active'] {"));
+    assert.equal(
+        (CSS.match(/animation: status-led-breathe/g) || []).length,
+        1,
+        'only one rule may start the breathing animation',
+    );
     // The base rule must not carry a running animation - a resting LED
     // holds still.
     assert.ok(

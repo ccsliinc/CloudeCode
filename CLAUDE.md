@@ -906,9 +906,12 @@ both answers `question`. Both are cleared by the same three events
 is the user showing up. On the LED, `question` is inner
 `waiting-permission` (its own hue, `--led-color-permission`) and `notice`
 is `waiting-input`, shared with the startup gate - both mean "come and
-look", neither means "approve this". Summary priority is
-**permission > input > working > unread > done > idle > dead > unknown**
-(`idle` - read, at rest, its own grey fill - added 2026-09-09).
+look", neither means "approve this". Summary priority for the header's
+INNER dot is
+**permission > input > working > unread > idle > dead > unknown** (the
+`done` bucket, "finished and already read", was retired 2026-09-09 - the
+grey `idle` dot spells that itself); its RING is folded separately, from
+activity across the whole group.
 
 **A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
 punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
@@ -1055,9 +1058,35 @@ finally receives it: `SessionStatusUI.dotHtml(status, signals)` takes
 it, and an unread `idle` session therefore painted a `steady` halo on
 every surface. Full model in `docs/session-status.md`.
 
+**`finished_unread` VERSUS `idle` IS DERIVED FROM THE UNREAD FLAG AT
+RESOLVE TIME, BY ONE FUNCTION, ON EVERY PATH** - `derive_read_state`
+(`src/core/session_status.py`), called from the hook tracker's resolve,
+the tmux fallback, the seed's `display_state`, the transcript ladder's
+rung 3 and the assembled answer in `_session_info_for`, so a saved
+`finished_unread` becomes `idle` the moment the flag clears and
+`activity_persist.write_state` stores only the base state. It shipped as
+a one-directional rule - adding unread to an `idle` and never removing it
+from a stored `finished_unread` - which is a cache rather than a
+derivation, and measured on live 2026-09-09 the owner opened
+`cloude_daily-briefing` and got `finished_unread` beside `unread: false`
+from `status_source: seed_row`, a green dot over a session he had just
+read.
+
+**THE OUTER RING MEANS ACTIVITY AND NOTHING ELSE**, restoring the owner's
+original spec ("colored and pulsing on activity and steady on done"):
+`working` breathes, a live-but-stopped turn (`question` / `notice` / the
+startup gate) is lit and still, and every resting or dead state leaves it
+off, with the outer `unread` state and its `--led-color-unread` hue
+retired. Unread now rides the INNER dot alone - green `done` against grey
+`idle` - because a breathing amber ring on a finished conversation read
+as background work, which is exactly what the owner reported: "the ring
+around some of the leds are not gray, which means there should be
+background tasks. i dont think those few have any background tasks."
+
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
-dot for the chat's status and an outer ring for activity and attention, so
-"working, and also unread" is sayable. `dotHtml` delegates to it, so every
+dot for the chat's status AND whether it has been read, and an outer ring
+for activity alone, so "a parked session with work still running behind
+it" is sayable on a group header. `dotHtml` delegates to it, so every
 surface renders the same component. BOTH RINGS ARE ONE ELEMENT: the inner
 is the span's `background-color` and the outer is a three-layer
 `box-shadow` on that same span (a hard `0 0 0 1.5px` ring, a low-alpha

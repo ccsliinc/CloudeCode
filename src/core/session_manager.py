@@ -64,6 +64,7 @@ from src.core.session_status import (
     LIVENESS_LIVE,
     LIVENESS_UNKNOWN,
     STATUS_UNKNOWN,
+    derive_read_state,
     resolve_listing_liveness,
 )
 from src.core.session_activity import (
@@ -2755,6 +2756,18 @@ class SessionManager:
 
         if not tmux_name or not state or state == STATUS_UNKNOWN:
             return
+        # THE COLUMN HOLDS THE BASE STATE, NOT THE READ VERDICT. `state`
+        # here is a DISPLAY value, and for a session at rest the display
+        # is the base state projected through the unread flag. The flag
+        # is durable and lives in its own store, so stamping the
+        # projection into the row records an answer that goes wrong the
+        # moment the user opens the tab - and nothing rewrites the row on
+        # a view. `derive_read_state(..., unread=False)` collapses the
+        # pair back to `idle`, and the read half is re-derived on every
+        # read from the flag. This also keeps the change-cache honest:
+        # without it a session flipping between the two spellings would
+        # issue a write per flip for a fact that never moved.
+        state = derive_read_state(state, unread=False)
         cache_key = (tmux_name, tmux_created_epoch)
         if self._last_persisted_activity.get(cache_key) == state:
             return
@@ -4632,6 +4645,25 @@ class SessionManager:
                 activity_status,
                 row.get("created_at_epoch") if row else None,
             )
+
+        # THE LAST WORD ON READ VERSUS UNREAD, AND IT BELONGS TO THE
+        # FLAG. Four sources can have answered above - the hook tracker,
+        # the durable row, the transcript ladder and the tmux fallback -
+        # and each of them derives this pair itself. This line is the
+        # gate that makes that true of the ASSEMBLED answer as well,
+        # against the flag as it stands after the seed path has had its
+        # chance to set one. It is the same pure function every source
+        # applied, so it is idempotent on their output and can only
+        # correct a value that disagrees with the flag.
+        #
+        # MEASURED ON LIVE 2026-09-09 at 5e13cb1, and this is the defect:
+        # the ``seed_row`` branch above returns ``sessions.activity_state``
+        # verbatim, so ``cloude_daily-briefing`` came back
+        # ``finished_unread`` beside ``unread: false`` after the owner had
+        # opened the tab, and the dot stayed green over a session that had
+        # been read. A stored state is a record of THEN; the flag is the
+        # measurement of NOW.
+        activity_status = derive_read_state(activity_status, unread=unread)
 
         # punchlist 19 - has this session even STARTED, or is it parked on
         # a folder-trust / login prompt nobody on a phone can see? Every

@@ -5,8 +5,15 @@
 // to be confidently wrong. The fold has to hold three properties:
 //
 //   1. THE PRIORITY IS STABLE AND WRITTEN DOWN. waiting > working >
-//      unread > done > dead > unknown. If a refactor reorders it, a group
+//      unread > idle > dead > unknown. If a refactor reorders it, a group
 //      containing something blocked on the user stops announcing it.
+//   1b. AND THE RING IS A SEPARATE FOLD. Since 2026-09-09 the header's
+//      inner dot is the highest-priority state in the group while its
+//      ring is ACTIVITY across the whole group, so a group holding one
+//      parked session and one busy one has to paint the parked dot
+//      inside a breathing ring. Deriving the ring from the winning
+//      bucket instead would hide the running work behind the more
+//      urgent dot.
 //   2. AN EMPTY GROUP IS `unknown`, NOT `done`. Nothing to measure is not
 //      the same as measured-and-quiet, and a calm green light on an empty
 //      group is the false green this project keeps paying for.
@@ -112,8 +119,72 @@ test('one malformed row cannot blank a whole header', () => {
 test('the documented priority order is the one in the table', () => {
     assert.deepEqual(
         plain(Summary.SUMMARY_PRIORITY).map((e) => e.key),
-        ['permission', 'input', 'working', 'unread', 'done', 'idle', 'dead', 'unknown'],
+        ['permission', 'input', 'working', 'unread', 'idle', 'dead', 'unknown'],
     );
+});
+
+test('THE `done` BUCKET IS RETIRED, and it did not lose a meaning', () => {
+    // It meant "finished and already read", which the inner dot now
+    // spells `idle`. A bucket that cannot be reached is a false lead.
+    assert.equal(
+        plain(Summary.SUMMARY_PRIORITY).filter((e) => e.key === 'done').length,
+        0,
+    );
+});
+
+test('THE FOLD NEVER PRODUCES AN unread RING, for any mix of rows', () => {
+    // The negative control for the 2026-09-09 change at the header
+    // level: a group used to inherit the retired amber ring from the
+    // unread bucket, so a folder of finished conversations pulsed.
+    const statuses = [
+        'working', 'question', 'notice', 'finished_unread',
+        'idle', 'dead', 'unknown',
+    ];
+    for (const a of statuses) {
+        for (const b of statuses) {
+            for (const unread of [true, false]) {
+                const s = plain(
+                    Summary.summarizeStates([
+                        { activity_status: a, unread },
+                        { activity_status: b },
+                    ]),
+                );
+                assert.notEqual(s.outer, 'unread', `${a} + ${b} rang unread`);
+            }
+        }
+    }
+});
+
+test('THE RING IS THE GROUP\'S ACTIVITY, not the winning row\'s', () => {
+    // A parked session and a busy one: the dot points at the one that
+    // needs a human, the ring says work is still running behind it.
+    const s = plain(
+        Summary.summarizeStates([
+            { activity_status: 'question' },
+            { activity_status: 'working' },
+        ]),
+    );
+    assert.equal(s.inner, 'waiting-permission');
+    assert.equal(s.outer, 'active');
+
+    // Take the work away and the same dot sits in a steady ring.
+    const parked = plain(
+        Summary.summarizeStates([
+            { activity_status: 'question' },
+            { activity_status: 'idle' },
+        ]),
+    );
+    assert.equal(parked.inner, 'waiting-permission');
+    assert.equal(parked.outer, 'steady');
+
+    // A group of nothing but resting sessions has no ring at all.
+    const quiet = plain(
+        Summary.summarizeStates([
+            { activity_status: 'finished_unread' },
+            { activity_status: 'idle' },
+        ]),
+    );
+    assert.equal(quiet.outer, 'off');
 });
 
 test('permission beats working - it is blocked on the user and will not resolve', () => {
@@ -170,7 +241,7 @@ test('working beats unread - one is moving, the other is only waiting', () => {
     assert.equal(s.bucket, 'working');
 });
 
-test('unread beats done', () => {
+test('unread beats read - the green dot is the headline of a quiet group', () => {
     const s = plain(
         Summary.summarizeStates([
             { activity_status: 'idle' },
@@ -178,7 +249,8 @@ test('unread beats done', () => {
         ]),
     );
     assert.equal(s.bucket, 'unread');
-    assert.equal(s.outer, 'unread');
+    assert.equal(s.inner, 'done');
+    assert.equal(s.outer, 'off', 'nothing is running in there, so no ring');
 });
 
 test('DEAD SITS BELOW DONE AND IDLE, so one corpse cannot headline nine live sessions', () => {
@@ -248,10 +320,11 @@ test('one unread among ten idle still bubbles unread', () => {
     for (let i = 0; i < 10; i++) rows.push({ activity_status: 'idle' });
     const s = plain(Summary.summarizeStates(rows));
     assert.equal(s.bucket, 'unread');
-    assert.equal(s.outer, 'unread');
+    assert.equal(s.inner, 'done');
+    assert.equal(s.outer, 'off');
 });
 
-test('idle beats dead but loses to done (unread)', () => {
+test('idle beats dead but loses to unread', () => {
     assert.equal(
         plain(
             Summary.summarizeStates([
@@ -293,7 +366,8 @@ test('summaryHtml renders no badge when unread is non-zero, but the LED carries 
         { activity_status: 'idle', unread: true },
     ]);
     assert.ok(!html.includes('status-summary-badge'), 'the badge markup is gone entirely');
-    assert.ok(html.includes('data-outer="unread"'), 'the outer ring still says unread');
+    assert.ok(html.includes('data-inner="done"'), 'the inner dot is what says unread');
+    assert.ok(html.includes('data-outer="off"'), 'and nothing is running, so no ring');
     assert.ok(html.includes('aria-label="unread - 2 sessions, 2 unread"'),
         'the count survives in words for accessibility');
     assert.ok(html.includes('title="unread - 2 sessions, 2 unread"'),

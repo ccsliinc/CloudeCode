@@ -84,8 +84,9 @@ console.log('[SessionHeaderLed Module] Loading...');
      *
      * Description: PURE, and the only place this module decides anything.
      *   Hands `dotHtml` the SAME signals object the sidebar row passes -
-     *   `unread` and `startup_gate` drive the outer ring and cannot be
-     *   expressed by a status string alone, and `status_source` is what
+     *   `unread` drives the inner dot and `startup_gate` the whole
+     *   light, neither of which a status string can express, and
+     *   `status_source` is what
      *   puts "via hooks" / "via transcript" in the tooltip. `size` is set
      *   here because the header is a larger type context than a sidebar
      *   row; everything else about the light comes from the shared seam.
