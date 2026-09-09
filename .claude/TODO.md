@@ -5733,6 +5733,172 @@ Full model in `CLAUDE.md`, new section "The `web/` build".
   outcome measurements listed there.
 - NOT DEPLOYED. Nothing was pushed and no deploy was run.
 
+## 2026-09-09 - release plan: 1.2 merge with Adam, 1.3 Svelte, slices paused after slice 1
+
+Owner's words: "hes been doing a lot of work, hes going to push it shortly. we
+are going to need to diff both our changes and then discuss them. many are
+already the same and i want to see which is better code. then we will make a
+1.2 release, with a 1.3 of the svelte work, mainly the plugin/theme engine and
+rewrite for adam to pull."
+
+- [ ] Wait for Adam's push to `adamdev` (Adoom666/CloudeCodeDev). Owner will say when.
+- [ ] Then: fetch, recompute merge base against `v1.1` (was `ba2aa5d`, 25
+  overlapping files, 17 hard conflicts per `git merge-tree` on 2026-09-09; see
+  `.claude/notes/divergence-adamdev-2026-09-09.md`), group the overlap by
+  subsystem (status LED, toasts, sidebar, launchpad, hooks, tests, docs), one
+  worker per subsystem producing a three-way view (base / ours / his) and a
+  verdict on the better code by: behaviour under unordered hooks, tests, 500-line
+  rule, docs in the same change, what the owner sees. Same intent: pick one.
+  Different intent: say so, stop for the owner.
+- [ ] Ours-only and his-only changes merge without discussion unless they
+  conflict in behaviour.
+- [ ] Assemble winners into `release/1.2` off `v1.1`, deploy, tag 1.2.
+- [ ] 1.3 = `feat/svelte-web` rebased onto 1.2: Svelte rewrite, plugin surface
+  registry, theme engine. Adam pulls 1.3.
+- [ ] Svelte slices 2 to 7 (`.claude/notes/svelte-migration-launchpad.md`) are
+  PAUSED after slice 1 lands, because his real work sits in the status, toast
+  and sidebar cluster (slices 4 and 5) and porting it before the 1.2 merge
+  would port it twice.
+- Branch state: `v1.1` at `d392aeb` is the release line; `feat/svelte-web` holds
+  `9d31ec4` (toolchain, validated 11/11) plus slice 1 in flight. `origin/main`
+  and `adamdev/v1.1` are 34 behind `v1.1`; push of those held pending owner.
+
+## 2026-09-09 - svelte slice 1: the attribution prompt card, and the mount seam
+
+Slice 1 of `.claude/notes/svelte-migration-launchpad.md`, on `feat/svelte-web`.
+The first legacy screen element actually REPLACED rather than duplicated: the
+Stage C attribution prompt is a Svelte 5 component, and the legacy code for it
+was deleted in the same commit.
+
+**What moved**
+
+- `client/js/launchpad.js`: **224 lines deleted, 27 added, net -197**
+  (6,481 to 6,284). The deleted code is `loadAttributionPrompt`,
+  `renderAttributionPrompt`, `_bindAttributionPrompt`, `_adoptAttributed`,
+  `_declineAttributed` (203 lines together) plus the `attributionPrompt` and
+  `attributionPromptClosed` constructor fields (11 lines) - 214 lines of
+  attribution logic - and two stale comment blocks that described them.
+- `web/src/lib/mount.ts` - `mountPanel(id, Component, props)` /
+  `unmountPanel(id)`. THE ONLY MOUNT PATH for every later slice. One handle per
+  container id, the old one unmounted first, the container never cleared (that
+  would delete sibling content the legacy parent still owns), a missing
+  container warned about rather than swallowed.
+- `web/src/lib/launchpad/attribution.ts` - the ladder and the two answers, with
+  the host (window.API / window.Launchpad / window.SessionLabel) injected so it
+  is testable in Node.
+- `web/src/lib/launchpad/AttributionPrompt.svelte` - runes, legacy class names
+  and element ids kept verbatim so `client/css/attribution-prompt.css` and all
+  26 themes apply unchanged, Tailwind for nothing but the absence of layout, no
+  `{@html}` anywhere.
+- The legacy call site is one guarded line in `loadProjects()`:
+  `window.CloudeWeb.launchpad.mountAttributionPrompt()`.
+
+**Three port decisions worth keeping**
+
+- THE CLOSE FLAG IS MODULE STATE, NOT COMPONENT STATE. Legacy kept it on the
+  Launchpad singleton, where it outlived every re-render and died with the page.
+  The component is REMOUNTED on every `loadProjects()`, so component state would
+  forget the close on the next home-screen entry, and anything durable would
+  contradict the card's own footnote ("closing this without answering brings it
+  back next time"). Module scope is the one lifetime that matches. It is not
+  persisted, and the Vitest case asserts that.
+- THE AGE STRING STILL COMES FROM THE LEGACY `_formatRelativeTime`, through the
+  host, rather than being copied into TypeScript. Slice 5 moves that function;
+  two copies for the length of the migration is how two copies drift. Measured
+  in the browser: the card rendered "started 393d ago" off the legacy
+  implementation.
+- ADOPT DOES NOT REFRESH ANYTHING ITSELF. Legacy reloaded the prompt and THEN
+  the running sessions, in that order; the component keeps the order rather than
+  the helper guessing at half of it. Decline refreshes NOTHING, which is the
+  legacy asymmetry, not an oversight - declining moves no session.
+
+**A regression this caught, in the same round**
+
+The mount call started life unguarded and it was the LAST statement in
+`loadProjects()`. `window.CloudeWeb` is absent in every node harness, so the
+throw rejected the promise every caller awaits: `test_project_list_render_guard`
+went 11 passed to 2 passed / 9 failed and `test_home_screen_mechanics` lost one.
+The call site now tests for the bundle and `console.error`s when it is missing -
+loud, because a prompt that silently never mounts is the same false green the
+card exists to remove, and non-fatal, because Stage C failing must not take the
+home screen down. Both suites are green again.
+
+**Measured, not assumed**
+
+- vitest in `web/`: **58 passed** (36 pre-existing StatusLed, 22 new in
+  `attribution.test.ts`), 2 files. `npm run check` (svelte-check): 262 files, 0
+  errors, 0 warnings.
+- node suite: **191 passed / 2 failed**, and both failures are the documented
+  pre-existing ones (`led_state_for.node.mjs` is a stdin CLI helper that exits
+  non-zero with no input; `test_archive_full_page_mode.node.mjs` was already
+  failing). `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+- pytest `tests/test_no_remote_assets.py`: 15 passed.
+- Bundle: `client/dist/app.js` 36,605 to 47,720 bytes, `app.css` unchanged at
+  835 bytes (the component adds no Tailwind utility that was not already there).
+- IN A REAL BROWSER (Claude in Chrome), against the repo served by the CSP
+  scratch server that IMPORTS `src.security_headers.SECURITY_HEADERS`, so the
+  page carried the production policy verbatim
+  (`default-src 'self'; script-src 'self' ...; frame-ancestors 'none'`), driving
+  `tests/manual/attribution-prompt-harness.html`:
+  - the card mounts INSIDE `#attribution-prompt` (`cardParentId` read back as
+    `attribution-prompt`), `class="attribution-prompt"`,
+    `data-attribution-state="pending"`, box 800 x 449.6, painted background
+    `rgba(251,191,36,0.18)` off the theme's warning token - not a UA default.
+  - all three rows render, tick boxes `display: none` until asked for, every
+    button non-zero and themed (`adopt all` on `rgb(215,119,87)`), the
+    `--picked` action row hidden.
+  - a LABEL containing `<b>not html</b>` renders as TEXT. Svelte's escaping
+    replaced `_escapeHtml` and the fixture proves it.
+  - "choose individually" adds `attribution-prompt--picking`, reveals the tick
+    boxes and swaps the two action rows. Unticking one row and pressing "adopt
+    the ticked ones" POSTed exactly the two ticked names, in order, and skipped
+    the unticked one. "adopt all" POSTed all three. "leave as external" POSTed
+    all three to the decline endpoint. Picking resets after each answer, as the
+    legacy re-render did.
+  - `?fixture=unavailable` renders the notice line with
+    `attribution-prompt--unknown`, `data-attribution-state="unavailable"`, ZERO
+    buttons and ZERO rows. `?fixture=none` renders nothing and the slot measures
+    0px tall.
+  - the close button renders nothing and the close SURVIVES a remount, which is
+    the module-state rule above, measured.
+  - `mountPanel` proven directly: mounting twice leaves ONE card, `unmountPanel`
+    removes it and returns true, a second call returns false, and a missing
+    container returns null and warns.
+  - **ZERO CSP violations** across all three fixtures and every interaction, and
+    the negative control is what makes that mean something: an off-origin
+    `<img>` appended to the same page raised `img-src`, so the policy is live
+    and the collector fires. (The `eval` control was DISCARDED as invalid - the
+    browser tool executes in an isolated world that the page policy does not
+    govern, so it proved nothing.)
+- Console on that page: one message, the deliberate `mountPanel` warning from
+  the missing-container control. No errors.
+
+**Known gaps, carried forward**
+
+- NO COMPONENT TEST. Vitest here runs in a Node environment and neither `jsdom`
+  nor `@testing-library/svelte` is a dependency; adding one for this slice was
+  out of scope. That is why the whole decision ladder was carved into
+  `viewFor()` and asserted there, and why the markup is proven in the browser
+  instead. A later slice that needs a DOM harness should add it once, with its
+  own reason.
+- ADOPT AND DECLINE WERE NOT FIRED AT A REAL SERVER. The tmux socket name
+  `cloude` is hardcoded (`DEFAULT_SOCKET_NAME`), so a second local app instance
+  would re-adopt the owner's 19 live panes, `ensure_pipe_pane` over their live
+  pipes and mint hook tokens - the exact class of damage CLAUDE.md records four
+  hours of. So the buttons were driven against the harness's stubbed `window.API`
+  (proving the component posts the right names to the right method) and the API
+  contract itself is asserted in Vitest. Nothing on the live install was touched.
+- `.attribution-prompt-slot:empty` still matched in Chrome with the component
+  mounted and rendering nothing, because Svelte's `{#if}` anchors are a comment
+  and two EMPTY text nodes, which Selectors 4 ignores. Older engines might not,
+  and the cost if one does not is exactly zero: the slot carries no other rule,
+  so it measures 0px either way. Measured, not assumed.
+- `tests/manual/attribution-adopt-harness.html` was updated to load the bundle,
+  but it cannot be exercised without Playwright: it delegates its API stubs to
+  injected bindings (`window.__srvPrompt`). Its archived verifier was not run.
+- The two archived pixel verifiers under `scripts/archive/verify/` were not run
+  (they need Playwright). The harness they drive still reports the same shape.
+
 ---
 
 ## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live

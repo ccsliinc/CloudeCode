@@ -42,7 +42,10 @@ under `/static` exactly as it serves everything else.
 | Tailwind entry (utilities only, prefixed) | `web/src/app.css` |
 | Entry point, publishes `window.CloudeWeb` | `web/src/main.ts` |
 | The first ported component and its two pure modules | `web/src/lib/StatusLed.svelte`, `led.ts`, `status-dot.ts` |
+| THE ONE MOUNT PATH, used by every migration slice | `web/src/lib/mount.ts` |
+| Slice 1, the attribution prompt card | `web/src/lib/launchpad/AttributionPrompt.svelte`, `attribution.ts` |
 | Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.test.ts` |
+| Slice 1's tests | `web/src/lib/launchpad/attribution.test.ts` |
 | The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
 | Prove the committed bundle is current | `scripts/web-build-check.sh` |
 
@@ -126,15 +129,57 @@ status source - 1008 comparisons, plus a negative control proving the
 comparison is capable of failing. Measured in a real browser under the
 production CSP on 2026-09-09: 1008 of 1008 identical.
 
-**NOTHING IS WIRED TO IT YET, AND THAT IS THIS ROUND'S SCOPE.** `main.ts`
-publishes `window.CloudeWeb` and returns - it mounts no component into the
-document, registers no listener and overwrites no global. The legacy parents
-still build their rows as HTML strings and set them with `innerHTML`, so
-switching a caller means rewriting a parent, which is a later round. The
-Svelte runtime is still proven end to end: `window.CloudeWeb.renderProbe()`
-mounts the compiled component into a DETACHED element and hands back its
-`outerHTML`, so a broken Svelte runtime cannot pass while every pure string
-function still would.
+**THE STATUS LED IS STILL WIRED TO NOTHING, AND THAT IS DELIBERATE.**
+`main.ts` publishes it but no legacy parent calls it: the parents build their
+rows as HTML strings and set them with `innerHTML`, so switching one means
+rewriting a parent, which is slices 4 and 5. The Svelte runtime is proven end
+to end regardless: `window.CloudeWeb.renderProbe()` mounts the compiled
+component into a DETACHED element and hands back its `outerHTML`, so a broken
+Svelte runtime cannot pass while every pure string function still would.
+
+**`mountPanel` IS THE ONLY WAY A COMPONENT REACHES THE DOCUMENT, AND EVERY
+SLICE USES IT.** `web/src/lib/mount.ts` records one `mount()` handle per
+container id and `unmount()`s the previous one before mounting the next.
+Svelte's `mount()` APPENDS and returns a handle that owns the reactive effects
+behind those nodes, so calling it twice on one container paints twice and
+leaves the first set of effects running, subscribing and answering forever.
+Nothing outside that file may call `mount()` on an element that is in the
+document. It does NOT clear the container - `unmount()` removes the nodes
+Svelte created and nothing else, which is exactly right while a container is
+shared with legacy markup mid-migration, and a helper that also wiped would be
+a hidden second behaviour a later slice could not turn off. A missing container
+is a warned no-op, not a throw: that is what the legacy renderers did, and a
+mount that silently does nothing is indistinguishable from a component that
+renders nothing.
+
+### Migration status
+
+The plan and its seven slices are `.claude/notes/svelte-migration-launchpad.md`.
+A slice deletes its legacy code in the same commit; a screen is legacy or
+compiled, never half of each.
+
+- **Slice 0, toolchain** - DONE (`9d31ec4`). vite + Svelte 5 + TypeScript +
+  Tailwind, the StatusLed proof component, nothing wired.
+- **Slice 1, the attribution prompt card** - DONE. 224 lines out of
+  `client/js/launchpad.js`, `mountPanel` built, `loadProjects()` calls
+  `window.CloudeWeb.launchpad.mountAttributionPrompt()` where its own render
+  used to run. Proven in a real browser under the production CSP.
+- **Slices 2 to 7** - PAUSED pending the 1.2 merge with Adam. See the
+  2026-09-09 release-plan entry in `.claude/TODO.md`: his work sits in the
+  status, toast and sidebar cluster, which is slices 4 and 5, and porting it
+  before the merge ports it twice.
+
+**THE LEGACY CALL SITE IS GUARDED, AND THE GUARD IS LOUD.** `client/index.html`
+loads the bundle as a deferred module, so in a browser `window.CloudeWeb` is
+always there by the time a screen renders. It is absent in every node harness,
+and the mount call is the LAST statement in `loadProjects()` - so an unguarded
+throw there rejects the promise every caller awaits and takes the whole home
+screen down over a card. Measured: it did, and
+`tests/test_project_list_render_guard.node.mjs` went from 11 passed to 9
+failed. The call site tests for the bundle and `console.error`s when it is
+missing, because a panel that silently never mounts is the same false green
+this project keeps paying for. Any later slice's call site needs the same
+shape.
 
 ## Architecture, the parts that shape everything else
 
