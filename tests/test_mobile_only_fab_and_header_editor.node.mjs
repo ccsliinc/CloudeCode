@@ -79,7 +79,8 @@ function clientFile(...parts) {
  * ------------------------------------------------------------------- */
 
 /** The stylesheets that can style either control, in index.html order. */
-const SHEETS = ['styles.css', 'terminal-tools.css', 'session-editor-header.css'];
+const SHEETS = ['styles.css', 'terminal-tools.css', 'session-editor-header.css',
+    'slash-commands-fab.css'];
 
 /**
  * Does one `@media` prelude hold at a given viewport width?
@@ -374,6 +375,82 @@ test('CHANGE 1: 768 and 769 are the boundary, and nothing straddles it', () => {
     // hole in it at some width nobody thought to test.
     assert.equal(resolve(FAB, 'display', 768).value, 'flex');
     assert.equal(resolve(FAB, 'display', 769).value, 'none');
+});
+
+/* ---------------------------------------------------------------------
+ * The slash-commands FAB (the round "/" button, bottom-left of the
+ * terminal screen) is mobile only too - same owner request ("this
+ * button needs to be removed on desktop view just like the clipboard
+ * one"), same breakpoint, same file shape as terminal-tools.css above.
+ * See client/css/slash-commands-fab.css.
+ * ------------------------------------------------------------------- */
+
+/** The button, as slash-commands.js builds it (id and class are the
+ * same string - see createButton() there). */
+const SLASH_BTN = {
+    id: 'slash-commands-btn',
+    classes: ['slash-commands-btn'],
+    attrs: ['aria-label', 'title', 'data-auth-only'],
+    screen: 'terminal-screen',
+};
+test('SLASH FAB: the button is absent at desktop width', () => {
+    for (const width of [769, 900, 1280, 1920]) {
+        const r = resolve(SLASH_BTN, 'display', width);
+        assertParsed(r);
+        assert.equal(r.value, 'none',
+            `the slash-commands FAB must not render at ${width}px (won by ${r.from})`);
+    }
+});
+
+test('SLASH FAB: the button is present at mobile width', () => {
+    for (const width of [330, 390, 428, 768]) {
+        const r = resolve(SLASH_BTN, 'display', width);
+        assertParsed(r);
+        assert.equal(r.value, 'flex',
+            `the slash-commands FAB must render at ${width}px (won by ${r.from})`);
+    }
+});
+
+test('SLASH FAB: 768 and 769 are the boundary, matching the tools FAB', () => {
+    assert.equal(resolve(SLASH_BTN, 'display', 768).value, 'flex');
+    assert.equal(resolve(SLASH_BTN, 'display', 769).value, 'none');
+});
+
+test('SLASH FAB: the modal it opens is forced off at and above 769px', () => {
+    // A hidden trigger with a reachable panel is a half-change - the same
+    // reasoning the terminal-tools FAB already applies to its own menu.
+    //
+    // The element-matching resolve() above cannot be reused for this one:
+    // modelling the modal with its real classes (`modal`, `active`) trips
+    // the resolver's "could plausibly reach, but I can't parse it" refusal
+    // on styles.css rules like `.modal .modal-overlay` and
+    // `.slash-commands-modal-content .modal-header`, because those use a
+    // descendant combinator this small resolver's selector grammar does
+    // not cover - not because anything about this change is wrong.
+    // Modelling by id alone doesn't dodge it either:
+    // `.slash-commands-modal-content` literally starts with the substring
+    // "slash-commands-modal", so the refusal fires just the same. So this
+    // reads the flattened rules directly instead, which is exactly what
+    // tests/test_terminal_tools_menu.node.mjs already does for the
+    // terminal-tools FAB's own menu - asserting the CSS text rather than
+    // resolving a cascade the small model cannot faithfully represent.
+    let found = 0;
+    for (const sheet of SHEETS) {
+        for (const rule of flatten(clientFile('css', sheet))) {
+            const hit = rule.selector.split(',').map((s) => s.trim())
+                .includes('#slash-commands-modal');
+            if (!hit) continue;
+            found++;
+            assert.ok(rule.media, 'the modal-hiding rule must sit inside a media query');
+            assert.equal(mediaHolds(rule.media, 768), false,
+                'must not fire below 769px, or the modal could never open on a phone');
+            assert.equal(mediaHolds(rule.media, 769), true, 'must fire at 769px');
+            assert.match(rule.body, /display\s*:\s*none\s*!important/,
+                'must force the modal off with !important - `.modal.active` in '
+                + 'styles.css is also `!important`, so anything weaker loses');
+        }
+    }
+    assert.equal(found, 1, 'exactly one #slash-commands-modal rule must hide it');
 });
 
 /* ---------------------------------------------------------------------

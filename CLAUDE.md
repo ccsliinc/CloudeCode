@@ -1334,6 +1334,7 @@ their plumbing (`client/js/fab-menu.js` builds the dropdown,
 |---|---|---|
 | `#terminalToolsBtn` | copy output, paste from clipboard, attach file | floating button, bottom row slot 0, **phone only** |
 | `#sessionEditorBtn` | session theme, detach session | a button in the header's `.controls` row, beside the file editor |
+| `#slash-commands-btn` | opens `#slash-commands-modal`: every slash command, grouped, with a description and a starred-favorites row, live-filterable | floating button, bottom-left corner, **phone only** |
 
 **THE TOOLS BUTTON IS MOBILE ONLY, ON THE D-PAD'S BREAKPOINT.** One media
 query in `terminal-tools.css` hides the trigger AND its menu above 769px,
@@ -1396,6 +1397,40 @@ cascade at a given width rather than grepping the source, so it answers
 "is the button on screen at 330px" instead of "does the file contain this
 string". It carries a control (the d-pad, unchanged) and refuses loudly
 on any selector its small matcher cannot read.
+
+**A THIRD FLOATING CONTROL FOLLOWED THE SAME RULE: `#slash-commands-btn`,
+THE ROUND "/" BUTTON, BOTTOM-LEFT.** The owner's request, verbatim: "this
+button needs to be removed on desktop view just like the clipboard one."
+`client/css/slash-commands-fab.css` is the same one media query, same
+769px line, hiding the button AND `#slash-commands-modal` - the panel it
+opens - so a hidden trigger never leaves a still-reachable panel behind.
+It is its own small file rather than an addition to `styles.css` (already
+over this project's line-count guideline) or to
+`slash-command-chips.css` (styles the favourites row INSIDE the modal,
+not the modal or its trigger).
+
+**DESKTOP LOSES SOMETHING REAL HERE, NOT NOTHING.** Typing `/` straight
+into the terminal still reaches claude's own CLI, which is a genuine
+slash-command entry point - but it is not the same feature. The modal
+this button opens lists every available command GROUPED, each with a
+short description, plus the user's starred favourites and live filtering
+as they type; typing `/` in the terminal gives none of that on its own.
+Hiding it was the explicit ask, so it is hidden regardless - this is
+recorded so the gap is a known decision rather than a surprise.
+
+`tests/test_mobile_only_fab_and_header_editor.node.mjs` proves the
+button's own visibility the same way it proves the tools FAB's, by
+resolving the cascade. It CANNOT do that for `#slash-commands-modal`
+through the same element-matching path: modelling the modal with its
+real classes (`modal`, `active`) trips the resolver's selector grammar on
+unrelated descendant-combinator rules in `styles.css` (`.modal
+.modal-overlay`, `.slash-commands-modal-content .modal-header`) purely
+because "modal" is a common substring, not because anything is wrong. So
+that one assertion reads the flattened CSS text directly instead - the
+same style `tests/test_terminal_tools_menu.node.mjs` already uses for the
+tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
+exactly once, sits inside a `(min-width: 769px)` block, and carries
+`display: none !important`.
 
 ## Gotchas that have cost real time
 
