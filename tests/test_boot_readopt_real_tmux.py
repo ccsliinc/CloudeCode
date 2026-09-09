@@ -460,6 +460,94 @@ async def test_readopted_backend_streams_live_output_without_a_reattach(
 
 @requires_tmux
 @pytest.mark.asyncio
+async def test_output_written_before_the_reader_opens_is_still_delivered(
+    live_state,
+):
+    """Bytes appended between the attach and the tail loop's first run.
+
+    THE RACE THIS PINS, and why the test above could not pin it on its
+    own. ``read_async()`` ends in ``asyncio.create_task``, which only
+    SCHEDULES the tail loop: nothing in ``attach_existing`` awaits after
+    it, so the task cannot open its fd until the CALLER next yields to
+    the event loop. Every byte tmux appends in that window used to be
+    discarded, because the loop opened the file and seeked to
+    ``SEEK_END`` - the end as of whenever it happened to be scheduled,
+    not the end as of the attach.
+
+    The sibling test above races that window against a real shell and
+    therefore only fails when the shell wins. It does on the macOS CI
+    runner, where a ``tmux send-keys`` subprocess costs more than the
+    pane needs to echo, so the whole burst - prompt included - lands
+    before the reader opens; measured there as ``pane_pipe='1'`` with
+    ``bytes_seen=0``, an empty stream rather than a late one, because
+    once the burst is over an idle pane produces nothing more to reveal
+    the loss. It passed on ubuntu and on a developer box with a slow
+    interactive shell, which is what made it read as a flake.
+
+    Here the window is not raced, it is USED. The payload is appended
+    with no ``await`` in between, exactly as tmux's ``cat >> <file>``
+    writer does, so the bytes are provably in the file before the reader
+    exists on any machine at any speed. That makes this deterministic
+    where the sibling is probabilistic, and it fails everywhere the
+    moment the offset stops being recorded on this path.
+    """
+    name = f"cloude_offset_{uuid.uuid4().hex[:6]}"
+    _create_session_like_the_app(name, "ses_offset", Path.home())
+
+    seen: list[bytes] = []
+
+    async def _collect(chunk: bytes) -> None:
+        seen.append(chunk)
+
+    backend = TmuxBackend(
+        session_id="ses_offset",
+        working_dir=Path.home(),
+        on_output=_collect,
+        socket_name=TEST_SOCKET_NAME,
+        session_name=name,
+    )
+
+    try:
+        await backend.attach_existing()
+
+        # NO AWAIT BETWEEN THE ATTACH AND THIS WRITE. That is the whole
+        # construction: the tail loop is a scheduled task that has not
+        # run, so these bytes are in the file before it opens the fd.
+        payload = f"CLOUDE_OFFSET_{uuid.uuid4().hex[:8]}\r\n".encode()
+        pipe_path = backend._resolve_pipe_path()
+        with open(pipe_path, "ab") as handle:
+            handle.write(payload)
+            handle.flush()
+
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while asyncio.get_event_loop().time() < deadline:
+            if payload in b"".join(seen):
+                break
+            await asyncio.sleep(0.05)
+
+        assert payload in b"".join(seen), (
+            "bytes appended to the pipe file after attach_existing "
+            "returned, but before the tail loop was first scheduled, "
+            "never reached on_output. The stream starts wherever the "
+            "event loop happened to get round to it rather than where "
+            "the attach left off, so a session producing output at "
+            "boot loses it silently. "
+            f"recorded_offset={backend._adopt_tail_start_offset!r}, "
+            f"pane_pipe={_pane_pipe(name)!r}, "
+            f"bytes_seen={len(b''.join(seen))}"
+        )
+    finally:
+        task = getattr(backend, "_reader_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+@requires_tmux
+@pytest.mark.asyncio
 async def test_attach_to_a_dead_pane_still_succeeds(live_state):
     """A session whose PANE has exited must still attach, not raise.
 
@@ -491,7 +579,15 @@ async def test_attach_to_a_dead_pane_still_succeeds(live_state):
     _tmux("set-option", "-t", name, "remain-on-exit", "on")
     _tmux("send-keys", "-t", name, "exit", "Enter")
 
-    deadline = asyncio.get_event_loop().time() + 5.0
+    # MEASURED on a developer box, 12 runs: the pane reports dead within
+    # 0.01s of the ``exit``, so this budget is not a guess about normal
+    # speed, it is headroom for a contended runner. It was 5.0s and that
+    # was observed to expire once in 25 full-file runs under load, failing
+    # with ``pane_dead`` still ``0`` - the setup never happening, said as
+    # though the code under test had misbehaved. The poll condition is
+    # unchanged and the assertion still fails if the pane never dies;
+    # only the patience is different.
+    deadline = asyncio.get_event_loop().time() + 15.0
     while asyncio.get_event_loop().time() < deadline:
         dead = _field_by_session("list-panes", "#{pane_dead}").get(name, "")
         if dead == "1":

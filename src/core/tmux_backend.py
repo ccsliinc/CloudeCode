@@ -860,6 +860,39 @@ class TmuxBackend(SessionBackend):
             pipe=str(pipe_path),
         )
 
+    def _record_tail_start_offset(self) -> None:
+        """Pin the byte the tail loop must start from, as of RIGHT NOW.
+
+        Description: reads the pipe file's current size and stores it in
+          ``self._adopt_tail_start_offset``, which ``_tail_loop`` seeks to
+          instead of ``SEEK_END`` when it finally opens the fd. Call it
+          immediately after ``ensure_pipe_pane`` returns, on EVERY attach
+          path - that call is the moment tmux is known to be appending to
+          this path, so it is the earliest offset that cannot replay
+          history and the latest one that cannot lose live output.
+          A file that does not exist yet records 0, which replays nothing
+          because there is nothing there, and a stat that fails records 0
+          for the same reason: re-delivering a little is recoverable,
+          dropping the stream is not.
+        Inputs: none (reads ``self``).
+        Output: None. Sets ``self._adopt_tail_start_offset``.
+        Example: await self.ensure_pipe_pane(attaching=True)
+                 self._record_tail_start_offset()
+        """
+        try:
+            pipe_path = self._resolve_pipe_path()
+            if pipe_path.exists():
+                self._adopt_tail_start_offset = pipe_path.stat().st_size
+            else:
+                self._adopt_tail_start_offset = 0
+        except OSError as exc:
+            logger.warning(
+                "adopt_fifo_offset_stat_failed",
+                session=self.tmux_session,
+                error=str(exc),
+            )
+            self._adopt_tail_start_offset = 0
+
     async def attach_existing(self, needs_pipe_setup: bool = False) -> None:
         """Rehydrate state for an existing tmux session on our socket.
 
@@ -954,19 +987,7 @@ class TmuxBackend(SessionBackend):
             # scrollback capture (step 5 in ``adopt_external_session``)
             # pulls from tmux's visible-pane buffer, so there's no
             # overlap contest here.
-            try:
-                pipe_path = self._resolve_pipe_path()
-                if pipe_path.exists():
-                    self._adopt_tail_start_offset = pipe_path.stat().st_size
-                else:
-                    self._adopt_tail_start_offset = 0
-            except OSError as exc:
-                logger.warning(
-                    "adopt_fifo_offset_stat_failed",
-                    session=self.tmux_session,
-                    error=str(exc),
-                )
-                self._adopt_tail_start_offset = 0
+            self._record_tail_start_offset()
 
             # 3. Defensive remain-on-exit so external death doesn't silently
             # collapse the pane mid-adoption. Users who need tear-down
@@ -1038,6 +1059,29 @@ class TmuxBackend(SessionBackend):
         if not do_external_setup:
             try:
                 await self.ensure_pipe_pane(attaching=True)
+                # AND THE OFFSET IS RECORDED ON THIS PATH TOO, for the
+                # same reason step 2b records it on the external one.
+                # ``read_async()`` only calls ``create_task``; the tail
+                # loop cannot open its fd until this coroutine's caller
+                # next yields to the event loop, and every byte tmux
+                # appends in that window is silently dropped by a bare
+                # ``SEEK_END``. Leaving it None here was not a smaller
+                # version of the same behavior, it was the opposite one:
+                # "start where the pane was when we attached" became
+                # "start wherever the pane had got to by the time the
+                # loop happened to schedule us".
+                #
+                # MEASURED, and it is why this is a defect rather than a
+                # slow test: with a pane shell that starts fast enough to
+                # echo before the caller's next await, 9 of 10 attaches
+                # delivered ZERO bytes while the marker sat in the pipe
+                # file every time. The macOS CI runner reproduces it
+                # because a ``tmux send-keys`` subprocess costs more
+                # there than the pane needs to run ``echo``, so the whole
+                # burst lands - prompt included - before the reader opens.
+                # After the burst the pane is idle, so nothing arrives to
+                # reveal the loss: the stream is not late, it is empty.
+                self._record_tail_start_offset()
             except RuntimeError as exc:
                 # A DEAD PANE IS THE CASE THIS EXISTS FOR, and it is why
                 # the failure is tolerated rather than raised. tmux
