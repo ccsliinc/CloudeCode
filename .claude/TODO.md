@@ -4587,3 +4587,79 @@ the owner).
     OS-managed caches, safe to ignore, not part of this cleanup.
   - Only one network mount active: Time Machine over smbfs to 10.0.1.202. No
     other SMB/AFP/NFS mounts present at check time.
+
+## 2026-09-09 - ClaudeArchive archived to archive-nas and released to Trash
+
+- [x] CLOSES the open item above ("`~/ClaudeArchive` is covered by no backup").
+  It now has one. archive-nas = 10.0.1.237 (TrueNAS SCALE, ssh user
+  `truenas_admin`, pubkey), dataset `/mnt/ARCHIVE` (8.4T, 1 percent used),
+  destination `/mnt/ARCHIVE/vault/85_cloud-exports/claude/`.
+
+- [x] `hostdim/` copied to `multihost-db-20260830/` (this was the ONLY item of
+  the four not already on the NAS).
+  - Source confirmed closed with `lsof` before reading; WAL 0 bytes, so the
+    `.db` is self-contained. `-shm` / `-wal` deliberately not copied.
+  - Opened read-only (`mode=ro`): `PRAGMA quick_check` = **ok** (64.3s).
+    `page_count` 2,918,513 x 4,096 = 11,954,229,248 = exactly the file size,
+    so not truncated.
+  - `rsync -a --partial --progress` (NOT `--info=progress2`: macOS ships
+    openrsync 2.6.9-compatible, which rejects that flag with exit 1 and a
+    usage dump. It failed before transferring anything, so no partial state).
+  - PROVEN: full sha256 on BOTH sides, identical,
+    `efbec96404dbcd329611e73f10e56faa2161f21427273031c18b4e4a810529c4`
+    (76s remote). Independently corroborated a third time by the hash the
+    owner's own `~/ClaudeArchive/README.md` already recorded for this file.
+  - Remote copy opened read-only with `sqlite3` on the NAS: 21,039 /
+    2,447,028 / 3,125,122 (message_transcripts / message_bodies /
+    message_appearances), matching the source exactly.
+  - All 10 provenance sidecars sha256-matched both sides. `README.txt` written
+    beside it on the NAS recording provenance, dates and the hash.
+
+- [x] Re-verified the three already-archived items before releasing them:
+  - `cloude-archive-20260903.db`: size 22,595,760,128 both sides, tail-64MiB
+    sha256 `ee9290bb...` identical.
+  - `claude-config-git-20260831.tar.zst`: size 4,481,263,585 both sides,
+    tail-64MiB sha256 `7661cd2f...` identical, and the NAS `.sha256` sidecar
+    reads `9a876ec9...` as expected.
+  - conflict-preserve set: went further than a sample. Streamed the NAS
+    `07-*.tar.zst` and hashed EVERY member: 6,962 files, 6,962 manifest
+    entries, 6,962 hash matches, 0 mismatches, 0 not-in-manifest. Plus 50
+    evenly-spaced manifest entries hashed against the local files, 50/50.
+    That closes the local <-> manifest <-> tar chain. A manifest is not the
+    archive, so verifying only the manifest would have proven the wrong thing.
+
+- [x] CUSTODY GAP FOUND AND CLOSED BEFORE RELEASE: `cc-dev-state/` held 240,325
+  bytes across 7 small files that were NOT on the NAS (`README-dev.md`, the
+  two `archive-sample-report.*`, the two `icloud-conflicts.*`,
+  `migration_trail.jsonl`, `refresh_tokens.db`). Only `cloude.db` had ever
+  been archived. Copied to
+  `cloude-db-20260903/cc-dev-state-sidecars/`, all 7 sha256-verified both
+  sides, THEN released. The two subdirectories (`projects/`, `legacy-logs/`)
+  were empty. Note `refresh_tokens.db` is credential material and
+  `README-dev.md` carries a throwaway TOTP/JWT pair the owner's README
+  already flags as throwaway.
+
+- [x] Released by MOVE to `~/.Trash/ClaudeArchive-20260909/` (never `rm`):
+  `cc-dev-state/`, `claude-config-archive/`,
+  `claude-icloud-conflict-preserve-20260902/`, `hostdim/`.
+  `~/ClaudeArchive` 37G -> 119M.
+
+- [ ] OPEN, needs the owner: **the 37G is still on the disk.** The Trash is on
+  the same volume, so `df` is UNCHANGED at 38Gi available on
+  `/System/Volumes/Data`. Emptying `~/.Trash` is what actually reclaims it,
+  and that is deliberately the owner's call, not this pass's.
+
+- Remaining in `~/ClaudeArchive` (119M, all regenerable, left in place):
+  `app/` 54M, `archive-venv/` 64M, `run/` 100K, `config-backups/` 64K,
+  `README.md` 16K, `archive-start.sh`, `refresh-app.sh`,
+  `archive-instance.env`.
+
+- Two things worth keeping. First, the owner's README records `cloude.db` as
+  22,572,834,816 B / sha256 `51943da1...`, but the file is now
+  22,595,760,128 B: it is the live DB for the archive instance and grew after
+  the README was written, so THAT RECORDED HASH IS STALE. It agrees with
+  nothing today and would look like corruption to the next reader. The NAS
+  copy matches the CURRENT file. Second, `cloude.db` was checked with `lsof`
+  and port 5055 was probed (`curl` got no response) before the move, because
+  moving a live database out from under a running service is the obvious way
+  to turn a cleanup into an incident.
