@@ -41,6 +41,14 @@ const inputKindSrc = read('client', 'js', 'terminal-input-kind.js');
 // correctly declines to invent a label and the assertion below would be
 // asserting the fallback instead of the feature.
 const sessionLabelSrc = read('client', 'js', 'session-label.js');
+// The two modules that put every one of a session's STATUS toasts on one
+// card. They are loaded here so this suite runs the shipped
+// configuration: the receipt's whole claim is that it is NOT one of
+// those events and keeps a card of its own, and a sandbox missing them
+// would prove that against a manager that could not have grouped
+// anything in the first place.
+const summarySrc = read('client', 'js', 'session-status-summary.js');
+const toastGroupSrc = read('client', 'js', 'toast-session-group.js');
 
 let failures = 0;
 let passes = 0;
@@ -160,6 +168,8 @@ function makeSandbox(opts = {}) {
     vm.createContext(sandbox);
     vm.runInContext(inputKindSrc, sandbox);
     vm.runInContext(sessionLabelSrc, sandbox);
+    vm.runInContext(summarySrc, sandbox);
+    vm.runInContext(toastGroupSrc, sandbox);
     vm.runInContext(toastSrc, sandbox);
     vm.runInContext(attachSrc, sandbox);
     return sandbox;
@@ -466,6 +476,29 @@ test('two attachments in one session coalesce onto one card', () => {
         const attach = groups.filter((g) => g.toasts[0].kind === 'Attachment');
         assert.equal(attach.length, 1, 'a second attachment must not build a pile');
     }
+});
+
+test('the receipt keeps its OWN card beside the session status card', () => {
+    // Every other kind now collapses onto one card per session. The
+    // receipt must not join them: it is not a session status event, it
+    // has no server record, and it is retired by the prompt being SENT
+    // rather than by the user showing up. Folded in, a picture of a
+    // staged file would sit under a heading reading "wants your
+    // attention" and a keystroke rule would retire the wrong thing.
+    const { mgr } = stagedManager('ses_a');
+    mgr.add({ id: 'srv1', session_id: 'ses_a', kind: 'Notification',
+              title: 'wants your attention', body: 'look' });
+    mgr.add({ id: 'srv2', session_id: 'ses_a', kind: 'Stop',
+              title: 'Your turn', body: 'done' });
+    const groups = mgr._groups();
+    assert.equal(groups.length, 2,
+        'one status card plus one receipt, never three and never one');
+    // Joined rather than deep-compared: `groups` was built inside the vm
+    // realm, so a structurally identical array fails deepEqual on its
+    // prototype alone. See the note on `plain` above.
+    const kinds = groups.map((g) => g.winner.kind).sort().join(',');
+    assert.equal(kinds, 'Attachment,Notification',
+        'the two server events share a card; the receipt keeps its own');
 });
 
 test('the card is stamped with the session the header is showing', () => {

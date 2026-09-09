@@ -959,6 +959,30 @@ plainly blue. Summary priority is unchanged:
 `notice` still buckets as `input` - the colour split is a rendering
 decision on the ROW, not a re-ranking.
 
+**THAT SAME FOLD NOW PICKS THE ONE TOAST CARD A SESSION GETS.** The toast
+stack coalesced on (kind, session) until 2026-09-09, so one session
+produced one card per kind - a "wants your attention" card AND a "Your
+turn" card, about the same session; four cards for two sessions, measured.
+`client/js/toast.js` keys the group on the SESSION alone, and
+`client/js/toast-session-group.js` READS `SUMMARY_PRIORITY` out of
+`session-status-summary.js` to pick which pending event that card shows.
+It declares only the join from a hook event name to a bucket -
+`PermissionRequest` to `permission`, `StartupPrompt` and `Notification`
+to `input`, `Stop` to `unread`, anything unrecognised to `input` (the
+same refusal-to-assume-harmless as `SEVERITY_DEFAULT`) - with toast.js's
+own severity breaking a tie INSIDE a bucket so a blocking startup prompt
+is not displaced by chatter. THERE IS NO SECOND RANKING; if the fold is
+unavailable the module groups NOTHING rather than inventing one. The
+pick is a pure FOLD over what is held, which is what makes the card
+upgrade in place, refuse to downgrade, and survive the same hook event
+twice. The `×n` badge counts the WINNER'S KIND, never the session's pile
+- it sits beside the winner's title and would otherwise put a 7 next to a
+sentence that happened once - while the dismiss control, the "Dismiss
+all" disclosure and the overflow row all count RECORDS. The attachment
+receipt (`client/js/attachment-toast.js`) is deliberately outside this
+grouping: no server record, retired by the prompt being SENT, so it keeps
+a card of its own. Full model in `docs/session-status.md`.
+
 **A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
 punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
 2.1.265: on a turn with NO SUBAGENT IN IT, `SubagentStop` arrives about

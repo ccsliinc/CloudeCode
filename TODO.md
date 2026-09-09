@@ -415,3 +415,24 @@ corrupt, but those sessions are not sitting where their names say. Also
 `tmux_ses_63beb976.pipe` is 3.0 MB with NO writer and NO reader - an orphaned
 pipe from a session now streaming through `tmux_ext_cloude_cloudecode.pipe`.
 Neither is the bleed; both are worth a separate look.
+
+[toast-per-session] [2026-09-09]: The toast stack coalesced on (kind,
+session), so one session painted one card per KIND - a "wants your
+attention" card AND a "Your turn" card, about the same session. The x5 and
+x2 badges the owner saw were the coalescing working; what was missing was
+collapsing ACROSS kinds. `client/js/toast.js` now keys the group on the
+session alone and `client/js/toast-session-group.js` picks which pending
+event that one card shows, by READING `SUMMARY_PRIORITY` out of
+`session-status-summary.js` rather than declaring a second order.
+Mapping: PermissionRequest -> permission, StartupPrompt and Notification
+-> input, Stop -> unread, an unknown kind -> input; toast.js's own
+severity table breaks a tie inside a bucket, so a blocking startup prompt
+is not displaced by a chatty notification. The `x n` badge counts the
+WINNER'S KIND (what the title claims); the dismiss control, the "Dismiss
+all" total and the overflow row's worst-severity label count RECORDS -
+two numbers because they answer two questions, and the per-group counts
+those last three used to do would have reported six finished turns as six
+permission prompts. The attachment receipt is deliberately outside the
+grouping and keeps its own card. Screens measured in a real Chromium:
+13 records across 3 sessions paint 3 cards on desktop and 2 plus an
+accurate overflow row at 330px, in both a dark and a light theme.

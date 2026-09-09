@@ -27,11 +27,10 @@
  * SO THE STACKING POLICY IS THREE RULES, each declared rather than
  * inferred:
  *
- *   1. COALESCE repeats into one card with a count. The pre-existing
- *      dedupe is by `id` only - that covers the backfill/WS race and
- *      nothing else. Ten `Stop` events are ten distinct ids saying one
- *      thing. `COALESCE_KEY` below declares, per kind, what "the same
- *      thing" means, and PermissionRequest is deliberately excluded.
+ *   1. COALESCE into ONE CARD PER SESSION, with a count. The
+ *      pre-existing dedupe is by `id` only - that covers the
+ *      backfill/WS race and nothing else. Ten `Stop` events are ten
+ *      distinct ids saying one thing.
  *   2. CAP the number of visible cards and put the rest behind ONE
  *      overflow row that states how many it is holding and the worst
  *      severity in there. Nothing is dropped and nothing is auto-acked:
@@ -41,6 +40,25 @@
  *      exempt from the cap entirely - the cap exists to suppress noise,
  *      and a blocking permission prompt is not noise. So a
  *      PermissionRequest can never be the thing hidden behind "+7 more".
+ *
+ * WHICH EVENT THE ONE CARD SHOWS. Rule 1 keyed on (kind, session) until
+ * 2026-09-09, so one session produced one card per kind - a "Your turn"
+ * card AND a "wants your attention" card, side by side, about the same
+ * session; four cards for two sessions, measured on the owner's screen.
+ * The key is the SESSION alone now, and the winner is chosen by the fold
+ * this project already writes down once, `SUMMARY_PRIORITY` in
+ * client/js/session-status-summary.js - the same order the sidebar group
+ * headers and the launchpad top bar use. The join from a hook event name
+ * to one of its buckets, and the reasoning for each mapping, is in
+ * client/js/toast-session-group.js. There is NO second ranking here.
+ *
+ * THE CARD UPGRADES AND CANNOT DOWNGRADE, because `_groups()` is a pure
+ * FOLD over the live set rather than a running "current worst" variable.
+ * A permission prompt landing on a session showing "your turn"
+ * re-answers the fold on the SAME group key, so the SAME element becomes
+ * the permission card; a later `Stop` cannot take it back. Hook events
+ * arrive unordered, duplicated and droppable, and a fold over what is
+ * held is idempotent against all three.
  *
  * NEVER SILENTLY LOSE SOMETHING THE USER NEEDED. Every suppression path
  * above stays reachable: the cap holds a live, counted, one-click set and
@@ -122,40 +140,29 @@ const CAP_NARROW = 2; // a phone screen is mostly toast at 3+
 const NARROW_QUERY = '(max-width: 640px)'; // matches toast.css's breakpoint
 
 /**
- * What "the same notification, again" means, per kind. Returns null to
- * declare a kind NEVER coalesces.
+ * Per-kind coalescing, for the kinds the session grouping must NOT take.
  *
- * Stop ignores the body on purpose: its body is the tail of the
- * transcript, so two Stops are almost never byte-identical, yet the older
- * one is strictly superseded - only the newest "your turn" carries
- * information. Notification keys on the body because its body IS the
- * message; two different messages are two different things to read.
- * PermissionRequest never coalesces because each one is a distinct
- * decision about a distinct command, and "x2" would hide the second
- * command string - exactly the loss this policy exists to prevent.
+ * THE LOCAL RECEIPT IS THE ONLY ENTRY. It is not a session status event:
+ * it describes what is staged in the prompt buffer, has no server
+ * record, and is retired by the prompt being SENT rather than by the
+ * user showing up. Folded into the status card, a picture of a staged
+ * file would sit under a heading reading "wants your attention" and a
+ * keystroke rule would retire the wrong thing. It coalesces on the
+ * SESSION alone, so four files on one prompt are ONE card carrying four
+ * thumbnails, and nothing is hidden by that: the card draws every member
+ * (AttachmentToast.renderThumbs), so no filename is lost behind an "x4".
+ *
+ * Every other kind is grouped by session in `_groupKeyFor`, so the
+ * per-kind rules that used to live here are gone rather than sitting
+ * beside a rule that supersedes them. A kind absent from this table and
+ * refused by the session grouping (no session id, or no attention order
+ * loaded) simply gets a card of its own - noisy, never wrong.
  *
  * Inputs: toast (object) - server-shape toast.
  * Output: string|null - the coalesce key, or null for "never coalesce".
- * Example: COALESCE_KEY.Stop({session_id:'s',title:'Your turn'})
- *          -> 's|Stop|Your turn'
+ * Example: COALESCE_KEY.Attachment({session_id:'s'}) -> 's|Attachment'
  */
 const COALESCE_KEY = {
-  Stop: (t) => `${t.session_id}|Stop|${t.title || ''}`,
-  Notification: (t) => `${t.session_id}|Notification|${t.title || ''}|${t.body || ''}`,
-  PermissionRequest: () => null,
-  // punchlist 19 - coalesces on the SESSION alone. The server already
-  // claims this toast once per tmux instance, so a second one for the
-  // same session should be impossible; this is the belt to that braces.
-  // A session cannot be blocked at two startup prompts at once, so
-  // collapsing them loses nothing - unlike PermissionRequest, where the
-  // second card carries a different command.
-  StartupPrompt: (t) => `${t.session_id}|StartupPrompt`,
-  // COALESCES ON THE SESSION ALONE, so attaching four files to one
-  // prompt is ONE card carrying four thumbnails rather than four cards.
-  // Unlike PermissionRequest, nothing is hidden by collapsing them: the
-  // card renders every member of the group (see
-  // AttachmentToast.renderThumbs), so the count and the pictures agree
-  // and no filename is lost behind an "x4".
   [ATTACHMENT_KIND]: (t) => `${t.session_id}|${ATTACHMENT_KIND}`,
 };
 
@@ -232,11 +239,58 @@ class ToastManager {
   }
 
   /**
+   * Which card a toast belongs on.
+   *
+   * A LOCAL RECEIPT IS ASKED ABOUT FIRST, because it is the one kind
+   * that must NOT join the session's status card - see COALESCE_KEY.
+   * Everything else is a session status event and gets the session's one
+   * card.
+   *
+   * Inputs: toast (object) - server-shape toast.
+   * Output: string|null - a group key, or null for "a card of its own".
+   * Example: _groupKeyFor({session_id: 'ses_1', kind: 'Stop'})
+   *          -> 'ses_1|session'
+   */
+  _groupKeyFor(toast) {
+    const keyFn = COALESCE_KEY[toast.kind];
+    if (typeof keyFn === 'function') return keyFn(toast);
+    const grouper = globalThis.ToastSessionGroup;
+    if (grouper && typeof grouper.groupKey === 'function') {
+      return grouper.groupKey(toast);
+    }
+    return null;
+  }
+
+  /**
+   * Which member of a group the card shows, and how many of its kind.
+   *
+   * Delegated to client/js/toast-session-group.js, which owns the join
+   * from a hook event name to the project's one attention order. The
+   * fallback - the newest member, whole group counted - is exactly right
+   * for a single-kind group, the only shape a group can have when that
+   * module is missing.
+   *
+   * Inputs: toasts (Array) - one group's members, arrival ordered.
+   * Output: {winner: object, count: number}.
+   */
+  _pick(toasts) {
+    const grouper = globalThis.ToastSessionGroup;
+    if (grouper && typeof grouper.pick === 'function') {
+      const picked = grouper.pick(toasts, (kind) => this._severity(kind));
+      if (picked && picked.winner) return picked;
+    }
+    return { winner: toasts[toasts.length - 1], count: toasts.length };
+  }
+
+  /**
    * Collapse the live toast set into render groups.
    *
-   * Output: Array of { key, toasts: [...], newest, count, severity },
-   *   sorted severity-desc then newest-first. `newest` is the toast whose
-   *   body and colour the card shows.
+   * Output: Array of { key, toasts: [...], winner, count, badgeCount,
+   *   severity }, sorted severity-desc then newest-first. `winner` is
+   *   the toast whose title, body and colour the card shows; `count` is
+   *   every record the card would clear; `badgeCount` is how many of
+   *   them are the same kind as the winner, which is what the ×n badge
+   *   beside the winner's title may honestly claim.
    */
   _groups() {
     const order = new Map();
@@ -245,8 +299,7 @@ class ToastManager {
     const byKey = new Map();
     const singles = [];
     for (const toast of this._byId.values()) {
-      const keyFn = COALESCE_KEY[toast.kind];
-      const key = typeof keyFn === 'function' ? keyFn(toast) : null;
+      const key = this._groupKeyFor(toast);
       if (!key) {
         singles.push({ key: `id:${toast.id}`, toasts: [toast] });
         continue;
@@ -255,24 +308,51 @@ class ToastManager {
       if (existing) existing.toasts.push(toast);
       else byKey.set(key, { key, toasts: [toast] });
     }
-    const groups = [...byKey.values(), ...singles].map((g) => {
-      // Arrival order is insertion order, so the last member is newest.
-      const newest = g.toasts[g.toasts.length - 1];
+    const groups = [...byKey.values()].concat(singles).map((g) => {
+      const picked = this._pick(g.toasts);
       return {
         key: g.key,
         toasts: g.toasts,
-        newest,
+        winner: picked.winner,
         count: g.toasts.length,
-        severity: this._severity(newest.kind),
+        badgeCount: picked.count,
+        // The WINNER's severity, which is also the group's highest: the
+        // attention order never ranks a bucket above one that can hold a
+        // more severe kind, so the card cannot be handed to a quieter
+        // event than something it is hiding.
+        severity: this._severity(picked.winner.kind),
       };
     });
     // Severity first so an actionable card is never below chatter; then
     // newest-first so the most recent thing in a tier reads at the top.
     groups.sort((a, b) => {
       if (b.severity !== a.severity) return b.severity - a.severity;
-      return order.get(b.newest.id) - order.get(a.newest.id);
+      return order.get(b.winner.id) - order.get(a.winner.id);
     });
     return groups;
+  }
+
+  /**
+   * How many TOASTS across these groups their own kind marks at or above
+   * a severity. Per RECORD, never per group: a group is a whole session's
+   * pile now, so summing group counts would report every `Stop` behind a
+   * permission prompt as a permission prompt, and a disclosure that
+   * overstates is worse than none.
+   *
+   * Inputs: groups (Array) from `_groups()`; min (number) - inclusive
+   *   floor; exact (boolean) - count only severity === min.
+   * Output: number.
+   * Example: _countBySeverity(groups, 3) -> 1
+   */
+  _countBySeverity(groups, min, exact = false) {
+    let n = 0;
+    for (const group of groups) {
+      for (const toast of group.toasts) {
+        const sev = this._severity(toast.kind);
+        if (exact ? sev === min : sev >= min) n += 1;
+      }
+    }
+    return n;
   }
 
   /**
@@ -684,9 +764,7 @@ class ToastManager {
       row.className = 'toast-dismiss-all';
       row.addEventListener('click', () => this.dismissAll());
     }
-    const blocking = groups
-      .filter((g) => g.severity >= CAP_EXEMPT_SEVERITY)
-      .reduce((n, g) => n + g.count, 0);
+    const blocking = this._countBySeverity(groups, CAP_EXEMPT_SEVERITY);
     const label = blocking
       ? `Dismiss all ${total} notifications, including ${blocking} `
         + `waiting on your permission`
@@ -708,7 +786,7 @@ class ToastManager {
    * Output: HTMLElement - the card.
    */
   _renderCard(group, container) {
-    const { newest, count, severity, key } = group;
+    const { winner, count, badgeCount, severity, key } = group;
     // NOT `.toast--dismissing`: a card mid-fade still carries its group
     // key for the 220ms the exit animation runs, so a new toast arriving
     // in that window would reuse the corpse and resurrect a card the user
@@ -721,11 +799,11 @@ class ToastManager {
       el.className = 'toast toast--entering';
       el.dataset.groupKey = key;
     }
-    el.dataset.toastId = newest.id;
-    el.dataset.kind = newest.kind || '';
+    el.dataset.toastId = winner.id;
+    el.dataset.kind = winner.kind || '';
     el.dataset.severity = String(severity);
     el.dataset.count = String(count);
-    if (newest.color) el.style.setProperty('--toast-accent', newest.color);
+    if (winner.color) el.style.setProperty('--toast-accent', winner.color);
     // A blocking prompt interrupts the screen reader; chatter does not.
     el.setAttribute('role', severity >= CAP_EXEMPT_SEVERITY ? 'alert' : 'status');
 
@@ -738,13 +816,18 @@ class ToastManager {
     // literally contains "x3".
     const titleText = document.createElement('span');
     titleText.className = 'toast__title-text';
-    titleText.textContent = newest.title || '(untitled)';
+    titleText.textContent = winner.title || '(untitled)';
     title.appendChild(titleText);
-    if (count > 1) {
+    // THE BADGE COUNTS WHAT THE TITLE SAYS, not the session's pile: it
+    // sits against the winner's title and is read as "this sentence,
+    // that many times", so a session holding one permission prompt and
+    // six finished turns must not paint "permission needed ×7". What the
+    // x actually CLEARS is a different number, stated on the control.
+    if (badgeCount > 1) {
       const badge = document.createElement('span');
       badge.className = 'toast__count';
-      badge.textContent = `×${count}`;
-      badge.setAttribute('aria-label', `${count} occurrences`);
+      badge.textContent = `×${badgeCount}`;
+      badge.setAttribute('aria-label', `${badgeCount} occurrences`);
       title.appendChild(badge);
     }
     el.appendChild(title);
@@ -771,17 +854,17 @@ class ToastManager {
     const session = document.createElement('div');
     session.className = 'toast__session';
     const resolved = window.SessionLabel
-      ? window.SessionLabel.resolveToast(newest)
-      : (newest.session_label || newest.session_name || null);
+      ? window.SessionLabel.resolveToast(winner)
+      : (winner.session_label || winner.session_name || null);
     session.textContent = resolved
       || (window.SessionLabel ? window.SessionLabel.UNKNOWN : 'unknown session');
     if (!resolved) session.dataset.unknown = '1';
     el.appendChild(session);
 
-    if (newest.body) {
+    if (winner.body) {
       const body = document.createElement('div');
       body.className = 'toast__body';
-      body.textContent = newest.body;
+      body.textContent = winner.body;
       el.appendChild(body);
     }
 
@@ -790,10 +873,10 @@ class ToastManager {
     // and a CSP-legal `data:` URL, none of which a notification card
     // has any reason to know about, so the whole strip is built by
     // client/js/attachment-toast.js and this is the one line that asks
-    // for it. The WHOLE GROUP is passed, not `newest`: attachments
+    // for it. The WHOLE GROUP is passed, not the winner: attachments
     // coalesce per session, so the card is showing four files when the
     // badge says x4 and must draw all four.
-    if (newest.kind === ATTACHMENT_KIND
+    if (winner.kind === ATTACHMENT_KIND
         && window.AttachmentToast
         && typeof window.AttachmentToast.renderThumbs === 'function') {
       window.AttachmentToast.renderThumbs(el, group.toasts);
@@ -802,8 +885,12 @@ class ToastManager {
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
     dismissBtn.className = 'toast__dismiss';
+    // COUNTS EVERY RECORD IT WILL CLEAR, which can be larger than the
+    // badge. The badge answers "how often did this happen"; this answers
+    // "what am I about to throw away", and a control that understated
+    // that would clear things the user was never told about.
     const label = count > 1
-      ? `Dismiss ${count} notifications`
+      ? `Dismiss ${count} notifications for this session`
       : 'Dismiss notification';
     dismissBtn.setAttribute('aria-label', label);
     dismissBtn.setAttribute('title', label);
@@ -881,8 +968,12 @@ class ToastManager {
         // string by a screen reader: "+9 more9 waiting on you" is what
         // bare concatenation produces, and the flex gap only fixes the
         // sighted case.
+        // Counted per RECORD at that exact severity, not per hidden
+        // group: a hidden group is a whole session's pile, so summing
+        // group counts would report a session's finished turns as
+        // things waiting on the user.
         w.textContent = '(' + worstLabel(
-          hidden.filter((g) => g.severity === worst).reduce((n2, g) => n2 + g.count, 0),
+          this._countBySeverity(hidden, worst, true),
         ) + ')';
         row.appendChild(w);
       }

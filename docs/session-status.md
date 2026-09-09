@@ -71,6 +71,55 @@ and a `Notification` **wants your attention**. The split is only worth
 having if it reaches the surface the user actually reads, and the toast is
 that surface on a phone.
 
+**ONE TOAST CARD PER SESSION, and it shows the same thing the LED would.**
+Until 2026-09-09 the toast stack coalesced on (kind, session), so one
+session produced one card per kind: a "wants your attention" card AND a
+"Your turn" card, side by side, about the same session. Measured on the
+owner's screen that day, four cards for two sessions plus a "Dismiss all
+(9)" row. `client/js/toast.js` now keys the group on the SESSION alone and
+`client/js/toast-session-group.js` picks which pending event that card
+shows, by READING `SUMMARY_PRIORITY` out of
+`client/js/session-status-summary.js` - the same fold, in the same order,
+that the sidebar group headers and the launchpad top bar already use.
+There is no second ranking; the join is only from a hook event name to
+one of that fold's buckets:
+
+| toast kind | bucket | why |
+|---|---|---|
+| `PermissionRequest` | `permission` | Claude is stopped on a yes/no |
+| `StartupPrompt` | `input` | parked on a startup prompt; the same bucket its `waiting-input` LED folds into |
+| `Notification` | `input` | wants a look, is not blocked; matches where the `notice` LED buckets |
+| `Stop` | `unread` | "your turn": a finished turn nobody has looked at |
+| anything else | `input` | an unknown kind is treated exactly as a Notification, never as the least interesting thing |
+
+Severity breaks a tie INSIDE a bucket, so a `StartupPrompt` keeps the card
+from a chatty `Notification` and with it the severity-3 cap exemption and
+`role="alert"`.
+
+**THE CARD UPGRADES AND CANNOT DOWNGRADE, because the pick is a fold and
+not a variable.** A permission prompt landing on a session already showing
+"your turn" re-answers the fold on the SAME group key, so the same card
+element becomes the permission card; a `Stop` landing on a session showing
+a permission prompt changes nothing. Hook events arrive unordered,
+duplicated and droppable, and a fold over what is currently held is
+idempotent against all three - a running "current worst" variable would
+not be.
+
+**THE BADGE COUNTS THE KIND ON THE CARD, NOT THE PILE.** `×5` sits against
+the winner's title, so it is read as "this sentence, five times"; a
+session holding one permission prompt and six finished turns must not
+paint "needs your permission ×7". How many records the x will actually
+clear is a different number and the dismiss control states it in words
+("Dismiss 7 notifications for this session"). For the same reason the
+"Dismiss all" disclosure and the overflow row's worst-severity label count
+RECORDS at that severity, never whole groups.
+
+**The attachment receipt is deliberately NOT in this grouping.** It is a
+browser-raised card describing what is staged in the prompt buffer, with
+no server record, retired by the prompt being SENT rather than by the user
+showing up. It keeps its own card, still coalesced per session, so a
+session can show one status card and one receipt.
+
 ## The rules that keep it honest
 
 **tmux is the only thing that can see a pane die.** The dead check runs
@@ -292,9 +341,9 @@ colour was never allowed to be the only signal here.
 | light blue | `notice` | `--led-color-notice` -> `--color-info` |
 | grey | `idle`, `unknown` | `--led-color-idle` / `--led-color-unknown` -> `--color-fg-muted` |
 | red | `dead`, transport disconnected | `--led-color-dead` / `--led-color-disconnected` -> `--color-danger` |
-| grey dot in a green ring | `finished_unread` | `--led-color-idle` dot, `--led-color-unread` ring |
+| green ring, cleared centre | `finished_unread` | `--led-color-unread` ring, `--led-fill: transparent` |
 
-Three things about that table are load-bearing.
+Four things about that table are load-bearing.
 
 **Yellow is STOPPED, light blue is NOT.** `question` is a
 `PermissionRequest` that halted the agent mid-turn; the startup gate is a
@@ -313,8 +362,22 @@ plainly blue. A third warm hue would have failed that.
 **Grey at rest and grey unmeasured are told apart by SHAPE.** `idle` and
 `unknown` take the same hue on purpose - neither is interesting to look at
 and neither may be dressed up as a measured healthy state - and `unknown`
-is the one hollow dot in the component. Colour would have ranked them;
-shape does not.
+is drawn hollow. Colour would have ranked them; shape does not.
+
+**THE TWO HOLLOW LIGHTS SHARE ONE RECIPE.** `unknown` and the
+finished-turn ring both clear the centre of the dot so the row background
+shows through, and they do it in a single rule naming both states
+(`--led-fill: transparent` in `status-led.css`). That is the owner's
+2026-09-09 correction: the ring shipped with a mid-grey FILLED centre and
+read as two lights stacked, and the ask was "it should look like the
+'status not measured' dot, but the outline should be green instead of
+light grey with the dark grey center". Two copies of "clear the middle"
+would be free to drift into one state showing the real background and the
+other showing a grey somebody picked, so the count of that declaration is
+asserted in `tests/test_status_led.node.mjs`. The two are told apart by
+HUE and by WHERE THE BAND SITS - a grey 2px rim on the 9px dot for
+`unknown`, a green 2.5px band on the 15.3px halo box for the ring - never
+by the centre.
 
 The permission orange this replaced (`--color-status-pending`, `#ffa500`)
 sat too close to the red the dead light takes. At nine pixels an orange
@@ -412,12 +475,24 @@ solid green blob with no grey in it at all. So the `::after` drops its
 fill and draws the band with an inset shadow instead, leaving the middle
 clear.
 
+**AND THE DOT UNDER IT IS CLEARED TOO, since 2026-09-09.** The first
+version left the grey `done` dot filled inside the band, which the owner
+rejected. `--led-fill: transparent` now removes it, so what shows in the
+middle is the row background rather than a second light - the `unknown`
+dot's construction in a different hue. The inner state is still `done`
+and still resolves to the grey ink; only the paint of the centre changed,
+so nothing in the state machine or the summary fold moved.
+
 Geometry: `--led-lit-scale` 1.7 with a `--led-ring-width` of 2.5px. At
-the 9px default that is a 15.3px lit object, an unmistakable 2.5px of
-green, and about 0.65px of background separating ring from dot so the two
-read as two things. **This ring is what sets the size for every other
-state** - see Sizing below. It used to override the halo scale in its own
-block; it must not do that again.
+the 9px default that is a 15.3px lit object and an unmistakable 2.5px of
+green. **This ring is what sets the size for every other state** - see
+Sizing below. It used to override the halo scale in its own block; it
+must not do that again. Measured on a real render at 8x device scale,
+before and after the cleared centre, the painted extent was IDENTICAL to
+the hundredth of a pixel in all nine states: 15.75px for the four
+breathing ones, 16.00 for the ring, 15.62 for `steady`, 15.38 for `dim`,
+and 9.00 for the two `off` states, which carry no halo at all by design.
+Clearing a fill moves paint, not geometry.
 
 Every state colour is a named token declared exactly once, at the top of
 `status-led.css`, and every one of them defers to a palette token that all
@@ -549,9 +624,36 @@ the same (inner, outer) pair the rows resolve to, so the key cannot show
 a colour, a size or a shape the app does not paint. A hand-drawn legend
 would be a second implementation of the component, and this project has
 already paid for two stylesheets drawing one dot.
-`tests/test_status_key.node.mjs` asserts both directions: every member of
-`INNER_STATES` appears in the key, and nothing in the key names a state
-the component cannot produce.
+
+**SEVEN ROWS, ONE PER LIGHT.** It carried nine until 2026-09-09, one per
+inner state, and the owner asked for "one entry per colour": two rows
+showed the same yellow and two showed the same red, which sends a reader
+looking up a dot on their screen hunting for a difference the light
+cannot show them. The rows, top to bottom, in the same urgency order the
+group-header fold uses:
+
+| light | row |
+|---|---|
+| yellow | stopped, waiting on you |
+| light blue | still working, but needs your attention |
+| green | working |
+| green ring | done, unread |
+| grey | idle |
+| red | dead / disconnected session |
+| grey outline | not measured - nothing reported in, so this is not idle |
+
+Green and grey each appear twice and that is not a breach of the rule:
+a solid dot and an outline are two different things on screen, which is
+exactly what the last row exists to explain. **THE STATE MACHINE DID NOT
+CHANGE.** There are still eight inner states, `waiting-permission` and
+`waiting-input` still paint one yellow, `dead` and `disconnected` still
+paint one red, and the component's own `title` and `aria-label` still say
+WHICH of each pair a given dot is. Collapsing the rows made those labels
+load-bearing rather than decorative, so
+`tests/test_status_key.node.mjs` now pins that the collapsed pairs really
+do resolve to one colour in the stylesheet AND that their words still
+differ. It also asserts the count, that every hue the component can paint
+has a row, and that no two rows draw the same light.
 
 It sits where the sidebar's "N remembered positions are held for sessions
 not currently listed" note used to, removed the same day: it named

@@ -809,6 +809,13 @@
          launchpad top bar. Depends on status-led.js for the vocabularies,
          so it loads after it. -->
     <script src="/static/js/session-status-summary.js"></script>
+    <!-- ONE TOAST CARD PER SESSION: the join from a hook event name to a
+         bucket in the attention order session-status-summary.js owns, so
+         the toast stack and the LED beside it cannot disagree about which
+         session most needs the user. toast.js reads it through globalThis
+         at RENDER time, so it may load after toast.js; it sits here
+         because it is meaningless without the fold directly above. -->
+    <script src="/static/js/toast-session-group.js"></script>
     <!-- The foldable legend naming every light. Draws REAL LEDs through
          status-led.js, so it loads after it and before
          session-sidebar-rows.js, which puts it at the foot of the list. -->

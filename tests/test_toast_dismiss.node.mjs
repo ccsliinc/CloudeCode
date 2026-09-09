@@ -227,13 +227,16 @@ test('the control DISCLOSES the blocking prompts it is about to clear', () => {
 });
 
 test('an expanded overflow does not survive a Dismiss all', async () => {
+    // EIGHT SESSIONS, not eight toasts in one: a session now gets one
+    // card, so eight cards means eight sessions. Anything less never
+    // reaches the cap and this case would expand nothing.
     const { container, mgr } = makeEnv();
-    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `n${i}`, `b${i}`, 'A'));
+    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `n${i}`, `b${i}`, `A${i}`));
     container.querySelector('.toast-overflow').click();
     assert.ok(cards(container).length > 3, 'setup: expanded past the cap');
     dismissAllRow(container).click();
     await settle();
-    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `m${i}`, `c${i}`, 'A'));
+    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `m${i}`, `c${i}`, `A${i}`));
     assert.equal(cards(container).length, 3,
         'an emptied stack must come back capped, not still expanded');
 });
