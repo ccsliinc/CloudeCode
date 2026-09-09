@@ -5636,6 +5636,105 @@ no `v1.2.0` tag was created, and nothing was pushed to origin.
 
 ---
 
+## 2026-09-09 - the `web/` build toolchain (Svelte 5 + TS + Tailwind via vite)
+
+Branch `feat/svelte-web`. Round 1 of a screen-by-screen (strangler)
+migration of `client/` to Svelte. Scope was the TOOLCHAIN plus one real
+component proving the pipeline end to end. NOTHING in the running app
+changes behaviour this round: the bundle publishes `window.CloudeWeb` and
+returns, mounts nothing into the document and overwrites no global.
+Full model in `CLAUDE.md`, new section "The `web/` build".
+
+**What landed**
+
+- `web/` vite project: Svelte 5 with `runes: true` forced project-wide,
+  TypeScript strict (`noUncheckedIndexedAccess` on too), Tailwind 4 at
+  build time. Every dependency pinned to an EXACT version,
+  `package-lock.json` committed - the bundle check compares bytes, so a
+  floating transitive dependency would make it fail for a reason nobody
+  caused. `npm ci`, never `npm install`.
+  Pinned: svelte 5.57.0, vite 8.2.2, @sveltejs/vite-plugin-svelte 7.3.0,
+  tailwindcss + @tailwindcss/vite 4.3.3, vitest 5.0.0, typescript 5.9.3,
+  svelte-check 4.7.6, @types/node 24.11.2.
+- Output at `client/dist/` with FIXED names `app.js` / `app.css`, no
+  content hash, so `client/index.html` never has to be rewritten per
+  build. Vite is given a `.ts` entry rather than an HTML file, so its HTML
+  plugin never runs and no inline script is ever emitted.
+- `client/index.html` loads both: a `<link>` last in `<head>` and a
+  `<script type="module">` last in `<body>`, both from `/static/dist/`.
+- `scripts/web-build-check.sh` (new): rebuilds and fails if
+  `git status --porcelain client/dist` is non-empty. Exit 1 = drift,
+  exit 2 = COULD NOT EVALUATE, 2 is not 0. Wired into `deploy-mini.sh`
+  before the transfer (drift -> exit 1 `DEPLOY FAILED`, cannot-evaluate ->
+  exit 3 `CANNOT DETERMINE`; `CLOUDE_DEPLOY_SKIP_WEB_CHECK=1` is the
+  named, printed escape hatch) and into the `javascript` CI job.
+- `.gitignore`: `!client/dist/` negation added. THE `dist/` LINE IN THE
+  PYTHON SECTION WAS SILENTLY SWALLOWING THE WHOLE BUNDLE - it has no
+  leading slash, so it matches a `dist` directory at any depth. Measured
+  before the fix: `git check-ignore -v client/dist/app.js` answered
+  `.gitignore:9:dist/`. Left alone, the deploy would have shipped nothing
+  and its own hash check would have read green, because absent on both
+  sides compares equal.
+- The proof component: `client/js/status-led.js` ported to
+  `web/src/lib/led.ts`, the status half of `session-status-ui.js` to
+  `web/src/lib/status-dot.ts`, and `web/src/lib/StatusLed.svelte` as a
+  real runes component. No legacy caller switched to it.
+- `tests/test_no_remote_assets.py` extended by 6 tests to cover the
+  emitted bundle: no remote URL in a LOADING position, no `eval` /
+  `new Function`, the bundle is committed, index.html references it, and
+  a negative control asserting both detectors can actually match.
+
+**Measured, not assumed**
+
+- vitest: 36 tests pass in `web/`. 30 are a one-for-one port of the
+  behavioural half of `tests/test_status_led.node.mjs`; the other 26
+  blocks in that file assert on the TEXT of `client/css/status-led.css`
+  and were deliberately NOT duplicated (same file, same assertions,
+  already run by CI). The node suite is untouched and still 56 passed.
+- THE EQUIVALENCE PROOF: the test loads the two REAL legacy files in a
+  `vm` sandbox and compares strings across the cross product of status x
+  unread x startup_gate x status_source. **1008 comparisons, 0
+  mismatches**, plus a negative control proving the comparison can fail.
+- IN A REAL BROWSER, under the production CSP served by a scratch static
+  server that IMPORTS `src.security_headers.SECURITY_HEADERS` rather than
+  copying it: the same 1008 comparisons, **0 mismatches**.
+  `CloudeWeb.ledHtml('working',{unread:false})` byte-identical to
+  `SessionStatusUI.dotHtml('working',{unread:false})`.
+- Svelte actually mounts: `CloudeWeb.renderProbe('question', ...)`
+  returned real rendered markup from a compiled runes component in a
+  DETACHED element. A broken Svelte runtime cannot pass that while every
+  pure string function still would.
+- CSP: `window.CloudeWeb` exists after load, so `script-src 'self'` did
+  not refuse the module; `/static/dist/app.css` is in `document.styleSheets`
+  with 10 rules and `tw:opacity-70` computes to `0.7` on a live element,
+  so the stylesheet parsed and applies. A deliberate `eval('1+1')` on
+  that page THREW and raised a `script-src` violation, and a deliberate
+  off-origin `<img>` raised an `img-src` one - so the policy is real and
+  the violation listener works. Nothing the bundle does triggers either.
+- Tailwind emits 7 prefixed utility rules and 0 preflight; `app.css` is
+  835 bytes, `app.js` 36,605 bytes.
+- pytest `tests/test_no_remote_assets.py`: 9 -> 15 passed, 0 failed.
+- `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+
+**Known gaps, carried forward**
+
+- NO CALLER USES THE PORT YET. The legacy parents build rows as HTML
+  strings and set them with `innerHTML`, so switching one means rewriting
+  a parent. That is round 2, one screen at a time.
+- No vite dev server / HMR, deliberately: it would need a proxy in front
+  of FastAPI and a CSP relaxation. Build and reload.
+- The 26 stylesheet assertions in `tests/test_status_led.node.mjs` are the
+  single source of truth for `client/css/status-led.css` and are NOT
+  mirrored in the web tree. If that stylesheet ever moves into `web/`,
+  they move with it.
+- The browser console reader captured only 1 of the page's many load-time
+  log lines, so "no console errors" from it is WEAK evidence and is not
+  what the CSP claim above rests on. The claim rests on the positive
+  outcome measurements listed there.
+- NOT DEPLOYED. Nothing was pushed and no deploy was run.
+
+---
+
 ## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live
 
 Closes the one failure recorded above: the footer read v1.0.33 because

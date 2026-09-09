@@ -189,3 +189,27 @@ scripts/verify/.terminal-opacity-shots/
 !.claude/
 .claude/*
 !.claude/commands/
+
+# The Svelte build workspace under web/. node_modules is a build input;
+# the BUILT bundle under client/dist is not, and is tracked - see below.
+web/node_modules
+web/node_modules.nosync/
+
+# client/dist IS TRACKED, and the negation above it is load bearing.
+#
+# The `dist/` line in the Python section at the top of this file has no
+# leading slash, so it matches a directory named `dist` at ANY depth -
+# client/dist included. That was measured on 2026-09-09:
+# `git check-ignore -v client/dist/app.js` answered `.gitignore:9:dist/`.
+#
+# Why the bundle is committed rather than built on the target:
+# scripts/deploy-mini.sh ships the COMMITTED file set by tar and the mini
+# has no build step. An ignored client/dist would deploy nothing, and
+# every hash check in that script would compare an absent file against an
+# absent file and read green - absent on both sides compares equal, which
+# is exactly how a check silently verifies nothing. Committing the bundle
+# is what makes the deploy's own verification able to see it.
+#
+# scripts/web-build-check.sh rebuilds and fails if the committed bundle
+# has drifted from the source, so a stale one cannot ship quietly.
+!client/dist/

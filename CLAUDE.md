@@ -16,12 +16,125 @@ Read this before writing code here. It is orientation first, conventions second.
 | Terminal | tmux (live backend) driving a PTY, xterm.js client-side | `src/core/tmux_backend.py`, `client/js/terminal.js` |
 | Frontend | vanilla JS, no framework, NO build step for `client/` | `client/` |
 | Desktop shell | Electron wrapper (has its own `package.json`) | `macOS/` |
+| Compiled frontend | Svelte 5 (runes) + TypeScript + Tailwind, built by vite | `web/`, output in `client/dist/` |
 | State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config.py`, `src/core/refresh_store.py` |
 
 `client/` is served straight off disk under `/static`. There is no bundler, no
 transpile, no `client/package.json`. A file you add there is live on reload, so
 it must be valid in the browser as written. Run `node --check` on every JS file
-you touch.
+you touch. That is still true of `client/js`; the one compiled tree is `web/`,
+described next.
+
+## The `web/` build
+
+**TWO FRONTEND TREES LIVE IN THIS REPO AT THE SAME TIME, ON PURPOSE.** `client/js`
+is the app: hand-written vanilla JS, no build step, served off disk. `web/` is a
+Svelte 5 + TypeScript + Tailwind project that vite compiles into `client/dist/`.
+They coexist for the length of a screen-by-screen (strangler) migration, and
+during it a screen is either legacy or compiled, never half of each. The
+owner's framing, verbatim: "lean and mean. kiss." No SvelteKit, no node process
+at runtime, no SSR, and no vite dev server - FastAPI serves the emitted files
+under `/static` exactly as it serves everything else.
+
+| Piece | Where |
+|---|---|
+| The vite project | `web/package.json`, `web/vite.config.ts`, `web/svelte.config.js`, `web/tsconfig.json`, `web/vitest.config.ts` |
+| Tailwind entry (utilities only, prefixed) | `web/src/app.css` |
+| Entry point, publishes `window.CloudeWeb` | `web/src/main.ts` |
+| The first ported component and its two pure modules | `web/src/lib/StatusLed.svelte`, `led.ts`, `status-dot.ts` |
+| Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.test.ts` |
+| The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
+| Prove the committed bundle is current | `scripts/web-build-check.sh` |
+
+**The workflow is `npm run build` from `web/`, and `npm run watch` for a
+rebuild-on-save loop.** `npm test` runs vitest, `npm run check` runs
+svelte-check. There is deliberately NO vite dev server and no HMR: a dev server
+would need a proxy in front of FastAPI and a CSP relaxation to load its client,
+and both are permanent complications bought for a convenience. Build, reload,
+move on.
+
+**THE OUTPUT FILE NAMES ARE FIXED - `app.js` and `app.css`, no content hash -
+and that is a decision, not a default.** `client/index.html` is a hand-maintained
+1400-line file that keeps loading the legacy scripts throughout the migration,
+so it references the bundle by a name that must never change; a hashed name
+would mean rewriting that file on every build. Cache correctness is not given
+up, because `NoCacheStaticFiles` (`src/main.py`) already stamps
+`Cache-Control: no-cache, must-revalidate` on every `.js` and `.css`, so the
+browser revalidates each load. The names are set in
+`build.rollupOptions.output`.
+
+**`client/dist` IS COMMITTED, AND THE `.gitignore` NEGATION THAT KEEPS IT
+TRACKED IS LOAD BEARING.** `scripts/deploy-mini.sh` ships the committed file set
+by tar and the mini runs no build, so an ignored bundle would deploy nothing -
+and every hash check in that script would then compare an absent file against an
+absent file and read green, because absent on both sides compares equal. Note
+the `dist/` line in the Python section of `.gitignore` has no leading slash and
+so matches a directory named `dist` at ANY depth: measured 2026-09-09,
+`git check-ignore -v client/dist/app.js` answered `.gitignore:9:dist/`. The
+`!client/dist/` negation is what un-ignores it.
+
+**A COMMITTED ARTIFACT HAS ONE FAILURE MODE AND IT IS SILENT**, so
+`scripts/web-build-check.sh` exists: it rebuilds from `web/src` and fails if
+`git status --porcelain client/dist` is non-empty. It is wired into
+`deploy-mini.sh` BEFORE the transfer (exit 1 becomes `DEPLOY FAILED`, its exit 2
+- could not evaluate, no node - becomes `CANNOT DETERMINE`, because a check that
+did not run is not a check that passed; `CLOUDE_DEPLOY_SKIP_WEB_CHECK=1` is the
+named, printed escape hatch) and into the `javascript` job in
+`.github/workflows/tests.yml`. Every dependency in `web/package.json` is pinned
+to an exact version and `package-lock.json` is committed, because the check
+compares BYTES and a floating transitive dependency would make it fail for a
+reason nobody caused. Use `npm ci`, not `npm install`.
+
+**NO INLINE SCRIPT AND NO REMOTE ANYTHING, WHICH IS WHY VITE NEVER SEES AN
+HTML FILE.** `build.rollupOptions.input` points at `web/src/main.ts`, not at an
+`index.html`, so vite's HTML plugin never runs and never emits a document or
+the inline module-preload script that `script-src 'self'` would refuse. We own
+`client/index.html`. `tests/test_no_remote_assets.py` now also reads the
+emitted bundle: it fails on a remote URL in a LOADING position (an import
+specifier, a CSS `@import` or `url()`, a `src`/`href`, a Worker) and on any
+`eval` or `new Function`, with a negative control asserting both patterns can
+actually match - a bare `https?://` scan would fail on Svelte's own error-message
+URLs and the XHTML namespace string, which are inert, and teach everyone to add
+exemptions.
+
+**TAILWIND SHIPS UTILITIES ONLY, PREFIXED `tw:`, INSIDE `@layer utilities`, AND
+ALL THREE OF THOSE ARE ABOUT NOT TOUCHING THE RUNNING APP.** Preflight is not
+imported at all, because it is a global reset and this stylesheet loads beside
+every legacy stylesheet in the app. The prefix exists because Tailwind finds
+class names by scanning TEXT, comments included: the first build of `web/src/app.css`
+emitted `.container`, `.block`, `.inline` and `.ring` purely because those words
+appear in the prose of the TypeScript beside it. Measured on this repo
+2026-09-09, no legacy element carries any of the four (the five `container` hits
+are all `*-container` compounds), so that was a landmine rather than a live bug -
+and `tw:flex` cannot collide with anything the legacy tree writes. The layer is
+the guard in the other direction: for normal declarations an UNLAYERED rule
+beats a layered one at any specificity, and every legacy stylesheet here is
+unlayered. Automatic source detection is off (`source(none)`) with one explicit
+`@source` naming `web/src`, so nothing outside that tree can contribute a class
+name.
+
+**THE FIRST PORT IS THE STATUS LED, AND ITS CONTRACT IS BYTE-IDENTICAL OUTPUT.**
+`web/src/lib/led.ts` ports `client/js/status-led.js` and
+`web/src/lib/status-dot.ts` ports the status half of
+`client/js/session-status-ui.js`; `window.CloudeWeb.ledHtml(status, signals)`
+must return exactly what `SessionStatusUI.dotHtml(status, signals)` returns.
+That is not asserted by hand-written expectations, which would only prove the
+port agrees with what the porter remembered: `web/src/lib/StatusLed.test.ts`
+loads the two REAL legacy files in a `vm` sandbox and compares string against
+string across the whole cross product of status, unread flag, startup gate and
+status source - 1008 comparisons, plus a negative control proving the
+comparison is capable of failing. Measured in a real browser under the
+production CSP on 2026-09-09: 1008 of 1008 identical.
+
+**NOTHING IS WIRED TO IT YET, AND THAT IS THIS ROUND'S SCOPE.** `main.ts`
+publishes `window.CloudeWeb` and returns - it mounts no component into the
+document, registers no listener and overwrites no global. The legacy parents
+still build their rows as HTML strings and set them with `innerHTML`, so
+switching a caller means rewriting a parent, which is a later round. The
+Svelte runtime is still proven end to end: `window.CloudeWeb.renderProbe()`
+mounts the compiled component into a DETACHED element and hands back its
+`outerHTML`, so a broken Svelte runtime cannot pass while every pure string
+function still would.
 
 ## Architecture, the parts that shape everything else
 
