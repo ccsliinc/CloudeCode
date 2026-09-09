@@ -65,13 +65,6 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
-        const toggleEl = e.target.closest('[data-mark-unread]');
-        if (toggleEl) {
-            e.stopPropagation();
-            await onMarkUnreadClick(ctrl, toggleEl);
-            return;
-        }
-
         // A click that landed on the grip was a drag gesture, not a
         // switch - the pointer handlers own it.
         if (e.target.closest('[data-grip-session]')) return;
@@ -160,27 +153,6 @@ console.log('[SessionSidebarClicks Module] Loading...');
         } catch (err) {
             console.error('SessionSidebar: switch failed:', err);
             alert(`Error: failed to switch conversation: ${err.message || err}`);
-        }
-    }
-
-    /**
-     * Description: toggle the manual unread flag for one row and re-render
-     *   immediately (optimistic - the next poll tick reconciles either
-     *   way, but a full POLL_MS with no visual feedback feels broken).
-     * Inputs: ctrl (object) - the SessionSidebarController.
-     *   toggleEl (Element) - the `[data-mark-unread]` span clicked.
-     * Output: Promise<void>.
-     */
-    async function onMarkUnreadClick(ctrl, toggleEl) {
-        const tmuxName = toggleEl.dataset.markUnread;
-        if (!tmuxName) return;
-        const next = toggleEl.dataset.unreadCurrent !== 'true';
-        try {
-            await window.API.setSessionUnread(tmuxName, next);
-            ctrl._lastSig = null; // force a repaint even if the poll sig matches
-            await ctrl._fetchAndRender();
-        } catch (err) {
-            console.error('SessionSidebar: mark-unread failed:', err);
         }
     }
 
@@ -373,7 +345,7 @@ console.log('[SessionSidebarClicks Module] Loading...');
 
     window.SessionSidebarClicks = {
         onRowClick, onGroupToggleClick, activateRow,
-        onMarkUnreadClick, onRowActionClick, runRestart,
+        onRowActionClick, runRestart,
     };
     console.log('[SessionSidebarClicks Module] Exported as window.SessionSidebarClicks');
 })();

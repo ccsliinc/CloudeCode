@@ -19,7 +19,7 @@
  * WHAT MOVED INTO THE MENU, and nothing was dropped or renamed. All
  * three of the row's old inline controls are now menu items built by THE
  * SAME BUILDERS that drew them: pin/unpin (SessionSidebarRows
- * .pinButtonHtml), mark unread (SessionStatusUI.markUnreadHtml) and
+ * .pinButtonHtml) and
  * close/remove plus RESTART on a dead row (SessionRowActions.html, which
  * already emitted restart alongside remove). Each item therefore carries
  * the identical data attribute, aria state and glyph, and its LABEL is
@@ -114,7 +114,7 @@ console.log('[SessionRowMenu Module] Loading...');
      *   menu ... no border is probably better".
      * Inputs:
      *   r (object) - one merged session row, as session-sidebar-rows.js
-     *     builds from. Reads `name`, `status`, `is_pinned`, `unread`.
+     *     builds from. Reads `name`, `status`, `is_pinned`.
      * Output:
      *   string - HTML for one `<button>`.
      * Example:
@@ -128,7 +128,6 @@ console.log('[SessionRowMenu Module] Loading...');
             + KEBAB_ATTR + '="' + esc(name) + '" '
             + 'data-row-status="' + esc((r && r.status) || 'unknown') + '" '
             + 'data-row-pinned="' + ((r && r.is_pinned) ? '1' : '0') + '" '
-            + 'data-row-unread="' + ((r && r.unread) ? '1' : '0') + '" '
             + 'tabindex="-1" aria-haspopup="menu" aria-expanded="false" '
             + 'aria-controls="' + PANEL_ID + '" '
             + 'title="more" aria-label="' + esc(label) + '">'
@@ -154,13 +153,9 @@ console.log('[SessionRowMenu Module] Loading...');
         var name = kebab.getAttribute(KEBAB_ATTR) || '';
         var status = kebab.getAttribute('data-row-status') || 'unknown';
         var pinned = kebab.getAttribute('data-row-pinned') === '1';
-        var unread = kebab.getAttribute('data-row-unread') === '1';
         var out = [];
         if (window.SessionSidebarRows) {
             out.push(window.SessionSidebarRows.pinButtonHtml(name, pinned));
-        }
-        if (window.SessionStatusUI) {
-            out.push(window.SessionStatusUI.markUnreadHtml(name, unread));
         }
         if (window.SessionSidebarGroupActions) {
             out.push(window.SessionSidebarGroupActions.rowMenuItemHtml(name));
@@ -343,13 +338,6 @@ console.log('[SessionRowMenu Module] Loading...');
             e.preventDefault();
             close();
             clicks.onRowActionClick(ctrl, actionEl);
-            return;
-        }
-        var unreadEl = target.closest('[data-mark-unread]');
-        if (unreadEl && clicks) {
-            e.preventDefault();
-            close();
-            clicks.onMarkUnreadClick(ctrl, unreadEl);
             return;
         }
         var pinEl = target.closest('[data-pin-session]');

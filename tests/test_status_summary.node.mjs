@@ -135,7 +135,12 @@ test('a notice beats working but loses to a permission prompt', () => {
         ]),
     );
     assert.equal(withWork.bucket, 'input');
-    assert.equal(withWork.inner, 'waiting-input');
+    // The BUCKET is `input` - that rank is the product decision and did
+    // not move with the five-colour pass. The rendered inner is `notice`
+    // because every member of the bucket here IS a notice, and a header
+    // that painted the stopped yellow over a group holding nothing
+    // stopped would be claiming something nobody measured.
+    assert.equal(withWork.inner, 'notice');
 
     // THE HEADLINE IS THE PARKED SESSION, not the chatty one. A group
     // holding both must point the user at the row that will not move

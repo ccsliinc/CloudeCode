@@ -223,7 +223,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
      *   already owns the group-picking domain - openPickerFor,
      *   commitAssignment, the store lookups - and
      *   client/js/session-row-menu.js pulls it into the panel exactly the
-     *   way it pulls pin from SessionSidebarRows and mark-unread from
+     *   way it pulls pin from SessionSidebarRows and the row action from
      *   SessionStatusUI: one control, built by the module that owns it.
      *
      *   An UNGROUPED row still gets the control, same as the chip did -

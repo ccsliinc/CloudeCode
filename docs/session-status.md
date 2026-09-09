@@ -212,6 +212,11 @@ overrule it.
 **Set** on `Stop` (the `auto` flag), and by the user's explicit control
 (the `manual` flag). A session is unread if either is set.
 
+**There is no longer a client control for the `manual` flag.** The unread
+envelope was removed from the sidebar and the launchpad on 2026-09-08 -
+see "The envelope is gone" below. `PATCH /sessions/{name}/unread` still
+exists and still works; nothing in the UI calls it.
+
 **Cleared** when a WS terminal actually binds to the session
 (`SessionManager.mark_session_viewed`) - the strongest "the user is
 looking at this" signal the server has, deliberately stronger than merely
@@ -257,65 +262,167 @@ a whole extra state only to say "done, and also unread", and there was no
 way at all to say "working, and also unread". Two rings say both.
 
 **Inner dot** (`data-inner`), the chat's own status:
-`working`, `waiting-permission`, `waiting-input`, `done`, `dead`,
-`unknown`.
+`working`, `waiting-permission`, `waiting-input`, `notice`, `done`,
+`dead`, `disconnected`, `unknown`.
 
 **Outer halo** (`data-outer`), activity and attention:
-`active` (breathing), `steady` (lit, still), `unread` (its own hue,
-breathing), `off` (dead, no halo at all), `dim` (not measured).
+`active` (breathing), `steady` (lit, still), `unread` (a crisp, still
+green ring), `off` (dead, no halo at all), `dim` (not measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
 
+### Five colours, eight states
+
+Asked for on 2026-09-08, in the owner's words: "if the session is fully
+stopped waiting for a response, then yellow. if it's still working but
+needs something from me, make it light blue", over "red if the connection
+is disconnected, grey if the session is idle, green if there is activity",
+plus "finished turn waiting on me to look at should be a green outline and
+grey filled dot".
+
+The eight inner state NAMES stay eight. Only the paint collapses onto
+five hues, and the accessible label still says which state it is, because
+colour was never allowed to be the only signal here.
+
+| colour | states | token |
+|---|---|---|
+| green | `working`, `working_subagent` | `--led-color-working` -> `--color-success` |
+| yellow | `question`, `awaiting_startup_prompt` | `--led-color-permission` / `--led-color-waiting` -> `--color-warning` |
+| light blue | `notice` | `--led-color-notice` -> `--color-info` |
+| grey | `idle`, `unknown` | `--led-color-idle` / `--led-color-unknown` -> `--color-fg-muted` |
+| red | `dead`, transport disconnected | `--led-color-dead` / `--led-color-disconnected` -> `--color-danger` |
+| grey dot in a green ring | `finished_unread` | `--led-color-idle` dot, `--led-color-unread` ring |
+
+Three things about that table are load-bearing.
+
+**Yellow is STOPPED, light blue is NOT.** `question` is a
+`PermissionRequest` that halted the agent mid-turn; the startup gate is a
+pane parked on the folder-trust dialog. Both are fully stopped and the
+user's answer to both is the same, so they paint the same yellow and keep
+separate names and separate labels. `notice` is a `Notification`: the
+agent is still working and merely wants a look. That is the
+`question` / `notice` split of earlier the same day, now visible on the
+light rather than only in the data.
+
+**Light blue has to survive red-green colourblindness.** Under both
+protanopia and deuteranopia the green (`#4ade80`) desaturates toward a
+pale yellow-khaki while a blue at this wavelength (`#4fc1ff`) stays
+plainly blue. A third warm hue would have failed that.
+
+**Grey at rest and grey unmeasured are told apart by SHAPE.** `idle` and
+`unknown` take the same hue on purpose - neither is interesting to look at
+and neither may be dressed up as a measured healthy state - and `unknown`
+is the one hollow dot in the component. Colour would have ranked them;
+shape does not.
+
+The permission orange this replaced (`--color-status-pending`, `#ffa500`)
+sat too close to the red the dead light takes. At nine pixels an orange
+and a red in the same list read as one colour.
+
+### The envelope is gone
+
+`finished_unread` used to be carried by an unread ENVELOPE ICON beside the
+row name on the sidebar and the launchpad, which doubled as the manual
+mark-unread control. Both were removed on 2026-09-08 and the green ring is
+what says it now. Unread TRACKING is untouched: `src/core/unread_store.py`
+still keys on the instance, `Stop` still sets it, binding a WS terminal
+still clears it, and `PATCH /sessions/{name}/unread` still exists. Only
+the client control went, along with its click and keyboard handlers in
+`launchpad.js`, `session-row-menu.js`, `session-sidebar-clicks.js` and
+`session-sidebar.js`, and its CSS. The kebab no longer carries
+`data-row-unread`, because nothing reads it.
+
 ### The mapping
 
-`StatusLed.ledStateFor({activity_status, unread, startup_gate})` is the
-ONE place the server vocabulary becomes a pair of rings.
+`StatusLed.ledStateFor({activity_status, unread, startup_gate, transport})`
+is the ONE place the server vocabulary becomes a pair of rings.
 
-| activity_status | startup_gate | unread | inner | outer |
-|---|---|---|---|---|
-| `dead` / `stopped` | any | any | `dead` | `off` |
-| any | `awaiting_startup_prompt` | any | `waiting-input` | `active` |
-| `question` | any | any | `waiting-permission` | `active` |
-| `notice` | any | any | `waiting-input` | `active` |
-| `working` / `working_subagent` / `running` | any | no | `working` | `active` |
-| `working` / `working_subagent` / `running` | any | yes | `working` | `unread` |
-| `finished_unread` | any | any | `done` | `unread` |
-| `idle` | any | no | `done` | `steady` |
-| `idle` | any | yes | `done` | `unread` |
-| `unknown` / absent / unrecognised | any | no | `unknown` | `dim` |
-| `unknown` / absent / unrecognised | any | yes | `unknown` | `unread` |
+| transport | activity_status | startup_gate | unread | inner | outer |
+|---|---|---|---|---|---|
+| `disconnected` | any | any | any | `disconnected` | `off` |
+| other | `dead` / `stopped` | any | any | `dead` | `off` |
+| other | any | `awaiting_startup_prompt` | any | `waiting-input` | `active` |
+| other | `question` | any | any | `waiting-permission` | `active` |
+| other | `notice` | any | any | `notice` | `active` |
+| other | `working` / `working_subagent` / `running` | any | any | `working` | `active` |
+| other | `finished_unread` | any | any | `done` | `unread` |
+| other | `idle` | any | no | `done` | `steady` |
+| other | `idle` | any | yes | `done` | `unread` |
+| other | `unknown` / absent / unrecognised | any | any | `unknown` | `dim` |
 
-Order matters: `dead` outranks everything (an unread flag must not paint a
-corpse as something to go and read), then anything blocking on the user,
-then activity. `unread` rides the halo independently of all of it.
+Order matters. A dead TRANSPORT outranks everything: nothing we are
+showing is fresh once the socket is down, so the light may not keep
+asserting the last status it happened to see. Then `dead` (an unread flag
+must not paint a corpse as something to go and read), then anything
+blocking on the user, then activity.
 
-Both inner waiting states are reachable from live data as of 2026-09-08.
-`waiting-permission` is `question` and nothing else - the agent is
-stopped. `waiting-input` is `notice` OR the startup gate, which is the
-right pairing: both mean "come and look", neither means "approve this".
+Two rows changed with the five-colour pass and both are deliberate.
+**A working session is solid green whatever its unread flag says** - the
+unread halo is now the green finished-turn ring, and a ring claiming a
+turn ended, around a session that is mid-turn, is two contradictory claims
+on one light. **`unknown` never takes the ring either**, for the same
+reason in its stronger form: the ring asserts that a turn FINISHED here,
+and nothing was measured.
 
-`waiting-permission` has its own hue, `--led-color-permission`, resolving
-to the existing `--color-status-pending` (`#ffa500`). It sits between the
-terracotta `--color-accent` that `waiting-input` takes (`#d77757`) and
-the red `--color-danger` that `dead` takes (`#ff4444`): hotter than "come
-and look", and deliberately NOT a red, because a blocked session is not a
-dead one and the two lights must never be confusable at a glance. An
-existing palette token was chosen over a new value so no theme has to
-learn one.
+### Transport: the one signal the server cannot report
+
+`client/js/session-transport.js`. Every other signal here is a fact about
+the session, measured on the Mac and shipped down `/sessions/list`.
+"Disconnected" is a fact about the BROWSER: the WebSocket in
+`client/js/terminal.js` closed. It is written from `ws.onopen` and
+`ws.onclose` and read by `session-sidebar-rows.js` and `launchpad.js` on
+their way into `dotHtml`.
+
+This browser holds a socket to at most ONE session, so **every other
+session answers `unknown`, never `connected` and never `disconnected`**. A
+sidebar full of red because one socket dropped would be exactly the
+fabricated-measurement mistake this whole model exists to avoid. A
+DELIBERATE close clears the record rather than marking it disconnected:
+"you left it" and "we lost it" are different facts and only one is worth
+painting red.
+
+`dead` and `disconnected` share the red, so the LABEL is the only thing
+separating them, and the two must never be paraphrases: "dead - the
+process exited" against "disconnected - no live connection to this
+session".
 
 ### Motion
 
-`active` and `unread` breathe on a 2s ease-in-out cycle, opacity and scale
-together, on the HALO only - the dot itself never animates, so the state
-colour stays at full strength at every point in the cycle. `steady` is lit
-and still. `off` has no halo. Under
-`prefers-reduced-motion: reduce` the glow stays and the pulse stops; the
-active/resting distinction moves entirely into opacity.
+`active` breathes on a 2s ease-in-out cycle, opacity and scale together,
+on the HALO only - the dot itself never animates, so the state colour
+stays at full strength at every point in the cycle. `steady` is lit and
+still. `off` has no halo. Under `prefers-reduced-motion: reduce` the glow
+stays and the pulse stops; the active/resting distinction moves entirely
+into opacity.
 
-The six state colours plus the unread hue are named tokens declared
-exactly once, at the top of `status-led.css`. A theme that wants a
-different palette redefines `--led-color-*`, never these rules.
+`unread` DOES NOT BREATHE since the five-colour pass. It is the
+finished-turn ring, and an outline that pulses stops reading as an outline
+at nine pixels. Motion is therefore a signal in its own right now: a light
+that moves is a session that is moving.
+
+**It is DRAWN AS A RING, NOT AS A DISC, and that is not a style
+preference.** The halo pseudo-element carries `z-index: -1`, which inside
+the element's own stacking context paints it ABOVE the element's
+background - and the element's background IS the dot. Every other halo
+gets away with that because it is a wash at 0.18 to 0.55 opacity, so the
+dot reads straight through it. An OPAQUE disc at the same z-index hides
+the dot completely: measured in a 6x render, `finished_unread` came out a
+solid green blob with no grey in it at all. So the `::after` drops its
+fill and draws the band with an inset shadow instead, leaving the middle
+clear.
+
+Geometry: `--led-halo-scale` 1.7 with a `--led-ring-width` of 2.5px. At
+the 9px default that is a 15.3px lit object, an unmistakable 2.5px of
+green, and about 0.65px of background separating ring from dot so the two
+read as two things. It stays comparable to the ~14.7px an `active` LED
+reaches at its breathing peak, so it does not reintroduce the
+oversized-glow problem the geometry was calibrated against.
+
+Every state colour is a named token declared exactly once, at the top of
+`status-led.css`, and every one of them defers to a palette token that all
+of `client/css/themes` already declares. A theme that wants a different
+palette redefines `--led-color-*`, never these rules.
 
 ### Sizing
 
@@ -370,6 +477,19 @@ as measured-and-quiet.
 Each child is bucketed from the LED state it already resolved to, not from
 its raw `activity_status`, so a header cannot disagree with the rows under
 it.
+
+**The `input` bucket holds two hues and its RANK did not move.** Since the
+five-colour pass, `waiting-input` is yellow (stopped on a startup prompt)
+and `notice` is light blue (still working). They stay in one bucket -
+that priority is the product decision - but the header has to paint one of
+them, so it paints yellow if any member is stopped and light blue when
+every member is a notice. A header that painted the stopped yellow over a
+group holding nothing stopped would be claiming something nobody measured,
+and a header that disagreed with its only child is a bug the suite guards.
+
+`disconnected` buckets with `dead`: they paint the same red and rank the
+same way. No group feeds one in today - children come from a REST listing,
+which has no socket.
 
 ## A silent degradation worth knowing about
 

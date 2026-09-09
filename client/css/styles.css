@@ -3006,7 +3006,7 @@ body.home-header-active {
  * 1.875px stroke (24 -> 18 scales by 0.75). The shared helper in
  * session-status-ui.js draws a 16x16 viewBox at 16px and stroke-width
  * 1.5, which lands at an 8x8 glyph with a 1.5px stroke: visibly lighter
- * and smaller than the pencil and envelope it sits beside.
+ * and smaller than the pencil it sits beside.
  *
  * Sizing is the host surface's job by design (SessionRowActions.html()
  * takes a surfaceClass for exactly this), so correct it here rather than

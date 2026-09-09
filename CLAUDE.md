@@ -827,6 +827,48 @@ to `notice`; `Stop` to `finished_unread` while unread, `idle` once seen;
 tmux's `#{pane_dead}` to `dead`; everything else is `unknown`, which is a
 real answer and never `idle`.
 
+**FIVE COLOURS ON ONE LIGHT, AND THE ENVELOPE IS GONE.** The owner's
+rule, 2026-09-08, verbatim: "if the session is fully stopped waiting for
+a response, then yellow. if it's still working but needs something from
+me, make it light blue", over "red if the connection is disconnected,
+grey if the session is idle, green if there is activity", plus "finished
+turn waiting on me to look at should be a green outline and grey filled
+dot". GREEN is `working` / `working_subagent`. YELLOW is `question` AND
+the startup gate's `awaiting_startup_prompt` - both are fully stopped and
+the user's answer to both is the same. LIGHT BLUE is `notice` alone, the
+only state that is working AND asking for you. GREY is `idle` and
+`unknown`, told apart by SHAPE (`unknown` is the one hollow dot) rather
+than by a louder colour. RED is `dead` and a dropped WebSocket. And
+`finished_unread` is the two rings saying two things at once: a grey dot
+in a crisp green ring. THE EIGHT INNER STATE NAMES STAY EIGHT - only the
+paint collapses onto five hues, because the accessible label still has to
+say which state it is and colour was never allowed to be the only signal.
+
+The unread ENVELOPE ICON went with it, from the sidebar row menu and the
+launchpad card. It was also the manual mark-unread control, so its click
+and keyboard handlers went too. Unread TRACKING is untouched: `Stop` still
+sets it, a WS terminal binding still clears it, `src/core/unread_store.py`
+still keys on the instance, and `PATCH /sessions/{name}/unread` still
+exists with nothing in the UI calling it. The green ring is the only thing
+saying it now, which is why it is drawn as a REAL RING - transparent
+centre, 2.5px inset band, 1.7x the dot - and not as the blurred 1.3x wash
+every other halo wears. THE FILL WAS THE TRAP: the halo pseudo-element
+paints ABOVE the element background, which IS the dot, so an opaque disc
+renders `finished_unread` as a solid green blob with no grey in it.
+Measured in a 6x render before it shipped.
+
+**A DROPPED SOCKET IS THE ONE SIGNAL THE SERVER CANNOT REPORT**, so it
+lives in `client/js/session-transport.js`, written from `terminal.js`'s
+`ws.onopen` / `ws.onclose` and read by the sidebar rows and the launchpad
+cards on their way into `dotHtml`. This browser holds a socket to at most
+ONE session, so **every other session answers `unknown`** - a sidebar full
+of red because one socket dropped would be the fabricated-measurement
+mistake this whole model exists to avoid. A DELIBERATE close CLEARS the
+record rather than marking it disconnected. `dead` and `disconnected`
+share the red, so the LABEL is the only thing separating them and the two
+must never be paraphrases: "dead - the process exited" against
+"disconnected - no live connection to this session".
+
 **`question` AND `notice` ARE TWO STATES BECAUSE A PERMISSION PROMPT
 STOPS THE AGENT AND A NOTIFICATION DOES NOT.** They were one state named
 `question` until 2026-09-08. A `PermissionRequest` halts claude mid-turn
@@ -841,11 +883,16 @@ side of the `PermissionRequest` it accompanies must not be able to move
 the blocking claim. `permission_open` is read first, so a session holding
 both answers `question`. Both are cleared by the same three events
 (`UserPromptSubmit`, `PreToolUse`, `Stop`) because what resolves either
-is the user showing up. On the LED, `question` is inner
-`waiting-permission` (its own hue, `--led-color-permission`) and `notice`
-is `waiting-input`, shared with the startup gate - both mean "come and
-look", neither means "approve this". Summary priority is
-**permission > input > working > unread > done > dead > unknown**.
+is the user showing up. On the LED the split is now VISIBLE rather than
+only recorded: `question` is inner `waiting-permission` and paints yellow
+with the startup gate, `notice` is its own inner state and paints light
+blue. Light blue over a third warm hue because the pair has to survive
+red-green colourblindness - under protanopia and deuteranopia the green
+desaturates toward a pale khaki while a blue at this wavelength stays
+plainly blue. Summary priority is unchanged:
+**permission > input > working > unread > done > dead > unknown**, and
+`notice` still buckets as `input` - the colour split is a rendering
+decision on the ROW, not a re-ranking.
 
 **A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
 punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
@@ -905,9 +952,14 @@ successor. Set on `Stop` and by the user's control, cleared when a WS
 terminal binds. An unmeasurable epoch degrades to the legacy name key.
 
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
-dot for the chat's status and an outer halo for activity and attention, so
-"working, and also unread" is sayable. `dotHtml` delegates to it, so every
-surface renders the same component.
+dot for the chat's status and an outer halo for activity and attention.
+`dotHtml` delegates to it, so every surface renders the same component -
+and every surface must now PASS IT SIGNALS (`unread`, `startup_gate`,
+`transport`), not just the status string, or the finished-turn ring and
+the disconnected red can never render. A WORKING session is solid green
+whatever its unread flag says, and `unknown` never takes the ring at all:
+the ring asserts that a turn FINISHED here, and neither of those measured
+one.
 
 ## The transcript archive the app maintains
 

@@ -143,7 +143,10 @@ test('the kebab carries the row s state, so the menu cannot open stale', () => {
     assert.equal(k.getAttribute(RowMenu.KEBAB_ATTR), 'a-row');
     assert.equal(k.getAttribute('data-row-status'), 'dead');
     assert.equal(k.getAttribute('data-row-pinned'), '1');
-    assert.equal(k.getAttribute('data-row-unread'), '1');
+    // NO `data-row-unread`. The menu's only reader of it was the unread
+    // envelope, removed on 2026-09-08 when the status light took over
+    // saying it. An attribute nothing reads is a claim nothing checks.
+    assert.equal(k.getAttribute('data-row-unread'), null);
 });
 
 test('the kebab is a real button with the header s menu semantics', () => {
@@ -175,8 +178,6 @@ test('the menu is built from the row s OWN builders, not a second copy', () => {
     // ever hand-rolls its own markup these stop matching.
     assert.ok(menu.includes(Rows.pinButtonHtml(r.name, true)),
         'the pin item must BE SessionSidebarRows.pinButtonHtml output');
-    assert.ok(menu.includes(StatusUI.markUnreadHtml(r.name, true)),
-        'the unread item must BE SessionStatusUI.markUnreadHtml output');
     assert.ok(menu.includes(RowActions.html(r.status, r.name, 'session-sidebar-row-delete')),
         'the destructive item must BE SessionRowActions.html output');
     assert.ok(menu.includes(GroupActions.rowMenuItemHtml(r.name)),
@@ -188,7 +189,9 @@ test('every action the row used to offer inline survives in the menu', () => {
     // by a later edit without this failing.
     const running = RowMenu.controlHtmlFor(kebabStub(row({ status: 'working' }))).join('');
     assert.ok(running.includes('data-pin-session='), 'pin survived');
-    assert.ok(running.includes('data-mark-unread='), 'mark-unread survived');
+    // NOT mark-unread. It was deliberately removed, not lost: the status
+    // light carries unread now, so the control it duplicated is gone.
+    assert.ok(!running.includes('data-mark-unread='), 'mark-unread is gone');
     assert.ok(running.includes(`${RowActions.ATTR_ACTION}="close"`), 'close survived');
     // The group chip's DISPLAY half is gone on purpose - see
     // test_session_sidebar_rows.node.mjs - but its ACTION half (opening
@@ -252,13 +255,14 @@ test('picking a group closes this menu before handing off, like pin does', () =>
         'the kebab panel must close BEFORE the picker opens, or two menus stack');
 });
 
-test('the pinned and unread STATES ride into the menu, not just the actions', () => {
+test('the pinned STATE rides into the menu, not just the action', () => {
     const on = RowMenu.controlHtmlFor(kebabStub(row({ is_pinned: true, unread: true }))).join('');
     assert.ok(on.includes('aria-pressed="true"'), 'a pinned row opens a menu that says so');
-    assert.ok(on.includes('mark-unread-toggle--active'));
     const off = RowMenu.controlHtmlFor(kebabStub(row())).join('');
     assert.ok(!off.includes('aria-pressed="true"'));
-    assert.ok(!off.includes('mark-unread-toggle--active'));
+    // The unread flag no longer reaches this menu at all - it is rendered
+    // by the row's status light instead. See tests/test_status_led.node.mjs.
+    assert.ok(!on.includes('mark-unread'));
 });
 
 test('every menu label comes from the control s own title - no second copy', () => {

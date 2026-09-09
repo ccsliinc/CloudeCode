@@ -24,7 +24,7 @@
  * derived from it, so one custom property scales the whole component.
  * ledHtml() may set it per instance; nothing else should.
  *
- * NO THEME MAY NEED TO OVERRIDE THIS FILE. The six state colours are
+ * NO THEME MAY NEED TO OVERRIDE THIS FILE. The state colours are
  * tokens declared once in the block below, each falling back to a theme
  * token where one exists and to a literal only when it does not. A theme
  * that wants a different LED palette redefines --led-color-*, not these
@@ -32,45 +32,88 @@
  */
 
 .status-led {
-    /* ---- the one place the six state colours are named --------------
+    /* ---- the one place the state colours are named ------------------
      * Each is the hue for BOTH rings of that state - the halo is the
      * same colour as the dot, only larger and blurred, which is what
-     * makes it read as one lit object rather than two shapes.
+     * makes it read as one lit object rather than two shapes. The one
+     * exception is the finished-turn ring, which is deliberately a
+     * DIFFERENT colour from its dot; see --led-color-unread below.
      *
-     * Every value defers to a theme token first. --color-accent and
-     * --color-danger already exist in every theme; the rest fall back to
-     * a literal that is legible on both the light and dark palettes this
-     * app ships, because there is no existing token that means them. */
-    --led-color-working: var(--color-info, #4a9eff);
-    --led-color-waiting: var(--color-accent, #ffb020);
-    /* BLOCKED ON A YES/NO gets its own hue, added with the 2026-09-08
-     * split of `question` (a PermissionRequest, the agent is stopped)
-     * from `notice` (a Notification, it is not). Two states that ask
-     * different things of the user may not paint the same colour, or the
-     * split buys nothing at the only place it matters - the light.
+     * Every value defers to a theme token first, and every token used
+     * here is one that all of client/css/themes already declares, so a
+     * theme changes the LED palette for free. The literal after the
+     * comma is only the no-theme fallback.
      *
-     * WHY --color-status-pending (#ffa500) AND NOT A NEW VALUE. It is an
-     * existing palette token, so no theme has to learn a new one. It is a
-     * saturated orange sitting between the terracotta `--color-accent`
-     * that `waiting` resolves to (#d77757, muted) and the red
-     * `--color-danger` that `dead` takes (#ff4444), which is exactly
-     * where this state belongs: hotter than "come and look", and NOT a
-     * red, because a blocked session is not a dead one and the two lights
-     * must never be confusable at a glance. The danger-adjacent
-     * --color-danger-strong (#ff6b6b) was rejected for that last reason
-     * alone. It is also clear of --color-unread's amber (#fbbf24), which
-     * rides the halo and could otherwise sit behind it. */
-    --led-color-permission: var(--color-status-pending, #ffa500);
-    --led-color-done: var(--color-success, #3fb950);
-    --led-color-dead: var(--color-danger, #ff4444);
-    --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
+     * FIVE COLOURS, 2026-09-08. The owner's rule, in their words: "if the
+     * session is fully stopped waiting for a response, then yellow. if
+     * it's still working but needs something from me, make it light
+     * blue", over "red if the connection is disconnected, grey if the
+     * session is idle, green if there is activity". Eight inner states
+     * resolve onto those five hues; the state NAMES stay eight because
+     * the accessible label still has to say which one it is, and colour
+     * was never allowed to be the only signal here.
+     *
+     * GREEN - the session is moving. */
+    --led-color-working: var(--color-success, #4ade80);
 
-    /* Attention has its own hue, deliberately NOT one of the five above.
-     * Unread is a property of the halo alone and can sit behind any
-     * inner state, so if it shared a colour with one of them the two
-     * rings would read as one signal in exactly the case where they are
-     * saying different things. */
-    --led-color-unread: var(--color-warning, #d29922);
+    /* YELLOW - fully stopped, waiting on a human. Two states land here: a
+     * PermissionRequest that halted the agent mid-turn, and a pane parked
+     * on the startup / folder-trust prompt. They keep separate tokens so
+     * a theme can still tell them apart if it ever wants to, and separate
+     * labels so a screen reader always can, but they paint the same
+     * yellow because the user's answer to both is the same - go to this
+     * session and respond.
+     *
+     * --color-warning (#fbbf24) is the palette's existing true yellow and
+     * every theme under client/css/themes already declares it, so no
+     * theme has to learn a new token. The permission orange this
+     * replaced (--color-status-pending, #ffa500) sat too close to the red
+     * the dead light takes; at nine pixels an orange and a red in the
+     * same list read as one colour. */
+    --led-color-waiting: var(--color-warning, #fbbf24);
+    --led-color-permission: var(--color-warning, #fbbf24);
+
+    /* LIGHT BLUE - still working, and asking for the user. A Notification
+     * does not stop the agent, so it may not paint the "stopped" yellow,
+     * and it is not resting, so it may not paint grey.
+     *
+     * WHY BLUE AND NOT A THIRD WARM HUE. This light has to be told apart
+     * from green by people who cannot tell red from green: under both
+     * protanopia and deuteranopia the green (#4ade80) desaturates toward
+     * a pale yellow-khaki while a blue at this wavelength stays plainly
+     * blue, so the pair survives. A warm hue would not have.
+     * --color-info (#4fc1ff) is the palette's existing light blue. */
+    --led-color-notice: var(--color-info, #4fc1ff);
+
+    /* GREY - at rest, or not measured. Both take the same hue on purpose:
+     * "idle" and "we did not find out" are equally uninteresting to look
+     * at, and neither may be dressed up as a measured healthy state. They
+     * are told apart by SHAPE, not colour - `unknown` is the one hollow
+     * dot in the component, see [data-inner='unknown'] below - which is
+     * the trick the old .status-dot used, for the same reason.
+     * --color-fg-muted rather than --color-fg-subtle: subtle is #666,
+     * which at nine pixels on the default #1e1e1e background is nearly
+     * invisible, and an indicator you cannot see is not an indicator. */
+    --led-color-idle: var(--color-fg-muted, #8b8b8b);
+    --led-color-unknown: var(--color-fg-muted, #8b8b8b);
+
+    /* RED - unusable, for two different reasons. `dead` is a pane whose
+     * process exited; `disconnected` is this browser's socket to the
+     * session being down, which says nothing about the session itself.
+     * One red was asked for and one red is what they get. The tooltip and
+     * the aria-label are what separate them - see INNER_LABELS in
+     * client/js/status-led.js. */
+    --led-color-dead: var(--color-danger, #ff4444);
+    --led-color-disconnected: var(--color-danger, #ff4444);
+
+    /* THE FINISHED-TURN RING. Not a sixth colour: it is the green above,
+     * worn as an outline around a grey dot - "finished turn waiting on me
+     * to look at should be a green outline and grey filled dot". This
+     * treatment replaced the unread envelope icon on both the sidebar and
+     * the launchpad, so it is now the only thing saying "there is
+     * something here for you" and it has to be unmistakable at nine
+     * pixels. See [data-outer='unread'] below for the geometry. */
+    --led-color-unread: var(--color-success, #4ade80);
 
     /* Geometry. The halo ring is 1.3x the dot and the soft glow beyond it
      * is a fixed 1.5px - fixed rather than proportional because at this
@@ -95,6 +138,11 @@
     --led-size: 9px;
     --led-halo-scale: 1.3;
     --led-glow-spread: 1.5px;
+    /* The band thickness of the finished-turn ring, and nothing else
+     * uses it. Flat pixels rather than a fraction of the dot, for the
+     * same reason --led-glow-spread is: at nine pixels a proportional
+     * value rounds to something that reads thinner than it measures. */
+    --led-ring-width: 2.5px;
 
     /* Resolved per state by the [data-inner] / [data-outer] rules below.
      * Declared here so every LED always has a value for both, and an
@@ -153,12 +201,20 @@
     --led-ink: var(--led-color-waiting);
 }
 
+.status-led[data-inner='notice'] {
+    --led-ink: var(--led-color-notice);
+}
+
 .status-led[data-inner='done'] {
-    --led-ink: var(--led-color-done);
+    --led-ink: var(--led-color-idle);
 }
 
 .status-led[data-inner='dead'] {
     --led-ink: var(--led-color-dead);
+}
+
+.status-led[data-inner='disconnected'] {
+    --led-ink: var(--led-color-disconnected);
 }
 
 .status-led[data-inner='unknown'] {
@@ -189,12 +245,47 @@
 }
 
 .status-led[data-outer='unread'] {
-    /* Its own hue, and it breathes - this is the state the whole feature
-     * exists to surface. Same 2s period as `active`: unread is not more
-     * urgent than working, it is a different KIND of thing, and a faster
-     * pulse would read as a severity ranking that is not intended. */
+    /* A FINISHED TURN NOBODY HAS LOOKED AT: a crisp green ring around
+     * whatever the dot is, which in the only state that reaches it
+     * (`finished_unread`) is the grey idle dot.
+     *
+     * IT IS DRAWN AS A RING, NOT AS A DISC, and that is not a style
+     * preference. The halo pseudo-element carries `z-index: -1`, which
+     * inside this element's own stacking context paints it ABOVE the
+     * element's background - and the element's background IS the dot.
+     * Every other halo gets away with that because it is a wash at
+     * 0.18 to 0.55 opacity, so the dot reads straight through it. An
+     * OPAQUE disc at the same z-index hides the dot completely: measured
+     * in a 6x render, `finished_unread` came out a solid green blob with
+     * no grey in it at all. So the fill is dropped and an inset shadow
+     * draws the band at the outer edge, leaving the middle clear for the
+     * dot to show through.
+     *
+     * GEOMETRY. 1.7x the dot with a 2.5px band: at the 9px default every
+     * call site actually renders at, that is a 15.3px lit object, an
+     * unmistakable 2.5px of green, and about 0.65px of background
+     * separating the ring from the dot so the two read as two things.
+     * The whole object stays comparable to the ~14.7px an `active` LED
+     * reaches at its breathing peak, so this does not reintroduce the
+     * oversized-glow problem the geometry block above was calibrated
+     * against.
+     *
+     * IT DOES NOT BREATHE - see the animation block below. This is the
+     * only indicator left for "there is something here for you" now that
+     * the envelope icon is gone from the sidebar and the launchpad, and
+     * an outline that pulses stops reading as an outline. Motion is
+     * reserved for `active`, so a light that moves is a session that is
+     * moving. */
     --led-halo-ink: var(--led-color-unread);
-    --led-halo-opacity: 0.6;
+    --led-halo-opacity: 1;
+    --led-halo-scale: 1.7;
+}
+
+.status-led[data-outer='unread']::after {
+    /* Transparent centre, hard-edged band, and no outer glow: the three
+     * things that turn the halo into an outline. See the block above. */
+    background: transparent;
+    box-shadow: inset 0 0 0 var(--led-ring-width) var(--led-halo-ink);
 }
 
 .status-led[data-outer='off'] {
@@ -211,8 +302,7 @@
  * dot, so the state colour at the centre stays at full strength and
  * legible at every point in the cycle. Opacity and scale together, so it
  * reads as a glow swelling rather than a light flickering. */
-.status-led[data-outer='active']::after,
-.status-led[data-outer='unread']::after {
+.status-led[data-outer='active']::after {
     animation: status-led-breathe 2s ease-in-out infinite;
 }
 
@@ -232,16 +322,16 @@
  * but it stops breathing and sits at its full lit value. A user who has
  * asked for no motion must still be able to tell an active session from
  * a resting one, so the distinction moves entirely into opacity: `active`
- * and `unread` remain the brightest haloes on screen, they just hold
- * still. */
+ * remains the brightest breathing halo on screen, it just holds still.
+ * `unread` never moved in the first place since the five-colour pass, so
+ * a reduced-motion user and everyone else see the same green ring. */
 @media (prefers-reduced-motion: reduce) {
     .status-led,
     .status-led::after {
         animation: none !important;
     }
 
-    .status-led[data-outer='active']::after,
-    .status-led[data-outer='unread']::after {
+    .status-led[data-outer='active']::after {
         opacity: var(--led-halo-opacity);
         transform: none;
     }

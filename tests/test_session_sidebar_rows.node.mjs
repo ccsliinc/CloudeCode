@@ -169,16 +169,10 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     // Scoped to the attributes and text session-sidebar-rows.js writes
     // itself: data-name, data-session-id, and the visible row name.
     //
-    // KNOWN, PRE-EXISTING, OUT OF SCOPE: SessionStatusUI.markUnreadHtml()
-    // interpolates the same name into `data-mark-unread="..."` WITHOUT
-    // escaping it, so a name containing a double quote breaks out of that
-    // attribute. That sink lives in client/js/session-status-ui.js and is
-    // reached identically from the launchpad, so it is not this module's
-    // to fix and is reported separately rather than patched here.
-    //
-    // The slice used to stop at 'mark-unread-toggle', the first thing on
-    // the row this module did not write. That control moved into the
-    // overflow menu, so the boundary moved with it: the kebab is now the
+    // The slice used to stop at the unread envelope, the first thing on
+    // the row this module did not write. That control is gone entirely -
+    // the status light says unread now - so the boundary moved: the
+    // kebab is now the
     // last thing rowHtml() emits from another module's builder, and
     // client/js/session-row-menu.js escapes its own attributes.
     const html = Rows.rowHtml(row({ name: 'evil" onclick="x', session_id: 'a" onload="y' }));
@@ -201,7 +195,7 @@ test('the row itself draws ONE kebab and no loose action icons', () => {
         assert.equal((html.match(/data-pin-session=/g) || []).length, 0,
             'the pin toggle must not also be drawn inline');
         assert.equal((html.match(/data-mark-unread=/g) || []).length, 0,
-            'the mark-unread toggle must not also be drawn inline');
+            'the mark-unread toggle is gone from the app entirely');
         assert.equal((html.match(/data-group-pick=/g) || []).length, 0,
             'the group chip must not also be drawn inline - it is gone from '
             + 'the row entirely, folded action and all, into the kebab menu');
@@ -212,7 +206,9 @@ test('the row itself draws ONE kebab and no loose action icons', () => {
     // The kebab must carry the row's state, or the menu opens stale.
     const pinned = Rows.rowHtml(row({ is_pinned: true, unread: true, status: 'dead' }));
     assert.ok(pinned.includes('data-row-pinned="1"'));
-    assert.ok(pinned.includes('data-row-unread="1"'));
+    // NOT data-row-unread. Its only reader was the envelope menu item,
+    // and the light renders unread now - see tests/test_status_led.node.mjs.
+    assert.ok(!pinned.includes('data-row-unread='));
     assert.ok(pinned.includes('data-row-status="dead"'));
 });
 

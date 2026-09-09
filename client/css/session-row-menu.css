@@ -135,7 +135,7 @@
 }
 
 /* Menu items are the ROW'S OWN CONTROLS, re-decorated - the same
- * elements `.session-sidebar-row-pin`, `.mark-unread-toggle` and
+ * elements `.session-sidebar-row-pin` and
  * `.session-sidebar-row-delete` are styled for on the row. Those rules
  * size them as small square icon buttons, which is wrong in a menu, so
  * every one of them is overridden here to a full-width labelled row. The
@@ -192,13 +192,8 @@
 
 /* Pinned reads as pinned in the menu too - the same accent the inline
  * toggle used, so the state did not become invisible by moving. */
-.session-row-menu .session-sidebar-row-pin[aria-pressed="true"],
-.session-row-menu .mark-unread-toggle--active {
+.session-row-menu .session-sidebar-row-pin[aria-pressed="true"] {
     color: var(--color-accent);
-}
-
-.session-row-menu .mark-unread-toggle--active {
-    color: var(--color-warning);
 }
 
 /* Destructive stays neutral until pointed at, exactly as it did on the

@@ -1478,6 +1478,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 this._forceScrollToBottom(800);
             }
 
+            // The socket is up. Record it so the sidebar row and the
+            // launchpad card for THIS session stop showing the red
+            // "disconnected" light - see client/js/session-transport.js
+            // for why this fact lives outside the session row model.
+            if (globalThis.SessionTransport) {
+                globalThis.SessionTransport.mark(
+                    this._currentTmuxName(),
+                    globalThis.SessionTransport.CONNECTED);
+            }
+
             // Start keepalive ping
             if (this.keepaliveInterval) {
                 clearInterval(this.keepaliveInterval);
@@ -1527,7 +1537,22 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (this._intentionalClose) {
                 console.log('Terminal: intentional close, skipping reconnect');
                 this._intentionalClose = false;
+                // A DELIBERATE CLOSE IS NOT A DISCONNECTION. Clearing
+                // rather than marking is the difference between "we lost
+                // this session" and "you left it", and only the first
+                // may paint a row red.
+                if (globalThis.SessionTransport) {
+                    globalThis.SessionTransport.clear();
+                }
                 return;
+            }
+
+            // The socket dropped under us. Every other status signal on
+            // this session is now stale, so its light says so.
+            if (globalThis.SessionTransport) {
+                globalThis.SessionTransport.mark(
+                    this._currentTmuxName(),
+                    globalThis.SessionTransport.DISCONNECTED);
             }
 
             this.updateStatus('Disconnected', 'error');

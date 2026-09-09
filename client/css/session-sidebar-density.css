@@ -120,11 +120,6 @@
     padding: 0 3px;
 }
 
-.session-sidebar-panel[data-density="compact"] .mark-unread-toggle {
-    width: 16px;
-    height: 16px;
-}
-
 /* ---- cozy (default) -------------------------------------------------
  * The row exactly as it shipped: 10px padding on both axes. */
 
@@ -190,7 +185,7 @@
 
 /* ---- Per-row pin -----------------------------------------------------
  * Sized and coloured to match .session-sidebar-row-delete and
- * .mark-unread-toggle, so the row's controls read as one set. */
+ * so the row's controls read as one set. */
 
 .session-sidebar-row-pin {
     display: inline-flex;

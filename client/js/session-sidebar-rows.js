@@ -5,12 +5,12 @@
  * Split out of client/js/session-sidebar.js for the project's 500-line
  * rule, and along the same seam the repo already uses for row internals:
  * client/js/session-row-actions.js owns the destructive control,
- * client/js/session-status-ui.js owns the status dot and the mark-unread
- * toggle, and client/js/session-row-menu.js owns the kebab those two now
- * fold into. This module is the row that composes them, nothing else -
- * it holds no state and touches no DOM, it only returns strings.
+ * client/js/session-status-ui.js owns the status dot, and
+ * client/js/session-row-menu.js owns the kebab those two fold into. This
+ * module is the row that composes them, nothing else - it holds no state
+ * and touches no DOM, it only returns strings.
  *
- * THE ACTION ICONS ARE NO LONGER DRAWN INLINE: pin, mark-unread and
+ * THE ACTION ICONS ARE NO LONGER DRAWN INLINE: pin and
  * close/restart/remove live in the row's overflow menu. Their builders
  * are unchanged and still have exactly one caller each - now
  * session-row-menu.js rather than rowHtml(). `pinButtonHtml` is exported
@@ -20,7 +20,7 @@
  * group name in the item. its in the group i can see the group on the
  * sidebar." The chip used to name the group a row was filed in AND open
  * the group picker; the display half is simply gone, and the action half
- * moved into the kebab menu the same way pin/mark-unread/close did -
+ * moved into the kebab menu the same way pin/close did -
  * see `rowMenuItemHtml` in client/js/session-sidebar-group-actions.js,
  * pulled in by client/js/session-row-menu.js. Group membership itself is
  * untouched: it is still DB-backed and it is still how the sidebar's
@@ -279,6 +279,10 @@ console.log('[SessionSidebarRows Module] Loading...');
                 startup: window.SessionStartupGate
                     ? window.SessionStartupGate.normalize(r.startup_gate)
                     : 'unknown',
+                // Same trap as `startup`: a dropped socket moves
+                // nothing else that the server reports.
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(r.name) : 'unknown',
             })),
         });
     }
@@ -376,17 +380,22 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   and the launcher's running-session row are the same controls
      *   with the same tooltips and confirm copy.
      *
-     *   `is_pinned`, `unread` and `status` are stamped on the KEBAB even
-     *   though nothing on the row draws them any more - the menu is built
-     *   from those attributes, so they are still things the row carries
-     *   and are still keyed in ``signature`` above.
+     *   `is_pinned` and `status` are stamped on the KEBAB even though
+     *   nothing on the row draws them - the menu is built from those
+     *   attributes. `unread` no longer goes there (its envelope control
+     *   was removed) but IS still in ``signature``: the LIGHT renders it.
      * Inputs: r (object) - one merged session row.
      *   density (string) - 'compact' | 'cozy' | 'detailed'.
      * Output: string - HTML.
      */
     function rowHtml(r, density) {
         const mode = density || 'cozy';
-        const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // THE LIGHT CARRIES THE UNREAD FLAG NOW - the envelope is gone.
+        const signals = { unread: !!r.unread, startup_gate: r.startup_gate,
+            transport: window.SessionTransport
+                ? window.SessionTransport.stateFor(r.name) : 'unknown' };
+        const dot = window.SessionStatusUI
+            ? window.SessionStatusUI.dotHtml(r.status, signals) : '';
         // punchlist 19 - "needs a keypress". Empty string for both 'ready'
         // and 'unknown', so this adds nothing to a normal row. It rides
         // at EVERY density including compact, unlike the tmux/external

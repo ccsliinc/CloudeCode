@@ -118,13 +118,15 @@ test('both vocabularies are exported and non-empty', () => {
     assert.ok(Array.isArray(Led.OUTER_STATES) && Led.OUTER_STATES.length > 0);
 });
 
-test('the inner vocabulary is exactly the six documented states', () => {
+test('the inner vocabulary is exactly the eight documented states', () => {
     assert.deepEqual(plain(Led.INNER_STATES), [
         'working',
         'waiting-permission',
         'waiting-input',
+        'notice',
         'done',
         'dead',
+        'disconnected',
         'unknown',
     ]);
 });
@@ -241,9 +243,12 @@ test('question maps to waiting-permission - the agent is stopped', () => {
     });
 });
 
-test('notice maps to waiting-input - it wants you but is not blocked', () => {
+test('notice has its own inner state - working, and wanting you', () => {
+    // The five-colour pass: "if it's still working but needs something
+    // from me, make it light blue". It is the only state on that side of
+    // the sentence, so it cannot share a name with the yellow ones.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'notice' })), {
-        inner: 'waiting-input',
+        inner: 'notice',
         outer: 'active',
     });
 });
@@ -258,15 +263,83 @@ test('question and notice do not paint the same inner dot', () => {
     );
 });
 
-test('a startup prompt and a notice share waiting-input', () => {
-    // Both mean "come and look"; neither means "approve this".
-    assert.equal(
-        Led.ledStateFor({
-            activity_status: 'idle',
-            startup_gate: 'awaiting_startup_prompt',
-        }).inner,
-        Led.ledStateFor({ activity_status: 'notice' }).inner,
-    );
+test('a startup prompt is STOPPED, so it paints the permission yellow', () => {
+    // A pane parked on the folder-trust dialog is "fully stopped waiting
+    // for a response" - the same thing a permission prompt is, and the
+    // opposite of a notice, which is still working.
+    const gated = Led.ledStateFor({
+        activity_status: 'idle',
+        startup_gate: 'awaiting_startup_prompt',
+    });
+    assert.equal(gated.inner, 'waiting-input');
+    assert.notEqual(gated.inner, Led.ledStateFor({ activity_status: 'notice' }).inner);
+});
+
+test('the two yellows resolve to the same colour token', () => {
+    // Separate names, separate labels, ONE hue: the user's answer to a
+    // permission prompt and to a startup prompt is the same - go there
+    // and respond.
+    assert.ok(CSS.includes('--led-color-waiting: var(--color-warning'));
+    assert.ok(CSS.includes('--led-color-permission: var(--color-warning'));
+});
+
+test('light blue is not the green, and is not derived from it', () => {
+    // Red-green colourblindness is the case this pair has to survive, so
+    // the notice hue must come from a different family entirely rather
+    // than being a lighter green.
+    assert.ok(CSS.includes('--led-color-notice: var(--color-info'));
+    assert.ok(CSS.includes('--led-color-working: var(--color-success'));
+});
+
+test('BOTH a permission and a notice open still answers yellow', () => {
+    // `permission_open` and `notice_open` are two independent booleans
+    // server-side and permission is read first, so a session holding both
+    // arrives here as `question`. The client must not second-guess that.
+    const both = Led.ledStateFor({
+        activity_status: 'question',
+        notice_open: true,
+        permission_open: true,
+    });
+    assert.equal(both.inner, 'waiting-permission');
+    assert.notEqual(both.inner, 'notice');
+});
+
+test('a dropped socket is red, and outranks every session-side status', () => {
+    // Nothing we are showing is fresh once the transport is down, so the
+    // light may not keep asserting the last status it happened to see.
+    for (const status of [
+        'working', 'working_subagent', 'question', 'notice',
+        'finished_unread', 'idle', 'unknown', undefined,
+    ]) {
+        assert.deepEqual(
+            plain(Led.ledStateFor({ activity_status: status, transport: 'disconnected' })),
+            { inner: 'disconnected', outer: 'off' },
+            `transport must win over ${status}`,
+        );
+    }
+    assert.ok(CSS.includes('--led-color-disconnected: var(--color-danger'));
+    assert.ok(CSS.includes('--led-color-dead: var(--color-danger'));
+});
+
+test('DEAD AND DISCONNECTED SHARE A COLOUR AND MUST NOT SHARE WORDS', () => {
+    // One red was asked for, so the label is the only thing left that can
+    // tell a corpse from a lost connection.
+    const dead = Led.INNER_LABELS.dead;
+    const gone = Led.INNER_LABELS.disconnected;
+    assert.ok(dead && gone && dead !== gone);
+    assert.ok(/process/.test(dead), 'dead must say the process exited');
+    assert.ok(/connection/.test(gone), 'disconnected must say the connection is gone');
+});
+
+test('connected and unknown transports change nothing', () => {
+    // This browser holds a socket to at most ONE session; knowing nothing
+    // about the rest is the normal case, not a fault.
+    for (const t of ['connected', 'unknown', undefined, null, '']) {
+        assert.equal(
+            Led.ledStateFor({ activity_status: 'working', transport: t }).inner,
+            'working',
+        );
+    }
 });
 
 test('an unread flag never downgrades a blocking permission prompt', () => {
@@ -292,12 +365,12 @@ test('the legacy `running` spelling still maps to working', () => {
     assert.equal(Led.ledStateFor({ activity_status: 'running' }).inner, 'working');
 });
 
-test('unread rides the HALO independently of the inner dot', () => {
-    // This is the whole reason there are two rings: the old single dot
-    // could not say "working, and also unread" at all.
+test('A WORKING SESSION IS SOLID GREEN, unread flag or not', () => {
+    // It used to take the unread halo. After the five-colour pass that
+    // would paint the finished-turn ring around a session that has not
+    // finished, which is two contradictory claims on one light.
     const busy = Led.ledStateFor({ activity_status: 'working', unread: true });
-    assert.equal(busy.inner, 'working', 'still working');
-    assert.equal(busy.outer, 'unread', 'and still wants attention');
+    assert.deepEqual(plain(busy), { inner: 'working', outer: 'active' });
 
     const rested = Led.ledStateFor({ activity_status: 'idle', unread: true });
     assert.deepEqual(plain(rested), { inner: 'done', outer: 'unread' });
@@ -324,12 +397,85 @@ test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () =
     assert.equal(Led.ledStateFor({ activity_status: 'a-state-from-2030' }).inner, 'unknown');
 });
 
-test('an unread session that could not be measured still shows the halo', () => {
-    // The measurement failed; the fact that something is waiting did not.
+test('UNKNOWN STAYS GREY even with an unread flag on it', () => {
+    // The green ring is a claim that a turn FINISHED here. Nothing was
+    // measured, so nothing may claim that - not having looked is not
+    // evidence of anything, which is the rule this whole component is
+    // built around.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'unknown', unread: true })), {
         inner: 'unknown',
-        outer: 'unread',
+        outer: 'dim',
     });
+});
+
+test('THE WHOLE MAPPING, one row per state, is what the user asked for', () => {
+    // Five colours: yellow stopped-and-waiting, light blue
+    // working-and-wanting-you, green working, grey at rest or not
+    // measured, red unusable. Plus the one two-part treatment: a
+    // finished turn nobody has looked at is a grey dot in a green ring.
+    const cases = [
+        [{ activity_status: 'question' }, 'waiting-permission', 'active'],
+        [{ activity_status: 'idle', startup_gate: 'awaiting_startup_prompt' },
+            'waiting-input', 'active'],
+        [{ activity_status: 'notice' }, 'notice', 'active'],
+        [{ activity_status: 'finished_unread' }, 'done', 'unread'],
+        [{ activity_status: 'working' }, 'working', 'active'],
+        [{ activity_status: 'working_subagent' }, 'working', 'active'],
+        [{ activity_status: 'idle' }, 'done', 'steady'],
+        [{ activity_status: 'unknown' }, 'unknown', 'dim'],
+        [{ activity_status: 'dead' }, 'dead', 'off'],
+        [{ activity_status: 'stopped' }, 'dead', 'off'],
+        [{ transport: 'disconnected' }, 'disconnected', 'off'],
+    ];
+    for (const [signals, inner, outer] of cases) {
+        assert.deepEqual(
+            plain(Led.ledStateFor(signals)),
+            { inner, outer },
+            `wrong LED for ${JSON.stringify(signals)}`,
+        );
+    }
+});
+
+test('the finished-turn ring is a GREEN OUTLINE around a GREY DOT', () => {
+    // The owner's words. This is the treatment that replaced the unread
+    // envelope icon, so it is the only thing left saying "there is
+    // something here for you".
+    const led = Led.ledStateFor({ activity_status: 'finished_unread' });
+    assert.equal(led.inner, 'done');
+    assert.equal(led.outer, 'unread');
+    // grey dot
+    assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
+    assert.ok(/\[data-inner='done'\]\s*\{\s*--led-ink: var\(--led-color-idle\)/.test(CSS));
+    // green ring
+    assert.ok(CSS.includes('--led-color-unread: var(--color-success'));
+    // and the ring is a RING, not the 1.3x fringe every other halo wears
+    const block = CSS.split("[data-outer='unread'] {")[1].split('}')[0];
+    assert.ok(/--led-halo-opacity:\s*1;/.test(block), 'the ring is opaque');
+    const scale = /--led-halo-scale:\s*([0-9.]+);/.exec(block);
+    assert.ok(scale && parseFloat(scale[1]) >= 1.6,
+        'the ring must be wide enough to read as a ring at 9px');
+    // AND IT MUST BE A RING, NOT A DISC. The halo pseudo-element paints
+    // ABOVE the element background, which IS the dot, so an opaque FILL
+    // hides the grey entirely - measured, it came out a solid green blob.
+    // A transparent centre with an inset band is what leaves the dot
+    // visible. If this ever reverts to a fill, the treatment the owner
+    // asked for silently stops existing.
+    const pseudo = CSS.split("[data-outer='unread']::after {")[1].split('}')[0];
+    assert.ok(/background:\s*transparent/.test(pseudo), 'the centre must be clear');
+    assert.ok(/box-shadow:\s*inset/.test(pseudo), 'the band must be an inset ring');
+    assert.ok(CSS.includes('--led-ring-width'), 'the band width is a named token');
+});
+
+test('grey at rest and grey unmeasured are told apart by SHAPE', () => {
+    // Same hue on purpose. `unknown` is the one hollow dot in the
+    // component, which is how "we did not look" stays distinguishable
+    // from "we looked and it is quiet" without ranking one above the
+    // other with a louder colour.
+    assert.ok(CSS.includes('--led-color-unknown: var(--color-fg-muted'));
+    assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
+    const hollow = CSS.split("[data-inner='unknown'] {")[1].split('}')[0];
+    assert.ok(/background:\s*transparent/.test(hollow));
+    assert.ok(/box-shadow:\s*inset/.test(hollow));
 });
 
 // ---- the stylesheet ---------------------------------------------------
@@ -352,12 +498,15 @@ test('every outer state has a rule', () => {
     }
 });
 
-test('the five state colours are named tokens in one place', () => {
+test('every state colour is a named token declared in one place', () => {
     for (const token of [
         '--led-color-working',
         '--led-color-waiting',
-        '--led-color-done',
+        '--led-color-permission',
+        '--led-color-notice',
+        '--led-color-idle',
         '--led-color-dead',
+        '--led-color-disconnected',
         '--led-color-unknown',
         '--led-color-unread',
     ]) {
@@ -366,11 +515,17 @@ test('the five state colours are named tokens in one place', () => {
     }
 });
 
-test('only the two breathing states animate, and only on the halo', () => {
+test('only `active` breathes, and only on the halo', () => {
     // The dot itself must never animate: the state colour has to stay at
-    // full strength and legible at every point in the cycle.
+    // full strength and legible at every point in the cycle. `unread`
+    // stopped breathing with the five-colour pass - an outline that
+    // pulses stops reading as an outline at nine pixels, and motion is
+    // now its own signal: a light that moves is a session that is moving.
     assert.ok(CSS.includes("[data-outer='active']::after"));
-    assert.ok(CSS.includes("[data-outer='unread']::after"));
+    assert.ok(
+        !/\[data-outer='unread'\]::after\s*\{\s*animation:/.test(CSS),
+        'the finished-turn ring must be still',
+    );
     // The `.status-dot.status-led` compat block sets `animation: none`,
     // which is a reset and not motion, so the check is anchored to a rule
     // whose selector is the bare component at the start of a line.

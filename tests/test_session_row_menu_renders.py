@@ -550,8 +550,7 @@ def _items_signature(page) -> list[str]:
         """() => Array.from(
             document.querySelectorAll('#session-row-menu-panel [role="menuitem"]'))
             .map(el => {
-                const attr = ['data-pin-session', 'data-mark-unread',
-                              'data-session-action']
+                const attr = ['data-pin-session', 'data-session-action']
                     .find(a => el.hasAttribute(a));
                 return `${attr}=${el.getAttribute(attr)}|${el.textContent.trim()}`;
             })"""
@@ -776,16 +775,23 @@ def test_pin_still_fires_from_inside_the_menu(page):
     assert _panel(page).count() == 0, "the menu stayed up after an action"
 
 
-def test_mark_unread_still_fires_from_inside_the_menu(page):
-    """And it carries the row's CURRENT state, so it toggles the right way."""
-    page.evaluate("window.__calls = []")
+def test_the_menu_no_longer_offers_mark_unread_at_all(page):
+    """The unread envelope was REMOVED on 2026-09-08, not relocated again.
+
+    The owner's instruction was to take the envelope off the slide-out
+    sidebar and the launchpad, and to let the status light carry unread
+    instead. This menu is where the sidebar's copy lived, so this is where
+    its absence has to be asserted in a real browser rather than only in
+    the markup. Server-side unread TRACKING is untouched - see
+    docs/session-status.md, "The envelope is gone".
+    """
     _kebab(page, "row-b").click()
-    item = page.locator("#session-row-menu-panel [data-mark-unread]")
-    # row-b is unread, so its toggle must be the CLEARING one.
-    assert item.get_attribute("data-unread-current") == "true"
-    item.click()
-    page.wait_for_timeout(80)
-    assert ["setSessionUnread", "row-b", False] in page.evaluate("window.__calls")
+    assert page.locator("#session-row-menu-panel [data-mark-unread]").count() == 0
+    # And the row's kebab no longer carries the state that only the
+    # envelope ever read. An attribute nothing reads is a claim nothing
+    # checks.
+    kebab = _kebab(page, "row-b")
+    assert kebab.get_attribute("data-row-unread") is None
 
 
 def test_close_still_confirms_and_then_destroys(page):

@@ -84,7 +84,7 @@
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
     <!-- The row's kebab and the panel it opens. MUST load after
          session-sidebar.css and session-sidebar-density.css: those size
-         .session-sidebar-row-pin, .mark-unread-toggle and
+         .session-sidebar-row-pin and
          .session-sidebar-row-delete as small square icon buttons for the
          row, and this file re-styles those same elements as full-width
          labelled menu items once they are inside the panel. -->
@@ -743,6 +743,12 @@
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->
     <script src="/static/js/status-led.js"></script>
+    <!-- Whether THIS browser's terminal socket is up, which is the one
+         status signal the server cannot report. Written by terminal.js
+         (ws.onopen / ws.onclose), read by the sidebar rows and the
+         launchpad cards on their way into the LED. Pure state, no DOM.
+         Must load BEFORE terminal.js, launchpad.js and the sidebar. -->
+    <script src="/static/js/session-transport.js"></script>
     <!-- Rolls a set of sessions up into one LED for a group header or the
          launchpad top bar. Depends on status-led.js for the vocabularies,
          so it loads after it. -->
