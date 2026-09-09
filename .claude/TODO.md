@@ -4550,3 +4550,40 @@ the owner).
   `~/.config/restic/backup-m4.sh.orig.20260616` still carries an old password
   inline in the file. Left alone deliberately, not rotated, not copied. The
   owner already knows about the .pw file; the `.orig` copy may be news.
+
+## 2026-09-09: cleanup, v24 backup and scratch dbs moved to Trash
+
+- [x] Moved to `~/.Trash/cloude-cleanup-20260909/` (move, not delete, per owner
+  policy - `rm` is denied by settings anyway):
+  - `~/Library/Application Support/CloudeCode/cloude.db.bak-v24-20260908T194725Z`
+    (4.6G) plus its `-shm` (32K) and `-wal` (0B) sidecars. Precondition
+    verified first: restic snapshot `0e27bf00` (repo `rest:http://10.0.10.80:8000/mini-m4`,
+    taken 2026-09-09T07:25:26-04:00) holds
+    `Library/Application Support/CloudeCode/cloude.online-backup.db` (confirmed
+    via `restic ls 0e27bf00 | grep online-backup`, 3 hits: cloude, dockge,
+    kuma). Live `cloude.db` passed `PRAGMA quick_check` = ok. `lsof` showed
+    the `.bak` not open. The v24 backup is gone from disk because restic
+    already holds the equivalent dump off-box.
+  - This session's scratch copies: `.../scratchpad/live.db` (4.7G) with its
+    `-shm`/`-wal` sidecars, and `.../scratchpad/bench/cloude.db` (295M).
+    `lsof` showed neither open.
+  - Trash folder total: 9.5G. Verified after the move: all seven source
+    paths gone (`[ -e ]` false), and `cloude.db`, `cloude.online-backup.db`,
+    `unread_state.json`, `hook_tokens.json` unchanged in size (only mtime
+    moved by seconds, from the live server's own normal activity between the
+    baseline read and the verify read - nothing in this cleanup touched
+    them).
+
+- [ ] OPEN, read-only findings from the same pass, not acted on:
+  - `~/ClaudeArchive` (37G: `cc-dev-state` 21G, `hostdim` 11G,
+    `claude-config-archive` 4.2G, `claude-icloud-conflict-preserve-20260902`
+    1.0G, rest small) is covered by **no** backup found: 0 hits in
+    `restic ls 0e27bf00 | grep -c ClaudeArchive`, and it is not under the
+    `~/Development` (iCloud) path either - it is its own directory at
+    `~/ClaudeArchive`, so iCloud sync does not cover it and the m4 restic repo
+    does not either. Worth a decision on whether it needs a backup target.
+  - `~/Library/Caches/CloudKit/*`: mostly small, but `com.apple.bird` (iCloud
+    Drive daemon) is 23G and `com.apple.cloudphotod` is 22G. Both are
+    OS-managed caches, safe to ignore, not part of this cleanup.
+  - Only one network mount active: Time Machine over smbfs to 10.0.1.202. No
+    other SMB/AFP/NFS mounts present at check time.
