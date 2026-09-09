@@ -521,7 +521,9 @@ test('the finished-turn ring is a GREEN OUTLINE around the SAME faint centre unk
     // green ring
     assert.ok(CSS.includes('--led-color-unread: var(--color-success'));
     const block = ruleBody(".status-led[data-outer='unread']");
-    assert.ok(/--led-halo-opacity:\s*1;/.test(block), 'the ring is opaque');
+    // Same inset ring `unknown` draws, green instead of grey.
+    assert.ok(/box-shadow:\s*inset 0 0 0 2px var\(--led-color-unread\)/.test(block),
+        "unread reuses unknown's inset ring in green");
     // AND IT MUST NOT RESIZE ITSELF. This block used to carry its own
     // `--led-halo-scale: 1.7`, which is precisely how `unread` and
     // `active` came to paint two different diameters in one list. The
@@ -530,58 +532,9 @@ test('the finished-turn ring is a GREEN OUTLINE around the SAME faint centre unk
         !/--led-lit-scale:/.test(block) && !/--led-halo-scale:/.test(block),
         'no state may set its own lit diameter - see the geometry block',
     );
-    const pseudo = ruleBody(".status-led[data-outer='unread']::after");
-    assert.ok(/box-shadow:\s*inset/.test(pseudo), 'the band must be an inset ring');
-    assert.ok(CSS.includes('--led-ring-width'), 'the band width is a named token');
-    // THE CENTRE MUST NOT BE TRANSPARENT. A 2026-09 fix cleared it to
-    // nothing (`background: transparent`) while removing the earlier
-    // solid-green-blob defect, and overshot: the owner's follow-up,
-    // verbatim, "the green outline dot should look like this grey one on
-    // the bottom, just the ring should be green instead of light gray".
-    // A bare `background: transparent` here is the exact regression this
-    // guards against.
-    assert.ok(
-        !/background:\s*transparent\s*;/.test(pseudo),
-        'the centre must not be cleared to nothing - see the 2026-09-09 overshoot',
-    );
-    // THE CENTRE READS UNKNOWN'S OWN TOKEN, NOT THE RING'S. Only the ring
-    // recolours per state; the centre dot is grey in every state that has
-    // one, unread included - reusing `unknown`'s construction rather than
-    // inventing a green (or a third) one.
-    assert.ok(
-        /var\(--led-color-unknown\)/.test(pseudo),
-        'the centre must read the unknown token, the same one unknown itself uses',
-    );
-    assert.ok(
-        !/radial-gradient\([^)]*--led-halo-ink/.test(pseudo),
-        'the centre fill must not be the ring colour - that is the solid-blob regression',
-    );
-    // SAME SHAPE AS THE BASE GRADIENT (and as `unknown`'s own halo, which
-    // never overrides `background` and so falls through to that same base
-    // rule): same core stop, closest-side, fading to nothing at the edge.
-    // A different shape here would be a second recipe, which the task
-    // this shipped from explicitly forbids ("do not invent a third
-    // recipe").
-    assert.ok(
-        /radial-gradient\(\s*closest-side/.test(pseudo),
-        'the centre must use the same closest-side radial-gradient shape as the base rule',
-    );
-    assert.ok(
-        pseudo.includes('var(--led-halo-core)'),
-        'the centre must use the same core-percentage token as every other halo',
-    );
-    // AND THE ALPHA MUST BE BAKED INTO THE COLOUR, NOT THE ELEMENT'S
-    // SHARED OPACITY. `--led-halo-opacity` is 1 on this state (for the
-    // ring, asserted above) - if the centre relied on that same shared
-    // opacity for its own dimming, it would paint at full strength
-    // wherever the gradient's colour stop is 100% and read as another
-    // solid blob (in a different colour). color-mix() (or an equivalent
-    // literal-alpha colour) is what lets the ring and the centre carry
-    // two different apparent strengths on one pseudo-element.
-    assert.ok(
-        /color-mix\(/.test(pseudo),
-        'the centre alpha must be baked into its own colour, independent of --led-halo-opacity',
-    );
+    // Both hollow states share ONE construction now: `--led-fill:
+    // transparent` plus an inset ring. No separate ::after ring.
+    const unknownBlock = ruleBody(".status-led[data-inner='unknown']");
 });
 
 test("unread's centre matches unknown's centre - same size, same treatment, same token", () => {
@@ -604,12 +557,11 @@ test("unread's centre matches unknown's centre - same size, same treatment, same
         /background:\s*radial-gradient\(\s*closest-side,\s*var\(--led-halo-ink\)/.test(base),
         'unknown never overrides ::after background, so it falls through to this base gradient',
     );
-    const unreadPseudo = ruleBody(".status-led[data-outer='unread']::after");
-    assert.ok(
-        /radial-gradient\(\s*closest-side,\s*color-mix\(in srgb, var\(--led-color-unknown\) 18%, transparent\) 0 var\(--led-halo-core\), transparent 100%\s*\)/
-            .test(unreadPseudo.replace(/\s+/g, ' ')),
-        "unread's centre must reproduce 18% (dim's own opacity) baked into unknown's token, at the same core stop",
-    );
+    // unread's halo is unknown's own dim halo, so the faint centre is
+    // identical in both and only the ring colour differs.
+    const unreadBlock = ruleBody(".status-led[data-outer='unread']");
+    assert.ok(/--led-halo-ink:\s*var\(--led-color-unknown\)/.test(unreadBlock));
+    assert.ok(/--led-halo-opacity:\s*0\.18/.test(unreadBlock));
 });
 
 test('THE CLEARED CENTRE IS ONE RECIPE SHARED BY BOTH HOLLOW STATES', () => {

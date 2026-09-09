@@ -298,6 +298,7 @@
     --led-ink: var(--led-color-unknown);
 }
 
+
 /* ---- outer halo: activity and attention ----------------------------
  * Colour, opacity and motion. */
 
@@ -365,37 +366,12 @@
      * an outline that pulses stops reading as an outline. Motion is
      * reserved for `active`, so a light that moves is a session that is
      * moving. */
-    --led-halo-ink: var(--led-color-unread);
-    --led-halo-opacity: 1;
+    box-shadow: inset 0 0 0 2px var(--led-color-unread);
+    --led-ink: var(--led-color-unread);
+    --led-halo-ink: var(--led-color-unknown);
+    --led-halo-opacity: 0.18;
 }
 
-.status-led[data-outer='unread']::after {
-    /* Hard-edged GREEN band at the outer edge, plus the SAME faint grey
-     * centre dot `unknown` shows - both live on this one pseudo-element,
-     * which is why they cannot share a plain `opacity`: the ring needs
-     * to read at full strength (this state's `--led-halo-opacity: 1`,
-     * above) and the centre needs to read at `unknown`'s dim strength
-     * (18%, `[data-outer='dim']`'s `--led-halo-opacity`) or it washes
-     * out the ring's own colour and drifts back toward the solid-blob
-     * problem in the comment above. So the centre's alpha is baked
-     * directly into its gradient colour with color-mix() - already this
-     * codebase's pattern for a literal alpha over a theme token, see
-     * client/css/styles.css and archive-nav-card.css - rather than read
-     * from the element's own `opacity`, which stays at 1 for the ring.
-     *
-     * `var(--led-color-unknown)`, not `var(--led-halo-ink)`: the centre
-     * is grey in EVERY state that has one, unread included - only the
-     * ring takes the state's own colour. Same core percentage
-     * (`--led-halo-core`) and same gradient shape as the shared base
-     * rule up top, so this is `unknown`'s recipe reused, not a third
-     * one invented for this state alone. */
-    background: radial-gradient(
-        closest-side,
-        color-mix(in srgb, var(--led-color-unknown) 18%, transparent) 0 var(--led-halo-core),
-        transparent 100%
-    );
-    box-shadow: inset 0 0 0 var(--led-ring-width) var(--led-halo-ink);
-}
 
 .status-led[data-outer='off'] {
     /* Dead. No halo at all - not a dim one. A corpse must not glow. */
