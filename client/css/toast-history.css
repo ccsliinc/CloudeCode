@@ -87,6 +87,13 @@
   opacity: 0.72;
 }
 
+/* Cleared BECAUSE the user turned up and typed, rather than by a click.
+   Same recessive weight as a dismissal - both are done with - because
+   the distinction is a fact to read in the row, not a call to act. */
+.toast-history__row[data-outcome="answered"] {
+  opacity: 0.72;
+}
+
 .toast-history__row--jump {
   cursor: pointer;
 }

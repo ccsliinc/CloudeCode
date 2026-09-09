@@ -90,6 +90,100 @@ back - which is correct, because it was never dismissed. Making the
 suppression permanent would turn a failed write into a notification the
 user never sees again.
 
+## A prompt from any client answers the session's toasts
+
+The owner's ask, verbatim: "on the toasts, if its waiting on me and i
+type into this browser or a remote control session, the toasts should be
+removed, we can tell because i think when a new prompt is sent it should
+trip a hook." He is right about the hook. `UserPromptSubmit` fires
+whenever a prompt is submitted to the agent, whoever typed it and
+wherever - the browser terminal, a remote control session, or the
+keyboard attached to the Mac. So it is a fact about THE USER SHOWING UP,
+and a notification asking the user to show up is answered the moment
+they do.
+
+`src/core/toast_auto_ack.py` is the pure rule set;
+`SessionManager.auto_ack_toasts` applies it; the hook route calls it once,
+right after `record_hook_event`.
+
+| Hook event | Toast kinds it answers | Why that set |
+|---|---|---|
+| `UserPromptSubmit` | `Stop`, `PermissionRequest`, `Notification`, `StartupPrompt` | the user typed, so nothing is still waiting on them |
+| `PreToolUse` | `PermissionRequest` only | a tool about to run proves a permission was granted, and proves nothing else |
+| `Stop` | `PermissionRequest`, `Notification`, `StartupPrompt` | an agent cannot end a turn while blocked, and the turn a notice belonged to is over |
+
+**A `Stop` NEVER ACKS A `Stop` TOAST, AND THAT IS STRUCTURAL RATHER THAN
+POSITIONAL.** `Stop` both RAISES the "your turn" card and answers others,
+so the obvious defect is a Stop eating the card it just created. It would
+be tempting to rely on call order - ack before recording, and the new
+toast cannot be seen - but that guarantee survives only until someone
+moves a line, and it fails outright for a DUPLICATED Stop, whose
+predecessor's card is a real unacked record by the time the duplicate
+arrives. Excluding the KIND makes the property hold for every ordering,
+every duplicate and every future call site. Only the user turning up
+clears a "your turn", which is `UserPromptSubmit`, or a click.
+
+**THE CUTOFF IS THE EVENT'S OWN INSTANT, NOT THE ACK'S.** Hook events are
+unordered, duplicated and droppable, so the moment the code RUNS says
+nothing about when the thing it describes HAPPENED. The route stamps
+`received_at` at the top of the handler, before any state is mutated, and
+a toast whose `created_at` is later than that is never answered by that
+event. A prompt redelivered late must not clear a notice about something
+that happened after the user typed - that would destroy a record the user
+never saw, which is worse than a card that lingers.
+
+Idempotence falls out of `ack_toast` refusing a second ack: the same
+event delivered ten times acks on the first and does nothing nine times,
+so no duplicate frames, no duplicate log lines, no history churn.
+
+**THE LED AND THE CARD AGREE BECAUSE THEY ARE FED BY THE SAME EVENTS.**
+`src/core/session_activity.py` already clears `permission_open` and
+`notice_open` on exactly `UserPromptSubmit`, `PreToolUse` and `Stop`, so
+no new clearing path was added - the auto-ack simply matches the set that
+was already there. `tests/test_toast_auto_ack.py` asserts it through the
+public resolver rather than trusting the reading, because a session
+showing a "needs permission" light with no card is the same lie as a card
+with no light, pointing the other way.
+
+## Removing a card, not only adding one
+
+`ToastManager.backfill` has only ever ADDED. That was correct while the
+only thing that could close a toast was a click here (which removes the
+card locally) or a click in another tab (which arrives as a `toast.ack`
+frame). Neither is true now that the server closes toasts by itself, and
+a surface holding no socket for the raising session - the launchpad, the
+archive, a terminal attached somewhere else - has no frame to hear it on.
+
+So there are two channels, and the fast one is an optimisation:
+
+* **`toast.ack` frame.** The auto-ack broadcasts the SAME frame a click
+  produces, from the same session-scoped fan-out, so an attached terminal
+  drops the card instantly. One dismissal protocol, not two.
+* **The poll, which is the floor.** `client/js/toast-global-poll.js` now
+  applies the server's open set in BOTH directions each tick:
+  `backfill(fresh)` adds, `ToastManager.reconcileOpen(list, {since})`
+  removes.
+
+**THE REMOVAL GUARD IS `ToastDismissedRing`'S RACE POINTING THE OTHER
+WAY.** A poll response describes the server as it was when the request
+LEFT. A `toast.new` frame that arrived after that instant is absent from
+the response through no fault of its own, and removing it would delete a
+card the server does hold. So the poller stamps `startedAt` before the
+request goes out and `reconcileOpen` spares any card added at or after
+it; the next tick, whose snapshot IS newer than the card, removes it.
+Sparing is a delay, never an exemption.
+
+**REMOVALS ARE COMPUTED FROM THE RAW LIST, ADDITIONS FROM THE FILTERED
+ONE.** An id the dismissed ring is suppressing is one this browser has
+already dropped, so subtracting it from the open set would only make the
+server's answer look smaller than it was. And the ring can never
+resurrect an auto-acked card: it only ever subtracts.
+
+**RECONCILING NEVER ACKS.** Every id it removes is one the server has
+already closed, so a sync-back would be a write with nothing to change,
+aimed at a record that may belong to a session this browser is not
+attached to. Removal is a rendering fact only.
+
 ## Clicking a toast
 
 A card is now usually about a session that is NOT on screen, so clicking
@@ -159,11 +253,13 @@ items below.
 | The two cross-session API calls | `client/js/api-toasts.js` |
 | The cross-session poll | `client/js/toast-global-poll.js` |
 | Stop a dismissed card coming back | `client/js/toast-dismissed-ring.js` |
+| Which toasts a hook event ANSWERS (PURE) | `src/core/toast_auto_ack.py` |
+| Apply that, and report what changed | `SessionManager.auto_ack_toasts` |
 | Click a toast, go to its session | `client/js/toast-navigate.js` |
 | What a history row CLAIMS (PURE) | `client/js/toast-history-render.js` |
 | The settings-panel slot | `client/js/toast-history-panel.js` |
 | Styling | `client/css/toast.css`, `client/css/toast-history.css` |
-| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_history_render.node.mjs` |
+| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs` |
 
 ## Open items
 
@@ -171,10 +267,15 @@ items below.
    it and needs a schema migration through `session_manager` and the db
    modules; the read view above is deliberately built over existing
    state, as the handoff scoped it.
-2. **The dismissal REASON is not recorded**, so the three-way outcome the
-   owner asked for cannot be rendered. It needs a reason threaded through
-   `POST /toasts/{id}/ack` into `SessionManager.ack_toast` and a column on
-   the record.
+2. ~~**The dismissal REASON is not recorded.**~~ CLOSED. `Toast.ack_reason`
+   carries it, threaded through `SessionManager.ack_toast`: the human
+   paths write `dismissed`, the hook-driven auto-ack writes `answered`.
+   A history row reads `open` / `dismissed` / `answered`, and a record
+   acked before the field existed carries null and still reads
+   `dismissed` - not having recorded which act cleared a toast is not
+   evidence it cleared itself. `summarize()` reports `answered` as a
+   SUBSET of `dismissed` rather than a sibling, so the count already on
+   screen did not silently change meaning.
 3. **A duplicate hook event after a dismissal mints a NEW toast.**
    Supersession never returns an ACKED record (by design - an acked card
    is one the user dealt with), so a `Stop` delivered twice with the ack

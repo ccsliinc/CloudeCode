@@ -305,10 +305,17 @@ def test_history_returns_dismissed_and_open_newest_first(monkeypatch, tmp_path):
     by_id = {t["id"]: t for t in body["toasts"]}
     assert by_id[old.id]["acknowledged"] is True
     assert by_id[new.id]["acknowledged"] is False
+    # ``answered`` is a SUBSET of ``dismissed``, not a sibling: the older
+    # count still means "no longer open", so the number the history header
+    # already showed did not change meaning when the hook-driven auto-ack
+    # landed. Nothing here was auto-acked, so it is 0 - and asserting the
+    # WHOLE dict is what would catch a future change that quietly
+    # redefined ``dismissed`` instead of adding beside it.
     assert body["summary"] == {
         "total": 2,
         "open": 1,
         "dismissed": 1,
+        "answered": 0,
         "by_kind": {"PermissionRequest": 1, "Notification": 1},
     }
 
@@ -424,9 +431,9 @@ def test_summarize_counts_the_whole_set():
     ]
     records[2].kind = "Stop"
     assert toast_history.summarize(records) == {
-        "total": 3, "open": 2, "dismissed": 1,
+        "total": 3, "open": 2, "dismissed": 1, "answered": 0,
         "by_kind": {"Notification": 2, "Stop": 1},
     }
     assert toast_history.summarize([]) == {
-        "total": 0, "open": 0, "dismissed": 0, "by_kind": {},
+        "total": 0, "open": 0, "dismissed": 0, "answered": 0, "by_kind": {},
     }

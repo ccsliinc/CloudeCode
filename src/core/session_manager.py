@@ -86,6 +86,7 @@ from src.core.session_startup_gate_ledger import (
 )
 from src.core import unread_identity
 from src.core import session_view_clears
+from src.core import toast_auto_ack
 from src.core.session_status_source import (
     STATUS_SOURCE_HOOK,
     STATUS_SOURCE_NONE,
@@ -2920,13 +2921,35 @@ class SessionManager:
                 except Exception:
                     pass
 
-    def ack_toast(self, session_id: str, toast_id: str) -> bool:
-        """Mark a toast acknowledged. Idempotent.
+    def ack_toast(
+        self,
+        session_id: str,
+        toast_id: str,
+        reason: str = toast_auto_ack.ACK_REASON_DISMISSED,
+    ) -> bool:
+        """Mark a toast acknowledged, recording WHY. Idempotent.
 
         Returns True when the toast was found AND state actually changed
         (i.e. wasn't already acked). Returns False when not found OR
         already acked - useful for the route layer to skip the WS
         broadcast on a no-op double-click.
+
+        ``reason`` defaults to ``dismissed`` so every pre-existing caller
+        records exactly what it always meant: a human cleared this. The
+        hook-driven path passes ``answered``. The reason is stamped ONLY
+        on the transition, never on a record that was already acked, so a
+        duplicate event cannot rewrite the history of an act the user
+        performed.
+
+        Inputs:
+            session_id: the session whose bucket to walk. The scoping is
+                real - a toast id from another session is simply not
+                found here, which is what keeps dismissal per session.
+            toast_id: the record to acknowledge.
+            reason: one of ``toast_auto_ack.ACK_REASON_*``.
+        Output: bool - True only when this call changed state.
+        Example:
+            >>> mgr.ack_toast("ses_1", "abc", reason="answered")
         """
         bucket = self._pending_toasts.get(session_id)
         if not bucket:
@@ -2936,14 +2959,82 @@ class SessionManager:
                 if t.acknowledged:
                     return False
                 t.acknowledged = True
+                t.ack_reason = reason
                 self._prune_toasts(session_id)
                 logger.info(
                     "toast_acked",
                     session_id=session_id,
                     toast_id=toast_id,
+                    reason=reason,
                 )
                 return True
         return False
+
+    def auto_ack_toasts(
+        self,
+        session_id: str,
+        event_kind: str,
+        cutoff: Optional[datetime] = None,
+    ) -> list[str]:
+        """Acknowledge the toasts a hook event has just ANSWERED.
+
+        Description: the impure half of ``src/core/toast_auto_ack.py``.
+            The rules live there and are pure; this resolves the session,
+            reads its bucket, applies the resulting ids, and reports back
+            only the ones that actually changed state - so the caller
+            broadcasts exactly as many ``toast.ack`` frames as there were
+            real transitions and a duplicated hook event is silent.
+
+            THE SAME STALE-ID REMAP AS ``record_toast``, for the same
+            reason. A pane's ``CLOUDECODE_SESSION_ID`` is baked in at
+            spawn and cannot be re-issued, so after a restart every hook
+            still presents the pre-restart id. Without this step, a
+            surviving session would keep RAISING toasts under its live id
+            (record_toast remaps) while failing to CLEAR them (this would
+            not), which is worse than not having the feature: the user
+            would type and watch the card stay.
+
+            NEVER RAISES. It is called from the hook critical path of a
+            live working session, and clearing a notification is not
+            worth a 500 to the hook subprocess. An unknown session yields
+            an empty list, which is also the honest answer.
+        Inputs:
+            session_id: the id the hook presented.
+            event_kind: the hook event kind that just arrived.
+            cutoff: the instant that POST arrived (naive UTC), so a toast
+                raised afterwards is never answered by it. See the pure
+                module for why the event's instant and not the ack's.
+        Output: list[str] - the ids whose state this call changed.
+        Example:
+            >>> mgr.auto_ack_toasts("ses_1", "UserPromptSubmit")
+            []
+        """
+        if not toast_auto_ack.kinds_answered_by(event_kind):
+            return []
+        if session_id not in self._pending_toasts:
+            remapped = self._live_session_id_for_stale_id(session_id)
+            if remapped is not None:
+                session_id = remapped
+        bucket = self._pending_toasts.get(session_id)
+        if not bucket:
+            return []
+        candidates = toast_auto_ack.resolve_auto_acks(
+            bucket, event_kind, cutoff=cutoff
+        )
+        changed = [
+            toast_id
+            for toast_id in candidates
+            if self.ack_toast(
+                session_id, toast_id, reason=toast_auto_ack.ACK_REASON_ANSWERED
+            )
+        ]
+        if changed:
+            logger.info(
+                "toast_auto_acked",
+                session_id=session_id,
+                **toast_auto_ack.describe(event_kind, changed),
+            )
+        return changed
 
     def get_toasts(
         self, session_id: str, unacked_only: bool = False

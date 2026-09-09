@@ -1687,6 +1687,25 @@ class Toast(BaseModel):
     acknowledged: bool = Field(
         False, description="True once the toast has been dismissed"
     )
+    # WHY IT WAS ACKED, WHICH IS A DIFFERENT FACT FROM WHETHER IT WAS.
+    # "I dealt with it" and "it was cleared for me because I turned up"
+    # are different things to have happened to a notification, and until
+    # this field existed the history could render only open/dismissed and
+    # said so out loud (docs/notifications.md open item 2).
+    #
+    # None ONLY while the record is open. A value is stamped by whatever
+    # acked it: ``dismissed`` for a click or a sweep control,
+    # ``answered`` for the hook-driven auto-ack in
+    # ``src/core/toast_auto_ack.py``. The vocabulary lives in that module
+    # so the writer and the reader cannot drift.
+    ack_reason: Optional[str] = Field(
+        None,
+        description=(
+            "Why this toast was acknowledged: 'dismissed' (a human "
+            "cleared it) or 'answered' (a hook said the user turned "
+            "up). None while the toast is still open."
+        ),
+    )
 
     class Config:
         json_encoders = {

@@ -13,15 +13,17 @@
 //   still in flight. Its whole contract is an expiry, so the clock is
 //   injected and the rule is measured rather than waited for.
 //
-// THE OUTCOME VOCABULARY IS THE POINT OF HALF THIS FILE. The server
-// records `acknowledged` as a bare boolean and NOTHING stamps which act
-// set it, so a row may say `dismissed` or `open` and nothing else. The
-// owner's original ask wanted three outcomes distinguished (answered /
-// auto-dismissed by typing / swept by "dismiss all"); the data cannot
-// support that today, and a row that guessed would be a fabricated fact
-// on a page whose only job is to be trusted about what happened. The
-// suite asserts the two-value vocabulary so a future third value has to
-// arrive with the evidence that justifies it.
+// THE OUTCOME VOCABULARY IS THE POINT OF HALF THIS FILE, and it grew a
+// third word once the evidence for one existed. It used to say two: the
+// server recorded `acknowledged` as a bare boolean and nothing stamped
+// which act set it, so a row could only say `dismissed` or `open`.
+// `ack_reason` closes that - the human paths write `dismissed`, the
+// hook-driven auto-ack writes `answered` (src/core/toast_auto_ack.py) -
+// so a row may now say `answered` because the server SAID so, not
+// because the page guessed. A record carrying no reason still reads
+// `dismissed`, which is the claim that assumes least, and the suite
+// asserts the three-value vocabulary so a fourth has to arrive with the
+// evidence that justifies it.
 //
 // NEGATIVE CONTROLS. Every "it is filtered" assertion is preceded by
 // proof the same input survives when the filter is not armed - a ring
@@ -82,16 +84,35 @@ test('an UNKNOWN kind is passed through verbatim, never defaulted', () => {
     assert.equal(R.kindLabel(undefined), 'unknown');
 });
 
-test('the outcome vocabulary is exactly two words', () => {
+test('the outcome vocabulary is exactly three words', () => {
     const { ToastHistoryRender: R } = load(RENDER);
     assert.equal(R.outcomeOf({ acknowledged: true }), 'dismissed');
     assert.equal(R.outcomeOf({ acknowledged: false }), 'open');
     assert.equal(R.outcomeOf({}), 'open', 'a record with no flag is not yet dealt with');
     assert.equal(R.outcomeOf(null), 'open');
+    assert.equal(
+        R.outcomeOf({ acknowledged: true, ack_reason: 'answered' }), 'answered',
+        'the third outcome arrived with the evidence for it: the server now '
+        + 'stamps ack_reason, so a hook-cleared record is a recorded fact '
+        + 'rather than a guess');
     assert.deepEqual(
-        [R.OUTCOME_OPEN, R.OUTCOME_DISMISSED].sort(),
-        ['dismissed', 'open'],
-        'a third outcome must arrive with the server-side evidence for it');
+        [R.OUTCOME_OPEN, R.OUTCOME_DISMISSED, R.OUTCOME_ANSWERED].sort(),
+        ['answered', 'dismissed', 'open'],
+        'a FOURTH outcome must arrive with the server-side evidence for it');
+});
+
+test('an acked record with no reason reads dismissed, never answered', () => {
+    // THE CLAIM THAT ASSUMES LEAST. Records acked before `ack_reason`
+    // existed carry null, and not having recorded which act cleared a
+    // toast is not evidence it cleared itself.
+    const { ToastHistoryRender: R } = load(RENDER);
+    assert.equal(R.outcomeOf({ acknowledged: true, ack_reason: null }), 'dismissed');
+    assert.equal(R.outcomeOf({ acknowledged: true, ack_reason: 'dismissed' }),
+        'dismissed');
+    // NEGATIVE CONTROL: an unrecognised future reason must not be read as
+    // the auto-ack either.
+    assert.equal(R.outcomeOf({ acknowledged: true, ack_reason: 'swept' }),
+        'dismissed');
 });
 
 test('the session name goes through the app-wide resolver when there is one', () => {

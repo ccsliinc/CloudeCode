@@ -77,6 +77,7 @@ from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
 from src.core import claude_title_sync_apply
+from src.core import toast_auto_ack
 from src.core import debug_trace
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
@@ -1978,7 +1979,15 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
     isolation lives in the storage walk, not in the status code.
     """
     session_manager = request.app.state.session_manager
-    changed = session_manager.ack_toast(session_id, toast_id)
+    # EXPLICIT, THOUGH IT IS THE DEFAULT. This is the HUMAN path - a
+    # click on the x, or a sweep control the human operated - and naming
+    # the reason here is what makes the history able to tell it apart
+    # from the hook-driven ``answered`` path in toast_auto_ack.py. A
+    # reason inferred at read time would be a guess on a page whose whole
+    # job is to be trusted about what happened.
+    changed = session_manager.ack_toast(
+        session_id, toast_id, reason=toast_auto_ack.ACK_REASON_DISMISSED
+    )
     if not changed:
         # Either not found OR already acked. We can't distinguish without
         # an extra get_toasts walk; the storage layer treats both as
@@ -2149,6 +2158,16 @@ async def claude_event_hook(request: Request):
     PostToolUse fire on every tool call - a toast per call would spam the
     UI) and return ``{"ok": true}`` with no ``toast_id``.
     """
+    # THE EVENT'S OWN INSTANT, CAPTURED BEFORE ANYTHING IS MUTATED.
+    # Hook events are unordered, duplicated and droppable, so the moment
+    # this handler RUNS says nothing about when the thing it describes
+    # HAPPENED. The auto-ack pass below compares a toast's own
+    # ``created_at`` against this, so a record raised after the user
+    # acted is never cleared by that act, however late or however many
+    # times this POST is delivered. Naive UTC to match
+    # ``Toast.created_at``. See src/core/toast_auto_ack.py.
+    received_at = datetime.utcnow()
+
     # Layer 1 - loopback only. Even a token leak shouldn't let a LAN
     # attacker fire toasts at someone else's cloudecode.
     client_host = request.client.host if request.client else ""
@@ -2224,6 +2243,46 @@ async def claude_event_hook(request: Request):
     except Exception as exc:  # pragma: no cover - defensive, see docstring
         logger.warning(
             "hook_activity_record_failed",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+
+    # THE USER TURNED UP, SO THE SESSION'S NOTIFICATIONS ARE ANSWERED.
+    # The owner's ask: a toast that is waiting on him should clear when
+    # he types into the session, from the browser terminal, a remote
+    # control session, or the keyboard on the Mac - all three submit a
+    # prompt, and a prompt fires ``UserPromptSubmit``. ``PreToolUse``
+    # answers a permission (a tool is about to run, so it was granted)
+    # and ``Stop`` answers a permission or a notice but NEVER a "your
+    # turn". The rules, and why each set is the size it is, live in
+    # src/core/toast_auto_ack.py.
+    #
+    # THIS SEAM AND NOT ANOTHER: ``UserPromptSubmit`` and ``PreToolUse``
+    # are ACTIVITY_ONLY_EVENTS and return before the toast block below,
+    # while ``Stop`` continues into it, so this is the one point all
+    # three pass through. It is deliberately NOT relying on sitting
+    # ahead of ``record_toast`` to spare a Stop's own toast - that is
+    # guaranteed by KIND, so it survives a reordering and a duplicate.
+    #
+    # BEST-EFFORT, like its neighbours: clearing a notification must
+    # never change the status code a hook subprocess sees.
+    try:
+        auto_acked = session_manager.auto_ack_toasts(
+            session_id, event_kind, received_at
+        )
+        for acked_id in auto_acked:
+            # THE SAME FRAME A CLICK PRODUCES, from the same fan-out, so
+            # an attached terminal drops the card instantly and every
+            # other surface picks it up on its next poll. One path, not
+            # a second dismissal protocol.
+            await connection_manager.broadcast_to_session(
+                session_id,
+                ToastAckMessage(toast_id=acked_id).model_dump_json(),
+            )
+    except Exception as exc:  # noqa: BLE001 - see comment above
+        logger.warning(
+            "toast_auto_ack_failed",
             session_id=session_id,
             event_kind=event_kind,
             error=str(exc),

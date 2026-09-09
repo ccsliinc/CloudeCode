@@ -40,6 +40,17 @@
  * typed into. So a card raised by session B is now visible from session
  * A and is still dismissed only for B.
  *
+ * IT IS A RECONCILE, NOT ONLY A BACKFILL, and that half arrived later
+ * than the rest of this module. The server can now CLOSE a toast on its
+ * own: a hook saying the user submitted a prompt answers everything that
+ * session was asking of them (src/core/toast_auto_ack.py). The `toast.ack`
+ * frame carries that to a terminal attached to the raising session and to
+ * nowhere else, which is the same session-scoped fan-out that made the
+ * RAISE path deaf in the first place. So each tick now applies the
+ * server's open set in BOTH directions - add what is new, remove what is
+ * gone - and the frame is the fast path for one screen while this stays
+ * the catch-all for every screen.
+ *
  * IDEMPOTENT UNDER REPETITION, which is the property that matters here:
  * the same record arriving on ten consecutive ticks renders once (id
  * dedupe), and a record the user just dismissed is filtered out by
@@ -105,12 +116,37 @@
     function tick() {
         if (!canPoll()) return Promise.resolve();
         state.inFlight = true;
+        // WHEN THIS SNAPSHOT WAS ASKED FOR, stamped before the request
+        // leaves. The response describes the server as it was at roughly
+        // this instant, so a card that arrived here afterwards - by a
+        // `toast.new` frame on the terminal socket - is absent from it
+        // for a reason that is not "closed". `reconcileOpen` spares
+        // those. See its docstring for the race in full.
+        var startedAt = Date.now();
         return window.API.getAllToasts({ unackedOnly: true })
             .then(function (payload) {
                 var list = (payload && payload.toasts) || [];
                 var r = ring();
                 var fresh = r ? r.filter(list) : list;
                 if (fresh.length) window.ToastManager.backfill(fresh);
+                // AND REMOVE WHAT THE SERVER NO LONGER LISTS. The server
+                // closes toasts by itself now: a hook saying the user
+                // typed into the session answers the toasts that were
+                // waiting on them (src/core/toast_auto_ack.py). A
+                // surface holding no socket for the raising session -
+                // the launchpad, the archive, a terminal attached
+                // somewhere else - has no `toast.ack` frame to hear
+                // that on, so the poll is its only channel, and a poll
+                // that could only add would leave the card forever.
+                //
+                // THE RAW LIST, NOT THE RING-FILTERED ONE. An id the
+                // ring is suppressing is one this browser has already
+                // dropped from its own model, so subtracting it here
+                // would change nothing and would only make the open set
+                // look smaller than the server said it was.
+                if (typeof window.ToastManager.reconcileOpen === 'function') {
+                    window.ToastManager.reconcileOpen(list, { since: startedAt });
+                }
             })
             .catch(function (err) {
                 console.warn('[ToastGlobalPoll] tick failed', err && err.message);

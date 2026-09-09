@@ -5041,3 +5041,87 @@ of the groups tests fail - the tests see the defect.
 Node sweep: 192 files, only the two known - `test_archive_full_page_mode`
 (pre-existing) and `led_state_for.node.mjs` (the piped-stdin CLI helper,
 which exits non-zero with no input by design).
+
+---
+
+## 2026-09-09 - a prompt from any client answers the session's toasts
+
+**The ask, verbatim.** "on the toasts, if its waiting on me and i type
+into this browser or a remote control session, the toasts should be
+removed, we can tell because i think when a new prompt is sent it should
+trip a hook." He is right about the hook: `UserPromptSubmit` fires
+whenever a prompt is submitted, whoever typed it and wherever - browser
+terminal, remote control session, or the keyboard on the Mac - so it is
+a fact about THE USER SHOWING UP, and a notification asking the user to
+show up is answered the moment they do.
+
+**Three rules, and the size of each set is the design.**
+`UserPromptSubmit` answers every kind (Stop, PermissionRequest,
+Notification, StartupPrompt) - the user typed, nothing is still waiting
+on them. `PreToolUse` answers a PermissionRequest and nothing else: a
+tool about to run proves a permission was granted and proves nothing
+about a notice the user has not read. `Stop` answers a permission, a
+notice and a startup prompt, and NEVER a "your turn".
+
+**A STOP NEVER ACKS A STOP, AND THAT IS STRUCTURAL RATHER THAN
+POSITIONAL.** Stop both raises the "your turn" card and answers others,
+so the obvious defect is a Stop eating the card it just created. Relying
+on call order - ack before recording, so the new toast cannot be seen -
+holds only until someone moves a line, and fails outright for a
+DUPLICATED Stop whose predecessor's card is a real unacked record by
+then. Excluding the KIND makes it hold for every ordering, every
+duplicate and every future call site.
+
+**The cutoff is the EVENT's instant, not the ack's.** The route stamps
+`received_at` at the top of the handler before any state is mutated, and
+a toast raised later than that is never answered by that event. A prompt
+redelivered late must not clear a notice about something that happened
+after the user typed - that destroys a record the user never saw, which
+is worse than a card that lingers. Idempotence falls out of `ack_toast`
+refusing a second ack: ten deliveries ack once and do nothing nine
+times, so no duplicate frames and no history churn.
+
+**The client half was the bigger gap.** `ToastManager.backfill` had only
+ever ADDED, which was correct while the only thing that could close a
+toast was a click here or a `toast.ack` frame from another tab. Neither
+is true once the SERVER closes toasts, and a surface with no socket for
+the raising session (launchpad, archive, a terminal attached elsewhere)
+has no frame to hear it on. `reconcileOpen` applies the open set in both
+directions each poll tick. Its guard is `ToastDismissedRing`'s race
+pointing the other way: a response describes the server as of when the
+request LEFT, so a card added after that instant is spared, and removed
+by the next tick whose snapshot can actually speak to it. Sparing is a
+delay, never an exemption. Removals read the RAW list, additions the
+ring-filtered one; reconciling never acks, because the record is already
+closed.
+
+**`ack_reason` closes docs/notifications.md open item 2.** History was
+two-valued because nothing stamped a reason. The human paths now write
+`dismissed`, the auto-ack writes `answered`, and a row reads open /
+dismissed / answered. A record acked before the field existed carries
+null and still reads `dismissed` - not having recorded which act cleared
+a toast is not evidence it cleared itself. `summarize()` reports
+`answered` as a SUBSET of `dismissed` rather than a sibling, so the count
+already on the history header did not silently change meaning.
+
+**No new clearing path for the LED.** `session_activity` already cleared
+`permission_open` and `notice_open` on exactly these three events, so the
+auto-ack matches a set that was already there. Asserted through the
+public resolver, not the private flags: a light saying "needs permission"
+with no card is the same lie as a card with no light.
+
+**Tests.** `test_toast_auto_ack.py` 20 cases - each rule with its
+negative control (PreToolUse must leave a Notification alone; no Stop may
+clear a "your turn", including an OLDER one), duplicates, the reorder
+where a late event meets a newer toast, the reorder where the Stop's own
+toast already exists, session scoping, the reason field, and the feature
+measured end to end through the real hook endpoint against what
+`GET /api/v1/toasts` actually serves - with another session's toast as
+the control. `test_toast_reconcile.node.mjs` 12 cases for card removal
+including the spared-then-removed race.
+`test_toast_history_render.node.mjs` 17 -> 19 (vocabulary is three words
+now, and an unrecognised reason still reads `dismissed`).
+
+Full pytest 5572 passed / 3 failed / 21 skipped - the three are the known
+environmental pre-existing ones. Node sweep 191 passed, only the
+pre-existing `test_archive_full_page_mode`.

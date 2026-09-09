@@ -203,6 +203,14 @@ unparseable file). Hooks POST to a loopback-only endpoint authenticated by an
 env-injected shared token. Events: `Stop`, `Notification`, `PermissionRequest`
 (these three also raise a toast), plus `UserPromptSubmit`, `PreToolUse`,
 `PostToolUse`, `SubagentStart`, `SubagentStop` (activity state only).
+**AND THREE OF THEM ANSWER TOASTS AS WELL AS RAISING THEM**: a prompt
+submitted from ANY client fires `UserPromptSubmit` wherever it was typed, so
+`src/core/toast_auto_ack.py` acks that session's open toasts as `answered`
+(`PreToolUse` acks only a permission; `Stop` acks a permission or a notice and
+NEVER the "your turn" it just raised, by KIND so the rule survives a duplicate
+or a reorder, and never a toast raised after the event's own instant). Clients
+drop the card on the `toast.ack` frame or, on a socket-less screen, when the
+poll reconciles the open set - see `docs/notifications.md`.
 
 Hook events arrive **unordered, and may be duplicated or dropped.** Every
 consumer in `src/core/session_activity.py` is therefore idempotent: last-write-

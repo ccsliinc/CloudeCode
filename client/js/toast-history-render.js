@@ -10,16 +10,21 @@
  * WHAT A ROW MAY CLAIM, which is the whole reason this is not four lines
  * of template string:
  *
- *   THE OUTCOME IS TWO-VALUED, NOT THREE. The owner's ask for punchlist
- *   item 8 wanted three outcomes distinguished - answered by the user,
- *   auto-dismissed by typing into the session, and swept by "dismiss
- *   all" - because "I answered it" and "it got swept" are different
- *   facts. The server does not record which act acked a toast: the
- *   `Toast` model carries `acknowledged` as a bare boolean and no writer
- *   stamps a reason. So this says `dismissed` or `open` and NOTHING
- *   ELSE. Rendering a guessed reason would be a fabricated fact on a
- *   page whose whole job is to be trusted about what happened. The gap
- *   is written down in docs/notifications.md rather than papered over.
+ *   THE OUTCOME IS THREE-VALUED NOW, AND THE THIRD VALUE IS RECORDED
+ *   RATHER THAN GUESSED. This block used to say two, because the `Toast`
+ *   model carried `acknowledged` as a bare boolean and no writer stamped
+ *   a reason, so "I dealt with it" and "it was cleared for me" were
+ *   indistinguishable at the record level. `ack_reason` closes that: the
+ *   human paths write `dismissed` and the hook-driven auto-ack writes
+ *   `answered` (src/core/toast_auto_ack.py). So a row may now say
+ *   `open`, `dismissed` or `answered`.
+ *
+ *   A RECORD WITH NO REASON STILL READS `dismissed`, NEVER `answered`.
+ *   Records acked before the field existed carry null, and the honest
+ *   reading of a missing reason is the one that claims less: not having
+ *   recorded which act cleared it is not evidence it cleared itself.
+ *   Rendering a guessed reason would be a fabricated fact on a page
+ *   whose whole job is to be trusted about what happened.
  *
  *   THE SESSION NAME GOES THROUGH THE ONE RESOLVER. `SessionLabel`
  *   owns "label, else the cloude_-stripped tmux name, else say so" for
@@ -35,9 +40,19 @@
 (function () {
     'use strict';
 
-    /** Outcome vocabulary. Two words, and there is deliberately no third. */
+    /**
+     * Outcome vocabulary. Three words, each backed by a recorded fact:
+     * still waiting, a human cleared it, or a hook said the user turned
+     * up and it was cleared for them. There is deliberately no fourth -
+     * "swept by dismiss all" is a human clearing it and writes
+     * `dismissed` like any other click.
+     */
     var OUTCOME_OPEN = 'open';
     var OUTCOME_DISMISSED = 'dismissed';
+    var OUTCOME_ANSWERED = 'answered';
+
+    /** The `ack_reason` value the server writes for the auto-ack path. */
+    var ACK_REASON_ANSWERED = 'answered';
 
     /** What the unknown-session marker falls back to with no SessionLabel. */
     var UNKNOWN_SESSION = 'unknown session';
@@ -64,13 +79,23 @@
     }
 
     /**
-     * Description: the outcome of one record, from the only fact recorded.
+     * Description: the outcome of one record, from the two facts the
+     *   server records about it - whether it is acknowledged, and what
+     *   acked it. An acknowledged record with no reason, or with any
+     *   reason other than the auto-ack's, reads `dismissed`: that is the
+     *   claim that assumes least about a record written before the field
+     *   existed.
      * Inputs: toast (object) - server-shape toast.
-     * Output: 'dismissed' | 'open'.
+     * Output: 'open' | 'dismissed' | 'answered'.
      * Example: outcomeOf({acknowledged: true}) -> 'dismissed'
+     *          outcomeOf({acknowledged: true, ack_reason: 'answered'})
+     *            -> 'answered'
      */
     function outcomeOf(toast) {
-        return (toast && toast.acknowledged) ? OUTCOME_DISMISSED : OUTCOME_OPEN;
+        if (!toast || !toast.acknowledged) return OUTCOME_OPEN;
+        return (toast.ack_reason === ACK_REASON_ANSWERED)
+            ? OUTCOME_ANSWERED
+            : OUTCOME_DISMISSED;
     }
 
     /**
@@ -185,5 +210,6 @@
         emptyText: emptyText,
         OUTCOME_OPEN: OUTCOME_OPEN,
         OUTCOME_DISMISSED: OUTCOME_DISMISSED,
+        OUTCOME_ANSWERED: OUTCOME_ANSWERED,
     };
 }());

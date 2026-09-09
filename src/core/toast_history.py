@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from src.core.toast_auto_ack import ACK_REASON_ANSWERED
 from src.models import Toast
 
 #: Default page size for the history view. The owner's ask was a
@@ -170,22 +171,41 @@ def summarize(records: Iterable[Toast]) -> dict:
         it passes.
     Inputs: records - any iterable of Toast.
     Output: dict with ``total``, ``open`` (unacknowledged), ``dismissed``
-        and ``by_kind`` (kind -> count).
+        (acknowledged, whatever acked it), ``answered`` and ``by_kind``
+        (kind -> count).
+
+    ``answered`` IS A SUBSET OF ``dismissed``, NOT A SIBLING OF IT, and
+    that is deliberate. ``dismissed`` has always meant "no longer open"
+    and the history panel's header reads it; redefining it to exclude
+    the auto-acked set would silently change a number already on screen
+    to mean something else. So the existing count keeps its meaning and
+    the new fact is added beside it: of the records no longer open,
+    ``answered`` many were cleared because a hook said the user turned
+    up (``src/core/toast_auto_ack.py``) rather than by a click.
+
+    A record acked before ``ack_reason`` existed carries None and counts
+    only in ``dismissed`` - not having recorded a reason is not evidence
+    of which reason it was.
+
     Example:
         >>> summarize([])
-        {'total': 0, 'open': 0, 'dismissed': 0, 'by_kind': {}}
+        {'total': 0, 'open': 0, 'dismissed': 0, 'answered': 0, 'by_kind': {}}
     """
     total = 0
     open_count = 0
+    answered_count = 0
     by_kind: dict = {}
     for toast in records:
         total += 1
         if not toast.acknowledged:
             open_count += 1
+        elif getattr(toast, "ack_reason", None) == ACK_REASON_ANSWERED:
+            answered_count += 1
         by_kind[toast.kind] = by_kind.get(toast.kind, 0) + 1
     return {
         "total": total,
         "open": open_count,
         "dismissed": total - open_count,
+        "answered": answered_count,
         "by_kind": by_kind,
     }
