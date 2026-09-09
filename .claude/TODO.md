@@ -4448,3 +4448,105 @@ unrelated `cloude.online-backup.db` (4.6G) appeared during this pass from
 the app's own background backup process - not touched, not part of this
 cleanup. Reclaim the 32G by emptying the Trash (not done here, left for
 the owner).
+
+## 2026-09-09 restic now covers Development and the app data dir
+
+- [x] Owner asked for "all of development added to restic". Done. The nightly
+  job `/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh` (this is
+  the file launchd actually runs; the copy under `ai-setup/scripts/launchd/` is
+  NOT executed) gained two sources:
+  `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development`
+  and `/Users/jsugamele/Library/Application Support/CloudeCode`. Repo is
+  `rest:http://10.0.10.80:8000/mini-m4` on qnap-home, LaunchAgent
+  `com.jsugamele.backup-m4`, daily 03:30, retention 7d/4w/6m run on qnap-home
+  because both REST servers are append-only and this host is write-only.
+  The long iCloud spelling is what was added, deliberately, per gotcha 6.
+
+- [x] First full pass: snapshot `2b1964d8`, 178,601 files / 50.356 GiB,
+  28.264 GiB added (15.608 GiB stored) in 7:33. Restic deduplicated roughly
+  22 GiB of that, mostly the `database.sqlite` / `.bak-premigrate` twins under
+  `Web/pt-imc-catalog`. Second pass (the one that carries the database):
+  snapshot `0e27bf00`, 4.636 GiB added (3.818 GiB stored) in 1:59.
+
+- [x] VERIFIED BY RESTORE, not by listing. Restored out of `0e27bf00` into a
+  scratch target and diffed against the originals: `Development/CloudeCode/
+  CLAUDE.md` (83,235 bytes) IDENTICAL, `Application Support/CloudeCode/
+  session_metadata.json` (989 bytes) IDENTICAL. Restore target then deleted.
+  Note restic restores directory modes too, so the tree needed a chmod pass
+  before it could be removed.
+
+- [x] `cloude.db` IS COVERED, VIA A DUMP, AND THE RAW FILE IS EXCLUDED. Copying
+  a hot SQLite file captures a torn database, so the job now takes a
+  `VACUUM INTO` dump to `cloude.online-backup.db` (integrity_check ok, 27
+  tables, 4,962,832,384 bytes) and excludes `cloude.db`, `-wal` and `-shm` so a
+  restore cannot pick the torn one. This is the pattern the job already used
+  for uptime-kuma and dockge, not a new mechanism.
+
+  CORRECTION to the cleanup entry above in this file: `cloude.online-backup.db`
+  is NOT "the app's own background backup process". It is written by the restic
+  job every night and it is the only consistent copy of the database that goes
+  off-box. DO NOT DELETE IT and do not add it to a cleanup sweep.
+
+  Unlike dockge, the dump opens the source WITHOUT `mode=ro`. Measured: this
+  database is `journal_mode=wal`, and a read-only open needs the `-shm` it may
+  not create, so both python sqlite3 and the sqlite3 CLI answer "unable to open
+  database file (14)". `VACUUM INTO` writes only its target, so the source is
+  not modified either way.
+
+- [x] EXCLUSIONS, with the sizes that justify them. Regenerable build
+  artifacts, measured across Development before the change: `venv.nosync`
+  (1 dir, 0.2 GiB), `.venv` (2, 0.1 GiB), `__pycache__` (346, 0.1 GiB),
+  `.mypy_cache` (2, 0.1 GiB), `.pytest_cache` (14, ~0), plus `node_modules`,
+  `venv` and `.DS_Store` which measure zero today and are excluded so they stay
+  that way. Those total only about 0.5 GiB: Development is 51 GiB of real data,
+  not dependency bloat, so nothing else was cut from it. Excluding them dropped
+  the pass from 191,857 files to 178,601.
+
+  The big exclusion is in the app data dir: eight stale multi-gigabyte
+  `cloude.db.bak-*` / `cloude.db.pre-*` migration rollbacks, roughly 37 GiB of
+  near-duplicates of the same database from one day's schema work. Also
+  excluded: `*.pipe` and `*.pipe.1` tmux scrollback tails, which are rewritten
+  constantly and would churn the repo nightly for no recovery value.
+
+  0 `.icloud` placeholder stubs in the tree, so everything in Development is on
+  local disk and is really captured, not a stub. Worth re-checking if the owner
+  ever turns on Optimise Mac Storage: restic backs up only what is on disk.
+
+- [x] TWO BUGS FOUND AND FIXED IN THE JOB ITSELF, both exposed by the new scale.
+
+  1. The CloudeCode dump was rejected on its first run by its own table floor,
+     27 tables against a floor of 40. The floor was wrong, not the dump: it was
+     derived from `SELECT count(*) FROM sqlite_master`, which counts every
+     object. This database is 27 tables + 58 indexes + 2 views = 87 objects.
+     The dump check counts `WHERE type='table'`. sqlite_master is not a table
+     list unless you filter it. Floor is now 15 against a measured 27. The
+     guard behaved correctly throughout: it refused the dump AND the
+     post-snapshot verify then reported the file absent from `2b1964d8`.
+
+  2. THE POST-SNAPSHOT VERIFY KILLED THE SCRIPT ON A GOOD BACKUP. It pipes the
+     `restic ls -l` listing into `awk '... {print $4; exit}'`. Under
+     `set -euo pipefail`, awk leaving early breaks the pipe, `printf` takes
+     SIGPIPE, the command substitution returns 141 and `set -e` ends the run.
+     This was invisible while the listing was 103 lines, because it fit in the
+     64 KB pipe buffer and printf always finished first. At 252,935 lines
+     printf blocks and the job dies mid-verify having written a perfectly good
+     snapshot, reporting failure every night. awk now reads to EOF and keeps
+     the first match. Proven against the real 252,935-line listing: all three
+     dumps verify and the pipeline survives `set -euo pipefail`.
+
+     The same line also could not have matched the new path at all: it used
+     `$NF`, and `Application Support` contains a space, so the last field was
+     only the tail of the name. It now matches on the line ending with the path.
+
+- [ ] OPEN, for the owner to weigh: the nightly job now writes a ~4.6 GiB
+  `VACUUM INTO` dump and pushes it every night. VACUUM rewrites pages, so
+  night-over-night dedup on that file is unlikely to be as good as on ordinary
+  data; run 2 added 4.636 GiB (3.818 GiB stored) for it. Against 7d/4w/6m
+  retention that is real growth on qnap-home. Worth watching the repo size for
+  a week and deciding whether the database wants a lower cadence than the rest.
+
+- [ ] OPEN, unrelated to this change but seen while doing it: the restic
+  password sits in plaintext at `~/.config/restic/mini-m4.pw`, and the retired
+  `~/.config/restic/backup-m4.sh.orig.20260616` still carries an old password
+  inline in the file. Left alone deliberately, not rotated, not copied. The
+  owner already knows about the .pw file; the `.orig` copy may be news.
