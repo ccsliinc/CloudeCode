@@ -403,6 +403,137 @@ test('a single-child group renders the same LED state as that child', () => {
     }
 });
 
+// ---- THE SIDEBAR ROW SPELLS THE STATUS `status`, NOT `activity_status` --
+//
+// The defect measured on live at 880247f. `session-sidebar-fetch.js
+// mergeLiveRow()` copies `info.activity_status` onto `row.status`, and the
+// group header - the only caller of this module - passes those merged
+// rows. A fold that read `activity_status` alone found undefined on every
+// child, bucketed all of them `unknown`, and painted EVERY header
+// `unknown/dim`: a group of twelve idle sessions and an empty group
+// rendered identically. Every test above this line uses the server
+// spelling, which is exactly why 23 of them were green over a header that
+// had never once told the truth.
+
+test('a merged SIDEBAR row (status:) folds identically to a server row', () => {
+    // The negative control for the whole defect: if these two disagree,
+    // the header is reading a field its own rows do not carry.
+    const cases = [
+        ['working', 'working', 'active'],
+        ['question', 'waiting-permission', 'steady'],
+        ['notice', 'waiting-input', 'steady'],
+        ['finished_unread', 'done', 'off'],
+        ['idle', 'idle', 'off'],
+        ['dead', 'dead', 'off'],
+        ['unknown', 'unknown', 'dim'],
+    ];
+    for (const [state, inner, outer] of cases) {
+        const sidebar = plain(Summary.summarizeStates([{ status: state }]));
+        const server = plain(Summary.summarizeStates([{ activity_status: state }]));
+        assert.equal(sidebar.inner, inner, `sidebar row ${state} inner`);
+        assert.equal(sidebar.outer, outer, `sidebar row ${state} outer`);
+        assert.deepEqual(
+            { inner: sidebar.inner, outer: sidebar.outer, bucket: sidebar.bucket },
+            { inner: server.inner, outer: server.outer, bucket: server.bucket },
+            `the two spellings of ${state} must fold to one answer`,
+        );
+    }
+});
+
+test('unread and the startup gate reach the fold from a sidebar row too', () => {
+    assert.equal(
+        plain(Summary.summarizeStates([{ status: 'idle', unread: true }])).inner,
+        'done',
+    );
+    const gated = plain(
+        Summary.summarizeStates([
+            { status: 'idle', startup_gate: 'awaiting_startup_prompt' },
+        ]),
+    );
+    assert.equal(gated.bucket, 'input');
+    assert.equal(gated.inner, 'waiting-input');
+    assert.equal(gated.outer, 'steady');
+});
+
+test('a row carrying NEITHER spelling is unknown, not a guess', () => {
+    // The other half of the control. Reconciling the two names must not
+    // become "find something to say": no field is no measurement.
+    const s = plain(Summary.summarizeStates([{ name: 'cloude_a' }]));
+    assert.equal(s.bucket, 'unknown');
+    assert.equal(s.inner, 'unknown');
+    assert.equal(s.outer, 'dim');
+    assert.equal(s.total, 1, 'it is still counted as a member');
+});
+
+test('activity_status wins when a row somehow carries both', () => {
+    const s = plain(
+        Summary.summarizeStates([{ activity_status: 'working', status: 'idle' }]),
+    );
+    assert.equal(s.bucket, 'working');
+});
+
+test('an empty string in either field is not a status', () => {
+    assert.equal(plain(Summary.summarizeStates([{ status: '' }])).inner, 'unknown');
+    assert.equal(
+        plain(Summary.summarizeStates([{ activity_status: '', status: 'working' }])).bucket,
+        'working',
+        'an empty activity_status falls through to the sidebar spelling',
+    );
+});
+
+// ---- THE ROLL-UP THE OWNER ASKED FOR, over sidebar-shaped rows ----------
+
+test('a group of nothing but idle sidebar rows reads idle / off', () => {
+    const rows = [];
+    for (let i = 0; i < 12; i++) rows.push({ status: 'idle', unread: false });
+    const s = plain(Summary.summarizeStates(rows));
+    assert.equal(s.inner, 'idle');
+    assert.equal(s.outer, 'off');
+    assert.equal(s.total, 12);
+});
+
+test('ONE working among idle reads working / active', () => {
+    const s = plain(
+        Summary.summarizeStates([
+            { status: 'idle' }, { status: 'working' }, { status: 'idle' },
+        ]),
+    );
+    assert.equal(s.inner, 'working');
+    assert.equal(s.outer, 'active');
+});
+
+test('ONE done-unread among idle reads done / off - unread never breathes', () => {
+    const s = plain(
+        Summary.summarizeStates([
+            { status: 'idle' }, { status: 'idle', unread: true },
+        ]),
+    );
+    assert.equal(s.inner, 'done');
+    assert.equal(s.outer, 'off', 'the ring is activity, and nothing is running');
+});
+
+test('a permission among working reads waiting-permission / ACTIVE', () => {
+    // The two dimensions are folded INDEPENDENTLY: the dot is the most
+    // urgent state in the group, the ring is whether anything in there is
+    // moving. Deriving the ring from the winning bucket would hide the
+    // running work behind the more urgent dot.
+    const s = plain(
+        Summary.summarizeStates([
+            { status: 'working' }, { status: 'question' }, { status: 'working' },
+        ]),
+    );
+    assert.equal(s.inner, 'waiting-permission');
+    assert.equal(s.outer, 'active');
+});
+
+test('a notice with nothing running is waiting-input / steady, not active', () => {
+    const s = plain(
+        Summary.summarizeStates([{ status: 'idle' }, { status: 'notice' }]),
+    );
+    assert.equal(s.inner, 'waiting-input');
+    assert.equal(s.outer, 'steady');
+});
+
 await runQueue();
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

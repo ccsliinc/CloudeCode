@@ -795,7 +795,14 @@ unknown); its ring is activity across the WHOLE group - `active` if any
 member is working, `steady` if any is a live turn waiting on the user,
 `off` otherwise, `dim` when nothing in there was measured. So a group
 holding one parked session and one busy one paints the parked dot inside a
-breathing ring, which is both facts at once.
+breathing ring, which is both facts at once. It folds the group's member
+ROWS from the merged list rather than anything in the DOM - which is what
+lets a COLLAPSED group, whose rows are deliberately not in the markup,
+still report - and those rows spell the state `status`, not
+`activity_status`, so `session-status-summary.js signalsFor()` reconciles
+the two names in one place; reading only the server's spelling made every
+header on live paint `unknown/dim` at 880247f, an empty group and a group
+of twelve idle sessions alike.
 
 THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
 `SessionStatusUI.dotHtml(status, signals)` takes `unread` and

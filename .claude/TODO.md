@@ -4960,3 +4960,84 @@ the halo assertion it replaces.
 Full suite 5551 passed / 3 failed / 21 skipped - the three are the known
 environmental ones. Node sweep: only the pre-existing
 `test_archive_full_page_mode` fails.
+
+---
+
+## 2026-09-09 - the group header rolls up again: `signalsFor` reconciles the two names for one field
+
+**The owner's report**, verbatim: "the status in the group is not working
+as expected." Measured in the browser on live at `880247f`, sidebar on the
+home page: EVERY group header LED read `data-inner="unknown"
+data-outer="dim"` - Joe (12 members, every one of them painting
+`idle/off`), Agents (4, folded), Waiting (1, folded), Clients (0), other
+(2 members painting `working/active` and `idle/off`). A group of twelve
+sessions and an empty group rendered the same light.
+
+**Root cause: ONE FACT, TWO FIELD NAMES, and the fold only knew one of
+them.** `summarizeStates` resolved each child through
+`StatusLed.ledStateFor(row)`, which reads `row.activity_status` - the
+`/sessions/list` spelling. Its only caller is the group header, and the
+rows it hands over are MERGED SIDEBAR ROWS, where
+`session-sidebar-fetch.js mergeLiveRow()` copies `info.activity_status`
+onto `row.status` so the probe rows and the live rows share one shape. So
+the field was `undefined` on every child, every child bucketed `unknown`,
+the fold picked `unknown` (last in `SUMMARY_PRIORITY`), and `outerFor`
+answered `dim` for that winner. The priority table and the ring fold were
+both already correct; the INPUT never arrived.
+
+**Why nothing caught it.** `tests/test_status_summary.node.mjs` had 23
+green tests and every one of them built its rows with `activity_status`,
+which is the shape no caller passes. And
+`tests/test_sidebar_groups_rename.node.mjs` renders the real
+`bodyHtml`, but loaded neither `status-led.js` nor
+`session-status-summary.js`, so `window.SessionStatusSummary` was absent
+and `headerHtml` took its "render the header without a LED" branch -
+green assertions over a header painting no light at all. A test that
+constructs its own input in a shape the app never produces is testing the
+test.
+
+**The fix.** `signalsFor(row)` in `client/js/session-status-summary.js` is
+the one place the two spellings are reconciled: whichever of
+`activity_status` / `status` is a non-empty string wins,
+`activity_status` first. Neither present stays `undefined` rather than
+defaulting to a state, so a row with no status field still answers
+`unknown/dim` - reconciling two names must not become "find something to
+say". It is NOT pushed into the caller: the row beside the header renders
+through `SessionStatusUI.dotHtml(r.status, ...)`, and a second copy of
+the adapter is a second chance to drift, which is the failure this module
+exists to prevent. `sectionHtml` already passed `rows` to `headerHtml`
+whether or not the section was folded; that is now documented as
+load-bearing rather than incidental, because the folded section emits no
+rows and the LED is the only thing left speaking for it.
+
+**Roll-up, unchanged and now reachable.** Inner is the highest-priority
+member state, `permission > input > working > unread(done) > idle > dead
+> unknown`. Outer is activity across the WHOLE group, folded
+independently: `active` if any member is working, `steady` if any is a
+live turn waiting on the user, `off` otherwise, `dim` only when the group
+is empty or every member is unmeasured. AN EMPTY GROUP READS
+`unknown/dim` and that is the documented choice - nothing to measure is
+not measured-and-quiet, and a calm light on an empty group is the false
+green this project keeps paying for.
+
+**Tests.** `test_status_summary.node.mjs` 23 -> 33: the sidebar spelling
+folds identically to the server spelling across all seven states, unread
+and the startup gate reach the fold from a sidebar row, a row carrying
+NEITHER name is `unknown` (the negative control - the reconciliation must
+not invent a status), `activity_status` wins when both are present, an
+empty string is not a status, plus the five roll-ups the owner named:
+all-idle -> `idle/off`, one working among idle -> `working/active`, one
+done-unread among idle -> `done/off`, a permission among working ->
+`waiting-permission/ACTIVE` (the two dimensions folded independently),
+and a notice with nothing running -> `waiting-input/steady`.
+`test_sidebar_groups_rename.node.mjs` 33 -> 37 and its stack now loads
+the LED modules: the header LED reads the rows, a COLLAPSED group is
+summarised from rows absent from its own markup, folding does not move
+what the header claims, and a header over a live member NEVER reads
+unknown across all six measured states. NEGATIVE CONTROL RUN both ways:
+with `signalsFor` removed from the call, 8 of the summary tests and all 4
+of the groups tests fail - the tests see the defect.
+
+Node sweep: 192 files, only the two known - `test_archive_full_page_mode`
+(pre-existing) and `led_state_for.node.mjs` (the piped-stdin CLI helper,
+which exits non-zero with no input by design).

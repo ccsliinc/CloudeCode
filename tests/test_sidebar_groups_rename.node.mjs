@@ -27,7 +27,16 @@ const ARRANGEMENT_KEY = 'cloude.session.sidebar.arrangement';
  */
 function loadStack(stored) {
     const storage = fakeStorage(stored === null ? {} : { [ARRANGEMENT_KEY]: stored });
+    // status-led.js and session-status-summary.js are in the stack because
+    // the header's summary LED is real behaviour, not decoration: it is
+    // the ONLY thing that speaks for a section the user has folded. This
+    // file used to load neither, so `window.SessionStatusSummary` was
+    // absent, `headerHtml` took its "render the header without a LED"
+    // branch, and every assertion here was green over a header that
+    // painted no light at all. Loading the modules the browser loads is
+    // what let the 2026-09-09 unknown/dim defect be caught here.
     const { window } = loadModules([
+        'status-led.js', 'session-status-summary.js',
         'session-sidebar-store.js', 'session-sidebar-arrangement.js',
         'session-sidebar-rows.js', 'session-sidebar-groups.js',
     ], { storage, document: new Doc() });
@@ -477,6 +486,98 @@ await test('the sidebar gutter is a sibling token of --project-gutter', () => {
     assert.ok(gutterRule, 'the gutter class has a rule');
     assert.ok(/var\(--sidebar-gutter\)/.test(gutterRule[1]),
         'the gutter reads the shared token rather than a hardcoded width');
+});
+
+// =====================================================================
+// THE HEADER IS SUMMARISED FROM THE ROWS, NEVER FROM THE DOM.
+//
+// A folded section emits no rows at all (see ITEM 64 above), so anything
+// that read the section's state back out of the markup would go silent at
+// exactly the moment the header's LED is the only thing left saying what
+// is inside. `sectionHtml` passes `rows` to `headerHtml` whether or not
+// the section is collapsed; these tests are what hold that.
+// =====================================================================
+
+/**
+ * Description: the (inner, outer) pair on one section header's summary
+ *   LED. Scoped to that section's own slice of the markup so a two-group
+ *   render cannot have one header's light read for another's.
+ * Inputs: html (string) - a bodyHtml render. key (string) - band key.
+ * Output: object|null - {inner, outer}, or null when no LED is present.
+ */
+function headerLed(html, key) {
+    const start = html.indexOf(`data-group="${key}"`);
+    if (start < 0) return null;
+    const next = html.indexOf('data-group="', start + 1);
+    const slice = html.slice(start, next < 0 ? html.length : next);
+    const summary = slice.indexOf('session-sidebar-group__summary');
+    if (summary < 0) return null;
+    const m = slice
+        .slice(summary)
+        .match(/data-inner="([^"]+)" data-outer="([^"]+)"/);
+    return m ? { inner: m[1], outer: m[2] } : null;
+}
+
+await test('the header LED reads the ROWS, and says what a group holds', () => {
+    const { G } = loadStack(null);
+    const rows = [
+        row({ name: 'p', is_pinned: true, status: 'idle' }),
+        row({ name: 'q', is_pinned: true, status: 'idle' }),
+        row({ name: 'a', status: 'working' }),
+    ];
+    const html = G.bodyHtml(rows, 'cozy', null, {});
+    assert.deepEqual(headerLed(html, 'pinned'), { inner: 'idle', outer: 'off' },
+        'an all-idle section is idle, not unknown');
+    assert.deepEqual(headerLed(html, 'other'), { inner: 'working', outer: 'active' },
+        'and a section holding a working session says so');
+});
+
+await test('a COLLAPSED group is still summarised, from rows it does not render', () => {
+    // The whole point. The folded section has no rows in the markup, so a
+    // header that had to find them there would report unknown for exactly
+    // the sections the user cannot see into.
+    const { G } = loadStack(null);
+    const rows = [
+        row({ name: 'p', is_pinned: true, status: 'question' }),
+        row({ name: 'a', status: 'idle' }),
+    ];
+    const html = G.bodyHtml(rows, 'cozy', { collapsed: ['pinned'] }, {});
+    assert.ok(!html.includes('data-name="p"'), 'its row really is absent from the markup');
+    assert.deepEqual(headerLed(html, 'pinned'),
+        { inner: 'waiting-permission', outer: 'steady' },
+        'and the header still reports the parked session inside it');
+});
+
+await test('folding a group does not change what its header claims', () => {
+    const { G } = loadStack(null);
+    const rows = [
+        row({ name: 'p', is_pinned: true, status: 'working' }),
+        row({ name: 'q', is_pinned: true, status: 'idle', unread: true }),
+        row({ name: 'a', status: 'idle' }),
+    ];
+    const open = G.bodyHtml(rows, 'cozy', { collapsed: [] }, {});
+    const shut = G.bodyHtml(rows, 'cozy', { collapsed: ['pinned'] }, {});
+    assert.deepEqual(headerLed(shut, 'pinned'), headerLed(open, 'pinned'),
+        'the fold is a view state and must not move the roll-up');
+    assert.deepEqual(headerLed(open, 'pinned'), { inner: 'working', outer: 'active' });
+});
+
+await test('a header over live members NEVER reads unknown', () => {
+    // The defect the owner reported, as a direct assertion: every group
+    // with a measured member has to say something about it.
+    const { G } = loadStack(null);
+    const states = ['working', 'question', 'notice', 'finished_unread', 'idle', 'dead'];
+    for (const state of states) {
+        const rows = [
+            row({ name: 'p', is_pinned: true, status: state }),
+            row({ name: 'a', status: 'idle' }),
+        ];
+        const html = G.bodyHtml(rows, 'cozy', { collapsed: ['pinned'] }, {});
+        const led = headerLed(html, 'pinned');
+        assert.ok(led, `a header with a ${state} member renders a LED`);
+        assert.notEqual(led.inner, 'unknown', `${state} member must not read unknown`);
+        assert.notEqual(led.outer, 'dim', `${state} member must not read dim`);
+    }
 });
 
 const { passes, failures } = results();

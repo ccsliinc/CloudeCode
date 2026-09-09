@@ -49,6 +49,24 @@
  * the ring off the winning bucket's row instead would have hidden the
  * work behind the more urgent dot.
  *
+ * THE STATUS FIELD HAS TWO NAMES IN THIS APP, AND THE FOLD HAS TO KNOW
+ * BOTH. A `/sessions/list` row calls it `activity_status`; the merged
+ * sidebar row calls it `status`, because
+ * `session-sidebar-fetch.js mergeLiveRow()` copies `info.activity_status`
+ * onto `row.status` so the probe rows and the live rows share one shape.
+ * The group header - the only caller today - passes those MERGED rows,
+ * so a fold that read `activity_status` alone found the field undefined
+ * on every child, bucketed all of them `unknown`, and painted every
+ * header `unknown/dim`: a full group and an empty one rendered
+ * identically. Measured on live at 880247f, all five headers, including
+ * one holding twelve idle sessions and one holding a working session.
+ * `signalsFor` is the single place that reconciles the two spellings,
+ * and it is not a widening of the contract - it is the contract the one
+ * caller always had. Do NOT push this mapping into the caller: the row
+ * beside the header renders through `SessionStatusUI.dotHtml(r.status,
+ * ...)`, so a second copy of the adapter is a second chance to drift,
+ * which is the exact failure this module exists to prevent.
+ *
  * Depends on client/js/status-led.js (for the vocabularies) and nothing
  * else. No DOM, no globals beyond that one.
  */
@@ -85,6 +103,47 @@ console.log('[SessionStatusSummary Module] Loading...');
      * @type {string[]}
      */
     const STEADY_BUCKETS = ['permission', 'input'];
+
+    /**
+     * The three signals StatusLed needs, from a row of EITHER shape.
+     *
+     * Description: PURE. `activity_status` is what a `/sessions/list`
+     *   row carries; `status` is what the merged sidebar row carries for
+     *   the same fact (see the module header). Whichever is a non-empty
+     *   string wins, `activity_status` first because it is the server's
+     *   own spelling and a row carrying both is a server row that some
+     *   other layer has annotated. Neither present is left undefined
+     *   rather than defaulted to a state, so StatusLed answers
+     *   `unknown/dim` - not having a field is not a measurement, and
+     *   inventing `idle` here would be the false green this project
+     *   keeps paying for.
+     *
+     *   `unread` and `startup_gate` are spelled the same on both shapes
+     *   and are passed straight through.
+     * Inputs:
+     *   row (Object|null) - one session row, either shape.
+     * Output:
+     *   Object - `{activity_status, unread, startup_gate}` for
+     *   StatusLed.ledStateFor.
+     * Example:
+     *   signalsFor({status: 'working'})
+     *   // {activity_status: 'working', unread: false, startup_gate: undefined}
+     * Example:
+     *   signalsFor({activity_status: 'idle', unread: true})
+     *   // {activity_status: 'idle', unread: true, startup_gate: undefined}
+     */
+    function signalsFor(row) {
+        const r = row || {};
+        const status =
+            (typeof r.activity_status === 'string' && r.activity_status)
+                ? r.activity_status
+                : ((typeof r.status === 'string' && r.status) ? r.status : undefined);
+        return {
+            activity_status: status,
+            unread: !!r.unread,
+            startup_gate: r.startup_gate,
+        };
+    }
 
     /**
      * Which summary bucket one child's (inner, outer) pair falls into.
@@ -153,11 +212,15 @@ console.log('[SessionStatusSummary Module] Loading...');
     /**
      * Summarise a set of sessions into one LED state plus a count.
      *
-     * Description: PURE. Takes the raw server rows (each carrying
-     *   `activity_status`, `unread` and optionally `startup_gate`),
+     * Description: PURE. Takes session rows of either shape (a server
+     *   row spelling the state `activity_status`, or a merged sidebar
+     *   row spelling it `status` - `signalsFor` reconciles the two),
      *   resolves each through the single mapping in StatusLed, buckets
      *   them, and returns the highest-priority bucket present along with
-     *   how many children are unread.
+     *   how many children are unread. It reads the ROWS it is handed and
+     *   never the DOM, which is what lets a COLLAPSED group - whose rows
+     *   are deliberately absent from the markup - still report what is
+     *   inside it.
      *
      *   AN EMPTY GROUP IS `unknown`, NOT `done`. A group with no children
      *   has not been measured as quiet; there is simply nothing in it,
@@ -165,9 +228,9 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   green this project keeps paying for elsewhere.
      * Inputs:
      *   children (Array|null) - session rows. Each may be
-     *     `{activity_status, unread, startup_gate}`. Non-objects are
-     *     skipped rather than throwing, so one malformed row cannot blank
-     *     a whole header.
+     *     `{activity_status|status, unread, startup_gate}`. Non-objects
+     *     are skipped rather than throwing, so one malformed row cannot
+     *     blank a whole header.
      * Output:
      *   Object - `{inner, outer, bucket, unreadCount, total}`.
      * Example:
@@ -191,7 +254,7 @@ console.log('[SessionStatusSummary Module] Loading...');
             const row = rows[i];
             if (!row || typeof row !== 'object') continue;
             total += 1;
-            const led = globalThis.StatusLed.ledStateFor(row);
+            const led = globalThis.StatusLed.ledStateFor(signalsFor(row));
             const bucket = bucketFor(led);
             present[bucket] = true;
             // Counted off the ROW's flag, not off the light: a working
@@ -279,6 +342,7 @@ console.log('[SessionStatusSummary Module] Loading...');
         summaryHtml: summaryHtml,
         bucketFor: bucketFor,
         outerFor: outerFor,
+        signalsFor: signalsFor,
     };
 
     globalThis.SessionStatusSummary = api;

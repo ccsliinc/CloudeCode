@@ -241,6 +241,14 @@ console.log('[SessionSidebarGroups Module] Loading...');
      *   rows. A folded section emits an EMPTY body element rather than no
      *   body at all, so `aria-controls` always resolves to something real
      *   and the drop target for a drag survives the fold.
+     *
+     *   THE HEADER GETS `rows` WHETHER OR NOT THE SECTION IS FOLDED, and
+     *   that is load-bearing rather than incidental. The body above is
+     *   emptied on a fold; the summary LED is a fold over the MODEL, so
+     *   it keeps answering for a section whose rows are not in the
+     *   markup at all. Anything that tried to read the section's state
+     *   back off the DOM would go silent at exactly the moment the LED
+     *   is the only thing left saying anything.
      * Inputs: key (string), rows (Array<object>), density (string),
      *   collapsed (boolean).
      * Output: string - HTML.
