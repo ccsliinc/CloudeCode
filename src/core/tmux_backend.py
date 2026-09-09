@@ -132,24 +132,7 @@ DEFAULT_SOCKET_NAME: str = "cloude"
 #: history-limit through the normal option lookup when it trims a pane's
 #: history, so a later change reaches existing panes too, but setting it
 #: first means a pane is never briefly born under the stock limit.
-#:
-#: Matched to xterm.js's own ``scrollback: 50000`` in
-#: ``client/js/terminal.js``. A pane that retains less than the browser is
-#: willing to show is a ceiling the user hits with nothing to tell them
-#: which layer stopped them, so the two are kept equal deliberately. This
-#: is what tmux RETAINS; how much of it is replayed to a client on attach
-#: is ``AuthConfig.session.scrollback_lines``, which is smaller on purpose
-#: because the replay crosses a phone's network and ANSI parser.
-#:
-#: Memory: roughly 10-30 MB per pane at 50000 lines by 172 columns,
-#: depending on how many cells carry attributes. Real, but tmux only
-#: allocates lines that exist, so an idle session costs nothing like that.
-#:
-#: This is only reachable at all because CloudeCode launches agents with
-#: ``CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`` (see
-#: ``AuthConfig.session.disable_alternate_screen``). An alternate-screen
-#: pane retains ZERO history whatever this says.
-HISTORY_LIMIT: int = 50000
+HISTORY_LIMIT: int = 10000
 
 #: Session name prefix - ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
