@@ -313,32 +313,43 @@
 }
 
 .status-led[data-outer='unread'] {
-    /* A FINISHED TURN NOBODY HAS LOOKED AT: a crisp green ring around a
-     * RECESSED CENTRE.
+    /* A FINISHED TURN NOBODY HAS LOOKED AT: a crisp green ring around the
+     * SAME faint centre `unknown` already draws.
      *
-     * THE CENTRE IS CLEARED, NOT GREY, and that is the 2026-09-09
-     * correction. The first version of this treatment left the grey
-     * `done` dot filled inside the green band, and the owner rejected
-     * exactly that: "it should look like the 'status not measured' dot,
-     * but the outline should be green instead of light grey with the
-     * dark grey center". A mid-grey disc inside a green ring reads as
-     * two lights stacked; a cleared centre reads as one ring. The clear
-     * itself is `--led-fill: transparent`, set in the SHARED rule above
-     * that `unknown` also uses, so the two hollow states cannot end up
-     * with two different ideas of what "dark centre" means.
+     * THE 2026-09-09 CORRECTION, AND THE 2026-09-09 OVERSHOOT PAST IT.
+     * The first version of this treatment left a solid mid-grey `done`
+     * dot filled inside the green band, and the owner rejected that:
+     * "it should look like the 'status not measured' dot, but the
+     * outline should be green instead of light grey with the dark grey
+     * center". The fix that shipped for it went one step too far and
+     * cleared the centre to NOTHING (see `::after` below, before this
+     * comment): a bare hollow ring with no dot at all, which is not what
+     * `unknown` looks like either - `unknown` shows a small, faint grey
+     * dot in the middle, from its own halo bleeding through. The owner's
+     * later, exact words: "the green outline dot should look like this
+     * grey one on the bottom, just the ring should be green instead of
+     * light gray". ONLY THE RING RECOLOURS. The centre reuses `unknown`'s
+     * own dot - same size, same construction, same `--led-color-unknown`
+     * token - see `::after` below.
+     *
+     * THE FRONT DOT STAYS CLEARED. `--led-fill: transparent`, set in the
+     * SHARED rule above that `unknown` also uses, so this element's own
+     * background (a solid disc under the ring) never shows - see the
+     * blob warning below for why that matters. Only the ::after halo may
+     * paint anything into the centre.
      *
      * IT IS DRAWN AS A RING, NOT AS A DISC, and that is not a style
      * preference. The halo pseudo-element carries `z-index: -1`, which
      * inside this element's own stacking context paints it ABOVE the
      * element's background - and the element's background IS the dot.
-     * Every other halo gets away with that because it is a wash at
-     * 0.18 to 0.55 opacity, so the dot reads straight through it. An
-     * OPAQUE disc at the same z-index hides everything under it:
-     * measured in a 6x render, `finished_unread` came out a solid green
-     * blob. So the fill is dropped and an inset shadow draws the band at
-     * the outer edge, leaving the middle clear. With `--led-fill` also
-     * cleared, what shows through that middle is the row background, not
-     * a dot - which is the whole point of the correction above.
+     * Every other halo gets away with a full-strength gradient fill
+     * because it is a wash at 0.18 to 0.55 opacity, so the dot reads
+     * straight through it. An OPAQUE disc at the same z-index and full
+     * opacity hides everything under it: measured in a 6x render,
+     * `finished_unread` came out a solid green blob when the ring's own
+     * full-strength green gradient was tried as the fill. The centre dot
+     * this rule now restores is deliberately a DIFFERENT, dimmer colour
+     * from the ring for exactly that reason - see `::after`.
      *
      * GEOMETRY, AND IT SETS THE NUMBER FOR EVERY OTHER STATE. This is
      * the one treatment with a hard size requirement - a 9px dot box, a
@@ -359,9 +370,30 @@
 }
 
 .status-led[data-outer='unread']::after {
-    /* Transparent centre, hard-edged band, and no outer glow: the three
-     * things that turn the halo into an outline. See the block above. */
-    background: transparent;
+    /* Hard-edged GREEN band at the outer edge, plus the SAME faint grey
+     * centre dot `unknown` shows - both live on this one pseudo-element,
+     * which is why they cannot share a plain `opacity`: the ring needs
+     * to read at full strength (this state's `--led-halo-opacity: 1`,
+     * above) and the centre needs to read at `unknown`'s dim strength
+     * (18%, `[data-outer='dim']`'s `--led-halo-opacity`) or it washes
+     * out the ring's own colour and drifts back toward the solid-blob
+     * problem in the comment above. So the centre's alpha is baked
+     * directly into its gradient colour with color-mix() - already this
+     * codebase's pattern for a literal alpha over a theme token, see
+     * client/css/styles.css and archive-nav-card.css - rather than read
+     * from the element's own `opacity`, which stays at 1 for the ring.
+     *
+     * `var(--led-color-unknown)`, not `var(--led-halo-ink)`: the centre
+     * is grey in EVERY state that has one, unread included - only the
+     * ring takes the state's own colour. Same core percentage
+     * (`--led-halo-core`) and same gradient shape as the shared base
+     * rule up top, so this is `unknown`'s recipe reused, not a third
+     * one invented for this state alone. */
+    background: radial-gradient(
+        closest-side,
+        color-mix(in srgb, var(--led-color-unknown) 18%, transparent) 0 var(--led-halo-core),
+        transparent 100%
+    );
     box-shadow: inset 0 0 0 var(--led-ring-width) var(--led-halo-ink);
 }
 

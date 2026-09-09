@@ -502,7 +502,7 @@ test('THE WHOLE MAPPING, one row per state, is what the user asked for', () => {
     }
 });
 
-test('the finished-turn ring is a GREEN OUTLINE around a RECESSED CENTRE', () => {
+test('the finished-turn ring is a GREEN OUTLINE around the SAME faint centre unknown shows', () => {
     // The owner's 2026-09-09 correction, verbatim: "it should look like
     // the 'status not measured' dot, but the outline should be green
     // instead of light grey with the dark grey center". The first version
@@ -530,16 +530,86 @@ test('the finished-turn ring is a GREEN OUTLINE around a RECESSED CENTRE', () =>
         !/--led-lit-scale:/.test(block) && !/--led-halo-scale:/.test(block),
         'no state may set its own lit diameter - see the geometry block',
     );
-    // AND IT MUST BE A RING, NOT A DISC. The halo pseudo-element paints
-    // ABOVE the element background, which IS the dot, so an opaque FILL
-    // hides the grey entirely - measured, it came out a solid green blob.
-    // A transparent centre with an inset band is what leaves the dot
-    // visible. If this ever reverts to a fill, the treatment the owner
-    // asked for silently stops existing.
     const pseudo = ruleBody(".status-led[data-outer='unread']::after");
-    assert.ok(/background:\s*transparent/.test(pseudo), 'the centre must be clear');
     assert.ok(/box-shadow:\s*inset/.test(pseudo), 'the band must be an inset ring');
     assert.ok(CSS.includes('--led-ring-width'), 'the band width is a named token');
+    // THE CENTRE MUST NOT BE TRANSPARENT. A 2026-09 fix cleared it to
+    // nothing (`background: transparent`) while removing the earlier
+    // solid-green-blob defect, and overshot: the owner's follow-up,
+    // verbatim, "the green outline dot should look like this grey one on
+    // the bottom, just the ring should be green instead of light gray".
+    // A bare `background: transparent` here is the exact regression this
+    // guards against.
+    assert.ok(
+        !/background:\s*transparent\s*;/.test(pseudo),
+        'the centre must not be cleared to nothing - see the 2026-09-09 overshoot',
+    );
+    // THE CENTRE READS UNKNOWN'S OWN TOKEN, NOT THE RING'S. Only the ring
+    // recolours per state; the centre dot is grey in every state that has
+    // one, unread included - reusing `unknown`'s construction rather than
+    // inventing a green (or a third) one.
+    assert.ok(
+        /var\(--led-color-unknown\)/.test(pseudo),
+        'the centre must read the unknown token, the same one unknown itself uses',
+    );
+    assert.ok(
+        !/radial-gradient\([^)]*--led-halo-ink/.test(pseudo),
+        'the centre fill must not be the ring colour - that is the solid-blob regression',
+    );
+    // SAME SHAPE AS THE BASE GRADIENT (and as `unknown`'s own halo, which
+    // never overrides `background` and so falls through to that same base
+    // rule): same core stop, closest-side, fading to nothing at the edge.
+    // A different shape here would be a second recipe, which the task
+    // this shipped from explicitly forbids ("do not invent a third
+    // recipe").
+    assert.ok(
+        /radial-gradient\(\s*closest-side/.test(pseudo),
+        'the centre must use the same closest-side radial-gradient shape as the base rule',
+    );
+    assert.ok(
+        pseudo.includes('var(--led-halo-core)'),
+        'the centre must use the same core-percentage token as every other halo',
+    );
+    // AND THE ALPHA MUST BE BAKED INTO THE COLOUR, NOT THE ELEMENT'S
+    // SHARED OPACITY. `--led-halo-opacity` is 1 on this state (for the
+    // ring, asserted above) - if the centre relied on that same shared
+    // opacity for its own dimming, it would paint at full strength
+    // wherever the gradient's colour stop is 100% and read as another
+    // solid blob (in a different colour). color-mix() (or an equivalent
+    // literal-alpha colour) is what lets the ring and the centre carry
+    // two different apparent strengths on one pseudo-element.
+    assert.ok(
+        /color-mix\(/.test(pseudo),
+        'the centre alpha must be baked into its own colour, independent of --led-halo-opacity',
+    );
+});
+
+test("unread's centre matches unknown's centre - same size, same treatment, same token", () => {
+    // This is the assertion the 2026-09-09 overshoot would have caught:
+    // `unknown` never overrides `::after`'s `background`, so its centre
+    // dot IS the base gradient at `--led-color-unknown` and `dim`'s
+    // opacity (0.18). `unread` must show the identical grey, at the
+    // identical shape, through its own (separately-authored) `::after`
+    // rule - same size (the shared `--led-size` / `--led-lit-scale`
+    // geometry, untouched by either state), same construction (a
+    // closest-side radial-gradient keyed on `--led-halo-core`), same
+    // token (`--led-color-unknown`, never `--led-halo-ink`).
+    const dimOpacity = ruleBody(".status-led[data-outer='dim']");
+    assert.ok(
+        /--led-halo-opacity:\s*0\.18;/.test(dimOpacity),
+        'unknown\'s own halo opacity is the alpha this test pins against',
+    );
+    const base = CSS.split('.status-led::after {')[1].split('\n}')[0];
+    assert.ok(
+        /background:\s*radial-gradient\(\s*closest-side,\s*var\(--led-halo-ink\)/.test(base),
+        'unknown never overrides ::after background, so it falls through to this base gradient',
+    );
+    const unreadPseudo = ruleBody(".status-led[data-outer='unread']::after");
+    assert.ok(
+        /radial-gradient\(\s*closest-side,\s*color-mix\(in srgb, var\(--led-color-unknown\) 18%, transparent\) 0 var\(--led-halo-core\), transparent 100%\s*\)/
+            .test(unreadPseudo.replace(/\s+/g, ' ')),
+        "unread's centre must reproduce 18% (dim's own opacity) baked into unknown's token, at the same core stop",
+    );
 });
 
 test('THE CLEARED CENTRE IS ONE RECIPE SHARED BY BOTH HOLLOW STATES', () => {

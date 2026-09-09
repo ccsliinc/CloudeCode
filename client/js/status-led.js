@@ -78,10 +78,12 @@ console.log('[StatusLed Module] Loading...');
      * breathing glow, because an outline that pulses stops reading as an
      * outline at nine pixels. Motion is therefore now a signal in its own
      * right - a light that moves is a session that is moving. Since
-     * 2026-09-09 the ring also CLEARS THE CENTRE of the dot it surrounds,
-     * so it reads as one ring rather than as a ring around a second
-     * light; the stylesheet does that with the same `--led-fill` the
-     * `unknown` dot uses.
+     * 2026-09-09 the ring's own DOT is cleared (the stylesheet does that
+     * with the same `--led-fill` the `unknown` dot uses, so it reads as
+     * one ring rather than as a ring around a second light), but the
+     * CENTRE is not empty: it shows the same faint grey dot `unknown`
+     * shows, via the halo bleeding through - only the ring recolours to
+     * green. See client/css/status-led.css for the composition.
      *
      * @type {string[]}
      */
@@ -345,16 +347,21 @@ console.log('[StatusLed Module] Loading...');
             return { inner: 'working', outer: 'active' };
         }
 
-        // THE FINISHED TURN NOBODY HAS LOOKED AT. A green ring around a
-        // recessed centre: the owner asked first for "a green outline and
-        // grey filled dot", then on 2026-09-09 for the fill to go, "it
-        // should look like the 'status not measured' dot, but the outline
-        // should be green instead of light grey with the dark grey
-        // center". The inner state is still `done` - the CHAT is at rest,
-        // and the ring is what says there is something here for the user.
-        // Only the PAINT of the centre changed; see --led-fill in
-        // client/css/status-led.css. This is what the envelope icon used
-        // to carry, before the icon was removed from both surfaces.
+        // THE FINISHED TURN NOBODY HAS LOOKED AT. A green ring around the
+        // same faint grey centre dot `unknown` shows: the owner asked
+        // first for "a green outline and grey filled dot", then on
+        // 2026-09-09 for the dot's own solid fill to go, "it should look
+        // like the 'status not measured' dot, but the outline should be
+        // green instead of light grey with the dark grey center", and
+        // then - after a fix that cleared the centre too far, to nothing
+        // - for the centre to come back exactly as `unknown` draws it:
+        // "the green outline dot should look like this grey one on the
+        // bottom, just the ring should be green instead of light gray".
+        // The inner state is still `done` - the CHAT is at rest, and the
+        // ring is what says there is something here for the user. Only
+        // the ring's colour changes; see client/css/status-led.css. This
+        // is what the envelope icon used to carry, before the icon was
+        // removed from both surfaces.
         if (status === 'finished_unread') {
             return { inner: 'done', outer: 'unread' };
         }
