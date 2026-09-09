@@ -981,22 +981,81 @@ class TmuxBackend(SessionBackend):
             )
             await self._apply_history_limit()
 
-        # Recompute / re-resolve pipe file path. It was written to by the
-        # old Python process; the tmux server kept pipe-pane running, so
-        # the file is still being appended to. We tail from current EOF.
+        # THE INVARIANT THIS METHOD OWES ITS CALLER: when it returns,
+        # tmux's ``pipe-pane`` is writing to the SAME path the tail loop
+        # is about to read. Nothing above establishes that for a backend
+        # that skipped the external-setup block, so it is established
+        # here.
+        #
+        # What used to be here instead: a check for the file's existence
+        # that, on a miss, logged ``tmux_backend_pipe_missing_recreating``
+        # and called ``pipe_path.touch()``. Its comment reasoned that "the
+        # old pipe-pane process inside tmux continues, we just make sure
+        # our file target exists" - and that is precisely the mistake. A
+        # MISSING pipe file is positive proof of the opposite: no
+        # pipe-pane is writing to this path, because if one were, the file
+        # would be there. ``touch()`` then created an empty file that
+        # nothing writes to and handed it to ``_tail_loop``, which sat at
+        # its EOF forever. The pane's real output was going to a different
+        # path entirely - the same tmux session reached through
+        # ``for_external`` resolves ``tmux_ext_<slug>.pipe`` while the boot
+        # re-adopt builds an OWNED backend that resolves
+        # ``tmux_adopted_<slug>.pipe``.
+        #
+        # MEASURED on the owner's box: ``tmux_adopted_cloude_cloudecode``
+        # .pipe sat at 0 bytes while ``tmux_ext_cloude_cloudecode.pipe``
+        # grew past 2.7 MB, and the browser showed a terminal frozen at
+        # whatever the last attach had painted. The paint kept working
+        # throughout and that is what made it confusing: it goes through
+        # ``capture_visible_screen()``, which asks tmux directly and never
+        # touches this file, so every re-attach produced fresh text and
+        # every keystroke in between produced nothing.
+        #
+        # ``ensure_pipe_pane`` is the right repair and not a bigger
+        # hammer than needed: it probes ``#{pane_pipe}`` itself, adopts a
+        # pane that has no pipe, replaces one pointed somewhere else, and
+        # creates the file. It is also what the external-setup block above
+        # already calls, so this makes the two attach paths agree instead
+        # of leaving one of them guessing.
         pipe_path = self._resolve_pipe_path()
-        if not pipe_path.exists():
-            # Shouldn't happen if tmux's pipe-pane is alive, but handle gracefully
-            # by re-running pipe-pane to re-establish the pipe. This is a
-            # defensive reconnect - the old pipe-pane process inside tmux
-            # continues, we just make sure our file target exists.
-            logger.warning(
-                "tmux_backend_pipe_missing_recreating",
-                session=self.tmux_session,
-                pipe=str(pipe_path),
-            )
-            pipe_path.parent.mkdir(parents=True, exist_ok=True)
-            pipe_path.touch()
+        if not do_external_setup:
+            try:
+                await self.ensure_pipe_pane(attaching=True)
+            except RuntimeError as exc:
+                # A DEAD PANE IS THE CASE THIS EXISTS FOR, and it is why
+                # the failure is tolerated rather than raised. tmux
+                # answers ``pipe-pane`` on an exited pane with "target
+                # pane has exited", which arrives here as RuntimeError.
+                # The caller that reaches this branch is
+                # ``SessionManager._lifespan_tmux_reconcile``, and it
+                # treats RuntimeError out of ``attach_existing`` as
+                # proof the session is gone: it logs
+                # ``session_backend_attach_failed`` and calls
+                # ``_clear_stale_metadata``. Letting the exception
+                # through would therefore DROP a dead-pane session's
+                # pointer at boot, leaving it reachable only through the
+                # Adopt list - a session the user could previously still
+                # see would silently stop being theirs.
+                #
+                # The old code could not hit that: it only ever called
+                # ``touch()``, which succeeds on a dead pane. So the
+                # fallback here is the previous behavior byte for byte,
+                # and this branch is strictly additive - it can only
+                # improve a pane that CAN be piped and never degrades one
+                # that cannot.
+                #
+                # Only RuntimeError is caught. Anything else - a
+                # cancellation, an OSError writing the file - still
+                # propagates, because those are not "this pane cannot be
+                # piped" and must not be disguised as it.
+                logger.warning(
+                    "tmux_backend_pipe_missing_recreating",
+                    session=self.tmux_session,
+                    pipe=str(pipe_path),
+                    error=str(exc),
+                )
+                pipe_path.parent.mkdir(parents=True, exist_ok=True)
+                pipe_path.touch()
 
         self._pipe_path = pipe_path
         self._running = True
@@ -1033,18 +1092,27 @@ class TmuxBackend(SessionBackend):
         is the toggle form and by this point no pipe is active either way, so
         we want the explicit non-toggle start semantics.
 
-        THE THIRD WAY TO SATISFY THE GUARD, and why it is not a hole in
-        it. The guard below means "this backend has a live pane to pipe
-        from". ``_running`` proves that for a backend that CREATED its
-        pane and ``_is_external`` proves it for one built by
+        THE THIRD WAY TO SATISFY THE GUARD, and what it does and does
+        not promise. The guard below means "this backend has a live pane
+        to pipe from". ``_running`` proves that for a backend that
+        CREATED its pane and ``_is_external`` proves it for one built by
         ``for_external``; neither is true of an OWNED backend attaching
-        to a pane that already exists, which is what the boot re-adopt
-        builds. That caller is not exempted from the precondition - it
-        passes ``attaching=True`` only from inside ``attach_existing``,
-        after ``is_alive()`` and the ``#{pane_dead}`` probe have both
-        answered, so it arrives with a STRONGER and more recent proof of
-        the same fact than either flag carries. Every other caller is
-        unchanged: the default is False, so nothing that is neither
+        to a pane that already exists. ``attaching=True`` is passed only
+        from inside ``attach_existing``, which has at minimum cleared
+        ``is_alive()`` on the SESSION.
+
+        THE PANE, HOWEVER, MAY BE DEAD. ``attach_existing`` runs its
+        ``#{pane_dead}`` probe inside the external-setup block, and the
+        second caller - the one covering the path where that block was
+        skipped - reaches here WITHOUT it. A session can be alive while
+        its pane has exited, and on such a pane tmux answers ``pipe-pane``
+        with "target pane has exited". That is not a bug in either place:
+        this method reports it as RuntimeError and the skipped-setup
+        caller catches RuntimeError and falls back to creating the file,
+        which is what it did before it called here at all. So the
+        contract is "establish the pipe, or say clearly that you could
+        not" - NOT "the pane is guaranteed pipeable". Every other caller
+        is unchanged: the default is False, so nothing that is neither
         running nor external can reach tmux through here by accident.
 
         Inputs: attaching (bool, keyword-only) - True only from

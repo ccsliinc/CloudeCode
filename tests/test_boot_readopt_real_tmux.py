@@ -367,3 +367,162 @@ async def test_real_readopt_pass_holds_every_live_session_by_stored_id(
             assert backend._running is True
     finally:
         await _drop_backends(mgr)
+
+
+# --------------------------------------------------------------------- #
+# live streaming, on the path the boot re-adopt actually takes
+# --------------------------------------------------------------------- #
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_readopted_backend_streams_live_output_without_a_reattach(
+    live_state,
+):
+    """Bytes typed into a re-adopted pane must reach ``on_output`` at once.
+
+    THE DEFECT THIS PINS, in the order it was actually diagnosed. The
+    browser showed a terminal that only ever changed when the user left
+    the session and came back. That pairing is the whole clue: the
+    attach-time paint reads ``capture_visible_screen()``, which asks tmux
+    for the pane's contents directly, so it kept working; the continuous
+    stream reads the ``pipe-pane`` FILE, and that had been pointed at a
+    path nothing was writing to.
+
+    ``attach_existing`` is called here with ``needs_pipe_setup=False``,
+    which is the DEFAULT and is what ``session_boot_readopt`` passes. That
+    is the branch that skipped ``ensure_pipe_pane`` entirely and then, on
+    finding no pipe file, called ``touch()`` on it and tailed the empty
+    result forever. The sibling test above covers ``needs_pipe_setup=
+    True``, satisfies the same invariant through a different door, and so
+    could never have caught this.
+
+    Note the assertion is on BYTES ARRIVING, not on ``#{pane_pipe}``.
+    A pipe being active is necessary but not sufficient - it can be
+    active and aimed at another file, which is exactly the state that
+    shipped - so the only claim worth making is that output produced
+    after the attach shows up at the callback with no second attach in
+    between.
+    """
+    name = f"cloude_stream_{uuid.uuid4().hex[:6]}"
+    _create_session_like_the_app(name, "ses_stream", Path.home())
+
+    seen: list[bytes] = []
+
+    async def _collect(chunk: bytes) -> None:
+        seen.append(chunk)
+
+    backend = TmuxBackend(
+        session_id="ses_stream",
+        working_dir=Path.home(),
+        on_output=_collect,
+        socket_name=TEST_SOCKET_NAME,
+        session_name=name,
+    )
+    assert backend._is_external is False, (
+        "the boot re-adopt builds an OWNED backend; an external one "
+        "takes the other branch and cannot reproduce this"
+    )
+
+    try:
+        # The production call: no keyword, so needs_pipe_setup is False.
+        await backend.attach_existing()
+
+        marker = f"CLOUDE_STREAM_{uuid.uuid4().hex[:8]}"
+        _tmux("send-keys", "-t", name, f"echo {marker}", "Enter")
+
+        # Poll rather than sleep a fixed span: the pane has to run the
+        # command, tmux has to pipe it, `cat` has to append it and the
+        # tail loop has to wake. Two seconds is generous for all four and
+        # the loop exits the moment the bytes land.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while asyncio.get_event_loop().time() < deadline:
+            if marker.encode() in b"".join(seen):
+                break
+            await asyncio.sleep(0.05)
+
+        assert marker.encode() in b"".join(seen), (
+            "output produced AFTER attach_existing never reached "
+            "on_output, so the websocket had nothing to forward and the "
+            "browser would show a frozen terminal until the next attach "
+            f"repainted it. pane_pipe={_pane_pipe(name)!r}, "
+            f"bytes_seen={len(b''.join(seen))}"
+        )
+    finally:
+        task = getattr(backend, "_reader_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_attach_to_a_dead_pane_still_succeeds(live_state):
+    """A session whose PANE has exited must still attach, not raise.
+
+    THE REGRESSION THIS GUARDS, which is a step removed from the terminal
+    and worth spelling out. ``SessionManager._lifespan_tmux_reconcile``
+    treats ``RuntimeError`` out of ``attach_existing`` as proof the
+    session is gone: it logs ``session_backend_attach_failed`` and calls
+    ``_clear_stale_metadata``. So an exception here does not surface as
+    an error the user sees - it silently DROPS the session's pointer at
+    boot, and a session they could previously still open becomes
+    reachable only through the Adopt list.
+
+    Establishing the pipe on this path is new. ``touch()``, which is what
+    the code did before, succeeds on a dead pane; ``pipe-pane`` does not -
+    tmux answers "target pane has exited". Without the ``except
+    RuntimeError`` fallback this test fails with exactly that message,
+    which is the whole point of writing it: the repair for the frozen
+    terminal must not cost dead-pane sessions their place in the list.
+
+    ``remain-on-exit on`` is what makes a dead pane observable at all -
+    without it tmux destroys the pane, and with it the session stays
+    alive holding a corpse, which is the real state being reproduced.
+    """
+    name = f"cloude_dead_{uuid.uuid4().hex[:6]}"
+    _create_session_like_the_app(name, "ses_dead", Path.home())
+
+    # Keep the pane's body after its process exits, then kill the process
+    # so the pane is genuinely dead rather than merely idle.
+    _tmux("set-option", "-t", name, "remain-on-exit", "on")
+    _tmux("send-keys", "-t", name, "exit", "Enter")
+
+    deadline = asyncio.get_event_loop().time() + 5.0
+    while asyncio.get_event_loop().time() < deadline:
+        dead = _field_by_session("list-panes", "#{pane_dead}").get(name, "")
+        if dead == "1":
+            break
+        await asyncio.sleep(0.1)
+    assert _field_by_session("list-panes", "#{pane_dead}").get(name) == "1", (
+        "could not get the pane into the dead state this test is about"
+    )
+
+    backend = TmuxBackend(
+        session_id="ses_dead",
+        working_dir=Path.home(),
+        on_output=None,
+        socket_name=TEST_SOCKET_NAME,
+        session_name=name,
+    )
+
+    try:
+        # Must NOT raise. The reconcile caller reads a raise as "drop it".
+        await backend.attach_existing()
+
+        assert backend._running is True
+        assert backend._resolve_pipe_path().exists(), (
+            "the fallback has to leave the tail loop a file to open, "
+            "which is what touch() was always for"
+        )
+    finally:
+        task = getattr(backend, "_reader_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
